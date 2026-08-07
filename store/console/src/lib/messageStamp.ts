@@ -15,12 +15,13 @@
  *
  * Local, via the SDK's `formatDateTime` — the same call the user and assistant headers make.
  * Rendering these two channels in different zones would be a worse defect than the missing
- * timestamp. Note this does NOT agree with the agent's own prose, which states times in UTC
- * (#329: no user timezone is stored and no prompt carries a clock), so a run can read
- * "started at 22:33:34 UTC" above a header saying 8:33 AM. That is #329's to reconcile — the
- * fix there is to format tool output in the user's zone at the source, server-side, which
- * makes both halves local without this file changing. `stampTitle` names the zone on hover
- * in the meantime, so a reader comparing the two can tell which is which.
+ * timestamp.
+ *
+ * `stampTitle` takes an explicit zone (#345). It used to pass `undefined` to `toLocaleString`,
+ * which means THE BROWSER'S zone — fine for the common case, and the two-clock defect all over
+ * again for the owner who set a zone different from their machine: honoured in the agent's prose
+ * (#329 reads `users.preferences.timezone`) and ignored in the UI. The stored zone is the one the
+ * user chose, so it wins here too; absent, the browser's is still the best guess available.
  */
 
 /** Gaps below this are noise — several entries written in the same tick, not a pause. */
@@ -81,16 +82,25 @@ export function gapBetween(prev?: string | null, current?: string | null): strin
 /**
  * The hover text for a stamp: the full local time WITH the zone named.
  *
- * The zone is the whole point — see the #329 note above. It is on `title` rather than in the
- * pill because naming the zone on every row costs width the mobile layout does not have
- * (#333), and it is only needed when a reader is reconciling two clocks.
+ * The zone is the whole point — see the note above. It is on `title` rather than in the pill
+ * because naming the zone on every row costs width the mobile layout does not have (#333), and it
+ * is only needed when a reader is reconciling two clocks.
+ *
+ * `timeZone` is the owner's stored zone (`users.preferences.timezone`, via `accountTimezone.ts`).
+ * Omitted or unresolvable ⇒ the browser's own zone, which is what this did before #345 — a stored
+ * zone this runtime's tz database does not carry must degrade to a readable time, never to "".
  */
-export function stampTitle(iso?: string | null): string {
+export function stampTitle(iso?: string | null, timeZone?: string): string {
 	const t = parseStamp(iso);
 	if (t === null) return "";
+	const d = new Date(t);
 	try {
-		return new Date(t).toLocaleString(undefined, { timeZoneName: "short" });
+		return d.toLocaleString(undefined, { timeZoneName: "short", ...(timeZone ? { timeZone } : {}) });
 	} catch {
-		return new Date(t).toLocaleString();
+		try {
+			return d.toLocaleString(undefined, { timeZoneName: "short" });
+		} catch {
+			return d.toLocaleString();
+		}
 	}
 }

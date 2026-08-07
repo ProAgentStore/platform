@@ -67,4 +67,21 @@ describe("stampTitle", () => {
 		expect(stampTitle(undefined)).toBe("");
 		expect(stampTitle("nonsense")).toBe("");
 	});
+
+	it("honours the owner's stored zone over the browser's (#345)", () => {
+		// The two-clock defect, one layer down: before this the title said `toLocaleString(undefined,
+		// …)` — the MACHINE's zone — so an owner who set a zone different from their laptop saw it
+		// honoured in the agent's prose and ignored in the UI.
+		const sydney = stampTitle("2026-08-06T22:33:34Z", "Australia/Sydney");
+		expect(sydney).toContain("8:33");
+		// The day differs too, which is the half that makes "overnight" mean two different things.
+		expect(sydney).toContain("2026");
+		expect(stampTitle("2026-08-06T22:33:34Z", "Europe/London")).toContain("11:33");
+	});
+
+	it("falls back to the browser's zone rather than to an empty title", () => {
+		// A stored zone this runtime's tz database does not carry must degrade to a readable time.
+		expect(stampTitle("2026-08-06T22:33:34Z", "Mars/Olympus")).not.toBe("");
+		expect(stampTitle("2026-08-06T22:33:34Z", undefined)).not.toBe("");
+	});
 });

@@ -74,4 +74,20 @@ describe("renderTerminalLine", () => {
 	it("empty view renders nothing", () => {
 		expect(renderTerminalLine({ kind: "none", text: "" })).toBe("");
 	});
+
+	it("dates a stored snapshot in the owner's zone, not as a raw D1 timestamp (#345)", () => {
+		// "Last saved snapshot (as of 2026-08-06 22:34:19)" goes straight into the system prompt, so
+		// a model asked when the session last ran reads that back verbatim — the #329 complaint.
+		const view = describeTerminal({ ...base, runnerOnline: false, updatedAt: "2026-08-06 22:34:19" });
+		// The DAY moves too: 22:34 UTC on the 6th is the 7th in Sydney.
+		expect(renderTerminalLine(view, "Australia/Sydney")).toContain("as of Fri, 7 Aug 2026, 08:34");
+		// Unset zone stays honest: an explicitly-labelled UTC clock, never the bare stored string.
+		expect(renderTerminalLine(view)).toContain("as of Thu, 6 Aug 2026, 22:34 UTC");
+		expect(renderTerminalLine(view)).not.toContain("22:34:19");
+	});
+
+	it("says 'unknown' when there is no timestamp at all, rather than inventing now", () => {
+		const view = describeTerminal({ ...base, runnerOnline: false, updatedAt: null });
+		expect(renderTerminalLine(view, "Australia/Sydney")).toContain("as of unknown");
+	});
 });

@@ -206,6 +206,11 @@ describe("storage tools", () => {
 		const result = await executeStorageTool({ name: "get_activity", input: {} }, engine);
 		expect(result.success).toBe(true);
 		expect(result.content).toContain("chat.message");
+		// An activity log is a timeline the model narrates back, so its stamps are the most likely
+		// of any tool's to be read out loud (#345). No zone here ⇒ an explicitly-labelled UTC wall
+		// clock, never the bare `2026-08-06T22:34:19.000Z` that gets repeated verbatim.
+		expect(result.content).toContain("UTC]");
+		expect(result.content).not.toMatch(/\[\d{4}-\d{2}-\d{2}T/);
 	});
 
 	it("get_user_context + set_user_preference round-trip", async () => {

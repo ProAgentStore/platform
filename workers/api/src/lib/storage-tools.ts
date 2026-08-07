@@ -8,6 +8,8 @@ import type { ToolCallResult, ToolDef } from "./tools.js";
 import { listRepos, listSessions, getActiveSessionForRepo } from "./coding-store.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import { lastTerminal } from "./coding-timeline.js";
+import { accountTimeZone } from "./account-timezone.js";
+import { localStamp } from "./agent-clock.js";
 import type { Env } from "../types.js";
 
 export interface StorageToolCallRequest {
@@ -470,8 +472,13 @@ export async function executeStorageTool(
 					type: call.input.type as ActivityEvent["type"] | undefined,
 				});
 				if (events.length === 0) return ok(call.name, "No recent activity.");
+				// An activity log is a TIMELINE the model narrates back ("you uploaded that at…"), so
+				// its stamps are among the most likely of any tool's to be read aloud verbatim — the
+				// #345 pattern. Rendered in the owner's zone, or as an explicitly-labelled UTC clock
+				// when they have not set one; never the bare ISO string.
+				const zone = ctx?.env && ctx.userId ? await accountTimeZone(ctx.env, ctx.userId) : undefined;
 				const summary = events.map((e) =>
-					`[${e.createdAt}] ${e.type}${e.userId ? ` (user: ${e.userId})` : ""} ${e.data ? JSON.stringify(e.data) : ""}`,
+					`[${localStamp(e.createdAt, zone) ?? e.createdAt}] ${e.type}${e.userId ? ` (user: ${e.userId})` : ""} ${e.data ? JSON.stringify(e.data) : ""}`,
 				).join("\n");
 				return ok(call.name, summary);
 			}

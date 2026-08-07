@@ -1,6 +1,7 @@
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { gapBetween, stampTitle } from "../lib/messageStamp";
+import { useAccountTimeZone } from "../lib/accountTimezone";
 
 /**
  * The third channel in the transcript: neither of you said this, the platform is reporting.
@@ -32,6 +33,9 @@ export default function SystemMessage({ content, createdAt, prevCreatedAt }: {
 	/** The timestamp of the entry directly above — what the elapsed gap is measured from. */
 	prevCreatedAt?: string;
 }) {
+	// The owner's own zone when they have set one (#345) — so a zone chosen deliberately is not
+	// honoured in the agent's prose and quietly ignored on hover.
+	const timeZone = useAccountTimeZone();
 	const long = content.length > 90 || content.includes("\n");
 	const time = createdAt ? formatDateTime(createdAt) : "";
 	const gap = gapBetween(prevCreatedAt, createdAt);
@@ -50,7 +54,7 @@ export default function SystemMessage({ content, createdAt, prevCreatedAt }: {
 			<SafeHtmlView className={`min-w-0 break-words ${long ? "msg-md leading-relaxed" : ""}`} html={renderMd(content)} />
 			{stamp && (
 				<span
-					title={stampTitle(createdAt)}
+					title={stampTitle(createdAt, timeZone)}
 					className={`text-[0.65rem] opacity-70 whitespace-nowrap tabular-nums ${long ? "block text-right mt-1.5" : ""}`}
 				>
 					{stamp}

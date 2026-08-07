@@ -7,7 +7,7 @@
  * transition.
  */
 import { describe, expect, it } from "vitest";
-import { clockPrompt, formatInZone, utcOffsetLabel } from "./agent-clock.js";
+import { clockPrompt, formatInZone, localStamp, parseTimestamp, utcOffsetLabel } from "./agent-clock.js";
 import { parseAccountPreferences } from "./preferences.js";
 
 /** 2026-08-06T22:34:19Z — the instant from the report in #329, to the second. */
@@ -114,5 +114,57 @@ describe("where the zone comes from", () => {
 		const prefs = parseAccountPreferences(JSON.stringify({ timezone: "Europe/London", voice: { speed: 130 } }));
 		expect(prefs.timezone).toBe("Europe/London");
 		expect(prefs.voice?.speed).toBe(130);
+	});
+});
+
+/**
+ * `localStamp` — the other half of the clock (#345).
+ *
+ * `clockPrompt` tells the agent what time it is. This is what the times INSIDE its tool results
+ * look like, which is where the #329 incident actually came from: `subordinate_status` emitted
+ * `new Date().toISOString()` and the Lead read "22:33:34 UTC" back to someone in Sydney.
+ */
+describe("localStamp — a timestamp a model is going to read out loud", () => {
+	it("renders a tool timestamp in the owner's zone, day and hour and all", () => {
+		const s = localStamp(REPORTED, "Australia/Sydney") ?? "";
+		expect(s).toContain("08:34");
+		// The DAY, not just the hour — 22:34 UTC on the 6th is the 7th in Sydney.
+		expect(s).toContain("7 Aug 2026");
+		expect(s).toMatch(/AEST|GMT\+10/);
+		// Never the machine shape. This exact string is what got read aloud.
+		expect(s).not.toContain("2026-08-06T22:34:19");
+	});
+
+	it("names UTC out loud when no zone is set — never a bare ISO string", () => {
+		const s = localStamp(REPORTED) ?? "";
+		expect(s).toContain("UTC");
+		expect(s).toContain("22:34");
+		// The unset state stays HONEST (it still says UTC, per clockPrompt) while dropping the
+		// `2026-08-06T22:34:19.000Z` that a model reads back as "twenty-two thirty-four".
+		expect(s).not.toContain("T22:34:19");
+	});
+
+	it("reads a D1 timestamp as UTC, not as the runtime's local time", () => {
+		// D1 hands back `YYYY-MM-DD HH:MM:SS` with no zone. Parsed naively that is LOCAL time, which
+		// silently shifts every server-written timestamp by the runtime's offset.
+		expect(parseTimestamp("2026-08-06 22:34:19")).toBe(REPORTED);
+		expect(localStamp("2026-08-06 22:34:19", "Australia/Sydney")).toContain("08:34");
+	});
+
+	it("takes epoch milliseconds too — an epoch number is the same defect in different clothes", () => {
+		expect(localStamp(REPORTED, "Australia/Sydney")).toBe(localStamp("2026-08-06T22:34:19Z", "Australia/Sydney"));
+	});
+
+	it("keeps absent absent — a missing timestamp must not become a formatted 'now'", () => {
+		expect(localStamp(null)).toBeNull();
+		expect(localStamp(undefined)).toBeNull();
+		expect(localStamp("")).toBeNull();
+	});
+
+	it("survives a zone this runtime cannot resolve, and a value that is not a time", () => {
+		// A stored zone the tz database does not carry must never take a tool call down.
+		expect(localStamp(REPORTED, "Mars/Olympus")).toContain("UTC");
+		// Unparseable input is passed through rather than dropped — it is not a time we can improve.
+		expect(localStamp("whenever", "Australia/Sydney")).toBe("whenever");
 	});
 });

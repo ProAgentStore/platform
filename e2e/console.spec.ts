@@ -849,7 +849,36 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/console/profile");
 		await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
 		await expect(page.getByRole("heading", { name: "Appearance" })).toHaveCount(0);
-		expect(mock.savedPreferences).toBeNull(); // nothing saved just by looking
+		// Nothing SETTABLE is saved just by looking. The one write a page load may make is the
+		// timezone seed (#345) — the mocked account has no stored zone, and seeding it once when
+		// empty is the whole point; re-asserting it on every load is what would be wrong.
+		expect(Object.keys((mock.savedPreferences as Record<string, unknown> | null) ?? {})).not.toContain("voice");
+		expect(Object.keys((mock.savedPreferences as Record<string, unknown> | null) ?? {})).not.toContain("translation");
+	});
+
+	test.describe("timezone (#345)", () => {
+		// PINNED, not inherited. CI runners are UTC, and a browser resolving to UTC is deliberately
+		// treated as a non-answer (see `timezoneSeed`) — so a test reading the runner's own zone
+		// would assert nothing on the machine that matters. This is also the honest setup: the
+		// feature is about a user who is somewhere.
+		test.use({ timezoneId: "Australia/Sydney" });
+
+		test("is seeded from this machine once, and an override then wins", async ({ page }) => {
+			// #329 taught agents to speak the owner's local time — and nothing ever wrote the field,
+			// so "unset" was the standing case and every agent kept saying UTC. Seeding makes unset
+			// transient. Seed, do NOT bind: the browser value changes when you travel, is absent on
+			// cron/pump/MCP paths, and cannot be corrected by the owner, so it may only fill an
+			// EMPTY field — which the mocked account is.
+			const mock = await mockSignedInConsole(page);
+			await page.goto("/console/preferences");
+			await expect(page.getByRole("heading", { name: "Timezone" })).toBeVisible();
+			await expect
+				.poll(() => (mock.savedPreferences as { timezone?: string } | null)?.timezone)
+				.toBe("Australia/Sydney");
+			// And an explicit override beats the machine — the two-clock defect this closes.
+			await page.getByLabel("Your timezone").selectOption("Europe/London");
+			await expect.poll(() => (mock.savedPreferences as { timezone?: string } | null)?.timezone).toBe("Europe/London");
+		});
 	});
 
 	test("an agent shows 'Using your defaults' until you customise it", async ({ page }) => {

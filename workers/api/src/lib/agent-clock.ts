@@ -98,7 +98,7 @@ export function utcOffsetLabel(now: number, zone: string): string {
 }
 
 /** The same instant in UTC, for the branch where UTC is the only zone we can honestly name. */
-function formatUtc(now: number): string {
+export function formatUtc(now: number): string {
 	return new Intl.DateTimeFormat("en-GB", {
 		timeZone: "UTC",
 		weekday: "short",
@@ -109,6 +109,56 @@ function formatUtc(now: number): string {
 		minute: "2-digit",
 		hourCycle: "h23",
 	}).format(new Date(now));
+}
+
+/**
+ * Milliseconds for a timestamp written by the platform, or null when it cannot be read.
+ *
+ * D1 hands back `YYYY-MM-DD HH:MM:SS` with no zone. `Date.parse` reads that shape as LOCAL time,
+ * which happens to be UTC on Workers and is NOT on any other runtime a test or a script might run
+ * on — so the `Z` is appended explicitly rather than relied upon. Same normalisation the console's
+ * `messageStamp.ts` applies for the same reason.
+ */
+export function parseTimestamp(value: number | string | null | undefined): number | null {
+	if (typeof value === "number") return Number.isFinite(value) ? value : null;
+	if (typeof value !== "string" || !value.trim()) return null;
+	const raw = value.trim();
+	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(raw) ? `${raw.replace(" ", "T")}Z` : raw;
+	const t = Date.parse(normalized);
+	return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * A timestamp that a model is going to READ ALOUD (#345).
+ *
+ * `clockPrompt` tells the agent what time it is; this is the other half — the times inside the tool
+ * results it answers FROM. `subordinate_status` emitted `asOf: new Date().toISOString()`, and the
+ * incident that opened #329 is a Lead reporting "the run completed at 22:33:34 UTC" to someone in
+ * Sydney. The model was not wrong: it was handed a bare ISO string and repeated it. A prompt
+ * instruction to convert cannot fix that reliably — DST and day boundaries are exactly the
+ * arithmetic a language model gets *almost* right — so the conversion happens HERE, where the
+ * instant and the zone are both in hand, and the model is handed words to repeat.
+ *
+ * With no zone this returns an explicitly-labelled UTC wall clock rather than an ISO string. That
+ * keeps the unset state honest (it still SAYS UTC, per `clockPrompt`'s unset branch) while removing
+ * the machine-shaped `2026-08-07T22:33:34.000Z` that reads back as "twenty-two thirty-three".
+ *
+ * Null in ⇒ null out, so a caller can drop the key entirely: an absent timestamp must stay absent
+ * rather than becoming a formatted "now".
+ */
+export function localStamp(at: number | string | null | undefined, zone?: string): string | null {
+	const ms = parseTimestamp(at);
+	// An unparseable string is returned untouched — it is not a time we can improve, and silently
+	// dropping a value the caller had is worse than passing it through.
+	if (ms === null) return typeof at === "string" && at.trim() ? at.trim() : null;
+	if (zone) {
+		try {
+			return formatInZone(ms, zone);
+		} catch {
+			// A stored zone this runtime cannot resolve must never take down a tool call.
+		}
+	}
+	return `${formatUtc(ms)} UTC`;
 }
 
 /**

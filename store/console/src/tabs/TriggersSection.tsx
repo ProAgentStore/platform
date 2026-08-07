@@ -12,6 +12,9 @@ import {
 	type ScheduleDraft,
 	type ScheduleMode,
 } from "../lib/triggerSchedule";
+// One zone list for the whole console (#345) — a trigger's schedule and the account preference
+// must offer the same vocabulary, or a zone you can schedule in is one you cannot set as yours.
+import { timeZoneOptions } from "../lib/accountTimezone";
 import {
 	eventHeadline,
 	eventTone,
@@ -100,18 +103,6 @@ const ACTION_LABELS: Array<[TriggerActionType, string]> = [
 	["run_browse", "Run browser task"],
 	["log_event", "Log event"],
 ];
-
-/** Every zone the browser knows, when it can tell us; a usable shortlist when it cannot. */
-function timeZoneOptions(current: string): string[] {
-	const withCurrent = (list: string[]) => (list.includes(current) ? list : [current, ...list]);
-	try {
-		const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
-		if (typeof supported === "function") return withCurrent(["UTC", ...supported("timeZone")]);
-	} catch {
-		// fall through
-	}
-	return withCurrent(["UTC", "Australia/Melbourne", "Australia/Sydney", "Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Singapore"]);
-}
 
 const inputClass = "text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full";
 

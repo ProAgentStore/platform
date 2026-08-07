@@ -12,6 +12,7 @@ import {
 	signOut as doSignOut,
 	type User,
 } from "./auth";
+import { loadAccountTimeZone, resetAccountTimeZone } from "./accountTimezone";
 
 interface AuthState {
 	user: User | null;
@@ -35,6 +36,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			const u = await checkAuth();
 			setUser(u);
 			setLoading(false);
+			// The whole app's single "we know who this is" moment, so it is where the timezone is
+			// read and — only when nothing is stored — seeded from this machine (#345). Not awaited:
+			// nothing on screen waits for a clock, and a slow preferences read must not delay the
+			// first paint. `loadAccountTimeZone` is memoised, so this stays one request per load.
+			if (u) void loadAccountTimeZone();
 		})();
 	}, []);
 
@@ -49,6 +55,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const signOut = useCallback(() => {
 		doSignOut();
 		setUser(null);
+		// The next person to sign in is not necessarily this one, and a stale zone would render
+		// their transcript in someone else's clock.
+		resetAccountTimeZone();
 	}, []);
 
 	return (

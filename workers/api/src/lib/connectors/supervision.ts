@@ -16,6 +16,8 @@
 // theirs). There is no external system and so no credential; what governs it is the graph, and
 // `delegate_goal` re-checks that on every call rather than trusting the caller.
 
+import { accountTimeZone } from "../account-timezone.js";
+import { localStamp } from "../agent-clock.js";
 import { delegateToInstance } from "../delegate-instance.js";
 import { getLoopRun } from "../agent-loop-store.js";
 import { loadGraph } from "../supervision.js";
@@ -219,6 +221,9 @@ async function observeSubordinates(
 	}
 	const userId = ctx.userId ?? "";
 	const ids = subs.map((s) => s.instanceId);
+	// The OWNER's zone, resolved once for the whole payload (#345). Every timestamp below is
+	// rendered through it — see `stampTimes`.
+	const zonePromise = accountTimeZone(ctx.env, userId);
 	// Two statements for the work picture, regardless of fan-out — see instance-work.ts. The
 	// connectivity read is a third plus one relay probe per subordinate (see MAX_RELAY_PROBES).
 	const [work, runs, facts, acts] = await Promise.all([
@@ -288,12 +293,22 @@ async function observeSubordinates(
 		list.push({ ...a });
 		actsById.set(a.instanceId, list);
 	}
+	const zone = await zonePromise;
 	const withConnectivity = view.subordinates.map((s) => {
 		const repo = repoStates.get(s.instanceId);
 		const theActs = actsById.get(s.instanceId) ?? [];
+		const connectivity = connectivityById.get(s.instanceId);
 		return {
 			...s,
-			connectivity: connectivityById.get(s.instanceId),
+			// Every field the model may read out is a wall clock in the owner's zone, never the
+			// stored ISO/epoch (#345). Done at the payload boundary, not inside
+			// `summarizeSubordinates`, because that function SORTS and TRIMS on `updatedAt` — a
+			// formatted string there would break its ordering, which is what keeps the newest work
+			// alive when the budget bites.
+			work: s.work.map((w) => ({ ...w, updatedAt: localStamp(w.updatedAt, zone) })),
+			connectivity: connectivity
+				? { ...connectivity, lastSeenAt: localStamp(connectivity.lastSeenAt, zone) }
+				: connectivity,
 			// Always present, including when it could not be read — `available: false` is an answer;
 			// an omitted key is an invitation to infer one.
 			config: configById.get(s.instanceId),
@@ -304,14 +319,16 @@ async function observeSubordinates(
 			// consequential", and this record cannot support that claim: only a stream-json engine
 			// reports acts, so absence means "not observed".
 			...(theActs.length
-				? { acts: theActs.map(({ instanceId: _i, ...rest }) => rest) }
+				? { acts: theActs.map(({ instanceId: _i, at, ...rest }) => ({ ...rest, at: localStamp(at, zone) })) }
 				: {}),
 		};
 	});
 	return {
 		content: JSON.stringify(
 			{
-				asOf: new Date().toISOString(),
+				// The reason #329 was filed: this was `new Date().toISOString()`, and a Lead read it
+				// back to a Sydney owner as "22:33:34 UTC" (#345).
+				asOf: localStamp(Date.now(), zone),
 				// What the tool decided the caller meant, when they named an agent rather than an id.
 				...(resolved ? { resolved } : {}),
 				// Stated in the payload, not only in the tool description, because the description
@@ -326,6 +343,7 @@ async function observeSubordinates(
 					"`acts` is what an agent actually DID — a pull request opened or merged, a push, a force-push, a delete, a deploy — with the literal command as evidence. Anything with `irreversible: true` changed something that cannot simply be undone, so REPORT IT to the human unprompted: an outcome of 'done' says only that the agent believes it finished, never what it changed on the way. " +
 					"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
 					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing. " +
+					TIMES_LEGEND +
 					CONFIG_LEGEND,
 				...view,
 				subordinates: withConnectivity,
@@ -365,6 +383,16 @@ async function standingConfigFor(ctx: SupervisionCtx, instanceId: string): Promi
 export const MAX_ACTS_PER_SUBORDINATE = 5;
 
 const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
+
+/**
+ * Said in the payload because the payload is what the model is reading (#345).
+ *
+ * Every timestamp here has already been converted to the owner's zone with the zone NAMED, so the
+ * remaining failure is a model "helpfully" converting an already-local time back to UTC — which is
+ * the same wrong hour arriving by the opposite route.
+ */
+const TIMES_LEGEND =
+	"Every time in this payload is ALREADY the owner's local wall clock with its zone named. Repeat it as written — do not convert it, do not re-label it UTC, and do not add an offset. ";
 
 export const SUPERVISION_TOOLS: ToolDef[] = [
 	{
@@ -516,17 +544,27 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 				// the standing `merge_policy` said it could merge to main, which the same run then did.
 				const config = await standingConfigFor(ctx, run.instanceId).catch(() => null);
 				const conflict = config ? objectiveConflict(config.mergeAuthority.policy, run.objective) : null;
+				const zone = await accountTimeZone(ctx.env, userId);
 				return {
 					content: JSON.stringify(
 						{
 							...run,
+							// `...run` spreads EPOCH MILLISECONDS, which is the same defect as an ISO
+							// string wearing different clothes: asked when a run finished, the model
+							// either reads `1786...` out loud or does the conversion itself (#345).
+							startedAt: localStamp(run.startedAt, zone),
+							finishedAt: localStamp(run.finishedAt, zone),
+							lastProgressAt: localStamp(run.lastProgressAt, zone),
+							timesLegend: TIMES_LEGEND.trim(),
 							...(config ? { config, configLegend: CONFIG_LEGEND } : {}),
 							// Present ONLY when the objective asks for something the policy forbids — the
 							// case where repeating the objective back would be actively misleading.
 							...(conflict ? { objectiveConflict: conflict } : {}),
 							// Present only when something was observed — an empty array would read as
 							// "this run changed nothing", which no engine can currently attest to.
-							...(acts.length ? { acts: acts.map(({ instanceId: _i, ...rest }) => rest) } : {}),
+							...(acts.length
+								? { acts: acts.map(({ instanceId: _i, at, ...rest }) => ({ ...rest, at: localStamp(at, zone) })) }
+								: {}),
 							...(acts.length
 								? {
 										actsLegend:

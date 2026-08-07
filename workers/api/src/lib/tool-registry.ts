@@ -19,29 +19,17 @@ import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
 import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
-import { parseAccountPreferences } from "./preferences.js";
-
-/**
- * The caller's own timezone, for rendering run times as wall-clock (#329).
- *
- * `work-report.ts` states that `check_work` and the automatic "recent work" prompt block must never
- * tell different stories about one run. The prompt block gets the zone free (it is on the config
- * join `agent-think` already does); this path has no such join, so it pays one indexed lookup — the
- * alternative is the same run reading `08:33 AEST` in the prompt and only `3m ago` in the tool
- * result, which is the inconsistency that comment forbids.
- *
- * Undefined on any failure, which is the honest unset state: relative times only, never a guess.
- */
-async function accountTimeZone(env: Env, userId: string): Promise<string | undefined> {
-	try {
-		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
-			.bind(userId)
-			.first<{ preferences: string | null }>();
-		return parseAccountPreferences(row?.preferences).timezone;
-	} catch {
-		return undefined;
-	}
-}
+// The caller's own timezone, for rendering run times as wall-clock (#329).
+//
+// `work-report.ts` states that `check_work` and the automatic "recent work" prompt block must never
+// tell different stories about one run. The prompt block gets the zone free (it is on the config
+// join `agent-think` already does); this path has no such join, so it pays one indexed lookup — the
+// alternative is the same run reading `08:33 AEST` in the prompt and only `3m ago` in the tool
+// result, which is the inconsistency that comment forbids.
+//
+// Moved to its own leaf module for #345, so `connectors/supervision.ts` can share it: importing
+// this file from there would close a cycle (this file imports the connector registry).
+import { accountTimeZone } from "./account-timezone.js";
 
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports

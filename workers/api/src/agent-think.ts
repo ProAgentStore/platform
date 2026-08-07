@@ -481,7 +481,7 @@ export async function runAgentThink(opts: {
 					active.forEach((s, idx) => {
 						const repo = repos.find((r) => r.id === s.repoId);
 						systemPrompt += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
-						const line = renderTerminalLine(terminals[idx]);
+						const line = renderTerminalLine(terminals[idx], ownerTimeZone);
 						if (line) systemPrompt += `${line}\n`;
 					});
 				} else {

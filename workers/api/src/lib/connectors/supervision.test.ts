@@ -31,6 +31,8 @@ function buildEnv(
 		acts?: unknown[];
 		/** A single `agent_loop_runs` row for the check_delegation drill-down. */
 		run?: Record<string, unknown> | null;
+		/** The owner's `users.preferences` blob — where their timezone lives (#329/#345). */
+		preferences?: string | null;
 	} = {},
 ) {
 	const INSTANCE_COLUMNS = new Set(["id", "user_id", "agent_id", "status", "config", "created_at", "updated_at"]);
@@ -76,6 +78,7 @@ function buildEnv(
 							async first() {
 								if (sql.includes("FROM instance_runtimes") || sql.includes("FROM instance_runtime_nodes")) return runtimeRow;
 								if (sql.includes("FROM agent_loop_runs")) return opts.run ?? null;
+								if (sql.includes("FROM users")) return { preferences: opts.preferences ?? null };
 								return null;
 							},
 							async run() { return { meta: { changes: 1 } }; },
@@ -371,7 +374,10 @@ describe("subordinate_status — the observe verb", () => {
 		// reported "done" and nothing else, which is the whole issue.
 		const out = JSON.parse((await t.handler(ctx(buildEnv({ acts: [ACT_ROW] })) as never, {})).content);
 		expect(out.subordinates[0].acts).toEqual([
-			{ kind: "pr.merge", summary: "merged a pull request #42", command: "gh pr merge 42 --squash", irreversible: true, traceId: "run-1", at: 1700 },
+			// `at` is a wall clock, not the stored epoch (#345): an act is the thing a supervisor
+			// reports to a human unprompted, so its time is the most likely of all of these to be
+			// read out loud. Epoch 1700ms with no zone set ⇒ the honest, explicitly-labelled UTC.
+			{ kind: "pr.merge", summary: "merged a pull request #42", command: "gh pr merge 42 --squash", irreversible: true, traceId: "run-1", at: "Thu, 1 Jan 1970, 00:00 UTC" },
 		]);
 	});
 
@@ -581,6 +587,88 @@ describe("check_delegation without a runId — the model reaches for the tool it
 		const out = await tool("check_delegation").handler(ctx(buildEnv()) as never, {});
 		expect(out.success).toBe(true);
 		expect(out.content).not.toMatch(/Give either a runId/);
+	});
+});
+
+/**
+ * ── #345: no timestamp in this payload is a bare machine string ──────────────
+ *
+ * `asOf: new Date().toISOString()` is the literal source of the "22:33:34 UTC" a Lead read back to
+ * a Sydney owner in the incident that opened #329. The model was not wrong — it repeated what it
+ * was handed. So the conversion happens where the instant and the zone are both known.
+ */
+describe("times a supervisor reads out loud", () => {
+	const SYDNEY = JSON.stringify({ timezone: "Australia/Sydney" });
+	const workRow = [{
+		instance_id: "sub", id: "t1", type: "delegation", status: "running",
+		payload: JSON.stringify({ title: "Delegated: green the suite" }), updated_at: "2026-08-06 22:34:19",
+	}];
+
+	it("states `asOf` as the owner's wall clock, never as an ISO string", async () => {
+		const env = buildEnv({ preferences: SYDNEY });
+		const out = JSON.parse((await tool("subordinate_status").handler(ctx(env) as never, {})).content);
+		expect(out.asOf).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+		expect(out.asOf).toMatch(/AEST|GMT\+1[01]/);
+	});
+
+	it("converts each work item's timestamp into that zone — hour and day both", async () => {
+		const env = buildEnv({ preferences: SYDNEY, work: workRow });
+		const out = JSON.parse((await tool("subordinate_status").handler(ctx(env) as never, {})).content);
+		// 22:34 UTC on the 6th is 08:34 on the 7th in Sydney: the day differs too, which is why
+		// "finished overnight" was a different claim for the two readers.
+		expect(out.subordinates[0].work[0].updatedAt).toContain("08:34");
+		expect(out.subordinates[0].work[0].updatedAt).toContain("7 Aug 2026");
+	});
+
+	it("keeps the newest work when the budget trims, despite the reformat", async () => {
+		// The formatting happens at the PAYLOAD boundary, not inside `summarizeSubordinates`, which
+		// sorts and trims on `updatedAt`. A formatted string in there would silently reorder the
+		// list, and the trim drops from the tail.
+		const env = buildEnv({
+			preferences: SYDNEY,
+			work: [
+				{ instance_id: "sub", id: "old", type: "delegation", status: "running", payload: "{}", updated_at: "2020-01-01 00:00:00" },
+				{ instance_id: "sub", id: "new", type: "delegation", status: "running", payload: "{}", updated_at: "2026-08-06 22:34:19" },
+			],
+		});
+		const out = JSON.parse((await tool("subordinate_status").handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].work.map((w: { id: string }) => w.id)).toEqual(["new", "old"]);
+	});
+
+	it("still says UTC out loud when the owner has set no zone", async () => {
+		// The unset state is first-class (#329) and must not be collapsed into a guessed local time
+		// — but it must not be a bare ISO string either.
+		const env = buildEnv({ preferences: null, work: workRow });
+		const out = JSON.parse((await tool("subordinate_status").handler(ctx(env) as never, {})).content);
+		expect(out.asOf).toContain("UTC");
+		expect(out.asOf).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+		expect(out.subordinates[0].work[0].updatedAt).toBe("Thu, 6 Aug 2026, 22:34 UTC");
+	});
+
+	it("renders a run's epoch fields, which are the same defect in different clothes", async () => {
+		const env = buildEnv({
+			preferences: SYDNEY,
+			run: {
+				run_id: "r1", instance_id: "sub", objective: "green the suite", status: "completed",
+				stop_reason: "done", detail: "objective completed", iteration: 3, max_iterations: 10,
+				cancel_requested: 0, budget_id: null,
+				started_at: Date.parse("2026-08-06T22:00:00Z"), finished_at: Date.parse("2026-08-06T22:34:19Z"),
+				last_progress_at: Date.parse("2026-08-06T22:30:00Z"), delegated_by: "sup",
+			},
+		});
+		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);
+		// `...run` used to spread raw epoch milliseconds: asked when it finished, the model either
+		// reads `1786...` out loud or does the DST arithmetic itself.
+		expect(typeof out.finishedAt).toBe("string");
+		expect(out.finishedAt).toContain("08:34");
+		expect(out.startedAt).toContain("08:00");
+	});
+
+	it("tells the model the times are already local, so it does not convert them back", async () => {
+		const env = buildEnv({ preferences: SYDNEY });
+		const out = JSON.parse((await tool("subordinate_status").handler(ctx(env) as never, {})).content);
+		expect(out.legend).toMatch(/ALREADY the owner's local wall clock/);
+		expect(out.legend).toMatch(/do not re-label it UTC/);
 	});
 });
 

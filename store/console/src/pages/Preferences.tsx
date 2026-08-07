@@ -3,6 +3,16 @@ import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
+import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
+
+/** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
+function nowIn(zone: string): string {
+	try {
+		return new Date().toLocaleString(undefined, { timeZone: zone, timeStyle: "short", dateStyle: "medium" });
+	} catch {
+		return "";
+	}
+}
 
 /**
  * How YOU speak, hear and read — across every agent (#211).
@@ -78,6 +88,32 @@ export default function Preferences() {
 		await api("/v1/preferences", { method: "PUT", body: JSON.stringify({ translation: next }) });
 	}, []);
 
+	/**
+	 * The zone every agent narrates in, and every timestamp here renders in (#329/#345).
+	 *
+	 * It is seeded from this machine on first load, so this control is normally already correct and
+	 * exists for the case the seed cannot serve: an owner whose machine is not where they live, or
+	 * who travels and wants their agents to keep speaking home time. `""` sends `null`, which clears
+	 * it back to UNSET — a state the user must be able to return to, because it is not "UTC", it is
+	 * "you were never told", and it is what makes an agent say UTC out loud instead of guessing.
+	 */
+	const timezone = useAccountTimeZone();
+	const [tzMsg, setTzMsg] = useState("");
+	const saveTimezone = useCallback(async (next: string) => {
+		const previous = timezone;
+		setAccountTimeZone(next || undefined);
+		setTzMsg("Saved — every agent uses this");
+		try {
+			await api("/v1/preferences", { method: "PUT", body: JSON.stringify({ timezone: next || null }) });
+		} catch {
+			// The route REJECTS a zone it cannot resolve rather than coercing it (#329), so a failure
+			// here means nothing was stored — put the control back rather than showing a save that
+			// did not happen.
+			setAccountTimeZone(previous);
+			setTzMsg("Could not save that timezone.");
+		}
+	}, [timezone]);
+
 	return (
 		<Page width={960}>
 			<h2 className="text-xl font-bold mb-1">Preferences</h2>
@@ -103,6 +139,39 @@ export default function Preferences() {
 						))}
 					</div>
 				</div>
+			</div>
+
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Timezone</h3>
+				<p className="text-xs text-muted mb-2">
+					What "today", "this morning" and "overnight" mean when an agent talks to you, and the
+					clock every timestamp is shown in. Leave it unset and agents say UTC and say so.
+				</p>
+				<div className="flex justify-between items-center py-2.5 text-sm gap-3">
+					<span className="text-muted font-medium">Your timezone</span>
+					<select
+						aria-label="Your timezone"
+						value={timezone || ""}
+						onChange={(e) => void saveTimezone(e.target.value)}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 max-w-[60%]"
+					>
+						<option value="">Not set — agents will say UTC</option>
+						{timeZoneOptions(timezone).map((tz) => (
+							<option key={tz} value={tz}>
+								{tz}
+								{tz === machineTimeZone() ? " (this machine)" : ""}
+							</option>
+						))}
+					</select>
+				</div>
+				{/* The confirmation that a zone name is the RIGHT zone name: nobody knows what
+				    "America/Kentucky/Monticello" is, everybody knows whether it is 8am there. */}
+				{timezone && nowIn(timezone) && (
+					<p className="text-xs text-muted">
+						It is <b>{nowIn(timezone)}</b> there.
+					</p>
+				)}
+				{tzMsg && <p className="text-xs text-muted mt-1">{tzMsg}</p>}
 			</div>
 
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">

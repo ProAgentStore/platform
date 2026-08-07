@@ -13,6 +13,8 @@
  * snapshot — no new I/O. Keep it pure so every branch is unit-tested.
  */
 
+import { localStamp } from "./agent-clock.js";
+
 export type TerminalKind =
 	| "runner-offline" // runner not connected — nothing is running
 	| "capture-failed" // runner online but the capture request failed this turn (do NOT infer idle/done)
@@ -70,8 +72,12 @@ export function describeTerminal(i: TerminalInputs): TerminalView {
  *  guardrail: an idle pane is explicitly "may be OLD output", a failed capture is
  *  explicitly "do NOT infer idle/done" — so the model can't launder stale text into
  *  a claim about current state. */
-export function renderTerminalLine(view: TerminalView): string {
+export function renderTerminalLine(view: TerminalView, zone?: string): string {
 	const t = view.text || "(none captured)";
+	// `asOf` is a raw D1 timestamp (`2026-08-07 22:33:34`) and it goes straight into the prompt, so
+	// a model asked "when did it last run" reads that back verbatim — the #345 pattern. `localStamp`
+	// renders it in the owner's zone, or as an explicitly-labelled UTC clock when there isn't one.
+	const asOf = localStamp(view.asOf, zone) ?? "unknown";
 	switch (view.kind) {
 		case "live-active":
 			return `  CURRENT terminal (runner online, engine actively running — this is live): ${view.text}`;
@@ -80,9 +86,9 @@ export function renderTerminalLine(view: TerminalView): string {
 		case "empty-pane":
 			return `  Terminal is EMPTY on screen right now (runner online, nothing displayed). Last saved output was: ${t}`;
 		case "capture-failed":
-			return `  Terminal UNAVAILABLE this turn (runner online but the capture request failed — do NOT infer the session is idle or finished). Last saved snapshot (as of ${view.asOf ?? "unknown"}): ${t}`;
+			return `  Terminal UNAVAILABLE this turn (runner online but the capture request failed — do NOT infer the session is idle or finished). Last saved snapshot (as of ${asOf}): ${t}`;
 		case "runner-offline":
-			return `  Runner OFFLINE — no live terminal. Last saved snapshot (as of ${view.asOf ?? "unknown"}): ${t}`;
+			return `  Runner OFFLINE — no live terminal. Last saved snapshot (as of ${asOf}): ${t}`;
 		default:
 			return "";
 	}
