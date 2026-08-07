@@ -64,7 +64,12 @@ jobs:
         # exact failure mode of an advisory lint (#305 cleared them).
         #
         # WIDENING THIS IS THE POINT, and each remaining tree needs its own work first:
-        #   workers/api    the `any` debt — the real typing work in #326.
+        #   workers/api    ONE finding away: a `useOptionalChain` in routes/triggers.ts. The
+        #                  `any` debt is gone — all 184 were in *.test.ts, which this repo's
+        #                  tsconfig excludes, so they were never typechecked either; the ones
+        #                  with a real type now have it, and the partial test doubles keep a
+        #                  documented cast per file rather than a fake interface. Add
+        #                  `workers/api` here the moment that last warning clears.
         #   agents/coder   1.
         # Add a path here the moment one of them reaches zero — do NOT widen it early and
         # then reach for `continue-on-error`, which is this step with the teeth removed.
