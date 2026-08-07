@@ -51,14 +51,20 @@ const line = process.argv[2] || "";
 setTimeout(() => process.stdout.write("late: " + line + "\\n"), 1800);
 `;
 
-/** A raw CLI that emits, PAUSES > 1.5s (e.g. a compile/test run), then resumes — to prove
- *  the settle heuristic doesn't LATCH idle: resumed output must restore "thinking". */
+/** A raw CLI that emits, PAUSES > 1.5s (e.g. a compile/test run), then resumes and exits —
+ *  to prove a quiet spell inside a turn is not mistaken for the end of it (#391). */
 const FAKE_PAUSER = `#!/usr/bin/env node
 const line = process.argv[2] || "";
 process.stdout.write("part 1: " + line + "\\n");
 setTimeout(() => process.stdout.write("part 2: " + line + "\\n"), 2000);
-// Linger so the resumed-"thinking" state is observable before close ends the turn.
+// Linger past the second chunk so "still working" is observable before the process exits.
 setTimeout(() => {}, 4000);
+`;
+
+/** A raw CLI that never finishes — for the enforced turn ceiling. */
+const FAKE_WEDGED = `#!/usr/bin/env node
+process.stdout.write("wedged: " + (process.argv[2] || "") + "\\n");
+setInterval(() => {}, 1000);
 `;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -151,12 +157,22 @@ describe("HeadlessSession (stream-json engine)", () => {
 	});
 });
 
+/**
+ * Why the raw cases below pass `command: "codex"` alongside a fake `bin`.
+ *
+ * `bin` swaps the BINARY only; the ARGS still come from the command, and a session with no
+ * command falls back to the engine's default preset — which is `codex exec --sandbox
+ * danger-full-access`, real flags a stand-in script does not understand (its turn text would
+ * arrive as argv[5]). Saying `command: "codex"` is the test declaring "a bare prefix, so the turn
+ * text is argv[2]", instead of depending on the default preset happening to have no flags.
+ */
 describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let dir: string;
 	let codexBin: string;
 	let slowBin: string;
 	let pauserBin: string;
 	let argvBin: string;
+	let wedgedBin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-raw-"));
@@ -164,14 +180,17 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		slowBin = join(dir, "fake-slow.js");
 		pauserBin = join(dir, "fake-pauser.js");
 		argvBin = join(dir, "fake-argv.js");
+		wedgedBin = join(dir, "fake-wedged.js");
 		writeFileSync(codexBin, FAKE_CODEX);
 		writeFileSync(slowBin, FAKE_SLOW);
 		writeFileSync(pauserBin, FAKE_PAUSER);
 		writeFileSync(argvBin, FAKE_ARGV);
+		writeFileSync(wedgedBin, FAKE_WEDGED);
 		chmodSync(codexBin, 0o755);
 		chmodSync(slowBin, 0o755);
 		chmodSync(pauserBin, 0o755);
 		chmodSync(argvBin, 0o755);
+		chmodSync(wedgedBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -180,7 +199,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// zero row would put "Coding engine · $0.00" on the Usage page, which claims the engine was
 		// free — a stronger and more misleading statement than the absence it replaces (#267).
 		// The absence is structural, not a special case: raw mode never parses JSON at all.
-		const s = new HeadlessSession({ id: "rawusage", workDir: dir, clientType: "codex", bin: codexBin });
+		const s = new HeadlessSession({ id: "rawusage", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
 		s.start();
 		s.input("hi");
 		await until(() => s.snapshot().includes("done: hi"), 12_000, "raw stdout to include final line");
@@ -189,7 +208,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	}, 20_000);
 
 	it("captures raw stdout (ANSI-stripped) into the transcript and settles to idle", async () => {
-		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", bin: codexBin });
+		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
 		s.start();
 		// A one-shot engine spawns nothing until a turn arrives — starting it eagerly is what
 		// made `codex` die instantly with "stdin is not a terminal". Asserted as "no process ran"
@@ -207,13 +226,13 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(pane).not.toContain("\x1b["); // ANSI escapes stripped
 		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] hi/); // your turn, echoed
 
-		await until(() => s.runState() === "idle", 6000, "raw session to settle idle"); // quiet for 1.5s → idle
+		await until(() => s.runState() === "idle", 6000, "raw session to settle idle"); // the process exited → idle
 		expect(s.runState()).toBe("idle");
 		s.stop();
 	}, 20_000);
 
 	it("a slow first token does NOT flip to idle mid-turn", async () => {
-		const s = new HeadlessSession({ id: "raw2", workDir: dir, clientType: "codex", bin: slowBin });
+		const s = new HeadlessSession({ id: "raw2", workDir: dir, clientType: "codex", command: "codex", bin: slowBin });
 		s.start();
 		s.input("go");
 		await wait(1000); // 1s in, no output yet — old heuristic would have flipped idle at 1.5s of silence
@@ -222,21 +241,42 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.stop();
 	}, 15_000);
 
-	it("does NOT latch idle: resumed output after a >1.5s pause restores thinking", async () => {
-		const s = new HeadlessSession({ id: "raw-pause", workDir: dir, clientType: "codex", bin: pauserBin });
+	it("a >1.5s output pause is NOT the end of the turn — only the process's exit is (#391)", async () => {
+		// The defect this replaces: a one-shot turn was judged idle after 1.5s of quiet, so a build
+		// or a test run — which is silent for far longer than that — read as FINISHED. The Pilot
+		// sent turn 2, `runOneShot` killed turn 1 to keep two engines off one repo, and the work in
+		// flight was destroyed while the brain reasoned about a turn that never completed. A turn is
+		// its own process here, so its exit is the exact boundary and no timer may pre-empt it.
+		const s = new HeadlessSession({ id: "raw-pause", workDir: dir, clientType: "codex", command: "codex", bin: pauserBin });
 		s.start();
 		s.input("build");
-		// First chunk lands, then a >1.5s pause → the settle heuristic reads idle...
 		await until(() => s.snapshot().includes("part 1: build"), 6000, "first paused raw output");
-		await until(() => s.runState() === "idle", 6000, "paused raw session to settle idle");
-		expect(s.runState()).toBe("idle");
-		// ...but when the turn RESUMES (part 2), state must return to thinking, not stay
-		// latched idle (the bug that made the brain act on a half-finished turn).
+		// Well past the old 1.5s "settled" rule, and the process is still working.
+		await wait(1800);
+		expect(s.runState()).toBe("thinking");
+		expect(s.ready).toBe(false); // and nothing may be sent into a live turn
+		// The turn's later output proves it really was still running.
 		await until(() => s.snapshot().includes("part 2: build"), 6000, "second paused raw output");
 		expect(s.runState()).toBe("thinking");
-		// And it settles to idle again once truly quiet.
-		await until(() => s.runState() === "idle", 6000, "resumed raw session to settle idle");
-		expect(s.runState()).toBe("idle");
+		// Idle arrives when — and only when — the process exits.
+		await until(() => s.runState() === "idle", 8000, "the engine process to exit");
+		expect(s.alive).toBe(true); // a resting one-shot session is not a dead one
+		s.stop();
+	}, 25_000);
+
+	it("ends a turn whose engine never exits, and says so (#391)", async () => {
+		// Exit being authoritative needs a ceiling, or a wedged process reports "thinking" forever
+		// and nothing on this path can unstick it. The ceiling ENDS the turn rather than relabelling
+		// a live process as idle — relabelling is the original defect, just slower, because the next
+		// instruction would then land on a repo another engine is still editing.
+		const s = new HeadlessSession({ id: "raw-wedged", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 700 });
+		s.start();
+		s.input("hang");
+		await until(() => s.snapshot().includes("wedged: hang"), 6000, "the wedged engine's output");
+		expect(s.runState()).toBe("thinking");
+		await until(() => s.runState() === "idle", 6000, "the turn ceiling to end the turn");
+		expect(s.snapshot()).toMatch(/turn ended after .* the engine never exited/);
+		expect(s.alive).toBe(true); // the SESSION survives; only the turn was ended
 		s.stop();
 	}, 20_000);
 
@@ -247,7 +287,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// every delegated goal on codex/grok/gemini/ollama died at iteration 0 having done
 		// nothing, reporting a dead session that was healthy and answering interactive turns.
 		// `alive` means "can take a turn"; "is a turn executing" is runState.
-		const s = new HeadlessSession({ id: "raw-alive", workDir: dir, clientType: "codex", bin: codexBin });
+		const s = new HeadlessSession({ id: "raw-alive", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
 		s.start();
 		expect(s.alive).toBe(true); // before the first turn
 		expect(s.runState()).toBe("idle"); // ...and nothing is executing
@@ -418,7 +458,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		// leaving an engine process still editing the repo, invisible to diagnostics and
 		// kill-tmux. `alive` cannot show this (a one-shot session is alive until stop), so the
 		// assertion is on `runState`, which is what the brain actually reads.
-		const s = new HeadlessSession({ id: "stale", workDir: dir, clientType: "codex", bin: slowBin });
+		const s = new HeadlessSession({ id: "stale", workDir: dir, clientType: "codex", command: "codex", bin: slowBin });
 		s.start();
 		s.input("build");
 		await until(() => s.snapshot().includes("turn1 start"), 6000, "turn 1 to emit");
@@ -432,9 +472,13 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		s.stop();
 	}, 20_000);
 
-	it("aborts a still-running turn before spawning its replacement", async () => {
-		// Two engine processes editing the same repo concurrently is worse than a lost turn.
-		const s = new HeadlessSession({ id: "stale2", workDir: dir, clientType: "codex", bin: fastBin });
+	it("aborts a still-running turn before spawning its replacement, and RECORDS the abort", async () => {
+		// Two engine processes editing the same repo concurrently is worse than a lost turn — and
+		// `input()` still accepts a turn at any moment (a human typing, a takeover), so making exit
+		// authoritative did not remove the need for this. What it did remove is the excuse for doing
+		// it silently: a turn's work vanishing with no line in the transcript is how the Pilot ends
+		// up reasoning about a turn that never finished, with nothing to explain the gap (#391).
+		const s = new HeadlessSession({ id: "stale2", workDir: dir, clientType: "codex", command: "codex", bin: fastBin });
 		s.start();
 		s.input("one");
 		await until(() => s.snapshot().includes("turn2: one"), 6000, "first turn");
@@ -442,6 +486,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		await until(() => s.snapshot().includes("turn2: two"), 6000, "second turn");
 		// Both turns are in the transcript, and exactly one process is current.
 		expect(s.snapshot()).toContain("turn2: one");
+		expect(s.snapshot()).toMatch(/turn aborted — a new instruction arrived/);
 		s.stop();
 		expect(s.alive).toBe(false);
 	}, 20_000);

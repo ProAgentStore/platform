@@ -69,6 +69,8 @@ export interface HeadlessSessionConfig {
 	statePath?: string;
 	/** Override the spawned binary (tests). Defaults to "claude". */
 	bin?: string;
+	/** Override the one-shot turn ceiling in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_MS}. */
+	maxTurnMs?: number;
 }
 
 type Run = "idle" | "thinking";
@@ -104,6 +106,20 @@ const MAX_PENDING_USAGE = 200;
  */
 const MAX_PENDING_ACTS = 100;
 
+/**
+ * Absolute ceiling on ONE one-shot turn (#391).
+ *
+ * The old idle heuristic carried a 15-minute backstop so a wedged engine could not sit "thinking"
+ * forever. Now that exit is the only thing that ends a one-shot turn, that ceiling has to be
+ * ENFORCED rather than inferred: a rule that merely relabels a still-running process as idle is
+ * the very defect #391 is about — it hands the next turn a repo another engine is still editing.
+ *
+ * So the timer ends the turn (SIGTERM) and says so in the transcript. Removing the ceiling
+ * outright would trade an early kill for a permanent hang, which is worse: nothing else on this
+ * path can unstick a process that never exits, and the console's Restart is a human noticing.
+ */
+const MAX_ONE_SHOT_TURN_MS = 15 * 60 * 1000;
+
 export class HeadlessSession {
 	/**
 	 * A human-readable label for this engine process (#247).
@@ -126,11 +142,11 @@ export class HeadlessSession {
 	private readonly cmdBin: string;
 	private readonly cmdArgs: string[];
 	private readonly binName: string;
-	/** Wall-clock of the last stdout/stderr byte — drives the raw-mode idle heuristic. */
+	/** Wall-clock of the last stdout/stderr byte — drives the persistent-raw idle heuristic. */
 	private lastOutputAt = 0;
-	/** Raw-mode: has any output arrived since the current turn's input? */
+	/** Persistent-raw: has any output arrived since the current turn's input? */
 	private sawOutputSinceInput = false;
-	/** Raw-mode: when the current turn started (absolute idle backstop). */
+	/** Persistent-raw: when the current turn started (absolute idle backstop). */
 	private turnStartedAt = 0;
 	/** Set by stop() — the only thing that ends a one-shot session (see `alive`). */
 	private stopped = false;
@@ -261,7 +277,26 @@ export class HeadlessSession {
 
 	runState(): "idle" | "thinking" | "responding" {
 		if (!this.alive) return "idle";
-		// Raw engines have no "turn over" event, so we INFER idle. Three rules, in order:
+		// A ONE-SHOT engine's turn IS a process, so its exit is an exact end-of-turn signal and no
+		// timer may pre-empt it (#391). Idle is set by the `close` handler; here the only question
+		// is whether that process is still running.
+		//
+		// This used to fall through to the timer rules below, which were written for a PERSISTENT
+		// interactive CLI — one with no other signal to read. Against a one-shot engine the 1.5s
+		// quiet rule could only ever fire EARLY: any pause inside a turn (a test suite, an install,
+		// a slow network fetch) read as "finished", the Pilot sent turn 2, and `runOneShot` killed
+		// turn 1 to keep two engines off one repo. The heuristic that existed to prevent a
+		// premature finish was causing one, and destroying the work in flight to do it.
+		//
+		// The ceiling that stops a wedged process is armed in `runOneShot` — it ENDS the turn
+		// rather than relabelling a live one as idle, which is the same mistake in slower form.
+		if (this.oneShot) return this.procAlive ? "thinking" : "idle";
+		// Below: a PERSISTENT non-Claude engine — alive between turns, so exit says nothing about
+		// a turn and idle must be inferred. None ships today; every raw engine is one-shot. The
+		// gate is `!oneShot` rather than `mode === "raw"` because the latter now means the
+		// OPPOSITE of the condition these rules were written for.
+		//
+		// Three rules, in order:
 		//  1. produced output, then went quiet for 1.5s → settled (the common case).
 		//  2. NEVER produced output but 8s elapsed → a silent turn (just a prompt) is done.
 		//  3. absolute 15-min backstop → never wedge "thinking" forever (e.g. a heartbeat
@@ -379,7 +414,7 @@ export class HeadlessSession {
 		const now = Date.now();
 		this.lastOutputAt = now;
 		this.turnStartedAt = now;
-		this.sawOutputSinceInput = false; // arm the raw idle heuristic for THIS turn
+		this.sawOutputSinceInput = false; // arm the persistent-raw idle heuristic for THIS turn
 		try {
 			if (this.mode === "stream-json") {
 				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
@@ -415,11 +450,17 @@ export class HeadlessSession {
 			env: mergeEnv(process.env, this.config.env),
 			stdio: ["ignore", "pipe", "pipe"],
 		});
-		// A turn already running is aborted before its replacement starts. `input()` never killed
-		// the previous process, and the raw idle heuristic declares idle after a >1.5s output
-		// pause — so a long build could be judged idle, the brain sends turn 2, and TWO engine
-		// processes edit the same repo at once.
+		// A turn already running is aborted before its replacement starts: `input()` accepts a turn
+		// at any time — a human typing in the console, a takeover, a Loop that stopped waiting —
+		// so without this TWO engine processes edit the same repo at once. Still needed after #391
+		// made exit authoritative: that stops the Pilot from being TOLD a running turn is over, it
+		// does not stop anyone from sending anyway.
+		//
+		// It SAYS what it destroyed, for the same reason the non-zero exit code goes into the
+		// transcript below: a turn's work vanishing with no line in the record is how the Pilot
+		// ends up reasoning about a turn that never finished, with nothing to explain the gap.
 		if (this.procAlive) {
+			this.push(`[${this.config.clientType} turn aborted — a new instruction arrived while the previous one was still running]`);
 			try {
 				this.proc?.kill();
 			} catch {
@@ -440,7 +481,21 @@ export class HeadlessSession {
 		});
 		proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString()));
 		proc.stderr?.on("data", (d: Buffer) => this.onStdout(d.toString()));
+		// The enforced ceiling (#391). `unref` so a pending timer can never keep the runner's
+		// event loop alive past its own shutdown.
+		const maxTurnMs = this.config.maxTurnMs ?? MAX_ONE_SHOT_TURN_MS;
+		const ceiling = setTimeout(() => {
+			if (this.proc !== proc) return; // a newer turn owns the session; this one is already gone
+			this.push(`[${this.config.clientType} turn ended after ${Math.round(maxTurnMs / 60000)}m — the engine never exited, so the session was unwedged]`);
+			try {
+				proc.kill();
+			} catch {
+				/* already gone */
+			}
+		}, maxTurnMs);
+		ceiling.unref();
 		proc.on("close", (code: number | null) => {
+			clearTimeout(ceiling); // cleared before the staleness guard: the timer belongs to THIS process
 			// A non-zero exit is the engine's own failure (bad flags, not signed in) and the
 			// operator needs to see it — silently going idle is how "stdin is not a terminal"
 			// looked like an idle session for a whole afternoon.

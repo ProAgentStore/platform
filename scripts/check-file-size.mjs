@@ -364,7 +364,15 @@ const PINS = {
 	// point of #361's floor is that the caller names its event rather than the layer guessing
 	// from the prose.
 	"workers/api/src/lib/triggers.ts": 853,
-	"packages/browser-runner/src/coding/headless.ts": 819,
+	// +55 at #391 (a constant, a config field, a timer, and the paragraphs saying why): one-shot
+	// turn boundaries moved from three inferred timers to the process's own exit, and the
+	// 15-minute backstop had to become an ENFORCED ceiling — a timer that ends the turn — rather
+	// than a rule that relabels a live process as idle. Raised rather than split BECAUSE of the
+	// prose: the timers looked correct for years, and a reader who finds the new rule without
+	// finding "a one-shot engine's exit is the exact boundary, so a quiet timer can only ever fire
+	// early" will eventually restore one. The mechanics that could be extracted (the ceiling, the
+	// abort note) are four lines each and belong beside the spawn they guard.
+	"packages/browser-runner/src/coding/headless.ts": 874,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge

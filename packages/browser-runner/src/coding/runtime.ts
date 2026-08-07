@@ -9,8 +9,9 @@ import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree,
 import { ensureRepo, sanitizeSessionName } from "./repo.js";
 
 /**
- * The coding runtime: the local "hands" that hold live tmux coding sessions, the
- * tmux counterpart of the browser runtime's Playwright page management.
+ * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
+ * processes ({@link HeadlessSession}), NOT tmux panes — the counterpart of the browser
+ * runtime's Playwright page management (#247).
  *
  * The remote brain (CodingSessionWorkflow) drives sessions through the
  * `/coding/*` HTTP surface: start a session, `capture` what the CLI shows, `act`
@@ -86,8 +87,8 @@ export class CodingRuntime {
 	/**
 	 * Active human handoffs keyed by session id. `resolved` flips when the human
 	 * finishes (console "Resume" / submits a value); the brain workflow polls
-	 * {@link takeoverStatus} and continues once it does — the tmux analogue of the
-	 * browser runtime's handoff-status machinery.
+	 * {@link takeoverStatus} and continues once it does — the coding-session analogue of
+	 * the browser runtime's handoff-status machinery.
 	 */
 	private takeovers = new Map<string, { reason: string; label: string; resolved: boolean; value?: string }>();
 
