@@ -83,8 +83,14 @@ export default function Notifications() {
 								else load();
 							}}
 						>
-							<div className="flex justify-between items-start">
-								<div>
+							<div className="flex justify-between items-start gap-2">
+								{/* `min-w-0` lets the column shrink; `[overflow-wrap:anywhere]` is what makes the
+								    STRING shorter. A notification body carries paths and repo names
+								    (`pas/platform: Here are the 10 largest files in …`) — one unbreakable token,
+								    so min-content stayed 397px inside a 340px row and the whole page panned by
+								    up to 110px at 320px. Same pair, same reason, as the account rows in
+								    `AccountConnections.tsx` (#333). */}
+								<div className="min-w-0 [overflow-wrap:anywhere]">
 									<div className="font-semibold text-sm">
 										{/* A run that has STOPPED and is waiting for you reads differently from news
 										    about one that finished — the same distinction a `needs_human` board card
