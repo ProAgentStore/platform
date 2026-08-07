@@ -128,7 +128,15 @@ const PINS = {
 	// it. One `biasPrompt()` computes the string all three call sites use, because the echo guard
 	// (#332) has to compare against the list that was actually SENT. The joining rule is pure and
 	// lives in voice/prompt.ts; the ref plumbing is what a hook is for and could not move.
-	"packages/sdk/src/voice/use-voice.ts": 1624,
+	// +39 for #377, raised late: f38367f grew this file and did not move the pin with it, which
+	// is the omission this ratchet exists to make loud. The growth is right and stays. A noise
+	// rejection used to `clear`, and three sites decided that on their own; the verdict is now
+	// pure (`planNoiseRejection` in voice/turn.ts) and each site spends lines on what a rejection
+	// COSTS — keeping the bubble as `failed`, handing the two recover paths to the composer, and
+	// a `client:voice` breadcrumb at each, because the defect's worst property was leaving no
+	// record anywhere. `gateSnapshot()` is the one extraction: both flags now read together at
+	// every decision point instead of separately at each.
+	"packages/sdk/src/voice/use-voice.ts": 1663,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
