@@ -1928,6 +1928,159 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 });
 
 /**
+ * The Terminal tab's pane is readable on a phone (#370).
+ *
+ * This is the guard the sweep above structurally could not be. `measureOverflow` measures the
+ * HORIZONTAL axis, and #370 was a vertical collapse: below `lg` the tab's two-column grid stacks
+ * eight blocks in one column, five of which are full-width inputs below `sm`, and the `<pre>` is
+ * the only `flex-1` element among them — so it absorbed the whole deficit and resolved to 24px,
+ * its own `p-3` padding and ZERO lines of output. Nothing about that pushes anything past the
+ * right edge, so every horizontal assertion was correctly green on a tab showing nothing.
+ *
+ * The second reason it was never caught: no instance in any fixture declares `surfaces: ["tmux"]`,
+ * so `TmuxTab` had never rendered in an e2e run at all — a vertical check bolted onto the sweep
+ * would still not have visited it. This block supplies the fixture and asserts BOTH axes.
+ */
+test.describe("mobile — the terminal pane is readable (#370)", () => {
+	const PANE = Array.from({ length: 60 }, (_, i) => `❯ line ${i} ${"x".repeat(70)}`).join("\n");
+
+	const tmuxInstance = [{
+		id: "inst-1",
+		name: "Terminal Agent",
+		slug: "terminal-agent",
+		category: "productivity",
+		capabilities: { surfaces: ["tmux"], runtime: "terminal", workflow: null },
+	}];
+
+	async function mockTmux(page: Page) {
+		await mockSignedInConsole(page, { instances: tmuxInstance });
+		await page.route("**/v1/instances/inst-1/tools**", async (route) => {
+			const path = new URL(route.request().url()).pathname;
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (path.endsWith("/tools")) {
+				// Every write tool granted: that renders the create-target and send-keys rows, which
+				// are the five stacked inputs that squeezed the pane. A read-only fixture would not
+				// reproduce the bug.
+				return json({
+					tools: ["terminal_list_targets", "terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_new_target", "terminal_kill_target"]
+						.map((name) => ({ name, allowed: true, scope: name.endsWith("_capture") || name.endsWith("_targets") ? "read" : "write" })),
+				});
+			}
+			if (path.endsWith("/terminal_list_targets")) {
+				return json({
+					success: true,
+					content: JSON.stringify([
+						{ backend: "tmux", id: "main", name: "main", windows: 3, attached: true, activeCommand: "pnpm test", activeWindow: "editor" },
+						{ backend: "tmux", id: "build", name: "build", windows: 1, attached: false, activeCommand: "vite" },
+						{ backend: "kitty", id: "7", name: "scratch", windows: 1, attached: false },
+					]),
+				});
+			}
+			if (path.endsWith("/terminal_capture")) return json({ success: true, content: PANE });
+			return json({ success: true, content: "" });
+		});
+	}
+
+	/** Height of the pane's CONTENT box in whole lines — what a person can actually read. */
+	async function paneLines(page: Page) {
+		return page.evaluate(() => {
+			const pre = document.querySelector("pre");
+			if (!pre) return 0;
+			const cs = getComputedStyle(pre);
+			const inner = pre.getBoundingClientRect().height - Number.parseFloat(cs.paddingTop) - Number.parseFloat(cs.paddingBottom);
+			return Math.floor(inner / Number.parseFloat(cs.lineHeight));
+		});
+	}
+
+	/**
+	 * Ten lines is well under what the fix delivers (30 at 320px, 32 at 390px, 20 at 390px/1.3x)
+	 * and far above what the bug did (0). It is a floor on "readable", not a pin on the layout —
+	 * pinning the exact height would fail on any deliberate chrome change and teach nothing.
+	 */
+	const MIN_LINES = 10;
+
+	for (const width of [320, 390]) {
+		test(`the pane shows terminal output at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockTmux(page);
+			await page.goto("/console/instances/inst-1/tmux");
+			await page.waitForLoadState("networkidle");
+			await page.waitForTimeout(400);
+
+			// The fixture really rendered — a 0-line pane and an unrendered tab both "show nothing".
+			await expect(page.locator('span[style*="color:#67e8f9"]').first()).toBeVisible();
+			expect(await paneLines(page), `terminal pane shows too few lines at ${width}px`).toBeGreaterThanOrEqual(MIN_LINES);
+
+			// And it did not buy that height by panning the page sideways.
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(mainOv).toBeLessThanOrEqual(1);
+			expect(docOv).toBeLessThanOrEqual(1);
+		});
+	}
+
+	test("the pane survives the largest text size", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockTmux(page);
+		await page.addInitScript(() => window.localStorage.setItem("pags:textScale", "1.3"));
+		await page.goto("/console/instances/inst-1/tmux");
+		await page.waitForLoadState("networkidle");
+		await page.waitForTimeout(400);
+
+		const rootPx = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
+		expect(rootPx, "text scale did not reach the document").toBeGreaterThan(19);
+		expect(await paneLines(page), "terminal pane shows too few lines at 1.3x").toBeGreaterThanOrEqual(MIN_LINES);
+
+		const { wide, mainOv } = await measureOverflow(page);
+		expect(wide, `content past the right edge at 390w / 1.3x: ${wide.join(", ")}`).toEqual([]);
+		expect(mainOv).toBeLessThanOrEqual(1);
+	});
+
+	test("the switch reaches the target list and the controls the pane no longer shares a column with", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockTmux(page);
+		await page.goto("/console/instances/inst-1/tmux");
+		await page.waitForLoadState("networkidle");
+		await page.waitForTimeout(400);
+
+		// Output is the landing view — the report was "it shows the terminal selector", so landing
+		// on the selector would reproduce the complaint deliberately.
+		await expect(page.getByRole("button", { name: "Output", exact: true })).toHaveAttribute("aria-pressed", "true");
+		await expect(page.getByRole("button", { name: "Text to send" })).toBeHidden();
+
+		await page.getByRole("button", { name: "Controls", exact: true }).click();
+		await expect(page.getByRole("textbox", { name: "Text to send" })).toBeVisible();
+		await expect(page.getByRole("textbox", { name: "Working directory" })).toBeVisible();
+		await expect(page.locator("pre")).toBeHidden();
+
+		await page.getByRole("button", { name: "Targets", exact: true }).click();
+		await expect(page.getByText("scratch")).toBeVisible();
+
+		// Picking a target is asking for its output, so the tap lands you back on the pane.
+		await page.getByText("scratch").click();
+		await expect(page.locator("pre")).toBeVisible();
+		expect(await paneLines(page)).toBeGreaterThanOrEqual(MIN_LINES);
+	});
+
+	test("the wide layout still shows every block at once", async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 812 });
+		await mockTmux(page);
+		await page.goto("/console/instances/inst-1/tmux");
+		await page.waitForLoadState("networkidle");
+		await page.waitForTimeout(400);
+
+		// No switch above lg, and the three blocks it would switch between are all on screen —
+		// the two-column layout was never the bug and must not become collateral.
+		await expect(page.getByRole("button", { name: "Output", exact: true })).toBeHidden();
+		await expect(page.locator("pre")).toBeVisible();
+		await expect(page.getByRole("textbox", { name: "Text to send" })).toBeVisible();
+		await expect(page.getByRole("textbox", { name: "Command", exact: true })).toBeVisible();
+		await expect(page.getByText("scratch")).toBeVisible();
+		expect(await paneLines(page)).toBeGreaterThanOrEqual(MIN_LINES);
+	});
+});
+
+/**
  * Profile, with the data a real account actually has (#235).
  *
  * The sweep above ran Profile with the default fixture: no profile fields, no API providers, a
