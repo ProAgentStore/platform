@@ -104,7 +104,7 @@ export class RelayDO extends DurableObject<Env> {
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
-	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+	async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const text = typeof message === "string" ? message : new TextDecoder().decode(message);
 
 		// Ignore pings
@@ -127,11 +127,11 @@ export class RelayDO extends DurableObject<Env> {
 		pending.resolve(parsed);
 	}
 
-	async webSocketClose(ws: WebSocket): Promise<void> {
+	async webSocketClose(_ws: WebSocket): Promise<void> {
 		this.rejectAll("Runner disconnected");
 	}
 
-	async webSocketError(ws: WebSocket): Promise<void> {
+	async webSocketError(_ws: WebSocket): Promise<void> {
 		this.rejectAll("Runner WebSocket error");
 	}
 
@@ -205,7 +205,7 @@ export class RelayDO extends DurableObject<Env> {
 	// ── Helpers ──────────────────────────────────────────────────────────
 
 	private rejectAll(reason: string): void {
-		for (const [id, pending] of this.pending) {
+		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timer);
 			pending.reject(new Error(reason));
 		}

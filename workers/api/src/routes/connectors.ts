@@ -26,7 +26,7 @@ function callbackUri(reqUrl: string, id: string): string {
 /** Resolve a connector that is oauth-auth AND has credentials wired, or throw a clear error. */
 function requireOauthConnector(env: Env, id: string) {
 	const connector = getConnector(id);
-	if (!connector || connector.auth !== "oauth" || !connector.oauth) {
+	if (connector?.auth !== "oauth" || !connector.oauth) {
 		throw new HttpError(404, `No OAuth connector "${id}".`);
 	}
 	const creds = resolveOauthConfig(env, id);
@@ -176,7 +176,7 @@ connectorRoutes.get("/:id/oauth/status", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
 	const connector = getConnector(id);
-	if (!connector || connector.auth !== "oauth") throw new HttpError(404, `No OAuth connector "${id}".`);
+	if (connector?.auth !== "oauth") throw new HttpError(404, `No OAuth connector "${id}".`);
 	const creds = resolveOauthConfig(c.env, id);
 	const row = await c.env.DB.prepare("SELECT created_at, account_label FROM user_api_keys WHERE user_id = ?1 AND provider = ?2")
 		.bind(session.uid, id)

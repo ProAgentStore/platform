@@ -3,7 +3,6 @@
 // API (routes/tools), and (later) MCP, so a new connector is declared in one place
 // instead of the current triple-definition. Additive: the legacy AGENT_TOOLS /
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
-import type { Env } from "../types.js";
 import { consentInstanceOf, describeAuthority, isDelegated } from "./execution-authority.js";
 import { logEvent } from "./events.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";

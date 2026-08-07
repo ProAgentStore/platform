@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { closeRun, listRuns, openRun } from "./pipeline-runs.js";
 import type { Env } from "../types.js";
 

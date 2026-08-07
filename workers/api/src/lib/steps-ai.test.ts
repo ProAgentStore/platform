@@ -7,7 +7,7 @@ vi.mock("./user-ai.js", () => ({ runUserWorkersAi: (...a: unknown[]) => runUserW
 import { STEP_TOOLS } from "./steps.js";
 import type { RegistryToolCtx } from "./tool-registry.js";
 
-// biome-ignore lint/style/noNonNullAssertion: the step is defined in this module.
+// Non-null assertion is safe: the step is defined in this module.
 const aiGen = STEP_TOOLS.find((t) => t.name === "ai_generate")!;
 
 describe("ai_generate step", () => {

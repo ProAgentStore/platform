@@ -510,7 +510,7 @@ const DRY_RUN_SUBMIT_RE =
 	/\bsubmit\b|\bfinish\b|\bdone\b|\bcomplete\b|\bconfirm\b|send application|submit application|easy apply|quick apply|one[- ]?click|1[- ]?click/i;
 
 export function dryRunBlockReason(action: { action?: string; name?: string } | null | undefined): string | null {
-	if (!action || action.action !== "click") return null;
+	if (action?.action !== "click") return null;
 	const name = String(action.name ?? "").trim();
 	if (!name) {
 		return 'DRY-RUN (test mode): a click must include the control\'s visible `name` so the final submit can be recognised and blocked. Re-issue this click with `name`.';

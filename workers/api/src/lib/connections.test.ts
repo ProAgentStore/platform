@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createConnection, deleteConnection, deliverEvent, listConnections, matchesConnectionFilter, validateConnectionFilter, type ConnectionRow } from "./connections.js";
 import type { Env } from "../types.js";
 

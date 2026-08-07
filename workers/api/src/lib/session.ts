@@ -76,7 +76,7 @@ export async function signRelayToken(
 
 export async function verifyRelayToken(token: string, signingKey: string): Promise<RelayToken | null> {
 	const p = await verifyPayload<RelayToken>(token, signingKey);
-	if (!p || p.typ !== "relay" || typeof p.exp !== "number" || !p.instanceId || !p.uid) return null;
+	if (p?.typ !== "relay" || typeof p.exp !== "number" || !p.instanceId || !p.uid) return null;
 	if (p.exp < Math.floor(Date.now() / 1000)) return null;
 	return p;
 }
@@ -114,7 +114,7 @@ export async function signChatToken(
 
 export async function verifyChatToken(token: string, signingKey: string): Promise<ChatToken | null> {
 	const p = await verifyPayload<ChatToken>(token, signingKey);
-	if (!p || p.typ !== "chat" || typeof p.exp !== "number" || !p.agentId || !p.uid) return null;
+	if (p?.typ !== "chat" || typeof p.exp !== "number" || !p.agentId || !p.uid) return null;
 	if (p.exp < Math.floor(Date.now() / 1000)) return null;
 	return p;
 }

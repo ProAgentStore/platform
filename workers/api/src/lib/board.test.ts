@@ -34,6 +34,7 @@ describe("TICKET_TURN_TYPES_SQL — the partial index only works if the predicat
 		// and the count becomes a full scan of the runtime event firehose. The query still
 		// returns the right answer, so nothing else would ever catch it.
 		expect(migration).toContain(`WHERE type IN (${TICKET_TURN_TYPES_SQL})`);
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: asserting on board.ts's SOURCE TEXT — the placeholder is what the assertion looks for, not a lost interpolation.
 		expect(boardCode).toContain("AND type IN (${TICKET_TURN_TYPES_SQL})");
 	});
 

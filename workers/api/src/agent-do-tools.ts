@@ -184,7 +184,7 @@ export function toolNamesFor(capabilities?: AgentCapabilities): Set<string> {
 	const surfaces = capabilities?.surfaces ?? [];
 	const declared = capabilities?.tools;
 	let set: Set<string>;
-	if (declared && declared.length) {
+	if (declared?.length) {
 		set = new Set<string>(BASE);
 		for (const name of declared) if (CREATOR_SELECTABLE_TOOLS.has(name)) set.add(name);
 	} else if (surfaces.includes("repo")) {

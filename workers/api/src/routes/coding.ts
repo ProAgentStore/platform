@@ -6,10 +6,9 @@ import { githubAppConfigured, installationTokenForOwner } from "../lib/github-ap
 import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "../lib/github-actions.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
-import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
+import { runUserWorkersAi } from "../lib/user-ai.js";
 import {
 	asClient,
-	deriveClientType,
 	engineAuthFor,
 	ENGINE_AUTHS,
 	engineAuthReport,
@@ -51,7 +50,7 @@ import { recordEngineUsage } from "../lib/usage.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
-import type { CodingClientType, CodingSessionRecord } from "../lib/coding-types.js";
+import type { CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 
@@ -1196,8 +1195,9 @@ codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
 	if (!raw) return c.json({ error: "message is required" }, 400);
 
 	// Global context: every repo, whether it has a live session, and its recent activity.
+	// No repo-id index here: #156 moved resolution into parseDelegationTarget/delegateToTarget,
+	// which own the refusal cases. The map this route used to build went unread after that.
 	const repos = await listRepos(c.env, instanceId, uid);
-	const repoById = new Map(repos.map((r) => [r.id, r] as const));
 	const blocks: string[] = [];
 	for (const r of repos) {
 		const active = await getActiveSessionForRepo(c.env, instanceId, uid, r.id);

@@ -55,6 +55,7 @@ function repoVecMetas(storage: DurableObjectStorage & { _store: Map<string, unkn
 describe("AgentStorageEngine repo vectors", () => {
 	// chunkText drops fragments ≤20 chars, so test content is realistically sized.
 	const FILE_A = "export const answer = 42; // the canonical example value for this module";
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source code being indexed — the `${...}` is part of the file content under test, not an interpolation in this test.
 	const FILE_B = "function greet(name) { return `hello ${name}, welcome to the project`; }";
 
 	it("namespaces vectors by repo and labels every chunk with repo + path", async () => {

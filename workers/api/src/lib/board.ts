@@ -392,7 +392,7 @@ export async function setInstanceBoardConfig(
 	const cfg = parseJson(row?.config);
 	if (patch.columns !== undefined) {
 		const clean = patch.columns === null ? undefined : sanitizeBoardColumns(patch.columns);
-		if (clean && clean.length) cfg.boardColumns = clean.slice(0, MAX_BOARD_COLUMNS);
+		if (clean?.length) cfg.boardColumns = clean.slice(0, MAX_BOARD_COLUMNS);
 		else delete cfg.boardColumns; // null / empty / invalid → reset to the agent's columns
 	}
 	if (patch.view === "list" || patch.view === "kanban") cfg.boardView = patch.view;
@@ -435,7 +435,7 @@ export async function configureBoardForAgent(
 	if (patch.columns === undefined && patch.view === undefined) {
 		return { content: "Nothing to change — provide `columns` (JSON array), `view` (kanban|list), or reset:true.", success: false };
 	}
-	if (patch.columns && patch.columns.length && !sanitizeBoardColumns(patch.columns)) {
+	if (patch.columns?.length && !sanitizeBoardColumns(patch.columns)) {
 		return { content: "Each column needs at least an `id` and a `title`.", success: false };
 	}
 	const cfg = await setInstanceBoardConfig(env, instanceId, userId, patch);

@@ -27,7 +27,7 @@ describe("atsHost", () => {
 describe("ats apply cache", () => {
 	function mockEnv() {
 		const store = new Map<string, { notes: string; steps: number }>();
-		const prepare = vi.fn((sql: string) => ({
+		const prepare = vi.fn((_sql: string) => ({
 			bind: (...args: unknown[]) => ({
 				first: async () => {
 					const [userId, host] = args as [string, string];

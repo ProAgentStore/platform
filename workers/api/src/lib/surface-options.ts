@@ -63,10 +63,10 @@ export function parseSurfaceSpec(raw: unknown): SurfaceSpec {
 		repos: o.repos === "single" ? "single" : "many",
 		// Only an explicit `false` opts out. An absent or malformed value keeps the drive tools,
 		// because silently dropping them is the failure this default exists to prevent.
-		drive: o.drive === false ? false : true,
+		drive: o.drive !== false,
 		// Same rule as `drive`: only an explicit false opts out, so a malformed config can never
 		// silently remove a surface the user is looking at.
-		copilot: o.copilot === false ? false : true,
+		copilot: o.copilot !== false,
 	};
 }
 

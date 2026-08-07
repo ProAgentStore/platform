@@ -54,7 +54,6 @@ describe("hasConsent", () => {
 	});
 
 	it("scopes the query by instance + connector + scope", async () => {
-		const { env } = mockEnv({ first: { ok: 1 } });
 		// captured via a bespoke DB to assert the exact bound args
 		const captured: Write[] = [];
 		const scopedEnv = {

@@ -76,7 +76,7 @@ async function decryptSecrets(env: Env, row: Pick<CredRow, "secrets_ciphertext" 
 	}
 }
 
-function rowToSummary(env: Env, row: CredRow): CredentialSummary {
+function rowToSummary(row: CredRow): CredentialSummary {
 	// hasX flags come from re-decrypting? No — keep it cheap: infer from presence of
 	// the ciphertext, refined per-field on reveal. We store a tiny plaintext "has"
 	// map by re-encrypting only set fields, so flags are derived at reveal time.
@@ -102,7 +102,7 @@ export async function listCredentials(env: Env, instanceId: string, userId: stri
 		.all<CredRow>();
 	const out: CredentialSummary[] = [];
 	for (const row of res.results ?? []) {
-		const summary = rowToSummary(env, row);
+		const summary = rowToSummary(row);
 		const secrets = await decryptSecrets(env, row);
 		summary.hasPassword = !!secrets.password;
 		summary.hasPin = !!secrets.pin;
@@ -119,7 +119,7 @@ export async function revealCredential(env: Env, instanceId: string, userId: str
 		.first<CredRow>();
 	if (!row) return null;
 	const secrets = await decryptSecrets(env, row);
-	const summary = rowToSummary(env, row);
+	const summary = rowToSummary(row);
 	return { ...summary, hasPassword: !!secrets.password, hasPin: !!secrets.pin, hasRecoveryCodes: !!secrets.recoveryCodes, ...secrets };
 }
 

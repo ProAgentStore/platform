@@ -175,7 +175,11 @@ const PINS = {
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
-	"workers/api/src/lib/steps.ts": 988,
+	// +2 for #326: fan_out's `concurrency` option is gone (schema property, description clause, and
+	// the local that read it — nothing ever used the value), replaced by four lines saying why it
+	// must not come back. The knob is the kind of debt the deleted code cannot record: a model that
+	// sets it believes it tuned throughput. Net is code removed, prose added.
+	"workers/api/src/lib/steps.ts": 990,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about

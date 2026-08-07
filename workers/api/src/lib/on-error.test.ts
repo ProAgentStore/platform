@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isTransientInfraError, logUnhandled } from "./on-error.js";
 import { HttpError } from "./auth.js";
 import type { Env } from "../types.js";

@@ -5,7 +5,6 @@ import {
 	type CodingActionKind,
 	type CodingDecision,
 	type CodingDeps,
-	type CodingGoal,
 	type CodingPaneSnapshot,
 	type CodingResult,
 } from "../lib/coding-loop.js";

@@ -1,3 +1,7 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: every `${...}` in this file is a
+// FIXTURE, not an interpolation that lost its backticks. findQuotedInterpolations is a detector
+// for SQL built by string interpolation, so its tests must hand it source text containing the
+// placeholder verbatim. Rewriting them to satisfy the rule would delete the thing under test.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
-import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
+import { getRegistryTool, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
@@ -28,7 +28,7 @@ import { listConnections, createConnection, deleteConnection } from "../lib/conn
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
-import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";

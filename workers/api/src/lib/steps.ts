@@ -17,7 +17,7 @@
 // `runRegistryTool`. That mutual need is real, so the calls below use a deferred
 // `await import("./tool-registry.js")`: by the time one runs, both modules are initialised.
 // Import it statically and the two initialise against each other. See lib/import-graph.ts.
-import type { RegistryToolCtx, RegistryToolResult, ToolDef } from "./connectors/types.js";
+import type { RegistryToolResult, ToolDef } from "./connectors/types.js";
 import { getPath } from "./connectors/http.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
 import { parseStepNumber, stepNumberError } from "./step-number.js";
@@ -610,7 +610,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		description:
-			"Iterate a source over pages (drive an http_request pagination cursor) OR over a generated set (grid cells around a centre), with a concurrency cap, and aggregate the items. mode 'grid': given center{lat,lng}, extentKm, stepKm → yields (2n+1)² cell centres (the lead-finder's grid). mode 'pages': repeatedly runs an http_request `request` template, threading the returned nextCursor into `cursorParam` until exhausted or `maxPages`. Returns the aggregated {items} (+ cells for grid).",
+			"Iterate a source over pages (drive an http_request pagination cursor) OR over a generated set (grid cells around a centre), and aggregate the items. mode 'grid': given center{lat,lng}, extentKm, stepKm → yields (2n+1)² cell centres (the lead-finder's grid). mode 'pages': repeatedly runs an http_request `request` template, threading the returned nextCursor into `cursorParam` until exhausted or `maxPages`. Returns the aggregated {items} (+ cells for grid).",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -624,12 +624,14 @@ export const STEP_TOOLS: ToolDef[] = [
 				cursorParam: { type: "string", description: "pages: which inputs key receives the previous page's nextCursor." },
 				itemsPath: { type: "string", description: 'pages: dotted path into each response for the page items (default "data").' },
 				maxPages: { type: "number", description: "pages: cap on pages fetched (default 5, max 50)." },
-				concurrency: { type: "number", description: "Max concurrent page/cell operations (default 4, max 20)." },
+				// No `concurrency` knob: it was advertised here and read into a local nothing used.
+				// `pages` is inherently sequential (each request needs the previous cursor) and `grid`
+				// only generates cell centres, so neither mode has anything to run in parallel. A number
+				// the model can set that changes nothing reads as a throughput control someone tuned.
 			},
 			required: [],
 		},
 		handler: async (ctx, input) => {
-			const concurrency = Number(input.concurrency) || 4;
 			const mode = input.mode === "pages" ? "pages" : "grid";
 
 			if (mode === "grid") {
@@ -641,9 +643,9 @@ export const STEP_TOOLS: ToolDef[] = [
 				return ok(JSON.stringify({ mode, cells, items: cells, count: cells.length }, null, 2));
 			}
 
-			// pages: drive http_request's nextCursor. Runs sequentially (each page needs the
-			// previous cursor); `concurrency` is honored via the shared cap helper when a page
-			// itself fans out — here it caps nothing beyond 1, kept for API symmetry.
+			// pages: drive http_request's nextCursor. Runs sequentially — each page needs the
+			// previous page's cursor, so there is nothing here to run in parallel. Use `enrich`
+			// when per-item calls should fan out; that step really does cap concurrency.
 			const reqTemplate = isRecord(input.request) ? { ...(input.request as Record<string, unknown>) } : null;
 			if (!reqTemplate) return fail("pages mode needs a `request` (an http_request input).");
 			if (!ctx.connectorClient) return fail("pages mode needs a connector-enabled context.");
