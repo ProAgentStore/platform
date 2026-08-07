@@ -28,6 +28,7 @@ import {
 } from "../lib/mcp-credentials.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pipeline.js";
+import { pipelineDeclarationError } from "../lib/pipeline-tool-policy.js";
 import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
@@ -217,6 +218,13 @@ toolRoutes.put("/:id/pipelines/:name", async (c) => {
 	const def = await c.req.json().catch(() => null);
 	const err = validatePipeline(def);
 	if (err !== null) throw new HttpError(400, `Invalid pipeline: ${typeof err === "string" ? err : JSON.stringify(err)}`);
+	// The declared-tools gate at AUTHORING time (#381). `validatePipeline` is pure and knows only
+	// the registry, so it cannot ask whose agent this is; that answer needs the capability join,
+	// which only a route has. Refused here rather than only at run time for the reason
+	// `create_connection` validates its filter on create: the human is present now, and a pipeline
+	// naming a tool its agent cannot run is otherwise discovered mid-run, after it has spent money.
+	const declarationError = pipelineDeclarationError(def as PipelineDef, await capabilitiesForInstance(c.env, instanceId, session.uid), getRegistryTool);
+	if (declarationError) throw new HttpError(400, declarationError);
 	let cfg: Record<string, unknown> = {};
 	try {
 		cfg = JSON.parse(instance.config || "{}") as Record<string, unknown>;

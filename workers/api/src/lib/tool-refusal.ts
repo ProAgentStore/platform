@@ -1,0 +1,57 @@
+/**
+ * WHY a tool is refused, the sentence that says so, and the declared-allowlist rule itself — a
+ * leaf (#381).
+ *
+ * These declarations are pure and shared by every surface that can refuse a tool call:
+ * `instance-tool-policy.ts` (the generic invoker + the console listing), `runRegistryTool` (the
+ * single dispatch path) and `pipeline-tool-policy.ts` (a pipeline definition, checked at authoring
+ * time). They lived inside `instance-tool-policy.ts`, which imports the tool catalog, the registry
+ * and the consent store — so a module that wanted nothing but the rule had to take the whole
+ * capability graph with it, and in this Worker that closes a cycle through `tool-registry` →
+ * `steps` → … → `pipeline-run-start` (see `import-graph.test.ts`).
+ *
+ * Same move `connectors/types.ts` made for the tool contract, for the same reason: the old home
+ * re-exports the names it used to own, so every existing import keeps working.
+ *
+ * Keep this file a LEAF. It imports nothing; adding an import is how the cycle comes back.
+ */
+
+/** Why a tool is or isn't runnable — surfaced to the UI/MCP so "blocked" is never a mystery. */
+export type ToolPolicyReason = "ok" | "not_declared" | "disabled_by_owner";
+
+/** Human-readable refusal, so an API 403, a pipeline step and an agent's own error all say the
+ *  same thing about the same tool. */
+export function explainRefusal(name: string, reason: ToolPolicyReason): string {
+	return reason === "disabled_by_owner"
+		? `"${name}" is switched off for this agent. Turn it back on in the console (Settings → Tools) to use it.`
+		: `"${name}" is not one of this agent's tools. It can only run the tools its agent declares.`;
+}
+
+/**
+ * The declared-allowlist rule for ONE tool call — the refusal to report, or null to proceed (#381).
+ *
+ * Three ways to pass, and each is a decision worth stating:
+ *
+ *  • `declaredTools` absent — the CALLER did not resolve an allowlist, so nothing is asserted and
+ *    nothing is refused. That covers every surface with its own gate (the chat runtime builds its
+ *    tool list from `toolNamesFor`; the /tools invoker consults `resolveToolPolicy`) and it covers
+ *    a capability lookup that came back empty, which is a FAILED READ rather than evidence — the
+ *    asymmetry `instanceToolPolicy` and `delegationDenial` already document.
+ *  • no `connector` — the tool is not in `TOOL_CATALOG` and no creator could declare it. The
+ *    pipeline step library (`steps.ts`) and the connector-less first-party tools are in this class:
+ *    gating them would refuse work against a vocabulary that cannot express it. Derived from the
+ *    tool's own declaration, so a tool that later gains a connector comes under the rule by itself.
+ *  • the allowlist names it — the ordinary allow.
+ *
+ * Deliberately NOT the owner's per-instance off-switch (`config.disabledTools`). That gate answers
+ * "has the subscriber vetoed their own copy", not "is this tool part of this agent", and folding
+ * the two is what `instance-tool-policy.ts` explicitly refuses to do.
+ */
+export function undeclaredToolRefusal(
+	name: string,
+	declaredTools: readonly string[] | null | undefined,
+	connector: string | undefined,
+): string | null {
+	if (!declaredTools || !connector || declaredTools.includes(name)) return null;
+	return explainRefusal(name, "not_declared");
+}

@@ -5,10 +5,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //  - "geocode": returns a JSON object {lat,lng}
 //  - "places": returns a JSON array of results
 //  - "reachable": echoes its input so we can assert threaded/fan-out inputs
-const KNOWN = new Set(["geocode", "places", "reachable", "noop"]);
+//
+// `connector` is part of the fake def because the declared-tools gate (#381) reads it: a
+// connector-provided tool is declarable (and therefore gated), a connector-less one is the step
+// library and is exempt. `places`/`noop` are deliberately connector-less.
+const KNOWN: Record<string, { connector?: string }> = {
+	geocode: { connector: "geo" },
+	reachable: { connector: "http" },
+	places: {},
+	noop: {},
+};
 const runRegistryTool = vi.fn();
 vi.mock("./tool-registry.js", () => ({
-	getRegistryTool: (name: string) => (KNOWN.has(name) ? { name } : undefined),
+	getRegistryTool: (name: string) => (name in KNOWN ? { name, ...KNOWN[name] } : undefined),
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
@@ -277,6 +286,76 @@ describe("executePipelineStep — dispatches via runRegistryTool + threads outpu
 		const res = await executePipelineStep(ctx, { tool: "reachable", forEach: { $param: "nope" } }, 0, {}, {});
 		expect(res.success).toBe(false);
 		expect(runRegistryTool).not.toHaveBeenCalled();
+	});
+});
+
+// ── #381 ────────────────────────────────────────────────────────────────────────
+// `runRegistryTool` enforces connector scope and write consent, neither of which asks whether
+// the tool belongs to this agent. So before this a stored pipeline could dispatch any tool in
+// the registry — including one the same instance's own /tools listing marks `not_declared`.
+describe("executePipelineStep — the declared-tools gate (#381)", () => {
+	// `geocode` is connector-provided in this file's fake registry, so it is declarable and gated;
+	// `places` has no connector, so it is step-library-shaped and exempt.
+	const scoped = { ...ctx, declaredTools: ["reachable"] };
+
+	it("refuses an undeclared tool WITHOUT dispatching it", async () => {
+		const res = await executePipelineStep(scoped, { tool: "geocode", bind: "geo" }, 0, {}, {});
+		expect(runRegistryTool).not.toHaveBeenCalled();
+		expect(res.success).toBe(false);
+		expect(res.bind).toBe("geo");
+		expect(res.content).toMatch(/not one of this agent's tools/);
+		expect(res.output).toBeNull();
+	});
+
+	it("refuses an undeclared fan-out ONCE, not once per item", async () => {
+		// `runRegistryTool` would refuse each call anyway; short-circuiting the step is what stops a
+		// 200-item forEach producing 200 identical refusals.
+		const step = { tool: "geocode", forEach: { $ref: "sites" }, inputs: { url: { $param: "item" } } };
+		const res = await executePipelineStep(scoped, step, 0, { sites: ["a.com", "b.com"] }, {});
+		expect(runRegistryTool).not.toHaveBeenCalled();
+		expect(res.success).toBe(false);
+	});
+
+	it("dispatches a declared tool, and forwards the allowlist so a NESTED dispatch is gated too", async () => {
+		// The forwarding is the point: `enrich` takes the tool to run as an INPUT and re-dispatches
+		// it per record through this same ctx, so a gate that only read step names would miss it.
+		runRegistryTool.mockResolvedValue({ name: "reachable", content: "{}", success: true });
+		const res = await executePipelineStep(scoped, { tool: "reachable" }, 0, {}, {});
+		expect(res.success).toBe(true);
+		expect(runRegistryTool).toHaveBeenCalledWith("reachable", expect.objectContaining({ declaredTools: ["reachable"] }), {});
+	});
+
+	it("never gates a connector-less tool — no creator can declare one", async () => {
+		runRegistryTool.mockResolvedValue({ name: "places", content: "[]", success: true });
+		const res = await executePipelineStep(scoped, { tool: "places" }, 0, {}, {});
+		expect(runRegistryTool).toHaveBeenCalledTimes(1);
+		expect(res.success).toBe(true);
+	});
+
+	it("asserts nothing when no allowlist was resolved", async () => {
+		// A capability lookup that came back empty is a failed read, not evidence.
+		runRegistryTool.mockResolvedValue({ name: "geocode", content: "{}", success: true });
+		expect((await executePipelineStep(ctx, { tool: "geocode" }, 0, {}, {})).success).toBe(true);
+	});
+});
+
+// ── #382 ────────────────────────────────────────────────────────────────────────
+// `RegistryToolCtx.budgetId` is what makes a subordinate SHARE the tree's pool; `PipelineRunCtx`
+// carried none, so `delegateToInstance` took its `??` branch and opened a fresh ROOT pool on every
+// call — ten leads in a forEach, ten pools.
+describe("executePipelineStep — the run's delegation pool (#382)", () => {
+	it("forwards the run's budgetId to every dispatch", async () => {
+		runRegistryTool.mockResolvedValue({ name: "geocode", content: "{}", success: true });
+		await executePipelineStep({ ...ctx, budgetId: "b1" }, { tool: "geocode" }, 0, {}, {});
+		expect(runRegistryTool).toHaveBeenCalledWith("geocode", expect.objectContaining({ budgetId: "b1" }), {});
+	});
+
+	it("forwards the SAME budgetId to every forEach iteration", async () => {
+		runRegistryTool.mockResolvedValue({ name: "reachable", content: "{}", success: true });
+		const step = { tool: "reachable", forEach: { $ref: "sites" }, inputs: { url: { $param: "item" } } };
+		await executePipelineStep({ ...ctx, budgetId: "b1" }, step, 0, { sites: ["a.com", "b.com", "c.com"] }, {});
+		expect(runRegistryTool).toHaveBeenCalledTimes(3);
+		for (const call of runRegistryTool.mock.calls) expect((call[1] as { budgetId?: string }).budgetId).toBe("b1");
 	});
 });
 

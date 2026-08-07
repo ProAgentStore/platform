@@ -17,6 +17,14 @@ export interface PipelineRunParams {
 	runId: string;
 	/** How the run was started, for the audit trail. */
 	trigger?: "chat" | "api" | "trigger";
+	/** The ONE delegation pool this run's steps draw against (#382), when it needs one. Opened at
+	 *  kick (`pipeline-run-start.ts`) so it survives a resume — a pool re-opened mid-run would be
+	 *  the per-call copy this fixes, arrived at from the other side. */
+	budgetId?: string;
+	/** The agent's declared tool allowlist (#381), resolved once at kick and journaled with the
+	 *  params — so the gate costs no read per step, and a capability change mid-run cannot make
+	 *  the walk non-deterministic on resume. */
+	declaredTools?: string[];
 }
 
 export interface PipelineRunResult {
@@ -66,7 +74,7 @@ function persistSummary(tool: string | undefined, out: unknown): PersistCounts |
 
 export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunParams> {
 	async run(event: WorkflowEvent<PipelineRunParams>, step: WorkflowStep): Promise<PipelineRunResult> {
-		const { instanceId, userId, pipeline, params = {}, runId, trigger = "api" } = event.payload;
+		const { instanceId, userId, pipeline, params = {}, runId, trigger = "api", budgetId, declaredTools } = event.payload;
 		const env = this.env;
 		// Run counts (issue #98) — captured as the runner walks, closed onto the run record.
 		let seen = 0;
@@ -100,7 +108,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// the journaled result back to StepResult — same escape hatch job-apply uses.
 				const result = (await step.do(`s${i}-${s.tool}`, async () =>
 					capStepOutput(
-						(await executePipelineStep({ env, userId, instanceId, traceId: runId }, s, i, outputs, params)) as unknown as StepResult,
+						(await executePipelineStep({ env, userId, instanceId, traceId: runId, budgetId, declaredTools }, s, i, outputs, params)) as unknown as StepResult,
 						s.tool,
 						i,
 					) as unknown as Record<string, string>,

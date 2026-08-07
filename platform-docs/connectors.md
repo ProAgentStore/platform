@@ -18,7 +18,12 @@ ProAgentStore has two connector layers, for two different jobs.
 A registry connector is declared ONCE in `workers/api/src/lib/connectors/registry.ts` as
 `{ id, label, auth, scopes: {read, write}, grantModel, tools }`; the tool catalog, the
 `connectorClient` auth dispatch, and capability-based gating all derive from that single entry.
-An agent gets a connector's tools only when it declares them in `capabilities.tools`.
+An agent gets a connector's tools only when it declares them in `capabilities.tools`. That holds on
+**every** surface, pipeline steps included: a stored pipeline definition is data the agent runs, not
+a second declaration, so a step naming a connector tool the agent does not declare is refused — at
+attach time if the pipeline is attached through the API, and at dispatch either way. The pipeline
+*step library* (`map`, `filter`, `slice`, `dedupe_upsert`, …) is not connector-provided and is
+therefore not declarable, so it is exempt by construction.
 
 | Connector | Auth | Scopes | Tools (examples) |
 |---|---|---|---|

@@ -9,6 +9,7 @@ import { connectorTools, getConnector } from "./connectors/registry.js";
 import { connectorClient } from "./connectors/client.js";
 import type { JsonSchema, RegistryTool, RegistryToolCtx, RegistryToolResult, ToolDef } from "./connectors/types.js";
 import { hasConsent } from "./connector-consent.js";
+import { undeclaredToolRefusal } from "./tool-refusal.js";
 import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
 import { getLoopRun, listDelegatedRuns, listLoopRuns, type LoopRunView } from "./agent-loop-store.js";
@@ -71,14 +72,19 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			if (driver.id === DEFAULT_LOOP_DRIVER.id) {
 				return { content: "This agent has no separate executor to hand work to — do it with your own tools instead.", success: false };
 			}
-			const budget = await openBudget(ctx.env, ctx.userId, ctx.instanceId);
+			// Inherit the caller's pool when there is one; only a ROOT hand-off opens a new one — the
+				// rule `delegate-instance.ts:71` states, and the reason it gives (#382). From chat there
+				// is no pool and this IS the root; from a pipeline step the run already owns one, and
+				// opening a second per call is the per-call copy that makes a tree's total grow with the
+				// number of calls instead of staying inside one allowance.
+				const budgetId = ctx.budgetId ?? (await openBudget(ctx.env, ctx.userId, ctx.instanceId)).id;
 			const started = await driver.start({
 				env: ctx.env,
 				instanceId: ctx.instanceId,
 				userId: ctx.userId,
 				objective,
 				maxIterations: typeof input.maxIterations === "number" ? input.maxIterations : undefined,
-				budgetId: budget.id,
+				budgetId,
 				depth: 0,
 			});
 			return started.ok
@@ -387,6 +393,14 @@ export async function runRegistryTool(
 ): Promise<{ name: string; content: string; success: boolean }> {
 	const tool = REGISTRY.get(name);
 	if (!tool) return { name, content: `Unknown tool: ${name}`, success: false };
+	// Declared-capability gate (#381), FIRST because it is the cheapest and the most fundamental:
+	// "is this tool part of this agent at all" precedes both "may this connector write" and "has
+	// the owner consented". Only callers that resolved an allowlist assert one (today the pipeline
+	// runner), so every other surface is unchanged — but a caller that does assert one gets the
+	// gate on NESTED dispatches too, which is the case a step-name check cannot reach: `enrich`
+	// takes the tool to run as an input and re-dispatches it per record through this same path.
+	const undeclared = undeclaredToolRefusal(name, ctx.declaredTools, tool.connector);
+	if (undeclared) return { name, content: undeclared, success: false };
 	// Scope enforcement (issue #86): a write-scoped tool on a read-only connector is
 	// unreachable — reject before consent/handler so the abstraction can't be bypassed.
 	if (tool.scope === "write" && tool.connector) {

@@ -13,6 +13,8 @@ import siteBuilder from "./site-builder.json" with { type: "json" };
 import siteDeploy from "./site-deploy.json" with { type: "json" };
 import { validatePipeline } from "../pipeline.js";
 import { agentCapabilities } from "../agent-capabilities.js";
+import { pipelineDeclarationError } from "../pipeline-tool-policy.js";
+import { getRegistryTool } from "../tool-registry.js";
 
 const MIGRATION = fileURLToPath(new URL("../../../migrations/0057_seed_site_builder_agent.sql", import.meta.url));
 
@@ -65,5 +67,45 @@ describe("migration 0057 — the seeded agent", () => {
 		const caps = agentCapabilities({ slug: "site-builder", category: "Sales", config: JSON.stringify(config) });
 		expect(caps.runtime).toBeNull();
 		expect(caps.settingsSchema?.map((f) => f.id)).toEqual(["mcp_url", "template_slug", "photo_limit"]);
+	});
+});
+
+// ── #381 ────────────────────────────────────────────────────────────────────────
+// `capabilities.tools` is now enforced on pipeline steps, so an agent that ships WITH pipelines
+// must declare the connector tools they dispatch or its own work is refused. 0057 declared none —
+// which is exactly the drift this file exists to catch, one field over — so 0096 adds them.
+//
+// A second file, because 0057 has already run in production and editing an applied migration
+// changes nothing there while a fresh database gets the new text.
+const TOOLS_MIGRATION = fileURLToPath(new URL("../../../migrations/0096_site_builder_declared_tools.sql", import.meta.url));
+
+describe("migration 0096 — the seeded agent declares what its pipelines dispatch", () => {
+	/** The tool names out of the migration's `json('[…]')` literal. */
+	function declaredTools(): string[] {
+		const sql = readFileSync(TOOLS_MIGRATION, "utf8");
+		const literal = sql.match(/json\('(\[[^']*\])'\)/);
+		expect(literal, "0096 must set capabilities.tools from a json('[…]') literal").not.toBeNull();
+		return JSON.parse((literal as RegExpMatchArray)[1]) as string[];
+	}
+
+	it("covers every gated tool in BOTH shipped pipelines", () => {
+		// Asked of the real registry, so a step swapped for a different connector tool fails here
+		// rather than at 3am on someone's cron.
+		const gated = [...new Set([...siteBuilder.steps, ...siteDeploy.steps].map((s) => s.tool))].filter((t) => !!getRegistryTool(t)?.connector);
+		expect(gated.length).toBeGreaterThan(0);
+		expect([...declaredTools()].sort()).toEqual(gated.sort());
+	});
+
+	it("makes the seeded agent's own pipelines pass the gate", () => {
+		// The whole point, end to end: 0057's config plus 0096's tools, through the real resolver
+		// and the real rule. Without 0096 both of these name their first connector step.
+		const seeded = seededAgentConfig();
+		const caps = agentCapabilities({
+			slug: "site-builder",
+			category: "Sales",
+			config: JSON.stringify({ ...seeded, capabilities: { ...(seeded.capabilities as object), tools: declaredTools() } }),
+		});
+		expect(pipelineDeclarationError(siteBuilder, caps, getRegistryTool)).toBeNull();
+		expect(pipelineDeclarationError(siteDeploy, caps, getRegistryTool)).toBeNull();
 	});
 });

@@ -31,9 +31,12 @@ import { toolNamesFor } from "../agent-do-tools.js";
 import { registryTools } from "./tool-registry.js";
 import { listConsents } from "./connector-consent.js";
 import type { Env } from "../types.js";
+// The reason vocabulary + its wording moved to a LEAF (#381) so a pipeline step can refuse with
+// the same sentence without importing the catalog/registry/consent graph this module needs.
+// Re-exported here, its original home, so every existing import keeps working.
+import { explainRefusal, type ToolPolicyReason } from "./tool-refusal.js";
 
-/** Why a tool is or isn't runnable — surfaced to the UI/MCP so "blocked" is never a mystery. */
-export type ToolPolicyReason = "ok" | "not_declared" | "disabled_by_owner";
+export { explainRefusal, type ToolPolicyReason };
 
 /**
  * What the write-consent machinery (#90 and the gates layered on it) will do to this tool, as
@@ -160,13 +163,6 @@ export function explainWriteConsent(entry: Pick<ToolPolicyEntry, "name" | "conne
 			: `"${entry.name}" may read, but a request that changes anything is refused until write access for the ${conn} connector is granted for this agent.`;
 	}
 	return null;
-}
-
-/** Human-readable refusal, so an API 403 and an agent's own error say the same thing. */
-export function explainRefusal(name: string, reason: ToolPolicyReason): string {
-	return reason === "disabled_by_owner"
-		? `"${name}" is switched off for this agent. Turn it back on in the console (Settings → Tools) to use it.`
-		: `"${name}" is not one of this agent's tools. It can only run the tools its agent declares.`;
 }
 
 /** Parse the owner's off-switch list out of an instance's config blob. Never throws. */

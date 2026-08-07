@@ -348,7 +348,14 @@ const PINS = {
 	// the re-entry away and turn this into a way to spend a permission the owner took back. The
 	// rules the handlers apply are pure and tested in lib/mcp-elicitation.ts, and the one-shot claim
 	// is in lib/mcp-input-requests.ts.
-	"workers/api/src/routes/tools.ts": 1024,
+	// +8 at #381 (one import, one lookup, six lines of why): PUT …/pipelines/:name now refuses a
+	// definition naming a tool the agent does not declare. Raised rather than split, and it belongs
+	// at this call site specifically: `validatePipeline` is pure and knows only the registry, so it
+	// cannot ask WHOSE agent a definition is being attached to — the capability join is the one
+	// thing only a route can do. The RULE is pure and tested in lib/tool-refusal.ts, and the
+	// whole-definition check in lib/pipeline-tool-policy.ts, which is where a split would have put
+	// it anyway; the enforcing gate is in `runRegistryTool`, not here.
+	"workers/api/src/routes/tools.ts": 1032,
 };
 
 /**

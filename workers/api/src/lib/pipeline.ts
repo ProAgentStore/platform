@@ -8,6 +8,7 @@
 // wraps executePipelineStep in step.do for durability/resumability past the 30s DO limit.
 import type { Env } from "../types.js";
 import { getRegistryTool, runRegistryTool } from "./tool-registry.js";
+import { undeclaredToolRefusal } from "./tool-refusal.js";
 import { unfenceUntrusted } from "./untrusted-fence.js";
 
 /**
@@ -367,6 +368,23 @@ export interface PipelineRunCtx {
 	instanceId: string;
 	/** The run id, forwarded to steps so an emitting step can stamp it on its deliveries. */
 	traceId?: string;
+	/**
+	 * The delegation pool this RUN draws against (#382), when the definition contains a step that
+	 * would open a delegation tree (`lib/pipeline-budget.ts`).
+	 *
+	 * Threaded so every step — and every `forEach` iteration — shares ONE pool. Without it
+	 * `delegateToInstance` took its `??` branch and opened a fresh ROOT pool per call, which made
+	 * the #184 per-tree bound inert on the only path that can delegate on a schedule.
+	 */
+	budgetId?: string;
+	/**
+	 * The agent's declared tool allowlist (#381), resolved ONCE per run — per step it would be a
+	 * D1 query per step.
+	 *
+	 * Forwarded onto every dispatch, where `runRegistryTool` applies it. Absent means the
+	 * capabilities could not be read, and nothing is refused: a failed read is not evidence.
+	 */
+	declaredTools?: readonly string[];
 }
 
 /**
@@ -386,7 +404,16 @@ export async function executePipelineStep(
 	params: Record<string, unknown>,
 ): Promise<StepResult> {
 	const bind = stepBind(step, index);
-	const registryCtx = { env: ctx.env, userId: ctx.userId, instanceId: ctx.instanceId, traceId: ctx.traceId };
+	// The declared-tools gate (#381), refused BEFORE any input is resolved. `runRegistryTool` would
+	// refuse it too — that is where the rule is enforced, including for a tool `enrich` names in
+	// its inputs — but a `forEach` would refuse once per item, so the whole step is short-circuited
+	// here on the same rule rather than N times on the far side of it.
+	//
+	// `budgetId` rides on the ctx built ONCE for the whole step, so a fan-out draws every iteration
+	// against the same pool instead of opening one per item (#382).
+	const registryCtx = { env: ctx.env, userId: ctx.userId, instanceId: ctx.instanceId, traceId: ctx.traceId, budgetId: ctx.budgetId, declaredTools: ctx.declaredTools };
+	const undeclared = undeclaredToolRefusal(step.tool, ctx.declaredTools, getRegistryTool(step.tool)?.connector);
+	if (undeclared) return { tool: step.tool, bind, success: false, content: undeclared, output: null };
 
 	if (step.forEach !== undefined) {
 		const list = resolveInputValue(step.forEach, { outputs, params });

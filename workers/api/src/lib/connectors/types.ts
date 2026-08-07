@@ -54,6 +54,19 @@ export interface RegistryToolCtx {
 	 */
 	budgetId?: string;
 	/**
+	 * The agent's declared tool allowlist (`capabilities.tools`), when the CALLER resolved one
+	 * (#381). `runRegistryTool` refuses a connector-provided tool that is not in it.
+	 *
+	 * Set by callers that have no other gate — today the pipeline runner, which builds its context
+	 * by hand and whose steps are stored DATA. Absent means "not asserted", which is what every
+	 * surface with its own gate wants: the chat runtime already hands the model only
+	 * `toolNamesFor`, and the /tools invoker already consults `resolveToolPolicy`.
+	 *
+	 * It lives on the ctx rather than being looked up per call because the nested case is the one
+	 * that matters: `enrich` re-dispatches a tool named in its INPUTS, and it forwards this ctx.
+	 */
+	declaredTools?: readonly string[];
+	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
 	 * grant/scope, instead of importing token-minting fns directly. Injected by

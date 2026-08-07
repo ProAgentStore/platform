@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// A registry whose tools are all "known" so a stored def validates.
+// A registry whose tools are all "known" so a stored def validates. `places` is
+// connector-provided, so it is the one the declared-tools gate (#381) can refuse; everything else
+// is step-library-shaped and exempt.
 vi.mock("./tool-registry.js", () => ({
-	getRegistryTool: (name: string) => ({ name }),
+	getRegistryTool: (name: string) => (name === "places" ? { name, connector: "http" } : { name }),
 	runRegistryTool: vi.fn(),
 }));
+
+// The delegation pool (#382) — stubbed so opening one is observable without D1.
+const openBudget = vi.fn(async () => ({ id: "pool-1" }));
+vi.mock("./delegation-budget-store.js", () => ({ openBudget: (...a: unknown[]) => openBudget(...(a as [])) }));
 
 import { startPipelineRun } from "./pipeline-run-start.js";
 import { loadPipeline } from "./pipeline.js";
@@ -12,10 +18,24 @@ import type { Env } from "../types.js";
 
 const PIPE = { name: "leads", steps: [{ tool: "geocode", inputs: { city: { $param: "city" } } }], sink: { collection: "leads" } };
 
-/** Env whose agent_instances row carries a config with a pipelines map. */
-function envWithConfig(config: unknown, create?: (arg: unknown) => Promise<{ id: string }>): Env {
+beforeEach(() => {
+	openBudget.mockClear();
+});
+
+/** Env whose agent_instances row carries a config with a pipelines map.
+ *
+ *  `agentConfig` answers the capability join (`agent_instances ⨝ agents`) separately, because that
+ *  is where `capabilities.tools` lives — the instance's own config holds the pipelines. */
+function envWithConfig(config: unknown, create?: (arg: unknown) => Promise<{ id: string }>, agentConfig?: unknown): Env {
+	const row = config === null ? null : { config: typeof config === "string" ? config : JSON.stringify(config) };
 	return {
-		DB: { prepare: () => ({ bind: () => ({ first: async () => (config === null ? null : { config: typeof config === "string" ? config : JSON.stringify(config) }) }) }) },
+		DB: {
+			prepare: (sql: string) => ({
+				bind: () => ({
+					first: async () => (sql.includes("JOIN agents") ? { slug: "fixture", category: "general", config: JSON.stringify(agentConfig ?? {}) } : row),
+				}),
+			}),
+		},
 		PIPELINE_RUN: { create: create ?? (async () => ({ id: "wf-1" })) },
 	} as unknown as Env;
 }
@@ -69,5 +89,52 @@ describe("startPipelineRun", () => {
 		expect(res.ok).toBe(false);
 		if (!res.ok) expect(res.error).toMatch(/No pipeline named "nope"/);
 		expect(create).not.toHaveBeenCalled();
+	});
+});
+
+// ── #381 ────────────────────────────────────────────────────────────────────────
+describe("startPipelineRun — the declared-tools gate", () => {
+	const CONNECTOR_PIPE = { name: "leads", steps: [{ tool: "places" }] };
+
+	it("refuses a pipeline naming an undeclared connector tool, and does NOT kick", async () => {
+		// Before this the run started, the workflow walked, and the tool ran — `runRegistryTool`
+		// asks about connector scope and write consent, never about whose agent this is.
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: CONNECTOR_PIPE } }, create, { capabilities: { tools: ["web_search"] } });
+		const res = await startPipelineRun(env, "i1", "u1", "leads", {}, "trigger");
+		expect(res.ok).toBe(false);
+		if (!res.ok) expect(res.error).toMatch(/places/);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("kicks when the agent declares the tool, carrying the allowlist to the runner", async () => {
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: CONNECTOR_PIPE } }, create, { capabilities: { tools: ["places"] } });
+		expect((await startPipelineRun(env, "i1", "u1", "leads", {}, "api")).ok).toBe(true);
+		expect((create.mock.calls[0][0] as { params: { declaredTools?: string[] } }).params.declaredTools).toEqual(["places"]);
+	});
+});
+
+// ── #382 ────────────────────────────────────────────────────────────────────────
+describe("startPipelineRun — one delegation pool per run", () => {
+	it("opens ONE pool for a definition that delegates, and hands it to every step", async () => {
+		// Before this no pool was opened here at all, so `delegateToInstance` took its `??` branch
+		// and opened a fresh ROOT pool per call — 288 a day on a 5-minute cron.
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const def = { name: "fleet", steps: [{ tool: "subordinate_status" }, { tool: "delegate_goal" }] };
+		const env = envWithConfig({ pipelines: { fleet: def } }, create);
+		expect((await startPipelineRun(env, "i1", "u1", "fleet", {}, "trigger")).ok).toBe(true);
+		expect(openBudget).toHaveBeenCalledTimes(1);
+		expect((create.mock.calls[0][0] as { params: { budgetId?: string } }).params.budgetId).toBe("pool-1");
+	});
+
+	it("opens NO pool for an ordinary source → transform → sink pipeline", async () => {
+		// The lead-finder sweeps every 5 minutes and never delegates; a pool per tick would be three
+		// D1 operations and a permanent unused row, forever, to bound nothing.
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: PIPE } }, create);
+		expect((await startPipelineRun(env, "i1", "u1", "leads", {}, "trigger")).ok).toBe(true);
+		expect(openBudget).not.toHaveBeenCalled();
+		expect((create.mock.calls[0][0] as { params: { budgetId?: string } }).params.budgetId).toBeUndefined();
 	});
 });

@@ -350,7 +350,12 @@ describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missi
 		// capture the config UPDATE the route performs
 		(env.DB as { prepare: (s: string) => unknown }).prepare = (sql: string) => ({
 			bind: (...args: unknown[]) => ({
-				first: async () => (sql.includes("FROM agent_instances") ? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" } : null),
+				first: async () => {
+					// The capability join (#381) — the attach route now refuses a definition naming a
+					// tool the agent does not declare, so this stub has to answer as the real one does.
+					if (sql.includes("JOIN agents")) return { slug: "fixture", category: "general", config: FIXTURE_AGENT_CONFIG, instance_config: "{}" };
+					return sql.includes("FROM agent_instances") ? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" } : null;
+				},
 				run: async () => { if (sql.includes("UPDATE agent_instances")) written = String(args[1]); return {}; }, // ?1 is the bound JSON path (#327)
 				all: async () => ({ results: [] }),
 			}),
@@ -366,6 +371,16 @@ describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missi
 		// via json_set instead of rewriting the whole blob, so a concurrent write to an unrelated
 		// key is no longer silently discarded (#231).
 		expect(JSON.parse(written).lead_finder.name).toBe("lead_finder");
+	});
+
+	it("400s a definition naming a tool the agent does not declare (#381)", async () => {
+		// Before this the definition was stored happily and the refusal — if it came at all — came
+		// at run time, several steps and one spend later. `validatePipeline` cannot catch it: it is
+		// pure and knows only the registry, so it cannot ask WHOSE agent this is.
+		const { app, env } = testApp({ agentConfig: JSON.stringify({ capabilities: { tools: ["http_request"] } }) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(DEF) }, await tok("u1"));
+		expect(res.status).toBe(400);
+		expect((await jsonBody(res)).error).toMatch(/github_workflow_runs/);
 	});
 });
 
