@@ -26,7 +26,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"list_instance_tools",
-		"Audit exactly what one of your instances may do. Returns EVERY registry tool with this instance's verdict: `allowed` (may it run), `scope` (read/write), `disabled` (you switched it off) and `reason` (ok | not_declared | disabled_by_owner), plus input schemas. Pass allowed_only:true for just the runnable set. Use this to verify an agent is read-only before trusting it with sensitive data — a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool.",
+		"Audit exactly what one of your instances may do. Returns EVERY registry tool with this instance's verdict: `allowed` (may it run), `scope` (read/write), `disabled` (you switched it off), `reason` (ok | not_declared | disabled_by_owner), and `writeConsent` (n/a | granted | required | per_call) — the SEPARATE consent gate, so `allowed:true, writeConsent:\"required\"` means the tool is this agent's but every call is refused until write access for its `connector` is granted; `per_call` means some calls run and mutating ones don't (a caller-chosen HTTP method, or an MCP server/tool that has not been granted). Plus input schemas. Pass allowed_only:true for just the runnable set. Use this to verify an agent is read-only before trusting it with sensitive data — a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),

@@ -121,7 +121,12 @@ const PINS = {
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
 	// Not split: three of the six lines are the explanation, and the rest is one hook call.
-	"store/console/src/tabs/SettingsTab.tsx": 1155,
+	// +13 for #351: the write-consent chip on each tool row. The listing said `allowed` and meant
+	// two different things, so the row now states the consent verdict beside the switch that reads
+	// as its opposite. Raised rather than split — the verdict itself is computed and tested in
+	// workers/api/src/lib/instance-tool-policy.ts, and what is here is one pure label function plus
+	// the span that renders it, which only means anything next to the row it annotates.
+	"store/console/src/tabs/SettingsTab.tsx": 1168,
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.

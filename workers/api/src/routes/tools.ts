@@ -85,10 +85,10 @@ export const toolRoutes = new Hono<{ Bindings: Env }>();
 /**
  * GET /v1/instances/:id/tools — EVERY registry tool with this instance's verdict on it.
  *
- * Returns the full list rather than only the runnable ones: "what can this agent do" is
- * only answerable if the answer also says what it can't and why. Each entry carries
- * `allowed` (the gate's decision), `disabled` (owner switched it off) and `reason`.
- * `?allowed=true` narrows to the runnable set for callers that want just that.
+ * Returns the full list rather than only the runnable ones: "what can this agent do" is only answerable
+ * if the answer also says what it can't and why. Each entry carries `allowed`, `disabled` and `reason` —
+ * plus `writeConsent` (#351), the separate #90 gate that used to be invisible here, so a write-gated tool
+ * read `allowed:true, reason:"ok"` until a call failed. `?allowed=true` narrows to the runnable set.
  */
 toolRoutes.get("/:id/tools", async (c) => {
 	const session = await requireUser(c);

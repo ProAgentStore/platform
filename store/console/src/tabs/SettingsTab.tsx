@@ -54,6 +54,18 @@ interface ToolPolicyEntry {
 	allowed: boolean;
 	disabled: boolean;
 	reason: "ok" | "not_declared" | "disabled_by_owner";
+	/** The SEPARATE write-consent verdict (#351) — `allowed` says the tool is part of this
+	 *  agent, this says whether the consent gate will refuse it anyway. */
+	writeConsent?: "n/a" | "granted" | "required" | "per_call";
+}
+
+/** The consent state as a short chip, or null when nothing is in the way. Amber, not red: an
+ *  ungranted write tool is a switch the owner has not flipped yet, not a fault. */
+function consentChip(t: ToolPolicyEntry): string | null {
+	if (!t.allowed) return null; // already refused for a reason the row states
+	if (t.writeConsent === "required") return `needs ${t.connector ?? "connector"} write access`;
+	if (t.writeConsent === "per_call") return t.connector === "mcp" ? "granted per server + tool" : `writes need ${t.connector ?? "connector"} access`;
+	return null;
 }
 
 interface ConnectorGrant {
@@ -857,6 +869,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 										</span>
 										{t.connector && <span className="ml-1.5 text-[0.68rem] text-muted-soft">{t.connector}</span>}
 										{t.disabled && <span className="ml-1.5 text-[0.68rem] text-muted">— off</span>}
+										{consentChip(t) && <span className="ml-1.5 text-[0.68rem] text-amber-500">— {consentChip(t)}</span>}
 										<span className="block text-[0.68rem] text-muted-soft leading-snug">{t.description}</span>
 									</span>
 								</label>
