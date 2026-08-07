@@ -11,7 +11,9 @@
  * particular build does — and the query says which view inside it to open. There is no
  * per-deploy page in the product to link at, and there cannot be one that is ready at
  * notification time: the only per-run artifact is GitHub's own, which is the thing we cannot
- * navigate to. Producer: `deployDeepLink` in workers/api/src/lib/deploy-watch.ts.
+ * navigate to. Producer: `deployDeepLink` in workers/api/src/lib/deploy-watch.ts, which since
+ * #344 builds the string through `lib/console-links.ts` — the one module a Worker may build a
+ * console link in, so every one of them can be held against `routes.ts` by a test.
  */
 
 /**

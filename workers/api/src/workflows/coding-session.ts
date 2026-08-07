@@ -19,6 +19,7 @@ import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
+import { codingSessionLink } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros, recordEngineUsage } from "../lib/usage.js";
@@ -558,7 +559,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				await step.do(`handoff-${round}`, () => callRunner<{ ok?: boolean }>(conn, "/coding/takeover", { sessionId, label, reason }));
 				// Ping the user — the agent is paused waiting on them.
 				await step.do(`notify-handoff-${round}`, async () => {
-					await notifyUser(env, userId, "coding", "🙋 Coder needs you", `${goal.repo}: ${label}`, codingDeepLink(instanceId, repoId)).catch(() => undefined);
+					await notifyUser(env, userId, "coding", "🙋 Coder needs you", `${goal.repo}: ${label}`, codingSessionLink(instanceId, sessionId)).catch(() => undefined);
 					return null;
 				});
 
@@ -691,7 +692,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
 				const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
 				const body = `${goal.repo}: ${result.detail || result.outcome}`;
-				await notifyUser(env, userId, "coding", title, body, codingDeepLink(instanceId, repoId)).catch(() => undefined);
+				await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId)).catch(() => undefined);
 				return null;
 			});
 			// #155: close out the observable delegation task on the board (if this was a
@@ -713,7 +714,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 	 * to you" the same way the autonomous run does, even with the console closed.
 	 */
 	private async runWatch(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
-		const { instanceId, userId, sessionId, repoId, runnerNode, goal } = event.payload;
+		const { instanceId, userId, sessionId, runnerNode, goal } = event.payload;
 		const env = this.env;
 		const conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
 		if (!conn) return { outcome: "failed", detail: "No coding runner connected.", steps: 0 };
@@ -774,23 +775,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				"coding",
 				"✅ Coder finished",
 				`${goal.repo}: ${reply ? reply.slice(0, 140) : "done — open to see what it did"}`,
-				codingDeepLink(instanceId, repoId),
+				codingSessionLink(instanceId, sessionId),
 			).catch(() => undefined);
 			return null;
 		});
 		return { outcome: "done", detail: "watched to idle", steps: 0 };
 	}
-}
-
-/**
- * Deep-link a notification straight to the repo's Agent chat (the summary view
- * that holds the message which triggered it), not the generic Coding tab — so a
- * push tap lands exactly on the conversation it's about.
- */
-function codingDeepLink(instanceId: string, repoId?: string): string {
-	return repoId
-		? `/console/instances/${instanceId}/coding/repos/${repoId}/summary`
-		: `/console/instances/${instanceId}/coding`;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -20,6 +20,7 @@ import {
 	mintDriveAccessToken,
 	type DriveFile,
 } from "./drive.js";
+import { instanceBoardLink } from "./console-links.js";
 import { logEvent } from "./events.js";
 import { enqueueDelivery } from "./connection-deliveries.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
@@ -353,7 +354,7 @@ export async function executeTriggerAction(
 				offline
 					? `${target.name}: your runner is offline — run \`pags up\`. It'll try again next schedule.`
 					: `${target.name}: a run is already in progress; skipping this one.`,
-				`/console/instances/${target.instance_id}/board`,
+				instanceBoardLink(target.instance_id),
 			).catch(() => undefined);
 		}
 	}

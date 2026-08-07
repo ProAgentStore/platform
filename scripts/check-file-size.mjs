@@ -147,7 +147,10 @@ const PINS = {
 	// those would put a read next to nothing that reads it.
 	"workers/api/src/agent-think.ts": 851,
 	"workers/api/src/routes/instances-runtime.ts": 849,
-	"workers/api/src/lib/triggers.ts": 838,
+	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
+	// console link a Worker writes by hand is a link nothing checks against the router — two were
+	// found broken that way. The line it replaced was the same length; the import is the cost.
+	"workers/api/src/lib/triggers.ts": 839,
 	"packages/browser-runner/src/coding/headless.ts": 819,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	"workers/api/src/routes/tools.ts": 833,

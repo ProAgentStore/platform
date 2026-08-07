@@ -1,5 +1,6 @@
 import { runUserWorkersAi, UserAiCredentialsError } from "./user-ai.js";
 import { getProfile, upsertProfile, PROFILE_FIELDS, type Profile } from "./profile.js";
+import { instanceKnowledgeLink, profileLink } from "./console-links.js";
 import { logError } from "./error-log.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -47,7 +48,7 @@ const SAVE_RESUME_TOOL = {
  * (no key, non-PDF, provider error) is swallowed so the upload itself is unaffected.
  */
 export async function parseResumeIntoProfile(env: Env, instanceId: string, userId: string, bytes: Uint8Array, mime: string): Promise<void> {
-	const link = `/console/instances/${instanceId}/knowledge`;
+	const link = instanceKnowledgeLink(instanceId);
 	// Claude reads PDFs natively; skip other formats (docx/txt) for now — but SAY so.
 	if (mime !== "application/pdf") {
 		await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", "Auto-fill needs a PDF résumé. Your file is saved and will still be attached to applications — re-upload as PDF to auto-fill your Profile.", link).catch(() => undefined);
@@ -130,7 +131,7 @@ export async function parseResumeIntoProfile(env: Env, instanceId: string, userI
 			link).catch(() => undefined);
 	} catch (e) {
 		if (e instanceof UserAiCredentialsError) {
-			await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", "Add an Anthropic API key in Profile → API Keys, then re-upload, to auto-fill your Profile from your résumé.", "/console/profile").catch(() => undefined);
+			await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", "Add an Anthropic API key in Profile → API Keys, then re-upload, to auto-fill your Profile from your résumé.", profileLink()).catch(() => undefined);
 			return;
 		}
 		// A REAL failure: persist it to the error log AND alert the user (never silent).

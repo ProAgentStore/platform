@@ -18,6 +18,7 @@ import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
+import { instanceLink } from "../lib/console-links.js";
 import { logEvent } from "../lib/events.js";
 import { logError } from "../lib/error-log.js";
 import { escalationNote, escalationTarget } from "../lib/escalation.js";
@@ -296,13 +297,17 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 				}
 			}
 			if (needsHuman(stop.reason)) {
+				// The Assistant, where the loop's own conversation is — and where a human answers it.
+				// This used to be `/console/#/instances/<id>`, a hash path on a BrowserRouter: the
+				// router never reads a fragment, so the tap opened the console and stopped at
+				// whatever screen the user had last (#344).
 				await notifyUser(
 					this.env,
 					userId,
 					"loop",
 					"Your agent needs you",
 					stop.message.slice(0, 200),
-					`/console/#/instances/${instanceId}`,
+					instanceLink(instanceId),
 				).catch(() => undefined);
 			}
 		});

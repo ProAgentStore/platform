@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
+import { consoleHomeLink } from "../lib/console-links.js";
 import { type PushSubscription, sendWebPush, type VapidConfig } from "../lib/web-push.js";
 import type { Env } from "../types.js";
 import { createNotification } from "./notifications.js";
@@ -115,7 +116,7 @@ pushRoutes.post("/test", async (c) => {
 	const sent = await sendPushToUser(c.env, session.uid, {
 		title: "ProAgentStore",
 		body: "Push notifications are working ✅",
-		url: "/console/",
+		url: consoleHomeLink(),
 		tag: "pags-test",
 	});
 	return c.json({ sent });

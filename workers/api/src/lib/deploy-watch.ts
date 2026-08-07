@@ -1,3 +1,4 @@
+import { codingBuildsLink } from "./console-links.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { installationTokenForOwner } from "./github-app.js";
 import { notifyUser } from "../routes/push.js";
@@ -47,10 +48,12 @@ export type DeployNotifyDecision =
  * sweep runs — the repo — and the Builds view inside it carries the run, its history, and a
  * one-click "View run" out to GitHub for the CI log itself.
  *
- * Consumer: `deepLinkedBuildsRepo` in store/console/src/lib/deepLink.ts.
+ * Consumer: `deepLinkedBuildsRepo` in store/console/src/lib/deepLink.ts. The URL itself is built
+ * by `codingBuildsLink` with every other console link this Worker emits, so it is checked against
+ * the router (#344); this stays as the name the deploy sweep and its tests already know it by.
  */
 export function deployDeepLink(instanceId: string, repoId: string): string {
-	return `/console/instances/${instanceId}/coding?builds=${encodeURIComponent(repoId)}`;
+	return codingBuildsLink(instanceId, repoId);
 }
 
 /**

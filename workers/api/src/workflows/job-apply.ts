@@ -4,6 +4,7 @@ import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-c
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
+import { instanceBoardLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
@@ -262,7 +263,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// so they know the application is paused waiting on THEM, instead of it sitting
 			// silently in needs_human until they happen to look at the console.
 			await step.do(`notify-${round}`, async () => {
-				const link = `/console/instances/${instanceId}/board`;
+				const link = instanceBoardLink(instanceId);
 				const host = atsHost(job.url) || "the job site";
 				const { title, body } =
 					reason === "needs_input"
