@@ -238,6 +238,78 @@ describe("resolveSubordinate — a name is what the model actually holds (#320)"
 		const r = resolveSubordinate(roster, "PAS");
 		expect(!r.ok && r.message).toContain("FAS platform (id-1)");
 	});
+
+	// ── The shared speech rule (#392) ────────────────────────────────────────────────────────────
+
+	it("resolves a name carrying a transcript's trailing stop", () => {
+		// The issue verbatim. Under the old local `trim().toLowerCase()` the dot survived, so the
+		// exact arm missed, BOTH fuzzy arms missed (they test the query as the needle) and the id
+		// prefix missed — three failures from one character — and the supervisor answered "You do
+		// not supervise \"FAS platform.\"" about an agent it does supervise.
+		const r = resolveSubordinate(roster, "FAS platform.");
+		expect(r.ok && r.row.instanceId).toBe("id-1");
+	});
+
+	it("resolves a name however the transcriber punctuated it", () => {
+		// Whisper renders the same utterance with a hyphen, a comma or nothing at all — a formatting
+		// choice the speaker cannot see or control (#334). Punctuation becomes a space, so all three
+		// are one name.
+		for (const spoken of ["FAS-platform", "FAS, platform", "«FAS platform»", "FAS platform!"]) {
+			expect(resolveSubordinate(roster, spoken), spoken).toMatchObject({ ok: true, row: { instanceId: "id-1" } });
+		}
+	});
+
+	it("resolves an instance id that picked up a trailing stop too", () => {
+		expect(resolveSubordinate(roster, "id-2.")).toMatchObject({ ok: true, row: { name: "FWS platform" } });
+	});
+
+	it("keeps the ambiguity refusal an ambiguity refusal once punctuation is gone", () => {
+		// "platform." used to fall all the way through to "you do not supervise it", which is a
+		// FALSE statement. Normalising makes it what it always was: a name that fits two agents.
+		const r = resolveSubordinate(roster, "platform.");
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.message).toMatch(/FAS platform and FWS platform/);
+	});
+
+	it("REFUSES a query that is only punctuation, even with a single subordinate", () => {
+		// The one way this change could have made things worse. An all-punctuation query normalises
+		// to "", and `"anything".startsWith("")` is true — so without the empty-key guard the fuzzy
+		// arm matches every row, and a supervisor with exactly ONE subordinate would resolve a name
+		// that was never spoken and delegate real work to it. A wrong confident match is worse than
+		// the refusal this change exists to remove.
+		const one = [row({})];
+		for (const junk of ["?", "…", "。", "!!!", "—"]) {
+			expect(resolveSubordinate(one, junk), junk).toMatchObject({ ok: false });
+			expect(resolveSubordinate(roster, junk), junk).toMatchObject({ ok: false });
+		}
+	});
+
+	it("refuses two agents whose names differ ONLY by punctuation, rather than guessing", () => {
+		// The single case where the shared rule NARROWS: these two used to be distinguishable by
+		// typing the exact name and now normalise to the same key. Refusing is the honest answer —
+		// a spoken name genuinely cannot tell them apart — and the refusal names the ids.
+		const twins = [row({ instanceId: "a", name: "FAS-platform" }), row({ instanceId: "b", name: "FAS platform" })];
+		const r = resolveSubordinate(twins, "FAS platform");
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.message).toMatch(/use the instance id/);
+	});
+
+	it("lets a literal instance id win outright, which is what every refusal promises", () => {
+		// The refusals say "use the instance id", so that has to work unconditionally — including
+		// when another agent is displayed under a name that normalises to the same key. Before the
+		// literal-id arm, both arrived in the exact set together and the escape hatch refused too.
+		const clash = [row({ instanceId: "id-2", name: "FWS platform" }), row({ instanceId: "x", name: "id 2" })];
+		expect(resolveSubordinate(clash, "id-2")).toMatchObject({ ok: true, row: { name: "FWS platform" } });
+	});
+
+	it("matches a name with an apostrophe however it was typed", () => {
+		// Elision marks are DELETED rather than spaced, so `Bob's` is one token in both renderings —
+		// the typographic apostrophe an STT engine emits and the ASCII one a creator typed.
+		const owned = [row({ instanceId: "o", name: "Bob’s agent" })];
+		for (const spoken of ["Bob's agent", "bobs agent", "Bob’s agent."]) {
+			expect(resolveSubordinate(owned, spoken), spoken).toMatchObject({ ok: true, row: { instanceId: "o" } });
+		}
+	});
 });
 
 describe("tool shape", () => {

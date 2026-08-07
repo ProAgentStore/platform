@@ -23,6 +23,7 @@ import { getLoopRun } from "../agent-loop-store.js";
 import { directionsForSupervisor, loadGraph, setSupervisionDirection } from "../supervision.js";
 import { DIRECTION_LEGEND, MAX_DIRECTION_CHARS, directionPayload, type AgentDirection } from "../agent-direction.js";
 import { subordinatesOf } from "../supervision-graph.js";
+import { normalizeSpeech } from "../normalize-speech.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
 import { actsInWindow, recentActsForInstances, recentRunsForInstances, recentWorkForInstances, type ActItem } from "../instance-work.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
@@ -91,6 +92,11 @@ export interface SubordinateRow {
  *
  * Ambiguity is refused, not guessed. Picking one of two agents whose names both start with "FAS"
  * would send a goal to the wrong repository, which is exactly the failure a supervisor cannot see.
+ * Reducing punctuation to a space (#392) makes the normalised names SHORTER, so it can only ever
+ * widen the candidate set — it cannot turn a refused ambiguity into a confident single answer. The
+ * one case where it goes the other way is two agents whose names differ ONLY by punctuation
+ * ("FAS-platform" and "FAS platform"): they now collide, and colliding is the honest answer,
+ * because a spoken name genuinely cannot tell them apart. The id still separates them.
  */
 export function resolveSubordinate(
 	rows: readonly SubordinateRow[],
@@ -100,14 +106,33 @@ export function resolveSubordinate(
 	const roster = rows.map((r) => `${r.name} (${r.instanceId})`).join(", ");
 	const nope = (why: string) => ({ ok: false as const, message: `${why} You supervise: ${roster || "nobody"}.` });
 	if (!q) return nope("No agent was named.");
-	const norm = (s: string) => s.trim().toLowerCase();
-	const key = norm(q);
+	// The SHARED speech rule, not a local `trim().toLowerCase()` (#392). This used to be its own
+	// normaliser, which was harmless only while every caller was a model writing a clean name into
+	// a tool argument. The moment a TRANSCRIPT reaches it — and #279 proposes a
+	// `transfer_conversation` that does exactly that, over voice — a transcriber's trailing full
+	// stop makes `"FAS platform."` fail the exact arm, fail `startsWith`/`includes` (which test the
+	// QUERY as the needle) and fail the id prefix, all three at once, and the supervisor confidently
+	// denies an agent it does supervise. Same defect class as #334, which is why the shared rule
+	// exists. See `../normalize-speech.ts` for why it is vendored and where equality is asserted.
+	const key = normalizeSpeech(q);
+	// A query of pure punctuation ("?", "…", "。") normalises to the empty string, and `"".startsWith("")`
+	// / `includes("")` is true of EVERY row — so a supervisor with one subordinate would resolve a
+	// name nobody said, confidently, which is worse than the refusal this change removes.
+	if (!key) return nope("No agent was named.");
+	// The instance id is the escape hatch EVERY refusal below points at ("use the instance id"), so
+	// it is matched literally and before anything else: whatever normalisation does to names, that
+	// promise has to hold unconditionally — including when some agent is displayed under a name
+	// that normalises to another agent's id.
+	const byId = rows.find((r) => r.instanceId === q);
+	if (byId) return { ok: true, row: byId };
 	// Order matters: an exact match on either identifier wins outright, so a name that happens to
 	// be a prefix of another agent's name is still reachable by typing it in full.
-	const exact = rows.filter((r) => r.instanceId === q || norm(r.name) === key);
+	const exact = rows.filter((r) => normalizeSpeech(r.instanceId) === key || normalizeSpeech(r.name) === key);
 	if (exact.length === 1) return { ok: true, row: exact[0] };
 	if (exact.length > 1) return nope(`"${q}" matches more than one of your agents — use the instance id.`);
-	const fuzzy = rows.filter((r) => norm(r.name).startsWith(key) || norm(r.name).includes(key) || r.instanceId.startsWith(q));
+	const fuzzy = rows.filter(
+		(r) => normalizeSpeech(r.name).startsWith(key) || normalizeSpeech(r.name).includes(key) || normalizeSpeech(r.instanceId).startsWith(key),
+	);
 	if (fuzzy.length === 1) return { ok: true, row: fuzzy[0] };
 	if (fuzzy.length > 1) {
 		return nope(`"${q}" matches ${fuzzy.map((r) => r.name).join(" and ")} — name one exactly, or use its instance id.`);
