@@ -81,16 +81,65 @@ speaking silences all others, so the Assistant and the Co-pilot can never talk o
 The **status pill** walks Listening → Transcribing → Working so there's never a silent gap, and
 while TTS is speaking the pill reads **"Speaking · tap to stop"** — tapping it stops playback.
 
-## Voice commands & global control words
+## Voice commands
 
-Say **"Repeat"** (or "say again", "pardon", …) to re-speak the last reply; toggle in
-Settings → Voice commands (`commandsEnabled`). A configurable **stop-speaking** keyword halts
-TTS by voice.
+Six spoken commands the app acts on **locally** instead of sending to the agent, plus two
+keyword settings that are not commands. Master switch: Settings → Voice → `commandsEnabled`.
 
-Control words can be set **globally on your profile** (`GET/PUT /v1/profile`, `group:"voice"`:
-`voiceRepeatWords` / `voiceMuteWords` / `voiceStopWords` / `voiceStopSpeechKeyword`) so they
-apply across every agent; a per-instance voice config can still override them. The whole stack
-is script-aware — the gate, STT, TTS, and the "repeat" command all work in every supported
+| Command | Does | Matched when |
+|---|---|---|
+| `repeat` | Re-speaks the last reply | not muted |
+| `mute` | Closes the mic **and** cancels speech + queue | not muted — **at any moment**, see below |
+| `unmute` | Re-opens the mic | **only** while muted |
+| `exit` | Leaves voice entirely, back to typing | any time (also while muted) |
+| `next` | Moves to the agent asking for you | only where the surface can switch |
+| `scrap` | Deletes the last turn | only where the surface can delete, and **only on a final transcript** |
+
+Two settings that are *not* in that table:
+
+- **Stop-speaking keyword** (`stopSpeechKeyword`) — halts TTS. Matched as a **case-insensitive
+  substring**, deliberately looser than every command above, and safe only because it is gated on
+  the agent actually speaking: there is nothing to interrupt otherwise.
+- **Stop words** (`stopWords`) — end-of-turn markers ("over", "send it"). They end a dictation
+  turn; they are not commands and are stripped from what is sent.
+
+### How a phrase is matched
+
+- A **single-word** phrase must **be the whole utterance**. "mute" never fires inside "mute the
+  alarm", and "what's next?" stays a message.
+- A **multi-word** phrase matches the whole utterance *or* a contiguous whole-word run inside it,
+  so "okay mute mute now" works. Multi-word phrases are distinctive enough for that to be safe.
+- `scrap` is held to whole-utterance matching regardless of length, and is withheld from partial
+  transcripts entirely — it is the only destructive word in the vocabulary.
+
+Built-in phrasings exist per language and are scoped to the configured voice language, so an
+English agent will not fire on a Chinese phrase. **Words you configure yourself replace the
+built-ins for that command** and apply in any language, because you chose them.
+
+> A field left **blank** means *use the built-ins* for the six commands, and *off* for the two
+> keyword settings — two conventions on one panel, stated here because the placeholders are the
+> only other place they are written down. #385 kept that asymmetry deliberately (changing it would
+> have silently removed working commands from everyone who never opened the panel) and fixed the
+> defect it caused with a precedence rule instead: see *A phrase you bind is yours* below.
+
+### Mute is available at every moment — [ADR 0001](../docs/adr/0001-mute-is-always-available.md)
+
+This is an **invariant**, not a feature of one code path: in a live voice session you can mute by
+voice and by touch while the agent is listening, transcribing, thinking, or **speaking** — and
+unmute by voice while muted. Mute silences both directions at once (mic closed, speech cancelled,
+queue dropped).
+
+It works during TTS because of a **dedicated always-on control listener** (#153): a lightweight
+recognizer, separate from the main pipeline, that runs whenever voice is engaged and the main
+recorder is idle — i.e. exactly while the agent talks or thinks, when the main path is capturing
+nothing. In Whisper mode the recorder produces nothing until the clip uploads, so the speech gate's
+live transcript is scanned for control words over that window instead; between the two, no phase is
+a dead zone.
+
+Read ADR 0001 before changing anything on that path. A guard that suppresses speech input while the
+agent is speaking looks locally correct and removes the entire capability.
+
+The whole stack is script-aware — the gate, STT, TTS and the commands all work in every supported
 language.
 
 **A phrase you bind is yours.** Leaving a command field blank still means "use our built-in
@@ -112,6 +161,78 @@ permission revoked mid-session, another tab or app taking the device, the OS sus
 session gives up rather than spinning in a restart loop. It now says so, with what to try, and
 leaves the message up until you act; the give-up is also recorded in the durable error log
 (`client:voice`), so a device that keeps dropping out is countable rather than anecdotal.
+
+## Where voice settings live
+
+Three levels, resolved server-side (`workers/api/src/lib/preferences.ts`):
+
+```
+platform defaults
+  └─ users.preferences.voice                    your account default  (Preferences → Voice)
+       └─ agent_instances.config.voiceSettings   PRESENT = "customised for this agent"
+            └─ a declared `voiceLanguage` setting (language only, resolved live)
+```
+
+`GET/PUT /v1/preferences` for the account default; `GET/PUT /v1/instances/:id/voice-settings` for
+one agent, whose Settings tab carries the **"Use my defaults / Customise for this agent"** control.
+Customising is *instead of* — with one deliberate exception: **vocabulary unions across scopes**
+rather than overriding, because your own name is a property of you, not of an agent.
+
+## Hands-free lifecycle
+
+- **One session app-wide.** A module-level singleton claims the slot, so starting hands-free
+  anywhere stops any other hands-free already running — two open tabs of the console cannot both
+  hold the mic.
+- **Between turns** the mic reopens after a short delay, with a listening chime.
+- **Failing restarts** — if the recognizer dies within 800ms of starting, four times in a row
+  (mic blocked, permission revoked, another app took the device), hands-free gives up rather than
+  spinning in a restart loop that would freeze the page. *Today it does so silently — **#387**.*
+- **Maximum turn length** — an open mic is force-ended after `maxDictationMs` so it cannot record
+  forever. Armed in hands-free only.
+- **Screen wake lock** while a session is live (`keepAwake`, default on), so the phone in your
+  hand does not sleep mid-conversation.
+
+## Guards
+
+- **Echo** — results are ignored while the agent is speaking and for ~800ms after, so the agent
+  cannot transcribe itself and reply to nothing. Applied on the main path and on the gate scan.
+  *Not* applied to the control path, which is why the agent's own voice can currently issue a
+  command — **#386**, to be fixed without breaking ADR 0001.
+- **Paused** — a turn already in flight, or teardown in progress, does not accept new input. Speech
+  captured *before* the pause began is still the user's, and survives.
+- **Language lock** — see above.
+
+## Tunables
+
+Every value is clamped server-side and in the SDK, so a bad stored setting cannot break a session.
+
+| Setting | Range | Default |
+|---|---|---|
+| `silenceMs` (end-of-turn pause) | 500 – 6000 | 1500 |
+| `maxDictationMs` (max turn) | 10s – 300s | 60s |
+| `sensitivity` (mic gate) | 0.4 – 2 | 0.8 |
+| `speed` (TTS) | 25 – 400 | 100 |
+| `ttsMaxChars` | clamped | provider-safe default |
+| `commandsEnabled` / `keepAwake` / `confirmLanguage` | on unless explicitly false | on |
+
+## Known gaps
+
+Recorded here rather than discovered twice:
+
+- **No Web Speech API → no voice control during TTS.** The always-on control listener is built on
+  the browser recognizer and returns nothing where the constructor is absent. Where that happens,
+  mute-by-voice while the agent speaks is unavailable and only the on-screen control satisfies
+  ADR 0001. Any surface shipping hands-free must keep a touch-reachable mute.
+- **Commands are judged more strictly while the agent talks.** Fixing #386 without breaking
+  ADR 0001 meant raising the bar rather than closing the door: inside TTS and its echo tail a
+  partial transcript is not judged at all and a command must be the whole utterance. A deliberate
+  "mute mute" still works; a command said *over* the agent in a longer sentence will not.
+- **Blank still means two different things** across the panel (see the note under *How a phrase is
+  matched*). Deliberate — #385 chose a precedence rule over a semantics change, because flipping it
+  would have removed working commands from every user who never opened the panel.
+
+Closed since this page was written: **#385** (precedence), **#386** (self-command), **#387**
+(hands-free says why it stopped) — all three are described above as shipped behaviour.
 
 ## Recording replay, translation & transliteration
 
