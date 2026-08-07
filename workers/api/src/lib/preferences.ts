@@ -82,6 +82,19 @@ export interface VoiceSettings {
 	 *  must not be reachable from the middle of a sentence. */
 	scrapWords: string[];
 	stopWords: string[];
+	/**
+	 * Words the USER says that a recogniser gets wrong — `tmux`, `HeartFull`, a product name
+	 * (#373). Biases the transcriber (which accepts a vocabulary `prompt`) and corrects the
+	 * browser engine (which does not — there is no steerable grammar, so the only lever on that
+	 * path is a post-hoc pass over the finished transcript).
+	 *
+	 * **This is the one voice field that UNIONS across scopes instead of overriding.** Every other
+	 * setting answers "how should this agent behave", and "customise for this agent" sensibly means
+	 * *instead of*. A vocabulary answers "what words do I say", and the answer is cumulative: your
+	 * own name belongs to you, this agent's repo names belong to the agent, and an override
+	 * contract would make you re-type the first into every one of them. See {@link resolveVoice}.
+	 */
+	vocabulary: string[];
 	stopSpeechKeyword: string;
 	confirmLanguage: boolean;
 }
@@ -142,6 +155,51 @@ export function parseVoiceWords(v: unknown): string[] {
 	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim().slice(0, 40)).filter(Boolean).slice(0, 20);
 }
 
+/**
+ * How many vocabulary terms one SCOPE may hold (#373).
+ *
+ * Bounded because the OpenAI `prompt` field is finite and its bias quality DEGRADES with length —
+ * a 500-word list is worse than a 20-word one, since every term is a candidate the decoder can
+ * reach for on a low-information clip (#332). 50 is "the proper nouns one person uses", which is
+ * the size the feature is for; the prompt builder caps what it actually sends far lower again.
+ */
+export const MAX_VOCABULARY_TERMS = 50;
+
+/** Normalize a vocabulary field. Same delimiters as `parseVoiceWords` (a term can be a phrase),
+ *  different cap: a vocabulary is a list of nouns, not a handful of command phrasings. */
+export function parseVocabularyTerms(v: unknown): string[] {
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of list) {
+		if (typeof raw !== "string") continue;
+		const term = raw.trim().slice(0, 40);
+		if (!term) continue;
+		// Case-insensitive dedupe, first spelling wins — the user writes `HeartFull` once and it is
+		// the CASING that a correction pass restores, so which copy survives is not arbitrary.
+		const key = term.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(term);
+		if (out.length >= MAX_VOCABULARY_TERMS) break;
+	}
+	return out;
+}
+
+/**
+ * Union two scopes' vocabularies, account first, deduped case-insensitively.
+ *
+ * Account first because those are the words that follow the user everywhere (their name, their
+ * company) and the per-agent list is the narrower addition — and because the prompt builder
+ * truncates the TAIL, so ordering decides what survives the cap.
+ *
+ * The union is capped at the same 50, not 100: the cap exists because a long list biases WORSE,
+ * and that is a property of the list the decoder receives, not of how many places it came from.
+ */
+export function mergeVocabulary(account: string[] | undefined, own: string[] | undefined): string[] {
+	return parseVocabularyTerms([...(account || []), ...(own || [])]);
+}
+
 /** Platform defaults — what you get having configured nothing, anywhere. */
 export function defaultVoiceSettings(): VoiceSettings {
 	return {
@@ -164,6 +222,7 @@ export function defaultVoiceSettings(): VoiceSettings {
 		nextWords: [],
 		scrapWords: [],
 		stopWords: [],
+		vocabulary: [],
 		stopSpeechKeyword: "",
 		confirmLanguage: true,
 	};
@@ -209,6 +268,11 @@ export function sanitizeVoiceSettings(raw: unknown, base: VoiceSettings = defaul
 		nextWords: has("nextWords") ? parseVoiceWords(o.nextWords) : base.nextWords,
 		scrapWords: has("scrapWords") ? parseVoiceWords(o.scrapWords) : base.scrapWords,
 		stopWords: has("stopWords") ? parseVoiceWords(o.stopWords) : base.stopWords,
+		// Patch semantics like every other field — an unspecified vocabulary keeps what this SCOPE
+		// already had. What differs is the base a caller hands in: `overrideVoiceBase` below seeds
+		// an agent override from the ACCOUNT for everything except this, because a union must never
+		// snapshot the list it is unioning with.
+		vocabulary: has("vocabulary") ? parseVocabularyTerms(o.vocabulary) : base.vocabulary,
 		stopSpeechKeyword: typeof o.stopSpeechKeyword === "string" ? o.stopSpeechKeyword.trim().slice(0, 40) : base.stopSpeechKeyword,
 		confirmLanguage: has("confirmLanguage") ? o.confirmLanguage !== false : base.confirmLanguage,
 	};
@@ -263,6 +327,12 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
  * (Language Buddy's `target_language`). It wins on `language` and NOTHING else, and it is resolved
  * live rather than copied into storage — previously the settings route wrote it INTO voiceSettings,
  * so changing the declared setting left a stale language behind until something re-saved.
+ *
+ * `vocabulary` is the ONE field that does not follow the override contract: it UNIONS (#373). It
+ * is not a behaviour the agent has, it is a list of words the person says, and an override would
+ * mean re-typing your own name into every agent you own. The departure is deliberate and is
+ * stated in the console beside the field, because "customise for this agent" means *instead of*
+ * everywhere else on that panel and *as well as* here.
  */
 export function resolveVoice(
 	account: VoiceSettings | undefined,
@@ -270,9 +340,29 @@ export function resolveVoice(
 	declaredLanguage?: string,
 ): VoiceSettings {
 	const base = account ? sanitizeVoiceSettings(account) : defaultVoiceSettings();
-	const effective = override === undefined || override === null ? base : sanitizeVoiceSettings(override, base);
+	const overridden = override === undefined || override === null ? base : sanitizeVoiceSettings(override, base);
+	const effective = { ...overridden, vocabulary: mergeVocabulary(base.vocabulary, overridden.vocabulary) };
 	const lang = typeof declaredLanguage === "string" ? declaredLanguage.trim() : "";
 	return lang ? { ...effective, language: lang.slice(0, 10) } : effective;
+}
+
+/**
+ * The base an agent OVERRIDE is sanitized against: your account values for every field, except
+ * `vocabulary`, which comes from the override's own current value.
+ *
+ * Without this the seeding rule ("customise starts from what you were already hearing") would copy
+ * the account vocabulary INTO the agent — and then the union would be a union with a snapshot.
+ * Remove a word from your account list afterwards and it survives on every agent you had ever
+ * customised, invisibly, because the agent's own box now contains it too. The list a scope stores
+ * is the list that scope ADDS; nothing else.
+ */
+export function overrideVoiceBase(account: VoiceSettings | undefined, currentOverride: unknown): VoiceSettings {
+	const base = account ? sanitizeVoiceSettings(account) : defaultVoiceSettings();
+	const own =
+		currentOverride && typeof currentOverride === "object" && !Array.isArray(currentOverride)
+			? (currentOverride as Record<string, unknown>).vocabulary
+			: undefined;
+	return { ...base, vocabulary: parseVocabularyTerms(own) };
 }
 
 export function resolveTranslation(

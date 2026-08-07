@@ -113,7 +113,21 @@ export function buildTranscribePrompt(
 	if (codingish || opts.runtime === "coding") parts.push(CODING_TERMS);
 	if (surfaces.includes("tmux")) parts.push(TMUX_TERMS);
 	if (surfaces.includes("apply")) parts.push(APPLY_TERMS);
-	// Dedupe against what the static lists already carry (`platform`, `git`, `console` arrive as
+	return extendTranscribePrompt(parts.join(", "), extra);
+}
+
+/**
+ * Add proper nouns to an already-built prompt, applying the same dedupe/split/cap rules.
+ *
+ * Exists because the terms arrive from two places at two times: the console knows the agent's
+ * capabilities at render, and the derived + user vocabulary (#372/#373) arrives with the voice
+ * CONFIG, which `useVoice` refreshes on every mic start. Re-joining through here rather than
+ * concatenating strings is what keeps the cap and the dedupe honest across both.
+ */
+export function extendTranscribePrompt(prompt: string, extra: string[] = []): string {
+	const parts: string[] = [];
+	if (prompt.trim()) parts.push(prompt.trim());
+	// Dedupe against what the prompt already carries (`platform`, `git`, `console` arrive as
 	// repo/target names constantly) — a term sent twice spends budget without adding bias — and
 	// against each other, case-insensitively, since the same repo can reach us by two names.
 	//

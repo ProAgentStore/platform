@@ -763,6 +763,31 @@ components:
         ttsSpeed: { type: number }
         language: { type: string, description: BCP-47 tag driving STT and TTS. }
         commandsEnabled: { type: boolean, description: Whether spoken commands such as "repeat" are recognised. }
+        vocabulary:
+          type: array
+          items: { type: string }
+          description: |
+            Words the user says that a recogniser gets wrong — names, products, jargon. The ONLY
+            field here that UNIONs across scopes instead of overriding: the resolved value is your
+            account list plus this agent's, because a vocabulary is a property of the person and an
+            override would mean re-typing your own name into every agent. Writing it stores only
+            the terms belonging to the scope you wrote to. Capped at 50; a longer list biases worse,
+            not better.
+        inheritedVocabulary:
+          type: array
+          readOnly: true
+          items: { type: string }
+          description: |
+            Read-only. The ACCOUNT half of the resolved `vocabulary`, so a client can show which
+            words this agent inherits rather than owns. Ignored on write.
+        derivedVocabulary:
+          type: array
+          readOnly: true
+          items: { type: string }
+          description: |
+            Read-only. Proper nouns the platform derived without being asked — this agent's name,
+            its attached repos, the agents it delegates to. Re-derived on every read, so attaching
+            a repo changes the next turn's transcription bias. Ignored on write.
 
     TranslationConfig:
       type: object

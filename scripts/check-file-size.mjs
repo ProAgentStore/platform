@@ -89,7 +89,12 @@ const PINS = {
 	// message log), instances-knowledge.ts (the subscriber's own KB). All three are under LIMIT,
 	// so they get no entry; this one is lowered rather than deleted because what remains —
 	// subscribe/cancel, runtime + node binding, voice, settings, trace — is still over it.
-	"workers/api/src/routes/instances.ts": 853,
+	// +33 for #372/#373: the voice-settings response gained two read-only companions to
+	// `vocabulary` (the account words this agent unions with, and the ones the platform derived),
+	// and GET/PUT/DELETE now build it through one `voiceSettingsBody` instead of three literals —
+	// which is a net reduction in the ways those three can disagree. The derivation itself is a
+	// separate module (lib/voice-vocabulary.ts) with its own tests; what is here is the wiring.
+	"workers/api/src/routes/instances.ts": 886,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -118,7 +123,12 @@ const PINS = {
 	// stopped carrying speech at #281 and kept a name that said otherwise, which is how both
 	// consumers went on binding it to their composer's `value` for three releases. The rule the
 	// rename enforces is pure and lives in voice/composer.ts.
-	"packages/sdk/src/voice/use-voice.ts": 1609,
+	// +15 for #372/#373: the bias prompt is no longer whatever the consumer passed — the user's
+	// vocabulary and the platform's derived terms arrive with the voice config and are joined onto
+	// it. One `biasPrompt()` computes the string all three call sites use, because the echo guard
+	// (#332) has to compare against the list that was actually SENT. The joining rule is pure and
+	// lives in voice/prompt.ts; the ref plumbing is what a hook is for and could not move.
+	"packages/sdk/src/voice/use-voice.ts": 1624,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or

@@ -12,6 +12,12 @@ import { useEffect, useState } from "react";
  * toggling an override off). It never talks to the API: the host decides whether a change writes to
  * `/v1/preferences` or to that instance's override, which is the entire difference between them.
  */
+/** A list field as an array, tolerating the delimited-string shape the API also accepts. */
+function asList(v: unknown): string[] {
+	const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
+	return raw.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean);
+}
+
 export interface VoiceFieldsProps {
 	/** The effective settings to display. */
 	value: Record<string, unknown>;
@@ -44,9 +50,17 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 	const [nextWords, setNextWords] = useState("");
 	const [scrapWords, setScrapWords] = useState("");
 	const [stopWords, setStopWords] = useState("");
+	/** THIS scope's own vocabulary (#373) — the account list on Preferences, this agent's own on
+	 *  the Settings tab. Never the union: the box has to edit what this scope stores, or saving it
+	 *  would copy the words above it into the scope below and quietly freeze them there. */
+	const [vocabulary, setVocabulary] = useState("");
 	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
 	const [confirmLanguage, setConfirmLanguage] = useState(true);
 	const [voiceMsg, setVoiceMsg] = useState("");
+	// Read straight off `value`, never held in state: neither is editable here, and both change
+	// under the panel (attach a repo, edit your account list) without this scope saving anything.
+	const inherited = asList(voiceSettings.inheritedVocabulary);
+	const derived = asList(voiceSettings.derivedVocabulary);
 
 	// Re-seed on every change of `value` — switching agents, or turning an override off, must
 	// repaint the controls rather than leave the previous agent's numbers on screen.
@@ -71,6 +85,10 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 		setExitWords(list(vs.exitWords));
 		setNextWords(list(vs.nextWords));
 		setScrapWords(list(vs.scrapWords));
+		// `vocabulary` arrives RESOLVED (account ∪ this agent's) because that is what the recogniser
+		// uses; subtracting the inherited half is what leaves this scope's own contribution.
+		const inheritedKeys = new Set(asList(vs.inheritedVocabulary).map((t) => t.toLowerCase()));
+		setVocabulary(asList(vs.vocabulary).filter((t) => !inheritedKeys.has(t.toLowerCase())).join(", "));
 		setStopWords(list(vs.stopWords));
 		setStopSpeechKeyword(typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword : "");
 		setConfirmLanguage(vs.confirmLanguage !== false);
@@ -289,6 +307,56 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 				Enable voice commands
 			</label>
 			<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat"/"mute" is sent as a normal message.</p>
+
+			<div className="border-t border-line my-3" />
+
+			{/* Vocabulary (#373). Placed with the recognition controls rather than the command
+			    keywords below, because it is not a command: it changes what the recogniser HEARS,
+			    not what a heard word does. */}
+			<label className="block">
+				<span className="block text-sm font-semibold mb-0.5">My vocabulary</span>
+				<input
+					value={vocabulary}
+					onChange={(e) => setVocabulary(e.target.value)}
+					onBlur={() => saveVoice({ vocabulary })}
+					placeholder="tmux, HeartFull, Vectorize  (comma-separated)"
+					className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm"
+				/>
+				<span className="block text-[0.7rem] text-muted-soft mt-0.5">
+					Words you say that get misheard — names, products, jargon. Smart (AI) recognition is told to
+					expect them; browser dictation can't be steered, so a word that comes back <i>close</i> to one
+					of these is corrected to match. Only whole words, only a very near miss — a mishearing that
+					isn't close to anything here is left exactly as it arrived.
+				</span>
+			</label>
+			{inherited.length > 0 && (
+				<div className="mt-2">
+					<span className="block text-[0.7rem] text-muted-soft mb-1">
+						{/* The one place the UNION is stated. Everything else on this panel is an override —
+						    "customise for this agent" means INSTEAD OF — and vocabulary means AS WELL AS. */}
+						Also applied here, from <b>Preferences → Voice</b> (these add to the list above, they don't replace it):
+					</span>
+					<div className="flex flex-wrap gap-1">
+						{inherited.map((t) => (
+							<span key={t} className="text-[0.7rem] bg-paper border border-line rounded-full px-2 py-0.5">{t}</span>
+						))}
+					</div>
+				</div>
+			)}
+			{derived.length > 0 && (
+				<div className="mt-2">
+					<span className="block text-[0.7rem] text-muted-soft mb-1">
+						Already known — this agent's name, its repos, the agents it works with. Nothing to type:
+					</span>
+					<div className="flex flex-wrap gap-1">
+						{derived.map((t) => (
+							<span key={t} className="text-[0.7rem] bg-paper border border-line rounded-full px-2 py-0.5 opacity-70">{t}</span>
+						))}
+					</div>
+				</div>
+			)}
+
+			<div className="border-t border-line my-3" />
 
 			{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
 			    above; the stop-word works whenever it's set. */}

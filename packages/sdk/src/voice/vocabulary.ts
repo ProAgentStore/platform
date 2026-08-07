@@ -77,3 +77,80 @@ export function nearWord(a: string, b: string): boolean {
 	if (max === 0) return false;
 	return editDistance(a, b, max) <= max;
 }
+
+/** One word the correction pass rewrote, so a caller can SHOW it. Silently rewriting somebody's
+ *  words is the failure mode this feature must not become. */
+export interface VocabularyCorrection {
+	from: string;
+	to: string;
+}
+
+/** A token and the separators around it, so a replacement keeps the sentence intact. */
+const TOKEN = /\p{L}[\p{L}\p{N}]*/gu;
+
+/**
+ * Rewrite near-misses of the user's own vocabulary, in place, conservatively (#373).
+ *
+ * This is the half of the feature that works on the BROWSER recogniser. Web Speech has no
+ * steerable grammar — `SpeechGrammarList` is specced and Chrome's default recogniser ignores it —
+ * so a vocabulary can only reach that path after the fact. The transcriber gets the same words as
+ * a bias prompt instead, which is the better mechanism where it is available.
+ *
+ * The user authors ONE flat list of words they SAY, never a from→to mapping: nobody knows in
+ * advance that "tmux" will come back as "Timo", and asking someone to enumerate their own
+ * mishearings is a guaranteed-incomplete chore.
+ *
+ * ── The guards, and what each one refuses
+ *
+ *  1. **Whole tokens only.** Never a multi-word span, never a substring of a longer word. A
+ *     replacement that can straddle a word boundary can change a sentence's structure.
+ *  2. **{@link nearWord}'s tolerance**, which is 0 edits below four letters — so `go`/`no` and
+ *     `it`/`is` can never be rewritten into each other by a short vocabulary entry.
+ *  3. **Ambiguity is left alone.** A token near TWO different terms is a token we cannot claim to
+ *     know the answer for; guessing between them is exactly the invisible-wrongness this must not
+ *     produce.
+ *  4. **A token that already IS a term is untouched**, so nothing is "corrected" to itself and a
+ *     user who says a word correctly never sees it move.
+ *
+ * ── What is NOT guarded, honestly
+ *
+ * There is no dictionary check, so a real English word one edit from a vocabulary term can be
+ * rewritten (add `Sentry` and someone saying "sentry" gets the capital). Shipping a dictionary per
+ * language to a browser bundle costs more than the failure does, and the list is the user's own
+ * proper nouns by construction — but this is the reason corrections are RETURNED rather than
+ * applied invisibly, and the reason the tolerance is as tight as it is.
+ */
+export function applyVocabulary(
+	text: string,
+	terms: string[],
+): { text: string; corrections: VocabularyCorrection[] } {
+	if (!text || !terms.length) return { text, corrections: [] };
+	// The canonical spelling per lowercased term, and the set of terms to match against.
+	const canonical = new Map<string, string>();
+	for (const t of terms) {
+		const term = t.trim();
+		// Multi-word terms are matched by the bias prompt, not here: rewriting a span is guard 1.
+		if (!term || /\s/.test(term) || !/^\p{L}[\p{L}\p{N}]*$/u.test(term)) continue;
+		if (!canonical.has(term.toLowerCase())) canonical.set(term.toLowerCase(), term);
+	}
+	if (!canonical.size) return { text, corrections: [] };
+	const corrections: VocabularyCorrection[] = [];
+	const out = text.replace(TOKEN, (token) => {
+		const lower = token.toLowerCase();
+		if (canonical.has(lower)) {
+			// Guard 4: it IS a term. Restore the user's spelling of it (that is the whole point of
+			// storing `HeartFull` rather than `heartfull`) but never call that a correction.
+			return canonical.get(lower) as string;
+		}
+		let hit: string | null = null;
+		for (const [key, spelling] of canonical) {
+			if (!nearWord(lower, key)) continue;
+			if (hit) return token; // guard 3: near two terms → we do not know which, so neither
+			hit = spelling;
+		}
+		if (!hit) return token;
+		corrections.push({ from: token, to: hit });
+		return hit;
+	});
+	return { text: out, corrections };
+}

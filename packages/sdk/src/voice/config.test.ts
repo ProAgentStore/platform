@@ -61,6 +61,23 @@ describe("getVoiceConfig — control words come from ONE place (#222)", () => {
 		expect(c.unmuteWords).toEqual(["wake up"]);
 		expect(c.exitWords).toEqual(["bye voice"]);
 	});
+
+	// #372/#373 — the route resolves the account ∪ agent vocabulary and derives what it can; the
+	// SDK's only job is to keep them in one list, USER FIRST. Order is load-bearing: the prompt
+	// builder truncates the tail, so a machine-derived repo name is what falls off the end when
+	// the budget runs out, never a word the user typed.
+	it("puts the user's vocabulary ahead of the derived one, deduped", () => {
+		const c = resolveVoiceConfig(
+			{ vocabulary: ["HeartFull", "tmux"], derivedVocabulary: ["tmux", "ProAgentStore/platform"] },
+			false,
+		);
+		expect(c.vocabulary).toEqual(["HeartFull", "tmux", "ProAgentStore/platform"]);
+	});
+
+	it("accepts the comma-separated shape too, and is empty when nothing is configured", () => {
+		expect(resolveVoiceConfig({ vocabulary: "tmux, HeartFull" }, false).vocabulary).toEqual(["tmux", "HeartFull"]);
+		expect(resolveVoiceConfig({}, false).vocabulary).toEqual([]);
+	});
 });
 
 // ── #325: a failed load must not BECOME the config ──────────────────────────────────

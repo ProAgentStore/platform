@@ -3,7 +3,8 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { createRepo, listRepos } from "../lib/coding-store.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
-import { parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
+import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
+import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { listEvents } from "../lib/events.js";
@@ -505,12 +506,38 @@ instanceRoutes.get("/:instanceId/voice-settings", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-	const { effective, hasOverride } = await effectiveVoice(c.env, instanceId, session.uid, cfg);
 	// Still `voiceSettings`, still the fully-resolved object: `getVoiceConfig` in
 	// packages/sdk/src/voice/config.ts reads exactly that key, so the SDK, the console chat and
 	// coder-web all keep working unchanged while resolution moves server-side.
-	return c.json({ voiceSettings: effective, hasOverride });
+	return c.json(await voiceSettingsBody(c.env, instanceId, session.uid, cfg));
 });
+
+/**
+ * The voice-settings response, identical from GET, PUT and DELETE so the panel never repaints
+ * differently depending on which one it just called.
+ *
+ * `voiceSettings` carries two READ-ONLY companions to `vocabulary`, inside the same object because
+ * that is the object the SDK and the shared `VoiceFields` control both already receive. Neither is
+ * a setting and neither survives a write — `sanitizeVoiceSettings` builds a fresh object from the
+ * fields it knows, so an echo of either back through PUT is dropped rather than persisted.
+ *
+ *   inheritedVocabulary — your ACCOUNT words, which apply here AS WELL AS this agent's. Rendering
+ *     them is what makes the union visible, since every other control on that panel overrides.
+ *   derivedVocabulary — what the platform already knows (see `deriveVoiceVocabulary`). Delivered
+ *     here rather than assembled in the console because this response is re-fetched on every mic
+ *     start, so attaching a repo changes the NEXT turn's bias (#372).
+ */
+async function voiceSettingsBody(env: Env, instanceId: string, userId: string, cfg: Record<string, unknown>) {
+	const { effective, hasOverride, accountVocabulary } = await effectiveVoice(env, instanceId, userId, cfg);
+	return {
+		voiceSettings: {
+			...effective,
+			inheritedVocabulary: accountVocabulary,
+			derivedVocabulary: await deriveVoiceVocabulary(env, instanceId, userId),
+		},
+		hasOverride,
+	};
+}
 
 /**
  * Unified run trace — the complete time-ordered timeline of what this agent DID
@@ -547,7 +574,7 @@ async function effectiveVoice(
 	instanceId: string,
 	userId: string,
 	cfg: Record<string, unknown>,
-): Promise<{ effective: VoiceSettings; hasOverride: boolean }> {
+): Promise<{ effective: VoiceSettings; hasOverride: boolean; accountVocabulary: string[] }> {
 	const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
 		.bind(userId)
 		.first<{ preferences: string | null }>();
@@ -560,7 +587,11 @@ async function effectiveVoice(
 	const values = resolveSettingsValues(schema, cfg.settings as Record<string, unknown> | undefined);
 	const declared = schema.find((f) => f.voiceLanguage);
 	const declaredLanguage = declared && typeof values[declared.id] === "string" ? String(values[declared.id]) : undefined;
-	return { effective: resolveVoice(account.voice, hasOverride ? override : undefined, declaredLanguage), hasOverride };
+	return {
+		effective: resolveVoice(account.voice, hasOverride ? override : undefined, declaredLanguage),
+		hasOverride,
+		accountVocabulary: account.voice?.vocabulary || [],
+	};
 }
 
 /**
@@ -580,13 +611,16 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		.bind(session.uid)
 		.first<{ preferences: string | null }>();
 	const account = parseAccountPreferences(row?.preferences);
-	const settings = sanitizeVoiceSettings(body, account.voice);
+	// Everything seeds from your account EXCEPT the vocabulary, which seeds from this agent's own
+	// current list — see `overrideVoiceBase`. A union that snapshots the thing it unions with is
+	// not a union, and the snapshot is invisible from the panel that made it.
+	const existing = await readInstanceConfig(c.env, instanceId, session.uid);
+	const settings = sanitizeVoiceSettings(body, overrideVoiceBase(account.voice, existing.voiceSettings));
 	await patchInstanceConfig(c.env, instanceId, session.uid, "voiceSettings", settings);
 	// Resolve against the config AS WRITTEN, not the copy read beforehand. The patch now goes
 	// straight to SQL without mutating a local blob, so resolving off the pre-write read would
 	// echo the OLD override back — the panel would show your previous speed after saving a new one.
-	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, { voiceSettings: settings });
-	return c.json({ voiceSettings: effective, hasOverride: true });
+	return c.json(await voiceSettingsBody(c.env, instanceId, session.uid, { voiceSettings: settings }));
 });
 
 /** "Use my defaults" — drop the override entirely. Absence is what the resolver reads. */
@@ -597,8 +631,7 @@ instanceRoutes.delete("/:instanceId/voice-settings", async (c) => {
 	await removeInstanceConfigKey(c.env, instanceId, session.uid, "voiceSettings");
 	// Resolve against an EMPTY override — that is the state just written, and "use my defaults"
 	// must report the account default, not the override it has just deleted.
-	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, {});
-	return c.json({ voiceSettings: effective, hasOverride: false });
+	return c.json(await voiceSettingsBody(c.env, instanceId, session.uid, {}));
 });
 
 /** Rename this instance (per-instance display name — distinguishes multiple

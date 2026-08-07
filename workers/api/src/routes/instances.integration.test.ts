@@ -783,6 +783,34 @@ describe("voice-settings resolve against the owner's account defaults (#211)", (
 		expect((body.voiceSettings as Record<string, unknown>).language).toBeDefined();
 	});
 
+	// #373. The one field that unions, end to end through the real route — the pure resolver is
+	// tested in lib/preferences.test.ts; this is about what the SDK and the panel actually receive.
+	it("resolves the vocabulary as a UNION and labels the inherited half", async () => {
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			accountPreferences: JSON.stringify({ voice: { vocabulary: ["HeartFull"] } }),
+			instanceConfig: JSON.stringify({ voiceSettings: { vocabulary: ["tmux"] } }),
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"));
+		const vs = (await res.json() as { voiceSettings: Record<string, unknown> }).voiceSettings;
+		expect(vs.vocabulary).toEqual(["HeartFull", "tmux"]);
+		// Without this the console cannot tell which words this agent OWNS, and the box that edits
+		// them would save the account's words into the agent — freezing a copy nobody can see.
+		expect(vs.inheritedVocabulary).toEqual(["HeartFull"]);
+		expect(Array.isArray(vs.derivedVocabulary)).toBe(true);
+	});
+
+	it("a vocabulary write never absorbs the account list into the agent", async () => {
+		const { app, env, writes } = buildApp({
+			owns: [["inst-1", "u1"]],
+			accountPreferences: JSON.stringify({ voice: { speed: 130, vocabulary: ["HeartFull"] } }),
+		});
+		await put(app, env, "/v1/instances/inst-1/voice-settings", { vocabulary: ["tmux"] }, await tokenFor("u1"));
+		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("json_set("))?.args ?? [])[1]));
+		expect(saved.speed).toBe(130); // every OTHER field still seeds from the account
+		expect(saved.vocabulary).toEqual(["tmux"]); // this one does not
+	});
+
 	it("PUT stores an override sanitized against the account, not the platform", async () => {
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], accountPreferences: ACCOUNT });
 		const res = await put(app, env, "/v1/instances/inst-1/voice-settings", { speed: 80 }, await tokenFor("u1"));

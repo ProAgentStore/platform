@@ -21,6 +21,7 @@
 import { isNoiseTranscript } from "./audio.js";
 import { commandStateFor, matchVoiceCommand, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
 import { storedDictation } from "./machine.js";
+import { applyVocabulary, type VocabularyCorrection } from "./vocabulary.js";
 
 /**
  * The whole utterance the user has said SO FAR in this capture — the accumulated finals plus
@@ -119,6 +120,9 @@ export type SendPlan =
 			dictation?: string;
 			/** Mint a turn id and upload the clip. False ⇒ send the text alone. */
 			attachAudio: boolean;
+			/** Words the vocabulary pass rewrote (#373), so the caller can show them. Empty when
+			 *  nothing was touched, which is the overwhelmingly common case. */
+			corrections: VocabularyCorrection[];
 	  };
 
 /**
@@ -136,6 +140,13 @@ export type SendPlan =
  * `attachAudio` is deliberately three conditions, not one: a recording exists, it has BYTES, and
  * there is an instance to store it against. A zero-byte blob still minted an audio key, whose
  * upload answers 400 and whose replay answers 404 — a turn that looks replayable and is not.
+ *
+ * VOCABULARY LAST (#373), and only on a transcript that has already survived both gates. Ordering
+ * it before the noise gate would let a correction turn a near-miss INTO an exact bias term and get
+ * the turn dropped as an echo (#332) — a rewrite that swallows a message is strictly worse than
+ * the mishearing it was trying to fix. `dictation` is compared against the CORRECTED text, so a
+ * turn whose only difference from the live capture was a spelling fix stops carrying a "what was
+ * heard" toggle that shows the same sentence twice.
  */
 export function planSend(
 	text: string,
@@ -149,14 +160,18 @@ export function planSend(
 		audioBytes: number;
 		/** Present ⇒ the clip has somewhere to be stored. */
 		instanceId?: string;
+		/** The user's vocabulary + the platform's derived terms (#372/#373). */
+		vocabulary?: string[];
 	},
 ): SendPlan {
 	if (isNoiseTranscript(text, cfg.transcribePrompt)) return { action: "drop", reason: "noise" };
 	if (cfg.confirmLanguage && transcriptLanguageMismatch(text, cfg.lang)) return { action: "drop", reason: "language" };
+	const fixed = applyVocabulary(text, cfg.vocabulary || []);
 	return {
 		action: "send",
-		text,
-		dictation: storedDictation(cfg.heard, text) ?? undefined,
+		text: fixed.text,
+		dictation: storedDictation(cfg.heard, fixed.text) ?? undefined,
 		attachAudio: cfg.audioBytes > 0 && !!cfg.instanceId,
+		corrections: fixed.corrections,
 	};
 }

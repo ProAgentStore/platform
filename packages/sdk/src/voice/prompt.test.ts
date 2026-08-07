@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_EXTRA_TERMS, buildTranscribePrompt, isTranscribeBiasEcho, spokenForm, transcribeBiasTerms } from "./prompt.js";
+import { MAX_EXTRA_TERMS, buildTranscribePrompt, extendTranscribePrompt, isTranscribeBiasEcho, spokenForm, transcribeBiasTerms } from "./prompt.js";
 
 // #371: a tmux operator has `surfaces: ["tmux"]`, so the gate — which only asked about `coding`
 // and `repo` — skipped CODING_TERMS entirely. The whole bias for that agent was its own name.
@@ -44,6 +44,20 @@ describe("the derived/user term list is bounded (#372)", () => {
 	it("dedupes the extras against each other, case-insensitively", () => {
 		const p = buildTranscribePrompt(["coding"], ["Heartfull", "heartfull", "HEARTFULL"]);
 		expect(p.match(/eartfull/gi)?.length).toBe(1);
+	});
+	// The terms arrive from two places at two times — the consumer knows the surfaces at render,
+	// the vocabulary arrives with the voice config on every mic start. Re-joining rather than
+	// concatenating strings is what keeps the cap and the dedupe honest across both.
+	it("extends an already-built prompt under the same rules", () => {
+		const base = buildTranscribePrompt(["tmux"]);
+		const extended = extendTranscribePrompt(base, ["HeartFull", "tmux"]);
+		expect(extended.startsWith(base)).toBe(true);
+		expect(extended).toContain("HeartFull");
+		expect(extended.match(/tmux/g)?.length).toBe(1); // already in TMUX_TERMS
+	});
+	it("extending nothing with nothing stays empty, so no bias field is sent at all", () => {
+		expect(extendTranscribePrompt("", [])).toBe("");
+		expect(extendTranscribePrompt("", ["Heartfull"])).toBe("Heartfull");
 	});
 	it("caps the extras — a long list degrades bias rather than improving it", () => {
 		const many = Array.from({ length: 100 }, (_, i) => `Zterm${i}`);

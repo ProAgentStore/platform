@@ -52,6 +52,7 @@ import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
+import { extendTranscribePrompt } from "./prompt.js";
 import { planFinalizedTurn, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
@@ -446,6 +447,18 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Ref so a changing prompt (e.g. repos attach later) is picked up on the next mic start.
 	const transcribePromptRef = useRef(opts.transcribePrompt);
 	transcribePromptRef.current = opts.transcribePrompt;
+	/** The user's vocabulary UNIONed with what the platform derived (#372/#373), refreshed with
+	 *  the voice config on every mic start — so attaching a repo changes the NEXT turn's bias. */
+	const vocabularyRef = useRef<string[]>([]);
+	/**
+	 * The prompt ACTUALLY sent, and the same string the echo guard reads back.
+	 *
+	 * Two sources arrive at two times: the consumer knows the agent's capabilities at render, the
+	 * vocabulary arrives with the voice config on every mic start. Joined here in ONE place because
+	 * `isTranscribeBiasEcho` compares against the list that was SENT (#332) — a second, shorter copy
+	 * of it would silently stop catching echoes.
+	 */
+	const biasPrompt = useCallback(() => extendTranscribePrompt(transcribePromptRef.current || "", vocabularyRef.current), []);
 	// Ref so the technical flag is read lazily at TTS-create time (surfaces can resolve
 	// after mount) — the TTS is created once, so re-create it if the flag flips.
 	const technicalRef = useRef(opts.technical);
@@ -474,7 +487,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		lastAudioBlobRef.current = null;
 		const plan = planSend(text, {
 			heard,
-			transcribePrompt: transcribePromptRef.current,
+			transcribePrompt: biasPrompt(),
+			vocabulary: vocabularyRef.current,
 			confirmLanguage: confirmLanguageRef.current,
 			lang: voiceLangRef.current,
 			audioBytes: blob?.size ?? 0,
@@ -590,6 +604,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 		confirmLanguageRef.current = c.confirmLanguage;
 		voiceLangRef.current = c.language;
+		vocabularyRef.current = c.vocabulary;
 	}, []);
 
 	useEffect(() => {
@@ -1028,7 +1043,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// Silence/echo hallucination ("you", ".", "\"") — you weren't talking. Don't
 					// send, don't chime; clear the placeholder and let the mic keep listening
 					// (onEnd reopens it). This is the "I'm not talking, don't submit" fix.
-					if (isNoiseTranscript(t, transcribePromptRef.current)) { flushSync(() => clearVoiceText()); return; }
+					if (isNoiseTranscript(t, biasPrompt())) { flushSync(() => clearVoiceText()); return; }
 					finalize(t);
 				} else if (!isFinal && text.trim()) {
 					// Streaming partial (gpt-4o-transcribe) — the words land live in the pending
@@ -1099,7 +1114,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// not the composer.
 			flushSync(() => dictate({ type: "speech", text, at: Date.now() }));
 		}
-	}, [stopAudioMonitor, readGuard, setPaused, dictate, clearVoiceText]);
+	}, [stopAudioMonitor, readGuard, setPaused, dictate, clearVoiceText, biasPrompt]);
 
 	const makeStt = useCallback(async () => {
 		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page reload, and
@@ -1117,7 +1132,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// muted/stopped the mic before its final result ever arrived to reset the latch).
 		handledUtteranceRef.current = false;
 		const stt = await createStt(instanceId, {
-			transcribePrompt: transcribePromptRef.current,
+			transcribePrompt: biasPrompt(),
 			onResult: handleResult,
 			// Stash the turn's recorded audio so emitSend can save it for replay.
 			onAudio: (blob) => { lastAudioBlobRef.current = blob; },
@@ -1195,7 +1210,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			},
 		});
 		return stt;
-	}, [instanceId, handleResult, startListening, setPaused, applyConfig, clearVoiceText, dictate]);
+	}, [instanceId, handleResult, startListening, setPaused, applyConfig, clearVoiceText, dictate, biasPrompt]);
 
 	const toggleMic = useCallback(async () => {
 		if (micOn) {

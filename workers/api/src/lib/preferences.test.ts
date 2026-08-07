@@ -7,6 +7,9 @@ import {
 	parseAccountPreferences,
 	parseVoiceWords,
 	resolveTranslation,
+	mergeVocabulary,
+	overrideVoiceBase,
+	parseVocabularyTerms,
 	resolveVoice,
 	sanitizeTranslationSettings,
 	sanitizeVoiceSettings,
@@ -214,5 +217,49 @@ describe("cross-package drift — the allowlist has to agree with the code that 
 		const offered = [...block.slice(0, block.indexOf("</select>")).matchAll(/<option value="([^"]+)"/g)].map((x) => x[1]);
 		expect(offered.length).toBeGreaterThan(0);
 		expect(offered.filter((v) => !VOICE_PROVIDERS.includes(v as never))).toEqual([]);
+	});
+});
+
+// #373. The one field on this panel that is ADDITIVE. Every other setting answers "how should
+// this agent behave" and overriding is right; a vocabulary answers "what words do I say", and an
+// override would make you re-type your own name into every agent you own.
+describe("vocabulary UNIONs across scopes instead of overriding", () => {
+	it("an agent's words are added to your account's, not substituted for them", () => {
+		const account = { ...defaultVoiceSettings(), vocabulary: ["HeartFull", "Vectorize"] };
+		expect(resolveVoice(account, { vocabulary: ["tmux"] }).vocabulary).toEqual(["HeartFull", "Vectorize", "tmux"]);
+	});
+	it("account words survive an override that says nothing about vocabulary", () => {
+		const account = { ...defaultVoiceSettings(), vocabulary: ["HeartFull"] };
+		expect(resolveVoice(account, { speed: 90 }).vocabulary).toEqual(["HeartFull"]);
+	});
+	it("account order comes first, because the prompt builder truncates the TAIL", () => {
+		expect(mergeVocabulary(["a-word"], ["b-word"])).toEqual(["a-word", "b-word"]);
+	});
+	it("dedupes case-insensitively across scopes, keeping the first spelling", () => {
+		// The CASING is what a correction restores, so which copy survives is not arbitrary.
+		expect(mergeVocabulary(["HeartFull"], ["heartfull"])).toEqual(["HeartFull"]);
+	});
+
+	// The bug this shape exists to prevent: "customise for this agent" seeds the override from your
+	// account values, so a naive base would COPY the account list into the agent — and then the
+	// union is a union with a snapshot. Remove a word from your account afterwards and it survives
+	// on every agent you had ever customised, invisibly.
+	it("an override is never seeded with the account vocabulary", () => {
+		const account = { ...defaultVoiceSettings(), speed: 130, vocabulary: ["HeartFull"] };
+		const base = overrideVoiceBase(account, undefined);
+		expect(base.speed).toBe(130); // everything else DOES seed from the account
+		expect(base.vocabulary).toEqual([]);
+	});
+	it("…but a partial save keeps the agent's OWN vocabulary", () => {
+		const account = { ...defaultVoiceSettings(), vocabulary: ["HeartFull"] };
+		const base = overrideVoiceBase(account, { vocabulary: ["tmux"] });
+		expect(sanitizeVoiceSettings({ speed: 90 }, base).vocabulary).toEqual(["tmux"]);
+	});
+	it("caps the list — a long vocabulary biases WORSE, not better", () => {
+		expect(parseVocabularyTerms(Array.from({ length: 200 }, (_, i) => `term${i}`)).length).toBe(50);
+		expect(mergeVocabulary(Array.from({ length: 40 }, (_, i) => `a${i}`), Array.from({ length: 40 }, (_, i) => `b${i}`)).length).toBe(50);
+	});
+	it("accepts the comma-separated string the console sends", () => {
+		expect(parseVocabularyTerms("tmux, HeartFull ,, Vectorize")).toEqual(["tmux", "HeartFull", "Vectorize"]);
 	});
 });

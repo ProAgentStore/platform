@@ -29,6 +29,34 @@ Two STT modes (Settings → Speech recognition):
   as you speak (legacy `whisper-1` is still selectable, without streaming). Sub-0.1s clips are
   dropped before upload; a per-agent vocab-bias prompt nudges domain words.
 
+### Vocabulary — the words you say that get misheard
+
+An agent is biased toward the vocabulary it is FOR: a terminal or coding agent expects
+`tmux`, `pane`, `pnpm`, `commit`; an apply agent expects `ATS`, `Greenhouse`, `recruiter`.
+The platform also supplies the proper nouns it already knows about your agent — its name, its
+attached repos, the agents it delegates to — with no configuration at all.
+
+On top of that you can keep **your own list** (Settings → Voice → *My vocabulary*), at two
+scopes that **add together** rather than replace each other:
+
+- **Preferences → Voice** — words that follow you everywhere: your name, your company, your stack.
+- **an agent's Settings → Voice** — words that belong to that one agent.
+
+This is the one voice setting where "customise for this agent" means *as well as* and not
+*instead of*: a vocabulary is a property of you, so you should never have to re-type your own
+name into every agent you own. The panel shows the inherited words as fixed chips beside the box.
+
+The list is used twice, because the two recognisers differ. Smart (AI) recognition accepts a
+vocabulary hint, so the words are sent with the audio. Browser dictation cannot be steered at
+all — there is no working grammar API — so a finished transcript is instead checked for **near
+misses** and corrected to your spelling. That pass is deliberately tight: whole words only,
+one or two characters at most, never a word that is close to two of your terms. A mishearing
+that is not close to anything you listed is left exactly as it arrived, because rewriting a
+word you really said is worse than showing you one you didn't.
+
+Lists are capped (~50 terms). That is not a storage limit: a long bias list biases *worse*, and
+each extra term is one more word a near-silent recording can echo back at you.
+
 **Language lock — the agent never assumes your language.** When a transcript's dominant script
 differs from the configured voice language, it is treated as a mis-detection: it is dropped
 (no send, no reply) and you are nudged to repeat, rather than the agent switching languages on

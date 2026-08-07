@@ -246,6 +246,33 @@ describe("planSend", () => {
 	it("carries no capture when there is nothing to compare", () => {
 		expect(planSend("run the tests", base)).toMatchObject({ dictation: undefined });
 	});
+
+	// #373. LAST, and only on a transcript that already survived both gates.
+	it("applies the user's vocabulary to what is sent, and reports what it changed", () => {
+		const plan = planSend("deploy heartful now", { ...base, vocabulary: ["HeartFull"] });
+		expect(plan).toMatchObject({ action: "send", text: "deploy HeartFull now" });
+	});
+
+	it("runs the vocabulary AFTER the noise gate, never before it", () => {
+		// Ordering it first would let a correction turn a near-miss INTO an exact bias term and get
+		// the turn dropped as an echo (#332). A rewrite that swallows a message is strictly worse
+		// than the mishearing it was trying to fix.
+		const prompt = "Coder Lead";
+		expect(planSend("Coder Leed", { ...base, transcribePrompt: prompt, vocabulary: ["Coder Lead"] })).toMatchObject({
+			action: "send",
+		});
+	});
+
+	it("compares the live capture against the CORRECTED text", () => {
+		// Otherwise a turn whose only difference from the capture was a spelling fix keeps a
+		// "what was heard" toggle that shows the same sentence twice.
+		const plan = planSend("heartful", { ...base, heard: "HeartFull", vocabulary: ["HeartFull"] });
+		expect(plan).toMatchObject({ text: "HeartFull", dictation: undefined });
+	});
+
+	it("changes nothing when no vocabulary is configured", () => {
+		expect(planSend("run the tests", base)).toMatchObject({ text: "run the tests", corrections: [] });
+	});
 });
 
 /**

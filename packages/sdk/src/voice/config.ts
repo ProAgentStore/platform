@@ -44,6 +44,17 @@ export interface VoiceConfig {
 	 *  that cannot delete — see `useVoice`'s `onScrap`. */
 	scrapWords: string[];
 	stopWords: string[];
+	/**
+	 * Words the user says that a recogniser gets wrong (#373) — the account list UNIONed with this
+	 * agent's, resolved server-side, plus (from `derivedVocabulary`) the proper nouns the platform
+	 * already knows about this agent (#372).
+	 *
+	 * Used TWICE, because the two recognisers have different capabilities: appended to the
+	 * transcription bias prompt (Whisper takes a vocabulary hint), and applied as a post-hoc
+	 * spelling correction over the finished transcript from EITHER engine — which is the only
+	 * lever that exists on the browser path, where there is no steerable grammar at all.
+	 */
+	vocabulary: string[];
 	/** Say this word/phrase while the agent is speaking to immediately halt playback
 	 *  (e.g. "stop stop"). Empty ⇒ off. Per-instance. Case-insensitive substring match. */
 	stopSpeechKeyword: string;
@@ -60,6 +71,23 @@ export interface VoiceConfig {
 function parseWords(v: unknown): string[] {
 	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
 	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean).slice(0, 20);
+}
+
+/** Parse a vocabulary list (array or delimited string). Deduped case-insensitively, first
+ *  spelling wins — the CASING is what a correction restores, so which copy survives matters. */
+function parseVocabulary(v: unknown): string[] {
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of list) {
+		if (typeof raw !== "string") continue;
+		const term = raw.trim().slice(0, 40);
+		if (!term || seen.has(term.toLowerCase())) continue;
+		seen.add(term.toLowerCase());
+		out.push(term);
+		if (out.length >= 50) break;
+	}
+	return out;
 }
 
 let _cache: VoiceConfig | null = null;
@@ -114,6 +142,12 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		nextWords: parseWords(vs.nextWords),
 		scrapWords: parseWords(vs.scrapWords),
 		stopWords: parseWords(vs.stopWords),
+		// The user's own words first (deliberate, and the ones they will notice going wrong), then
+		// what the platform derived (#372). Order matters downstream: the prompt builder truncates
+		// the TAIL, so a machine-derived repo name is what gets dropped when the budget runs out,
+		// never a word the user typed. `parseWords`' 20-item cap is the wrong bound here — a
+		// vocabulary is a list of nouns, not a handful of command phrasings — so it is not reused.
+		vocabulary: parseVocabulary([...parseVocabulary(vs.vocabulary), ...parseVocabulary(vs.derivedVocabulary)]),
 		stopSpeechKeyword: typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword.trim().slice(0, 40) : "",
 		confirmLanguage: vs.confirmLanguage !== false, // default ON
 	};
