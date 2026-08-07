@@ -142,7 +142,10 @@ const PINS = {
 	// as its opposite. Raised rather than split — the verdict itself is computed and tested in
 	// workers/api/src/lib/instance-tool-policy.ts, and what is here is one pure label function plus
 	// the span that renders it, which only means anything next to the row it annotates.
-	"store/console/src/tabs/SettingsTab.tsx": 1168,
+	// +3 more: the write-access checkboxes are built from `per_call` tools as well, so the
+	// connector a chip tells you to grant actually has a switch. Three lines, all of them the
+	// explanation of why a read-scoped tool belongs in a WRITE list.
+	"store/console/src/tabs/SettingsTab.tsx": 1171,
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.

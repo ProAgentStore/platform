@@ -252,8 +252,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setToolPolicy(policy);
 				// Which connectors can this agent WRITE with? Read off the server's verdict rather
 				// than re-deriving it client-side — the gate and the UI must not be able to disagree.
+				// `per_call` counts too (#351): `http_request` is honestly read-scoped, so this set
+				// used to omit `http` entirely and there was no checkbox anywhere for the grant its
+				// mutating calls are refused for — a chip asking for a switch that did not exist.
 				const writeConns = new Set<string>();
-				for (const t of policy) if (t.scope === "write" && t.connector && (t.allowed || t.disabled)) writeConns.add(t.connector);
+				for (const t of policy) if (t.connector && (t.allowed || t.disabled) && (t.scope === "write" || t.writeConsent === "per_call")) writeConns.add(t.connector);
 				setWriteConnectors([...writeConns]);
 				setGrantedConnectors((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
 			} catch {}
