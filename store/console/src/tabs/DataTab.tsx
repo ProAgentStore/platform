@@ -497,14 +497,16 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 			)}
 
 			{detail && (
-				<div
-					className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-					onClick={() => setDetail(null)}
-				>
-					<div
-						className="bg-white rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4"
-						onClick={(e) => e.stopPropagation()}
-					>
+				// Dismiss-on-backdrop as a real button SIBLING of the panel, not a click handler on
+				// the backdrop div wrapping it. Two things fall out: the dismiss becomes reachable by
+				// keyboard (a div with onClick is reachable by nothing), and the panel no longer needs
+				// `stopPropagation` to avoid closing itself — it is not inside the click target any
+				// more. Same idiom as the chat menu's overlay in InstanceDetail.
+				<div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+					<button type="button" aria-label="Close record details" className="absolute inset-0 bg-black/40 cursor-default" onClick={() => setDetail(null)}>
+						<span className="sr-only">Close record details</span>
+					</button>
+					<div className="relative bg-white rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4">
 						<div className="flex items-center justify-between mb-3">
 							<h3 className="font-semibold text-base">{String(detail.data.name ?? detail.data.title ?? detail.id ?? "Record")}</h3>
 							<button type="button" aria-label="Close record details" onClick={() => setDetail(null)} className="text-muted-soft">

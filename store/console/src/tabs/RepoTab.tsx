@@ -112,6 +112,7 @@ export default function RepoTab({ instanceId }: Props) {
 						value={url}
 						onChange={(e) => setUrl(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && addRepo(url)}
+						aria-label="GitHub repository URL to index"
 						placeholder="https://github.com/owner/repo"
 						className="flex-1"
 					/>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useId } from "react";
 import PrefOverride from "../components/PrefOverride";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
@@ -66,6 +66,7 @@ interface ConnectorGrant {
 }
 
 export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
+	const runsOnLabelId = useId();
 	const [maintMsg, setMaintMsg] = useState("");
 	// Agent-declared settings: the schema prop is the fast path; the GET also returns
 	// `fields` so the form never depends on a stale instance-list cache.
@@ -740,8 +741,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 				{/* Node binding — ONE machine per agent (no auto-any). A tile per machine you run
 				    `pags up` on; click one to bind this agent there. */}
-				<div className="mt-3 pt-3 border-t border-line/60">
-					<label className="block text-sm font-semibold mb-1">Runs on</label>
+				{/* This <label> named nothing — what it labels is the GRID of machine tiles, and a
+				    label can only name one form control. A named group announces the same thing. */}
+				{/* biome-ignore lint/a11y/useSemanticElements: a <fieldset> renders its <legend> inside its own top border, and the only border here IS a top rule — role="group" carries the same semantics without cutting the rule in half. */}
+				<div className="mt-3 pt-3 border-t border-line/60" role="group" aria-labelledby={runsOnLabelId}>
+					<div id={runsOnLabelId} className="block text-sm font-semibold mb-1">Runs on</div>
 					<p className="text-xs text-muted-soft mb-2">
 						Bind this agent to exactly one machine running <code className="text-accent">pags up</code> — its runner tasks (chat tools, apply, coding) route there.
 					</p>
@@ -986,6 +990,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 								value={driveGrantRef}
 								onChange={(e) => setDriveGrantRef(e.target.value)}
 								onKeyDown={(e) => { if (e.key === "Enter") addDriveGrant(); }}
+								aria-label="Google Drive folder to grant this agent"
 								placeholder="Google Drive folder URL or ID"
 								className="flex-1 min-w-0 sm:min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 							/>
@@ -1032,6 +1037,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 								value={workdriveGrantRef}
 								onChange={(e) => setWorkdriveGrantRef(e.target.value)}
 								onKeyDown={(e) => { if (e.key === "Enter") addWorkdriveGrant(); }}
+								aria-label="Zoho WorkDrive folder to grant this agent"
 								placeholder="Zoho WorkDrive folder URL or ID"
 								className="flex-1 min-w-0 sm:min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 							/>

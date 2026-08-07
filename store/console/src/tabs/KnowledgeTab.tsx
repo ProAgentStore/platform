@@ -424,6 +424,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 								<input
 									value={editTitle}
 									onChange={(e) => setEditTitle(e.target.value)}
+									aria-label="Document title"
 									placeholder="Document title"
 									className="flex-1 min-w-[12rem] bg-panel border border-line rounded-lg px-3 py-2 text-sm font-semibold"
 								/>
@@ -439,6 +440,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 								<textarea
 									value={editContent}
 									onChange={(e) => setEditContent(e.target.value)}
+									aria-label="Document content (Markdown)"
 									placeholder={"# Heading\n\nWrite in **Markdown**. Lists, links, tables — all supported.\n\n- point one\n- point two"}
 									className="w-full min-h-[320px] bg-panel border border-line rounded-xl px-3 py-2.5 text-sm font-mono leading-relaxed"
 								/>
@@ -487,8 +489,8 @@ export default function KnowledgeTab({ instanceId }: Props) {
 
 						{showUrl && (
 							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
-								<input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} placeholder="https://..." className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
-								<input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} placeholder="Title (auto-detected)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+								<input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} aria-label="URL to import into the knowledge base" placeholder="https://..." className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+								<input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} aria-label="Title for the imported page" placeholder="Title (auto-detected)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 								<div className="flex gap-2">
 									<button type="button" onClick={addUrl} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Import</button>
 									<button type="button" onClick={() => setShowUrl(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
@@ -516,6 +518,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 												value={driveQuery}
 												onChange={(e) => setDriveQuery(e.target.value)}
 												onKeyDown={(e) => { if (e.key === "Enter") searchDrive(); }}
+												aria-label="Search the granted Drive folder"
 												placeholder="Search granted folder"
 												className="flex-1 min-w-[12rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 											/>
@@ -700,6 +703,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 					<textarea
 						value={instructions}
 						onChange={(e) => setInstructions(e.target.value)}
+						aria-label="Special Instructions — rules this agent must follow"
 						placeholder={`e.g.\n- Use British English.\n- Never run destructive commands without asking.`}
 						className="min-h-[130px] w-full mb-2"
 					/>

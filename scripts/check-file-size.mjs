@@ -97,7 +97,11 @@ const PINS = {
 	// mcp-connection.ts, which is where a split would have put it anyway.
 	"workers/api/src/lib/connectors/mcp.ts": 1236,
 	"workers/mcp/src/index.ts": 1151,
-	"store/console/src/tabs/SettingsTab.tsx": 1149,
+	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
+	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
+	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
+	// Not split: three of the six lines are the explanation, and the rest is one hook call.
+	"store/console/src/tabs/SettingsTab.tsx": 1155,
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.

@@ -145,6 +145,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					autoComplete="off"
 					value={tokenValue}
 					onChange={(e) => setTokenValue(e.target.value)}
+					aria-label={`Access token for ${endpoint}`}
 					placeholder={`Access token for ${endpoint}`}
 					className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-surface border border-line rounded font-mono"
 				/>

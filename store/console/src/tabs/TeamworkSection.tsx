@@ -277,7 +277,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					);
 				})}
 				<div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 mt-2">
-					<input value={eventType} onChange={(e) => setEventType(e.target.value)} placeholder="Event, e.g. lead.created" className={field} />
+					<input value={eventType} onChange={(e) => setEventType(e.target.value)} aria-label="Event that triggers this connection" placeholder="Event, e.g. lead.created" className={field} />
 					<select aria-label="Connection target agent" value={target} onChange={(e) => setTarget(e.target.value)} className={field}>
 						<option value="">Send to…</option>
 						{others.map((i) => <option key={i.id} value={i.id}>{i.name || i.agentName || i.slug || i.id}</option>)}
@@ -288,7 +288,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					<button type="button" disabled={busy || !eventType.trim() || !target} onClick={addConnection} className="text-sm px-3 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-40 whitespace-nowrap">Add event</button>
 				</div>
 				{action === "run_pipeline" && (
-					<input value={pipeline} onChange={(e) => setPipeline(e.target.value)} placeholder="Pipeline name to run on the target" className={`${field} mt-2`} />
+					<input value={pipeline} onChange={(e) => setPipeline(e.target.value)} aria-label="Pipeline to run on the target agent" placeholder="Pipeline name to run on the target" className={`${field} mt-2`} />
 				)}
 
 				{/* Routing filter — validated server-side at create time, so a predicate that could

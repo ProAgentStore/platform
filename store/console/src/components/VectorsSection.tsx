@@ -153,6 +153,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
 							onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+							aria-label="Test search — what the agent can find"
 							placeholder="Test what the agent can find, e.g. “ice machine capacity”"
 							className="flex-1 bg-bg border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"
 						/>

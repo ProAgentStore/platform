@@ -1,5 +1,6 @@
 /**
- * Accessible-name detection for form controls, as a pure function over JSX source (#292).
+ * Two source-level a11y checks over JSX: whether a form control has an accessible NAME (#292),
+ * and whether a click target can be REACHED by anything but a mouse (#324).
  *
  * Why source-scanning and not a rendered-DOM assertion: neither console has component-testing
  * infrastructure, and #282 decided deliberately not to add one — the convention is pure
@@ -49,11 +50,33 @@ const CONTROLS = new Set(["input", "select", "textarea"]);
 const SELF_NAMING_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image"]);
 
 /**
+ * Blank out comments before scanning, keeping every newline so lines and indices still line up.
+ *
+ * Prose about markup is not markup. A comment saying "a `<tr onClick>` is reachable by mouse and
+ * by nothing else" is a description of the bug being FIXED on the next line, and reporting it is
+ * the same false-positive class this file's header is about.
+ *
+ * Only the three shapes this codebase actually writes are masked: a JSX brace-slash-star block,
+ * and a slash-star or double-slash comment that STARTS a line. Nothing mid-line is touched,
+ * because a double slash inside "https://…" and a slash-star inside a glob are both ordinary
+ * string content, and blanking to end-of-line there would erase the attributes that name a
+ * control.
+ */
+function maskComments(source: string): string {
+	const blank = (m: string) => m.replace(/[^\n]/g, " ");
+	return source
+		.replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
+		.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, blank)
+		.replace(/^[ \t]*\/\/[^\n]*/gm, blank);
+}
+
+/**
  * Split JSX into tags, respecting that a `>` can appear inside a `{...}` expression or a
  * string attribute (`placeholder=">"`, `onChange={(e) => …}` — that arrow is the common case
  * and a naive `/<[^>]*>/` truncates the tag right before the attributes that name it).
  */
-function scanTags(source: string): { name: string; body: string; index: number; selfClosing: boolean; closing: boolean }[] {
+function scanTags(input: string): { name: string; body: string; index: number; selfClosing: boolean; closing: boolean }[] {
+	const source = maskComments(input);
 	const out: { name: string; body: string; index: number; selfClosing: boolean; closing: boolean }[] = [];
 	for (let i = 0; i < source.length; i++) {
 		if (source[i] !== "<") continue;
@@ -132,3 +155,37 @@ export const findUnlabeledControls = (source: string): ControlFinding[] => findC
 
 /** Controls named only by a placeholder — a real but fragile name. */
 export const findPlaceholderOnlyControls = (source: string): ControlFinding[] => findControls(source).filter((c) => c.via === "placeholder");
+
+/**
+ * Plain HTML elements that carry no interactive semantics. A `<div onClick>` is not a control:
+ * it is not focusable, it is not in the tab order, Enter and Space do nothing to it, and it is
+ * announced as nothing. A mouse is the only way in.
+ *
+ * Deliberately a DENY-list of bare containers rather than an allow-list of everything else,
+ * because the false-positive cost is high: `<button>`, `<a href>`, `<summary>`, and any
+ * capitalised component (which may render a button) must never be reported.
+ */
+const NON_INTERACTIVE = new Set(["div", "span", "p", "li", "ul", "ol", "section", "article", "header", "footer", "aside", "main", "nav", "td", "tr", "tbody", "table", "figure", "h1", "h2", "h3", "h4", "h5", "h6"]);
+
+export interface ClickTargetFinding {
+	tag: string;
+	line: number;
+	excerpt: string;
+}
+
+/**
+ * Click handlers on elements only a mouse can operate.
+ *
+ * A `role` is accepted as the escape hatch, because declaring one is the deliberate act: the
+ * remote-control surface in RunDetail is `role="application"` with its own key handling, and
+ * that is a real decision someone made and wrote down. A bare `<div onClick>` is the accident.
+ *
+ * `onMouseEnter`/`onMouseOver` are NOT reported. Hover that only decorates (the admin's chart
+ * highlight) has no keyboard equivalent to be missing — the underlying value is exposed by other
+ * means, and demanding a focus handler for a hover tint invents work without adding access.
+ */
+export function findMouseOnlyClickTargets(source: string): ClickTargetFinding[] {
+	return scanTags(source)
+		.filter((t) => !t.closing && NON_INTERACTIVE.has(t.name) && hasAttr(t.body, "onClick") && !hasAttr(t.body, "role"))
+		.map((t) => ({ tag: t.name, line: source.slice(0, t.index).split("\n").length, excerpt: t.body.replace(/\s+/g, " ").slice(0, 120) }));
+}

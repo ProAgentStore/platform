@@ -238,6 +238,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 						<input
 							value={runUrl}
 							onChange={(e) => setRunUrl(e.target.value)}
+							aria-label="Start URL for the browser task"
 							placeholder="Start URL, e.g. https://www.facebook.com/friends/requests"
 							className="flex-1 min-w-0 sm:min-w-[18rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 						/>
@@ -642,7 +643,9 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 						<div key={i} className="border border-line rounded-xl p-2.5 bg-paper flex flex-col gap-2">
 							<div className="flex items-center gap-2">
 								<input type="color" value={/^#[0-9a-fA-F]{6}$/.test(c.color) ? c.color : "#a3a3a3"} onChange={(e) => patch(i, { color: e.target.value })} className="w-7 h-7 rounded border border-line bg-panel shrink-0 cursor-pointer" title="Column color" aria-label="Column color" />
-								<input value={c.title} onChange={(e) => patch(i, { title: e.target.value })} placeholder="Column title" className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+								{/* Indexed, because these rows repeat: "Column title" named all four of them
+								    identically, which is the failure the placeholder was already making. */}
+								<input value={c.title} onChange={(e) => patch(i, { title: e.target.value })} aria-label={`Title of column ${i + 1}`} placeholder="Column title" className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm" />
 								<div className="flex items-center gap-0.5 shrink-0">
 									<button type="button" onClick={() => swap(i, -1)} disabled={i === 0} className="w-7 h-7 flex items-center justify-center rounded border border-line text-muted hover:text-accent disabled:opacity-30" title="Move up"><ArrowUp size={13} /></button>
 									<button type="button" onClick={() => swap(i, 1)} disabled={i === draft.length - 1} className="w-7 h-7 flex items-center justify-center rounded border border-line text-muted hover:text-accent disabled:opacity-30" title="Move down"><ArrowDown size={13} /></button>
@@ -650,7 +653,7 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 								</div>
 							</div>
 							<div className="flex items-center gap-2 flex-wrap">
-								<input value={c.statusesText} onChange={(e) => patch(i, { statusesText: e.target.value })} placeholder="statuses (comma-separated) — optional for manual columns" className="flex-1 min-w-[10rem] bg-panel border border-line rounded-lg px-2.5 py-1.5 text-xs font-mono" />
+								<input value={c.statusesText} onChange={(e) => patch(i, { statusesText: e.target.value })} aria-label={`Statuses routed to column ${i + 1}`} placeholder="statuses (comma-separated) — optional for manual columns" className="flex-1 min-w-[10rem] bg-panel border border-line rounded-lg px-2.5 py-1.5 text-xs font-mono" />
 								<label className="flex items-center gap-1.5 text-xs text-muted shrink-0 cursor-pointer">
 									<input type="checkbox" checked={!!c.catchAll} onChange={() => toggleCatchAll(i)} /> Catch-all
 								</label>
