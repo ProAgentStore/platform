@@ -1720,9 +1720,21 @@ test.describe("ProAgentStore authenticated Console", () => {
  * that by measuring GEOMETRY instead: any element whose right edge is past the viewport.
  *
  * Descendants of a nested scroller are excused, because a strip that pans on purpose (the
- * instance sub-tabs) has content past the edge by design. The walk stops AT `<main>`, which is
- * `overflow-auto` on the pages that scroll vertically — treating that as a licence would excuse
- * the whole page and put the hole straight back.
+ * instance sub-tabs) has content past the edge by design. `<main>` is SKIPPED in that walk rather
+ * than counted: it is `overflow-auto` on the pages that scroll vertically, so treating it as a
+ * licence would excuse the whole page and put the hole straight back.
+ *
+ * ── `wide` measures the whole BODY, not just `<main>`
+ *
+ * `scrollers` and the loop that fed `wide` both started at `<main>`, so two of the three regions of
+ * the app shell were outside everything this function could see: the sticky header (logo, nav,
+ * bell, avatar, hamburger) and the push-permission banner above `<main>` — a `flex-wrap` row with a
+ * `min-w-[8rem]` text column and a `whitespace-nowrap shrink-0` button, i.e. exactly the shape #333
+ * was reported against, in a component the guard could not measure. A user who feels the page pan
+ * sideways does not know which region did it. `wide` now walks `document.body`.
+ *
+ * `scrollers` deliberately stays scoped to `<main>`: the header nav IS `overflow-x-auto` by design
+ * from `sm` up, and `navOv` below is the assertion that owns it.
  */
 async function measureOverflow(page: Page) {
 	return page.evaluate(() => {
@@ -1734,7 +1746,8 @@ async function measureOverflow(page: Page) {
 			return `${h.tagName.toLowerCase()}${h.id ? `#${h.id}` : ""}.${cls.split(/\s+/).slice(0, 3).join(".")}`;
 		};
 		const insideScroller = (el: HTMLElement) => {
-			for (let p = el.parentElement; p && p !== m; p = p.parentElement) {
+			for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+				if (p === m) continue; // the page's own scroll region, never a licence
 				const ox = getComputedStyle(p).overflowX;
 				if (ox === "auto" || ox === "scroll") return true;
 			}
@@ -1747,6 +1760,9 @@ async function measureOverflow(page: Page) {
 			if (over > 1 && (ox === "auto" || ox === "scroll")) {
 				scrollers.push(`${name(h)} (+${over}px)`);
 			}
+		}
+		for (const el of Array.from(document.body.querySelectorAll("*"))) {
+			const h = el as HTMLElement;
 			const r = h.getBoundingClientRect();
 			if (r.width > 0 && r.right > window.innerWidth + 1 && !insideScroller(h)) {
 				wide.push(`${name(h)} (right ${Math.round(r.right)} > ${window.innerWidth})`);
@@ -1909,4 +1925,40 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 		expect(wide, `roles row pushed content past the right edge: ${wide.join(", ")}`).toEqual([]);
 		expect(mainOv).toBeLessThanOrEqual(1);
 	});
+
+	/**
+	 * The largest text size, which every other guard here runs without (#333).
+	 *
+	 * Preferences → Appearance offers 0.9x / 1x / 1.15x / 1.3x, persisted to `pags:textScale` and
+	 * applied to `document.documentElement.style.fontSize` on boot (`main.tsx`). At 1.3x every
+	 * rem-sized padding, gap and font grows 30% while the px-pinned parts do not move — the 72px
+	 * avatar, `max-w-[220px]` on the token, `max-w-[200px]` on the user id, the mobile input's
+	 * `font-size: 16px`. A row that fits at 1x and not at 1.3x is the exact shape of this report,
+	 * and it is one tap away from any account, so a guard that only ever runs at 1x is measuring a
+	 * setting rather than the app.
+	 *
+	 * It passes today. It is here so that stays a measured fact.
+	 */
+	for (const width of [320, 390]) {
+		for (const route of ["/console/profile", "/console/preferences"]) {
+			test(`no horizontal scroll at ${width}px and 1.3x text — ${route}`, async ({ page }) => {
+				await page.setViewportSize({ width, height: 812 });
+				await mockSignedInConsole(page, realistic);
+				await page.addInitScript(() => window.localStorage.setItem("pags:textScale", "1.3"));
+				await page.goto(route);
+				await page.waitForLoadState("networkidle");
+				await page.locator("main").waitFor();
+				await page.waitForTimeout(300);
+
+				// The scale actually reached the document — otherwise this is a 1x run wearing a
+				// 1.3x name, which is the hollow-fixture failure #235 was closed on.
+				const rootPx = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
+				expect(rootPx, "text scale did not reach the document").toBeGreaterThan(19);
+
+				const { mainOv, wide } = await measureOverflow(page);
+				expect(wide, `content past the right edge at ${width}w / 1.3x on ${route}: ${wide.join(", ")}`).toEqual([]);
+				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w / 1.3x on ${route}`).toBeLessThanOrEqual(1);
+			});
+		}
+	}
 });
