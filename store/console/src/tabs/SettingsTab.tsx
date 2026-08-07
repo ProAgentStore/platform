@@ -393,10 +393,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		invalidateVoiceConfig();
 	};
 
-	/** "Use my defaults" — DELETE the override and repaint from what the account resolves to. */
+	/** "Use my defaults" — DELETE the override and repaint from what the account resolves to.
+	 *  Deliberately NOT caught, here or in clearTrOverride: a rejection must reach PrefOverride, which owns the radio whose position is the claim (the reasoning lives there). */
 	const clearVoiceOverride = async () => {
-		const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`, { method: "DELETE" })
-			.catch(() => null);
+		const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`, { method: "DELETE" });
 		setVoiceOverride(false);
 		if (d?.voiceSettings) setVoiceSettings(d.voiceSettings);
 		invalidateVoiceConfig(); // same reason as saveVoice: the cached config just became wrong
@@ -422,7 +422,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string } }>(
 			`/v1/instances/${instanceId}/translation`,
 			{ method: "DELETE" },
-		).catch(() => null);
+		);
 		setTrOverride(false);
 		if (d?.translation) {
 			setTrEnabled(d.translation.enabled === true);

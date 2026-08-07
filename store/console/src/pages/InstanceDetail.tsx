@@ -824,9 +824,9 @@ function InstancePage() {
 			// below sees the terminal status and reports it, so we do not fake one here.
 			await api(`/v1/instances/${id}/loop/${runId}/cancel`, { method: "POST" });
 			emitSystemChat("Stopping the loop…");
-		} catch {
-			setLoopOn(false);
-			setLoopRunId(null);
+		} catch (e) {
+			// pollLoop's own catch refuses to kill the watcher for exactly this reason — the run is durable and carries on. Clearing it here stopped the poll, so the loop kept iterating and spending with no UI trace, no Stop control and no way to re-attach: on screen, identical to a stop that worked.
+			emitSystemChat(`Couldn't stop the loop — it's still running. ${e instanceof Error ? e.message : ""}`.trim(), false);
 		}
 	};
 

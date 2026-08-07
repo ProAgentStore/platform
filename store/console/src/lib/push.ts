@@ -57,7 +57,14 @@ export async function enablePush(): Promise<"granted" | "denied" | "unsupported"
 	}
 }
 
-/** Fire a server-side test push to confirm the round-trip works. */
-export async function sendTestPush(): Promise<void> {
-	await api("/v1/push/test", { method: "POST" }).catch(() => undefined);
+/**
+ * Fire a server-side test push to confirm the round-trip works.
+ *
+ * Returns whether the request was accepted. It used to return `void` after swallowing the failure,
+ * so the caller could not tell even if it wanted to — and this is the DIAGNOSTIC control: the one
+ * button a user presses to check push works. Rendering "Sent ✓" for a request that was rejected
+ * sends them to debug their OS notification settings instead.
+ */
+export async function sendTestPush(): Promise<boolean> {
+	return api("/v1/push/test", { method: "POST" }).then(() => true, () => false);
 }

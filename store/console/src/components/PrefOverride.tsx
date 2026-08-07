@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 /**
@@ -26,19 +27,37 @@ export interface PrefOverrideProps {
 	 * must not be operable.
 	 */
 	loaded?: boolean;
-	onUseDefaults: () => void;
+	/**
+	 * May reject. Clearing an override is a DELETE, and this radio is the only thing that reports
+	 * whether it landed: the caller must not flip `hasOverride` optimistically, because a failed
+	 * DELETE leaves the override live on the server while the screen says "using your defaults" —
+	 * and then prints the OVERRIDE's own values as the summary of the account defaults, so the two
+	 * halves of the lie corroborate each other. Reject and the radio stays where it truthfully is.
+	 */
+	onUseDefaults: () => void | Promise<void>;
 	onCustomise: () => void;
 }
 
 export default function PrefOverride({ label, hasOverride, summary, loaded = true, onUseDefaults, onCustomise }: PrefOverrideProps) {
 	const name = `pref-${label.replace(/\s+/g, "-")}`;
+	const [error, setError] = useState("");
+	// The failure belongs to the control, not to the page: this component owns the radio whose
+	// position is the claim, so it is the one place that can say the claim did not take.
+	const useDefaults = async () => {
+		setError("");
+		try {
+			await onUseDefaults();
+		} catch {
+			setError(`Couldn't switch to your defaults — this agent is still using its own ${label}.`);
+		}
+	};
 	if (!loaded) {
 		return <div className="mb-3 text-sm text-muted-soft">Loading your {label}…</div>;
 	}
 	return (
 		<div className="mb-3">
 			<label className="flex items-start gap-2 text-sm cursor-pointer py-1">
-				<input type="radio" name={name} checked={!hasOverride} onChange={onUseDefaults} className="mt-0.5" />
+				<input type="radio" name={name} checked={!hasOverride} onChange={useDefaults} className="mt-0.5" />
 				<span className="min-w-0">
 					<span className="font-semibold">Using your defaults</span>
 					{summary && <span className="text-muted"> — {summary}</span>}
@@ -56,6 +75,7 @@ export default function PrefOverride({ label, hasOverride, summary, loaded = tru
 					</span>
 				</span>
 			</label>
+			{error && <p className="text-xs text-red mt-1">{error}</p>}
 		</div>
 	);
 }

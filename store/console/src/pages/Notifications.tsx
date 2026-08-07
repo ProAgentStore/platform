@@ -114,24 +114,51 @@ function AlertsCard() {
 	const [perm, setPerm] = useState<string>(() => pushPermission());
 	const [busy, setBusy] = useState(false);
 	const [tested, setTested] = useState(false);
+	const [failed, setFailed] = useState("");
 	if (!pushSupported()) return null;
 
-	const onEnable = async () => { setBusy(true); await enablePush(); setPerm(pushPermission()); setBusy(false); };
-	const onTest = async () => { setBusy(true); await sendTestPush(); setBusy(false); setTested(true); setTimeout(() => setTested(false), 4000); };
+	// Both results were discarded, and this card is keyed on `pushPermission()` — the BROWSER's
+	// permission, not whether a subscription reached the server. `enablePush()` returns "error"
+	// for exactly the case where permission was granted and the subscribe/save failed, which is
+	// the case that reads as "granted": the card flipped to "you'll get a notification … an agent
+	// waiting on you always gets through", replaced the Enable button so there was nothing left to
+	// retry, and `sendPushToUser` had no subscription to fan out to. Layout.tsx already reads this
+	// return value; this call site was the deviation.
+	const onEnable = async () => {
+		setBusy(true);
+		setFailed("");
+		const res = await enablePush();
+		if (res === "error") setFailed("Couldn't finish turning alerts on — nothing will reach you yet. Try again.");
+		setPerm(pushPermission());
+		setBusy(false);
+	};
+	const onTest = async () => {
+		setBusy(true);
+		setFailed("");
+		const sent = await sendTestPush();
+		setBusy(false);
+		if (!sent) return setFailed("Couldn't send the test — this is the platform's end, not your browser's.");
+		setTested(true);
+		setTimeout(() => setTested(false), 4000);
+	};
 
 	return (
 		<div className="mb-4 p-4 bg-panel border border-line rounded-xl flex flex-wrap items-center gap-3">
 			<div className="flex-1 min-w-[10rem]">
 				<div className="text-sm font-bold text-ink">🔔 Browser alerts</div>
-				<div className="text-sm text-muted mt-0.5">
-					{perm === "granted" ? "On — you'll get a notification (even with this tab closed) when an agent needs you."
+				{/* The failure REPLACES the status line rather than sitting under it: "On — you'll get
+				    a notification" beside "couldn't finish turning alerts on" is the same claim the
+				    swallow was making, only slower. */}
+				<div className={`text-sm mt-0.5 ${failed ? "text-red" : "text-muted"}`}>
+					{failed ? failed
+						: perm === "granted" ? "On — you'll get a notification (even with this tab closed) when an agent needs you."
 						: perm === "denied" ? "Blocked. Turn on notifications for proagentstore.online in your browser's site settings, then reload."
 						: "Off — turn them on so an agent can reach you the moment it needs an answer."}
 				</div>
 				{/* Before #360 the only remedy for a noisy class of notification was turning push OFF
 				    entirely, which also loses the handoff — the one alert the product needs to
 				    interrupt for. Point at the control from the page where the noise is noticed. */}
-				{perm === "granted" && (
+				{perm === "granted" && !failed && (
 					<div className="text-xs text-muted-soft mt-1">
 						Too noisy?{" "}
 						<Link to="/preferences" className="text-accent font-semibold hover:underline">
@@ -141,13 +168,16 @@ function AlertsCard() {
 					</div>
 				)}
 			</div>
-			{perm === "granted" ? (
+			{/* A granted permission with a failed enrolment must keep the ENABLE button: it is the
+			    only control that re-runs the subscribe, and replacing it with "send a test alert"
+			    left the user pressing the one button that cannot fix what is wrong. */}
+			{perm === "granted" && !failed ? (
 				<button type="button" onClick={onTest} disabled={busy} className="px-4 py-2 rounded-lg border border-line text-sm font-semibold text-ink hover:border-accent disabled:opacity-50 shrink-0">
 					{tested ? "Sent ✓ (switch tabs to see it)" : busy ? "Sending…" : "Send a test alert"}
 				</button>
 			) : perm !== "denied" ? (
 				<button type="button" onClick={onEnable} disabled={busy} className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-bold disabled:opacity-50 shrink-0">
-					{busy ? "Enabling…" : "Enable alerts"}
+					{busy ? "Enabling…" : failed ? "Try again" : "Enable alerts"}
 				</button>
 			) : null}
 		</div>
