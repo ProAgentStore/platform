@@ -240,6 +240,23 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			});
 		}
 		if (path === "/v1/instances/inst-1/messages") return json({ messages: persistedMessages });
+		// #358: the action vocabulary, judged against THIS instance. The console renders its
+		// picker from this and holds no list of its own — the old hardcoded one offered "Run
+		// browser task" on every agent, including the 25 of 26 that would refuse it.
+		if (path === "/v1/triggers/actions" && method === "GET") {
+			const reason = 'This agent cannot drive a browser: doing that needs an agent declaring capabilities.workflow = "BROWSER_TASK", and this one declares "JOB_APPLY". Declare it on the agent, or pick an action this agent can run.';
+			return json({
+				actions: [
+					{ action: "create_task", label: "Create task", available: true, reason: null, requires: null },
+					{ action: "add_knowledge", label: "Add knowledge", available: true, reason: null, requires: null },
+					{ action: "sync_connector", label: "Sync folder", available: true, reason: null, requires: null },
+					{ action: "run_pipeline", label: "Run pipeline", available: true, reason: null, requires: null },
+					{ action: "insert_record", label: "Insert record", available: true, reason: null, requires: null },
+					{ action: "run_browse", label: "Run browser task", available: false, reason, requires: 'capabilities.workflow = "BROWSER_TASK"' },
+					{ action: "log_event", label: "Log event", available: true, reason: null, requires: null },
+				],
+			});
+		}
 		if (path === "/v1/triggers" && method === "GET") {
 			return json({
 				triggers: [
@@ -251,6 +268,18 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 						enabled: true,
 						schedule: "@daily",
 						nextRunAt: "2026-07-13T00:00:00.000Z",
+					},
+					// A row saved before the create-time gate existed: a schedule wired to an action
+					// this agent can never perform. It used to look exactly as healthy as the others.
+					{
+						id: "trigger-browse",
+						name: "Nightly portal check",
+						type: "cron",
+						action: "run_browse",
+						enabled: true,
+						schedule: "@daily",
+						config: { url: "https://portal.test/jobs" },
+						unavailable: 'This agent cannot drive a browser: doing that needs an agent declaring capabilities.workflow = "BROWSER_TASK", and this one declares "JOB_APPLY". Declare it on the agent, or pick an action this agent can run.',
 					},
 					{
 						id: "trigger-sync",
@@ -1177,6 +1206,32 @@ test.describe("ProAgentStore Console smoke", () => {
 		// insert_record → a target-collection input appears.
 		await action.selectOption("insert_record");
 		await expect(page.getByPlaceholder("collection name")).toBeVisible();
+	});
+
+	test("an action this agent cannot perform is offered as disabled, with the reason (#358)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
+
+		const triggersCard = page
+			.locator("div")
+			.filter({ has: page.getByRole("heading", { name: "Triggers" }) })
+			.last();
+		const action = triggersCard.locator("select").filter({ has: page.locator('option[value="run_pipeline"]') });
+
+		// Still LISTED — hiding it would leave "why can't I schedule a browser run here?"
+		// unanswered — but not selectable, because this agent declares JOB_APPLY, not BROWSER_TASK.
+		const browse = action.locator('option[value="run_browse"]');
+		await expect(browse).toHaveCount(1);
+		// `toBeDisabled` does not read an <option>, so assert the attribute the browser honours.
+		await expect(browse).toHaveAttribute("disabled", "");
+		await expect(browse).toHaveText(/not supported by this agent/);
+
+		// And the row saved before the gate existed no longer looks healthy: it says, on the row,
+		// that it can never run — without deleting a trigger the user wrote.
+		const stale = page.locator("div.bg-paper").filter({ hasText: "Nightly portal check" }).first();
+		await expect(stale.getByText("This trigger can never run.")).toBeVisible();
+		await expect(stale.getByText(/BROWSER_TASK/)).toBeVisible();
 	});
 
 	test("schedule editor previews the next runs in local time AND UTC (#18)", async ({ page }) => {
