@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
-import { lintAgentClaims } from "../lib/agent-claims-lint.js";
+import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
 import { HttpError, isSuspended, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
@@ -382,7 +382,18 @@ agentRoutes.post("/", async (c) => {
 	// Catalog claims lint (#66): loudly (but non-blockingly) warn when the description promises a
 	// runtime capability the declared capabilities can't back — the creator should wire the
 	// capability or rewrite the copy before publishing.
-	const claimWarnings = lintAgentClaims({ description: body.description, capabilities: { runtime: declaredCaps.runtime ?? null, workflow: declaredCaps.workflow ?? null } });
+	//
+	// Against the RESOLVED capabilities (#362), not the declared block alone: `agentCapabilities`
+	// falls back to the slug/category derivation for pre-registry agents, so a create with
+	// `category: "code"` and honest copy about a local runner is backed and must not be accused.
+	// The update path now makes the identical call — one rule, two doors.
+	const claimWarnings = lintResolvedAgentClaims({
+		description: body.description,
+		slug: body.slug,
+		// The value that was INSERTed, not the raw body — the fallback derivation keys off it.
+		category: body.category || "general",
+		config: JSON.stringify(initialConfig),
+	});
 
 	return c.json(claimWarnings.length ? { id, slug: body.slug, warnings: claimWarnings } : { id, slug: body.slug }, 201);
 });
@@ -392,11 +403,14 @@ agentRoutes.put("/:id", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
 
+	// `category` and `config` come along for the claims lint (#362): it needs the capabilities as
+	// they will stand AFTER this patch, and the capabilities branch below already had to read the
+	// config a second time to merge into it.
 	const row = await c.env.DB.prepare(
-		"SELECT owner_id, slug, name, description FROM agents WHERE id = ?1",
+		"SELECT owner_id, slug, name, description, category, config FROM agents WHERE id = ?1",
 	)
 		.bind(id)
-		.first<AgentRow>();
+		.first<AgentRow & { category: string | null; config: string | null }>();
 	if (!row) throw new HttpError(404, "Agent not found");
 	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
 		throw new HttpError(403, "Not your agent");
@@ -441,15 +455,18 @@ agentRoutes.put("/:id", async (c) => {
 	// update). Patch-merge the validated power fields (surfaces/runtime/workflow/tools)
 	// into config.capabilities, preserving sibling keys other routes own (customSurfaces).
 	// Only keys present in the body change. Runtime/workflow trust-gating is #142.
+	// The config as it will stand after this call — the lint below reads it whether or not the
+	// capabilities were touched, because a copy-only edit is exactly the case #362 is about.
+	let resolvedConfig = row.config;
 	if ("capabilities" in body) {
 		const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
-		const cfgRow = await c.env.DB.prepare("SELECT config FROM agents WHERE id = ?1").bind(id).first<{ config: string | null }>();
 		let config: Record<string, unknown> = {};
-		try { config = cfgRow?.config ? (JSON.parse(cfgRow.config) as Record<string, unknown>) : {}; } catch { config = {}; }
+		try { config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {}; } catch { config = {}; }
 		const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
 		Object.assign(caps, declaredCaps);
 		config.capabilities = caps;
-		params.push(JSON.stringify(config));
+		resolvedConfig = JSON.stringify(config);
+		params.push(resolvedConfig);
 		sets.push(`config = ?${params.length + 1}`);
 	}
 
@@ -460,7 +477,23 @@ agentRoutes.put("/:id", async (c) => {
 	await c.env.DB.prepare(sql)
 		.bind(...params)
 		.run();
-	return c.json({ success: true });
+
+	// Catalog claims lint (#66, wired here by #362). Create ran it and update did not, which is
+	// backwards: a description is rewritten far more often than it is first written, so the path
+	// where the copy actually changes was the path with no check. Against the POST-patch values
+	// on both sides, so it catches the mismatch arrived at from either direction — new copy over
+	// old capabilities, or new capabilities under old copy.
+	//
+	// Advisory, exactly as on create: the write has already happened and the warnings ride
+	// alongside the success. The heuristic is overridable by design (#66) and blocking on it
+	// would make a store's copy editor fight a regex.
+	const claimWarnings = lintResolvedAgentClaims({
+		description: typeof body.description === "string" ? body.description : row.description,
+		slug: row.slug,
+		category: typeof body.category === "string" ? body.category : row.category,
+		config: resolvedConfig,
+	});
+	return c.json(claimWarnings.length ? { success: true, warnings: claimWarnings } : { success: true });
 });
 
 /** Read the agent's declared custom surfaces (owner only). */
@@ -498,9 +531,11 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 agentRoutes.put("/:id/capabilities", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
-	const row = await c.env.DB.prepare("SELECT owner_id, config FROM agents WHERE id = ?1")
+	// slug/category/description ride along for the claims lint below (#362) — this route is the
+	// other door onto the same mismatch: capabilities change here while the copy stays put.
+	const row = await c.env.DB.prepare("SELECT owner_id, slug, category, description, config FROM agents WHERE id = ?1")
 		.bind(id)
-		.first<{ owner_id: string; config: string | null }>();
+		.first<{ owner_id: string; slug: string | null; category: string | null; description: string | null; config: string | null }>();
 	if (!row) throw new HttpError(404, "Agent not found");
 	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
 		throw new HttpError(403, "Not your agent");
@@ -537,9 +572,14 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	if (declared.tools !== undefined) caps.tools = declared.tools;
 
 	config.capabilities = caps;
+	const resolvedConfig = JSON.stringify(config);
 	await c.env.DB.prepare("UPDATE agents SET config = ?1, updated_at = datetime('now') WHERE id = ?2")
-		.bind(JSON.stringify(config), id)
+		.bind(resolvedConfig, id)
 		.run();
+	// Dropping `runtime` here silently turns honest catalog copy into an overclaim, so the same
+	// advisory lint the other two doors run reports it (#362). Warnings only — this route's job
+	// is to store what the creator declared.
+	const claimWarnings = lintResolvedAgentClaims({ description: row.description, slug: row.slug, category: row.category, config: resolvedConfig });
 	return c.json({
 		customSurfaces: caps.customSurfaces ?? [],
 		surfaces: caps.surfaces ?? [],
@@ -547,6 +587,7 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		workflow: caps.workflow ?? null,
 		tools: caps.tools ?? [],
 		customSurfacesEnabled: customSurfacesEnabled(c.env),
+		...(claimWarnings.length ? { warnings: claimWarnings } : {}),
 	});
 });
 
