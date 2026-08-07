@@ -95,12 +95,20 @@ export function registerRepoTools(server: McpServer, ctx: InstanceToolsCtx): voi
 					repo_url: repo_url || "(all)",
 				});
 			}
-			await authedCall(
+			const cleared = (await authedCall(
 				`/v1/instances/${instance_id}/ingest-repo/clear`,
 				sessionToken,
 				{ method: "POST", body: JSON.stringify(repo_url ? { repoUrl: repo_url } : {}) },
 				env,
-			);
+			)) as { error?: string };
+			// authedCall RETURNS `{error: "API <status>"}` on any non-2xx rather than throwing, so
+			// discarding it (as this tool did) reported "Removed all repositories." for a call that
+			// removed nothing — and wrote `action:"completed"` to the audit log, the one record an
+			// operator would consult to answer whether a destructive removal happened. The vectors
+			// survive and keep being cited, so the caller's next question is answered from an index
+			// it was told is gone. Every sibling mutating tool already checks this (see
+			// coding_session_message: "do NOT report 'sent' for a command that never ran").
+			if (cleared?.error) return text(`Error removing ${repo_url || "all repositories"}: ${cleared.error}`);
 			await audit(safetyFor(token), { tool: "remove_repo", action: "completed", input });
 			return text(repo_url ? `Removed ${repo_url}.` : "Removed all repositories.");
 		},

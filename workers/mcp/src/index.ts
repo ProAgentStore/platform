@@ -346,12 +346,21 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
 				// Accept a JSON string as well as an object: models routinely send one when a
 				// schema says "object", and rejecting that turns a working call into a retry loop.
-				const parseMaybeJson = (v: unknown): unknown => {
-					if (typeof v !== "string") return v;
-					try { return JSON.parse(v); } catch { return undefined; }
+				// A string that is not valid JSON is a different case and must NOT collapse to
+				// undefined: `capabilities` is what makes this "a fully-formed agent in one call",
+				// and undefined is silently the plain-chat agent the description promises you avoid
+				// — created, reported as `Created: <id>`, with no surfaces, no runtime and no
+				// tools[] allowlist. update_agent below already errors on exactly this input.
+				const parseMaybeJson = (v: unknown): { ok: true; value: unknown } | { ok: false } => {
+					if (typeof v !== "string") return { ok: true, value: v };
+					try { return { ok: true, value: JSON.parse(v) }; } catch { return { ok: false }; }
 				};
-				const caps = parseMaybeJson(capabilities);
-				const schema = parseMaybeJson(settings_schema);
+				const parsedCaps = parseMaybeJson(capabilities);
+				if (!parsedCaps.ok) return text("Error: capabilities must be a JSON object or valid JSON string.");
+				const parsedSchema = parseMaybeJson(settings_schema);
+				if (!parsedSchema.ok) return text("Error: settings_schema must be a JSON array or valid JSON string.");
+				const caps = parsedCaps.value;
+				const schema = parsedSchema.value;
 				const input = { slug, name, description, category, model, personality, goal, capabilities: caps, settingsSchema: schema };
 				const denied = await requirePermission(this.safety(token), "write", "create_agent", input);
 				if (denied) return denied;

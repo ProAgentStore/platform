@@ -326,6 +326,38 @@ describe("create_agent", () => {
 		expect(res.content[0].text).toContain("Error");
 		expect(res.content[0].text).toContain("slug taken");
 	});
+
+	// A JSON *string* is accepted on purpose (models send one for an object param). A
+	// string that is not valid JSON is a different case: it used to collapse to
+	// `undefined`, so the agent was created with no surfaces, no runtime and no tools[]
+	// allowlist — the plain chat agent the tool description promises you avoid — and the
+	// call still answered `Created: <id>`. Fail loudly instead. (#325)
+	it("accepts capabilities as a JSON string", async () => {
+		const h = await setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents") && m === "POST", { body: { id: "ag-1" } });
+		const res = await h.tools.get("create_agent")!.handler({
+			slug: "x",
+			name: "X",
+			capabilities: '{"surfaces":["repo"]}',
+		});
+		expect(res.content[0].text).toContain("Created: ag-1");
+		const call = h.fetchStub.calls.find((c) => c.method === "POST" && c.url.endsWith("/v1/agents"))!;
+		expect(JSON.parse(call.body!).capabilities).toEqual({ surfaces: ["repo"] });
+	});
+
+	it("refuses malformed capabilities rather than creating a capability-less agent", async () => {
+		const h = await setup();
+		const res = await h.tools.get("create_agent")!.handler({ slug: "x", name: "X", capabilities: "{surfaces: repo" });
+		expect(res.content[0].text).toContain("capabilities must be a JSON object");
+		expect(h.fetchStub.calls.some((c) => c.method === "POST" && c.url.endsWith("/v1/agents"))).toBe(false);
+	});
+
+	it("refuses malformed settings_schema the same way", async () => {
+		const h = await setup();
+		const res = await h.tools.get("create_agent")!.handler({ slug: "x", name: "X", settings_schema: "[{id:" });
+		expect(res.content[0].text).toContain("settings_schema must be a JSON array");
+		expect(h.fetchStub.calls.some((c) => c.method === "POST" && c.url.endsWith("/v1/agents"))).toBe(false);
+	});
 });
 
 // ── update_agent: only truthy fields are sent ────────────────────────────────

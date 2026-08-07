@@ -964,3 +964,33 @@ describe("connector grant tools", () => {
 		expect(h.fetchStub.calls.length).toBe(before);
 	});
 });
+
+describe("remove_repo — a failed removal must not be reported as one (#325)", () => {
+	// `authedCall` RETURNS `{error: "API <status>"}` on a non-2xx instead of throwing, so
+	// discarding its result made this tool answer "Removed all repositories." for a call
+	// that removed nothing, and write `action:"completed"` to the audit log — the record an
+	// operator consults to answer whether the destructive removal actually happened. The
+	// vectors survive and keep being cited from an index the caller was told is gone.
+	it("surfaces the API failure and writes no completed audit event", async () => {
+		const h = setup({ groups: ["repo"] });
+		h.fetchStub.respond((u, m) => u.includes("/ingest-repo/clear") && m === "POST", {
+			status: 500,
+			body: { error: "vectorize unavailable" },
+		});
+
+		const res = await h.tools.get("remove_repo")!.handler({ instance_id: "i1", repo_url: "owner/repo" });
+
+		expect(res.content[0].text).toMatch(/^Error removing owner\/repo/);
+		expect(h.auditEvents().some((e) => e.tool === "remove_repo" && e.action === "completed")).toBe(false);
+	});
+
+	it("still reports and audits a removal that really happened", async () => {
+		const h = setup({ groups: ["repo"] });
+		h.fetchStub.respond((u, m) => u.includes("/ingest-repo/clear") && m === "POST", { body: { success: true } });
+
+		const res = await h.tools.get("remove_repo")!.handler({ instance_id: "i1", repo_url: "owner/repo" });
+
+		expect(res.content[0].text).toBe("Removed owner/repo.");
+		expect(h.auditEvents().some((e) => e.tool === "remove_repo" && e.action === "completed")).toBe(true);
+	});
+});
