@@ -234,7 +234,7 @@ function InstancePage() {
 		},
 		// Bias transcription toward this agent's vocabulary so domain words aren't
 		// mis-heard (a coding agent should expect "bugs", not "bars").
-		transcribePrompt: buildTranscribePrompt(surfaces, instance?.name ? [instance.name] : []),
+		transcribePrompt: buildTranscribePrompt(surfaces, instance?.name ? [instance.name] : [], { runtime: instance?.capabilities?.runtime }),
 		// A code explainer (repo/coding) speaks ABOUT code — keep identifiers + file
 		// basenames in the spoken reply instead of gutting them to "a file … a file".
 		technical: surfaces.includes("repo") || surfaces.includes("coding") || surfaces.includes("tmux"),

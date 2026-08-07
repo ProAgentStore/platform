@@ -238,14 +238,37 @@ describe("dictationDiverged (#281 — a lost tail should be observable, not a va
 	it("ordinary engine disagreement about WORDING is not a divergence", () => {
 		expect(dictationDiverged("fix the bugs in the parser today", "fixed the bars in the parser today")).toBe(false);
 	});
-	it("silent below four heard words — too little signal to accuse anything", () => {
-		expect(dictationDiverged("coder lead", "")).toBe(false);
-	});
 	it("an empty final after a real sentence is the worst loss, and is flagged", () => {
 		expect(dictationDiverged("please summarise the deployment status", "")).toBe(true);
 	});
 	it("nothing heard live (iOS, no gate) can never accuse the final", () => {
 		expect(dictationDiverged("", "a perfectly good transcript")).toBe(false);
+	});
+});
+
+// The volume test above is switched off below four words, which left the two turns in #371 that
+// came back as pure nonsense as the only two the guard could not comment on. Short utterances are
+// the most likely to be mistranscribed and had no check at all.
+describe("dictationDiverged (#371 — a short utterance is judged by OVERLAP, not volume)", () => {
+	it("flags the reported turns: nothing in the final is anything that was heard", () => {
+		expect(dictationDiverged("Do it", "Duet")).toBe(true);
+		expect(dictationDiverged("Send", "context:")).toBe(true);
+	});
+	it("a spelling disagreement between the two engines is NOT a divergence", () => {
+		expect(dictationDiverged("colour", "color")).toBe(false);
+		expect(dictationDiverged("Heartfull", "Heartful")).toBe(false);
+		expect(dictationDiverged("go ahead", "Go ahead.")).toBe(false);
+	});
+	it("one word in common is enough — the engines heard the same utterance", () => {
+		expect(dictationDiverged("do it now", "do that now")).toBe(false);
+	});
+	it("an empty final after a short utterance is still the worst loss", () => {
+		expect(dictationDiverged("coder lead", "")).toBe(true);
+	});
+	it("short words are not fuzzy-matched into each other", () => {
+		// `go`/`no` and `it`/`is` are DIFFERENT words; a one-edit allowance at this length would
+		// make the guard agree with a transcript that inverted the instruction.
+		expect(dictationDiverged("go", "no")).toBe(true);
 	});
 });
 

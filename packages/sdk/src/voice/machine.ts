@@ -12,6 +12,7 @@
  */
 
 import type { VoiceMode } from "./convo.js";
+import { nearWord } from "./vocabulary.js";
 
 /** How long after the agent stops speaking the mic still ignores input (speaker echo/reverb). */
 export const ECHO_GUARD_MS = 800;
@@ -315,14 +316,40 @@ function words(s: string): string[] {
  * time. A dropped tail is a different shape — the final is simply much shorter than what was
  * heard, which is what "'this model' has no referent" looks like from the outside.
  *
- * Conservative on purpose: silent below four heard words (too little signal to accuse anything)
- * and only flags a loss of more than ~40% of the utterance, so ordinary engine disagreement
- * never fires it.
+ * Conservative on purpose: a loss of more than ~40% of the utterance, so ordinary engine
+ * disagreement never fires it.
+ *
+ * ── TWO tests, because a short utterance has no volume to measure (#371)
+ *
+ * The volume test used to be the only one and it was switched off below four heard words — "too
+ * little signal to accuse anything". The observed consequence: the two turns in the reported
+ * thread that came back as pure nonsense are the two turns the guard was contractually forbidden
+ * to comment on.
+ *
+ *     heard "Do it"  → transcribed "Duet"      2 words → silent
+ *     heard "Send"   → transcribed "context:"  1 word  → silent
+ *
+ * Both were sent to the agent as the user's own words, and the second broke the conversation: the
+ * agent could not resolve "Duet" and re-listed what it had already listed twice. Short utterances
+ * are the MOST likely to be mistranscribed (there is no surrounding context to constrain the
+ * decoder) and they were the only ones with no check at all.
+ *
+ * So below four words the question changes from "how much is left?" to "is any of it the same?":
+ * if the final shares NO word with what the gate heard, the two engines did not hear the same
+ * utterance, regardless of length. `Do it`/`Duet` and `Send`/`context:` trip that; `colour`/
+ * `color` and every other ordinary spelling disagreement do not, because {@link nearWord} counts
+ * a spelling variant as the same word. The volume test is left exactly as it was above four
+ * words, where it is the better question — a long turn that lost its tail still overlaps.
  */
 export function dictationDiverged(heard: string, final: string): boolean {
 	const h = words(heard);
-	if (h.length < 4) return false;
-	return words(final).length < Math.ceil(h.length * 0.6);
+	if (!h.length) return false; // nothing was heard live — there is no second reading to compare
+	const f = words(final);
+	if (h.length < 4) {
+		if (!f.length) return true; // heard something, transcribed nothing
+		return !f.some((w) => h.some((x) => nearWord(w, x)));
+	}
+	return f.length < Math.ceil(h.length * 0.6);
 }
 
 /**

@@ -1,5 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { buildTranscribePrompt, isTranscribeBiasEcho, transcribeBiasTerms } from "./prompt.js";
+import { MAX_EXTRA_TERMS, buildTranscribePrompt, isTranscribeBiasEcho, spokenForm, transcribeBiasTerms } from "./prompt.js";
+
+// #371: a tmux operator has `surfaces: ["tmux"]`, so the gate — which only asked about `coding`
+// and `repo` — skipped CODING_TERMS entirely. The whole bias for that agent was its own name.
+describe("a terminal agent gets a vocabulary (#371)", () => {
+	it("reads the tmux surface as coding-ish, so the coding terms it was missing arrive", () => {
+		const p = buildTranscribePrompt(["tmux"]);
+		expect(p).toContain("console");
+		expect(p).toContain("terminal");
+		expect(p).toContain("commit");
+	});
+	it("adds the terminal nouns a shell user actually says", () => {
+		const p = buildTranscribePrompt(["tmux"]);
+		expect(p).toContain("tmux"); // the word the browser gate returned as "Timo"
+		expect(p).toContain("pane");
+		expect(p).toContain("detach");
+	});
+	it("reads the RUNTIME axis too — the tmux agent's runtime was 'coding' the whole time", () => {
+		const p = buildTranscribePrompt(["chat"], [], { runtime: "coding" });
+		expect(p).toContain("refactor");
+		// …but a runtime alone does not make it a terminal.
+		expect(p).not.toContain("detach");
+	});
+	it("leaves a plain chat agent unbiased", () => {
+		expect(buildTranscribePrompt(["chat"], [], { runtime: null })).toBe("");
+	});
+});
+
+describe("the derived/user term list is bounded (#372)", () => {
+	it("sends the spoken form of an identifier beside the written one", () => {
+		const p = buildTranscribePrompt(["coding"], ["tmux-operator-runner"]);
+		expect(p).toContain("tmux-operator-runner");
+		expect(p).toContain("tmux operator runner");
+	});
+	it("splits camel case and slashes the way they are said aloud", () => {
+		expect(spokenForm("ProAgentStore/platform")).toBe("Pro Agent Store platform");
+		expect(spokenForm("heartfull")).toBe(""); // nothing to split → no duplicate term
+	});
+	it("does not send a term the static lists already carry", () => {
+		const p = buildTranscribePrompt(["coding"], ["console"]);
+		expect(p.match(/console/g)?.length).toBe(1);
+	});
+	it("dedupes the extras against each other, case-insensitively", () => {
+		const p = buildTranscribePrompt(["coding"], ["Heartfull", "heartfull", "HEARTFULL"]);
+		expect(p.match(/eartfull/gi)?.length).toBe(1);
+	});
+	it("caps the extras — a long list degrades bias rather than improving it", () => {
+		const many = Array.from({ length: 100 }, (_, i) => `Zterm${i}`);
+		const p = buildTranscribePrompt(["coding"], many);
+		expect(p.match(/Zterm/g)?.length).toBe(MAX_EXTRA_TERMS);
+		// Caller supplies most-recently-used first, so the cap truncates the tail.
+		expect(p).toContain("Zterm0");
+		expect(p).not.toContain("Zterm99");
+	});
+});
 
 describe("buildTranscribePrompt", () => {
 	it("biases toward coding vocabulary for coding/repo surfaces (fixes 'bugs'→'bars')", () => {
