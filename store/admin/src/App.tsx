@@ -22,6 +22,7 @@ import McpAudit from "./pages/McpAudit";
 import Ops from "./pages/Ops";
 import Triggers from "./pages/Triggers";
 import ErrorSignature from "./pages/ErrorSignature";
+import GithubIssues from "./pages/GithubIssues";
 
 type Gate = "loading" | "anon" | "denied" | "ok";
 
@@ -69,6 +70,7 @@ export default function App() {
 					<Route path="connectors" element={<Connectors />} />
 					<Route path="connectors/:connector" element={<ConnectorDetail />} />
 					<Route path="ops" element={<Ops />} />
+					<Route path="github-issues" element={<GithubIssues />} />
 					<Route path="triggers" element={<Triggers />} />
 					<Route path="mcp-audit" element={<McpAudit />} />
 					<Route path="usage" element={<Usage />} />

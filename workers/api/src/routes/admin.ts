@@ -12,6 +12,7 @@ import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import type { Env } from "../types.js";
 import { externalUsage } from "../lib/external-usage.js";
+import { fetchGithubIssueMonitorReport, parseGithubRepo } from "../lib/admin-github-issues.js";
 
 /** UTC "YYYY-MM-DD" for `daysAgo` days before today (0 = today). */
 function dayUtc(daysAgo: number): string {
@@ -120,6 +121,20 @@ adminRoutes.get("/connectors", async (c) => {
 adminRoutes.get("/overview", async (c) => {
 	await requireAdmin(c);
 	return c.json(await getOverviewStats(c.env));
+});
+
+/** GET /v1/admin/github/issues?repo=owner/repo&since=YYYY-MM-DD — operator issue burndown. */
+adminRoutes.get("/github/issues", async (c) => {
+	await requireAdmin(c);
+	const repo = c.req.query("repo") || `${c.env.GITHUB_ORG || "ProAgentStore"}/platform`;
+	if (!parseGithubRepo(repo)) throw new HttpError(400, "Invalid GitHub repo. Use owner/repo.");
+	const since = c.req.query("since") || null;
+	if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new HttpError(400, "Invalid since date. Use YYYY-MM-DD.");
+	try {
+		return c.json(await fetchGithubIssueMonitorReport(c.env, repo, { since }));
+	} catch (e) {
+		throw new HttpError(502, e instanceof Error ? e.message : "GitHub issue monitor failed");
+	}
 });
 
 /**

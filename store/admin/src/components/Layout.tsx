@@ -1,10 +1,11 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, AlertTriangle, BarChart3, Bot, Boxes, Gauge, LayoutDashboard, Plug, ScrollText, Siren, TerminalSquare, Users as UsersIcon, Zap } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, Bot, Boxes, CircleDot, Gauge, LayoutDashboard, Plug, ScrollText, Siren, TerminalSquare, Users as UsersIcon, Zap } from "lucide-react";
 
 const NAV = [
 	{ to: "/", label: "Overview", icon: LayoutDashboard, end: true },
 	{ to: "/ops", label: "Ops", icon: Siren },
 	{ to: "/errors", label: "Errors", icon: AlertTriangle },
+	{ to: "/github-issues", label: "GitHub issues", icon: CircleDot },
 	{ to: "/users", label: "Users", icon: UsersIcon },
 	{ to: "/agents", label: "Agents", icon: Bot },
 	{ to: "/instances", label: "Instances", icon: Boxes },
