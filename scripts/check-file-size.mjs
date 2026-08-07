@@ -195,12 +195,15 @@ const PINS = {
 	// +2 at #326: the focus re-check listed `instanceId` alongside the `refreshRunner` callback
 	// that is already keyed on it, so one id change re-subscribed the listener twice. Removing the
 	// redundant dep is one character; the two lines are the note saying why it is not a missing dep.
-	// -154 at #355: the ACCOUNT half left. Connect/disconnect for Gmail, Drive, WorkDrive and the
-	// GitHub identity link were never properties of an agent — they moved to Preferences →
-	// Connections, taking their handlers, their confirm dialogs and their callback effect with
-	// them. What is left is the per-agent grant. Recorded, not banked: #305 still has to split
-	// this file, and holding the new floor is what stops the move from being refilled.
-	"store/console/src/tabs/SettingsTab.tsx": 1015,
+	// `store/console/src/tabs/SettingsTab.tsx` was 1015 lines. #355 had already moved the ACCOUNT
+	// half out (connect/disconnect was never a property of an agent) and left a note saying the
+	// shrink was recorded, not banked — the split was still owed. #305 paid it: two blocks with
+	// their own data and their own writes left for components/RunnerPanel.tsx (three endpoints, a
+	// refresh cycle, the node pin) and components/ToolPermissions.tsx (the tool switches, the
+	// write-consent checkboxes and the MCP grants — three views of one allow-list that had drifted
+	// apart while spread across the file). Every phrase either renders now comes from a tested
+	// module: lib/runnerPanel.ts, lib/toolPolicy.ts and lib/voiceSummary.ts. 629 lines, so its
+	// entry is gone rather than lowered — which is what this guard asks for under LIMIT.
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.

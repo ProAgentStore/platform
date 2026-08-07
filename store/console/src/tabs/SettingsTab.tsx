@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useId } from "react";
+import { useState, useEffect } from "react";
 import PrefOverride from "../components/PrefOverride";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
@@ -9,35 +9,11 @@ import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
 import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
-import McpConnections from "../components/McpConnections";
-import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
+import RunnerPanel from "../components/RunnerPanel";
+import ToolPermissions from "../components/ToolPermissions";
 import { showsConnector, type ConnectorReach } from "../lib/connectorState";
+import { voiceSummary } from "../lib/voiceSummary";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
-
-/** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
-type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
-
-/** One of the user's machines (from /v1/terminals/nodes) — used to render the "Runs on" tiles. */
-type Machine = {
-	node: string;
-	placement?: string;
-	runnerVersion?: string;
-	lastSeenAt?: string | null;
-	connected: boolean;
-	instances?: Array<{ instanceId: string; connected: boolean; bound?: boolean }>;
-};
-
-/** Compact relative time for a machine's last-seen. */
-function agoShort(iso?: string | null): string {
-	if (!iso) return "never";
-	const t = Date.parse(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`);
-	if (Number.isNaN(t)) return "";
-	const s = Math.max(0, Math.round((Date.now() - t) / 1000));
-	if (s < 60) return `${s}s ago`;
-	if (s < 3600) return `${Math.round(s / 60)}m ago`;
-	if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-	return `${Math.round(s / 86400)}d ago`;
-}
 
 interface Props {
 	instanceId: string;
@@ -45,29 +21,6 @@ interface Props {
 	/** The agent's declared subscriber settings (from capabilities). */
 	settingsSchema?: SettingsField[];
 	onUnsubscribe: () => void;
-}
-
-/** One registry tool + this instance's verdict on it (GET /v1/instances/:id/tools). */
-interface ToolPolicyEntry {
-	name: string;
-	connector?: string;
-	scope: "read" | "write";
-	description: string;
-	allowed: boolean;
-	disabled: boolean;
-	reason: "ok" | "not_declared" | "disabled_by_owner";
-	/** The SEPARATE write-consent verdict (#351) — `allowed` says the tool is part of this
-	 *  agent, this says whether the consent gate will refuse it anyway. */
-	writeConsent?: "n/a" | "granted" | "required" | "per_call";
-}
-
-/** The consent state as a short chip, or null when nothing is in the way. Amber, not red: an
- *  ungranted write tool is a switch the owner has not flipped yet, not a fault. */
-function consentChip(t: ToolPolicyEntry): string | null {
-	if (!t.allowed) return null; // already refused for a reason the row states
-	if (t.writeConsent === "required") return `needs ${t.connector ?? "connector"} write access`;
-	if (t.writeConsent === "per_call") return t.connector === "mcp" ? "granted per server + tool" : `writes need ${t.connector ?? "connector"} access`;
-	return null;
 }
 
 interface ConnectorGrant {
@@ -94,104 +47,12 @@ interface WorkdriveStatus {
 }
 
 export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
-	const runsOnLabelId = useId();
 	const [maintMsg, setMaintMsg] = useState("");
 	// Agent-declared settings: the schema prop is the fast path; the GET also returns
 	// `fields` so the form never depends on a stale instance-list cache.
 	const [agentFields, setAgentFields] = useState<SettingsField[]>(settingsSchema ?? []);
 	const [agentSettings, setAgentSettings] = useState<Record<string, string | number | boolean>>({});
 	const [settingsMsg, setSettingsMsg] = useState("");
-	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
-	// Node binding: which machine this instance runs on ("" = automatic).
-	const [runnerNode, setRunnerNode] = useState("");
-	const [runnerNodesDetail, setRunnerNodesDetail] = useState<Array<{ node: string; connected: boolean; nodeOnline?: boolean }>>([]);
-	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
-	const [runnerRefreshing, setRunnerRefreshing] = useState(false);
-	const [machines, setMachines] = useState<Machine[]>([]);
-	// Does this agent use a local runtime (browser/coding)? Only then is the Runner panel
-	// relevant. Default true (show) until we learn it's cloud-only, so it never flickers off
-	// for a runner agent. Set from capabilities.runtime.
-	const [agentNeedsRunner, setAgentNeedsRunner] = useState(true);
-	// Connector write-consent (#90): connectors this agent's tools can WRITE with, and
-	// which the owner has granted. A write tool (e.g. browser_navigate/act) refuses until
-	// its connector is granted here — the human gate for an agent acting AS the user.
-	const [writeConnectors, setWriteConnectors] = useState<string[]>([]);
-	const [grantedConnectors, setGrantedConnectors] = useState<string[]>([]);
-	const [consentMsg, setConsentMsg] = useState("");
-	// Outbound-MCP grants (#262). The connector checkbox above cannot name a server — the
-	// endpoint is config supplied at call time — so `mcp` write is granted per (server, tool).
-	// The panel that edits them lives in <McpConnections/> (#266); this component only owns the
-	// list, because the connector checkboxes above have to reflect what granting a server did.
-	const [mcpGrants, setMcpGrants] = useState<McpGrant[]>([]);
-	// Tool policy: every registry tool with THIS instance's verdict on it. The answer to
-	// "what can this agent actually do", including what it can't and why — an allow-list you
-	// can't read is not something you can trust.
-	const [toolPolicy, setToolPolicy] = useState<ToolPolicyEntry[]>([]);
-	const [toolMsg, setToolMsg] = useState("");
-
-	// Switch one tool off/on for this instance (optimistic; reverts on failure).
-	const toggleTool = async (name: string, enabled: boolean) => {
-		setToolPolicy((p) => p.map((t) => (t.name === name ? { ...t, allowed: enabled, disabled: !enabled, reason: enabled ? "ok" : "disabled_by_owner" } : t)));
-		try {
-			await api(`/v1/instances/${instanceId}/tools/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ enabled }) });
-			setToolMsg(`${name} ${enabled ? "enabled" : "switched off"}`);
-			setTimeout(() => setToolMsg(""), 2500);
-		} catch (e) {
-			setToolPolicy((p) => p.map((t) => (t.name === name ? { ...t, allowed: !enabled, disabled: enabled, reason: enabled ? "disabled_by_owner" : "ok" } : t)));
-			setToolMsg(e instanceof Error ? e.message : "Could not change that tool");
-		}
-	};
-
-	// Toggle a connector's write consent (optimistic; reverts on failure).
-	const toggleConnectorConsent = async (connector: string, enabled: boolean) => {
-		setGrantedConnectors((g) => (enabled ? [...new Set([...g, connector])] : g.filter((c) => c !== connector)));
-		try {
-			await api(`/v1/instances/${instanceId}/connectors/${connector}/consent`, { method: "PUT", body: JSON.stringify({ enabled }) });
-			setConsentMsg(`${connector} write access ${enabled ? "granted" : "revoked"}`);
-			setTimeout(() => setConsentMsg(""), 2500);
-		} catch (e) {
-			setGrantedConnectors((g) => (enabled ? g.filter((c) => c !== connector) : [...new Set([...g, connector])]));
-			setConsentMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
-	// Re-check the runner (live RelayDO truth) on demand — used by the Refresh button and
-	// the tab-focus re-check, so a just-started/stopped `pags up` reflects without a reload.
-	// Also pulls the full machine list (all your `pags up` nodes) for the "Runs on" tiles.
-	const refreshRunner = useCallback(async () => {
-		setRunnerRefreshing(true);
-		try {
-			const [st, rn, tn] = await Promise.all([
-				api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`).catch(() => null),
-				api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`).catch(() => null),
-				api<{ nodes: Machine[] }>(`/v1/terminals/nodes`).catch(() => null),
-			]);
-			if (st) setRuntimeInfo(st);
-			if (rn) { setRunnerNode(rn.runnerNode || ""); setRunnerNodesDetail(rn.nodesDetail || []); }
-			if (tn) setMachines(tn.nodes || []);
-		} finally { setRunnerRefreshing(false); }
-	}, [instanceId]);
-
-	// The pinned machine's live state: `nodeOnline` = the machine runs a runner for ANY of
-	// your agents (Terminals' node-level truth), even if THIS agent isn't attached to it.
-	const pinnedDetail = runnerNodesDetail.find((d) => d.node === runnerNode);
-	const pinnedNodeOnline = pinnedDetail?.nodeOnline === true;
-	// Is THIS agent's runner live? /runtime/status carries it at relay.connected (there is
-	// no top-level `connected`), and the machine name at relay.runnerNode — reading the wrong
-	// (top-level) keys made the panel read "Offline" permanently. `connected` on the pinned
-	// node's detail is the same RelayDO truth, used as a fallback when the probe hasn't loaded.
-	const relayInfo = (runtimeInfo as { relay?: { connected?: boolean; runnerNode?: string | null } } | null)?.relay;
-	// Why it isn't attached, computed server-side (#237). The panel used to show only an amber
-	// "agent not attached", which is a symptom with no cause and no remedy — the CLI knew both
-	// and printed them to a terminal nobody was watching.
-	const attachment = (runtimeInfo as { attachment?: { state?: string; message?: string; remedy?: string | null } } | null)?.attachment;
-	const agentOnline = relayInfo?.connected === true || pinnedDetail?.connected === true;
-	const agentNode = relayInfo?.runnerNode || runnerNode || "";
-	// The machines to render as "Runs on" tiles: all your `pags up` nodes, plus the pinned
-	// one if it's dropped off the live list (so you always see what this agent is bound to).
-	const machinesToShow: Machine[] = runnerNode && !machines.some((m) => m.node === runnerNode)
-		? [{ node: runnerNode, connected: false, instances: [] }, ...machines]
-		: machines;
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	// PRESENCE of a per-agent override (#211), not "do the values differ" — an override that
 	// happens to match your defaults is still a choice the user made.
@@ -237,45 +98,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				const d = await api<{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }>(`/v1/instances/${instanceId}/settings`);
 				setAgentSettings(d.settings || {});
 				if (d.fields?.length) setAgentFields(d.fields);
-			} catch {}
-			try {
-				const d = await api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`);
-				setRuntimeInfo(d);
-			} catch {}
-			try {
-				const d = await api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`);
-				setRunnerNode(d.runnerNode || "");
-				setRunnerNodesDetail(d.nodesDetail || []);
-			} catch {}
-			try {
-				const d = await api<{ nodes: Machine[] }>(`/v1/terminals/nodes`);
-				setMachines(d.nodes || []);
-			} catch {}
-			try {
-				// Which connectors can this agent WRITE with, and what's already granted?
-				// writeConnectors = the agent's declared tools ∩ the registry's write tools.
-				const [inst, toolsRes, consentRes] = await Promise.all([
-					api<{ instances?: Array<{ id: string; capabilities?: { tools?: string[]; runtime?: string | null } }> }>("/v1/instances/my/instances"),
-					api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools`),
-					api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
-				]);
-				const mine = (inst.instances || []).find((i) => i.id === instanceId);
-				setAgentNeedsRunner(mine?.capabilities?.runtime != null);
-				const policy = toolsRes.tools || [];
-				setToolPolicy(policy);
-				// Which connectors can this agent WRITE with? Read off the server's verdict rather
-				// than re-deriving it client-side — the gate and the UI must not be able to disagree.
-				// `per_call` counts too (#351): `http_request` is honestly read-scoped, so this set
-				// used to omit `http` entirely and there was no checkbox anywhere for the grant its
-				// mutating calls are refused for — a chip asking for a switch that did not exist.
-				const writeConns = new Set<string>();
-				for (const t of policy) if (t.connector && (t.allowed || t.disabled) && (t.scope === "write" || t.writeConsent === "per_call")) writeConns.add(t.connector);
-				setWriteConnectors([...writeConns]);
-				setGrantedConnectors((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
-			} catch {}
-			try {
-				const d = await api<{ grants?: McpGrant[] }>(`/v1/instances/${instanceId}/mcp/consent`);
-				setMcpGrants(d.grants || []);
 			} catch {}
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }>; hasOverride?: boolean }>(`/v1/instances/${instanceId}/translation`);
@@ -333,22 +155,17 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	}, [instanceId]);
 
 	// Cloud connectors open OAuth in a popup; re-check when the user returns to this tab.
-	// Also re-check the RUNNER: a machine can connect/disconnect (or be taken over with
-	// `pags up --force`) while this tab is open, and the runner card + "Runs on" picker are
-	// otherwise fetched only once on mount — so without this they'd show stale online/offline
-	// state (and a stale "⚠ machine offline" warning) until a full reload.
+	// (<RunnerPanel/> keeps its own focus listener for the same reason — a machine can connect,
+	// disconnect or be taken over with `pags up --force` while this tab sits open.)
 	useEffect(() => {
 		const onFocus = () => {
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
 			api<DriveStatus>("/v1/drive/status").then(setDriveStatus).catch(() => {});
 			api<WorkdriveStatus>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
-			refreshRunner();
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
-		// `refreshRunner` alone: it is a useCallback keyed on `instanceId`, so naming that too
-		// only re-subscribed the listener twice for one change.
-	}, [refreshRunner]);
+	}, []);
 
 	// Agent settings save (patch semantics — only the changed field is sent).
 	const saveSetting = async (id: string, value: string | number | boolean) => {
@@ -401,15 +218,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		if (d?.voiceSettings) setVoiceSettings(d.voiceSettings);
 		invalidateVoiceConfig(); // same reason as saveVoice: the cached config just became wrong
 	};
-
-	/** A one-line "what am I actually getting" for the radio, so the choice is informed. */
-	const voiceSummary = (() => {
-		const vs = voiceSettings || {};
-		const stt = vs.sttMode === "openai" ? "Whisper" : "Dictation";
-		const tts = typeof vs.provider === "string" && vs.provider.includes("openai") ? "OpenAI voice" : "Browser voice";
-		const spd = typeof vs.speed === "number" ? `${(vs.speed / 100).toFixed(2).replace(/0$/, "")}×` : "1×";
-		return `${stt} · ${tts} · ${spd}`;
-	})();
 
 	const saveTranslationOverride = async (next: { enabled: boolean; target: string; transliterate: boolean; wordTap: boolean; fontSize: string }) => {
 		setTrEnabled(next.enabled); setTrTarget(next.target); setTrTranslit(next.transliterate);
@@ -525,17 +333,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			onUnsubscribe();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
-		}
-	};
-
-	const saveRunnerNode = async (node: string) => {
-		setRunnerNode(node);
-		setRunnerNodeMsg("Saving…");
-		try {
-			await api(`/v1/instances/${instanceId}/runner-node`, { method: "PUT", body: JSON.stringify({ runnerNode: node || null }) });
-			setRunnerNodeMsg(node ? `Pinned to ${node}` : "Set to automatic");
-		} catch (e) {
-			setRunnerNodeMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -673,104 +470,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{maintMsg && <div className="text-sm text-muted mt-2">{maintMsg}</div>}
 			</div>
 
-			{/* Runner info — only for agents that use a local runtime (browser/coding).
-			    Cloud-only agents (runtime:null) show a one-line note instead of the panel. */}
-			{agentNeedsRunner ? (
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
-				<div className="flex items-center justify-between gap-2 mb-1">
-					<h3 className="text-base font-bold">Runner</h3>
-					<button type="button" onClick={refreshRunner} disabled={runnerRefreshing} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">{runnerRefreshing ? "Refreshing…" : "Refresh"}</button>
-				</div>
-				<div className="text-sm text-muted leading-relaxed">
-					{runtimeInfo ? (
-						<>
-							Status: <span className={agentOnline ? "text-green" : ""}>{agentOnline ? "Online" : "Offline"}</span>
-							{/* Agent's own socket down while the machine is up for OTHER agents. */}
-							{!agentOnline && pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
-							{agentNode && <> · Node: {agentNode}</>}
-							{/* The cause + the one command that fixes it. `pags up` is the WRONG advice when
-							    the machine is already running, which is exactly the confusing case. */}
-							{!agentOnline && attachment?.message && (
-								<div className="mt-1 text-[0.8rem] text-muted-soft">
-									{attachment.message}
-									{attachment.remedy && (
-										<> Run <code className="px-1 py-0.5 rounded bg-paper border border-line font-mono text-[0.75rem]">{attachment.remedy}</code>.</>
-									)}
-								</div>
-							)}
-						</>
-					) : (
-						"Checking runner status..."
-					)}
-				</div>
-
-				{/* Node binding — ONE machine per agent (no auto-any). A tile per machine you run
-				    `pags up` on; click one to bind this agent there. */}
-				{/* This <label> named nothing — what it labels is the GRID of machine tiles, and a
-				    label can only name one form control. A named group announces the same thing. */}
-				{/* biome-ignore lint/a11y/useSemanticElements: a <fieldset> renders its <legend> inside its own top border, and the only border here IS a top rule — role="group" carries the same semantics without cutting the rule in half. */}
-				<div className="mt-3 pt-3 border-t border-line/60" role="group" aria-labelledby={runsOnLabelId}>
-					<div id={runsOnLabelId} className="block text-sm font-semibold mb-1">Runs on</div>
-					<p className="text-xs text-muted-soft mb-2">
-						Bind this agent to exactly one machine running <code className="text-accent">pags up</code> — its runner tasks (chat tools, apply, coding) route there.
-					</p>
-					{machinesToShow.length === 0 ? (
-						<div className="text-xs text-muted px-3 py-3 border border-dashed border-line rounded-lg">
-							No machines connected yet. Run <code className="text-accent">pags up</code> on a machine — it appears here and on the <span className="text-accent">Terminals</span> page.
-						</div>
-					) : (
-						<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-							{machinesToShow.map((m) => {
-								const attached = (m.instances || []).some((i) => i.instanceId === instanceId && i.connected);
-								const machineOnline = m.connected;
-								const pinned = runnerNode === m.node;
-								const tone = attached ? "green" : machineOnline ? "amber" : "off";
-								const statusText = attached ? "Attached · online" : machineOnline ? "Online · agent not attached" : "Offline";
-								return (
-									<button
-										key={m.node}
-										type="button"
-										onClick={() => saveRunnerNode(m.node)}
-										aria-pressed={pinned}
-										title={pinned ? "This agent is bound to this machine" : "Bind this agent to this machine"}
-										className={`text-left rounded-xl border p-3 transition-colors ${pinned ? "border-accent bg-accent/10" : "border-line bg-paper hover:border-accent/60"}`}
-									>
-										<div className="flex items-center gap-2 min-w-0">
-											<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${tone === "green" ? "bg-green" : tone === "amber" ? "bg-amber-500" : "bg-muted-soft"}`} />
-											<span className="font-semibold text-sm truncate">{m.node}</span>
-											{pinned && <span className="ml-auto shrink-0 text-[0.6rem] font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
-										</div>
-										<div className={`text-[0.7rem] mt-1 ${tone === "green" ? "text-green" : tone === "amber" ? "text-amber-500" : "text-muted-soft"}`}>{statusText}</div>
-										<div className="text-[0.7rem] text-muted-soft mt-0.5">
-											{m.placement === "managed" ? "cloud" : "local"}{m.runnerVersion ? ` · v${m.runnerVersion}` : ""} · seen {agoShort(m.lastSeenAt)}
-										</div>
-									</button>
-								);
-							})}
-						</div>
-					)}
-					{/* Pinned machine not serving THIS agent → guidance (machine-online vs fully-offline). */}
-					{runnerNode && pinnedDetail && !pinnedDetail.connected && (
-						pinnedNodeOnline ? (
-							<p className="text-xs text-amber-500 mt-2">
-								⚠ <b>{runnerNode}</b> is online, but this agent isn't attached to it yet. Restart <code className="text-accent">pags up</code> on it (it attaches newly-subscribed agents on start).
-							</p>
-						) : (
-							<p className="text-xs text-amber-500 mt-2">
-								⚠ <b>{runnerNode}</b> isn't connected. This agent's runner tasks won't run until you start <code className="text-accent">pags up</code> on it, or pick another machine.
-							</p>
-						)
-					)}
-					{!runnerNode && machinesToShow.length > 0 && <p className="text-xs text-amber-500 mt-2">Pick a machine above to run this agent on.</p>}
-					{runnerNodeMsg && <p className="text-xs text-muted mt-1">{runnerNodeMsg}</p>}
-				</div>
-			</div>
-			) : (
-				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4 text-sm text-muted">
-					<h3 className="text-base font-bold mb-1">Runner</h3>
-					This agent runs entirely in the cloud — no local runner (<code className="text-accent">pags up</code>) needed.
-				</div>
-			)}
+			{/* Runner — its own data, its own refresh cycle, its own writes; nothing else on this tab
+			    reads any of it. Cloud-only agents (runtime:null) get a one-line note instead. */}
+			<RunnerPanel instanceId={instanceId} />
 
 			{/* Where things live */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
@@ -791,99 +493,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					or disconnecting an account is account-wide and lives in <b>Preferences → Connections</b>.
 				</p>
 
-				{/* Tools — the full, honest answer to "what can this agent do?". Shows what it
-				    MAY run and what it may not, with the reason, so "read-only" is verifiable
-				    rather than asserted. Toggling here changes the agent's real capability:
-				    a tool switched off is withheld from its chat AND refused by the API/MCP. */}
-				{toolPolicy.length > 0 && (
-					<div className="mb-3 pb-3 border-b border-line">
-						<div className="text-sm font-semibold mb-0.5">Tools</div>
-						<p className="text-[0.7rem] text-muted-soft mb-2">
-							Everything this agent is allowed to do. Switch any of them off — it applies to the agent's chat, the API and MCP alike.
-							{toolPolicy.some((t) => t.allowed && t.scope === "write")
-								? " This agent has write tools; each one also needs its connector granted below."
-								: " This agent has no write tools — it can only read."}
-						</p>
-						{toolPolicy
-							.filter((t) => t.allowed || t.disabled)
-							.map((t) => (
-								<label key={t.name} className="flex items-start gap-2 text-sm cursor-pointer mb-1.5">
-									<input
-										type="checkbox"
-										checked={t.allowed}
-										onChange={(e) => toggleTool(t.name, e.target.checked)}
-										className="w-4 h-4 accent-accent mt-0.5"
-									/>
-									<span className="min-w-0">
-										<span className="font-mono text-[0.78rem] font-semibold">{t.name}</span>
-										<span
-											className={`ml-1.5 text-[0.62rem] uppercase tracking-wide ${t.scope === "write" ? "text-red" : "text-muted"}`}
-										>
-											{t.scope}
-										</span>
-										{t.connector && <span className="ml-1.5 text-[0.68rem] text-muted-soft">{t.connector}</span>}
-										{t.disabled && <span className="ml-1.5 text-[0.68rem] text-muted">— off</span>}
-										{consentChip(t) && <span className="ml-1.5 text-[0.68rem] text-amber-500">— {consentChip(t)}</span>}
-										<span className="block text-[0.68rem] text-muted-soft leading-snug">{t.description}</span>
-									</span>
-								</label>
-							))}
-						{toolPolicy.every((t) => !t.allowed && !t.disabled) && (
-							<p className="text-xs text-muted">This agent declares no tools — it can only talk.</p>
-						)}
-						{toolMsg && <p className="text-xs text-green mt-1">{toolMsg}</p>}
-					</div>
-				)}
-
-				{/* Connector write-consent (#90): the human gate for tools that act AS you
-				    (e.g. the browser agent's navigate/click/type). Off until you check it. */}
-				{writeConnectors.length > 0 && (
-					<div className="mb-3 pb-3 border-b border-line">
-						<div className="text-sm font-semibold mb-0.5">Agent write access</div>
-						<p className="text-[0.7rem] text-muted-soft mb-2">
-							Lets this agent act as you — click, type, and navigate — through the connector on your machine. Off by default; enable only what you want it to do.
-						</p>
-						{writeConnectors.map((connector) => (
-							<label key={connector} className="flex items-center gap-2 text-sm cursor-pointer mb-1.5">
-								<input
-									type="checkbox"
-									checked={grantedConnectors.includes(connector)}
-									onChange={(e) => toggleConnectorConsent(connector, e.target.checked)}
-									className="w-4 h-4 accent-accent"
-								/>
-								<span className="capitalize font-semibold">{connector}</span>
-								<span className="text-muted">write access</span>
-							</label>
-						))}
-						{consentMsg && <p className="text-xs text-green mt-1">{consentMsg}</p>}
-						{writeConnectors.includes("mcp") && (
-							<p className="text-[0.7rem] text-muted-soft mt-1.5">
-								MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.
-							</p>
-						)}
-					</div>
-				)}
-
-				{/* Outbound-MCP connections (#262 grants + #266 setup lifecycle). Every other
-				    connector IS the remote system, so a connector-level grant names it. An MCP
-				    endpoint is config supplied at call time, so reach has to be named per server
-				    and per tool — and you can only name a tool you have been shown, which is why
-				    this is a discover-then-approve panel rather than two text inputs.
-				    Gated on ANY mcp tool, read or write: gating on write hid the panel until the
-				    user had already granted a capability they couldn't yet see. */}
-				{hasMcpCapability(toolPolicy) && (
-					<McpConnections
-						instanceId={instanceId}
-						grants={mcpGrants}
-						onGrantsChanged={(g) => {
-							setMcpGrants(g);
-							// Granting a server implies the connector-level write gate (the PUT sets it
-							// server-side); reflect what actually happened rather than leaving the
-							// checkbox above looking off.
-							if (g.length) setGrantedConnectors((c) => [...new Set([...c, "mcp"])]);
-						}}
-					/>
-				)}
+				{/* The tool switches, the connector write-consent checkboxes and the outbound-MCP grants:
+				    three views of one allow-list, which is why they live together. */}
+				<ToolPermissions instanceId={instanceId} />
 
 				{showsDrive && (
 					<FileConnectorPanel
@@ -963,7 +575,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					// while the real value is still in flight, and the response overwrites the click.
 					loaded={voiceSettings !== null}
 					hasOverride={voiceOverride}
-					summary={voiceSummary}
+					// "What am I actually getting" — resolved against the OpenAI key, because half of
+					// these settings silently fall back to the browser without one (lib/voiceSummary).
+					summary={voiceSummary(voiceSettings, hasOpenAiKey)}
 					onUseDefaults={clearVoiceOverride}
 					onCustomise={() => setVoiceOverride(true)}
 				/>
