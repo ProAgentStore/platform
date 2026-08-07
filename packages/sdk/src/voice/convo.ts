@@ -4,6 +4,8 @@
  * unit-tested without a browser.
  */
 
+import { normalizeSpeech, trimTrailingPunctuation } from "./normalize.js";
+
 /** Tunables for the restart/freeze guard. */
 export interface RestartConfig {
 	/** A recognizer end sooner than this after start counts as a "rapid" (failing) end. */
@@ -141,20 +143,44 @@ const UNMUTE_BY_LANG: Record<string, string[]> = {
 	hi: ["अनम्यूट", "फिर से सुनो"],
 };
 
-/** "Exit voice" phrasings per language (#165) — leave voice mode entirely and go back to
- *  typing. Distinct from mute: mute keeps the session live and listening for control words,
- *  exit tears the whole thing down. */
+/**
+ * "Exit voice" phrasings per language (#165) — leave voice mode entirely and go back to
+ * typing. Distinct from mute: mute keeps the session live and listening for control words,
+ * exit tears the whole thing down.
+ *
+ * ── The bare stop word (#331)
+ *
+ * Every English phrase here used to require "voice" AFTER the verb, so bare `"stop"` matched
+ * nothing and was sent to the agent as a chat message. The agent — which has no view of, and no
+ * control over, client-side voice state — answered conversationally: *"Got it. Stopped."* That
+ * is the worst available outcome, because the reply CONFIRMS an action nobody performed, and the
+ * user disengaged with the microphone still open.
+ *
+ * A bare word is safe here by construction, not by luck: `phraseMatchesTranscript` requires a
+ * single-word phrase to BE the whole utterance. That rule was added when "next agent" fired
+ * inside "the next agent in the chain is the builder" — and it is exactly what keeps "don't stop
+ * now" a message while "Stop." is a command. The utterance in the report WAS the whole utterance.
+ *
+ * `"stop stop"` is listed too, and it is not redundant: the doubled emphatic is what the owner
+ * says, and Whisper renders it `"Stop-stop."` → two normalised words, which the single-word rule
+ * can never match. As a multi-word phrase it can also match inside a longer utterance; a repeated
+ * imperative is distinctive enough for that to be safe, in the way "next agent" was not.
+ *
+ * NOT moved here: `"stop listening"`, which stays a MUTE phrase. It says literally what mute
+ * does, exit is checked first and would have stolen it, and silencing the mic is the smaller,
+ * recoverable reading of an ambiguous request.
+ */
 const EXIT_BY_LANG: Record<string, string[]> = {
-	en: ["exit voice", "exit voice mode", "stop voice", "stop voice mode", "leave voice", "text mode", "switch to text", "back to text"],
-	es: ["salir de voz", "modo texto", "cambiar a texto"],
-	fr: ["quitter la voix", "mode texte", "passer au texte"],
-	de: ["sprachmodus beenden", "textmodus", "zurück zum text"],
-	it: ["esci dalla voce", "modalità testo"],
-	pt: ["sair da voz", "modo texto"],
-	zh: ["退出语音", "文字模式", "切换到文字"],
-	ja: ["音声モード終了", "テキストモード"],
-	ko: ["음성 모드 종료", "텍스트 모드"],
-	hi: ["वॉइस बंद करो", "टेक्स्ट मोड"],
+	en: ["exit voice", "exit voice mode", "stop voice", "stop voice mode", "leave voice", "text mode", "switch to text", "back to text", "stop", "stop stop"],
+	es: ["salir de voz", "modo texto", "cambiar a texto", "para", "basta"],
+	fr: ["quitter la voix", "mode texte", "passer au texte", "stop", "arrête"],
+	de: ["sprachmodus beenden", "textmodus", "zurück zum text", "stopp", "aufhören"],
+	it: ["esci dalla voce", "modalità testo", "stop", "basta"],
+	pt: ["sair da voz", "modo texto", "pare", "chega"],
+	zh: ["退出语音", "文字模式", "切换到文字", "停", "停止"],
+	ja: ["音声モード終了", "テキストモード", "ストップ", "やめて"],
+	ko: ["음성 모드 종료", "텍스트 모드", "그만", "중지"],
+	hi: ["वॉइस बंद करो", "टेक्स्ट मोड", "रुको"],
 };
 
 /**
@@ -238,15 +264,10 @@ export function transcriptLanguageMismatch(text: string, lang?: string): boolean
 	return foreign > letters.length / 2; // majority in another script → mis-detection
 }
 
-/** Normalize a transcript for matching: lowercase, strip punctuation (Latin + CJK +
- *  inverted Spanish), collapse whitespace. Shared by every matcher so they agree. */
-function normalizeTranscript(text: string): string {
-	return text
-		.toLowerCase()
-		.replace(/[.,!?¿¡。，！？、]/g, "")
-		.replace(/\s+/g, " ")
-		.trim();
-}
+/** Normalize a transcript for matching. Lives in `./normalize.js` (#334) because the noise
+ *  filter in `audio.ts` needs the SAME answer — two normalisers with different ideas of what
+ *  punctuation is are what let `"Stop-stop."` miss a configured `"stop stop"`. */
+const normalizeTranscript = normalizeSpeech;
 
 /**
  * "Repeat" phrasings per language (2-letter code) — ONLY the agent's configured
@@ -394,20 +415,39 @@ export function shouldScanGateTranscript(s: {
 export function stripStopWord(text: string, stopWords?: string[]): { ended: boolean; text: string } {
 	if (!stopWords?.length) return { ended: false, text };
 	// Compare on a normalized copy but slice the ORIGINAL so casing/spacing is preserved.
-	const cleaned = text.replace(/[.,!?¿¡。，！？、]+\s*$/, "").trimEnd();
+	const cleaned = trimTrailingPunctuation(text);
 	const norm = normalizeTranscript(cleaned);
 	for (const raw of stopWords) {
 		const w = normalizeTranscript(raw);
 		if (!w) continue;
 		if (norm === w) return { ended: true, text: "" };
 		if (norm.endsWith(` ${w}`)) {
-			// Drop the last N words (the stop-word may be multi-word) off the original.
-			const wordCount = w.split(" ").length;
-			const kept = cleaned.split(/\s+/).slice(0, -wordCount).join(" ").replace(/[\s,]+$/, "").trim();
-			return { ended: true, text: kept };
+			const kept = dropNormalizedSuffix(cleaned, w);
+			if (kept !== null) return { ended: true, text: kept };
 		}
 	}
 	return { ended: false, text };
+}
+
+/**
+ * Cut the trailing run of the ORIGINAL text whose normalisation IS `phrase`, or null when no
+ * whitespace boundary lines up with it.
+ *
+ * It used to drop the last N whitespace-separated tokens, N = the phrase's word count. Once
+ * `normalizeSpeech` began spacing hyphens (#334) that arithmetic broke: `"run the tests,
+ * stop-stop"` is FOUR tokens but SIX normalised words, so a two-word stop-word ate `"tests,"`
+ * along with the compound and sent `"run the"`. Walking real boundaries can't drift — the cut
+ * is always at a place the original actually has.
+ */
+function dropNormalizedSuffix(cleaned: string, phrase: string): string | null {
+	const parts = cleaned.split(/(\s+)/); // separators kept, so slices rejoin exactly
+	// Highest index first = shortest candidate tail, so the cut is minimal.
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const tail = parts.slice(i).join("");
+		if (normalizeTranscript(tail) !== phrase) continue;
+		return trimTrailingPunctuation(cleaned.slice(0, cleaned.length - tail.length)).trim();
+	}
+	return null;
 }
 
 /** The phrase list actually in force for one command — custom words if the user set any,

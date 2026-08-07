@@ -34,6 +34,34 @@ describe("isNoiseTranscript", () => {
 		// "谢谢" (thank you) is a real learner utterance — must NOT be dropped.
 		expect(isNoiseTranscript("谢谢")).toBe(false);
 	});
+
+	// ── #332: silence comes back as OUR OWN vocabulary list ────────────────────────────────
+	//
+	// Two user messages in a row, both with audio, both reading "Coder Lead" — the agent's own
+	// name, which the console adds to the transcription bias list. The user said neither. Given
+	// silence the decoder returns a term from the list it was handed, and the proper noun is the
+	// likeliest one because it is the only distinctive token among generic vocabulary.
+	it("drops a transcript that is exactly one term from the bias prompt", () => {
+		const bias = "bug, bugs, refactor, function, commit, Coder Lead";
+		expect(isNoiseTranscript("Coder Lead", bias)).toBe(true);
+		expect(isNoiseTranscript("coder lead.", bias)).toBe(true);
+		// Without the prompt there is nothing to compare against — the caller decides.
+		expect(isNoiseTranscript("Coder Lead")).toBe(false);
+	});
+
+	it("KEEPS a real utterance that merely contains a bias term", () => {
+		const bias = "bug, bugs, refactor, function, commit, Coder Lead";
+		for (const real of ["ask Coder Lead to look at this", "Coder Lead, what's the status?", "refactor the function"]) {
+			expect(isNoiseTranscript(real, bias)).toBe(false);
+		}
+	});
+
+	// The narrowing that keeps this from becoming the opposite bug: a one-word utterance is a
+	// plausible genuine command, and this filter's whole contract is that short commands survive.
+	it("KEEPS a single-word bias term — 'commit' alone is something a user really says", () => {
+		const bias = "bug, bugs, refactor, function, commit, Coder Lead";
+		for (const real of ["commit", "refactor", "bugs"]) expect(isNoiseTranscript(real, bias)).toBe(false);
+	});
 });
 
 describe("isTooShortToTranscribe", () => {

@@ -70,6 +70,21 @@ export interface SpeechGateOptions {
 	onInterim: (text: string) => void;
 	/** Fired the first time real words are heard this turn (→ the turn is legit). */
 	onSpeech?: () => void;
+	/**
+	 * Could the words arriving RIGHT NOW belong to the user? Default: yes.
+	 *
+	 * The heard-speech flag is what `endOfTurnAction` trusts to discard a silent clip, and it
+	 * used to latch on ANY recognised words — including the agent's own TTS coming back through
+	 * the speakers, and anything picked up while a reply was in flight. So the gate would vouch
+	 * for a turn in which the user had not spoken at all, the clip was uploaded, and Whisper
+	 * returned a term from its own vocabulary prompt (#332: two turns reading "Coder Lead", the
+	 * agent's name, with the user disengaged and the mic still open).
+	 *
+	 * The caller already computes exactly this predicate for the live-transcript path
+	 * (`shouldIgnoreResult` — echo tail plus paused plus muted). Passing it here is what makes
+	 * the veto and the display agree about whose voice they are hearing.
+	 */
+	acceptSpeech?: () => boolean;
 }
 
 /** Is browser dictation available at all? (Used to decide whether to gate.) */
@@ -111,8 +126,10 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			}
 			const shown = (final || interim).trim();
 			if (shown) opts.onInterim(shown);
-			// Real words (not a bare filler/punctuation) → the turn is legitimate.
-			if (!heard && !isNoiseTranscript(final || interim)) {
+			// Real words (not a bare filler/punctuation) from someone who is not the agent → the
+			// turn is legitimate. `acceptSpeech` is the ONLY thing standing between the agent's own
+			// voice and a gate that vouches for a turn the user never took (#332).
+			if (!heard && opts.acceptSpeech?.() !== false && !isNoiseTranscript(final || interim)) {
 				heard = true;
 				opts.onSpeech?.();
 			}

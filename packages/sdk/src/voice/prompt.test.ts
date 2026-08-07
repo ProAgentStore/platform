@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTranscribePrompt } from "./prompt.js";
+import { buildTranscribePrompt, isTranscribeBiasEcho, transcribeBiasTerms } from "./prompt.js";
 
 describe("buildTranscribePrompt", () => {
 	it("biases toward coding vocabulary for coding/repo surfaces (fixes 'bugs'→'bars')", () => {
@@ -50,5 +50,44 @@ describe("the prompt cannot be continued as speech", () => {
 
 	it("stays empty for an agent with no domain, so no bias is applied at all", () => {
 		expect(buildTranscribePrompt([])).toBe("");
+	});
+});
+
+// The bias still earns its place (it is what stops "bugs" → "bars"), so the answer to #332 is not
+// to drop it — it is to recognise it when it comes back. Silence handed to the decoder does not
+// return nothing; it returns something from the list we supplied.
+describe("isTranscribeBiasEcho (#332 — the list read back to us)", () => {
+	it("recognises the incident transcript: the agent's own name, alone, from silence", () => {
+		const prompt = buildTranscribePrompt(["coding"], ["Coder Lead"]);
+		expect(isTranscribeBiasEcho("Coder Lead", prompt)).toBe(true);
+		expect(isTranscribeBiasEcho("coder lead.", prompt)).toBe(true);
+		expect(isTranscribeBiasEcho("Coder-Lead", prompt)).toBe(true); // same normaliser as #334
+	});
+
+	it("recognises a multi-word generic term echoed alone", () => {
+		expect(isTranscribeBiasEcho("pull request", buildTranscribePrompt(["coding"]))).toBe(true);
+		expect(isTranscribeBiasEcho("cover letter", buildTranscribePrompt(["apply"]))).toBe(true);
+	});
+
+	it("never fires on a single word — a one-word utterance is plausible speech", () => {
+		const prompt = buildTranscribePrompt(["coding"], ["Sentry"]);
+		for (const word of ["commit", "deploy", "refactor", "Sentry"]) expect(isTranscribeBiasEcho(word, prompt)).toBe(false);
+	});
+
+	it("never fires on a sentence that merely uses the terms", () => {
+		const prompt = buildTranscribePrompt(["coding"], ["Coder Lead"]);
+		expect(isTranscribeBiasEcho("open a pull request", prompt)).toBe(false);
+		expect(isTranscribeBiasEcho("ask Coder Lead about it", prompt)).toBe(false);
+	});
+
+	it("is inert with no prompt — an agent with no bias has nothing to echo", () => {
+		expect(isTranscribeBiasEcho("Coder Lead")).toBe(false);
+		expect(isTranscribeBiasEcho("Coder Lead", "")).toBe(false);
+		expect(isTranscribeBiasEcho("", buildTranscribePrompt(["coding"]))).toBe(false);
+	});
+
+	it("reads the prompt back into the terms it was built from", () => {
+		expect(transcribeBiasTerms(buildTranscribePrompt(["coding"], ["Coder Lead"]))).toContain("coder lead");
+		expect(transcribeBiasTerms("")).toEqual([]);
 	});
 });

@@ -85,7 +85,12 @@ const PINS = {
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
 	// already carried `audioKey`; the decision it makes is pure and lives in machine.ts.
-	"packages/sdk/src/voice/use-voice.ts": 1538,
+	// +12 for #331/#332: the dictation gate is handed the caller's own echo/paused predicate (so it
+	// cannot vouch for a turn made of the agent's TTS), the send gate is handed the bias prompt, and
+	// "stop" silences the agent immediately rather than after the teardown await. Raised rather than
+	// split — all three are one expression each at a call site that must stay where it is; the
+	// decisions themselves are pure and live in gate.ts, audio.ts/prompt.ts and convo.ts.
+	"packages/sdk/src/voice/use-voice.ts": 1550,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	"store/console/src/pages/InstanceDetail.tsx": 1245,

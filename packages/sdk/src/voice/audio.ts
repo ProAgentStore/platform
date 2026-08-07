@@ -4,6 +4,9 @@
  * are unit-tested without a real AudioContext, MediaRecorder, or network.
  */
 
+import { normalizeSpeech } from "./normalize.js";
+import { isTranscribeBiasEcho } from "./prompt.js";
+
 /** Recorder mime types we try, best → worst. Opus in WebM is smallest + best for
  *  Whisper; Safari only does mp4/…; ogg is a last resort. */
 export const RECORDER_MIME_CANDIDATES = [
@@ -82,15 +85,15 @@ const SILENCE_HALLUCINATIONS = new Set([
 	"谢谢观看",
 	"请订阅",
 ]);
-export function isNoiseTranscript(text: string): boolean {
+export function isNoiseTranscript(text: string, biasPrompt?: string): boolean {
 	if (!text) return true;
-	// Strip punctuation (Latin + CJK) + collapse whitespace, then judge.
-	const t = text
-		.toLowerCase()
-		.replace(/[.,!?"'’“”…·•–—:;()。，！？、：；「」『』（）《》-]|\[|\]/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	// Strip punctuation + collapse whitespace, then judge. The normaliser is SHARED with the
+	// command matcher (#334) — this filter's wider punctuation set was the correct one, and
+	// keeping two of them is what let a hyphen decide whether a stop-word matched.
+	const t = normalizeSpeech(text);
 	if (!t) return true; // was only punctuation/whitespace (".", "…", "\"", …)
+	// Our own vocabulary bias read back verbatim on silence (#332) — see isTranscribeBiasEcho.
+	if (biasPrompt && isTranscribeBiasEcho(t, biasPrompt)) return true;
 	// Count letters/digits in ANY script — the old [^a-z0-9] strip deleted every CJK
 	// character, so a whole Chinese sentence counted as noise and the turn was
 	// silently discarded before it was ever sent.

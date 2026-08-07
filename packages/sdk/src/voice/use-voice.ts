@@ -257,6 +257,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 				gateLangRef.current = voiceLangRef.current;
 				gateRef.current = createSpeechGate({
 					lang: voiceLangRef.current,
+					// The same predicate the live-transcript path below applies — so the gate cannot
+					// vouch for a turn made of the agent's own TTS (#332). Without it a silent turn
+					// after a spoken reply was uploaded and came back as a vocabulary term.
+					acceptSpeech: () => !mutedRef.current && !shouldIgnoreResult(readGuard(), Date.now()),
 					onInterim: (text) => {
 						// Control words during CAPTURE (#228). In Whisper/OpenAI mode the main path
 						// records with MediaRecorder and produces nothing until the clip uploads, and
@@ -429,7 +433,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Universal gate: never submit a noise/hallucination transcript ("you", ".", "\"",
 		// "Thank you." on silence/echo). The user "didn't say anything" — drop it, ditch the
 		// recording, and let the mic recycle instead of sending a phantom turn.
-		if (isNoiseTranscript(text)) {
+		// The bias prompt is passed so a transcript that is only our OWN vocabulary read back —
+		// the agent's name arriving from silence (#332) — is caught here too, not just filler.
+		if (isNoiseTranscript(text, transcribePromptRef.current)) {
 			lastAudioBlobRef.current = null;
 			setPaused(false);
 			return;
@@ -741,6 +747,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const exitFromCommand = useCallback(() => {
 		mutedRef.current = false; // don't leave a muted flag behind for the next voice session
 		setMuted(false);
+		// Silence the agent NOW, the way "mute" does. setVoiceMode cancels TTS too, but only after
+		// awaiting the hands-free teardown — and a user who has just said "stop" (#331) is listening
+		// for whether anything stopped, not for a reply that keeps talking over the answer.
+		ttsRef.current?.cancel();
+		setSpeaking(false);
+		speakEndedAtRef.current = Date.now();
 		void setVoiceModeRef.current?.("text");
 	}, []);
 	const exitFromCommandRef = useRef(exitFromCommand);
@@ -964,7 +976,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// Silence/echo hallucination ("you", ".", "\"") — you weren't talking. Don't
 					// send, don't chime; clear the placeholder and let the mic keep listening
 					// (onEnd reopens it). This is the "I'm not talking, don't submit" fix.
-					if (isNoiseTranscript(t)) { flushSync(() => clearVoiceText()); return; }
+					if (isNoiseTranscript(t, transcribePromptRef.current)) { flushSync(() => clearVoiceText()); return; }
 					finalize(t);
 				} else if (!isFinal && text.trim()) {
 					// Streaming partial (gpt-4o-transcribe) — the words land live in the pending

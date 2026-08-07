@@ -152,6 +152,31 @@ describe("stripStopWord", () => {
 	it("supports multi-word stop-words", () => {
 		expect(stripStopWord("send the email over and out", ["over and out"])).toEqual({ ended: true, text: "send the email" });
 	});
+
+	// ── #334: the same spoken phrase must not depend on how Whisper punctuated it ──────────
+	//
+	// The owner has "stop stop" configured. Whisper renders a repeated word as a hyphenated
+	// compound SOMETIMES — a formatting choice, not a transcription difference — so the turn
+	// ended on one rendering and was sent to the agent as a chat message on the next. That is
+	// the reported "seems like it works now, weird"; it will not reproduce reliably by hand,
+	// which is why the three renderings are pinned here.
+	it("ends the turn on every rendering of the SAME utterance (the 'Stop-stop.' report)", () => {
+		for (const rendering of ["Stop-stop.", "Stop stop.", "Stop, stop.", "stop—stop", "STOP-STOP!"]) {
+			expect(stripStopWord(rendering, ["stop stop"])).toEqual({ ended: true, text: "" });
+		}
+	});
+
+	it("strips a hyphenated stop-word off the END without eating the word before it", () => {
+		// The old slice dropped N whitespace tokens for an N-word stop-word. "stop-stop" is ONE
+		// token and TWO normalised words, so that arithmetic ate "tests," and sent "run the".
+		expect(stripStopWord("run the tests, stop-stop", ["stop stop"])).toEqual({ ended: true, text: "run the tests" });
+		expect(stripStopWord("run the tests, stop stop", ["stop stop"])).toEqual({ ended: true, text: "run the tests" });
+	});
+
+	it("a hyphenated rendering of a single-word stop-word still only matches at the end", () => {
+		expect(stripStopWord("Do it — copy.", ["copy"])).toEqual({ ended: true, text: "Do it" });
+		expect(stripStopWord("copy this file to the server", ["copy"])).toEqual({ ended: false, text: "copy this file to the server" });
+	});
 });
 
 describe("resolveVoiceMode", () => {
@@ -451,6 +476,56 @@ describe("splitTrailingCommand", () => {
 	it("does not strip a command phrase that is not at the end", () => {
 		const r = splitTrailingCommand("exit voice mode is the phrase I keep forgetting", undefined, "en-US", { muted: false });
 		expect(r.text).toBe("exit voice mode is the phrase I keep forgetting");
+	});
+});
+
+// ── #331: "stop" alone is a command ────────────────────────────────────────────────────────
+//
+// Every English exit phrase used to require "voice" after the verb, so bare "stop" was sent to
+// the agent as a message. The agent, which cannot see or change client-side voice state, replied
+// "Got it. Stopped." — a confirmation of something nobody did — and the user disengaged with the
+// mic still open. The next two turns were phantom (#332).
+describe('matchVoiceCommand — bare "stop" (#331)', () => {
+	it("exits voice when the whole utterance IS stop, in any rendering", () => {
+		for (const utterance of ["stop", "Stop.", "STOP!", "Stop-stop.", "stop stop"]) {
+			expect(matchVoiceCommand(utterance, undefined, "en-US")).toBe("exit");
+		}
+	});
+
+	it("still exits while muted — mute silences the mic, it does not trap you in voice", () => {
+		expect(matchVoiceCommand("Stop.", undefined, "en-US", { muted: true })).toBe("exit");
+	});
+
+	// The single-word rule (a bare phrase must BE the whole utterance) is what makes this safe.
+	// It was added when "next agent" fired inside "the next agent in the chain is the builder";
+	// it is the same rule keeping ordinary speech about stopping a message.
+	it("does NOT hijack ordinary speech that merely contains the word", () => {
+		for (const sentence of ["don't stop now", "stop the deploy when the tests go green", "we should stop", "did it stop?"]) {
+			expect(matchVoiceCommand(sentence, undefined, "en-US")).toBeNull();
+		}
+	});
+
+	// "stop listening" says literally what mute does, and exit is checked first — so adding the
+	// bare word must not have quietly stolen it.
+	it("leaves 'stop listening' as MUTE", () => {
+		expect(matchVoiceCommand("stop listening", undefined, "en-US")).toBe("mute");
+	});
+
+	it("has an equivalent in every language that already had exit phrases", () => {
+		expect(matchVoiceCommand("停止", undefined, "zh-CN")).toBe("exit");
+		expect(matchVoiceCommand("やめて", undefined, "ja-JP")).toBe("exit");
+		expect(matchVoiceCommand("그만", undefined, "ko-KR")).toBe("exit");
+		expect(matchVoiceCommand("basta", undefined, "es-ES")).toBe("exit");
+		expect(matchVoiceCommand("arrête", undefined, "fr-FR")).toBe("exit");
+		expect(matchVoiceCommand("aufhören", undefined, "de-DE")).toBe("exit");
+		expect(matchVoiceCommand("रुको", undefined, "hi-IN")).toBe("exit");
+	});
+
+	// A turn that IS the command sends nothing; a turn that ENDS with the doubled imperative
+	// keeps what came before, the same contract every other trailing command has.
+	it("sends nothing when the turn is only the stop word", () => {
+		expect(splitTrailingCommand("Stop-stop.", undefined, "en-US", { muted: false })).toEqual({ command: "exit", text: "" });
+		expect(splitTrailingCommand("Stop.", undefined, "en-US", { muted: false })).toEqual({ command: "exit", text: "" });
 	});
 });
 

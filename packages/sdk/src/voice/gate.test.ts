@@ -83,6 +83,34 @@ describe("speech gate", () => {
 		restore();
 	});
 
+	// #332 — the heard-speech flag is what endOfTurnAction trusts to DISCARD a silent clip. It
+	// used to latch on any recognised words, including the agent's own TTS coming back through
+	// the speakers, so the gate vouched for a turn the user never took: the clip was uploaded,
+	// and Whisper returned a term from its own vocabulary prompt ("Coder Lead", the agent's name).
+	it("does NOT flag speech the caller says is not the user's (the agent's own voice)", () => {
+		const { instances, restore } = withFakeSR();
+		let mine = false; // the caller's echo/paused/muted guard
+		const gate = createSpeechGate({ onInterim: () => {}, acceptSpeech: () => mine })!;
+		gate.start();
+
+		instances[0].emit("here is what I found in the repository", true); // the agent, aloud
+		expect(gate.heardSpeech()).toBe(false); // → endOfTurnAction discards the silent turn
+
+		mine = true;
+		instances[0].emit("fix the bug", true); // the user, once the echo window has passed
+		expect(gate.heardSpeech()).toBe(true);
+		restore();
+	});
+
+	it("accepts speech by default, so a caller that passes no predicate is unchanged", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		instances[0].emit("fix the bug", true);
+		expect(gate.heardSpeech()).toBe(true);
+		restore();
+	});
+
 	it("becomes alive on any event; reset clears heard but not liveness", () => {
 		const { instances, restore } = withFakeSR();
 		const gate = createSpeechGate({ onInterim: () => {} })!;
