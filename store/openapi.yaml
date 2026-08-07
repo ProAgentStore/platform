@@ -1174,7 +1174,16 @@ paths:
                 $ref: "#/components/schemas/Error"
     put:
       summary: Update agent
-      description: Update agent metadata. Owner or admin only.
+      description: |
+        Update agent metadata. Owner or admin only.
+
+        Runs the catalog claims lint against the POST-patch description AND the POST-patch
+        capabilities, returning `warnings[]` alongside the success when the copy promises a
+        runtime capability (a browser, posting on your behalf, a local runner, cron) the agent
+        declares no `runtime` and no `workflow` for. Advisory and heuristic — it never blocks
+        the write. This is the path where catalog copy actually changes, and it catches the
+        mismatch from either direction: new copy over old capabilities, or capabilities dropped
+        under copy nobody touched.
       operationId: updateAgent
       tags: [Agents]
       parameters:
@@ -1211,11 +1220,18 @@ paths:
                   nullable: true
       responses:
         "200":
-          description: Agent updated
+          description: Agent updated — with catalog-claim warnings when the copy overstates the capabilities
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Success"
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      warnings:
+                        type: array
+                        items: { type: string }
+                        description: Present only when the lint found something. Advisory; the update has already landed.
         "400":
           description: Nothing to update
           content:
@@ -3771,6 +3787,10 @@ paths:
         against closed enums; `customSurfaces` bundles must be `https` URLs because they
         load as code into the console origin, and are only overwritten when the key is
         present.
+
+        Returns `warnings[]` when the resulting capabilities no longer back what the agent's
+        standing catalog description promises — dropping `runtime` here silently turns honest
+        copy into an overclaim. Advisory; the capabilities are stored either way.
       operationId: setAgentCapabilities
       tags: [Agents]
       parameters:
@@ -3783,11 +3803,17 @@ paths:
               $ref: "#/components/schemas/AgentCapabilities"
       responses:
         "200":
-          description: The stored capabilities
+          description: The stored capabilities, plus any catalog-claim warnings they now create
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AgentCapabilities"
+                allOf:
+                  - $ref: "#/components/schemas/AgentCapabilities"
+                  - type: object
+                    properties:
+                      warnings:
+                        type: array
+                        items: { type: string }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -6530,6 +6556,13 @@ paths:
         Choreography, not orchestration: a connection routes a FACT this instance emits (e.g.
         `lead.created`, `site.live`) into another of your instances by running a trigger action.
         Storage stays isolated, and chain-versus-fan-out stays configuration.
+
+        Every row carries `warnings[]` — what is wrong with that edge as it stands, in the same
+        words the create path returns. Today that is a `run_pipeline` connection naming a
+        pipeline the target agent does not have (or has, but whose definition does not
+        validate): it dead-letters every event while the row still reads "enabled". Rows written
+        before the create-time check existed are surfaced this way rather than removed — a
+        connection you wrote is yours to delete.
       operationId: listConnections
       tags: [Tools]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -6543,7 +6576,17 @@ paths:
                 properties:
                   connections:
                     type: array
-                    items: { type: object, additionalProperties: true }
+                    items:
+                      type: object
+                      additionalProperties: true
+                      properties:
+                        warnings:
+                          type: array
+                          items: { type: string }
+                          description: |
+                            Advisory problems with this edge — empty when there are none. A
+                            warning that could not be computed (an unreadable target) yields an
+                            empty list rather than a guess: a failed read is not evidence.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     post:
@@ -6553,6 +6596,11 @@ paths:
         `[{field, op, value}]` predicate vocabulary the pipeline `filter` step uses — as a bare
         array (AND) or `{where, any}` (OR) — and is validated at create time, because a filter
         that silently never matches stops the chain while the connection still looks healthy.
+
+        For the same reason, a `run_pipeline` connection naming a pipeline the TARGET does not
+        have comes back with a `warnings[]` entry saying so, naming the pipeline, the agent it
+        was looked for on, and what that agent actually has. Advisory, not a 400: a pipeline can
+        legitimately be added to the target after the edge is wired.
       operationId: createConnection
       tags: [Tools]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]

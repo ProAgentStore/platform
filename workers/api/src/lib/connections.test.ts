@@ -7,8 +7,18 @@ import type { Env } from "../types.js";
  * `connections` seeds rows returned by the deliverEvent/list SELECTs. `writes` captures
  * INSERT/DELETE for assertions.
  */
-function buildEnv(opts: { owns?: Array<[string, string]>; connections?: ConnectionRow[]; agentStatus?: number; insertChanges?: number } = {}) {
+function buildEnv(
+	opts: {
+		owns?: Array<[string, string]>;
+		connections?: ConnectionRow[];
+		agentStatus?: number;
+		insertChanges?: number;
+		/** Target instances as `id -> {agentName, config}` — what the #363 pipeline check reads. */
+		instances?: Record<string, { agentName?: string; config: unknown }>;
+	} = {},
+) {
 	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
+	const instances = opts.instances ?? {};
 	const rows = opts.connections ?? [];
 	const writes: Array<{ sql: string; args: unknown[] }> = [];
 	const agentFetches: Request[] = [];
@@ -18,6 +28,11 @@ function buildEnv(opts: { owns?: Array<[string, string]>; connections?: Connecti
 				bind(...args: unknown[]) {
 					return {
 						async first() {
+							// loadPipeline — distinct from the ownership probe below, which selects `id`.
+							if (sql.includes("SELECT config FROM agent_instances")) {
+								const seeded = instances[String(args[0])];
+								return seeded ? { config: JSON.stringify(seeded.config) } : null;
+							}
 							if (sql.includes("FROM agent_instances")) {
 								const [id, uid] = args as [string, string];
 								return owns.has(`${id}::${uid}`) ? { id } : null;
@@ -29,6 +44,16 @@ function buildEnv(opts: { owns?: Array<[string, string]>; connections?: Connecti
 							return null;
 						},
 						async all<T>() {
+							// targetFactsFor — the batched "what is this agent called, what pipelines
+							// does it have" read behind the #363 annotation.
+							if (sql.includes("JOIN agents a ON a.id = ai.agent_id")) {
+								const ids = args.slice(1).map(String);
+								return {
+									results: ids
+										.filter((id) => instances[id])
+										.map((id) => ({ id, config: JSON.stringify(instances[id].config), agent_name: instances[id].agentName ?? null })) as unknown as T[],
+								};
+							}
 							if (sql.includes("FROM agent_connections")) {
 								// deliverEvent: WHERE source_instance_id AND event_type AND enabled
 								if (sql.includes("source_instance_id = ?1 AND event_type = ?2")) {
@@ -132,6 +157,96 @@ describe("deliverEvent", () => {
 		const r = await deliverEvent(env, "finder", "u1", "lead.created", [{ name: "A" }]);
 		expect(r.connections).toBe(0);
 		expect(agentFetches.length).toBe(0);
+	});
+});
+
+// ── #363: a connection may not silently name a pipeline the target does not have ────────
+const GOOD = { name: "site-builder", steps: [{ tool: "geocode", inputs: { city: "Sydney" } }] };
+
+/** A target agent that owns exactly the pipelines listed, plus a broken one when asked. */
+function builder(pipelines: Record<string, unknown>) {
+	return { agentName: "Website Builder", config: { pipelines } };
+}
+
+describe("createConnection — the named pipeline must exist on the target (#363)", () => {
+	const input = (pipeline: string) => ({
+		sourceInstanceId: "finder",
+		targetInstanceId: "outreach",
+		eventType: "lead.created",
+		action: "run_pipeline" as const,
+		config: { pipeline },
+	});
+	const owns: Array<[string, string]> = [
+		["finder", "u1"],
+		["outreach", "u1"],
+	];
+
+	it("warns — naming the pipeline, the agent, and what that agent actually has", async () => {
+		const { env } = buildEnv({ owns, connections: [conn({ action: "run_pipeline" })], instances: { outreach: builder({ "site-builder": GOOD }) } });
+		const res = await createConnection(env, "u1", input("site-buidler"));
+		expect(res.ok).toBe(true);
+		const warnings = res.ok ? res.warnings : [];
+		expect(warnings.join(" ")).toContain('"site-buidler"');
+		expect(warnings.join(" ")).toContain("Website Builder");
+		expect(warnings.join(" ")).toContain('"site-builder"');
+	});
+
+	it("still CREATES it — a pipeline can legitimately be added to the target afterwards", async () => {
+		const { env, writes } = buildEnv({ owns, connections: [conn({ action: "run_pipeline" })], instances: { outreach: builder({}) } });
+		const res = await createConnection(env, "u1", input("site-deploy"));
+		expect(res.ok).toBe(true);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_connections"))).toBe(true);
+	});
+
+	it("says nothing when the pipeline is there", async () => {
+		const { env } = buildEnv({ owns, connections: [conn({ action: "run_pipeline" })], instances: { outreach: builder({ "site-builder": GOOD }) } });
+		const res = await createConnection(env, "u1", input("site-builder"));
+		expect(res.ok && res.warnings).toEqual([]);
+	});
+
+	it("says nothing when the target's config cannot be read — a failed read is not evidence", async () => {
+		const { env } = buildEnv({ owns, connections: [conn({ action: "run_pipeline" })] });
+		const res = await createConnection(env, "u1", input("site-deploy"));
+		expect(res.ok && res.warnings).toEqual([]);
+	});
+});
+
+describe("listConnections — an already-invalid row is surfaced, not removed (#363)", () => {
+	it("annotates a stored edge naming a pipeline the target does not have", async () => {
+		const { env } = buildEnv({
+			connections: [conn({ action: "run_pipeline", config: JSON.stringify({ pipeline: "site-deploy" }) })],
+			instances: { outreach: builder({ "site-builder": GOOD }) },
+		});
+		const [row] = await listConnections(env, "u1", { sourceInstanceId: "finder" });
+		expect(row.warnings.join(" ")).toContain('"site-deploy"');
+	});
+
+	it("leaves a healthy edge and every non-pipeline action unannotated", async () => {
+		const { env } = buildEnv({
+			connections: [
+				conn({ id: "c1", action: "run_pipeline", config: JSON.stringify({ pipeline: "site-builder" }) }),
+				conn({ id: "c2", action: "insert_record" }),
+			],
+			instances: { outreach: builder({ "site-builder": GOOD }) },
+		});
+		const list = await listConnections(env, "u1", {});
+		expect(list.map((r) => r.warnings)).toEqual([[], []]);
+	});
+
+	it("flags a name that is PRESENT but whose definition would never run", async () => {
+		const { env } = buildEnv({
+			connections: [conn({ action: "run_pipeline", config: JSON.stringify({ pipeline: "site-deploy" }) })],
+			instances: { outreach: builder({ "site-deploy": { name: "site-deploy", steps: [] } }) },
+		});
+		const [row] = await listConnections(env, "u1", { sourceInstanceId: "finder" });
+		expect(row.warnings.join(" ")).toContain("not valid");
+	});
+
+	it("never takes the listing down with it when the annotation read fails", async () => {
+		const { env } = buildEnv({ connections: [conn({ action: "run_pipeline", config: JSON.stringify({ pipeline: "site-deploy" }) })] });
+		const [row] = await listConnections(env, "u1", { sourceInstanceId: "finder" });
+		expect(row.id).toBe("c1");
+		expect(row.warnings).toEqual([]);
 	});
 });
 

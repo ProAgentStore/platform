@@ -278,3 +278,106 @@ describe("agent update capabilities merge (#141 update path)", () => {
 		expect(JSON.parse(params[1] as string).capabilities.tools).toEqual(["browser_navigate"]);
 	});
 });
+
+// ── #362: the claims lint runs where the copy actually changes ─────────────────────────
+
+/** A single-agent app whose row (description / category / config) the test controls. */
+function claimsApp(agent: Record<string, unknown>) {
+	const app = new Hono();
+	app.route("/v1/agents", agentRoutes);
+	app.onError((err, c) => {
+		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+		throw err;
+	});
+	const writes: string[] = [];
+	const env = {
+		SESSION_SIGNING_KEY: TEST_SECRET,
+		DB: {
+			prepare(sql: string) {
+				return {
+					bind() {
+						return {
+							first: async () => (sql.includes("FROM agents") ? agent : null),
+							all: async () => ({ results: [] }),
+							run: async () => {
+								writes.push(sql);
+								return { meta: { changes: 1 } };
+							},
+						};
+					},
+				};
+			},
+		},
+	};
+	return { app, env, writes };
+}
+
+const CLAIM = "Runs a headless browser and posts on your behalf.";
+const agentRow = (over: Record<string, unknown> = {}) => ({
+	id: "agent-1",
+	owner_id: "user-1",
+	slug: "poster",
+	name: "Poster",
+	description: "Answers questions about your documents.",
+	category: "general",
+	config: "{}",
+	...over,
+});
+const BACKED = JSON.stringify({ capabilities: { surfaces: [], runtime: "browser", workflow: "BROWSER_TASK" } });
+
+describe("PUT /v1/agents/:id — catalog claims lint (#362)", () => {
+	const put = async (agent: Record<string, unknown>, body: Record<string, unknown>) => {
+		const { app, env, writes } = claimsApp(agent);
+		const token = await signSession("user-1", TEST_SECRET);
+		const res = await app.request(
+			"/v1/agents/agent-1",
+			{ method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
+			env,
+		);
+		return { res, data: await res.json<{ success?: boolean; warnings?: string[] }>(), writes };
+	};
+
+	it("warns when the description is rewritten into a runtime claim the agent cannot back", async () => {
+		const { res, data } = await put(agentRow(), { description: CLAIM });
+		expect(res.status).toBe(200);
+		expect(data.success).toBe(true);
+		expect((data.warnings ?? []).join(" ")).toContain("no runtime/workflow");
+	});
+
+	it("is ADVISORY — the update still lands", async () => {
+		const { writes } = await put(agentRow(), { description: CLAIM });
+		expect(writes.some((s) => s.startsWith("UPDATE agents SET"))).toBe(true);
+	});
+
+	it("catches the other direction: capabilities dropped under copy nobody touched", async () => {
+		const { data } = await put(agentRow({ description: CLAIM, config: BACKED }), { capabilities: { runtime: null, workflow: null } });
+		expect((data.warnings ?? []).length).toBeGreaterThan(0);
+	});
+
+	it("stays quiet when the copy is backed, and when it promises nothing runtime-shaped", async () => {
+		expect((await put(agentRow({ config: BACKED }), { description: CLAIM })).data.warnings).toBeUndefined();
+		expect((await put(agentRow(), { description: "Summarises your inbox." })).data.warnings).toBeUndefined();
+	});
+
+	it("reads the RESOLVED capabilities, so a legacy agent's honest copy is not accused", async () => {
+		// `coder` takes runtime/workflow from the slug fallback with nothing in config at all.
+		const legacy = agentRow({ slug: "coder", category: "code", config: null });
+		expect((await put(legacy, { description: "Drives Claude Code through a local runner." })).data.warnings).toBeUndefined();
+	});
+});
+
+describe("PUT /v1/agents/:id/capabilities — the other door onto the same mismatch (#362)", () => {
+	it("reports when dropping the runtime turns standing copy into an overclaim", async () => {
+		const { app, env } = claimsApp(agentRow({ description: CLAIM, config: BACKED }));
+		const token = await signSession("user-1", TEST_SECRET);
+		const res = await app.request(
+			"/v1/agents/agent-1/capabilities",
+			{ method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ runtime: null, workflow: null }) },
+			env,
+		);
+		const data = await res.json<{ runtime: string | null; warnings?: string[] }>();
+		expect(res.status).toBe(200);
+		expect(data.runtime).toBeNull();
+		expect((data.warnings ?? []).join(" ")).toContain("no runtime/workflow");
+	});
+});

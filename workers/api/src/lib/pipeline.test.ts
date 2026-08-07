@@ -12,7 +12,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { attachAudit, auditStepEntry, collectReferences, executePipelineStep, pipelineDefForKey, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
+import { attachAudit, auditStepEntry, collectReferences, executePipelineStep, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -358,5 +358,31 @@ describe("pipelineDefForKey — the config key is the pipeline's one name", () =
 		const def = { name: "lead-finder", steps: [] };
 		pipelineDefForKey("lead_finder", def);
 		expect(def.name).toBe("lead-finder");
+	});
+});
+
+// ── #363: the create-time check needs the inventory, not one yes/no lookup ─────────────
+describe("pipelineInventory", () => {
+	const good = { name: "site-builder", steps: [{ tool: "geocode" }] };
+
+	it("splits present names by whether the definition would actually run", () => {
+		expect(pipelineInventory({ "site-builder": good, broken: { name: "broken", steps: [] } })).toEqual({
+			valid: ["site-builder"],
+			invalid: ["broken"],
+		});
+	});
+
+	it("an agent with NO pipelines is an empty inventory, not an unknown one", () => {
+		// The distinction is the whole point: empty means "we looked and there are none", which
+		// is exactly the case a connection naming one deserves to be warned about. `null` — the
+		// unreadable case — is decided by pipelineNamesFor, not here.
+		expect(pipelineInventory(undefined)).toEqual({ valid: [], invalid: [] });
+		expect(pipelineInventory({})).toEqual({ valid: [], invalid: [] });
+		expect(pipelineInventory([])).toEqual({ valid: [], invalid: [] });
+		expect(pipelineInventory("nonsense")).toEqual({ valid: [], invalid: [] });
+	});
+
+	it("sorts, so the warning text does not depend on JSON key order", () => {
+		expect(pipelineInventory({ z: good, a: good }).valid).toEqual(["a", "z"]);
 	});
 });
