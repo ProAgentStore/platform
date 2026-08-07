@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildClauses,
 	buildConnectionConfig,
+	canDelegate,
 	clauseValue,
 	connectionHealth,
 	countdown,
@@ -298,5 +299,38 @@ describe("connectionHealth — surfacing the silent stop", () => {
 
 	it("says a disabled connection routes nothing, before anything else", () => {
 		expect(connectionHealth(conn({ enabled: false }), [del({ status: "dead" })])).toEqual({ tone: "idle", text: "disabled — it routes nothing" });
+	});
+});
+
+// ── The two halves of supervision must agree (#354) ──────────────────────────────────────
+//
+// The picker offered supervision on every instance and the route answered 201, while the ABILITY
+// to delegate is agent-level and exactly one agent declares it. The same fact now gates both, and
+// it is read off the tool listing's registry `connector` rather than a copied list of tool names.
+describe("canDelegate", () => {
+	const t = (connector: string, reason = "ok") => ({ connector, reason });
+
+	it("is true when the agent declares any supervision tool", () => {
+		expect(canDelegate([t("github"), t("supervision")])).toBe(true);
+	});
+
+	it("is false when it declares connector tools but none that delegate", () => {
+		expect(canDelegate([t("github"), t("http")])).toBe(false);
+	});
+
+	// The listing reports EVERY registry tool, including the ones this agent never declared —
+	// reading "there is a supervision row" would make every agent look like a supervisor.
+	it("ignores supervision tools the agent does not declare", () => {
+		expect(canDelegate([t("supervision", "not_declared"), t("github")])).toBe(false);
+	});
+
+	// An owner who switched the delegation tools off has paused the wiring, not made it
+	// impossible — hiding their existing links would be the wrong answer.
+	it("still counts a declared tool the owner switched off", () => {
+		expect(canDelegate([t("supervision", "disabled_by_owner")])).toBe(true);
+	});
+
+	it("is false for an empty listing", () => {
+		expect(canDelegate([])).toBe(false);
 	});
 });

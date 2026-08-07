@@ -317,14 +317,29 @@ describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {
 describe("supervision edges (#183)", () => {
 	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
 
-	const post = async (body: unknown, owned = true) => {
-		const { app, env } = testApp({ owned });
+	// A supervisor's AGENT has to declare a supervision tool, or the edge it wires can never be
+	// used (#354) — so the fixture for the graph rules declares one, and the tests below that are
+	// about the graph keep testing the graph.
+	const DELEGATES = JSON.stringify({ capabilities: { tools: ["delegate_goal", "list_subordinates"] } });
+
+	const post = async (body: unknown, owned = true, agentConfig = DELEGATES) => {
+		const { app, env } = testApp({ owned, agentConfig });
 		return app.request("/v1/instances/i1/supervision", {
 			method: "POST",
 			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
 			body: JSON.stringify(body),
 		}, env);
 	};
+
+	// The half that was missing. The graph is instance-level and the ability is agent-level, and
+	// the route only ever checked the graph: it answered 201, the row appeared under "Agents this
+	// one supervises", and the impossibility surfaced only when a delegation was asked for and the
+	// agent had no tool to do it with — which reads as the agent being broken.
+	it("refuses a supervisor whose agent declares no supervision tool", async () => {
+		const res = await post({ subordinateInstanceId: "i2" }, true, JSON.stringify({ capabilities: { tools: ["search_knowledge"] } }));
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toContain("cannot delegate");
+	});
 
 	it("wires a supervisor over a subordinate", async () => {
 		const res = await post({ subordinateInstanceId: "i2" });

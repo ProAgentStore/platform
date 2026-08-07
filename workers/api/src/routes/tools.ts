@@ -27,6 +27,7 @@ import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision } from "../lib/supervision.js";
+import { delegationDenial } from "../lib/supervision-capability.js";
 import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
@@ -686,6 +687,11 @@ toolRoutes.post("/:id/supervision", async (c) => {
 	};
 	// Every rejection here (cycle, tower, fan-out, two managers) is invisible at run time until
 	// it has already spent money, so it is surfaced now, while the human is looking at the form.
+	// Including the one the graph rules could not see: a supervisor whose AGENT declares no
+	// delegation tool (#354). The graph is instance-level, the ability is agent-level, and until
+	// this line the two halves never asked each other anything.
+	const denial = delegationDenial(await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null));
+	if (denial) throw new HttpError(400, denial);
 	const res = await createSupervision(c.env, session.uid, {
 		supervisorInstanceId: instanceId,
 		subordinateInstanceId: String(body.subordinateInstanceId ?? ""),

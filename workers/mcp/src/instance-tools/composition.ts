@@ -44,7 +44,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"create_supervision",
-		"Put one agent in charge of another: the supervisor may then delegate goals to the subordinate. Rejected if it would create a supervision loop, exceed the depth or fan-out limits, or give the subordinate a second supervisor.",
+		"Put one agent in charge of another: the supervisor may then delegate goals to the subordinate. Rejected if the SUPERVISOR's agent declares no supervision tool (it could never delegate, so the link would be dead on arrival — check with list_instance_tools), if it would create a supervision loop, if it would exceed the depth or fan-out limits, or if it would give the subordinate a second supervisor. The subordinate needs nothing declared: being delegated to is not a capability.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			supervisor_instance_id: z.string().describe("The instance that will delegate."),

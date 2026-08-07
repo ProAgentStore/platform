@@ -281,3 +281,28 @@ export function deliveryHeadline(counts: DeliveryCounts): { tone: Tone; text: st
 export function toneClass(tone: Tone): string {
 	return tone === "bad" ? "text-red" : tone === "warn" ? "text-yellow" : tone === "ok" ? "text-green" : "text-muted-soft";
 }
+
+/** One row of `GET /v1/instances/:id/tools` — only the fields this rule needs. */
+export interface ToolVerdict {
+	connector?: string;
+	reason?: string;
+}
+
+/**
+ * Can this agent delegate? (#354)
+ *
+ * The supervision GRAPH is instance-level and the ABILITY is agent-level, so a picker that
+ * offers supervision on an agent with no delegation tool wires an edge that can never be used.
+ * The route refuses it; this hides the editor, and the two must agree in BOTH directions — a
+ * picker that offers nothing is fine, one that offers what the route rejects is not.
+ *
+ * Read off the tool listing rather than a copied list of tool names, because that listing already
+ * carries each tool's `connector` from the registry the route checks against. A fifth supervision
+ * tool therefore needs no change here.
+ *
+ * DECLARED, not `allowed`: an owner who switched the delegation tools off has not made the wiring
+ * impossible, only paused it, and hiding their existing links would be the wrong answer.
+ */
+export function canDelegate(tools: readonly ToolVerdict[]): boolean {
+	return tools.some((t) => t.connector === "supervision" && t.reason !== "not_declared");
+}

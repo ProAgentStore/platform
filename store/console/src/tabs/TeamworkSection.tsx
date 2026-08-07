@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import { formatTime } from "@proagentstore/sdk/ui";
 import {
 	buildConnectionConfig,
+	canDelegate,
 	connectionHealth,
 	deliveryCounts,
 	deliveryHeadline,
@@ -14,6 +15,7 @@ import {
 	type ClauseDraft,
 	type Connection,
 	type Delivery,
+	type ToolVerdict,
 } from "../lib/teamwork";
 
 /**
@@ -59,6 +61,10 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 	const [links, setLinks] = useState<SupervisionLink[]>([]);
 	const [connections, setConnections] = useState<Connection[]>([]);
 	const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+	// #354: whether this agent can delegate at all. Supervision is offered only if it can;
+	// Connections and Deliveries stay ungated, because any agent can emit a fact and any agent
+	// can be a target. Starts true so an existing link never blinks out while the answer loads.
+	const [delegates, setDelegates] = useState(true);
 	const [msg, setMsg] = useState("");
 	const [busy, setBusy] = useState(false);
 
@@ -87,7 +93,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 
 	const load = useCallback(async () => {
 		try {
-			const [mine, sup, conns, dels] = await Promise.all([
+			const [mine, sup, conns, dels, tools] = await Promise.all([
 				// `{instances}`, not a bare array — every other caller in the console reads it that
 				// way. Reading it as an array made `Array.isArray` permanently false, so the list
 				// was always empty and BOTH pickers below could never be set: supervision and
@@ -99,11 +105,18 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				// what it HAS carried, so filtering server-side would make "nothing has ever
 				// matched" indistinguishable from "nothing has died".
 				api<{ deliveries: Delivery[] }>(`/v1/instances/${instanceId}/connections/deliveries?limit=200`).catch(() => ({ deliveries: [] })),
+				// The tool listing, for the one fact the supervision editor needs: does this agent
+				// declare a supervision tool. It carries each tool's registry `connector`, so this
+				// asks the same source the route rejects against instead of a second copy of it.
+				api<{ tools: ToolVerdict[] }>(`/v1/instances/${instanceId}/tools`).catch(() => ({ tools: [] })),
 			]);
 			setInstances(mine.instances ?? []);
 			setLinks(sup.supervision ?? []);
 			setConnections(conns.connections ?? []);
 			setDeliveries(dels.deliveries ?? []);
+			// An unreadable listing must not hide an editor the route would accept — only a
+			// listing that came back and said no does that.
+			setDelegates(tools.tools?.length ? canDelegate(tools.tools) : true);
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
@@ -231,11 +244,19 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Teamwork</h3>
 			<p className="text-sm text-muted mb-4">
-				How this agent works with your others. <strong>Supervision</strong> hands another agent a goal and
-				tracks the result. <strong>Connections</strong> announce a fact and let any agent react.
+				How this agent works with your others.{" "}
+				{delegates && <><strong>Supervision</strong> hands another agent a goal and tracks the result.{" "}</>}
+				<strong>Connections</strong> announce a fact and let any agent react.
 			</p>
 
-			{/* ── Supervision ─────────────────────────────────────────── */}
+			{/* ── Supervision ───────────────────────────────────────────
+			    Offered only to an agent that CAN delegate (#354). The graph is instance-level and
+			    the ability is agent-level, and this editor used to ignore the second half: it
+			    offered the wiring on all 26 instances, 25 of which have no delegation tool, and
+			    the route agreed with the picker rather than with the runtime. Existing links are
+			    still listed when the ability is absent — a row already written has to be
+			    removable — but nothing new can be added. */}
+			{(delegates || links.length > 0) && (
 			<div className="mb-5">
 				<div className="text-sm font-semibold mb-2">Agents this one supervises</div>
 				{links.length === 0 && <div className="text-xs text-muted mb-2">None yet — it has nobody to delegate to.</div>}
@@ -245,6 +266,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 						<button type="button" disabled={busy} onClick={() => removeSupervision(l.id)} className={chip}>Remove</button>
 					</div>
 				))}
+				{delegates ? (
 				<div className="flex flex-col sm:flex-row gap-2 mt-2">
 					<select aria-label="Agent to supervise" value={subordinate} onChange={(e) => setSubordinate(e.target.value)} className={field}>
 						<option value="">Add an agent to supervise…</option>
@@ -252,7 +274,11 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					</select>
 					<button type="button" disabled={busy || !subordinate} onClick={addSupervision} className="text-sm px-3 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-40 whitespace-nowrap">Add agent</button>
 				</div>
+				) : (
+					<div className="text-xs text-yellow mt-2">This agent can’t delegate — its tools include none of the supervision tools, so these links do nothing. Remove them, or supervise from an agent that can.</div>
+				)}
 			</div>
+			)}
 
 			{/* ── Connections ─────────────────────────────────────────── */}
 			<div className="mb-5">

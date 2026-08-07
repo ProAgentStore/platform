@@ -174,7 +174,12 @@ const PINS = {
 	"workers/api/src/lib/triggers.ts": 839,
 	"packages/browser-runner/src/coding/headless.ts": 819,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
-	"workers/api/src/routes/tools.ts": 833,
+	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
+	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge
+	// the runtime can never use. Raised rather than split — it belongs with the cycle/tower/
+	// fan-out rejections it stands beside, and the RULE it applies is pure and tested in
+	// lib/supervision-capability.ts, which is where a split would have put it anyway.
+	"workers/api/src/routes/tools.ts": 839,
 };
 
 /**
