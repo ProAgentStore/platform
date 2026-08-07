@@ -5,12 +5,12 @@ import type { Connector } from "./registry.js";
 // Mock the collaborators so we can assert connectorClient's dispatch + enforcement in
 // isolation from real GitHub/OAuth/DB. Each auth type routes to a distinct collaborator.
 vi.mock("./registry.js", () => ({ getConnector: (id: string) => FIXTURES[id] }));
-vi.mock("../github-app.js", () => ({ installationTokenForOwner: vi.fn() }));
+vi.mock("../github-app.js", () => ({ resolveGithubAccess: vi.fn() }));
 vi.mock("../connector-oauth.js", () => ({ readConnectorRefreshToken: vi.fn() }));
 vi.mock("../connector-grants.js", () => ({ requireConnectorGrant: vi.fn() }));
 
 import { connectorClient } from "./client.js";
-import { installationTokenForOwner } from "../github-app.js";
+import { resolveGithubAccess } from "../github-app.js";
 import { readConnectorRefreshToken } from "../connector-oauth.js";
 import { requireConnectorGrant } from "../connector-grants.js";
 
@@ -28,21 +28,55 @@ FIXTURES.google_drive = FIXTURES.oauth_conn;
 
 const caller = { userId: "u1", instanceId: "i1" };
 
+/** The minter's two answers (#321): a token, or a CLASSIFIED denial. */
+const grants = (token: string) => vi.mocked(resolveGithubAccess).mockResolvedValue({ ok: true, token });
+const denies = (state: "app-not-configured" | "owner-unknown" | "not-installed" | "not-authorized" | "transient", owner = "acme") =>
+	vi.mocked(resolveGithubAccess).mockResolvedValue({
+		ok: false,
+		state,
+		owner,
+		retryable: state === "transient",
+		message: `denied: ${state}`,
+		remedy: null,
+	});
+
 afterEach(() => vi.clearAllMocks());
 
 describe("connectorClient token dispatch", () => {
-	it("app auth → installationTokenForOwner, scoped to the resource owner", async () => {
-		vi.mocked(installationTokenForOwner).mockResolvedValue("gh-token");
+	it("app auth → resolveGithubAccess, scoped to the resource owner", async () => {
+		grants("gh-token");
 		const c = connectorClient({} as Env, "app_conn", caller);
 		const t = await c.token({ resourceId: "acme/widgets" });
 		expect(t).toBe("gh-token");
-		expect(installationTokenForOwner).toHaveBeenCalledWith({}, "u1", "acme");
+		// `diagnose` on: a tool's caller is a model talking to a human, and the whole point is
+		// that the message names the actual condition rather than one guessed from a null.
+		expect(resolveGithubAccess).toHaveBeenCalledWith({}, "u1", "acme", { diagnose: true });
 	});
 
-	it("app auth → throws when no installation token", async () => {
-		vi.mocked(installationTokenForOwner).mockResolvedValue(null);
+	it("app auth → relays the minter's OWN diagnosis, not a generic access refusal (#321)", async () => {
+		// The old line was `No app_conn access for "acme"` for every one of five conditions —
+		// including an owner that is not a GitHub account at all, which is not an access problem.
+		denies("owner-unknown");
 		const c = connectorClient({} as Env, "app_conn", caller);
-		await expect(c.token({ resourceId: "acme/widgets" })).rejects.toThrow(/No app_conn access/);
+		await expect(c.token({ resourceId: "acme/widgets" })).rejects.toThrow(/denied: owner-unknown/);
+	});
+
+	it("app auth → reserves HTTP 502 for the ONE retryable state", async () => {
+		// The status is the contract github.ts branches on to decide whether to say "try again".
+		// Getting it wrong is the whole bug: a permanent failure that advertises a retry loop.
+		const statusOf = async (state: Parameters<typeof denies>[0]) => {
+			denies(state);
+			const c = connectorClient({} as Env, "app_conn", caller);
+			return await c.token({ resourceId: "acme/widgets" }).then(
+				() => 0,
+				(e: { status?: number }) => e.status ?? 0,
+			);
+		};
+		expect(await statusOf("transient")).toBe(502);
+		expect(await statusOf("owner-unknown")).toBe(400);
+		expect(await statusOf("app-not-configured")).toBe(503);
+		expect(await statusOf("not-installed")).toBe(403);
+		expect(await statusOf("not-authorized")).toBe(403);
 	});
 
 	it("oauth auth → reads the refresh token then mints an access token from the provider endpoint", async () => {
@@ -82,7 +116,7 @@ describe("connectorClient token dispatch", () => {
 	it("none auth → empty token, no collaborators called", async () => {
 		const c = connectorClient({} as Env, "none_conn", caller);
 		expect(await c.token()).toBe("");
-		expect(installationTokenForOwner).not.toHaveBeenCalled();
+		expect(resolveGithubAccess).not.toHaveBeenCalled();
 		expect(readConnectorRefreshToken).not.toHaveBeenCalled();
 	});
 
@@ -95,11 +129,11 @@ describe("connectorClient scope enforcement", () => {
 	it("read-only connector rejects a write-scoped token request", async () => {
 		const c = connectorClient({} as Env, "readonly_conn", caller);
 		await expect(c.token({ scope: "write", resourceId: "acme/x" })).rejects.toThrow(/read-only/);
-		expect(installationTokenForOwner).not.toHaveBeenCalled();
+		expect(resolveGithubAccess).not.toHaveBeenCalled();
 	});
 
 	it("read-only connector still serves a read-scoped request", async () => {
-		vi.mocked(installationTokenForOwner).mockResolvedValue("ro-token");
+		grants("ro-token");
 		const c = connectorClient({} as Env, "readonly_conn", caller);
 		expect(await c.token({ scope: "read", resourceId: "acme/x" })).toBe("ro-token");
 	});
@@ -108,7 +142,7 @@ describe("connectorClient scope enforcement", () => {
 describe("connectorClient grant enforcement (fail-closed)", () => {
 	it("instance-resource connector mints a token only after requireConnectorGrant passes", async () => {
 		vi.mocked(requireConnectorGrant).mockResolvedValue({} as never);
-		vi.mocked(installationTokenForOwner).mockResolvedValue("granted-token");
+		grants("granted-token");
 		const c = connectorClient({} as Env, "granted_conn", caller);
 		const t = await c.token({ resourceId: "res-1" });
 		expect(t).toBe("granted-token");
@@ -119,7 +153,7 @@ describe("connectorClient grant enforcement (fail-closed)", () => {
 		vi.mocked(requireConnectorGrant).mockRejectedValue(Object.assign(new Error("Connector grant does not allow this agent to access that resource"), { status: 403 }));
 		const c = connectorClient({} as Env, "granted_conn", caller);
 		await expect(c.token({ resourceId: "res-x" })).rejects.toThrow(/grant does not allow/);
-		expect(installationTokenForOwner).not.toHaveBeenCalled();
+		expect(resolveGithubAccess).not.toHaveBeenCalled();
 	});
 
 	it("requireGrant() → 403 when there is no instance context (fail-closed)", async () => {

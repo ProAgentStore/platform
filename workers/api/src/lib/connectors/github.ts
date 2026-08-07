@@ -30,18 +30,25 @@ function ownerOf(repo: string): string {
 /**
  * Resolve an installation token for the repo's owner, or a helpful error string. Auth is
  * minted via the connectorClient (issue #86): `token({resourceId: repo})` runs the same
- * installationTokenForOwner path (the "github" connector is auth:"app"), so behaviour is
- * identical — same token, same scoping. The platform-configured + owner-parse checks stay
- * here so their user-facing messages are unchanged.
+ * installation-token path (the "github" connector is auth:"app"), so behaviour is identical —
+ * same token, same scoping. The platform-configured + owner-parse checks stay here because they
+ * are answerable with no network call at all; everything past them is CLASSIFIED by the minter
+ * (#321), and this function only decides how to phrase what it decided.
  */
 async function resolveRepo(ctx: RegistryToolCtx, repo: string): Promise<{ token: string } | { error: string }> {
 	if (!githubAppConfigured(ctx.env)) return { error: "GitHub is not connected on this platform (GitHub App not configured)." };
 	const owner = ownerOf(repo);
-	if (!owner) return { error: `Invalid repo "${repo}" — use the form "owner/name".` };
-	// Swallowing every error into one message made a TRANSIENT failure look like a missing
-	// installation: the same call failed at 11:17 and succeeded at 11:19 with no config change,
-	// and the agent told its owner to go install an App that was already installed. A wrong
-	// diagnosis costs more than a vague one, so distinguish the two.
+	if (!owner) {
+		return {
+			error: `Invalid repo "${repo}" — a GitHub tool takes the full "owner/name". If you have a coding agent's repository from subordinate_status, that value is \`repo.githubRepo\`; \`repo.name\` is a display label and is not a path.`,
+		};
+	}
+	// #321. This branch used to GUESS: any throw became "usually transient — try again", on the
+	// reasoning that "a retryable fault names itself; 'not installed' does not fail, it returns
+	// nothing". That reasoning was wrong — the token minter throws for every failure, so a
+	// PERMANENT one (an owner that is not a GitHub account at all) was advertised as worth
+	// retrying, forever. The minter now classifies the condition itself and reserves HTTP 502 for
+	// the one genuinely transient state, so there is nothing left to infer here.
 	let token: string | null = null;
 	let cause: unknown = null;
 	try {
@@ -51,13 +58,20 @@ async function resolveRepo(ctx: RegistryToolCtx, repo: string): Promise<{ token:
 	}
 	if (!token) {
 		if (cause) {
-			const msg = cause instanceof Error ? cause.message : String(cause);
-			// A retryable fault names itself; "not installed" does not fail, it returns nothing.
-			return {
-				error: `Couldn't reach GitHub for "${owner}" just now (${msg.slice(0, 120)}). This is usually transient — try again. If it keeps failing, re-authorize the ProAgentStore GitHub App.`,
-			};
+			const msg = (cause instanceof Error ? cause.message : String(cause)).slice(0, 240);
+			// Read structurally, not with `instanceof`: what matters is the CONTRACT (an HTTP
+			// status the minter set), and an error crossing a module or realm boundary keeps its
+			// fields but not always its prototype. A missing status means unclassified.
+			const status = Number((cause as { status?: unknown }).status) || 0;
+			// 502 — and ONLY 502 — is the state where trying again can succeed on its own.
+			if (status === 502 || status === 0) {
+				return { error: `Couldn't reach GitHub for "${owner}" just now (${msg}). This is usually transient — try again.` };
+			}
+			// Permanent: the minter's message already names the actual condition and its remedy.
+			// Adding "try again" here is what sent a user to re-authorize a working installation.
+			return { error: msg };
 		}
-		return { error: `No GitHub access for "${owner}". Install/authorize the ProAgentStore GitHub App for that account, then try again.` };
+		return { error: `GitHub access for "${owner}" could not be established, and no reason was reported.` };
 	}
 	return { token };
 }

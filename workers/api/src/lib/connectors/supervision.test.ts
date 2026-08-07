@@ -224,6 +224,49 @@ describe("check_delegation", () => {
 		expect(r.success).toBe(true);
 		expect(JSON.parse(r.content).subordinates).toHaveLength(1);
 	});
+
+	// ── #339: the tool the Lead actually reached for, and what it could see ──────────────────
+	//
+	// Owner: "What are the instructions to it? Is it supposed to work through PRs or direct
+	// commits to main?" The Lead called this, read the run's OBJECTIVE, and reported it as the
+	// configuration — reassuring its owner about a review gate that did not exist.
+
+	const RUN = {
+		run_id: "r1", user_id: "u1", instance_id: "sub", status: "running", stop_reason: null, detail: null,
+		iteration: 2, max_iterations: 10, cancel_requested: 0, budget_id: null, started_at: 1, finished_at: null,
+		last_progress_at: 2, delegated_by: "sup",
+		objective: "Read each open issue, implement a fix, commit, push, open a PR, and merge it.",
+	};
+
+	const codingWith = (config: string) => [{ ...codingSubordinate[0], config }];
+	const oneRepo = [{ id: "r", instance_id: "sub", user_id: "u1", name: "p", github_repo: "org/p", merge_policy: "",
+	                   clone_status: "ready", branch: "", workdir: "", default_client: "claude", created_at: "", updated_at: "" }];
+
+	it("returns the standing configuration ALONGSIDE the run's objective", async () => {
+		const env = buildEnv({ run: RUN, instances: codingWith(JSON.stringify({ settings: { merge_policy: "pr" } })), repos: oneRepo });
+		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);
+		expect(out.objective).toContain("merge it");
+		expect(out.config.mergeAuthority.policy).toBe("pr");
+		// The legend rides in the payload, not only in the description (#259 precedent).
+		expect(out.configLegend).toMatch(/NOT configuration/);
+	});
+
+	it("says the objective EXCEEDS the policy rather than repeating it as the plan", async () => {
+		const env = buildEnv({ run: RUN, instances: codingWith(JSON.stringify({ settings: { merge_policy: "pr" } })), repos: oneRepo });
+		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);
+		expect(out.objectiveConflict).toMatch(/EXCEEDS the policy/);
+		expect(out.objectiveConflict).toMatch(/cannot grant permission/);
+	});
+
+	it("invents no conflict under the permissive default — which is the incident's real state", async () => {
+		// `merge_policy: "merge"` was what the configuration actually said. There is no conflict
+		// to report; what was missing is the FACT, so that "it works through PRs" cannot be said.
+		const env = buildEnv({ run: RUN, instances: codingWith("{}"), repos: oneRepo });
+		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);
+		expect(out.objectiveConflict).toBeUndefined();
+		expect(out.config.mergeAuthority.policy).toBe("merge");
+		expect(out.config.mergeAuthority.permits).toMatch(/may merge to the trunk/);
+	});
 });
 
 describe("subordinate_status — the observe verb", () => {
@@ -412,6 +455,52 @@ describe("subordinate_status — the observe verb", () => {
 		// And the legend has to SAY which of the two is a GitHub path — the description is a long
 		// way away by the time the model is reading this JSON (the #259 precedent).
 		expect(out.legend).toMatch(/githubRepo/);
+	});
+
+	it("carries the STANDING configuration, not only what is happening (#339)", async () => {
+		// Asked "what are the instructions to it? Is it supposed to work through PRs or direct
+		// commits to main?", the Lead read the run's OBJECTIVE and answered from that. The
+		// standing `merge_policy` — the field that actually governs merge authority — was in no
+		// tool it had.
+		const env = buildEnv({
+			instances: [{
+				...codingSubordinate[0],
+				config: JSON.stringify({ settings: { merge_policy: "pr" }, specialInstructions: "Never touch the release branch." }),
+			}],
+			runtime: { connected: true, node: "macbook" },
+			repos: [{ id: "repo_1", instance_id: "sub", user_id: "u1", name: "fws", github_repo: "freewebstore-online/platform",
+			          merge_policy: "", branch: "", workdir: "/dev/fws", clone_status: "ready", default_client: "claude", created_at: "", updated_at: "" }],
+			gitStatus: "## main\n",
+		});
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		const cfg = out.subordinates[0].config;
+		expect(cfg.available).toBe(true);
+		expect(cfg.mergeAuthority.policy).toBe("pr");
+		expect(cfg.mergeAuthority.permits).toMatch(/must NOT merge/);
+		expect(cfg.specialInstructions.text).toMatch(/release branch/);
+		// And the legend has to say which layer answers "what is it allowed to do" — the
+		// description is a long way away by the time the model is reading this JSON (#259).
+		expect(out.legend).toMatch(/config\.mergeAuthority/);
+		expect(out.legend).toMatch(/NOT configuration/);
+	});
+
+	it("reports config for an UNREACHABLE subordinate too — authority is stored, not probed", async () => {
+		// Repo STATE needs a live runner; merge authority does not. An offline agent still has
+		// permissions, and "I could not tell you" would be a worse answer than the true one.
+		const env = buildEnv({
+			instances: [{ ...codingSubordinate[0], config: JSON.stringify({ settings: { merge_policy: "none" } }) }],
+			repos: [{ id: "r", instance_id: "sub", user_id: "u1", name: "p", github_repo: "org/p", merge_policy: "", clone_status: "ready", branch: "", workdir: "", default_client: "claude", created_at: "", updated_at: "" }],
+		});
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].connectivity.canWork).toBe(false);
+		expect(out.subordinates[0].config.mergeAuthority.policy).toBe("none");
+	});
+
+	it("says the configuration is NOT AVAILABLE rather than reporting it as unrestricted", async () => {
+		const env = buildEnv({ instances: [{ ...codingSubordinate[0], config: "{not json" }] });
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].config.available).toBe(false);
+		expect(out.subordinates[0].config.note).toMatch(/NOT AVAILABLE/);
 	});
 
 	it("says so plainly when there is nobody to observe", async () => {

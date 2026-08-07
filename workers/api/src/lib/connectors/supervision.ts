@@ -26,6 +26,8 @@ import { summarizeSubordinates } from "../subordinate-observation.js";
 import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
 import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
+import { CONFIG_LEGEND, objectiveConflict, resolveSubordinateConfig, type SubordinateConfig } from "../subordinate-config.js";
+import type { SettingsField } from "../agent-capabilities.js";
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 
 /**
@@ -55,6 +57,13 @@ export interface SubordinateRow {
 	columns: BoardColumn[];
 	/** `capabilities.runtime != null` — does its work need a machine running `pags up`? */
 	requiresRunner: boolean;
+	/** Raw `agent_instances.config` — the STANDING configuration (#339). Kept unparsed so
+	 *  `resolveSubordinateConfig` can tell "malformed, not available" from "empty". */
+	configRaw: string | null;
+	/** Raw `agents.config` for the template — the creator's behaviour defaults. */
+	agentConfigRaw: string | null;
+	/** The typed settings the agent declares, so a stored value can be reported with its LABEL. */
+	settingsSchema: SettingsField[];
 }
 
 /**
@@ -145,8 +154,40 @@ async function subordinateSummaries(ctx: SupervisionCtx): Promise<SubordinateRow
 			// Read from the capability registry rather than guessed from the slug — a declarative
 			// agent that needs no local hands must not be reported as "runner offline" (#259).
 			requiresRunner: caps.runtime != null,
+			configRaw: r.config,
+			agentConfigRaw: r.agent_config,
+			settingsSchema: caps.settingsSchema ?? [],
 		};
 	});
+}
+
+type RepoAuthorityRow = { name: string | null; githubRepo: string | null; mergePolicy: string | null };
+
+/**
+ * Every subordinate's repos, with the field that says what it may DO to each one (#339).
+ *
+ * A separate read from `repoStateForInstances` on purpose: that one probes a live runner and is
+ * therefore skipped for anything unreachable, but merge authority is a stored DECISION and is the
+ * answer to "is it allowed to merge" whether or not a machine is on. One indexed statement.
+ *
+ * Returns null on failure rather than an empty map, so the report can say the repos were not read
+ * instead of reporting an agent that has repositories as having none.
+ */
+async function repoAuthorityForInstances(ctx: SupervisionCtx, ids: readonly string[]): Promise<Map<string, RepoAuthorityRow[]> | null> {
+	if (!ids.length) return new Map();
+	const placeholders = ids.map((_, i) => `?${i + 2}`).join(",");
+	const res = await ctx.env.DB.prepare(
+		`SELECT instance_id, name, github_repo, merge_policy FROM coding_repos
+		  WHERE user_id = ?1 AND instance_id IN (${placeholders})`,
+	)
+		.bind(ctx.userId ?? "", ...ids)
+		.all<{ instance_id: string; name: string | null; github_repo: string | null; merge_policy: string | null }>();
+	const out = new Map<string, RepoAuthorityRow[]>();
+	for (const id of ids) out.set(id, []);
+	for (const r of res.results ?? []) {
+		out.get(r.instance_id)?.push({ name: r.name, githubRepo: r.github_repo, mergePolicy: r.merge_policy });
+	}
+	return out;
 }
 
 /**
@@ -223,6 +264,22 @@ async function observeSubordinates(
 		userId,
 		ids.filter((id) => connectivityById.get(id)?.canWork && connectivityById.get(id)?.requiresRunner),
 	).catch(() => new Map<string, RepoStateReport>());
+	// The STANDING configuration (#339) — merge authority, standing rules, behaviour, settings.
+	// Read for EVERY subordinate, connected or not: "may it merge to main" is a stored decision,
+	// not a live probe, and it is the question the Lead answered from a run objective instead.
+	const repoAuthority = await repoAuthorityForInstances(ctx, ids).catch(() => null);
+	const configById = new Map<string, SubordinateConfig>(
+		subs.map((sub) => [
+			sub.instanceId,
+			resolveSubordinateConfig({
+				config: sub.configRaw,
+				agentConfig: sub.agentConfigRaw,
+				settingsSchema: sub.settingsSchema,
+				// null, NOT [] — an unread table must not be reported as "it has no repositories".
+				repos: repoAuthority ? (repoAuthority.get(sub.instanceId) ?? []) : null,
+			}),
+		]),
+	);
 	// Grouped here rather than in `summarizeSubordinates` to keep that function pure over the two
 	// records it was built for; the shape is already per-instance so grouping is a one-liner.
 	const actsById = new Map<string, ActItem[]>();
@@ -237,6 +294,9 @@ async function observeSubordinates(
 		return {
 			...s,
 			connectivity: connectivityById.get(s.instanceId),
+			// Always present, including when it could not be read — `available: false` is an answer;
+			// an omitted key is an invitation to infer one.
+			config: configById.get(s.instanceId),
 			// Absent when unknown (no repo, no runner, an older runner) — never a fabricated
 			// "clean on main", which a supervisor would act on.
 			...(repo ? { repo } : {}),
@@ -265,7 +325,8 @@ async function observeSubordinates(
 					"`repo.githubRepo` is that repository's `owner/name` on GitHub and is the ONLY value to pass to a GitHub tool. `repo.name` is a display label chosen by the owner — it may look like a path and still not be one. When `githubRepo` is absent the repo is not linked to GitHub; say that rather than guessing an owner or asking the human to supply one. " +
 					"`acts` is what an agent actually DID — a pull request opened or merged, a push, a force-push, a delete, a deploy — with the literal command as evidence. Anything with `irreversible: true` changed something that cannot simply be undone, so REPORT IT to the human unprompted: an outcome of 'done' says only that the agent believes it finished, never what it changed on the way. " +
 					"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
-					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing.",
+					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing. " +
+					CONFIG_LEGEND,
 				...view,
 				subordinates: withConnectivity,
 			},
@@ -274,6 +335,24 @@ async function observeSubordinates(
 		),
 		success: true,
 	};
+}
+
+/**
+ * The standing configuration of ONE subordinate, or null when it is not one of ours.
+ *
+ * `check_delegation` needs it because that is the tool the Lead actually reached for when asked
+ * "what are the instructions to it" — and all it could see was the run's objective (#339).
+ */
+async function standingConfigFor(ctx: SupervisionCtx, instanceId: string): Promise<SubordinateConfig | null> {
+	const row = (await subordinateSummaries(ctx)).find((r) => r.instanceId === instanceId);
+	if (!row) return null;
+	const repos = await repoAuthorityForInstances(ctx, [instanceId]).catch(() => null);
+	return resolveSubordinateConfig({
+		config: row.configRaw,
+		agentConfig: row.agentConfigRaw,
+		settingsSchema: row.settingsSchema,
+		repos: repos ? (repos.get(instanceId) ?? []) : null,
+	});
 }
 
 /**
@@ -329,7 +408,12 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 				"says it met its objective, never what it changed to get there. " +
 				"Name the agent however you have it — \"FAS platform\" or its instance id both work, and the answer " +
 				"says which one it resolved to. `repo.githubRepo` is that agent's repository on GitHub, and the only " +
-				"value a GitHub tool will accept; `repo.name` is a display label, not a path.",
+				"value a GitHub tool will accept; `repo.name` is a display label, not a path. " +
+				"`config` is each agent's STANDING configuration — `config.mergeAuthority` says whether it may " +
+				"merge to a repository's trunk, open a pull request only, or neither; `config.specialInstructions` " +
+				"are the owner's standing rules; `config.behaviour` is how it talks; `config.settings` are its " +
+				"typed settings. Answer \"what are its instructions\" and \"what is it allowed to do\" from THESE — " +
+				"a run objective is a one-off ask and never a permission.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -400,7 +484,9 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		connector: "supervision",
 		scope: "read",
 		description:
-			"Check ONE delegated run by id: its status, how many steps it has taken, why it stopped, and `acts` — the consequential things it DID along the way (a pull request opened or MERGED, a push, a force-push, a delete, a deploy). Report anything marked `irreversible` to the human: \"completed\" describes the objective, never what the run changed. With no run id this falls through to the same picture subordinate_status gives — so for \"what is happening across my agents\", prefer subordinate_status directly.",
+			"Check ONE delegated run by id: its status, how many steps it has taken, why it stopped, and `acts` — the consequential things it DID along the way (a pull request opened or MERGED, a push, a force-push, a delete, a deploy). Report anything marked `irreversible` to the human: \"completed\" describes the objective, never what the run changed. " +
+			"`objective` is what this ONE run was asked to do; `config` is the agent's standing configuration — its merge authority, standing rules, behaviour and settings. Asked what an agent's instructions are, or whether it may merge to main, answer from `config` and say so by name; the objective cannot grant permission the configuration withholds, and `objectiveConflict` appears when it tries to. " +
+			"With no run id this falls through to the same picture subordinate_status gives — so for \"what is happening across my agents\", prefer subordinate_status directly.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -424,10 +510,20 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 					run.startedAt,
 					run.finishedAt ?? Date.now(),
 				).catch(() => [] as ActItem[]);
+				// #339: the objective is a ONE-OFF ask, and this tool used to return it alone. Asked what
+				// an agent's instructions were, the Lead read the objective, called it the configuration,
+				// and reassured its owner that the agent worked "through PRs, not direct commits" — while
+				// the standing `merge_policy` said it could merge to main, which the same run then did.
+				const config = await standingConfigFor(ctx, run.instanceId).catch(() => null);
+				const conflict = config ? objectiveConflict(config.mergeAuthority.policy, run.objective) : null;
 				return {
 					content: JSON.stringify(
 						{
 							...run,
+							...(config ? { config, configLegend: CONFIG_LEGEND } : {}),
+							// Present ONLY when the objective asks for something the policy forbids — the
+							// case where repeating the objective back would be actively misleading.
+							...(conflict ? { objectiveConflict: conflict } : {}),
 							// Present only when something was observed — an empty array would read as
 							// "this run changed nothing", which no engine can currently attest to.
 							...(acts.length ? { acts: acts.map(({ instanceId: _i, ...rest }) => rest) } : {}),

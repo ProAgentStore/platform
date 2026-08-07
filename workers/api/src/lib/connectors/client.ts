@@ -8,7 +8,7 @@
 // grantModel} once instead of hand-rolling token logic in each tool.
 import { HttpError } from "../auth.js";
 import type { Env } from "../../types.js";
-import { installationTokenForOwner } from "../github-app.js";
+import { resolveGithubAccess } from "../github-app.js";
 import { readConnectorRefreshToken } from "../connector-oauth.js";
 import { requireConnectorGrant, type ConnectorGrant } from "../connector-grants.js";
 import { safeFetch } from "../ssrf.js";
@@ -108,9 +108,18 @@ export function connectorClient(env: Env, provider: string, caller: ConnectorCli
 			case "app": {
 				// GitHub-App installation token, scoped to the resource owner.
 				const owner = ownerOf(opts?.resourceId ?? "");
-				const t = await installationTokenForOwner(env, caller.userId ?? "", owner).catch(() => null);
-				if (!t) throw new HttpError(403, `No ${connector.id} access for "${owner}".`);
-				return t;
+				// The failure now carries WHICH of the five conditions stopped it (#321). It used to be
+				// ONE sentence — `No github access for "X"` — naming authorization for an owner that had
+				// never been resolved, which the connector then wrapped in "this is usually transient".
+				// The STATUS encodes the only distinction a caller must not get wrong: 502 is the single
+				// retryable state; every other one is permanent until a human does something.
+				const access = await resolveGithubAccess(env, caller.userId ?? "", owner, { diagnose: true }).catch(
+					() =>
+						({ ok: false, state: "transient", retryable: true, message: `GitHub could not be reached for "${owner}" just now.`, remedy: null }) as const,
+				);
+				if (access.ok) return access.token;
+				const status = access.retryable ? 502 : access.state === "owner-unknown" ? 400 : access.state === "app-not-configured" ? 503 : 403;
+				throw new HttpError(status, access.remedy ? `${access.message} ${access.remedy}` : access.message);
 			}
 			case "oauth": {
 				const refresh = await readConnectorRefreshToken(env, caller.userId ?? "", connector.id, connector.label);

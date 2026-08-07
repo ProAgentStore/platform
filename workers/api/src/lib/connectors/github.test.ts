@@ -100,6 +100,8 @@ describe("github connector — repo-format validation (before any fetch)", () =>
 			const r = await tool("github_workflow_runs").handler(ctx(), { repo: bad });
 			expect(r.success).toBe(false);
 			expect(r.content).toMatch(/invalid repo/i);
+			// Never a network call, and never an authorization claim about a string that is not an owner.
+			expect(r.content).not.toMatch(/authoriz/i);
 		}
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
@@ -114,18 +116,22 @@ describe("github connector — resolveRepo error messages", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it('returns "no access" when the connector client cannot mint a token', async () => {
+	it("reports an unclassified empty mint honestly, blaming nothing (#321)", async () => {
+		// This branch used to read `No GitHub access for "acme". Install/authorize the App` — an
+		// AUTHORIZATION diagnosis emitted whenever the minter simply returned nothing. The minter
+		// now classifies every failure itself and throws, so reaching here means we genuinely do
+		// not know why, and the honest answer is to say so rather than name a cause.
 		const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: tokenClient(null) }), { repo: "acme/widgets" });
 		expect(r.success).toBe(false);
-		expect(r.content).toMatch(/No GitHub access for "acme"/);
-		expect(r.content).toMatch(/GitHub App/);
+		expect(r.content).toMatch(/no reason was reported/i);
+		expect(r.content).not.toMatch(/authoriz|install/i);
+		expect(r.content).not.toMatch(/try again/i);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("reports a THROWN token mint as transient, not as a missing installation", async () => {
-		// These are different problems with different fixes. Reporting a network blip as
-		// "install the GitHub App" sent an owner to fix something that was already correct —
-		// the same call failed and then succeeded two minutes later with no config change.
+	it("reports an UNCLASSIFIED throw as transient — a network blip is not a missing installation", async () => {
+		// The same call failed at 11:17 and succeeded at 11:19 with no config change; telling the
+		// owner to install an App that was already installed cost real time on a non-problem.
 		const throwing = (_p: string) => ({ token: () => Promise.reject(new Error("boom")) }) as never;
 		const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: throwing }), { repo: "acme/widgets" });
 		expect(r.success).toBe(false);
@@ -135,13 +141,36 @@ describe("github connector — resolveRepo error messages", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("still says NO ACCESS when the mint returns nothing (genuinely not installed)", async () => {
-		// The un-thrown, empty case is the real "not authorized" signal and must keep its
-		// actionable message.
-		const empty = (_p: string) => ({ token: () => Promise.resolve(null) }) as never;
-		const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: empty }), { repo: "acme/widgets" });
+	it("relays a PERMANENT failure verbatim and never appends \"try again\" (#321)", async () => {
+		// The observed bug, exactly: `Couldn't reach GitHub for "fws" (No github access for
+		// "fws".). This is usually transient — try again.` Retrying an owner that is not a GitHub
+		// account fails identically, forever; the hint recommended the loop it should prevent.
+		for (const status of [400, 403, 503]) {
+			const denied = (_p: string) =>
+				({ token: () => Promise.reject(Object.assign(new Error('"fws" is not a GitHub account or organisation.'), { status })) }) as never;
+			const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: denied }), { repo: "fws/platform" });
+			expect(r.success).toBe(false);
+			expect(r.content).toMatch(/is not a GitHub account or organisation/);
+			expect(r.content).not.toMatch(/transient|try again/i);
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps \"try again\" for the one state that earns it (502)", async () => {
+		const blip = (_p: string) =>
+			({ token: () => Promise.reject(Object.assign(new Error("GitHub could not be reached just now."), { status: 502 })) }) as never;
+		const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: blip }), { repo: "acme/widgets" });
+		expect(r.content).toMatch(/try again/i);
+	});
+
+	it("a one-part repo points at the field that IS a path, rather than at authorization", async () => {
+		// "fws" reached the minter as an owner in the first place because the Lead had only a
+		// display label. Naming `repo.githubRepo` here is the difference between a fixable
+		// mistake and a re-authorization the owner did not need.
+		const r = await tool("github_workflow_runs").handler(ctx(), { repo: "fws" });
 		expect(r.success).toBe(false);
-		expect(r.content).toMatch(/No GitHub access/);
+		expect(r.content).toMatch(/githubRepo/);
+		expect(r.content).not.toMatch(/authoriz/i);
 	});
 });
 

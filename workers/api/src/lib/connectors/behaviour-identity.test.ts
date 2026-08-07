@@ -1,17 +1,20 @@
 // Proves the #86 refactor is BEHAVIOUR-IDENTICAL: the github + meta tools now obtain
 // auth via ctx.connectorClient(...) instead of importing token fns directly, but the
-// SAME token source is used (installationTokenForOwner for github, META_ACCESS_TOKEN for
+// SAME token source is used (the GitHub-App installation token for github, META_ACCESS_TOKEN for
 // meta), the SAME requests are made, and the SAME outputs come back.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../../types.js";
 
 vi.mock("../github-app.js", () => ({
 	githubAppConfigured: () => true,
-	installationTokenForOwner: vi.fn(),
+	// #321: the minter now returns a CLASSIFIED result rather than a token-or-null, so that a
+	// permanent failure stops being reported as a transient one. Same token source, same call
+	// signature, same scoping — which is exactly what this file exists to keep proving.
+	resolveGithubAccess: vi.fn(),
 }));
 
 import { runRegistryTool } from "../tool-registry.js";
-import { installationTokenForOwner } from "../github-app.js";
+import { resolveGithubAccess } from "../github-app.js";
 
 /** Env whose consent lookup returns write-consent for every (instance,connector). */
 function envWithConsent(extra: Partial<Env> = {}): Env {
@@ -25,7 +28,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("github tools stay behaviour-identical through connectorClient", () => {
 	it("github_workflow_runs mints the owner's installation token and returns the same shape", async () => {
-		vi.mocked(installationTokenForOwner).mockResolvedValue("gh-installation-token");
+		vi.mocked(resolveGithubAccess).mockResolvedValue({ ok: true, token: "gh-installation-token" });
 		const capturedAuth: string[] = [];
 		vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
 			capturedAuth.push(new Headers(init?.headers).get("Authorization") ?? "");
@@ -38,15 +41,15 @@ describe("github tools stay behaviour-identical through connectorClient", () => 
 			{ repo: "acme/widgets" },
 		);
 		expect(r.success).toBe(true);
-		// Token minted for the repo owner — same as the old inline installationTokenForOwner(env, userId, owner).
-		expect(installationTokenForOwner).toHaveBeenCalledWith(expect.anything(), "u1", "acme");
+		// Token minted for the repo owner — same scoping as the old inline call.
+		expect(resolveGithubAccess).toHaveBeenCalledWith(expect.anything(), "u1", "acme", { diagnose: true });
 		// The GitHub REST calls use the classic `token <t>` header the tool already built.
 		expect(capturedAuth[0]).toBe("token gh-installation-token");
 		expect(JSON.parse(r.content)[0]).toMatchObject({ status: "completed", conclusion: "success", branch: "main" });
 	});
 
 	it("github_create_issue (write) still resolves the owner's token after the consent gate", async () => {
-		vi.mocked(installationTokenForOwner).mockResolvedValue("gh-tok");
+		vi.mocked(resolveGithubAccess).mockResolvedValue({ ok: true, token: "gh-tok" });
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ number: 7, html_url: "https://github.com/acme/widgets/issues/7" }), { status: 201 }),
 		);
@@ -57,7 +60,7 @@ describe("github tools stay behaviour-identical through connectorClient", () => 
 		);
 		expect(r.success).toBe(true);
 		expect(r.content).toContain("Opened issue #7");
-		expect(installationTokenForOwner).toHaveBeenCalledWith(expect.anything(), "u1", "acme");
+		expect(resolveGithubAccess).toHaveBeenCalledWith(expect.anything(), "u1", "acme", { diagnose: true });
 	});
 });
 
