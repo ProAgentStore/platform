@@ -30,7 +30,7 @@ An agent gets a connector's tools only when it declares them in `capabilities.to
 | `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 | `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
-| `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation` |
+| `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write) |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 
@@ -196,6 +196,30 @@ refused → `list_subordinates` → `subordinate_status(uuid)`), and that refusa
 refusal is now `success: false`. Each subordinate's `repo` block also carries `githubRepo` — the
 repository's `owner/name` on GitHub, the only value a GitHub tool accepts; `repo.name` is a display
 label that may look like a path and not be one.
+
+**The Lead owns direction, each subordinate owns tasks** (#330). A supervisor could say what its
+agents had *done* — `subordinate_status` reports every subordinate's board cards, runs, repo state
+and consequential acts — but not what any of them was *for*. Asked "what should FWS be working on?"
+it answered from recent runs, which is history rather than intent, and direction that lived only in
+the conversation died with the thread. A **direction** (an epic) is now a field on the supervision
+edge, `agent_supervision.config.direction`: no new table, and `idx_supervision_subordinate` being
+UNIQUE makes "one direction per agent" the primary key rather than application logic. It reaches
+the model three ways — on `list_subordinates`, on `subordinate_status`, and as a derived
+`## Your Agents` prompt block read fresh from the record every turn.
+
+Attribution needs no column either: the epic is keyed `(supervisor, subordinate)`, and
+`agent_loop_runs` already carries `delegated_by` + `instance_id` on one index, so "runs against the
+FWS direction" is a query over what is already written.
+
+**The agent proposes; the owner sets.** A direction is durable and lands on every later prompt, so
+an agent able to write its own would convert one prompt injection — in a repo file, an issue body,
+a remote MCP resource — into a *standing* instruction. `PUT /v1/instances/:id/supervision/:sid/direction`
+is the only path that writes `setBy: "user"`, and that value is immutable to the agent; the
+`set_direction` tool records `setBy: "agent"`, which comes back under a **different key**
+(`proposedDirection`) whose legend says it carries no authority. The console shows a proposal as one
+and turns its Save button into *Confirm* — confirming is the owner re-sending the text through the
+owner's route. Same mechanism as memory's `(user-set)` marker. Clearing the field is how an epic
+closes: nothing auto-closes it, because a subordinate that finished a task cannot attest to an epic.
 
 **The browser connector is experimental** and additionally gated behind the API worker's
 `BROWSER_TOOLS_ENABLED` env flag (fail-closed when unset) — first-party / self-use only until the
