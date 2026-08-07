@@ -307,10 +307,24 @@ export default function RunDetail() {
 	// Which attempt of the job this run is (JSW-style: each retry is a separate,
 	// numbered run with its own activity log). Resolved from the board's grouping.
 	const [attempt, setAttempt] = useState<{ num: number; total: number } | null>(null);
+	// A handoff notification outlives the handoff (#349): the tap can come hours later, after the
+	// run finished — or after it was deleted. A finished run needs nothing special (it loads, and
+	// `needsHuman` is simply false, so the takeover prompt is absent). A run that is GONE used to
+	// leave every fetch failing silently and render an empty shell titled "Run detail" with "No
+	// activity yet", which reads like a broken page rather than an answered one. Say so, and offer
+	// the Board — the same "degrade to a real page" #344 chose for a session id that no longer
+	// resolves. Only a 404 counts; a network blip must keep whatever is on screen.
+	const [gone, setGone] = useState(false);
 	const urlsRef = useRef<Record<number, string>>({});
 
 	const load = useCallback(async () => {
-		try { setTask(await api<RuntimeTask>(`/v1/instances/${instanceId}/tasks/${taskId}`)); } catch { /* keep */ }
+		try {
+			setTask(await api<RuntimeTask>(`/v1/instances/${instanceId}/tasks/${taskId}`));
+			setGone(false);
+		} catch (e) {
+			// "Task not found" / "Instance not found" from the API, or the client's own `HTTP 404`.
+			if (/not found|\b404\b/i.test(e instanceof Error ? e.message : String(e))) setGone(true);
+		}
 		try {
 			const d = await api<{ events: RuntimeEvent[] }>(`/v1/instances/${instanceId}/task-events?limit=500`);
 			const mine = (d.events || []).filter((e) => String(e.taskId ?? (e.data as Record<string, unknown>)?.taskId ?? "") === taskId);
@@ -407,6 +421,21 @@ export default function RunDetail() {
 	const cur = shots[idx];
 	const status = task?.status ?? "";
 	const url = String(task?.input?.url ?? "");
+
+	if (gone && !task) {
+		return (
+			<Page width={1100}>
+				<button type="button" onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent mb-4">
+					<ArrowLeft size={15} /> Back
+				</button>
+				<div className="bg-panel border border-line rounded-xl p-6 text-center">
+					<h1 className="text-lg font-bold mb-1">This run is no longer here</h1>
+					<p className="text-sm text-muted mb-4">It was deleted, or it belongs to an agent you no longer have. Anything the notification was asking for has been resolved or removed.</p>
+					<button type="button" onClick={() => navigate(`/instances/${instanceId}/board`)} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm">Open the Board</button>
+				</div>
+			</Page>
+		);
+	}
 
 	return (
 		<Page width={1100}>

@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { blockedActionReason, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
 import { callRunner, getBoundRunnerConn } from "../lib/runner-client.js";
-import { instanceBoardLink } from "../lib/console-links.js";
+import { instanceRunLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
@@ -124,7 +124,9 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
 
 			await step.do(`notify-${round}`, async () => {
-				const link = instanceBoardLink(instanceId);
+				// The run, not the Board (#349) — same reasoning as the apply workflow: the controls
+				// that resolve a handoff (take over / resume / supply the value) live on the run.
+				const link = instanceRunLink(instanceId, taskId);
 				const { title, body } =
 					reason === "needs_input"
 						? { title: "🙋 Your agent needs an answer", body: `${label} — open to provide it and it continues.` }

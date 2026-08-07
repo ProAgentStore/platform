@@ -45,6 +45,26 @@ export function instanceBoardLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/board`;
 }
 
+/**
+ * One run — `RunDetail`, the page that holds the takeover overlay and the needs-input box (#349).
+ *
+ * The handoff notifications used to point at the Board. That resolves, so it was never #344's
+ * class of broken link — it was one step short: the Board shows a card saying the run is waiting
+ * on you, and every control that ANSWERS the wait (live remote control, "Resume — I've done it",
+ * the input field for a value the agent refuses to invent) is on the run itself. A notification
+ * that asks for help should land on the control that provides it, which is the same reasoning
+ * that chose the coding session over the repo list.
+ *
+ * Satisfies the #338 rule: the `instance_runtime_tasks` row is written when the task is created,
+ * before the workflow can block on anything, and it outlives the run — so the link works before
+ * the handoff, while it waits, and after it has resolved. A task that has since been deleted
+ * degrades to the run page's own "no longer exists" state with a way back to the Board, rather
+ * than erroring.
+ */
+export function instanceRunLink(instanceId: string, taskId: string): string {
+	return `${instanceLink(instanceId)}/tasks/${encodeURIComponent(taskId)}`;
+}
+
 /** The instance's Knowledge surface: documents, memory, files, credentials, rules. */
 export function instanceKnowledgeLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/knowledge`;
