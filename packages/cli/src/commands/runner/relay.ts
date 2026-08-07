@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 import { loadSession } from "../login.js";
+import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION } from "./process.js";
@@ -25,6 +26,10 @@ export async function connectViaRelay(
 	const pagsToken = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
 	if (!pagsToken) throw new Error("PAGS token required for WebSocket relay");
 	const runnerNode = hostname();
+	// The hostname stays the routing key — it names the relay DO — but it is NOT this machine's
+	// identity: it moves with the network. The persisted id is what lets the server recognise a
+	// renamed machine as the same one, so a pin made under an old name keeps working (#379).
+	const machine = loadMachineIdentity(runnerNode);
 
 	// Register the runtime (needed for the status badge / getRunnerConn)
 	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
@@ -38,6 +43,8 @@ export async function connectViaRelay(
 				capabilities: caps,
 				runnerVersion: CLI_VERSION,
 				runnerNode,
+				machineId: machine.id,
+				machineNames: machine.names,
 				force,
 			});
 		} catch (e) {
@@ -146,6 +153,10 @@ export async function connectViaRelay(
 						res.instances ?? [],
 						runnerNode,
 						blocked,
+						// The names this machine has also worn. Without them a pin made under a
+						// previous hostname reads as "pinned to another machine", and this poll
+						// detaches the agent twenty seconds after startup attached it (#379).
+						machine.names,
 					);
 					for (const inst of toAttach) {
 						await registerRuntime(inst.id);

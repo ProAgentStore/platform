@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 import { loadSession } from "../login.js";
+import { loadMachineIdentity } from "../../machine.js";
 import type {
 	PagsRequestOptions,
 	RunnerRequestOptions,
@@ -44,13 +45,19 @@ export function apiPathSegment(value: string): string {
 }
 
 export function buildRuntimeRegistrationBody(opts: RuntimeRegisterOptions, capabilities: string[] = []) {
+	const node = hostname();
+	// The hostname routes (it names the relay DO); the persisted id IDENTIFIES (#379). Both are
+	// sent because the hostname moves under the machine and the pin is made from it.
+	const machine = loadMachineIdentity(node);
 	return {
 		endpointUrl: clean(opts.endpointUrl) || opts.endpointUrl,
 		token: clean(opts.runnerToken) || clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN),
 		placement: opts.placement === "managed" ? "managed" : "local",
 		capabilities,
 		runnerVersion: clean(opts.runnerVersion) || "",
-		runnerNode: hostname(),
+		runnerNode: node,
+		machineId: machine.id,
+		machineNames: machine.names,
 	};
 }
 

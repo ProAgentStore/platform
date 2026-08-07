@@ -28,6 +28,9 @@ export interface RuntimeRow {
 	capabilities: string;
 	runner_version: string;
 	runner_node: string;
+	/** Stable machine identity (#379). Only on `instance_runtime_nodes`, and null until the
+	 *  machine has registered with a CLI that mints one. */
+	machine_id?: string | null;
 	status: string;
 	last_seen_at: string | null;
 	created_at: string;
@@ -41,6 +44,12 @@ export interface RuntimeRegistrationBody {
 	capabilities?: unknown[];
 	runnerVersion?: string;
 	runnerNode?: string;
+	/** Stable per-machine id, minted once by the CLI and persisted beside its session (#379).
+	 *  Absent from every older CLI, which is why nothing may depend on it being present. */
+	machineId?: string;
+	/** Hostnames THIS machine has answered to while running the CLI — the backfill that
+	 *  reconnects a pin already stranded on a name the machine has stopped using. */
+	machineNames?: unknown;
 }
 
 export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
@@ -67,9 +76,9 @@ export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
 export const UPSERT_INSTANCE_RUNTIME_NODE_SQL = `INSERT INTO instance_runtime_nodes (
        instance_id, user_id, runner_node, placement, endpoint_url,
        token_ciphertext, token_dek_wrapped, token_iv, token_plaintext,
-       capabilities, runner_version, status, last_seen_at, created_at, updated_at
+       capabilities, runner_version, machine_id, status, last_seen_at, created_at, updated_at
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'registered', datetime('now'), datetime('now'), datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'registered', datetime('now'), datetime('now'), datetime('now'))
      ON CONFLICT(instance_id, runner_node) DO UPDATE SET
        user_id = excluded.user_id,
        placement = excluded.placement,
@@ -80,6 +89,10 @@ export const UPSERT_INSTANCE_RUNTIME_NODE_SQL = `INSERT INTO instance_runtime_no
        token_plaintext = excluded.token_plaintext,
        capabilities = excluded.capabilities,
        runner_version = excluded.runner_version,
+       -- COALESCE, not excluded (#379): an OLDER CLI sends no machine id, and it must not erase
+       -- the identity a newer one recorded for the same machine. Losing it would silently strand
+       -- every pin that resolves through this row the next time the hostname moved.
+       machine_id = COALESCE(excluded.machine_id, instance_runtime_nodes.machine_id),
        status = 'registered',
        last_seen_at = datetime('now'),
        updated_at = datetime('now')`;
@@ -622,6 +635,37 @@ export function normalizeRunnerTaskBody(value: unknown): RunnerTaskBody {
 				? `Approve task ${type}`
 				: undefined,
 	};
+}
+
+/**
+ * Stamp this machine's id onto the rows left behind by the hostnames it used to wear (#379).
+ *
+ * Without this, the identity column only ever helps machines that have not renamed themselves YET
+ * — every pin already stranded on a dead name would stay stranded forever, because that dead
+ * name's row has no id and never will (the machine no longer registers under it). The claim is
+ * what migrates the existing rows into the new identity.
+ *
+ * Three things keep it safe, and all three matter:
+ *   - the names come from the machine's OWN record of hostnames it has actually run under, so it
+ *     can never claim a name it has not been;
+ *   - `machine_id IS NULL` — a row another machine has already claimed is never taken over;
+ *   - `user_id` scoping — one account's machines only, like every other tenant-scoped read here.
+ */
+export async function claimMachineNames(
+	env: Env,
+	userId: string,
+	machineId: string,
+	names: readonly string[],
+): Promise<number> {
+	if (!machineId || !names.length) return 0;
+	const placeholders = names.map((_, i) => `?${i + 3}`).join(",");
+	const res = await env.DB.prepare(
+		`UPDATE instance_runtime_nodes SET machine_id = ?1
+     WHERE user_id = ?2 AND (machine_id IS NULL OR machine_id = '') AND runner_node IN (${placeholders})`,
+	)
+		.bind(machineId, userId, ...names)
+		.run();
+	return res.meta?.changes ?? 0;
 }
 
 export async function requireOwnedInstance(

@@ -176,6 +176,8 @@ describe("getBoundRunnerConn (live-aware routing)", () => {
 		defaultNode?: string | null;                    // instance_runtimes.runner_node
 		nodes?: string[];                               // instance_runtime_nodes rows
 		liveNames?: string[];                           // relay names reporting connected
+		/** node -> machine_id (#379). Absent = the column is NULL, which is every legacy row. */
+		machines?: Record<string, string>;
 	}): Env {
 		const live = new Set(opts.liveNames ?? []);
 		const DB = {
@@ -200,6 +202,10 @@ describe("getBoundRunnerConn (live-aware routing)", () => {
 							},
 							async all() {
 								if (sql.includes("SELECT DISTINCT runner_node")) return { results: (opts.nodes ?? []).map((n) => ({ runner_node: n })) };
+								// The machine-identity read (#379) — every node the USER has, with its id.
+								if (sql.includes("machine_id AS machineId")) {
+									return { results: (opts.nodes ?? []).map((n) => ({ node: n, machineId: opts.machines?.[n] ?? null, instanceId: INST, lastSeenAt: null })) };
+								}
 								return { results: [] };
 							},
 							async run() { return { meta: { changes: 0 } }; },
@@ -242,6 +248,40 @@ describe("getBoundRunnerConn (live-aware routing)", () => {
 
 	it("pinned + offline: returns null (no silent fallback to another machine)", async () => {
 		// Pinned to A (offline), B is live. Strict pin must NOT run on B — the agent is offline.
+		const env = buildEnv({ pin: "A", nodes: ["A", "B"], liveNames: [relayNameForInstance(INST, "B")] });
+		expect(await getBoundRunnerConn(env, INST, "u1")).toBeNull();
+	});
+
+	// #379. `os.hostname()` moves under the machine (DHCP, VPN, the `.local` mDNS form), so a pin
+	// outlives the name it was made with. Before this, every runner call on such an instance
+	// answered "run `pags up`" while `pags up` was running on that very machine with a live
+	// socket. A shared `machine_id` makes "same machine" a recorded fact, so routing through the
+	// new name honours the pin rather than falling back from it.
+	it("pinned to a name the machine has stopped using: routes to the same machine's new name", async () => {
+		const env = buildEnv({
+			pin: "RLs-MacBook-Air.local",
+			nodes: ["RLs-MacBook-Air.local", "Mac"],
+			machines: { "RLs-MacBook-Air.local": "machine-aaaa1111", Mac: "machine-aaaa1111" },
+			liveNames: [relayNameForInstance(INST, "Mac")],
+		});
+		const conn = await getBoundRunnerConn(env, INST, "u1");
+		expect(conn?.endpointUrl).toBe("http://Mac");
+		expect(conn?.runnerNode).toBe("Mac");
+	});
+
+	it("pinned + a DIFFERENT machine live: still null, even though both are registered", async () => {
+		// The no-fallback contract, restated against the new code path: a distinct machine id is a
+		// distinct laptop, and routing there would run the agent in a checkout the user did not pick.
+		const env = buildEnv({
+			pin: "laptop",
+			nodes: ["laptop", "desktop"],
+			machines: { laptop: "machine-aaaa1111", desktop: "machine-bbbb2222" },
+			liveNames: [relayNameForInstance(INST, "desktop")],
+		});
+		expect(await getBoundRunnerConn(env, INST, "u1")).toBeNull();
+	});
+
+	it("pinned + offline with NO machine ids recorded: unchanged — an unprovable rename never heals", async () => {
 		const env = buildEnv({ pin: "A", nodes: ["A", "B"], liveNames: [relayNameForInstance(INST, "B")] });
 		expect(await getBoundRunnerConn(env, INST, "u1")).toBeNull();
 	});

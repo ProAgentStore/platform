@@ -19,7 +19,7 @@ export interface RunnerPanelProps {
 }
 
 /** `GET /v1/instances/:id/runner-node`. */
-type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: NodeDetail[] };
+type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: NodeDetail[]; resolvedNode?: string | null };
 
 const CARD = "bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4";
 
@@ -29,6 +29,10 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 	// Node binding: which machine this instance runs on ("" = automatic).
 	const [runnerNode, setRunnerNode] = useState("");
 	const [nodesDetail, setNodesDetail] = useState<NodeDetail[]>([]);
+	// Where the pin actually resolves: a hostname moves under a machine, so a pin can name a
+	// machine correctly and a hostname wrongly at the same time (#379). Server-computed — only it
+	// holds the machine id that proves two names are one machine.
+	const [resolvedNode, setResolvedNode] = useState<string | null>(null);
 	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
 	const [refreshing, setRefreshing] = useState(false);
 	const [machines, setMachines] = useState<Machine[]>([]);
@@ -52,6 +56,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 			if (rn) {
 				setRunnerNode(rn.runnerNode || "");
 				setNodesDetail(rn.nodesDetail || []);
+				setResolvedNode(rn.resolvedNode || null);
 			}
 			if (tn) setMachines(tn.nodes || []);
 		} finally {
@@ -101,7 +106,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 	}
 
 	const reading = runnerReading(runtimeInfo, nodesDetail, runnerNode);
-	const warning = pinnedWarning(runnerNode, nodesDetail);
+	const warning = pinnedWarning(runnerNode, nodesDetail, resolvedNode);
 	const tiles = machinesToShow(machines, runnerNode, instanceId, nodesDetail);
 	// Why it isn't attached, computed server-side (#237). The panel used to show only an amber
 	// "agent not attached", which is a symptom with no cause and no remedy — the CLI knew both and
@@ -175,6 +180,17 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 							);
 						})}
 					</div>
+				)}
+				{/* The pin names a hostname this machine has stopped using, and the SAME machine is
+				    here under another one — so it is already serving this agent. Say it out loud
+				    rather than repointing silently: only the USER can decide that a pin should now
+				    read differently, and a silent rewrite is indistinguishable from the platform
+				    moving their agent to a machine they did not choose (#379). */}
+				{warning === "renamed" && (
+					<p className="text-xs text-muted mt-2">
+						Pinned to <b>{runnerNode}</b>, which this machine no longer calls itself — it now reports as <b>{resolvedNode}</b>, and this agent is running there.{" "}
+						<button type="button" onClick={() => resolvedNode && save(resolvedNode)} className="underline text-accent font-semibold">Repin to {resolvedNode}</button>
+					</p>
 				)}
 				{/* Pinned machine not serving THIS agent → guidance (machine-online vs fully-offline). */}
 				{warning === "not_attached" && (

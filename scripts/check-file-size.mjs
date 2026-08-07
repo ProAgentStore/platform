@@ -94,7 +94,17 @@ const PINS = {
 	// and GET/PUT/DELETE now build it through one `voiceSettingsBody` instead of three literals —
 	// which is a net reduction in the ways those three can disagree. The derivation itself is a
 	// separate module (lib/voice-vocabulary.ts) with its own tests; what is here is the wiring.
-	"workers/api/src/routes/instances.ts": 886,
+	// +47 for #379/#380, and most of it says WHY rather than doing anything. `/runtime/status` had
+	// resolved the pin correctly and then overridden itself: the fallback row's node was fed to
+	// `relayConnected` and to `diagnoseAttachment`, so the endpoint answered "Connected." about a
+	// machine the pin excludes while every tool call on the same instance answered "no runner". It
+	// now derives liveness from the pin-aware resolution alone and, when that fails, names the dead
+	// pin AND the machine that is up. `/runner-node` gained the same vocabulary: the picker folds
+	// one machine's several hostnames into one tile and reports where a stale pin resolves. Raised
+	// rather than split — three of the four blocks are one expression plus its paragraph, and every
+	// decision behind them is pure and lives elsewhere with tests (lib/machine-identity.ts,
+	// lib/runtime-attachment.ts, lib/runner-client.ts), which is where a split would have put them.
+	"workers/api/src/routes/instances.ts": 933,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -329,7 +339,16 @@ const PINS = {
 	// declares a supervision tool pays for the read) and one `systemPrompt +=` — and the gate has to
 	// be here, next to the capabilities it reads.
 	"workers/api/src/agent-think.ts": 871,
-	"workers/api/src/routes/instances-runtime.ts": 849,
+	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
+	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
+	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
+	// one), and `claimMachineNames` adopts the rows left behind under a dead name — the one thing
+	// that migrates a pin already stranded before any of this existed. Raised rather than split
+	// because all of it belongs to this module's subject (the runtime tables and the statements
+	// that write them); the DECISIONS — what a machine id is, which names are one machine, and
+	// what may therefore be claimed — are pure and live in lib/machine-identity.ts with their
+	// tests, which is where a split would have put them anyway.
+	"workers/api/src/routes/instances-runtime.ts": 893,
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.

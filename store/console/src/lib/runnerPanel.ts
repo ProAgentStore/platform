@@ -121,14 +121,26 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string):
 /**
  * Why the pinned machine is not serving this agent — or null when nothing is wrong.
  *
+ *   renamed      — the pin names a hostname the machine has stopped using, and the SAME machine
+ *                  is here under a new one, so routing already resolves through it (#379). Nothing
+ *                  is broken; saying "offline" here would be a warning about a state the user is
+ *                  not in, over an agent that is working.
  *   not_attached — the machine is up for other agents but never opened this agent's socket.
  *                  `pags up` is the WRONG advice here, which is exactly the confusing case.
  *   offline      — nothing is running there at all.
+ *
+ * `resolvedNode` comes from `/runner-node`, which is the only side that can prove two names are
+ * one machine — it holds the persisted machine id. The card must not try to infer it from names.
  */
-export function pinnedWarning(runnerNode: string, detail: readonly NodeDetail[]): "not_attached" | "offline" | null {
+export function pinnedWarning(
+	runnerNode: string,
+	detail: readonly NodeDetail[],
+	resolvedNode?: string | null,
+): "renamed" | "not_attached" | "offline" | null {
 	if (!runnerNode) return null;
 	const d = detail.find((x) => x.node === runnerNode);
 	if (!d || d.connected) return null;
+	if (resolvedNode && resolvedNode !== runnerNode) return "renamed";
 	return d.nodeOnline === true ? "not_attached" : "offline";
 }
 

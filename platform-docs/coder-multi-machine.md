@@ -42,6 +42,18 @@ The picker is backed by `GET /v1/instances/:id/runner-node`, which returns the c
 
 `PUT /v1/instances/:id/runner-node` with `{"runnerNode": "my-laptop"}` pins; `{"runnerNode": null}` clears the pin. The pin is stored as `config.runnerNode` on the instance and written as a single-key patch, so saving it cannot clobber a settings or behaviour change made from another tab.
 
+## A Machine Is Not Its Hostname
+
+`runner_node` is the machine's hostname, and a hostname is not stable — on macOS it follows the network-supplied name and flips between the `.local` mDNS form and whatever DHCP hands out. One laptop therefore used to appear as several machines in the picker, and an agent pinned to a name it had stopped using reported offline while `pags up` was running on it.
+
+The hostname keeps its job — it is the routing key and it names the relay Durable Object — and a **stable machine id** now rides alongside it. The CLI mints one on first use and keeps it in `~/.config/proagentstore/machine.json` next to your session, together with the hostnames this machine has answered to.
+
+- **The picker shows machines, not names.** Hostnames proven to belong to one machine collapse into a single tile under the freshest name.
+- **A pin made under an old name keeps working.** When the pinned hostname is dead, routing looks for a node carrying the same machine id and uses that. This is not a fallback to another machine: sameness is a recorded fact, not a guess. `GET /v1/instances/:id/runner-node` reports it as `resolvedNode`, and the console says so and offers a one-click repin rather than repointing your agent silently.
+- **Unknown identity fails closed.** Registrations from before this landed — and from any CLI that does not send an id — carry none, so nothing is merged and nothing heals. Those pins behave exactly as they always have, and the console names the dead pin and the machine that *is* up instead of prescribing `pags up` to someone already running it.
+
+Rows written under an old hostname are adopted the next time that machine registers while remembering that name, which is how a pin stranded by a rename reconnects without you renaming anything.
+
 ## Routing Follows The Live Socket
 
 Placement resolution is deliberately conservative in one direction and forgiving in the other.
@@ -61,8 +73,11 @@ When an agent has no live socket, the runtime status reports a diagnosis and the
 | `never-registered` | No runner has ever registered for this agent. | `pags up` |
 | `runner-offline` | It registered, but the machine stopped heartbeating (older than ~90s — three missed beats). | `pags up` |
 | `machine-online-agent-detached` | The machine is demonstrably alive and heartbeating, but this agent holds no socket — usually another runner on the same hostname already claimed it and this one was rejected. | `pags up --force` |
+| `pinned-machine-offline` | This agent is pinned to a machine that is not connected, while a *different* machine of yours is. | No command — change **Runs on**, or start the runner on the pinned machine. |
 
-`pags up` is the wrong advice in the third case, which is exactly the case that used to show an unexplained amber dot. All three are derived server-side from "is there a runtime row", "is its heartbeat fresh", and "is a relay socket live", so no CLI upgrade is needed to see them.
+`pags up` is the wrong advice in the third case, which is exactly the case that used to show an unexplained amber dot. It is wrong in the fourth too, and so is `--force`: the runner is already running, on the other machine.
+
+The liveness this diagnosis is built on is **pin-aware**. A machine the pin excludes never contributes to `relay.connected`, so the status endpoint cannot report a live socket that belongs to a machine this agent would not route to. All three are derived server-side from "is there a runtime row", "is its heartbeat fresh", and "is a relay socket live", so no CLI upgrade is needed to see them.
 
 ## How It Works
 
@@ -82,7 +97,7 @@ default relay: <instance_id>
 node relay:    <instance_id>:node:<runner_node>
 ```
 
-Two tables back this. `instance_runtimes` holds the legacy default runtime for the instance, which older clients and non-node-aware paths still use. `instance_runtime_nodes` holds one row per connected machine, and is what the picker and the Terminals page enumerate.
+Two tables back this. `instance_runtimes` holds the legacy default runtime for the instance, which older clients and non-node-aware paths still use. `instance_runtime_nodes` holds one row per connected machine — with the machine id alongside the hostname — and is what the picker and the Terminals page enumerate.
 
 ## User Flow
 

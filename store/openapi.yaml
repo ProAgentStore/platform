@@ -2669,6 +2669,24 @@ paths:
                   example: [browser.playwright, file.upload, human.approval]
                 runnerVersion:
                   type: string
+                runnerNode:
+                  type: string
+                  description: |
+                    The machine's hostname. This is the ROUTING key — it names the relay Durable
+                    Object — and it is not stable: it moves with the network.
+                machineId:
+                  type: string
+                  description: |
+                    Stable per-machine id, minted once by the CLI and persisted beside its
+                    session. Optional; when present it is what lets a pin made under an old
+                    hostname keep resolving to the same machine.
+                machineNames:
+                  type: array
+                  items: { type: string }
+                  description: |
+                    Hostnames this machine has answered to. Unclaimed registrations under those
+                    names are adopted by this `machineId`, which is what reconnects a pin that
+                    was stranded when the hostname changed. Capped at 10.
       responses:
         "201":
           description: Runtime registered
@@ -2806,6 +2824,26 @@ paths:
                   capabilities:
                     type: object
                     additionalProperties: true
+                  relay:
+                    type: object
+                    description: |
+                      Pin-aware liveness. `connected` is true only when the machine this agent
+                      would actually route to holds a socket right now — a machine the pin
+                      excludes never contributes to it. `runnerNode` is the node that answer is
+                      about (the live one, else the pin).
+                    properties:
+                      connected: { type: boolean }
+                      runnerNode: { type: string, nullable: true }
+                      live: { type: boolean }
+                  attachment:
+                    type: object
+                    description: Why it is not attached, and the single command that fixes it (null when there is none).
+                    properties:
+                      state:
+                        type: string
+                        enum: [attached, never-registered, runner-offline, machine-online-agent-detached, pinned-machine-offline]
+                      message: { type: string }
+                      remedy: { type: string, nullable: true }
         "502":
           description: Registered runtime could not be reached
           content:
@@ -4430,6 +4468,12 @@ paths:
         connected node, and its runner calls route there. `connected` is this agent's own
         relay socket; `nodeOnline` is whether the machine is up for any agent — which is what
         distinguishes "machine offline" from "machine online but this agent never attached".
+
+        A pin names a hostname, and a hostname moves under a machine (DHCP, VPN, the `.local`
+        mDNS form), so a pin can name the right machine and a dead name at once. `nodes` lists
+        one entry per MACHINE — names proven to belong to the same machine collapse to the
+        freshest one — and `resolvedNode` names the machine a stale pin is actually being
+        served by, or is null when the pin resolves to itself or to nothing.
       operationId: getRunnerNode
       tags: [Runtime]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -4453,6 +4497,10 @@ paths:
                         node: { type: string }
                         connected: { type: boolean }
                         nodeOnline: { type: boolean }
+                  resolvedNode:
+                    type: string
+                    nullable: true
+                    description: The machine a pin naming a stale hostname is actually served by.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:

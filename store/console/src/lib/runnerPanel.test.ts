@@ -88,6 +88,18 @@ describe("machinesToShow", () => {
 		expect(pinnedWarning("laptop", detail)).toBe("offline");
 	});
 
+	// #379. A hostname moves under a machine, so a pin can name the right MACHINE and the wrong
+	// NAME at the same time. The server proves sameness with a persisted machine id and reports
+	// where the pin resolved; the card must not print "⚠ offline" over an agent that is working.
+	it("says the machine was renamed rather than warning about a pin that already resolves", () => {
+		const detail: NodeDetail[] = [{ node: "RLs-MacBook-Air.local", connected: false, nodeOnline: false }];
+		expect(pinnedWarning("RLs-MacBook-Air.local", detail, "Mac")).toBe("renamed");
+		// Without the server's proof it is the old, honest "offline" — a rename is never guessed.
+		expect(pinnedWarning("RLs-MacBook-Air.local", detail)).toBe("offline");
+		// And a pin that resolves to itself is not a rename.
+		expect(pinnedWarning("RLs-MacBook-Air.local", detail, "RLs-MacBook-Air.local")).toBe("offline");
+	});
+
 	it("never disagrees with the warning under it, for any state of the pinned node", () => {
 		// The invariant, stated once so a fourth reading cannot be added that breaks it: the tile's
 		// tone and the warning are two renderings of one answer.

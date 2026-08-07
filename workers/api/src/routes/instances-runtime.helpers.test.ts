@@ -220,11 +220,13 @@ const SECRET = "runtime-integration-secret";
 // A valid 32-byte (AES-256) KEK, hex-encoded, so encodeRuntimeToken's crypto path works.
 const KEK = "0".repeat(64);
 
-function relayStub(connected: boolean) {
+/** `liveNames` models a MULTI-MACHINE account: only those relay DO names hold a socket. Without
+ *  it every DO answers the same, which is exactly the world in which #380 could not be seen. */
+function relayStub(connected: boolean, liveNames?: string[]) {
 	return {
 		idFromName: (name: string) => ({ name }),
-		get: () => ({
-			async fetch() { return Response.json({ connected }); },
+		get: (id: { name: string }) => ({
+			async fetch() { return Response.json({ connected: liveNames ? liveNames.includes(id.name) : connected }); },
 		}),
 	};
 }
@@ -234,6 +236,12 @@ function buildApp(opts: {
 	nodes?: unknown[];
 	instanceConfig?: string;
 	relayConnected?: boolean;
+	/** Relay DO names that hold a live socket, for the multi-machine cases. */
+	liveRelayNames?: string[];
+	/** `instance_runtimes.runner_node` — the single default row, overwritten by the NEWEST
+	 *  `pags up` and never cleared on disconnect. On a multi-machine account it names a machine
+	 *  the pin may exclude, which is the whole of #238/#380. */
+	defaultRuntimeNode?: string;
 	noRuntime?: boolean;
 	mirroredTask?: unknown;
 	/** Rows returned for a task-scoped event read (the per-ticket thread, #150 P2). */
@@ -258,11 +266,22 @@ function buildApp(opts: {
 								if (!owns.has(`${id}::${uid}`)) return null;
 								return { id, agent_id: "a1", user_id: uid, status: "active", config: opts.instanceConfig ?? "{}", created_at: "", updated_at: "" };
 							}
+							// Per-MACHINE registration (a multi-machine account). Checked before the default
+							// row: "instance_runtimes" is not a substring of "instance_runtime_nodes", but
+							// reading them in this order says which is which.
+							if (sql.includes("FROM instance_runtime_nodes") && sql.includes("runner_node = ?3")) {
+								const [id, uid, node] = args as [string, string, string];
+								if (!owns.has(`${id}::${uid}`)) return null;
+								const known = (opts.nodes ?? []) as RuntimeRow[];
+								return known.some((n) => n.runner_node === node)
+									? mockRow({ instance_id: id, user_id: uid, runner_node: node, endpoint_url: `https://${node}.example.com` })
+									: null;
+							}
 							if (sql.includes("FROM instance_runtimes")) {
 								if (opts.noRuntime) return null; // runner-less agent (pipeline/config)
 								const [id, uid] = args as [string, string];
 								if (!owns.has(`${id}::${uid}`)) return null;
-								return mockRow({ instance_id: id, user_id: uid });
+								return mockRow({ instance_id: id, user_id: uid, runner_node: opts.defaultRuntimeNode ?? "" });
 							}
 							if (sql.includes("FROM instance_runtime_tasks")) {
 								return opts.mirroredTask ? { payload: JSON.stringify(opts.mirroredTask) } : null;
@@ -270,6 +289,11 @@ function buildApp(opts: {
 							return null;
 						},
 						async all() {
+							// The machine-identity read (#379) aliases its columns, and answers the
+							// question "which of these names are one machine".
+							if (sql.includes("machine_id AS machineId")) {
+								return { results: ((opts.nodes ?? []) as RuntimeRow[]).map((n) => ({ node: n.runner_node, machineId: n.machine_id ?? null, instanceId: n.instance_id, lastSeenAt: n.last_seen_at })) };
+							}
 							if (sql.includes("instance_runtime_nodes")) return { results: opts.nodes ?? [] };
 							if (sql.includes("FROM instance_runtime_task_events")) {
 								return { results: (opts.taskEvents ?? []).map((e) => ({ payload: JSON.stringify(e) })) };
@@ -285,7 +309,7 @@ function buildApp(opts: {
 	const env = {
 		SESSION_SIGNING_KEY: SECRET,
 		KEY_ENCRYPTION_KEY: KEK,
-		RELAY: relayStub(opts.relayConnected ?? false),
+		RELAY: relayStub(opts.relayConnected ?? false, opts.liveRelayNames),
 		PIPELINE_RUN: {
 			async create(args: { params: Record<string, unknown> }) {
 				opts.pipelineRuns?.push(args.params);
@@ -363,6 +387,40 @@ describe("POST /v1/instances/:id/runtime (integration — register a node)", () 
 		expect(body.nodes.map((n) => n.runnerNode).sort()).toEqual(["desktop-B", "laptop-A"]);
 	});
 
+	// #379. The hostname is the routing key and cannot be replaced (it names the relay DO), so the
+	// stable id rides ALONGSIDE it — and the registration also claims the hostnames this machine
+	// used to wear, which is the only thing that migrates a row already stranded under a dead name.
+	it("stores the machine id and claims the hostnames this machine used to wear", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(app, env, "/v1/instances/inst-1/runtime", {
+			endpointUrl: "https://runner.example.com",
+			runnerNode: "Mac",
+			machineId: "2f1c8a90-0e2b-4b6a-9a2b-3c4d5e6f7081",
+			machineNames: ["Mac", "RLs-MacBook-Air.local", "Mac"],
+		}, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		const nodeInsert = writes.find((w) => w.sql.includes("INSERT INTO instance_runtime_nodes"));
+		expect(nodeInsert?.args).toContain("2f1c8a90-0e2b-4b6a-9a2b-3c4d5e6f7081");
+		// An older CLI sends no id, so the upsert must never overwrite a known one with NULL.
+		expect(nodeInsert?.sql).toContain("COALESCE(excluded.machine_id");
+		const claim = writes.find((w) => w.sql.includes("SET machine_id = ?1"));
+		expect(claim?.args).toEqual(["2f1c8a90-0e2b-4b6a-9a2b-3c4d5e6f7081", "u1", "Mac", "RLs-MacBook-Air.local"]);
+		// Only UNCLAIMED rows, and only this user's — a machine may never take another's identity.
+		expect(claim?.sql).toContain("machine_id IS NULL");
+		expect(claim?.sql).toContain("user_id = ?2");
+	});
+
+	it("an OLD CLI (no machineId) registers exactly as before — nothing is claimed", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(app, env, "/v1/instances/inst-1/runtime", {
+			endpointUrl: "https://runner.example.com",
+			runnerNode: "laptop-A",
+		}, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		expect(writes.some((w) => w.sql.includes("SET machine_id = ?1"))).toBe(false);
+		expect(writes.find((w) => w.sql.includes("INSERT INTO instance_runtime_nodes"))?.args).toContain(null);
+	});
+
 	it("400s on a non-https endpoint URL (validation before any write)", async () => {
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
 		const res = await post(app, env, "/v1/instances/inst-1/runtime", { endpointUrl: "http://runner.example.com" }, await tokenFor("u1"));
@@ -386,6 +444,59 @@ describe("GET /v1/instances/:id/runtime (integration)", () => {
 		const { app, env } = buildApp({ owns: [] });
 		const res = await get(app, env, "/v1/instances/inst-1/runtime", await tokenFor("u2"));
 		expect(res.status).toBe(404);
+	});
+});
+
+describe("GET /v1/instances/:id/runtime/status (integration — #380, the pin-blind fallback)", () => {
+	// Measured on a real instance: pinned to a machine that is off, socket live on ANOTHER
+	// machine, and this endpoint answered `attached · Connected.` while every tool call on the
+	// same instance answered "No runner is connected". `getLiveRuntime` returned null (pin-aware,
+	// correct) and the fallback row's node was then fed to `relayConnected` and to
+	// `diagnoseAttachment` — so the pin-blind question overrode the pin-aware one, and the ONE
+	// endpoint whose job is "is this agent's runner up" reported the wrong laptop's answer.
+	const pinnedToDeadMachine = () => buildApp({
+		owns: [["inst-1", "u1"]],
+		instanceConfig: JSON.stringify({ runnerNode: "laptop" }),
+		nodes: [mockRow({ runner_node: "laptop" }), mockRow({ runner_node: "desktop" })],
+		// The default row names `desktop` — the newest `pags up` wrote it, and nothing clears it.
+		// That is the row the old code asked about, which is how "Connected." was produced.
+		defaultRuntimeNode: "desktop",
+		liveRelayNames: ["inst-1:node:desktop"],
+	});
+
+	it("does NOT report connected when the pin points at a machine that is down", async () => {
+		const { app, env } = pinnedToDeadMachine();
+		const res = await get(app, env, "/v1/instances/inst-1/runtime/status", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = await res.json() as { relay: { connected: boolean; live: boolean; runnerNode: string | null }; attachment: { state: string; message: string; remedy: string | null } };
+		expect(body.relay.connected).toBe(false);
+		expect(body.relay.live).toBe(false);
+		// The node the answer is ABOUT — the pin, not the fallback row's machine.
+		expect(body.relay.runnerNode).toBe("laptop");
+	});
+
+	it("names the dead pin AND the machine that is up, instead of a remedy for neither", async () => {
+		const { app, env } = pinnedToDeadMachine();
+		const res = await get(app, env, "/v1/instances/inst-1/runtime/status", await tokenFor("u1"));
+		const { attachment } = await res.json() as { attachment: { state: string; message: string; remedy: string | null } };
+		expect(attachment.state).toBe("pinned-machine-offline");
+		expect(attachment.message).toContain("laptop");
+		expect(attachment.message).toContain("desktop");
+		expect(attachment.remedy).toBeNull();
+	});
+
+	it("still reports connected when the pinned machine IS the live one", async () => {
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			instanceConfig: JSON.stringify({ runnerNode: "laptop" }),
+			nodes: [mockRow({ runner_node: "laptop" })],
+			liveRelayNames: ["inst-1:node:laptop"],
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/runtime/status", await tokenFor("u1"));
+		const body = await res.json() as { relay: { connected: boolean; runnerNode: string | null }; attachment: { state: string } };
+		expect(body.relay.connected).toBe(true);
+		expect(body.relay.runnerNode).toBe("laptop");
+		expect(body.attachment.state).toBe("attached");
 	});
 });
 
@@ -428,6 +539,40 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		expect(body.runnerNode).toBe("laptop-A");
 		expect(body.nodes).toContain("laptop-A");
 		expect(body.nodesDetail.find((n) => n.node === "laptop-A")?.connected).toBe(true);
+	});
+
+	// #379. The picker renders one tile per `runner_node` string, so one laptop that had worn
+	// three hostnames was three machines to choose between — two of which could never come back.
+	// A shared machine id collapses them, and `resolvedNode` tells the card that a pin naming a
+	// hostname the machine has stopped using is nonetheless being honoured right now.
+	it("folds one machine's several hostnames, and reports where a stale pin resolves", async () => {
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			instanceConfig: JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" }),
+			nodes: [
+				mockRow({ runner_node: "Mac", machine_id: "machine-aaaa1111", last_seen_at: "2026-08-08 06:39:00" }),
+				mockRow({ runner_node: "RLs-MacBook-Air.local", machine_id: "machine-aaaa1111", last_seen_at: "2026-08-07 09:20:00" }),
+			],
+			liveRelayNames: ["inst-1:node:Mac"],
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/runner-node", await tokenFor("u1"));
+		const body = await res.json() as { runnerNode: string | null; nodes: string[]; resolvedNode: string | null };
+		expect(body.runnerNode).toBe("RLs-MacBook-Air.local");
+		expect(body.nodes).toEqual(["Mac"]);
+		expect(body.resolvedNode).toBe("Mac");
+	});
+
+	it("reports no resolution for a pin that is simply offline — a rename is never guessed", async () => {
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			instanceConfig: JSON.stringify({ runnerNode: "laptop" }),
+			nodes: [mockRow({ runner_node: "laptop" }), mockRow({ runner_node: "desktop" })],
+			liveRelayNames: ["inst-1:node:desktop"],
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/runner-node", await tokenFor("u1"));
+		const body = await res.json() as { nodes: string[]; resolvedNode: string | null };
+		expect(body.resolvedNode).toBeNull();
+		expect(body.nodes.sort()).toEqual(["desktop", "laptop"]);
 	});
 
 	it("404s when a non-owner tries to pin", async () => {

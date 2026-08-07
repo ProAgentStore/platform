@@ -28,6 +28,18 @@ describe("isEligible", () => {
 		expect(isEligible(inst({ id: "a", config: { runnerNode: NODE } }), NODE)).toBe(true);
 		expect(isEligible(inst({ id: "a", config: { runnerNode: null } }), NODE)).toBe(true);
 	});
+
+	// #379. A hostname moves under the machine, so a pin made yesterday can name THIS laptop by a
+	// name it no longer answers to. Without the machine's own name history that reads as "pinned
+	// elsewhere", and the 20s poll detached the agent the user had pinned to this very machine —
+	// leaving the platform with no socket to resolve the pin onto.
+	it("keeps an instance pinned to a hostname this machine used to wear", () => {
+		const pinnedToOldName = inst({ id: "a", config: { runnerNode: "RLs-MacBook-Air.local" } });
+		expect(isEligible(pinnedToOldName, NODE)).toBe(false);
+		expect(isEligible(pinnedToOldName, NODE, ["RLs-MacBook-Air.local"])).toBe(true);
+		// A name this machine has never worn is still another machine's, history or not.
+		expect(isEligible(inst({ id: "a", config: { runnerNode: "desktop" } }), NODE, ["RLs-MacBook-Air.local"])).toBe(false);
+	});
 });
 
 describe("diffMembership", () => {
@@ -47,6 +59,8 @@ describe("diffMembership", () => {
 		expect(diffMembership(["a", "b"], [inst({ id: "a" })], NODE).detach).toEqual(["b"]);
 		expect(diffMembership(["a"], [inst({ id: "a", status: "cancelled" })], NODE).detach).toEqual(["a"]);
 		expect(diffMembership(["a"], [inst({ id: "a", config: { runnerNode: "other" } })], NODE).detach).toEqual(["a"]);
+		// …but NOT one pinned to a name this machine itself used to answer to (#379).
+		expect(diffMembership(["a"], [inst({ id: "a", config: { runnerNode: "old-name" } })], NODE, new Set(), ["old-name"]).detach).toEqual([]);
 	});
 
 	// A 4409 means another live runner owns that relay. Without this, every poll would re-attach

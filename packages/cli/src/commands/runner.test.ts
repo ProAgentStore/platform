@@ -15,6 +15,10 @@ import {
 
 // No saved session in tests, so requestPags's session-token fallback resolves to none.
 vi.mock("./login.js", () => ({ loadSession: () => null }));
+// The machine identity (#379) is read from — and minted into — `~/.config/proagentstore`. A unit
+// test must not create a file in the developer's home, and the value it returns is not what this
+// suite is about, so it is stubbed to a fixed identity.
+vi.mock("../machine.js", () => ({ loadMachineIdentity: () => ({ id: "machine-abc123", names: ["test-host"] }) }));
 
 describe("runner command helpers", () => {
 	beforeEach(() => {
@@ -95,6 +99,10 @@ describe("runner command helpers", () => {
 			capabilities: ["browser.playwright"],
 			runnerVersion: "0.1.0",
 			runnerNode: expect.any(String),
+			// The hostname routes; the id identifies. Both travel, because the hostname moves
+			// under the machine and a pin is made from it (#379).
+			machineId: "machine-abc123",
+			machineNames: ["test-host"],
 		});
 	});
 

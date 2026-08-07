@@ -18,10 +18,11 @@ import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
-import { relayConnected } from "../lib/runner-client.js";
+import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
 import {
 	callRuntime,
+	claimMachineNames,
 	encodeRuntimeToken,
 	expireOrphanedRuntimeTasks,
 	getRuntime,
@@ -56,6 +57,7 @@ export {
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
+import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment } from "../lib/runtime-attachment.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
@@ -306,6 +308,11 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const placement = body.placement === "managed" ? "managed" : "local";
 	const runnerVersion = String(body.runnerVersion || "").slice(0, 80);
 	const runnerNode = normalizeRunnerNode(body.runnerNode);
+	// Stable machine identity (#379), additive to the hostname — see lib/machine-identity.ts for
+	// why the hostname could not simply be replaced. Empty for every older CLI, which then behaves
+	// exactly as it does today: no id, no alias, no change.
+	const machineId = normalizeMachineId(body.machineId);
+	const machineNames = sanitizeMachineNames(body.machineNames);
 
 	// Multi-machine Coder: each machine registers as an addressable node. The legacy
 	// instance_runtimes row is still updated as the default runtime for browser/apply
@@ -340,8 +347,15 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 				tokenParts.plaintext,
 				capabilities,
 				runnerVersion,
+				machineId || null,
 			)
 			.run();
+		// Adopt the rows this machine left under the hostnames it used to wear, so a pin already
+		// stranded on a dead name resolves again. Best-effort: a failed backfill must not fail the
+		// registration — the runner would then be unreachable for a bookkeeping write.
+		if (machineId && machineNames.length) {
+			await claimMachineNames(c.env, session.uid, machineId, machineNames).catch(() => 0);
+		}
 	}
 
 	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
@@ -400,8 +414,12 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 		.first<{ config: string | null }>();
 	const runnerNode = parseBoundRunnerNode(cfgRow?.config);
 	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
-	// Distinct node names known for this instance (each registration = one machine).
-	const available = [...new Set(nodes.map((n) => normalizeRunnerNode(n.runner_node)).filter(Boolean))];
+	// Distinct MACHINES known for this instance. One laptop used to appear three times here —
+	// `Mac`, `RLs-MacBook-Air.local`, `RLs-MacBook-Air` — because a registration is keyed by a
+	// hostname that moves under it (#379). Rows sharing a `machine_id` collapse to their freshest
+	// name; rows without one stay separate, because without the proof they ARE separate.
+	const machines = foldNodesByMachine(nodes.map((n) => ({ node: normalizeRunnerNode(n.runner_node), machineId: n.machine_id ?? null, lastSeenAt: n.last_seen_at })));
+	const available = [...new Set(machines.map((n) => n.node).filter(Boolean))];
 
 	// Machine-level liveness: which of the user's machines are running a runner AT ALL
 	// (any of their instances holds a live relay socket) — the same node-level truth the
@@ -433,7 +451,15 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 			return { node, connected, nodeOnline: connected ? true : await nodeMachineOnline(node) };
 		}),
 	);
-	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail });
+	// Where the pin ACTUALLY resolves right now (#379). A pin names a hostname, and a hostname
+	// moves under the machine — so a pin can name the right MACHINE and a dead NAME at once. The
+	// console has to be told, or it prints "⚠ pinned machine offline" over an agent that is
+	// working. Null when the pin resolves to itself, or to nothing.
+	const pinnedDetail = nodesDetail.find((d) => d.node === runnerNode);
+	const resolvedNode = runnerNode && pinnedDetail && !pinnedDetail.connected
+		? await liveAliasForPin(c.env, instanceId, session.uid, runnerNode).catch(() => null)
+		: null;
+	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail, resolvedNode });
 });
 
 /** Pin (or clear, with an empty/null value) the node this instance runs on. */
@@ -751,7 +777,7 @@ async function attachSettingRepo(env: Env, instanceId: string, userId: string, s
 instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
-	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
 	// Resolve the LIVE, pin-aware node first (#238). `requireRuntime` reads the single default
 	// row, which the newest `pags up` overwrites and which is never cleared on disconnect — so
 	// on a multi-machine account this route reported a machine that had gone away, and then
@@ -780,7 +806,20 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		// Persist offline only when the probe fails AND the heartbeat has gone stale.
 		const effective = online || recentlySeen ? "online" : "offline";
 		await updateRuntimeStatus(c.env, instanceId, session.uid, effective);
-		const relayIsConnected = await relayConnected(c.env, instanceId, runtime.runner_node);
+		// #380: liveness is the PIN-AWARE answer or nothing. This used to ask `relayConnected`
+		// about `runtime.runner_node` — which, once `getLiveRuntime` returned null, is the FALLBACK
+		// row's node, a machine the pin excludes. So the pin-blind question overrode the pin-aware
+		// one and the endpoint whose job is "is this agent's runner up" answered "Connected." for
+		// an agent that could not reach a runner at all. `getLiveRuntime` is itself relay-checked
+		// (via `getBoundRunnerConn`), so its result IS the live check — no second probe, and no
+		// route by which a node the pin excludes can contribute to this boolean.
+		const relayIsConnected = Boolean(liveRuntime);
+		// Only when it is NOT attached, and only to DESCRIBE: which machine is actually up, so the
+		// sentence below can name it instead of prescribing a command the user is already running.
+		const pinnedNode = liveRuntime ? "" : parseBoundRunnerNode(instance.config);
+		const liveNodeExcludedByPin = pinnedNode
+			? await liveNodeIgnoringPin(c.env, instanceId, session.uid).catch(() => null)
+			: null;
 		// Say WHY when it isn't attached (#237). The console previously had only a boolean, so a
 		// machine that is demonstrably alive with one agent detached rendered as an unexplained
 		// amber dot — the CLI knew the reason and the remedy and printed both to a terminal
@@ -789,12 +828,20 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 			hasRuntimeRow: true,
 			relayConnected: relayIsConnected,
 			lastSeenAt: runtime.last_seen_at,
+			pinnedNode,
+			liveNodeExcludedByPin,
 		});
 		return c.json({
 			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: new Date().toISOString() }),
 			health,
 			capabilities,
-			relay: { connected: relayIsConnected, runnerNode: runtime.runner_node || null, live: Boolean(liveRuntime) },
+			relay: {
+				connected: relayIsConnected,
+				// The node the answer is ABOUT: the live one when there is one, else the pin — never
+				// the fallback row's machine, which is what made "Connected." name the wrong laptop.
+				runnerNode: (liveRuntime?.runner_node || pinnedNode || runtime.runner_node) || null,
+				live: Boolean(liveRuntime),
+			},
 			attachment,
 		});
 	} catch (error) {

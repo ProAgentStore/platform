@@ -1,4 +1,5 @@
 import { decryptKey } from "./crypto.js";
+import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
 import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
@@ -82,14 +83,77 @@ export async function getBoundRunnerConn(env: Env, instanceId: string, userId: s
 		// live. We can't trust the DB `status` column — it's never cleared when a runner drops
 		// (RelayDO.webSocketClose doesn't touch D1), so a machine that closed its laptop still
 		// reads `registered`. The RelayDO is the only source of truth. Pinned + dead → offline.
-		if (!(await relayConnected(env, instanceId, node).catch(() => false))) return null;
-		return getRunnerConn(env, instanceId, userId, node);
+		if (await relayConnected(env, instanceId, node).catch(() => false)) {
+			return getRunnerConn(env, instanceId, userId, node);
+		}
+		// The pinned NAME is dead — but a name is not a machine (#379). `os.hostname()` moves under
+		// the machine (DHCP, VPN, the `.local` mDNS form), so a pin can outlive the name it was
+		// made with while the machine it means is right here with a live socket. Route to a node
+		// that carries the SAME persisted `machine_id`: that is the pinned machine, proven by a
+		// recorded fact rather than inferred, so it does NOT breach the no-fallback contract above.
+		// No id recorded → no candidates → the same null as before.
+		for (const alias of await sameMachineNodes(env, instanceId, userId, node)) {
+			if (await relayConnected(env, instanceId, alias).catch(() => false)) {
+				return getRunnerConn(env, instanceId, userId, alias);
+			}
+		}
+		return null;
 	}
 	// Unpinned: route to whichever registered machine holds a LIVE relay socket right now —
 	// not whatever the stale `instance_runtimes` default points at. A second `pags up` overwrites
 	// that default row (to the newest machine) BEFORE its socket is up and it's never cleared on
 	// disconnect, so trusting it silently repoints an unpinned agent at an offline machine.
 	return getLiveRunnerConn(env, instanceId, userId);
+}
+
+/**
+ * Node names that are the SAME MACHINE as `pinned`, freshest first (#379).
+ *
+ * Read across ALL the user's registrations, not just this instance's, because the pinned name may
+ * belong to a machine this agent never registered on — that is precisely the stranded case. The
+ * pure rule (and why an unknown id yields nothing) lives in `machine-identity.ts`.
+ *
+ * Only reached when the pinned name is already known to be dead, so the happy path pays nothing.
+ */
+async function sameMachineNodes(env: Env, instanceId: string, userId: string, pinned: string): Promise<string[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt
+		 FROM instance_runtime_nodes
+		 WHERE user_id = ?1 AND runner_node IS NOT NULL AND runner_node != ''
+		 ORDER BY updated_at DESC LIMIT 200`,
+	)
+		.bind(userId)
+		.all<NodeRegistration>()
+		.catch(() => ({ results: [] as NodeRegistration[] }));
+	return aliasNodesFor(pinned, results ?? [], instanceId);
+}
+
+/**
+ * Which node a stale pin ACTUALLY resolves to right now, or null (#379).
+ *
+ * The same question `getBoundRunnerConn` answers while routing, asked by the console so its card
+ * can say "pinned to X; that machine now reports as Y" instead of warning about a pin that is
+ * being honoured. Callers pass a pin they have already found to be dead — probing it again here
+ * would only buy a duplicate relay fetch.
+ */
+export async function liveAliasForPin(env: Env, instanceId: string, userId: string, pinned: string): Promise<string | null> {
+	for (const alias of await sameMachineNodes(env, instanceId, userId, pinned).catch(() => [])) {
+		if (await relayConnected(env, instanceId, alias).catch(() => false)) return alias;
+	}
+	return null;
+}
+
+/**
+ * Which machine holds a live socket for this instance, IGNORING the pin — for DESCRIPTION ONLY.
+ *
+ * Never for routing: taking this answer as a destination is exactly the fallback
+ * `getBoundRunnerConn` forbids. `/runtime/status` needs it to say the true sentence "you are
+ * pinned to X, which is dead; Y is up" instead of reporting Y's liveness as though it were the
+ * agent's (#380). Still live-checked — the DB `status` column is never cleared on disconnect.
+ */
+export async function liveNodeIgnoringPin(env: Env, instanceId: string, userId: string): Promise<string | null> {
+	const conn = await getLiveRunnerConn(env, instanceId, userId).catch(() => null);
+	return conn?.runnerNode || null;
 }
 
 /**

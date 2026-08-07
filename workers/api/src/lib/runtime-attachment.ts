@@ -19,7 +19,9 @@ export type AttachmentState =
 	/** Registered, but the machine itself has gone quiet. */
 	| "runner-offline"
 	/** The machine is alive and heartbeating, yet THIS agent has no socket. */
-	| "machine-online-agent-detached";
+	| "machine-online-agent-detached"
+	/** Pinned to a machine that is down while a DIFFERENT one is up (#379/#380). */
+	| "pinned-machine-offline";
 
 export interface AttachmentDiagnosis {
 	state: AttachmentState;
@@ -38,6 +40,10 @@ export function diagnoseAttachment(input: {
 	relayConnected: boolean;
 	lastSeenAt: string | null | undefined;
 	now?: number;
+	/** The machine this instance is pinned to (`config.runnerNode`); "" / absent = automatic. */
+	pinnedNode?: string | null;
+	/** A machine that holds a live socket for this instance but which the PIN excludes. */
+	liveNodeExcludedByPin?: string | null;
 }): AttachmentDiagnosis {
 	if (input.relayConnected) {
 		return { state: "attached", message: "Connected.", remedy: null };
@@ -47,6 +53,23 @@ export function diagnoseAttachment(input: {
 			state: "never-registered",
 			message: "No runner has registered for this agent yet.",
 			remedy: "pags up",
+		};
+	}
+	// BEFORE the heartbeat check, deliberately (#380). The heartbeat comes off the runtime row,
+	// and on a multi-machine account the LIVE machine's heartbeat lands on the shared default row
+	// — so a pin onto a dead machine reads as "fresh" and diagnoses `machine-online-agent-detached`,
+	// prescribing `pags up --force` for a machine that is switched off. The pin is the reason this
+	// agent has no socket, and it is the one fact that names both the problem and what to do.
+	const pinned = (input.pinnedNode || "").trim();
+	const live = (input.liveNodeExcludedByPin || "").trim();
+	if (pinned && live && live !== pinned) {
+		return {
+			state: "pinned-machine-offline",
+			message: `This agent is pinned to ${pinned}, which isn't connected. ${live} is connected — set "Runs on" to ${live} (or Automatic), or start the runner on ${pinned}.`,
+			// No single command fixes this, and offering one would be the #259/#271/#321 failure
+			// again: `pags up` is already running (on ${live}) and `--force` would take a machine
+			// over rather than change where this agent points. The fix is one click in "Runs on".
+			remedy: null,
 		};
 	}
 	const seen = input.lastSeenAt ? Date.parse(`${input.lastSeenAt.replace(" ", "T")}Z`) : 0;

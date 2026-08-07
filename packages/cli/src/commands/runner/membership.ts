@@ -26,11 +26,17 @@ export interface DiscoverableInstance {
  * either lose a race with the pinned machine or, worse, win one and silently relocate the
  * user's agent away from where they pinned it.
  */
-export function isEligible(inst: DiscoverableInstance, thisNode: string): boolean {
+export function isEligible(inst: DiscoverableInstance, thisNode: string, alsoKnownAs: readonly string[] = []): boolean {
 	if (inst.status !== "active") return false;
 	if (inst.capabilities?.runtime == null) return false;
 	const pin = inst.config?.runnerNode;
-	if (pin && pin !== thisNode) return false;
+	// A pin names a HOSTNAME, and `os.hostname()` moves under the machine — DHCP, a VPN, the
+	// `.local` mDNS form (#379). So "pinned elsewhere" and "pinned here under the name I had
+	// yesterday" look identical unless this machine says which names are its own. Without
+	// `alsoKnownAs`, a rename made the poll DETACH the very agent the user pinned to this laptop,
+	// twenty seconds after `pags up` attached it — and the server then had no socket to resolve
+	// the pin onto, which is the half of the fix that cannot live on the server.
+	if (pin && pin !== thisNode && !alsoKnownAs.includes(pin)) return false;
 	return true;
 }
 
@@ -47,9 +53,11 @@ export function diffMembership(
 	eligible: DiscoverableInstance[],
 	thisNode: string,
 	blocked: ReadonlySet<string> = new Set(),
+	/** Hostnames this machine has also answered to, so a pin made under one still points here. */
+	alsoKnownAs: readonly string[] = [],
 ): { attach: DiscoverableInstance[]; detach: string[] } {
 	const have = new Set(attached);
-	const want = eligible.filter((i) => isEligible(i, thisNode));
+	const want = eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs));
 	const wantIds = new Set(want.map((i) => i.id));
 	return {
 		attach: want.filter((i) => !have.has(i.id) && !blocked.has(i.id)),
