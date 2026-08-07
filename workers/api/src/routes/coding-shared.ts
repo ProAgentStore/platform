@@ -11,6 +11,7 @@
  */
 import type { Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { parseRepoRef } from "../lib/git-providers.js";
 import { getRunnerConn } from "../lib/runner-client.js";
 import { getRuntime } from "./instances-runtime.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
@@ -74,10 +75,19 @@ export function pickNextIssue<T extends { number: number }>(issues: T[], exclude
  * answer the same question, and the second site's comment already said "same shape as the
  * clone-URL path" — so a fix to one (a new host form, a stricter owner charset) would
  * silently have left the other behind.
+ *
+ * It is now the GitHub-shaped VIEW of `lib/git-providers.ts#parseRepoRef` rather than a regex
+ * of its own (#221). Making it provider-aware would have meant a third parser, which is the
+ * mistake #304 was about; delegating instead means the multi-provider parser is held to every
+ * GitHub shape the old regex handled, by the tests that were already written for it.
+ *
+ * Two things changed, both narrowings: `https://evil.example/github.com/o/r` no longer reads as
+ * the GitHub repo `o/r` (the host is parsed, not substring-matched), and a browser URL with a
+ * trailing `/tree/main` now resolves instead of returning null.
  */
 export function parseGithubRepo(url: string | null | undefined): string | null {
-	if (!url) return null;
-	return url.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i)?.[1] ?? null;
+	const ref = parseRepoRef(url);
+	return ref && ref.provider === "github" && ref.slug ? ref.slug : null;
 }
 
 /**

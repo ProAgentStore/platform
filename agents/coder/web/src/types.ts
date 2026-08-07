@@ -7,6 +7,11 @@ export interface CodingRepo {
 	workdir?: string;
 	cloneStatus?: string;
 	githubRepo?: string;
+	/** Which host it lives on (#221): local | github | gitlab | bitbucket | other. */
+	provider?: string;
+	/** The provider-neutral coordinate — `group/subgroup/project` on GitLab. */
+	repoSlug?: string;
+	webUrl?: string;
 	urls?: { dev?: string; staging?: string; prod?: string };
 	instructions?: string;
 }

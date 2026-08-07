@@ -23,15 +23,39 @@ export function sanitizeSessionName(label: string): string {
 }
 
 /**
+ * The clone URL with the credential embedded, or the URL untouched.
+ *
+ * PURE and exported so the one line that decides where a credential goes is unit-testable
+ * without a network or a git binary. `username` is provider-specific — GitHub wants
+ * `x-access-token`, GitLab `oauth2`, Bitbucket `x-token-auth` (#221) — and it defaults to the
+ * value this function used to hardcode, so a cloud that sends only `token` behaves as before.
+ *
+ * Only https carries a credential: git ignores userinfo on an ssh URL, so injecting there would
+ * be pure exposure for no effect. Both halves are percent-encoded — a secret containing `@`,
+ * `/` or `:` would otherwise re-parse the URL into a DIFFERENT host and send the credential
+ * there. GitHub's tokens contain none of those, so nothing changes for the existing provider.
+ */
+export function authenticatedCloneUrl(cloneUrl: string, token?: string, username?: string): string {
+	if (!token || !/^https:\/\//i.test(cloneUrl)) return cloneUrl;
+	const user = encodeURIComponent(username || "x-access-token");
+	return cloneUrl.replace(/^https:\/\//i, `https://${user}:${encodeURIComponent(token)}@`);
+}
+
+/**
  * Ensure a repo is present at `dir`, cloning it from `cloneUrl` if not. Idempotent
- * — an existing checkout is left alone (no clobber). For private repos a GitHub
- * App installation token is injected as `x-access-token` into an https URL. The
- * coding CLI then runs in this directory.
+ * — an existing checkout is left alone (no clobber). For private repos the cloud
+ * sends a token, injected as the password half of an https URL. The coding CLI then
+ * runs in this directory.
+ *
+ * `tokenUsername` is the USERNAME half, and it is provider-specific: GitHub wants
+ * `x-access-token`, GitLab `oauth2`, Bitbucket `x-token-auth` (#221). It defaults to
+ * `x-access-token` — the value this function used to hardcode — so an older cloud that
+ * sends only `token` behaves exactly as before.
  *
  * Returns the absolute working directory. Throws on clone failure so the caller
  * can surface it (a session can't start without its repo).
  */
-export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: string; token?: string } = {}): string {
+export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: string; token?: string; tokenUsername?: string } = {}): string {
 	// A real checkout (has .git) is reused as-is.
 	if (existsSync(join(dir, ".git"))) return dir;
 	if (!opts.cloneUrl) {
@@ -51,10 +75,7 @@ export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: stri
 		}
 		rmSync(dir, { recursive: true, force: true });
 	}
-	let url = opts.cloneUrl;
-	if (opts.token && /^https:\/\//.test(url)) {
-		url = url.replace(/^https:\/\//, `https://x-access-token:${opts.token}@`);
-	}
+	const url = authenticatedCloneUrl(opts.cloneUrl, opts.token, opts.tokenUsername);
 	const args = ["clone", "--depth", "1"];
 	if (opts.branch) args.push("--branch", opts.branch);
 	args.push(url, dir);

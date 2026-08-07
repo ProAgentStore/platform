@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CodingRuntime } from "./runtime.js";
-import { ensureRepo } from "./repo.js";
+import { authenticatedCloneUrl, ensureRepo } from "./repo.js";
 import { HeadlessSession } from "./headless.js";
 
 // A fake `claude` that speaks stream-json: init on start, then for each user turn
@@ -47,6 +47,32 @@ describe("CodingRuntime capabilities", () => {
 	it("throws for an unknown session", () => {
 		const rt = new CodingRuntime();
 		expect(() => rt.snapshot("nope")).toThrow(/No coding session/);
+	});
+});
+
+describe("authenticatedCloneUrl — the credential the runner puts in a clone URL (#221)", () => {
+	it("defaults to x-access-token, so a cloud that sends only a token behaves as before", () => {
+		expect(authenticatedCloneUrl("https://github.com/o/r.git", "ghs_live")).toBe("https://x-access-token:ghs_live@github.com/o/r.git");
+	});
+
+	it("uses the provider's own username when the cloud names one", () => {
+		// The username half is not decoration: GitLab wants `oauth2` and Bitbucket
+		// `x-token-auth`. The same token under the wrong username is a 401.
+		expect(authenticatedCloneUrl("https://gitlab.com/g/p.git", "glpat-abc", "oauth2")).toBe("https://oauth2:glpat-abc@gitlab.com/g/p.git");
+	});
+
+	it("leaves the URL alone with no token, and on ssh", () => {
+		expect(authenticatedCloneUrl("https://github.com/o/r.git")).toBe("https://github.com/o/r.git");
+		// git ignores userinfo on ssh, so injecting there is exposure with no effect.
+		expect(authenticatedCloneUrl("git@gitlab.com:g/p.git", "glpat-abc", "oauth2")).toBe("git@gitlab.com:g/p.git");
+	});
+
+	it("percent-encodes both halves, so a secret cannot re-point the URL at another host", () => {
+		// A `@` in the token would otherwise end the userinfo early and make `evil.example` the
+		// host — sending the credential somewhere else entirely.
+		expect(authenticatedCloneUrl("https://gitlab.com/g/p.git", "tok@evil.example/x", "oauth2")).toBe(
+			"https://oauth2:tok%40evil.example%2Fx@gitlab.com/g/p.git",
+		);
 	});
 });
 

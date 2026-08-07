@@ -30,8 +30,10 @@ export interface StartCodingInput {
 	/** Clone source — fetched on first start if the working dir is absent. */
 	cloneUrl?: string;
 	branch?: string;
-	/** GitHub App installation token for cloning private repos. */
+	/** Clone credential for a private repo (GitHub App installation token, GitLab PAT, …). */
 	token?: string;
+	/** Username half of that credential — provider-specific (#221). Default `x-access-token`. */
+	tokenUsername?: string;
 	env?: Record<string, string>;
 	/** Override the agent binary (tests / a custom `claude` path). */
 	bin?: string;
@@ -149,7 +151,7 @@ export class CodingRuntime {
 			const workDir = input.workDir
 				? resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()))
 				: join(this.reposBaseDir, sanitizeSessionName(input.repoId));
-			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token });
+			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername });
 			session = new HeadlessSession({
 				id: input.sessionId,
 				workDir,

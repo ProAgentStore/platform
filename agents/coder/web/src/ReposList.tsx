@@ -4,7 +4,7 @@ import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
 import type { CodingRepo, CodingSession } from "./types";
 import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
 import RepoIssues from "./RepoIssues";
-import { repoIsGitHub, repoTitle } from "./repo-title";
+import { repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
@@ -95,11 +95,14 @@ export default function ReposList({
 				<div className="flex justify-between items-center gap-3">
 					<div className="min-w-0">
 						<div className="font-semibold text-sm truncate flex items-center gap-1.5">
-							{/* ONE identity rule: the GitHub coordinate when there is one, else the folder
-							    name — see repo-title.ts. `local` is explicit so a bare `a/b` folder name
-							    cannot be misread as an owner/repo slug. */}
+							{/* ONE identity rule: the hosted coordinate when there is one, else the folder
+							    name — see repo-title.ts. The badge names the HOST (#221): it used to say
+							    `local` for anything without a githubRepo, so a working GitLab repo was
+							    labelled as having no remote at all. */}
 							{repoTitle(r)}
-							{!repoIsGitHub(r) && <span className="text-[0.6rem] px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">local</span>}
+							{repoProviderBadge(r) && (
+								<span className="text-[0.6rem] px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">{repoProviderBadge(r)}</span>
+							)}
 						</div>
 						<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
 							{isEngineBusy(status) ? (

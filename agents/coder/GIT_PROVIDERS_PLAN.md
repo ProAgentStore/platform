@@ -1,5 +1,34 @@
 # Coder Git Providers Plan
 
+## Status (2026-08-08)
+
+Phase 1 has landed, plus GitLab's **clone credential** out of Phase 3. Phases 3–5 are otherwise
+still open.
+
+**Shipped.** `workers/api/src/lib/git-providers.ts` is the provider registry — declared data
+(hosts, git username, credential model, capability flags), not a chain of `if (provider ===
+"gitlab")`. `lib/git-credentials.ts` is the single token-minting seam that all three clone call
+sites now use. Migration `0097` adds `provider` / `repo_slug` / `web_url` to `coding_repos` and
+backfills; `github_repo` stays populated for GitHub so every existing reader is untouched. The
+add-repo route, `detect-github`, the repo badge/title and the runner's clone URL are all
+provider-aware. A GitLab personal access token is stored in the existing encrypted vault
+(`user_api_keys` provider `gitlab`) and used as the password half of an https clone.
+
+**Deliberately deferred, and failing cleanly rather than silently.** GitLab and Bitbucket
+**issues** and **pipelines**: `GitProvider.supports` declares `{issues:false, builds:false}` for
+them, the issues routes answer 400 with "not supported for GitLab yet" (never "isn't connected to
+GitHub"), and the builds routes answer `{available:false}` — no GitLab API client exists, and one
+built without an account to test against would be guesswork. Bitbucket's **credential**: an app
+password is a username + secret and the vault holds one opaque value per provider, so wiring it
+would 401 on every private clone while looking configured. Self-managed GitLab / Bitbucket Server
+resolve as provider `other` — they clone fine, and claim nothing.
+
+**Two departures from the plan below.** A fifth provider value, `other`, exists: a clone URL on an
+unrecognised host is a real remote, and calling it `local` is the same class of lie this work is
+about. And `/detect-github` KEEPS its name (it now returns `provider`/`repoSlug` alongside
+`githubRepo`) rather than becoming `/detect-remote`, because the console polls it on load and a
+rename would break every deployed client for a cosmetic gain.
+
 ## Decision
 
 Keep one core Repo Coder implementation. Do not fork the runtime into separate GitHub, GitLab, and Bitbucket coders.

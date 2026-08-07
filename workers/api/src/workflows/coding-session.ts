@@ -60,7 +60,7 @@ const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
 export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSessionParams> {
 	async run(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
 		if (event.payload.mode === "watch") return runWatchSession(this.env, event, step);
-		const { instanceId, userId, sessionId, repoId, runnerNode, cloneUrl, branch, token, goal } = event.payload;
+		const { instanceId, userId, sessionId, repoId, runnerNode, cloneUrl, branch, token, tokenUsername, goal } = event.payload;
 		const env = this.env;
 		/**
 		 * When this run began — the lower bound of the window its acts are read back from (#294).
@@ -299,7 +299,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			return callRunner<{ sessionId?: string }>(conn, "/coding/start", {
 				sessionId, repoId,
 				workDir: repo?.workdir || undefined,
-				cloneUrl, branch, token,
+				cloneUrl, branch, token, tokenUsername,
 				clientType: goal.clientType,
 				command: sess?.launchCommand || undefined,
 				env: engineEnv,

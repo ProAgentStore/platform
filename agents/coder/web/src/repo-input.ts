@@ -26,6 +26,15 @@
 //
 // The suffix is now anchored, and the `owner/repo` shape is recognised on the OWNER — GitHub
 // logins are `[A-Za-z0-9-]` only, so a first segment carrying a dot is a hostname, not a login.
+//
+// ── Non-GitHub hosts (#221)
+//
+// This box needs no provider picker. A GitLab or Bitbucket URL already falls into the `cloneUrl`
+// branch, and the SERVER reads the host off it (`lib/git-providers.ts`) and stores the repo as
+// what it is. What matters on this side is only that a non-GitHub URL never picks up a
+// `githubRepo` — that field is what would make a GitLab repo claim to be a GitHub one. A bare
+// `owner/repo` still means GitHub, deliberately: that is what it has always meant, and there is
+// no host in the string to say otherwise.
 
 /** Exactly one of these fields; the server branches on which one arrives. */
 export type AddRepoBody =

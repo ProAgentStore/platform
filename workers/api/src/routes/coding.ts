@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { installationTokenForOwner } from "../lib/github-app.js";
+import { resolveCloneCredential } from "../lib/git-credentials.js";
 import {
 	engineAuthFor,
 	ENGINE_AUTHS,
@@ -40,7 +40,7 @@ import { patchInstanceConfig } from "../lib/instance-config.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
 import { registerRepoRoutes } from "./coding-repos.js";
-import { getSessionRunnerConn, ownerOf, readSpecialInstructions, requireOwned } from "./coding-shared.js";
+import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 
 // `startSessionOnRunner` moved to `lib/coding-session-open.ts` (#271): it was private to this
 // module, which is why the autonomous delegation path could not open a session and had to 409
@@ -559,8 +559,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 		specialInstructions: combined || undefined,
 		dryRun: body.dryRun === true,
 	};
-	const owner = ownerOf(repo.githubRepo);
-	const token = owner ? await installationTokenForOwner(c.env, uid, owner) : null;
+	// One credential seam for every provider (#221) — see lib/git-credentials.ts.
+	const credential = await resolveCloneCredential(c.env, uid, repo);
 	const wf = await c.env.CODING_SESSION.create({
 		params: {
 			instanceId,
@@ -570,7 +570,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 			runnerNode: session.runnerNode ?? null,
 			cloneUrl: repo.cloneUrl,
 			branch: repo.branch || undefined,
-			token: token ?? undefined,
+			token: credential?.token,
+			tokenUsername: credential?.username,
 			goal,
 			driverId,
 		},

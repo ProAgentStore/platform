@@ -18,8 +18,12 @@ export interface CodingSessionParams {
 	runnerNode?: string | null;
 	cloneUrl?: string;
 	branch?: string;
-	/** GitHub App installation token for cloning a private repo. */
+	/** Clone credential for a private repo — a GitHub App installation token, or another
+	 *  provider's token (#221). Resolved by `lib/git-credentials.ts`. */
 	token?: string;
+	/** The username half of that credential (`x-access-token` on GitHub, `oauth2` on GitLab).
+	 *  Absent keeps the runner's historical `x-access-token`, which is what GitHub needs. */
+	tokenUsername?: string;
 	goal: CodingGoal;
 	/**
 	 * "watch": don't drive the CLI — the user just sent it an instruction manually

@@ -124,6 +124,19 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "",
 	},
 	{
+		// The Coder's GitLab clone credential (user_api_keys provider "gitlab"), read by
+		// lib/git-credentials.ts and used as the password half of an https clone URL (#221).
+		// GitHub needs nothing here — its credential is a GitHub App installation token minted
+		// per owner — but GitLab's grant model is a USER-scoped token, so the vault is where it
+		// belongs. host:null — never proxied; it only ever reaches `git clone`, and only for a
+		// URL on gitlab.com.
+		id: "gitlab",
+		name: "GitLab (private repo access)",
+		host: null,
+		keyPrefix: "glpat-",
+		docsUrl: "https://gitlab.com/-/user_settings/personal_access_tokens",
+	},
+	{
 		// Claude Code sign-in for the Coder engine: a long-lived OAuth token from
 		// `claude setup-token` (works with a Pro/Max subscription). host:null — this is
 		// NOT proxyable; it's injected as CLAUDE_CODE_OAUTH_TOKEN into the runner's

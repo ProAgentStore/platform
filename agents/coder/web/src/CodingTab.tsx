@@ -6,7 +6,7 @@ import { entryText, groupRepoHistory, sessionLabel } from "./repo-history";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
-import { repoTitle } from "./repo-title";
+import { repoIssuesUnavailable, repoTitle } from "./repo-title";
 import { resolveRunnerOnline } from "./runner-online";
 import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
@@ -212,17 +212,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			setLoopPresets(presetData.presets || []);
 			if (engineData.defaultEngineId) setDefaultEngine(engineData.defaultEngineId);
 
-			// Local repos with no GitHub association → ask the runner to read their `origin`
-			// remote and store owner/repo, so the Builds panel can query Actions for them.
-			const needDetect = repos.filter((r) => r.workdir && !r.githubRepo && !detectAttemptedRef.current.has(r.id));
+			// Local repos with no hosted association → the runner reads their `origin` and stores it, so Builds
+			// can query Actions. A non-GitHub origin counts too (#221), so `detected` — not `githubRepo` — refetches.
+			const needDetect = repos.filter((r) => r.workdir && !r.githubRepo && !r.repoSlug && !detectAttemptedRef.current.has(r.id));
 			if (needDetect.length) {
 				let found = false;
 				await Promise.all(needDetect.map(async (r) => {
 					detectAttemptedRef.current.add(r.id);
 					try {
-						const d = await api<{ githubRepo?: string | null }>(`/v1/instances/${instanceId}/coding/repos/${r.id}/detect-github`, { method: "POST" });
-						if (d.githubRepo) found = true;
-					} catch { /* offline / non-github — leave as local-only */ }
+						const d = await api<{ githubRepo?: string | null; detected?: boolean }>(`/v1/instances/${instanceId}/coding/repos/${r.id}/detect-github`, { method: "POST" });
+						if (d.detected ?? !!d.githubRepo) found = true;
+					} catch { /* offline / no origin — leave as local-only */ }
 				}));
 				if (found) {
 					const fresh = await api<{ repos: CodingRepo[] }>(`/v1/instances/${instanceId}/coding/repos`).catch(() => null);
@@ -963,7 +963,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								<RepoIssues instanceId={instanceId} repo={solo} onWorkOnIssue={workOnIssue} startOpen />
 							</div>
 						) : (
-							<p className="text-center py-6 text-muted-soft text-sm">This repo isn't connected to GitHub, so it has no issues to show.</p>
+							<p className="text-center py-6 text-muted-soft text-sm">{repoIssuesUnavailable(solo ?? { name: "" })}</p>
 						)}
 					</div>
 				)}

@@ -158,6 +158,21 @@ describe("exactly one field, always", () => {
 		}
 	});
 
+	it("hands a non-GitHub URL to the server as a bare cloneUrl (#221)", () => {
+		// The box needs no provider picker for this to work: the server reads the HOST off the
+		// URL (`lib/git-providers.ts#parseRepoRef`) and stores the repo as what it is. What
+		// matters here is only that the client does not attach a `githubRepo` to it — that field
+		// is what would make a GitLab repo claim to be a GitHub one.
+		for (const v of [
+			"https://gitlab.com/group/subgroup/project.git",
+			"git@gitlab.com:group/project.git",
+			"https://bitbucket.org/workspace/repo.git",
+			"gitlab.com/group/project",
+		]) {
+			expect(parseRepoInput(v), v).toEqual({ cloneUrl: v.includes("://") || v.startsWith("git@") ? v : `https://${v}` });
+		}
+	});
+
 	it("every input produces a body the server has a branch for", () => {
 		for (const v of CORPUS) {
 			const body = parseRepoInput(v);

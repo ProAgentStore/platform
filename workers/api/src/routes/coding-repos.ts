@@ -23,7 +23,8 @@ import { asClient } from "../lib/coding-engines.js";
 import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo } from "../lib/coding-store.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
-import { getSessionRunnerConn, ownerOf, parseGithubRepo, pickNextIssue, requireOwned } from "./coding-shared.js";
+import { gitProviderFor, hostedFeatureUnavailable, parseRepoRef } from "../lib/git-providers.js";
+import { getSessionRunnerConn, ownerOf, pickNextIssue, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
 /** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */
@@ -86,8 +87,8 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const { uid, instanceId } = await requireOwned(c);
 		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 		const name = String(body.name ?? "").trim();
-		let githubRepo = typeof body.githubRepo === "string" ? body.githubRepo : undefined;
-		const cloneUrl = typeof body.cloneUrl === "string" ? body.cloneUrl : undefined;
+		const githubRepoIn = typeof body.githubRepo === "string" ? body.githubRepo : undefined;
+		const cloneUrlIn = typeof body.cloneUrl === "string" ? body.cloneUrl : undefined;
 		// A local checkout the user already has on the runner machine — run there, no clone.
 		const localPath = typeof body.localPath === "string" ? body.localPath.trim() : "";
 		if (localPath) {
@@ -96,25 +97,39 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 				// path segments ("pags/platform"). Editable later either way.
 				name: name || lastTwoSegments(localPath) || "repo",
 				workdir: localPath,
+				provider: "local",
 				defaultClient: asClient(body.defaultClient),
 			});
 			return c.json({ repo }, 201);
 		}
-		// A clone URL alone is enough: derive owner/repo (for private-repo token
-		// resolution) and a display name from it. Accept name OR github repo OR URL.
-		if (!githubRepo && cloneUrl) {
-			githubRepo = parseGithubRepo(cloneUrl) ?? undefined;
-		}
-		// Default to the full "owner/repo" — a bare repo name ("platform") is too
-		// generic to tell projects apart. The user can rename it afterwards.
+		// A clone URL alone is enough: it carries the provider, the slug and the web URL (#221).
+		// The URL is the AUTHORITY when both arrive — `githubRepo` and `cloneUrl` are independent
+		// body fields, so a GitLab URL paired with a GitHub coordinate must not be stored as a
+		// GitHub repo. (It is also what stops that pair minting an installation token; the
+		// credential seam re-checks the host, so this is defence in depth rather than the fix.)
+		const ref = parseRepoRef(cloneUrlIn);
+		// No URL and no coordinate is a placeholder the owner will point at a source later —
+		// `local`, not `other`: it has no remote to be honest or dishonest about.
+		const provider = ref ? ref.provider : githubRepoIn ? "github" : cloneUrlIn ? "other" : "local";
+		const slug = ref ? ref.slug : (githubRepoIn ?? "");
+		// `github_repo` stays populated for GitHub ONLY — every GitHub reader (issues, Actions,
+		// deploy watch, the supervisor's coordinates) still keys off it, and writing a GitLab
+		// path into it is precisely the "pretending they are GitHub" this issue is about.
+		const githubRepo = provider === "github" ? slug || undefined : undefined;
+		// An https URL is canonicalised (a pasted browser path is not cloneable); ssh is kept
+		// verbatim so the machine's own keys still do the work.
+		const cloneUrl = ref?.cloneUrl || cloneUrlIn;
+		// Default to the full slug — a bare repo name ("platform") is too generic to tell
+		// projects apart. The user can rename it afterwards.
 		const derivedName =
-			name ||
-			githubRepo ||
-			(cloneUrl ? cloneUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop() : "");
+			name || slug || (cloneUrl ? cloneUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop() : "");
 		if (!derivedName && !cloneUrl) return c.json({ error: "a repo name or URL is required" }, 400);
 		const repo = await createRepo(c.env, instanceId, uid, {
 			name: derivedName || "repo",
 			githubRepo,
+			provider,
+			repoSlug: slug || undefined,
+			webUrl: ref?.webUrl || undefined,
 			cloneUrl,
 			branch: typeof body.branch === "string" ? body.branch : undefined,
 			defaultClient: asClient(body.defaultClient),
@@ -123,11 +138,16 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	});
 
 	/**
-	 * Auto-associate a LOCAL-PATH repo with its GitHub owner/repo by reading the local
-	 * checkout's `origin` remote via the runner — so build status can query Actions for a
-	 * repo you run from a local checkout (which otherwise has no githubRepo). Idempotent:
-	 * returns the existing githubRepo if already set; { githubRepo: null } (never a 500) when
-	 * there's no runner, no origin, or the origin isn't a GitHub URL.
+	 * Auto-associate a LOCAL-PATH repo with its hosted identity by reading the local checkout's
+	 * `origin` remote via the runner — so build status can query Actions for a repo you run from
+	 * a local checkout (which otherwise has no githubRepo). Idempotent: returns the existing
+	 * githubRepo if already set; { githubRepo: null } (never a 500) when there's no runner or no
+	 * origin.
+	 *
+	 * Since #221 it also records a NON-GitHub origin (provider + slug + web URL) rather than
+	 * discarding it — a GitLab checkout used to come back `{githubRepo:null}` and stay badged
+	 * "local" forever. The route KEEPS its name and its `githubRepo` field: the console polls it
+	 * on every load, so renaming it would break every deployed client for a cosmetic gain.
 	 */
 	codingRoutes.post("/:instanceId/coding/repos/:repoId/detect-github", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
@@ -144,14 +164,16 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		} catch {
 			return c.json({ githubRepo: null, reason: "could not read remote" });
 		}
-		// Parse owner/repo from an https or ssh GitHub remote — the same parser the clone-URL path uses.
-		const githubRepo = parseGithubRepo(remote);
-		if (githubRepo) {
-			await c.env.DB.prepare("UPDATE coding_repos SET github_repo = ?1, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
-				.bind(githubRepo, repo.id, instanceId, uid)
-				.run();
-		}
-		return c.json({ githubRepo, detected: !!githubRepo });
+		// The same parser the clone-URL path uses — https, ssh, or scp-like, any known host.
+		const ref = parseRepoRef(remote);
+		if (!ref?.slug) return c.json({ githubRepo: null, detected: false });
+		const githubRepo = ref.provider === "github" ? ref.slug : null;
+		await c.env.DB.prepare(
+			"UPDATE coding_repos SET github_repo = COALESCE(?1, github_repo), provider = ?5, repo_slug = ?6, web_url = ?7, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
+		)
+			.bind(githubRepo, repo.id, instanceId, uid, ref.provider, ref.slug, ref.webUrl || null)
+			.run();
+		return c.json({ githubRepo, provider: ref.provider, repoSlug: ref.slug, detected: true });
 	});
 
 	codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
@@ -322,14 +344,18 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	/**
 	 * GitHub issues for a repo (read-only, cloud→GitHub — works on any runner). Public
 	 * repos work unauthenticated; private repos need the GitHub App installed for the owner.
-	 * 400 for local-only repos (no `github_repo`); the Issues panel hides in that case.
+	 * 400 for anything else; the Issues panel hides in that case.
+	 *
+	 * DEFERRED (#221): GitLab and Bitbucket issues. This route FAILS CLEANLY for them — it says
+	 * "not supported for GitLab yet", not "isn't connected to GitHub", which is what a
+	 * provider-blind `!githubRepo` check used to tell a perfectly well-connected GitLab repo.
 	 */
 	codingRoutes.get("/:instanceId/coding/repos/:repoId/issues", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
 		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 		if (!repo) throw new HttpError(404, "Repo not found");
 		if (!repo.githubRepo?.includes("/")) {
-			return c.json({ error: "This repo isn't connected to GitHub — add it by owner/repo or a GitHub URL to use issues." }, 400);
+			return c.json({ error: hostedFeatureUnavailable(gitProviderFor(repo.provider), "issues") }, 400);
 		}
 		const state = c.req.query("state");
 		const labels = c.req.query("labels") || undefined;
@@ -345,7 +371,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 		if (!repo) throw new HttpError(404, "Repo not found");
 		if (!repo.githubRepo?.includes("/")) {
-			return c.json({ error: "This repo isn't connected to GitHub." }, 400);
+			return c.json({ error: hostedFeatureUnavailable(gitProviderFor(repo.provider), "issues") }, 400);
 		}
 		const number = Number.parseInt(c.req.param("number"), 10);
 		if (!Number.isFinite(number)) return c.json({ error: "Invalid issue number" }, 400);
@@ -386,7 +412,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 		if (!repo) throw new HttpError(404, "Repo not found");
 		if (!repo.githubRepo?.includes("/")) {
-			return c.json({ error: "This repo isn't connected to GitHub — add it by owner/repo or a GitHub URL to use issues." }, 400);
+			return c.json({ error: hostedFeatureUnavailable(gitProviderFor(repo.provider), "issues") }, 400);
 		}
 		const exclude = new Set<number>();
 		for (const n of (c.req.query("exclude") || "").split(",")) {

@@ -16,7 +16,7 @@
 import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
-import { installationTokenForOwner } from "../lib/github-app.js";
+import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -29,7 +29,7 @@ import { delegationTaskRecord } from "../lib/delegation.js";
 import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingGoal } from "../lib/coding-loop.js";
-import { getSessionRunnerConn, ownerOf, readSpecialInstructions, requireOwned } from "./coding-shared.js";
+import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
 /**
@@ -154,13 +154,13 @@ async function delegateToTarget(
 	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const combined = [instanceInstructions, repo.instructions].filter(Boolean).join("\n\n");
 	const goal: CodingGoal = { objective, repo: repo.name, clientType: session.clientType, specialInstructions: combined || undefined };
-	const owner = ownerOf(repo.githubRepo);
-	const token = owner ? await installationTokenForOwner(c.env, uid, owner).catch(() => null) : null;
+	// One credential seam for every provider (#221) — see lib/git-credentials.ts.
+	const credential = await resolveCloneCredential(c.env, uid, repo).catch(() => null);
 	await c.env.CODING_SESSION.create({
 		params: {
 			instanceId, userId: uid, sessionId: session.id, repoId: repo.id,
 			runnerNode: session.runnerNode ?? null, cloneUrl: repo.cloneUrl ?? undefined,
-			branch: repo.branch || undefined, token: token ?? undefined, goal, boardTaskId: taskId,
+			branch: repo.branch || undefined, token: credential?.token, tokenUsername: credential?.username, goal, boardTaskId: taskId,
 			driverId,
 		},
 	});

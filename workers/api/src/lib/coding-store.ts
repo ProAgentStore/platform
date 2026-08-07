@@ -1,5 +1,6 @@
 import { closeCodingSessionCards, upsertCodingSessionCard } from "./coding-board.js";
 import { parseMergePolicy } from "./coding-authority.js";
+import { gitProviderFor, type GitProviderId } from "./git-providers.js";
 import type { Env } from "../types.js";
 import type {
 	CloneStatus,
@@ -29,6 +30,9 @@ interface RepoRow {
 	user_id: string;
 	name: string;
 	github_repo: string | null;
+	provider: string | null;
+	repo_slug: string | null;
+	web_url: string | null;
 	clone_url: string | null;
 	branch: string;
 	workdir: string | null;
@@ -61,6 +65,12 @@ function toRepo(r: RepoRow): CodingRepo {
 		userId: r.user_id,
 		name: r.name,
 		githubRepo: r.github_repo ?? undefined,
+		// `gitProviderFor` rather than a cast: a row written before migration 0097 (or by a test
+		// fixture) has no `provider` at all, and the answer for one carrying `github_repo` is
+		// GitHub, not the 'local' the column would default to.
+		provider: gitProviderFor(r.provider ?? (r.github_repo ? "github" : "local")).id,
+		repoSlug: r.repo_slug ?? r.github_repo ?? undefined,
+		webUrl: r.web_url ?? undefined,
 		cloneUrl: r.clone_url ?? undefined,
 		branch: r.branch,
 		workdir: r.workdir ?? undefined,
@@ -80,6 +90,10 @@ function toRepo(r: RepoRow): CodingRepo {
 export interface NewRepoInput {
 	name: string;
 	githubRepo?: string;
+	/** #221. Absent = infer: `githubRepo` means GitHub, a bare local path means local. */
+	provider?: GitProviderId;
+	repoSlug?: string;
+	webUrl?: string;
 	cloneUrl?: string;
 	branch?: string;
 	defaultClient?: CodingClientType;
@@ -110,9 +124,12 @@ export async function createRepo(env: Env, instanceId: string, userId: string, i
 	// A local checkout is already on disk → "ready". Otherwise it clones on first
 	// session start, or is missing a source entirely.
 	const cloneStatus: CloneStatus = input.workdir ? "ready" : input.cloneUrl || input.githubRepo ? "cloning" : "missing_url";
+	// Inferred, not defaulted, so a caller that predates #221 (the settings-repo attach in
+	// routes/instances.ts, an MCP tool) still stores the truth rather than 'local'.
+	const provider = input.provider ?? (input.githubRepo ? "github" : input.workdir ? "local" : input.cloneUrl ? "other" : "local");
 	await env.DB.prepare(
-		`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, clone_url, branch, workdir, clone_status, default_client)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+		`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, provider, repo_slug, web_url, clone_url, branch, workdir, clone_status, default_client)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
 	)
 		.bind(
 			id,
@@ -120,6 +137,9 @@ export async function createRepo(env: Env, instanceId: string, userId: string, i
 			userId,
 			input.name,
 			input.githubRepo ?? null,
+			provider,
+			input.repoSlug ?? input.githubRepo ?? null,
+			input.webUrl ?? null,
 			input.cloneUrl ?? null,
 			input.branch ?? "",
 			input.workdir ?? null,

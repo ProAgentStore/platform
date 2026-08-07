@@ -7,7 +7,7 @@
 // a second copy would drift on exactly the details that make it work (machine-switch reclaim,
 // installation tokens, engine env).
 import { callRunner, getBoundRunnerConn, getRunnerConn, relayConnected, type RunnerConn } from "./runner-client.js";
-import { installationTokenForOwner } from "./github-app.js";
+import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { createSession, endSession, getActiveSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
@@ -50,8 +50,11 @@ export async function startSessionOnRunner(
 		}
 	}
 	if (!conn) return null;
-	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
-	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
+	// Provider-dispatched (#221): GitHub still resolves through the App installation token, and a
+	// non-GitHub repo gets its own provider's credential — or none, which means "clone it
+	// publicly / with whatever this machine already has", the same thing a public GitHub repo
+	// has always got.
+	const credential = await resolveCloneCredential(env, uid, repo);
 	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
 	try {
 		await callRunner(conn, "/coding/start", {
@@ -61,7 +64,11 @@ export async function startSessionOnRunner(
 			workDir: repo.workdir || undefined,
 			cloneUrl: repo.cloneUrl,
 			branch: repo.branch || undefined,
-			token: token ?? undefined,
+			token: credential?.token,
+			// The username half. An older runner ignores it and hardcodes `x-access-token`,
+			// which is still correct for GitHub and happens to work for a GitLab PAT (GitLab
+			// accepts any username), so a stale bundle degrades rather than breaking.
+			tokenUsername: credential?.username,
 			clientType: session.clientType,
 			// The exact CLI command for this session's engine (Claude default, or a
 			// user-configured Codex/Grok/custom). The runner spawns it.

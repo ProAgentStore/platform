@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
+import { repoProviderLabel } from "./repo-title";
 import { Settings, Trash2 } from "lucide-react";
 
 /** Per-repo settings sheet: name, special instructions (rules), launch URLs, and delete. */
@@ -77,7 +78,11 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 
 				{/* Read-only details */}
 				<div className="grid grid-cols-2 gap-2 mb-3">
-					{repo.githubRepo && <Detail label="GitHub" value={repo.githubRepo} />}
+					{/* The HOST, not "GitHub" (#221) — this panel is where an owner checks what a repo
+					    actually is, and it answered "GitHub or nothing" for every provider. */}
+					{repo.repoSlug || repo.githubRepo ? (
+						<Detail label={repoProviderLabel(repo.provider ?? (repo.githubRepo ? "github" : null))} value={repo.repoSlug || repo.githubRepo || ""} />
+					) : null}
 					{repo.workdir && <Detail label="Folder" value={repo.workdir} />}
 					{repo.cloneStatus && <Detail label="Clone status" value={repo.cloneStatus} />}
 					<Detail label="Repo id" value={repo.id} />

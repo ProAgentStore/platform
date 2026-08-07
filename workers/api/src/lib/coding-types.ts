@@ -7,6 +7,8 @@
  * sessions key off `instance_id`.
  */
 
+import type { GitProviderId } from "./git-providers.js";
+
 export type CodingClientType = "claude" | "gemini" | "codex" | "grok";
 
 export type CloneStatus = "unknown" | "cloning" | "ready" | "missing_url" | "error";
@@ -23,6 +25,16 @@ export interface CodingRepo {
 	userId: string;
 	name: string;
 	githubRepo?: string; // "owner/repo"
+	/**
+	 * Which host this repo lives on (#221, migration 0097). `githubRepo` stays populated for
+	 * GitHub so every existing reader is untouched; this is what lets a GitLab repo be stored
+	 * as itself instead of as an empty GitHub one.
+	 */
+	provider: GitProviderId;
+	/** The provider-neutral coordinate — `group/subgroup/project` on GitLab, `owner/name` elsewhere. */
+	repoSlug?: string;
+	/** Where a human opens it. */
+	webUrl?: string;
 	cloneUrl?: string;
 	branch: string;
 	workdir?: string;

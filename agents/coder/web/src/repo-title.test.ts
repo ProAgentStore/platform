@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { repoIsGitHub, repoTitle } from "./repo-title";
+import { repoIsGitHub, repoProviderBadge, repoProviderLabel, repoTitle } from "./repo-title";
 
 describe("repoTitle — one meaning, however the repo was added", () => {
 	it("prefers the GitHub coordinate over the add-time nickname", () => {
@@ -36,5 +36,41 @@ describe("repoTitle — one meaning, however the repo was added", () => {
 		// misread as a slug — the exact confusion this helper exists to end.
 		expect(repoIsGitHub({ name: "fws/platform", githubRepo: "o/r" })).toBe(true);
 		expect(repoIsGitHub({ name: "fws/platform" })).toBe(false);
+	});
+
+	it("uses the provider-neutral slug, which is the general form of the same rule (#221)", () => {
+		// GitLab namespaces nest, so `owner/repo` cannot hold the identity at all.
+		expect(repoTitle({ name: "project", provider: "gitlab", repoSlug: "group/subgroup/project" })).toBe("group/subgroup/project");
+		// And it equals githubRepo for every GitHub repo, so this widened nothing there.
+		expect(repoTitle({ name: "platform", provider: "github", repoSlug: "o/r", githubRepo: "o/r" })).toBe("o/r");
+	});
+});
+
+describe("repoProviderBadge — the badge names the HOST", () => {
+	it("no longer calls a GitLab repo `local`", () => {
+		// The bug: the badge asked only "does it have a githubRepo?", so a correctly configured
+		// GitLab repo was labelled as having no remote at all.
+		expect(repoProviderBadge({ name: "group/project", provider: "gitlab", repoSlug: "group/project" })).toBe("GitLab");
+		expect(repoProviderBadge({ name: "w/r", provider: "bitbucket", repoSlug: "w/r" })).toBe("Bitbucket");
+		expect(repoProviderBadge({ name: "team/service", provider: "other" })).toBe("git");
+	});
+
+	it("stays silent for GitHub — the owner/repo title already says it", () => {
+		expect(repoProviderBadge({ name: "fws/platform", provider: "github", githubRepo: "o/r" })).toBeNull();
+		// And for a payload from a deployment that predates the column.
+		expect(repoProviderBadge({ name: "fws/platform", githubRepo: "o/r" })).toBeNull();
+	});
+
+	it("still says `local` for a local checkout", () => {
+		expect(repoProviderBadge({ name: "my-notes", provider: "local" })).toBe("local");
+		expect(repoProviderBadge({ name: "my-notes" })).toBe("local");
+	});
+
+	it("labels every provider for the settings panel", () => {
+		expect(repoProviderLabel("github")).toBe("GitHub");
+		expect(repoProviderLabel("gitlab")).toBe("GitLab");
+		expect(repoProviderLabel("bitbucket")).toBe("Bitbucket");
+		expect(repoProviderLabel("other")).toBe("Git remote");
+		expect(repoProviderLabel(null)).toBe("Local");
 	});
 });
