@@ -194,7 +194,19 @@ export interface Notification {
 	body?: string;
 	read: boolean;
 	instanceId?: string;
-	createdAt: string;
+	/**
+	 * `/v1/notifications` returns rows straight from D1, so the wire shape is snake_case — see
+	 * `NotificationLike` in lib/nextAgent.ts, which had it right. The camelCase fields below are
+	 * what the page WISHED for: `createdAt` was always undefined, so every row rendered
+	 * "Invalid Date". Both are declared, and readers must tolerate either.
+	 */
+	created_at?: string;
+	createdAt?: string;
+	/**
+	 * `alert` = a run has stopped and is waiting for you; `update` = news (#361). Absent on rows
+	 * written before migration 0093.
+	 */
+	kind?: "alert" | "update";
 	/**
 	 * Where clicking it should land — the same same-origin console path the push notification
 	 * carries (#338). Stored per row since migration 0026 and returned by `SELECT *`; the list

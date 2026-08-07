@@ -4,6 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
+import NotificationPreferences, { type NotificationTypeSpec } from "../components/NotificationPreferences";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 
 /** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
@@ -54,6 +55,8 @@ export default function Preferences() {
 	const [voice, setVoice] = useState<Record<string, unknown>>({});
 	const [translation, setTranslation] = useState<Record<string, unknown>>({});
 	const [languages, setLanguages] = useState<Array<{ name: string; tag: string }>>([]);
+	const [notificationTypes, setNotificationTypes] = useState<NotificationTypeSpec[]>([]);
+	const [mutedNotifications, setMutedNotifications] = useState<string[]>([]);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [loaded, setLoaded] = useState(false);
 
@@ -75,12 +78,21 @@ export default function Preferences() {
 		(async () => {
 			try {
 				const d = await api<{
-					preferences?: { voice?: Record<string, unknown>; translation?: Record<string, unknown> };
+					preferences?: {
+						voice?: Record<string, unknown>;
+						translation?: Record<string, unknown>;
+						notifications?: { muted?: string[] };
+					};
 					languages?: Array<{ name: string; tag: string }>;
+					notificationTypes?: NotificationTypeSpec[];
 				}>("/v1/preferences");
 				setVoice(d.preferences?.voice || {});
 				setTranslation(d.preferences?.translation || {});
 				setLanguages(d.languages || []);
+				// The vocabulary comes from the server, not from a second copy of the list here —
+				// see NotificationPreferences.
+				setNotificationTypes(d.notificationTypes || []);
+				setMutedNotifications(d.preferences?.notifications?.muted || []);
 			} catch {
 				// A failed read must still render the controls at platform defaults — an empty page
 				// with no explanation is worse than editable defaults.
@@ -138,13 +150,19 @@ export default function Preferences() {
 		<Page width={960}>
 			<h2 className="text-xl font-bold mb-1">Preferences</h2>
 			<p className="text-sm text-muted mb-5">
-				Your account — connections, timezone, and how you speak, hear and read.{" "}
+				Your account — connections, notifications, timezone, and how you speak, hear and read.{" "}
 				<b>Connections and timezone apply to every agent and cannot be overridden.</b> Voice and
 				translation are defaults any agent can override on its own Settings tab. Appearance is
 				this browser only.
 			</p>
 
 			<AccountConnections />
+
+			<NotificationPreferences
+				types={notificationTypes}
+				muted={mutedNotifications}
+				onSaved={setMutedNotifications}
+			/>
 
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Appearance</h3>

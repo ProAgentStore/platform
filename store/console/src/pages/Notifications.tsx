@@ -1,10 +1,25 @@
 import { useState, useEffect, useCallback } from "react";
 import Page from "../components/Page";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Notification } from "../lib/types";
 import { pushSupported, pushPermission, enablePush, sendTestPush } from "../lib/push";
 import { notificationRoute } from "../lib/deepLink";
+
+/**
+ * When it arrived — reading the field the API actually sends.
+ *
+ * `/v1/notifications` returns rows straight from D1, so it is `created_at`; this page read
+ * `createdAt`, which is always undefined, so every row in the list has been rendering
+ * "Invalid Date". Both are accepted, and an unparseable value renders nothing rather than the
+ * words "Invalid Date", which look like a bug in the notification rather than a missing field.
+ */
+function formatWhen(n: Notification): string {
+	const raw = n.created_at || n.createdAt;
+	if (!raw) return "";
+	const d = new Date(raw);
+	return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+}
 
 export default function Notifications() {
 	const navigate = useNavigate();
@@ -70,9 +85,19 @@ export default function Notifications() {
 						>
 							<div className="flex justify-between items-start">
 								<div>
-									<div className="font-semibold text-sm">{n.title}</div>
+									<div className="font-semibold text-sm">
+										{/* A run that has STOPPED and is waiting for you reads differently from news
+										    about one that finished — the same distinction a `needs_human` board card
+										    draws, and the one a per-type mute is never allowed to hide (#360). */}
+										{n.kind === "alert" && (
+											<span className="mr-1.5 align-middle text-[0.6rem] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/15 text-accent">
+												Needs you
+											</span>
+										)}
+										{n.title}
+									</div>
 									{n.body && <div className="text-sm text-muted mt-0.5">{n.body}</div>}
-									<div className="text-xs text-muted-soft mt-1">{new Date(n.createdAt).toLocaleString()}</div>
+									<div className="text-xs text-muted-soft mt-1">{formatWhen(n)}</div>
 								</div>
 								{!n.read && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1" />}
 							</div>
@@ -103,6 +128,18 @@ function AlertsCard() {
 						: perm === "denied" ? "Blocked. Turn on notifications for proagentstore.online in your browser's site settings, then reload."
 						: "Off — turn them on so an agent can reach you the moment it needs an answer."}
 				</div>
+				{/* Before #360 the only remedy for a noisy class of notification was turning push OFF
+				    entirely, which also loses the handoff — the one alert the product needs to
+				    interrupt for. Point at the control from the page where the noise is noticed. */}
+				{perm === "granted" && (
+					<div className="text-xs text-muted-soft mt-1">
+						Too noisy?{" "}
+						<Link to="/preferences" className="text-accent font-semibold hover:underline">
+							Choose which ones reach you
+						</Link>{" "}
+						— an agent waiting on you always gets through.
+					</div>
+				)}
 			</div>
 			{perm === "granted" ? (
 				<button type="button" onClick={onTest} disabled={busy} className="px-4 py-2 rounded-lg border border-line text-sm font-semibold text-ink hover:border-accent disabled:opacity-50 shrink-0">
