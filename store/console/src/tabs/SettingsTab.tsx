@@ -11,7 +11,7 @@ import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
 import McpConnections from "../components/McpConnections";
 import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
-import { disconnectPrompt, showsConnector, type ConnectorReach } from "../lib/connectorState";
+import { showsConnector, type ConnectorReach } from "../lib/connectorState";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
 
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
@@ -209,11 +209,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [trWordTap, setTrWordTap] = useState(true);
 	const [trFontSize, setTrFontSize] = useState("medium");
 	const [trLanguages, setTrLanguages] = useState<Array<{ name: string; tag: string }>>([]);
-	// Account-level GitHub identity link (for Coder build status / repo access). Google
-	// sign-in leaves github_login = your email, which can't authorize the GitHub App —
-	// linking records your real GitHub username without switching accounts.
-	const [githubLinked, setGithubLinked] = useState<string | null>(null);
-	const [githubMsg, setGithubMsg] = useState("");
+	// Connector STATUS only — no connect/disconnect state lives here any more (#355). This tab
+	// reads whether the account connection exists so it can show the per-agent grant; the
+	// connection itself is made on Preferences → Connections, where its scope is.
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
@@ -435,60 +433,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
-	// Link a real GitHub username to this account (account-level). Full-page redirect
-	// (not a popup) — the callback sets linked_github_login then bounces back with
-	// ?github_linked=<login>, which the effect below reads.
-	const connectGithub = async () => {
-		try {
-			const returnTo = window.location.origin + window.location.pathname;
-			const { url } = await api<{ url: string }>(`/v1/auth/github/link/start?return_to=${encodeURIComponent(returnTo)}`);
-			window.location.href = url;
-		} catch (e) {
-			alert(e instanceof Error ? e.message : "Couldn't start GitHub link");
-		}
-	};
-
-	// Load the current GitHub link state, and surface the link-callback's return param.
-	useEffect(() => {
-		const params = new URLSearchParams(window.location.search);
-		const justLinked = params.get("github_linked");
-		if (justLinked) {
-			setGithubLinked(justLinked);
-			const bound = params.get("github_bound");
-			if (bound) setGithubMsg(`Connected as ${justLinked} — ${bound} org${bound === "1" ? "" : "s"} linked. Build status will show for their repos.`);
-			params.delete("github_linked");
-			params.delete("github_bound");
-			const q = params.toString();
-			window.history.replaceState({}, "", window.location.pathname + (q ? `?${q}` : ""));
-		}
-		api<{ githubLinked?: string | null }>("/v1/auth/me").then((d) => setGithubLinked(d.githubLinked ?? null)).catch(() => {});
-	}, []);
-
-	const connectGmail = async () => {
-		try {
-			const { url } = await api<{ url: string }>("/v1/email/google/start");
-			window.open(url, "_blank", "noopener");
-			setEmailMsg("Complete the Google sign-in in the new tab, then come back here.");
-		} catch (e) {
-			setEmailMsg(e instanceof Error ? e.message : "Failed to start Gmail connection");
-		}
-	};
-
-	const disconnectGmail = async () => {
-		// Gmail is the other half of #357, and it goes the OTHER way deliberately: its permission
-		// is a per-agent flag in that agent's own state, not a row this account-level route can
-		// see, so disconnecting does NOT clear it. Saying so is the honest option; the one thing
-		// ruled out is letting a reconnect quietly re-arm it without ever having mentioned it.
-		if (!confirm("Disconnect Gmail?\n\nAgents lose inbox access immediately. Their per-agent permission to read your inbox is NOT cleared, so reconnecting Gmail restores it — turn the permission off per agent below if you want it gone for good.")) return;
-		try {
-			await api("/v1/email/google", { method: "DELETE" });
-			setEmailStatus((s) => (s ? { ...s, connected: false } : s));
-			setEmailMsg("Gmail disconnected.");
-		} catch (e) {
-			setEmailMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
 	// The blast-radius line under the grant list is account-wide, so it goes stale the moment
 	// THIS page changes a grant. Re-read rather than guess: the count it shows is the count
 	// the disconnect confirmation will quote.
@@ -497,41 +441,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	};
 	const refreshWorkdriveReach = () => {
 		api<WorkdriveStatus>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
-	};
-
-	const connectDrive = async () => {
-		try {
-			const { url } = await api<{ url: string }>("/v1/drive/google/start");
-			window.open(url, "_blank", "noopener");
-			setDriveMsg("Complete the Google sign-in in the new tab, then come back here.");
-		} catch (e) {
-			setDriveMsg(e instanceof Error ? e.message : "Failed to start Google Drive connection");
-		}
-	};
-
-	// Re-reads the status first: the reach quoted in the confirmation has to be the reach at
-	// the moment of the click, not whatever was fetched when the tab opened (another tab, or
-	// this one's other agents, may have granted folders since).
-	const disconnectDrive = async () => {
-		let reach = driveStatus?.reach;
-		try {
-			const fresh = await api<DriveStatus>("/v1/drive/status");
-			setDriveStatus(fresh);
-			reach = fresh.reach;
-		} catch { /* fall back to the loaded status — never block a disconnect on a status read */ }
-		if (!confirm(disconnectPrompt("Google Drive", reach))) return;
-		try {
-			const r = await api<{ revoked?: ConnectorReach }>("/v1/drive/google", { method: "DELETE" });
-			setDriveStatus((s) => (s ? { ...s, connected: false, reach: { grants: 0, instances: 0 } } : s));
-			setDriveGrants([]);
-			setDriveMsg(
-				r.revoked?.grants
-					? `Google Drive disconnected. Revoked ${r.revoked.grants} folder grant${r.revoked.grants === 1 ? "" : "s"} across ${r.revoked.instances} agent${r.revoked.instances === 1 ? "" : "s"}.`
-					: "Google Drive disconnected.",
-			);
-		} catch (e) {
-			setDriveMsg(e instanceof Error ? e.message : "Failed");
-		}
 	};
 
 	const addDriveGrant = async () => {
@@ -558,38 +467,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			refreshDriveReach();
 		} catch (e) {
 			setDriveMsg(e instanceof Error ? e.message : "Failed to remove Drive access");
-		}
-	};
-
-	const connectWorkdrive = async () => {
-		try {
-			const { url } = await api<{ url: string }>("/v1/workdrive/zoho/start");
-			window.open(url, "_blank", "noopener");
-			setWorkdriveMsg("Complete the Zoho sign-in in the new tab, then come back here.");
-		} catch (e) {
-			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to start Zoho WorkDrive connection");
-		}
-	};
-
-	const disconnectWorkdrive = async () => {
-		let reach = workdriveStatus?.reach;
-		try {
-			const fresh = await api<WorkdriveStatus>("/v1/workdrive/status");
-			setWorkdriveStatus(fresh);
-			reach = fresh.reach;
-		} catch { /* see disconnectDrive */ }
-		if (!confirm(disconnectPrompt("Zoho WorkDrive", reach))) return;
-		try {
-			const r = await api<{ revoked?: ConnectorReach }>("/v1/workdrive/zoho", { method: "DELETE" });
-			setWorkdriveStatus((s) => (s ? { ...s, connected: false, reach: { grants: 0, instances: 0 } } : s));
-			setWorkdriveGrants([]);
-			setWorkdriveMsg(
-				r.revoked?.grants
-					? `Zoho WorkDrive disconnected. Revoked ${r.revoked.grants} folder grant${r.revoked.grants === 1 ? "" : "s"} across ${r.revoked.instances} agent${r.revoked.instances === 1 ? "" : "s"}.`
-					: "Zoho WorkDrive disconnected.",
-			);
-		} catch (e) {
-			setWorkdriveMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -675,9 +552,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 	// #353: a connector with no OAuth client on this deployment is not ON this page — it used to
 	// be a red warning plus a dead row with no button. Why, and the three states: lib/connectorState.
+	//
+	// #355 narrowed Drive/WorkDrive further, from "connectable" to CONNECTED. What is left on this
+	// tab for them is the folder grant, and a grant against an account you have not connected is
+	// not a control — it is the dead row #353 removed, wearing a different hat. On a deployment
+	// where nobody has connected Drive, the block is simply absent from every agent, which is the
+	// reported symptom gone. Gmail is the exception below and says why.
 	const showsEmail = showsConnector(emailStatus);
-	const showsDrive = showsConnector(driveStatus);
-	const showsWorkdrive = showsConnector(workdriveStatus);
+	const showsDrive = driveStatus?.connected === true;
+	const showsWorkdrive = workdriveStatus?.connected === true;
 
 	return (
 		// min-w-0 lets this shrink inside the flex scroll wrapper; overflow-x-hidden is a
@@ -904,7 +787,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 				<p className="text-sm text-muted mb-3">
-					Connect accounts once, then grant this agent access to only the folders it should use.
+					What <b>this agent</b> may do, and which of your connected folders it may read. Connecting
+					or disconnecting an account is account-wide and lives in <b>Preferences → Connections</b>.
 				</p>
 
 				{/* Tools — the full, honest answer to "what can this agent do?". Shows what it
@@ -1001,53 +885,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					/>
 				)}
 
-				{/* GitHub identity — account-level. Needed for Coder build status + repo access
-				    (esp. if you signed in with Google, whose github_login is your email). */}
-				<div className="flex items-start justify-between gap-3 mb-3">
-					<div className="text-sm min-w-0">
-						<span className="font-semibold">GitHub</span>{" "}
-						{githubLinked
-							? <span className="text-green">· connected as {githubLinked}</span>
-							: <span className="text-muted">· not connected</span>}
-						<p className="text-[0.7rem] text-muted-soft mt-0.5">Links your GitHub username so the Coder can show build status and reach your repos. Account-level — applies to all your agents.</p>
-					</div>
-					<button type="button" onClick={connectGithub} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold shrink-0">
-						{githubLinked ? "Reconnect" : "Connect GitHub"}
-					</button>
-				</div>
-				{githubMsg && <p className="text-xs text-green mb-3 -mt-1">{githubMsg}</p>}
-
-				{showsEmail && (
-				<div className="flex items-center justify-between gap-3 mb-3">
-					<div className="text-sm">
-						<span className="font-semibold">Gmail</span>{" "}
-						{emailStatus?.connected
-							? <span className="text-green">· connected{emailStatus.email ? ` (${emailStatus.email})` : ""}</span>
-							: <span className="text-muted">· not connected</span>}
-					</div>
-					{emailStatus?.connected ? (
-						<button type="button" onClick={disconnectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
-							Disconnect
-						</button>
-					) : (
-						<button type="button" onClick={connectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-							Connect Gmail
-						</button>
-					)}
-				</div>
-				)}
-
 				{showsDrive && (
 					<FileConnectorPanel
 						label="Google Drive"
-						connected={driveStatus?.connected === true}
 						account={driveStatus?.email}
 						reach={driveStatus?.reach}
 						grants={driveGrants}
 						grantRef={driveGrantRef}
 						onGrantRefChange={setDriveGrantRef}
-						onConnect={connectDrive}
-						onDisconnect={disconnectDrive}
 						onAddGrant={addDriveGrant}
 						onRemoveGrant={(g) => removeDriveGrant(g as ConnectorGrant)}
 					/>
@@ -1056,20 +901,21 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{showsWorkdrive && (
 					<FileConnectorPanel
 						label="Zoho WorkDrive"
-						connected={workdriveStatus?.connected === true}
 						account={workdriveStatus?.account}
 						reach={workdriveStatus?.reach}
 						grants={workdriveGrants}
 						grantRef={workdriveGrantRef}
 						onGrantRefChange={setWorkdriveGrantRef}
-						onConnect={connectWorkdrive}
-						onDisconnect={disconnectWorkdrive}
 						onAddGrant={addWorkdriveGrant}
 						onRemoveGrant={(g) => removeWorkdriveGrant(g as ConnectorGrant)}
 					/>
 				)}
 
-				{/* Goes with the Gmail row: it pointed at "Connect Gmail above", which is now gone. */}
+				{/* The inbox permission is genuinely per-agent — a flag in THIS agent's own state, not
+				    an account row — so it stays. It is shown whenever the deployment can do Gmail at
+				    all, disabled rather than hidden while the account is disconnected, because
+				    `agent-think.ts` still offers `find_confirmation_link` on this flag alone: hiding
+				    the checkbox would remove the only control that turns off something still set. */}
 				{showsEmail && (
 				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
 					<input
@@ -1082,7 +928,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				</label>
 				)}
 				{showsEmail && !emailStatus?.connected && (
-					<p className="text-xs text-muted mt-1">Connect Gmail above to enable this.</p>
+					<p className="text-xs text-muted mt-1">Connect Gmail in <b>Preferences → Connections</b> to enable this.</p>
 				)}
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}

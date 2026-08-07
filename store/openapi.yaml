@@ -8866,6 +8866,28 @@ paths:
                         connected: { type: boolean, nullable: true, description: "Whether the caller has connected it; null when the connector holds no credential (relay/no-auth)." }
                         account: { type: string, nullable: true }
                         connectedAt: { type: string, nullable: true }
+                        reach:
+                          type: object
+                          nullable: true
+                          description: >
+                            What disconnecting would revoke: folder grants, and how many agents hold
+                            them. `null` when the connector's reach is not grants (Gmail's is a
+                            per-agent permission flag), because `{grants: 0}` there would read as
+                            "nothing uses this" rather than "this is not how its reach works".
+                          properties:
+                            grants: { type: integer }
+                            instances: { type: integer }
+                        flow:
+                          type: object
+                          nullable: true
+                          description: >
+                            The endpoints a UI should call to connect/disconnect. Drive, Gmail and
+                            WorkDrive name dedicated flows because their OAuth apps register those
+                            redirect URIs; every other oauth connector gets the generic
+                            `/v1/connectors/{id}/oauth*` pair. `null` when no connect step exists.
+                          properties:
+                            start: { type: string, example: /v1/drive/google/start }
+                            disconnect: { type: string, example: /v1/drive/google }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/connectors/{id}/oauth/start:
