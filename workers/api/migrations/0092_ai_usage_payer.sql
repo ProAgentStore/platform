@@ -1,0 +1,47 @@
+-- Who PAYS for a ledger row (#346) — the fact `ai_usage` never recorded.
+--
+-- The ledger had tokens and one `cost_micros`, plus `cost_source` (0080). That column answers
+-- "whose arithmetic produced this number?" and was then read everywhere as if it answered "is
+-- this number money?", which nothing in the schema answered at all.
+--
+-- The correction that forces this column: `total_cost_usd` from Claude Code is NOT a measurement
+-- of money. Anthropic's own docs (https://code.claude.com/docs/en/costs) say the CLI "computes
+-- the dollar figure locally from token counts priced at standard list rates … and may differ from
+-- your actual bill", and that for Max/Pro subscribers "the session cost figure isn't relevant for
+-- billing purposes". It is tokens × list price — structurally the same object as our own estimate
+-- in lib/ai-pricing.ts. So 0080's comment ("the real thing rather than our arithmetic") was wrong
+-- when it was written; it is corrected in place, and `cost_source` keeps only its narrow, true
+-- meaning: whose process did the multiplication.
+--
+-- What that mistake cost (#343): `DAILY_CEILING_MICROS` summed `cost_micros` and refused a
+-- delegation with "the $50.00 daily spend limit has been hit" over $48.76 of engine turns run on
+-- the owner's Claude subscription. Nobody was billed a cent. The user went to the Console usage
+-- page to find the $50 and found nothing, because there was nothing.
+--
+-- Three separable facts, previously collapsed into one number:
+--   consumption    — tokens. Always true. Already stored.
+--   notional value — tokens × list price. Always true, as an estimate. That IS `cost_micros`.
+--   charge         — money someone actually owes. Depends on the payer. THIS column.
+--
+--   'byok-api'     the user's own provider key. Real money on their provider account.
+--   'subscription' a Claude/ChatGPT plan. No marginal charge; draws a plan allowance, which is
+--                  a rolling 5h + weekly TOKEN window — there is no dollar figure on the other
+--                  side for a dollar ceiling to compare against.
+--   'platform'     ProAgentStore pays (Workers AI, platform models). Real money, our account.
+--   NULL           unknown. Say so; never guess.
+--
+-- NULL is the honest default and there is no backfill: every pre-existing row genuinely does not
+-- record who paid, and stamping one on retrospectively would be the same confident-but-unfounded
+-- inference this column exists to remove.
+--
+-- The gap that stays a gap: the runner can observe `api-key` / `subscription` / `machine-login`
+-- from the engine's merged spawn env, but `machine-login` means only "neither credential was in
+-- the env and the CLI used whatever login it has stored" — which could be either. It maps to
+-- NULL, not to 'subscription'. Unknown is never blocked by a MONEY ceiling (we cannot assert a
+-- charge we cannot establish) and is bounded by the token ceiling instead, in the unit it is
+-- certainly consuming.
+ALTER TABLE ai_usage ADD COLUMN payer TEXT;
+
+-- Every consumer that sums money now filters on this, so the filter has to be cheap over the
+-- same (user, window) scan the ceiling and the Usage page already perform.
+CREATE INDEX IF NOT EXISTS idx_ai_usage_user_payer ON ai_usage(user_id, payer, created_at);

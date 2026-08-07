@@ -206,4 +206,30 @@ describe("engineAuthReport — the per-session transparency payload", () => {
 		const json = JSON.stringify(engineAuthReport("api-key", "api-key"));
 		expect(json).not.toMatch(/sk-ant|sk-o|CLAUDE_CODE_OAUTH_TOKEN/);
 	});
+
+	it("says something in the ORDINARY case, not only when something is wrong (#343)", () => {
+		// `warning` fires only on a mismatch, and `auto` + `machine-login` is a match — so the
+		// most common configuration, and the one where the owner can least tell which account is
+		// paying, was the silent one.
+		const r = engineAuthReport("auto", "machine-login");
+		expect(r.warning).toBeNull();
+		expect(r.note).toBeTruthy();
+	});
+
+	it("carries the payer, and refuses to guess it from machine-login", () => {
+		expect(engineAuthReport("api-key", "api-key").payer).toBe("byok-api");
+		expect(engineAuthReport("subscription", "subscription").payer).toBe("subscription");
+		// The load-bearing one (#346): neither credential was in the env, so the CLI used whatever
+		// login it has stored — which may be a plan OR an API key configured inside the CLI.
+		expect(engineAuthReport("auto", "machine-login").payer).toBeNull();
+		expect(engineAuthReport("auto", "machine-login").note).toMatch(/cannot see|unattributed/i);
+		expect(engineAuthReport("auto", "machine-login").note).not.toMatch(/your subscription\b/i);
+	});
+
+	it("tells a subscription session it is not counted against the spend limit", () => {
+		// The user-visible half of the denomination fix: the session that triggered #343 now says
+		// so on its own header, rather than the owner discovering it from a refusal.
+		expect(engineAuthReport("subscription", "subscription").note).toMatch(/not counted against the account spend limit/i);
+		expect(engineAuthReport("api-key", "api-key").note).toMatch(/counted against the account spend limit/i);
+	});
 });

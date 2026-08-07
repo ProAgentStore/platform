@@ -25,7 +25,40 @@ describe("denseDays", () => {
 describe("aggregateUsage", () => {
 	it("sums totals across rows", () => {
 		const s = aggregateUsage([row(), row({ input_tokens: 500, output_tokens: 100, cost_micros: 3000 })]);
-		expect(s.totals).toEqual({ inputTokens: 1500, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 9000, calls: 2 });
+		expect(s.totals).toEqual({ inputTokens: 1500, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 9000, chargedCostMicros: 0, calls: 2 });
+	});
+
+	it("reports charged value separately from total list value — never added together", () => {
+		// The page's whole correction (#346/#347). `cost_micros` is notional value on EVERY row:
+		// tokens × list price, ours or Claude Code's. Only some of it is money anyone owes, and
+		// a single "Est. cost" over the sum is what taught the product to read this as a bill.
+		const s = aggregateUsage([
+			row({ payer: "byok-api", cost_micros: 4000 }),
+			row({ payer: "platform", cost_micros: 1000 }),
+			row({ payer: "subscription", kind: "engine", cost_micros: 2_870_000 }),
+			row({ payer: null, kind: "engine", cost_micros: 900_000 }),
+		]);
+		expect(s.totals.chargedCostMicros).toBe(5000);
+		expect(s.totals.costMicros).toBe(3_775_000); // the value is real; the charge is $0.005
+	});
+
+	it("buckets by payer, with an unattributed row shown rather than dropped", () => {
+		// A row we cannot attribute is still consumption the owner should see. Hiding it would
+		// make the page's own attribution look more complete than it is.
+		const s = aggregateUsage([
+			row({ payer: "byok-api", cost_micros: 100 }),
+			row({ payer: null, cost_micros: 900 }),
+		]);
+		expect(s.byPayer.map((b) => b.key).sort()).toEqual(["byok-api", "unknown"]);
+		expect(s.byPayer.find((b) => b.key === "unknown")?.label).toBe("Payer not established");
+	});
+
+	it("treats a pre-payer row as unknown, not as charged", () => {
+		// No backfill on migration 0092: rows written before it genuinely do not record who paid,
+		// and stamping one on retrospectively is the inference the column exists to remove.
+		const s = aggregateUsage([row({ cost_micros: 6000 })]);
+		expect(s.totals.chargedCostMicros).toBe(0);
+		expect(s.byPayer[0].key).toBe("unknown");
 	});
 
 	it("breaks down by model, kind and agent sorted by cost", () => {

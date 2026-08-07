@@ -5,11 +5,16 @@ import { unmeteredUsageSummary } from "../lib/engine-metering.js";
 import type { Env } from "../types.js";
 
 /**
- * Usage transparency — token usage + estimated cost across ALL the user's agents,
- * broken down by model, modality (chat/apply/coding/…), and agent, over time.
- * Cost is a BYOK ESTIMATE (tokens × published list price; see lib/ai-pricing.ts) —
- * we never see the real provider bill. History begins when the ledger shipped (no
- * backfill). Data source: the `ai_usage` ledger written at the AI choke point.
+ * Usage transparency — token usage + estimated value across ALL the user's agents,
+ * broken down by model, modality (chat/apply/coding/…), agent, and PAYER, over time.
+ *
+ * Every cost figure here is an estimate at published list prices (tokens × list rate; see
+ * lib/ai-pricing.ts), including the coding-engine rows: Claude Code computes its own figure the
+ * same way and Anthropic's docs say so explicitly (#347). We never see any provider's bill.
+ *
+ * `payer` (migration 0092) is the axis that says whether a figure is money at all, and it is
+ * returned unaggregated with the rest so the page can show consumption and charge as two numbers
+ * rather than implying the total is a bill. History begins when the ledger shipped (no backfill).
  */
 export const usageRoutes = new Hono<{ Bindings: Env }>();
 
@@ -36,7 +41,7 @@ usageRoutes.get("/", async (c) => {
 	const stmt = c.env.DB.prepare(
 		`SELECT COALESCE(u.agent_id, i.agent_id) AS agent_id, u.instance_id, u.provider, u.model, u.kind,
 		        u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
-		        u.cost_micros, u.created_at, a.name AS agent_name
+		        u.cost_micros, u.payer, u.created_at, a.name AS agent_name
 		 FROM ai_usage u
 		 LEFT JOIN agent_instances i ON i.id = u.instance_id
 		 LEFT JOIN agents a ON a.id = COALESCE(u.agent_id, i.agent_id)

@@ -10,6 +10,7 @@
 // Pure move — no behaviour changed.
 
 import { getUserProviderKey } from "./user-ai.js";
+import { payerForEngineAuth, type EngineAuthResolved, type PayerOrUnknown } from "./usage-payer.js";
 import type { CodingClientType, CodingSessionRecord } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -129,7 +130,8 @@ export function engineAuthFor(engines: CodingEngine[], launchCommand: string | n
  * connected, or when the runner predates the field — an unknown answer, reported as unknown
  * rather than guessed from the setting.
  */
-export type EngineAuthResolved = "subscription" | "api-key" | "machine-login";
+// Re-exported from the leaf that defines it (see usage-payer.ts) so existing importers are unmoved.
+export type { EngineAuthResolved } from "./usage-payer.js";
 
 /** The transparency report for one session: what was ASKED for, what was GOT, what it runs as. */
 export interface EngineAuthReport {
@@ -141,7 +143,34 @@ export interface EngineAuthReport {
 	runtime: "child-process";
 	/** Human-readable warning when the outcome contradicts the setting, else null. */
 	warning: string | null;
+	/**
+	 * Who pays for this session's turns, as the ledger records it (#346). `null` = unknown, and
+	 * that is the honest answer for `machine-login`, which is also the most common resolution.
+	 */
+	payer: PayerOrUnknown;
+	/**
+	 * The positive statement of the outcome — what this session's spend IS, not what is wrong
+	 * with it (#343).
+	 *
+	 * `machine-login` produced no message at all before this: `engineAuthWarning` only fires on a
+	 * mismatch, and `auto` + `machine-login` is a match. So the single most common configuration —
+	 * the one where the user has the least idea which account is paying — was the silent one.
+	 */
+	note: string;
 }
+
+/** What each observed credential means for the bill, stated plainly. */
+const PAYER_NOTE_FOR_RESOLVED: Record<EngineAuthResolved, string> = {
+	"api-key": "Billed per token to your own provider account, and counted against the account spend limit.",
+	subscription:
+		"Running on your Claude subscription — no per-token charge, and not counted against the account spend limit. It draws your plan's allowance, which is measured in tokens.",
+	// Deliberately NOT "you're on your subscription". The runner can only observe that neither
+	// credential was in the env, so the CLI used whatever login it has stored — which may be a
+	// claude.ai plan or an API key configured inside the CLI itself. Naming the ambiguity is the
+	// honest report; guessing subscription here is the error #346 exists to remove.
+	"machine-login":
+		"Running on this machine's own stored login. We cannot see whether that is a subscription or an API key configured in the CLI, so this session's spend is recorded as unattributed and never counted against the account spend limit.",
+};
 
 /**
  * Warn when what the engine GOT contradicts what the preset ASKED for (#248).
@@ -182,7 +211,16 @@ export function engineAuthWarning(mode: EngineAuth, resolved: EngineAuthResolved
 
 /** Assemble the full per-session auth report from the preset setting + the runner's observation. */
 export function engineAuthReport(mode: EngineAuth, resolved: EngineAuthResolved | null): EngineAuthReport {
-	return { mode, resolved, runtime: "child-process", warning: engineAuthWarning(mode, resolved) };
+	return {
+		mode,
+		resolved,
+		runtime: "child-process",
+		warning: engineAuthWarning(mode, resolved),
+		payer: payerForEngineAuth(resolved),
+		note: resolved
+			? PAYER_NOTE_FOR_RESOLVED[resolved]
+			: "No runner is reporting this session's credential, so who pays for it is unknown.",
+	};
 }
 
 /**

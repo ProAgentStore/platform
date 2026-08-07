@@ -688,9 +688,16 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// consume records they would then discard.
 	const snap = await callRunner(conn, "/coding/capture", { sessionId, drainUsage: true }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
+	// The SAME snapshot carries what the engine authenticated with, and it is the only place in
+	// the system that knows: the credential is decided by a merge with the machine's own shell,
+	// which happens on the runner. It was already being displayed further down this handler and
+	// then thrown away (#346) — so a ledger row could say what a turn was WORTH but never who
+	// pays, which is what let a money ceiling fire on a subscription (#343). Persist it here,
+	// where the value and the observation are in hand together.
+	const resolvedAuth = ((snap as { authResolved?: unknown }).authResolved ?? null) as EngineAuthResolved | null;
 	await recordEngineUsage(
 		c.env,
-		{ userId: uid, sessionId, instanceId },
+		{ userId: uid, sessionId, instanceId, authResolved: resolvedAuth },
 		sanitizeEngineUsage((snap as { usage?: unknown }).usage),
 	);
 	// What the Engine actually DID (#294). The same drain carries it, so this poll records a merge
@@ -729,10 +736,7 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// they disagree. A runner too old to report `authResolved` yields null, i.e. "unknown", never
 	// a restatement of the setting.
 	const { engines } = await readEngines(c.env, instanceId, uid);
-	const auth = engineAuthReport(
-		engineAuthFor(engines, session.launchCommand),
-		((snap as { authResolved?: unknown }).authResolved ?? null) as EngineAuthResolved | null,
-	);
+	const auth = engineAuthReport(engineAuthFor(engines, session.launchCommand), resolvedAuth);
 
 	// `usage` is drained, so it appears on one poll in a hundred and is empty on the rest. Passing
 	// that to the console would look like a field that flickers; it has been ledgered above and

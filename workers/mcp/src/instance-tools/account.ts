@@ -31,7 +31,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"usage_summary",
-		"Token usage + ESTIMATED cost across all your agents, broken down by agent, model, and activity (chat/apply/coding/voice/…), over a time range. Cost is a BYOK estimate from list prices, not a bill; history starts when tracking was enabled.",
+		"Token usage + ESTIMATED value across all your agents, broken down by agent, model, activity (chat/apply/coding/voice/…) and PAYER, over a time range. Every dollar figure is tokens x published list price — ours for platform calls, Claude Code's own arithmetic for coding-engine rows — so none of it is a bill. `totals.chargedCostMicros` is the part someone is actually charged; the rest (a coding engine on a subscription, or one whose payer we could not establish) is real tokens at a notional price. History starts when tracking was enabled.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			range: z.enum(["7d", "30d", "90d", "all"]).optional().describe("Time window (default 30d)."),

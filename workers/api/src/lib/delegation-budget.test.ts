@@ -4,6 +4,7 @@ import {
 	canAdmit,
 	DEFAULT_LIMITS,
 	formatMicros,
+	formatTokens,
 	isExhausted,
 	remainingCost,
 	remainingDelegations,
@@ -148,6 +149,16 @@ describe("remainingDelegations / formatMicros", () => {
 	it("formats micros as dollars", () => {
 		expect(formatMicros(1_250_000)).toBe("$1.25");
 		expect(formatMicros(-1)).toBe("$0.00");
+	});
+
+	it("formats tokens as the magnitude a human compares against", () => {
+		// The other unit a refusal can be denominated in (#343). "250000000 tokens" reads as
+		// noise; every tool that shows this number shows it this way.
+		expect(formatTokens(13_400_000)).toBe("13M");
+		expect(formatTokens(2_500_000)).toBe("2.5M");
+		expect(formatTokens(250_000_000)).toBe("250M");
+		expect(formatTokens(1500)).toBe("2K");
+		expect(formatTokens(-5)).toBe("0");
 	});
 });
 

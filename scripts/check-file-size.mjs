@@ -79,7 +79,7 @@ const PINS = {
 	// lib/coding-authority.ts (a split would have put them there anyway); what is left here is the
 	// three lines that read one field off a body, which belong with the other fields of the same
 	// PUT and would be worse anywhere else.
-	"workers/api/src/routes/coding.ts": 1774,
+	"workers/api/src/routes/coding.ts": 1778,
 	// 1696 → 853 at #305. Three contiguous route blocks left for sibling modules along the seams
 	// the registrations already had — instances-tasks.ts (the board/ticket surface and the
 	// instance_runtime_tasks mirror it all reconciles against), instances-chat.ts (the AgentDO
@@ -109,7 +109,7 @@ const PINS = {
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
-	"agents/coder/web/src/CodingTab.tsx": 1225,
+	"agents/coder/web/src/CodingTab.tsx": 1230,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs

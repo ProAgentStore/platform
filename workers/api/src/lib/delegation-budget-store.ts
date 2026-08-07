@@ -7,12 +7,13 @@
 // D1 applies second sees the first one's reservation already subtracted and matches zero rows.
 // A read-then-write would race; this cannot.
 
-import { spendPercentileMicros, userSpendSinceMicros } from "./usage.js";
+import { accountUsageSince, spendPercentileMicros } from "./usage.js";
 import type { Env } from "../types.js";
 import {
 	canAdmit,
 	DEFAULT_LIMITS,
 	formatMicros,
+	formatTokens,
 	sanitizeLimits,
 	type AdmissionRefusal,
 	type BudgetLimits,
@@ -73,14 +74,42 @@ function toView(row: BudgetRow): BudgetView {
 const DERIVED_HEADROOM_RUNS = 25;
 
 /**
- * Account-wide ceiling over a rolling 24h, in USD micros.
+ * Account-wide ceiling over a rolling 24h, in USD micros — of CHARGED spend only.
  *
  * The per-tree pool bounds ONE runaway. It cannot see a thousand small ones — each opens its own
  * budget, each stays inside it, and the account still bleeds. This is the backstop for that,
  * checked at admission so an exhausted account cannot open new work rather than being discovered
  * on a bill. Generous on purpose: it is a circuit breaker, not a quota.
+ *
+ * "Rather than being discovered on a bill" is the whole justification, and it is exactly what
+ * #343 broke. The ledger's `cost_micros` is notional value on every row — tokens × list price —
+ * and this summed all of it. A day of coding whose engine ran on the owner's Claude subscription
+ * accrued $48.76 of value against a $50 money ceiling, and the next delegation was refused with
+ * "the $50.00 daily spend limit has been hit". There was no bill to discover. The user opened the
+ * Console usage page looking for the $50 and found nothing, because nothing had been spent.
+ *
+ * So it now reads `chargedMicros` — rows whose `payer` (migration 0092) is a real charge. The
+ * denomination is the fix, not the threshold: raising $50 to $200 would have bought a few more
+ * hours before the same wall, and the wall would still have been made of money nobody owed.
  */
-export const DAILY_CEILING_MICROS = 50_000_000; // $50 / 24h across everything
+export const DAILY_CEILING_MICROS = 50_000_000; // $50 / 24h of CHARGED spend
+
+/**
+ * Account-wide ceiling over the same rolling 24h, in TOKENS.
+ *
+ * The money ceiling stopped counting non-money, which would otherwise have left subscription and
+ * unattributed engine work bounded by nothing at all — a runaway loop on a subscription engine
+ * would never have tripped the account backstop. It is not unbounded; it is bounded in the unit it
+ * actually consumes, which is also the unit a subscription's own allowance is denominated in
+ * (a rolling 5h + weekly token window, per Anthropic's docs).
+ *
+ * Sized against the incident it is named for, deliberately far above it: the whole day in #343 was
+ * 13.4M tokens of ordinary hard work. 250M is roughly eighteen such days compressed into one — a
+ * shape no human working session has, which is what a circuit breaker is supposed to catch. All
+ * tokens count, charged or not: consumption is consumption, and a runaway on an API key is the
+ * same runaway.
+ */
+export const DAILY_TOKEN_CEILING = 250_000_000;
 const DAILY_WINDOW_HOURS = 24;
 
 /**
@@ -175,11 +204,35 @@ export async function reserve(
 	// without this a thousand small trees each stay inside their own limit while the bill grows.
 	// Deliberately not part of the atomic UPDATE — it is a coarse circuit breaker over a rolling
 	// window, and racing two admissions past it by one step is not the failure mode it guards.
-	if (await userSpendSinceMicros(env, userId, DAILY_WINDOW_HOURS) >= DAILY_CEILING_MICROS) {
+	//
+	// TWO ceilings in two units, because there are two resources and no exchange rate between
+	// them. Both report `account_ceiling`: the workflows key off that reason to keep the SHARED
+	// tree pool open for what is a transient account-level fact, and a second reason string would
+	// silently lose them that (they would markExhausted a pool with headroom left, the exact
+	// regression the reason code was introduced to fix).
+	const window = await accountUsageSince(env, userId, DAILY_WINDOW_HOURS);
+	if (window.chargedMicros >= DAILY_CEILING_MICROS) {
 		return {
 			ok: false,
 			reason: "account_ceiling",
-			message: `Stopped: your agents have spent the ${formatMicros(DAILY_CEILING_MICROS)} daily limit across all runs. It resets as older usage ages out.`,
+			// Names what was counted and over what window. "The $50 daily limit has been hit" sent
+			// the user of #343 to a provider dashboard that showed nothing for that day, because
+			// the figure that tripped it was never on any bill.
+			message:
+				`Stopped: ${formatMicros(window.chargedMicros)} of charged AI spend in the last ${DAILY_WINDOW_HOURS}h across all your runs, ` +
+				`against a ${formatMicros(DAILY_CEILING_MICROS)} account circuit breaker. That counts only calls billed to your own provider ` +
+				`API key or paid by the platform — subscription and unattributed coding-engine usage is excluded, because it is tokens rather ` +
+				`than money. See Usage for the breakdown; it resets as older usage ages out.`,
+		};
+	}
+	if (window.tokens >= DAILY_TOKEN_CEILING) {
+		return {
+			ok: false,
+			reason: "account_ceiling",
+			message:
+				`Stopped: ${formatTokens(window.tokens)} tokens consumed in the last ${DAILY_WINDOW_HOURS}h across all your runs, against a ` +
+				`${formatTokens(DAILY_TOKEN_CEILING)} account circuit breaker. This one is in tokens, not dollars, because most coding-engine ` +
+				`work draws a subscription allowance rather than a bill. It resets as older usage ages out.`,
 		};
 	}
 

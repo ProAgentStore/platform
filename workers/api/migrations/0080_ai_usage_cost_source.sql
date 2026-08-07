@@ -1,14 +1,24 @@
--- Distinguish a MEASURED cost from an estimated one (#267).
+-- Record WHOSE ARITHMETIC produced a cost figure (#267).
 --
--- Every ai_usage row until now carried an estimate: tokens × published list price
--- (lib/ai-pricing.ts), because BYOK means we never see the provider's bill. The coding Engine
--- is the exception — Claude Code computes `total_cost_usd` itself and reports it on the event
--- that ends each turn, so that figure is the real thing rather than our arithmetic.
+-- CORRECTED IN PLACE at #347. This comment used to say the coding Engine's figure "is the real
+-- thing rather than our arithmetic". It is not, and that sentence is what turned a provenance
+-- flag into a licence to enforce: #343's $50 circuit breaker fired on $48.76 of engine turns run
+-- on a Claude subscription, over a bill that did not exist.
 --
--- Mixing the two in one `cost_micros` column with no marker would make the total less
--- trustworthy, not more: a consumer (the Usage page, payouts in #57, cost governance in #56)
--- could not tell which part of a sum it was allowed to rely on.
+-- Anthropic's docs (https://code.claude.com/docs/en/costs) are explicit: Claude Code "computes the
+-- dollar figure locally from token counts priced at standard list rates, so it doesn't reflect
+-- promotional pricing or contracted discounts and may differ from your actual bill", and Max/Pro
+-- subscribers "have usage included in their subscription, so the session cost figure isn't
+-- relevant for billing purposes". `total_cost_usd` is tokens × list price — the same construction
+-- as lib/ai-pricing.ts, run by a different process.
 --
--- NULL means "estimated", which is the truth for every pre-existing row, so no backfill.
--- 'reported' means the provider's own CLI computed it.
+-- So EVERY ai_usage row carries an estimate, and this column records only which process estimated
+-- it. That is still worth knowing (the CLI has the exact per-turn token split and model, so its
+-- figure is the better estimate), but it carries no authority about money.
+--
+-- NULL  — we computed it from lib/ai-pricing.ts. True for every pre-existing row, so no backfill.
+-- 'reported' — the provider's own CLI computed it.
+--
+-- Whether a figure is money at all is `payer` (migration 0092), which is a different question
+-- this column was wrongly read as answering.
 ALTER TABLE ai_usage ADD COLUMN cost_source TEXT;

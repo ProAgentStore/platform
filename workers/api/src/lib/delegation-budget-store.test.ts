@@ -3,6 +3,7 @@ import { DEFAULT_LIMITS } from "./delegation-budget.js";
 import {
 	closeBudget,
 	DAILY_CEILING_MICROS,
+	DAILY_TOKEN_CEILING,
 	openBudget,
 	markExhausted,
 	raiseBudget,
@@ -278,8 +279,8 @@ describe("openBudget — defaults derived from the ledger, not guessed", () => {
 });
 
 describe("the account backstop — what a per-tree pool cannot see", () => {
-	/** Env whose ai_usage rolling-window SUM returns `spent`. */
-	function envSpent(spent: number) {
+	/** Env whose ai_usage rolling-window read returns `chargedMicros` and `tokens`. */
+	function envSpent(chargedMicros: number, tokens = 0) {
 		const writes: Write[] = [];
 		const env = {
 			DB: {
@@ -288,7 +289,7 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 						bind() {
 							return {
 								async first() {
-									if (sql.includes("SUM(cost_micros)")) return { total: spent };
+									if (sql.includes("FROM ai_usage")) return { charged_micros: chargedMicros, tokens };
 									return openRow({ cost_micros_spent: 0 });
 								},
 								async all() { return { results: [] }; },
@@ -302,13 +303,17 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 		return { env, writes };
 	}
 
-	it("refuses a NEW draw once the account has spent its daily limit", async () => {
+	it("refuses a NEW draw once the account has run up its daily CHARGED spend", async () => {
 		// A thousand small trees each stay inside their own pool while the bill grows; the
 		// per-tree budget is blind to the account, so this is the only thing that catches it.
 		const { env, writes } = envSpent(DAILY_CEILING_MICROS);
 		const r = await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
 		expect(r.ok).toBe(false);
-		expect(r.message).toMatch(/daily limit/i);
+		// The refusal must name what was counted and over what window (#343). "The $50 daily limit
+		// has been hit" sent the user to a provider dashboard that showed nothing for that day.
+		expect(r.message).toMatch(/charged/i);
+		expect(r.message).toMatch(/24h/);
+		expect(r.message).toMatch(/\$50\.00/);
 		// Refused at ADMISSION — the pool is never touched.
 		expect(writes.filter((w) => w.sql.includes("UPDATE delegation_budgets"))).toHaveLength(0);
 	});
@@ -316,6 +321,32 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 	it("admits normally while the account is under the ceiling", async () => {
 		const { env } = envSpent(1_000_000);
 		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
+	});
+
+	it("does NOT refuse over a mountain of tokens that cost nobody money", async () => {
+		// #343 itself. 500M tokens of engine work on a Claude subscription is a huge amount of
+		// notional list-price value and zero dollars. The old breaker summed the value and blocked
+		// hours of queued work over a bill that did not exist. Under the token ceiling, so it runs.
+		const { env } = envSpent(0, 200_000_000);
+		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
+	});
+
+	it("still bounds that work — in tokens, which is the unit it consumes", async () => {
+		// Removing the money ceiling from non-money must not leave it unbounded. The subscription
+		// allowance it draws on is itself a rolling token window, so this is the matching unit.
+		const { env } = envSpent(0, DAILY_TOKEN_CEILING);
+		const r = await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
+		expect(r.ok).toBe(false);
+		expect(r.message).toMatch(/tokens/i);
+		expect(r.message).not.toMatch(/\$/); // a token limit is never quoted in dollars
+	});
+
+	it("reports BOTH ceilings as account_ceiling, not as the pool being spent", async () => {
+		// The workflows key off this reason to keep the SHARED tree pool open for a transient
+		// account-level fact. A second reason string would silently lose them that, and they would
+		// markExhausted a pool with headroom left — the regression the reason code was added to fix.
+		expect((await reserve(envSpent(DAILY_CEILING_MICROS).env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).reason).toBe("account_ceiling");
+		expect((await reserve(envSpent(0, DAILY_TOKEN_CEILING).env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).reason).toBe("account_ceiling");
 	});
 
 	it("fails OPEN when the ledger read breaks", async () => {
@@ -327,7 +358,7 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 						bind() {
 							return {
 								async first() {
-									if (sql.includes("SUM(cost_micros)")) throw new Error("D1 down");
+									if (sql.includes("FROM ai_usage")) throw new Error("D1 down");
 									return openRow({ cost_micros_spent: 0 });
 								},
 								async run() { return { meta: { changes: 1 } }; },

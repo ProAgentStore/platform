@@ -23,8 +23,21 @@ describe("engineAuthBadge — the money question, in the session header", () => 
 		expect(engineAuthBadge(report({ resolved: "subscription" }))?.label).toMatch(/subscription/i);
 	});
 
-	it("says machine login when neither credential was present", () => {
-		expect(engineAuthBadge(report({ resolved: "machine-login" }))?.label).toMatch(/machine/i);
+	it("says machine login when neither credential was present — and that the payer is unknown", () => {
+		// It is the MOST COMMON resolution (what the default `auto` mode produces) and the one
+		// where the reader can least tell which account is paying. Naming only the mechanism left
+		// them to assume either answer (#343/#346).
+		const label = engineAuthBadge(report({ resolved: "machine-login" }))?.label;
+		expect(label).toMatch(/machine/i);
+		expect(label).toMatch(/unknown/i);
+	});
+
+	it("carries the API's positive note, so the ordinary case says something", () => {
+		expect(engineAuthBadge(report({ note: "Running on your Claude subscription — no per-token charge." }))?.note).toMatch(/no per-token charge/);
+	});
+
+	it("degrades to no note against an API that predates it", () => {
+		expect(engineAuthBadge(report())?.note).toBeNull();
 	});
 
 	it("still renders when the outcome is UNKNOWN — silence is the bug being fixed", () => {

@@ -16,6 +16,10 @@ export interface EngineAuthReport {
 	resolved: EngineAuthResolved | null;
 	runtime: "child-process";
 	warning: string | null;
+	/** Who pays, as the ledger records it (#346). null = unknown; optional for an older API. */
+	payer?: "byok-api" | "subscription" | "platform" | null;
+	/** The positive statement of what this session's spend is. Optional for an older API. */
+	note?: string;
 }
 
 export interface EngineAuthBadge {
@@ -25,14 +29,22 @@ export interface EngineAuthBadge {
 	detail: string;
 	/** "warn" when the outcome contradicts the setting — this is the loud case. */
 	tone: "warn" | "neutral";
+	/**
+	 * What this session's spend IS, from the API (#343). Distinct from `warning`, which only ever
+	 * fires when something is wrong — so before this, the ordinary case said nothing at all.
+	 */
+	note: string | null;
 }
 
 const RESOLVED_LABEL: Record<EngineAuthResolved, string> = {
 	// Named for the BILL, not the mechanism: "API key" alone never answered the question people
 	// actually have when they open this.
 	"api-key": "API key — billing per token",
-	subscription: "Claude subscription",
-	"machine-login": "This machine's own login",
+	subscription: "Claude subscription — no per-token charge",
+	// The one that used to say nothing beyond the mechanism (#343). It is the most common
+	// resolution, and it is the case where the user can LEAST tell which account is paying — so
+	// the label names the ambiguity rather than leaving the reader to assume either answer.
+	"machine-login": "This machine's own login — payer unknown",
 };
 
 const MODE_LABEL: Record<EngineAuthMode, string> = {
@@ -54,5 +66,5 @@ export function engineAuthBadge(auth: EngineAuthReport | null | undefined): Engi
 	// Always state the runtime: "is this tmux?" was unanswerable, and the old `tmuxSession` label
 	// actively suggested the wrong answer.
 	const detail = `Set to ${MODE_LABEL[auth.mode]} · child process`;
-	return { label, detail, tone: auth.warning ? "warn" : "neutral" };
+	return { label, detail, tone: auth.warning ? "warn" : "neutral", note: auth.note ?? null };
 }

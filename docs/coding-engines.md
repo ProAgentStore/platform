@@ -128,3 +128,29 @@ Every mode except `api-key` actively **strips** the provider key from the engine
 value means remove, see the runner's `mergeEnv`). A developer with `ANTHROPIC_API_KEY` exported in
 their shell must not silently pay per token for an engine they asked to run on a subscription.
 See `docs/connector-auth.md`.
+
+### What the engine's cost figure is, and who pays it
+
+Claude Code reports a `total_cost_usd` per turn and the ledger stores it. That figure is **not a
+measurement of money**: per [Anthropic's docs](https://code.claude.com/docs/en/costs), the CLI
+"computes the dollar figure locally from token counts priced at standard list rates … and may
+differ from your actual bill", and for Max/Pro subscribers "the session cost figure isn't relevant
+for billing purposes". It is tokens × list price — the same construction as the platform's own
+estimate, run by a different process.
+
+So the ledger records the two facts separately (migration `0092`):
+
+| | |
+|---|---|
+| `cost_micros` | notional value — tokens × list price. True on every row. Never a bill. |
+| `payer` | who is charged. `byok-api`, `subscription`, `platform`, or NULL for unknown. |
+
+The runner observes the credential from the engine's merged spawn env and the capture poll
+persists it, so `api-key` → `byok-api` and `subscription` → `subscription`. **`machine-login` maps
+to unknown, not to subscription** — it means only that neither credential was in the env, so the
+CLI used whatever login it has stored, which may be either.
+
+Dollar limits (the per-tree delegation pool and the account circuit breaker) sum **charged rows
+only**. Subscription and unknown engine work is bounded by a token ceiling instead, in the unit it
+actually consumes — a subscription's own allowance is a rolling 5h + weekly token window, so there
+is no dollar figure on the other side for a dollar ceiling to compare against.

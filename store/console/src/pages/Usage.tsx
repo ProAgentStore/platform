@@ -27,13 +27,28 @@ interface Unmetered {
 }
 interface UsageData {
 	range: string;
-	totals: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number };
+	totals: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number };
 	daily: Day[];
 	byModel: Bucket[];
 	byKind: Bucket[];
 	byAgent: Bucket[];
+	/** Sessions whose cost could not be read at all (#348) — absent, never zero. */
 	unmetered?: Unmetered;
+	/** Value split by who pays it (#346). Absent from an older API — the page degrades to totals. */
+	byPayer?: Bucket[];
 }
+
+/**
+ * What each payer means for the reader's money. The `unknown` note is the honest one and the one
+ * that matters most: `machine-login` is the most common way a coding engine signs in, and it does
+ * not tell us whether a subscription or an API key is behind it.
+ */
+const PAYER_NOTE: Record<string, string> = {
+	"byok-api": "Real money on your provider account. Estimated at list prices — your provider's dashboard has the bill.",
+	subscription: "No per-token charge. It draws your plan's allowance, which is measured in tokens over a rolling window, not in dollars. If you are past that allowance and drawing on usage credits, you ARE being charged and we cannot see it.",
+	platform: "Our Workers AI and platform models. Costs you nothing.",
+	unknown: "A coding engine signed in with a login stored on your machine. That may be a subscription or an API key configured inside the CLI — we can't tell from here, so we don't guess.",
+};
 
 const RANGES = [
 	{ id: "7d", label: "7 days" },
@@ -62,10 +77,15 @@ function tok(n: number): string {
 const KIND_LABEL: Record<string, string> = {
 	chat: "Chat", apply: "Job apply", coding: "Coding (Pilot)", copilot: "Co-pilot",
 	overseer: "Overseer", run: "Direct run", resume: "Résumé parse", translate: "Translation", voice: "Voice",
-	// The coding CLI itself, reporting its own cost (#267). Named apart from "coding" — which is
-	// only the cloud-side Pilot choosing the next instruction — because the two differ by an
-	// order of magnitude and a single "coding" row made the Engine's spend look like all of it.
-	engine: "Coding engine (measured)",
+	// The coding CLI itself (#267). Named apart from "coding" — which is only the cloud-side Pilot
+	// choosing the next instruction — because the two differ by an order of magnitude and a single
+	// "coding" row made the Engine's spend look like all of it.
+	//
+	// It said "(measured)" until #347. It is not: Claude Code computes its figure locally from
+	// token counts at standard list rates, exactly as we do, and it is the row LEAST likely to
+	// correspond to a charge, because a subscription login is the normal way an engine signs in.
+	// The label is retired rather than softened — the payer column now carries the real answer.
+	engine: "Coding engine",
 };
 
 /** A dead-simple, dependency-free SVG bar chart (one bar per day). Value is chosen by `metric`. */
@@ -178,7 +198,9 @@ export default function Usage() {
 				</button>
 			</div>
 			<p className="text-sm text-muted mb-2">
-				Token usage and cost across all your agents. Most rows are <b>estimated</b> from list prices on your own key (BYOK) — not a bill. Coding-engine rows are the exception: the CLI reports what it actually spent. History starts when tracking was enabled.
+				Token usage across all your agents. Every dollar figure here is <b>estimated from published list
+				prices</b> — ours for platform calls, Claude Code’s own arithmetic for coding-engine rows. Neither is a
+				bill. What differs between rows is <b>who pays</b>. History starts when tracking was enabled.
 			</p>
 			<Scope unmetered={unmetered} />
 
@@ -215,7 +237,11 @@ export default function Usage() {
 					<UnmeteredNotice unmetered={unmetered} />
 					{/* Headline totals */}
 					<div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
-						<Stat label="Est. cost" value={usd(totals.costMicros)} accent />
+						{/* The headline is CHARGED value, not total value (#346). "Est. cost" over an
+						    undifferentiated sum is what taught everyone — the product included — to
+						    read this page as a bill, and then to enforce one. The full list value is
+						    still shown, one line down, where it cannot be mistaken for what is owed. */}
+						<Stat label="Est. billed" value={usd(totals.chargedCostMicros ?? totals.costMicros)} accent />
 						<Stat label="Total tokens" value={tok(totals.inputTokens + totals.outputTokens)} />
 						<Stat label="Input · Output" value={`${tok(totals.inputTokens)} · ${tok(totals.outputTokens)}`} />
 						{/* Cache hit rate — read ÷ (input + read). The number that says whether prompt
@@ -228,11 +254,17 @@ export default function Usage() {
 							<Stat label="Prompt cache hit" value={`${Math.round(cacheHitRate * 100)}%`} />
 						)}
 					</div>
-					{cacheHitRate !== null && (
-						<div className="text-xs text-muted-soft -mt-2 mb-4">
-							{totals.calls.toLocaleString()} AI calls · {tok(totals.cacheReadTokens || 0)} tokens served from cache at a tenth of the input price.
-						</div>
-					)}
+					<div className="text-xs text-muted-soft -mt-2 mb-4">
+						{cacheHitRate !== null && (
+							<>{totals.calls.toLocaleString()} AI calls · {tok(totals.cacheReadTokens || 0)} tokens served from cache at a tenth of the input price. </>
+						)}
+						{/* The two figures are never added together, and this line is where that is
+						    said. Total list value is the answer to "what would this have cost on the
+						    API?" — a genuinely useful number, and not one anybody owes. */}
+						{totals.chargedCostMicros !== undefined && totals.chargedCostMicros !== totals.costMicros && (
+							<>{usd(totals.costMicros)} of list-price value in total, of which {usd(totals.chargedCostMicros)} is charged to someone.</>
+						)}
+					</div>
 
 					{/* Daily chart */}
 					<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-4">
@@ -250,6 +282,20 @@ export default function Usage() {
 
 					{/* Breakdowns */}
 					<div className="grid md:grid-cols-2 gap-4">
+						{/* Who pays (#346) — first, and full width, because it is the axis that decides
+						    how to read every other card on this page. Without it the reader has one
+						    undifferentiated total and no way to tell which part of it is money. */}
+						{!!data.byPayer?.length && (
+							<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 md:col-span-2">
+								<h3 className="text-sm font-bold mb-2">Who pays</h3>
+								<Breakdown rows={data.byPayer} labelOf={(b) => b.label || b.key} />
+								<ul className="mt-3 pt-3 border-t border-line space-y-1 text-xs text-muted-soft">
+									{data.byPayer.map((b) => PAYER_NOTE[b.key] && (
+										<li key={b.key}><b>{b.label || b.key}</b> — {PAYER_NOTE[b.key]}</li>
+									))}
+								</ul>
+							</div>
+						)}
 						<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
 							<h3 className="text-sm font-bold mb-2">By agent</h3>
 							<Breakdown rows={data.byAgent} labelOf={(b) => b.label || b.key} />
@@ -269,7 +315,8 @@ export default function Usage() {
 							{hasCodingUsage && (
 								<p className="text-xs text-muted-soft mt-3 pt-3 border-t border-line">
 									<b>Coding (Pilot)</b> is the cloud deciding what to tell the engine to do. <b>Coding engine</b> is the CLI
-									doing it, priced by the CLI itself. Codex and Grok report nothing, so they appear here at all only via the Pilot.
+									doing it, priced by the CLI at list rates — an estimate like the rest, and usually one nobody is charged.
+									Codex and Grok report nothing, so they appear here at all only via the Pilot.
 								</p>
 							)}
 						</div>
@@ -283,15 +330,21 @@ export default function Usage() {
 }
 
 /**
- * What the number on this page covers — and, more usefully, what it leaves out.
+ * What the number on this page covers, what it leaves out — and what KIND of number it is.
  *
- * "Estimated, not a bill" was already stated, but not in which DIRECTION it is wrong. #270 said
- * the coding Engine's spend was missing entirely; #267 then made Claude Code report it, so that
- * bullet has been replaced by the figure it was standing in for — which is what its own comment
- * asked for. The exclusion did not vanish, it SHRANK: engines with no structured output (Codex,
- * Grok) still cannot be measured, and they now deserve the plain statement, because a page that
- * says "engine spend is included" without qualifying it is a new version of the same
- * looks-complete problem.
+ * The third one is the correction (#347). This block used to say the coding-engine row was "the
+ * one line here that is a measurement rather than an estimate". Anthropic's docs say the opposite:
+ * Claude Code "computes the dollar figure locally from token counts priced at standard list
+ * rates … and may differ from your actual bill", and for Max/Pro subscribers "the session cost
+ * figure isn't relevant for billing purposes" (https://code.claude.com/docs/en/costs).
+ *
+ * That is the same construction as our own estimate, computed by a different process — and it is
+ * the row LEAST likely to correspond to a charge, because signing in with a subscription is the
+ * normal way a coding engine runs. The irony worth remembering: #270's complaint was that engine
+ * spend was invisible, and the fix surfaced it AND promoted it to "measured". A page built to be
+ * more honest became less so, and a circuit breaker was then built on the promotion (#343).
+ *
+ * The correct caveat that was already here — Codex and Grok report nothing — is kept verbatim.
  */
 function Scope({ unmetered }: { unmetered?: Unmetered }) {
 	const drives = unmetered?.drives ?? 0;
@@ -306,9 +359,9 @@ function Scope({ unmetered }: { unmetered?: Unmetered }) {
 				<ul className="mt-1 space-y-0.5 text-muted">
 					<li>· Calls the platform makes on your key — chat, voice, translation, and the Pilot, Co-pilot and Overseer decisions behind a coding session.</li>
 					<li>
-						· <b className="text-ink">The Claude Code engine’s own spend</b>, shown as “Coding engine (measured)”.
-						It runs on your machine, so the CLI reports what each turn cost and that figure is used as-is — the one
-						line here that is a measurement rather than an estimate.
+						· <b className="text-ink">The Claude Code engine’s own turns</b>, shown as “Coding engine”. The CLI
+						reports its own dollar figure, but it computes that the same way we do — token counts at standard
+						list rates — so it is an estimate too, and Anthropic’s docs say it may differ from your bill.
 					</li>
 				</ul>
 				<div className="font-semibold text-xs uppercase tracking-wide text-muted-soft mt-3">Not included</div>
@@ -337,9 +390,13 @@ function Scope({ unmetered }: { unmetered?: Unmetered }) {
 					</li>
 				</ul>
 				<p className="text-xs text-muted-soft mt-3">
-					Apart from the measured engine rows, everything here is priced from published list prices at the time of
-					the call, so it is an estimate — never a provider bill. Check your provider’s dashboard for the
-					authoritative number.
+					Nothing on this page is a bill. If a coding session signed in with your Claude subscription, that row cost
+					you nothing in dollars — it is shown because the tokens are real and they draw your plan’s allowance. For
+					what you were actually charged, see{" "}
+					<a className="underline hover:text-accent" href="https://platform.claude.com/usage" target="_blank" rel="noreferrer">
+						the Claude Console
+					</a>{" "}
+					for API spend, or claude.ai for subscription plan usage.
 				</p>
 			</div>
 		</details>

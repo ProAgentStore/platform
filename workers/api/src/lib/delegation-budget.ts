@@ -133,6 +133,20 @@ export function formatMicros(micros: Micros): string {
 }
 
 /**
+ * `13.4M` from a token count — the other unit a refusal can be denominated in (#343).
+ *
+ * A token ceiling that reported "250000000 tokens" would read as noise, and the number a human
+ * has to compare it against ("my session used 13.4M") is always quoted this way by the tools that
+ * show it. Rounded, never padded: this is a magnitude, not an accounting figure.
+ */
+export function formatTokens(n: number): string {
+	const v = Math.max(0, Math.floor(Number(n) || 0));
+	if (v < 1000) return String(v);
+	if (v < 1_000_000) return `${Math.round(v / 1000)}K`;
+	return `${(v / 1_000_000).toFixed(v < 10_000_000 ? 1 : 0)}M`;
+}
+
+/**
  * Normalize caller-supplied limits.
  *
  * Clamped to the defaults as a CEILING, not just a fallback: a supervisor must not be able to

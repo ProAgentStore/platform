@@ -1,9 +1,15 @@
 // The usage ledger: record one row per AI call at the choke point, and aggregate
 // it for the Usage page. Recording is best-effort — a ledger write must never
 // break or slow an actual chat/apply/coding call.
+//
+// What `cost_micros` IS, on every row without exception (#346/#347): notional value — tokens ×
+// published list price. It is not a bill and never was. What it does NOT say is who pays, which
+// is `payer` (migration 0092) and the only thing a money ceiling may be denominated in.
 
 import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
 import { engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
+import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
+import type { EngineAuthResolved } from "./usage-payer.js";
 import type { Env } from "../types.js";
 
 export type UsageKind =
@@ -64,6 +70,11 @@ interface RecordArgs extends UsageContext {
  * Insert one usage row. Best-effort: swallows every error (a failed ledger write
  * is never worth failing the user's request over) and no-ops when there's no user
  * or no tokens to record.
+ *
+ * `payer` is hardcoded `'byok-api'` rather than passed in, and that is a structural fact rather
+ * than a guess: this recorder is reachable only from `user-ai.ts`, which has just made the call
+ * ON THE USER'S OWN KEY (their Anthropic key, or their Cloudflare account creds). Platform-paid
+ * calls have their own recorder. A payer we injected the credential for is one we know.
  */
 export async function recordUsage(
 	env: { DB: D1Database },
@@ -82,8 +93,8 @@ export async function recordUsage(
 		if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return;
 		const cost = estimateCostMicros(args.model, input, output, { read: cacheRead, write: cacheWrite });
 		await env.DB.prepare(
-			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, created_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'))`,
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, payer, created_at)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'byok-api', datetime('now'))`,
 		)
 			.bind(
 				crypto.randomUUID(),
@@ -119,8 +130,8 @@ export async function recordVoiceUsage(
 		if (!args.userId) return;
 		const cost = Math.max(0, Math.floor(Number(args.costMicros) || 0));
 		await env.DB.prepare(
-			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, created_at)
-			 VALUES (?1, ?2, NULL, ?3, 'openai', ?4, 'voice', 0, 0, ?5, datetime('now'))`,
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, payer, created_at)
+			 VALUES (?1, ?2, NULL, ?3, 'openai', ?4, 'voice', 0, 0, ?5, 'byok-api', datetime('now'))`,
 		)
 			.bind(crypto.randomUUID(), args.userId, args.instanceId ?? null, args.model, cost)
 			.run();
@@ -130,15 +141,30 @@ export async function recordVoiceUsage(
 }
 
 /**
- * Ledger measured spend from a coding Engine (#267).
+ * Ledger a coding Engine's own reported spend (#267), corrected at #347.
  *
- * Unlike every other recorder, cost is NOT estimated here. Claude Code computes `total_cost_usd`
- * itself and reports it on each turn's `result` event, so this is the one figure in the ledger
- * that is a measurement — re-deriving it from `ai-pricing.ts` list prices would replace a real
- * number with a worse one (and would get it wrong anyway, since the CLI knows about subscription
- * pricing, service tiers and 1h-cache rates that the price table does not model).
- * `cost_source = 'reported'` (migration 0080) is how a consumer tells the two apart; NULL, on
- * every other row, means estimated.
+ * This used to be documented as "the one figure in the ledger that is a measurement", on the
+ * reasoning that the CLI "knows about subscription pricing, service tiers and 1h-cache rates that
+ * the price table does not model". That was false, and it was the load-bearing false statement:
+ * it is why the number was given authority, and #343 is what the authority cost.
+ *
+ * Anthropic's docs (https://code.claude.com/docs/en/costs) say Claude Code "computes the dollar
+ * figure locally from token counts priced at standard list rates, so it doesn't reflect
+ * promotional pricing or contracted discounts and may differ from your actual bill", and that
+ * Max/Pro subscribers "have usage included in their subscription, so the session cost figure isn't
+ * relevant for billing purposes". `total_cost_usd` is tokens × list price — the same construction
+ * as `ai-pricing.ts`, computed by a different process.
+ *
+ * It is still the better number to store, for the ordinary reason: the CLI knows the exact per-turn
+ * token split and the exact model, and we would be re-deriving both from a report. `cost_source =
+ * 'reported'` (0080) records that, and NOTHING MORE — whose arithmetic ran, with no authority
+ * attached. Whether the figure is money is `payer`, which is a different question with a different
+ * answer.
+ *
+ * `authResolved` is what the runner OBSERVED about the engine's credential. Optional and defaulting
+ * to unknown on purpose: several drain paths (session end, the Pilot's own capture) have no
+ * observation to pass, and unknown-and-honest is the right row for them. It is never inferred from
+ * the preset's SETTING — asking for a subscription is not the same as getting one.
  *
  * `INSERT OR IGNORE` on a deterministic id makes the write idempotent, which is what lets more
  * than one cloud path drain and record the same turn without double-charging. Best-effort like
@@ -146,17 +172,25 @@ export async function recordVoiceUsage(
  */
 export async function recordEngineUsage(
 	env: { DB: D1Database },
-	args: { userId: string | undefined; sessionId: string; instanceId?: string | null; agentId?: string | null },
+	args: {
+		userId: string | undefined;
+		sessionId: string;
+		instanceId?: string | null;
+		agentId?: string | null;
+		/** What the runner saw the engine authenticate with. Absent ⇒ the row's payer is unknown. */
+		authResolved?: EngineAuthResolved | null;
+	},
 	records: EngineUsageReport[] | undefined,
 ): Promise<void> {
 	try {
 		if (!args.userId || !args.sessionId || !records?.length) return;
+		const payer = payerForEngineAuth(args.authResolved);
 		const stmts = records.map((r) =>
 			env.DB.prepare(
 				`INSERT OR IGNORE INTO ai_usage
 				   (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens,
-				    cache_read_tokens, cache_write_tokens, cost_micros, cost_source, created_at)
-				 VALUES (?1, ?2, ?3, ?4, 'anthropic', ?5, 'engine', ?6, ?7, ?8, ?9, ?10, 'reported', datetime('now'))`,
+				    cache_read_tokens, cache_write_tokens, cost_micros, cost_source, payer, created_at)
+				 VALUES (?1, ?2, ?3, ?4, 'anthropic', ?5, 'engine', ?6, ?7, ?8, ?9, ?10, 'reported', ?11, datetime('now'))`,
 			).bind(
 				engineUsageRowId(args.sessionId, r.id),
 				args.userId,
@@ -168,6 +202,7 @@ export async function recordEngineUsage(
 				r.cacheReadTokens,
 				r.cacheWriteTokens,
 				Math.round(r.costUsd * 1_000_000),
+				payer,
 			),
 		);
 		await env.DB.batch(stmts);
@@ -193,8 +228,8 @@ export async function recordPlatformUsage(
 		if (input === 0 && output === 0) return;
 		const cost = estimatePlatformCostMicros(input, output);
 		await env.DB.prepare(
-			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, created_at)
-			 VALUES (?1, ?2, ?3, ?4, 'platform', ?5, ?6, ?7, ?8, ?9, datetime('now'))`,
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, payer, created_at)
+			 VALUES (?1, ?2, ?3, ?4, 'platform', ?5, ?6, ?7, ?8, ?9, 'platform', datetime('now'))`,
 		)
 			.bind(
 				crypto.randomUUID(),
@@ -228,7 +263,13 @@ export interface UsageRow {
 	/** Prompt-cache tokens. NULL on rows written before 0074 — genuinely unknown, not zero. */
 	cache_read_tokens?: number | null;
 	cache_write_tokens?: number | null;
+	/**
+	 * Notional value: tokens × published list price. On EVERY row, including engine rows — the
+	 * CLI's own figure is built the same way (#347). Never a bill.
+	 */
 	cost_micros: number;
+	/** Who is charged (0092). NULL = unknown, on every row written before it and on machine-login. */
+	payer?: string | null;
 	created_at: string; // "YYYY-MM-DD HH:MM:SS" (UTC, D1 datetime('now'))
 }
 
@@ -251,11 +292,26 @@ export interface UsageBucket {
 }
 
 export interface UsageSummary {
-	totals: { inputTokens: number; outputTokens: number; costMicros: number; calls: number };
+	totals: {
+		inputTokens: number;
+		outputTokens: number;
+		/** Notional list-price value of EVERYTHING here. Not a bill, and not what anyone owes. */
+		costMicros: number;
+		/**
+		 * The subset of `costMicros` that someone is actually charged (`payer` in byok-api /
+		 * platform). Reported separately rather than replacing the total, because the two answer
+		 * different questions and adding them together is the error #346 is about — a subscription
+		 * row's tokens are real consumption worth seeing, at a dollar figure worth nothing.
+		 */
+		chargedCostMicros: number;
+		calls: number;
+	};
 	daily: Array<{ date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }>;
 	byModel: UsageBucket[];
 	byKind: UsageBucket[];
 	byAgent: UsageBucket[];
+	/** Value split by who pays it — the axis the page needs to stop implying everything is a bill. */
+	byPayer: UsageBucket[];
 }
 
 const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, calls: 0 });
@@ -286,11 +342,12 @@ export function aggregateUsage(
 	rows: UsageRow[],
 	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string> } = {},
 ): UsageSummary {
-	const totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, calls: 0 };
+	const totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 };
 	const dayMap = new Map<string, UsageBucket>();
 	const modelMap = new Map<string, UsageBucket>();
 	const kindMap = new Map<string, UsageBucket>();
 	const agentMap = new Map<string, UsageBucket>();
+	const payerMap = new Map<string, UsageBucket>();
 
 	const into = (map: Map<string, UsageBucket>, key: string, r: UsageRow) => {
 		let b = map.get(key);
@@ -304,11 +361,16 @@ export function aggregateUsage(
 		totals.cacheReadTokens += r.cache_read_tokens || 0;
 		totals.cacheWriteTokens += r.cache_write_tokens || 0;
 		totals.costMicros += r.cost_micros || 0;
+		if (isCharged(r.payer)) totals.chargedCostMicros += r.cost_micros || 0;
 		totals.calls += 1;
 		into(dayMap, usageDay(r.created_at), r);
 		into(modelMap, r.model || "unknown", r);
 		into(kindMap, r.kind || "unknown", r);
 		into(agentMap, r.agent_id || "unassigned", r);
+		// NULL payer buckets as "unknown" rather than being dropped: a row we cannot attribute is
+		// still consumption the owner should see, and hiding it would make the page's own
+		// attribution look more complete than it is.
+		into(payerMap, asPayer(r.payer) ?? UNKNOWN_PAYER_KEY, r);
 	}
 
 	// Dense daily series so the chart shows empty days as zero rather than skipping.
@@ -333,6 +395,7 @@ export function aggregateUsage(
 		byModel: sortBuckets(modelMap),
 		byKind: sortBuckets(kindMap),
 		byAgent,
+		byPayer: sortBuckets(payerMap).map((b) => ({ ...b, label: PAYER_LABEL[b.key] || b.key })),
 	};
 }
 
@@ -450,11 +513,17 @@ export function denseDays(fromDay: string, toDay: string): string[] {
 }
 
 /**
- * Running total of estimated spend on one instance, in USD micros.
+ * Running total of CHARGED spend on one instance, in USD micros.
  *
  * Used by the durable agent loop (#158) to settle a budget reservation with the ACTUAL cost:
  * read before the iteration, read after, settle the delta. `ai_usage` is append-only, so the
  * total is monotonic and two reads are enough — no time window to get wrong.
+ *
+ * Filtered to {@link CHARGED_SQL} (#343/#346). A delegation pool is denominated in dollars, so it
+ * may only be drawn down by dollars: a coding session whose engine runs on the owner's Claude
+ * subscription accrues large notional value and no charge, and settling the pool against that
+ * would exhaust a $5 budget over money nobody owes. The tokens are still in the ledger and still
+ * on the Usage page; they are just not a bill, so they are not a draw.
  *
  * Caveat worth knowing: the delta is instance-scoped, not run-scoped, so a user chatting with the
  * same instance while a loop runs has that chat attributed to the loop's budget. That errs toward
@@ -464,7 +533,8 @@ export function denseDays(fromDay: string, toDay: string): string[] {
 export async function instanceSpendMicros(env: Env, userId: string, instanceId: string): Promise<number> {
 	try {
 		const row = await env.DB.prepare(
-			"SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage WHERE user_id = ?1 AND instance_id = ?2",
+			`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage
+			  WHERE user_id = ?1 AND instance_id = ?2 AND ${CHARGED_SQL}`,
 		)
 			.bind(userId, instanceId)
 			.first<{ total: number }>();
@@ -486,6 +556,10 @@ export async function instanceSpendMicros(env: Env, userId: string, instanceId: 
  * `kind` scopes it to comparable work (coding sessions cost far more than chat turns). Returns
  * null when there is too little history to be meaningful, so the caller keeps its static default
  * rather than trusting a percentile computed from three rows.
+ *
+ * Charged rows only, for the same reason the pool it sizes is: a distribution that includes
+ * subscription engine turns would derive a dollar budget from dollars nobody pays, sizing the pool
+ * by the wrong quantity in both directions at once.
  */
 export async function spendPercentileMicros(
 	env: Env,
@@ -503,6 +577,7 @@ export async function spendPercentileMicros(
 			    AND (?2 IS NULL OR kind = ?2)
 			    AND created_at >= datetime('now', ?3)
 			    AND cost_micros > 0
+			    AND ${CHARGED_SQL}
 			  ORDER BY cost_micros ASC`,
 		)
 			.bind(userId, opts.kind ?? null, `-${days} days`)
@@ -517,28 +592,52 @@ export async function spendPercentileMicros(
 	}
 }
 
+/** What an account has consumed over a rolling window, in the two units it can be bounded in. */
+export interface AccountUsageWindow {
+	/** Money someone is actually charged — `payer` in byok-api / platform. The dollar ceiling. */
+	chargedMicros: number;
+	/** All tokens consumed, charged or not. The unit subscription and unknown work has. */
+	tokens: number;
+}
+
 /**
- * Total estimated spend for a user over a rolling window, in USD micros.
+ * What a user's agents have consumed over a rolling window — charged dollars AND tokens.
  *
  * The per-tree pool (#184) bounds ONE runaway delegation. It cannot see a thousand small runaway
  * trees: each opens its own budget, each stays inside it, and the account still bleeds. This is
  * the other control — an account-wide ceiling over time, which is a rolling window rather than a
  * pool because there is nothing to reserve against.
+ *
+ * Two numbers, because there are two resources and they are not convertible (#343). This
+ * previously returned one unfiltered `SUM(cost_micros)` named "spend", which counted $48.76 of
+ * engine turns run on a Claude subscription and refused work over a $50 bill that did not exist.
+ * A subscription's own limit is a rolling 5h + weekly TOKEN allowance — there is no dollar figure
+ * on the other side of it for a dollar ceiling to be comparing against.
+ *
+ * One query, not two: the ceiling is checked at every admission, and the second read would double
+ * the D1 cost of the check for a number the first scan already has in hand.
  */
-export async function userSpendSinceMicros(env: Env, userId: string, hours = 24): Promise<number> {
+export async function accountUsageSince(env: Env, userId: string, hours = 24): Promise<AccountUsageWindow> {
 	const h = Math.max(1, Math.min(24 * 30, Math.floor(hours)));
 	try {
 		const row = await env.DB.prepare(
-			`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage
+			`SELECT
+			   COALESCE(SUM(CASE WHEN ${CHARGED_SQL} THEN cost_micros ELSE 0 END), 0) AS charged_micros,
+			   COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+			                + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0)), 0) AS tokens
+			 FROM ai_usage
 			  WHERE user_id = ?1 AND created_at >= datetime('now', ?2)`,
 		)
 			.bind(userId, `-${h} hours`)
-			.first<{ total: number }>();
-		return Math.max(0, Number(row?.total ?? 0));
+			.first<{ charged_micros: number; tokens: number }>();
+		return {
+			chargedMicros: Math.max(0, Number(row?.charged_micros ?? 0)),
+			tokens: Math.max(0, Number(row?.tokens ?? 0)),
+		};
 	} catch {
 		// A ledger read failure must not become an outage. Failing OPEN is deliberate: the
 		// per-tree pool still bounds the work, so the safe-ish default here is to let it run
 		// rather than freeze every agent on a transient D1 blip.
-		return 0;
+		return { chargedMicros: 0, tokens: 0 };
 	}
 }

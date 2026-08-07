@@ -1060,6 +1060,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								<span>{badge.label}</span>
 							</div>
 							<p className="text-[0.65rem] text-muted mt-0.5">{badge.detail}</p>
+							{/* The ordinary case, stated (#343). `warning` only fires on a mismatch, so
+							    the most common resolution — this machine's own login — showed nothing
+							    at all, which is precisely the configuration where the owner cannot
+							    tell which account is paying. */}
+							{badge.note && <p className="text-[0.65rem] text-muted-soft mt-1">{badge.note}</p>}
 							{engineAuth?.warning && <p className="text-xs text-orange mt-1">{engineAuth.warning}</p>}
 						</div>
 					);
