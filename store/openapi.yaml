@@ -6874,6 +6874,66 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/supervision/{sid}/direction:
+    put:
+      summary: Set a subordinate's standing direction (its epic)
+      description: |
+        The Lead owns DIRECTION (durable — what an agent is for); each subordinate owns TASKS
+        (execution). Direction is a field on the supervision edge, not a record of its own: the
+        edge already names the pair it is about, and `idx_supervision_subordinate` is UNIQUE, so
+        "one direction per agent" is the primary key rather than application logic.
+
+        THIS ROUTE IS THE ONLY WAY `setBy: "user"` IS EVER WRITTEN, and that is a security
+        boundary. A direction reaches the supervisor's prompt on every later turn, so an agent
+        able to write its own would convert one prompt injection — in a repo file, an issue body,
+        a remote MCP resource — into a STANDING instruction. The agent's `set_direction` tool
+        records `setBy: "agent"`, which comes back to the model as `proposedDirection` and carries
+        no authority; confirming a proposal means the owner re-sending the text through here.
+      operationId: setSupervisionDirection
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: sid, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                direction: { type: string, description: "Standing intent in a sentence or two (max 600 characters)." }
+                text: { type: string, description: "Accepted as an alias for `direction`." }
+      responses:
+        "200":
+          description: The edge, with the direction it now carries
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The edge changed while this was being written — re-read it and retry.
+    delete:
+      summary: Clear a subordinate's direction
+      description: >-
+        Clearing it is how an epic CLOSES — there is no lifecycle, no status field and no
+        auto-close from a subordinate finishing a task. A subordinate cannot attest to an epic:
+        "completed" describes the objective it was given and never what it changed on the way.
+      operationId: clearSupervisionDirection
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: sid, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The edge, with no direction on it
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/delegate:
     post:
       summary: Hand a goal to a subordinate

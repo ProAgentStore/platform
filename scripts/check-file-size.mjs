@@ -199,7 +199,13 @@ const PINS = {
 	// assemble and adjudicate it. What is left here is what only this function can do — one field on
 	// the config join it already performs, the turn's instant, and two `systemPrompt +=` lines. Moving
 	// those would put a read next to nothing that reads it.
-	"workers/api/src/agent-think.ts": 851,
+	// +20 for #330's `## Your Agents` block — the standing direction a Lead holds for each agent it
+	// supervises. Raised rather than split, and the split it looks like it wants is again already
+	// done: the block's every word is rendered by `lib/agent-direction.ts` and its rows come from
+	// `lib/supervision.ts`, both unit-tested. What is left here is the gate (only an agent that
+	// declares a supervision tool pays for the read) and one `systemPrompt +=` — and the gate has to
+	// be here, next to the capabilities it reads.
+	"workers/api/src/agent-think.ts": 871,
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
@@ -217,7 +223,13 @@ const PINS = {
 	// the runtime can never use. Raised rather than split — it belongs with the cycle/tower/
 	// fan-out rejections it stands beside, and the RULE it applies is pure and tested in
 	// lib/supervision-capability.ts, which is where a split would have put it anyway.
-	"workers/api/src/routes/tools.ts": 839,
+	// +46 at #330: PUT and DELETE for a subordinate's standing direction, and the paragraph saying
+	// why they exist at all. Raised rather than split BECAUSE of that paragraph — this pair of
+	// handlers is the only place `setBy: "user"` is ever written, which is what stops a prompt
+	// injection from becoming a standing instruction, and a reader who finds the routes without
+	// finding that sentence will eventually add a third writer. The rules themselves are pure and
+	// tested in lib/agent-direction.ts; the store's compare-and-swap is in lib/supervision.ts.
+	"workers/api/src/routes/tools.ts": 885,
 };
 
 /**

@@ -306,3 +306,30 @@ export interface ToolVerdict {
 export function canDelegate(tools: readonly ToolVerdict[]): boolean {
 	return tools.some((t) => t.connector === "supervision" && t.reason !== "not_declared");
 }
+
+/** The standing direction on a supervision edge — the Lead's epic for that one agent (#330). */
+export interface Direction {
+	text: string;
+	/** Who put it there. Only the owner's carries authority — see `directionState`. */
+	setBy: "user" | "agent";
+	updatedAt?: string;
+}
+
+/** Mirrors MAX_DIRECTION_CHARS in workers/api/src/lib/agent-direction.ts. */
+export const MAX_DIRECTION_CHARS = 600;
+
+/**
+ * What a row should SAY about its direction — and the reason the console shows `setBy` at all
+ * rather than only the text.
+ *
+ * An agent-written direction is a PROPOSAL. It is durable, and the agent reads it back on later
+ * turns, so a surface that rendered it identically to one the owner set would leave the owner no
+ * way to notice that a repo's standing brief is text their agent lifted out of an issue body.
+ * Confirming a proposal means the owner re-sending it through the one route that stamps
+ * `setBy: "user"` — this label is where that choice becomes visible.
+ */
+export function directionState(direction: Direction | null | undefined): { tone: Tone; label: string } {
+	if (!direction?.text) return { tone: "idle", label: "No direction set — this agent has no standing brief." };
+	if (direction.setBy === "user") return { tone: "ok", label: "You set this. It is on the Lead's prompt every turn." };
+	return { tone: "warn", label: "Proposed by the agent — it carries no authority until you confirm it." };
+}

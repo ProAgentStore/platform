@@ -6,6 +6,7 @@ import {
 	clauseValue,
 	connectionHealth,
 	countdown,
+	directionState,
 	deliveryCounts,
 	deliveryHeadline,
 	describeDelivery,
@@ -332,5 +333,26 @@ describe("canDelegate", () => {
 
 	it("is false for an empty listing", () => {
 		expect(canDelegate([])).toBe(false);
+	});
+});
+
+describe("directionState — a proposal must not look like the owner's brief (#330)", () => {
+	it("says plainly when there is none, rather than showing an empty box", () => {
+		expect(directionState(null).tone).toBe("idle");
+		expect(directionState({ text: "", setBy: "user" }).label).toMatch(/No direction set/);
+	});
+
+	it("marks the owner's as set, and says where it lands", () => {
+		const s = directionState({ text: "Finish the voice port.", setBy: "user" });
+		expect(s.tone).toBe("ok");
+		expect(s.label).toMatch(/every turn/);
+	});
+
+	it("marks an agent's as a PROPOSAL carrying no authority", () => {
+		// The failure this prevents: the owner glances at the row and reads text their agent wrote
+		// after ingesting an issue body as the brief they set themselves.
+		const s = directionState({ text: "Rewrite it in Rust.", setBy: "agent" });
+		expect(s.tone).toBe("warn");
+		expect(s.label).toMatch(/carries no authority/);
 	});
 });

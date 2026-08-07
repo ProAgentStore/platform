@@ -9,7 +9,10 @@ import {
 	deliveryHeadline,
 	describeDelivery,
 	describeFilter,
+	directionState,
 	toneClass,
+	MAX_DIRECTION_CHARS,
+	type Direction,
 	FILTER_OPS,
 	VALUELESS_OPS,
 	type ClauseDraft,
@@ -39,7 +42,14 @@ import {
  */
 
 type Instance = { id: string; name?: string; slug?: string; agentName?: string };
-type SupervisionLink = { id: string; supervisorInstanceId: string; subordinateInstanceId: string; enabled: boolean };
+type SupervisionLink = {
+	id: string;
+	supervisorInstanceId: string;
+	subordinateInstanceId: string;
+	enabled: boolean;
+	/** The standing direction for THIS edge (#330) — what that agent is for, durable. */
+	direction?: Direction | null;
+};
 type TraceEvent = { id?: string; ts?: string; event?: string; message?: string; source?: string; level?: string };
 
 const ACTIONS = ["run_pipeline", "insert_record", "create_task", "add_knowledge"] as const;
@@ -69,6 +79,9 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 	const [busy, setBusy] = useState(false);
 
 	const [subordinate, setSubordinate] = useState("");
+	// Per-edge direction edits, keyed by link id. Absent = show what is stored; a draft only
+	// exists while the owner is typing, so a reload never fights the cursor.
+	const [directionDraft, setDirectionDraft] = useState<Record<string, string>>({});
 	const [eventType, setEventType] = useState("");
 	const [target, setTarget] = useState("");
 	const [action, setAction] = useState<(typeof ACTIONS)[number]>("run_pipeline");
@@ -145,6 +158,33 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		} catch (e) {
 			// The server rejects cycles, towers, fan-out and second supervisors at WIRING time.
 			// Surfacing the reason here is the whole value of validating early.
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
+	};
+
+	/**
+	 * Set or clear one subordinate's DIRECTION (#330).
+	 *
+	 * This surface is the only place `setBy: "user"` can be produced — the route it calls is what
+	 * stamps it, and the agent's own tool cannot reach it. So "Save" on a proposal the agent wrote
+	 * is the confirmation step: the same text, re-sent by the person whose direction it is.
+	 */
+	const saveDirection = async (id: string, text: string | null) => {
+		setBusy(true);
+		setMsg("");
+		try {
+			await api(`/v1/instances/${instanceId}/supervision/${id}/direction`, {
+				method: text === null ? "DELETE" : "PUT",
+				...(text === null ? {} : { body: JSON.stringify({ direction: text }) }),
+			});
+			setDirectionDraft((d) => {
+				const next = { ...d };
+				delete next[id];
+				return next;
+			});
+			await load();
+		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
 		setBusy(false);
@@ -260,12 +300,45 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 			<div className="mb-5">
 				<div className="text-sm font-semibold mb-2">Agents this one supervises</div>
 				{links.length === 0 && <div className="text-xs text-muted mb-2">None yet — it has nobody to delegate to.</div>}
-				{links.map((l) => (
-					<div key={l.id} className="flex items-center justify-between gap-2 text-sm border border-line rounded-lg px-3 py-2 mb-1">
-						<span className="truncate">{nameOf(l.subordinateInstanceId)}</span>
-						<button type="button" disabled={busy} onClick={() => removeSupervision(l.id)} className={chip}>Remove</button>
+				{/* Each row carries that agent's DIRECTION (#330) — the durable "what is this one
+				    for", which the Lead previously had to reconstruct from recent runs. The
+				    proposed-vs-set distinction is rendered, not just stored: an agent may propose a
+				    direction, and only the owner saving it here makes it authoritative. */}
+				{links.map((l) => {
+					const state = directionState(l.direction);
+					const draft = directionDraft[l.id];
+					const value = draft ?? l.direction?.text ?? "";
+					const dirty = draft !== undefined && draft.trim() !== (l.direction?.text ?? "");
+					// A proposal is savable UNCHANGED — that is exactly what confirming it is.
+					const canSave = value.trim().length > 0 && value.length <= MAX_DIRECTION_CHARS && (dirty || l.direction?.setBy === "agent");
+					return (
+					<div key={l.id} className="text-sm border border-line rounded-lg px-3 py-2 mb-1">
+						<div className="flex items-center justify-between gap-2">
+							<span className="truncate">{nameOf(l.subordinateInstanceId)}</span>
+							<button type="button" disabled={busy} onClick={() => removeSupervision(l.id)} className={chip}>Remove</button>
+						</div>
+						<div className={`text-xs mt-1 ${toneClass(state.tone)}`}>{state.label}</div>
+						<div className="flex flex-col sm:flex-row gap-2 mt-1">
+							<input
+								aria-label={`Direction for ${nameOf(l.subordinateInstanceId)}`}
+								placeholder="What is this agent for? e.g. finish the voice port and keep the suite green"
+								maxLength={MAX_DIRECTION_CHARS}
+								value={value}
+								onChange={(e) => setDirectionDraft((d) => ({ ...d, [l.id]: e.target.value }))}
+								className={field}
+							/>
+							<div className="flex gap-2 shrink-0">
+								<button type="button" disabled={busy || !canSave} onClick={() => saveDirection(l.id, value.trim())} className={`${chip} disabled:opacity-40`}>
+									{l.direction?.setBy === "agent" && !dirty ? "Confirm" : "Save"}
+								</button>
+								{/* Clearing IS closing the epic — there is no lifecycle and nothing
+								    auto-closes it, because a subordinate finishing a task cannot know. */}
+								{l.direction && <button type="button" disabled={busy} onClick={() => saveDirection(l.id, null)} className={chip}>Clear</button>}
+							</div>
+						</div>
 					</div>
-				))}
+					);
+				})}
 				{delegates ? (
 				<div className="flex flex-col sm:flex-row gap-2 mt-2">
 					<select aria-label="Agent to supervise" value={subordinate} onChange={(e) => setSubordinate(e.target.value)} className={field}>
