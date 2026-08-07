@@ -20,9 +20,11 @@ import {
 	mintDriveAccessToken,
 } from "../lib/drive.js";
 import {
+	connectorGrantReach,
 	deleteConnectorGrant,
 	listConnectorGrants,
 	requireConnectorGrant,
+	revokeUserConnectorGrants,
 	upsertConnectorGrant,
 } from "../lib/connector-grants.js";
 import {
@@ -85,17 +87,32 @@ driveRoutes.get("/status", async (c) => {
 	)
 		.bind(session.uid, PROVIDER)
 		.first<{ created_at: string; account_label: string | null }>();
-	return c.json({ connected: !!row, email: row?.account_label ?? null, connectedAt: row?.created_at ?? null, configured });
+	// `reach` is what a disconnect would destroy (#357). Sent with the status so the
+	// confirmation can name it BEFORE the click, rather than the console discovering it
+	// afterwards — a permission surface has to state its own blast radius.
+	const reach = await connectorGrantReach(c.env, session.uid, PROVIDER);
+	return c.json({
+		connected: !!row,
+		email: row?.account_label ?? null,
+		connectedAt: row?.created_at ?? null,
+		configured,
+		reach,
+	});
 });
 
+// Disconnect REVOKES: the token row and every folder grant this user made for Drive, on
+// every agent. Grants used to survive, invisibly, and a reconnect silently re-armed all of
+// them (#357). Grants go first: if the token delete then failed we would have over-revoked,
+// which is the direction a permission bug should fail in.
 driveRoutes.delete("/google", async (c) => {
 	const session = await requireUser(c);
+	const revoked = await revokeUserConnectorGrants(c.env, session.uid, PROVIDER);
 	await c.env.DB.prepare(
 		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
 	)
 		.bind(session.uid, PROVIDER)
 		.run();
-	return c.json({ success: true });
+	return c.json({ success: true, revoked });
 });
 
 driveRoutes.get("/google/callback", async (c) => {

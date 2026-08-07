@@ -114,6 +114,60 @@ export async function deleteConnectorGrant(
 		.run();
 }
 
+/** How many grants a user holds for one connector, and across how many agents. */
+export interface ConnectorGrantReach {
+	grants: number;
+	instances: number;
+}
+
+/**
+ * The blast radius of an account-level disconnect (#357).
+ *
+ * Until this existed, NOTHING queried grants by (user_id, provider) — grants were only ever
+ * read per instance — which is precisely why disconnecting a connector could delete the token
+ * and leave every folder grant standing, invisible, ready to be re-armed by a reconnect. The
+ * `(user_id, provider, created_at)` index from migration 0044 makes this cheap.
+ */
+export async function connectorGrantReach(
+	env: Env,
+	userId: string,
+	provider: ConnectorProvider,
+): Promise<ConnectorGrantReach> {
+	const rows = await env.DB.prepare(
+		"SELECT instance_id FROM instance_connector_grants WHERE user_id = ?1 AND provider = ?2",
+	)
+		.bind(userId, provider)
+		.all<{ instance_id: string }>();
+	const results = rows.results ?? [];
+	return { grants: results.length, instances: new Set(results.map((r) => r.instance_id)).size };
+}
+
+/**
+ * Disconnecting revokes: every grant this user made for this connector, on every agent.
+ *
+ * That is the meaning the product now commits to, and the confirmation says so before you
+ * click. The alternative — keep the rows — is only safe if reconnecting re-asks, and it
+ * didn't: it silently re-armed every grant, months later, possibly for a different account.
+ *
+ * Returns the reach that was revoked so the caller can report it. Counted first rather than
+ * read off `meta.changes`, so the number is the same one the confirmation quoted.
+ */
+export async function revokeUserConnectorGrants(
+	env: Env,
+	userId: string,
+	provider: ConnectorProvider,
+): Promise<ConnectorGrantReach> {
+	const reach = await connectorGrantReach(env, userId, provider);
+	if (reach.grants > 0) {
+		await env.DB.prepare(
+			"DELETE FROM instance_connector_grants WHERE user_id = ?1 AND provider = ?2",
+		)
+			.bind(userId, provider)
+			.run();
+	}
+	return reach;
+}
+
 export async function requireConnectorGrant(
 	env: Env,
 	instanceId: string,

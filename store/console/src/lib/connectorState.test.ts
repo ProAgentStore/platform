@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectorState, showsConnector } from "./connectorState";
+import { connectorState, disconnectPrompt, showsConnector } from "./connectorState";
 
 describe("connectorState — an inert connector is a state, not a failure (#353)", () => {
 	it("names the deployment gap separately from 'you haven't connected it'", () => {
@@ -37,5 +37,35 @@ describe("showsConnector", () => {
 
 	it("waits for the answer rather than flashing an unconnected row", () => {
 		expect(showsConnector(null)).toBe(false);
+	});
+});
+
+describe("disconnectPrompt — the blast radius, before the click (#357)", () => {
+	it("names how many grants on how many agents will be revoked", () => {
+		const msg = disconnectPrompt("Google Drive", { grants: 4, instances: 2 });
+		expect(msg).toContain("REVOKES 4 folder grants across 2 agents");
+		expect(msg).toContain("Reconnecting will not bring them back");
+	});
+
+	it("says what survives, so the prompt is not only a threat", () => {
+		expect(disconnectPrompt("Google Drive", { grants: 1, instances: 1 })).toContain(
+			"Documents already imported stay",
+		);
+	});
+
+	it("singularizes, because '1 folder grants across 1 agents' reads as a bug", () => {
+		expect(disconnectPrompt("Zoho WorkDrive", { grants: 1, instances: 1 })).toContain(
+			"REVOKES 1 folder grant across 1 agent.",
+		);
+	});
+
+	// The reach is fetched fresh at click time; if that read failed we still disconnect, and the
+	// prompt must not invent a number it does not have.
+	it("claims no revocation when the reach is unknown or empty", () => {
+		for (const reach of [undefined, null, { grants: 0, instances: 0 }]) {
+			const msg = disconnectPrompt("Google Drive", reach);
+			expect(msg).toContain("No agent currently holds a Google Drive folder grant");
+			expect(msg).not.toContain("REVOKES");
+		}
 	});
 });

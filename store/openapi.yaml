@@ -268,6 +268,18 @@ components:
           type: boolean
           example: true
 
+    ConnectorReach:
+      type: object
+      description: >
+        How far an account-level file connector currently reaches: how many per-instance folder
+        grants the user holds for it, and across how many agents. Returned by the status routes
+        so a disconnect confirmation can state what it is about to revoke, and by the disconnect
+        routes as what it did revoke.
+      required: [grants, instances]
+      properties:
+        grants: { type: integer, example: 4 }
+        instances: { type: integer, example: 2 }
+
     McpSurfaceReport:
       type: object
       description: |
@@ -8916,19 +8928,29 @@ paths:
                   email: { type: string, nullable: true }
                   connectedAt: { type: string, nullable: true }
                   configured: { type: boolean }
+                  reach: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/drive/google:
     delete:
       summary: Disconnect Google Drive
+      description: >
+        Revokes the account's Drive connection AND every per-instance folder grant it made,
+        on every agent. Grants used to survive a disconnect and be silently restored by the
+        next reconnect; `reach` on `/v1/drive/status` is the same count, available beforehand
+        so a confirmation can state it.
       operationId: driveDisconnect
       tags: [Connectors]
       responses:
         "200":
-          description: Disconnected
+          description: Disconnected; `revoked` is what was destroyed
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Success" }
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  revoked: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/drive/files:
@@ -9158,19 +9180,27 @@ paths:
                   account: { type: string, nullable: true }
                   connectedAt: { type: string, nullable: true }
                   configured: { type: boolean }
+                  reach: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/workdrive/zoho:
     delete:
       summary: Disconnect Zoho WorkDrive
+      description: >
+        Revokes the account's WorkDrive connection AND every per-instance folder grant it made,
+        on every agent. See `DELETE /v1/drive/google`.
       operationId: workdriveDisconnect
       tags: [Connectors]
       responses:
         "200":
-          description: Disconnected
+          description: Disconnected; `revoked` is what was destroyed
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Success" }
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  revoked: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/workdrive/folder:

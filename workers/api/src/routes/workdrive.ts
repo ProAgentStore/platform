@@ -9,9 +9,11 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import {
+	connectorGrantReach,
 	deleteConnectorGrant,
 	listConnectorGrants,
 	requireConnectorGrant,
+	revokeUserConnectorGrants,
 	upsertConnectorGrant,
 } from "../lib/connector-grants.js";
 import {
@@ -82,17 +84,29 @@ workdriveRoutes.get("/status", async (c) => {
 	)
 		.bind(session.uid, PROVIDER)
 		.first<{ created_at: string; account_label: string | null }>();
-	return c.json({ connected: !!row, account: row?.account_label ?? null, connectedAt: row?.created_at ?? null, configured });
+	// What a disconnect would destroy, sent with the status so the confirmation can name it
+	// before the click (#357). Same contract as /v1/drive/status.
+	const reach = await connectorGrantReach(c.env, session.uid, PROVIDER);
+	return c.json({
+		connected: !!row,
+		account: row?.account_label ?? null,
+		connectedAt: row?.created_at ?? null,
+		configured,
+		reach,
+	});
 });
 
+// Disconnect REVOKES every WorkDrive folder grant this user made, on every agent — see the
+// matching handler in drive.ts for why keeping them was not defensible (#357).
 workdriveRoutes.delete("/zoho", async (c) => {
 	const session = await requireUser(c);
+	const revoked = await revokeUserConnectorGrants(c.env, session.uid, PROVIDER);
 	await c.env.DB.prepare(
 		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
 	)
 		.bind(session.uid, PROVIDER)
 		.run();
-	return c.json({ success: true });
+	return c.json({ success: true, revoked });
 });
 
 workdriveRoutes.get("/zoho/callback", async (c) => {

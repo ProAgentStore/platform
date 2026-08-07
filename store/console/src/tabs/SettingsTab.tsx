@@ -11,7 +11,8 @@ import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
 import McpConnections from "../components/McpConnections";
 import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
-import { showsConnector } from "../lib/connectorState";
+import { disconnectPrompt, showsConnector, type ConnectorReach } from "../lib/connectorState";
+import { FileConnectorPanel } from "../components/FileConnectorPanel";
 
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
@@ -76,6 +77,20 @@ interface ConnectorGrant {
 	resourceName: string;
 	resourceType: string;
 	resourceUrl?: string | null;
+}
+
+interface DriveStatus {
+	connected: boolean;
+	configured: boolean;
+	email?: string | null;
+	reach?: ConnectorReach;
+}
+
+interface WorkdriveStatus {
+	connected: boolean;
+	configured: boolean;
+	account?: string | null;
+	reach?: ConnectorReach;
 }
 
 export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
@@ -202,11 +217,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
-	const [driveStatus, setDriveStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
+	const [driveStatus, setDriveStatus] = useState<DriveStatus | null>(null);
 	const [driveMsg, setDriveMsg] = useState("");
 	const [driveGrantRef, setDriveGrantRef] = useState("");
 	const [driveGrants, setDriveGrants] = useState<ConnectorGrant[]>([]);
-	const [workdriveStatus, setWorkdriveStatus] = useState<{ connected: boolean; configured: boolean; account?: string | null } | null>(null);
+	const [workdriveStatus, setWorkdriveStatus] = useState<WorkdriveStatus | null>(null);
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
 	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
@@ -297,7 +312,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setEmailStatus(s);
 			} catch {}
 			try {
-				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
+				const s = await api<DriveStatus>("/v1/drive/status");
 				setDriveStatus(s);
 			} catch {}
 			try {
@@ -305,7 +320,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setDriveGrants(d.grants || []);
 			} catch {}
 			try {
-				const s = await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status");
+				const s = await api<WorkdriveStatus>("/v1/workdrive/status");
 				setWorkdriveStatus(s);
 			} catch {}
 			try {
@@ -327,8 +342,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	useEffect(() => {
 		const onFocus = () => {
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
-			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status").then(setDriveStatus).catch(() => {});
-			api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
+			api<DriveStatus>("/v1/drive/status").then(setDriveStatus).catch(() => {});
+			api<WorkdriveStatus>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
 			refreshRunner();
 		};
 		window.addEventListener("focus", onFocus);
@@ -458,7 +473,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	};
 
 	const disconnectGmail = async () => {
-		if (!confirm("Disconnect Gmail? Agents will no longer be able to read your inbox for sign-in links.")) return;
+		// Gmail is the other half of #357, and it goes the OTHER way deliberately: its permission
+		// is a per-agent flag in that agent's own state, not a row this account-level route can
+		// see, so disconnecting does NOT clear it. Saying so is the honest option; the one thing
+		// ruled out is letting a reconnect quietly re-arm it without ever having mentioned it.
+		if (!confirm("Disconnect Gmail?\n\nAgents lose inbox access immediately. Their per-agent permission to read your inbox is NOT cleared, so reconnecting Gmail restores it — turn the permission off per agent below if you want it gone for good.")) return;
 		try {
 			await api("/v1/email/google", { method: "DELETE" });
 			setEmailStatus((s) => (s ? { ...s, connected: false } : s));
@@ -466,6 +485,16 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		} catch (e) {
 			setEmailMsg(e instanceof Error ? e.message : "Failed");
 		}
+	};
+
+	// The blast-radius line under the grant list is account-wide, so it goes stale the moment
+	// THIS page changes a grant. Re-read rather than guess: the count it shows is the count
+	// the disconnect confirmation will quote.
+	const refreshDriveReach = () => {
+		api<DriveStatus>("/v1/drive/status").then(setDriveStatus).catch(() => {});
+	};
+	const refreshWorkdriveReach = () => {
+		api<WorkdriveStatus>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
 	};
 
 	const connectDrive = async () => {
@@ -478,12 +507,26 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
+	// Re-reads the status first: the reach quoted in the confirmation has to be the reach at
+	// the moment of the click, not whatever was fetched when the tab opened (another tab, or
+	// this one's other agents, may have granted folders since).
 	const disconnectDrive = async () => {
-		if (!confirm("Disconnect Google Drive? You can keep existing imported documents, but new Drive imports will stop working.")) return;
+		let reach = driveStatus?.reach;
 		try {
-			await api("/v1/drive/google", { method: "DELETE" });
-			setDriveStatus((s) => (s ? { ...s, connected: false } : s));
-			setDriveMsg("Google Drive disconnected.");
+			const fresh = await api<DriveStatus>("/v1/drive/status");
+			setDriveStatus(fresh);
+			reach = fresh.reach;
+		} catch { /* fall back to the loaded status — never block a disconnect on a status read */ }
+		if (!confirm(disconnectPrompt("Google Drive", reach))) return;
+		try {
+			const r = await api<{ revoked?: ConnectorReach }>("/v1/drive/google", { method: "DELETE" });
+			setDriveStatus((s) => (s ? { ...s, connected: false, reach: { grants: 0, instances: 0 } } : s));
+			setDriveGrants([]);
+			setDriveMsg(
+				r.revoked?.grants
+					? `Google Drive disconnected. Revoked ${r.revoked.grants} folder grant${r.revoked.grants === 1 ? "" : "s"} across ${r.revoked.instances} agent${r.revoked.instances === 1 ? "" : "s"}.`
+					: "Google Drive disconnected.",
+			);
 		} catch (e) {
 			setDriveMsg(e instanceof Error ? e.message : "Failed");
 		}
@@ -499,6 +542,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setDriveGrants((grants) => [d.grant, ...grants.filter((g) => g.id !== d.grant.id && g.resourceId !== d.grant.resourceId)]);
 			setDriveGrantRef("");
 			setDriveMsg(`Granted this agent access to ${d.grant.resourceName}.`);
+			refreshDriveReach();
 		} catch (e) {
 			setDriveMsg(e instanceof Error ? e.message : "Failed to grant Drive folder");
 		}
@@ -509,6 +553,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			await api(`/v1/drive/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
 			setDriveGrants((grants) => grants.filter((g) => g.id !== grant.id));
 			setDriveMsg(`Removed access to ${grant.resourceName}.`);
+			refreshDriveReach();
 		} catch (e) {
 			setDriveMsg(e instanceof Error ? e.message : "Failed to remove Drive access");
 		}
@@ -525,11 +570,22 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	};
 
 	const disconnectWorkdrive = async () => {
-		if (!confirm("Disconnect Zoho WorkDrive? Existing imported documents stay, but new WorkDrive imports will stop working.")) return;
+		let reach = workdriveStatus?.reach;
 		try {
-			await api("/v1/workdrive/zoho", { method: "DELETE" });
-			setWorkdriveStatus((s) => (s ? { ...s, connected: false } : s));
-			setWorkdriveMsg("Zoho WorkDrive disconnected.");
+			const fresh = await api<WorkdriveStatus>("/v1/workdrive/status");
+			setWorkdriveStatus(fresh);
+			reach = fresh.reach;
+		} catch { /* see disconnectDrive */ }
+		if (!confirm(disconnectPrompt("Zoho WorkDrive", reach))) return;
+		try {
+			const r = await api<{ revoked?: ConnectorReach }>("/v1/workdrive/zoho", { method: "DELETE" });
+			setWorkdriveStatus((s) => (s ? { ...s, connected: false, reach: { grants: 0, instances: 0 } } : s));
+			setWorkdriveGrants([]);
+			setWorkdriveMsg(
+				r.revoked?.grants
+					? `Zoho WorkDrive disconnected. Revoked ${r.revoked.grants} folder grant${r.revoked.grants === 1 ? "" : "s"} across ${r.revoked.instances} agent${r.revoked.instances === 1 ? "" : "s"}.`
+					: "Zoho WorkDrive disconnected.",
+			);
 		} catch (e) {
 			setWorkdriveMsg(e instanceof Error ? e.message : "Failed");
 		}
@@ -545,6 +601,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setWorkdriveGrants((grants) => [d.grant, ...grants.filter((g) => g.id !== d.grant.id && g.resourceId !== d.grant.resourceId)]);
 			setWorkdriveGrantRef("");
 			setWorkdriveMsg(`Granted this agent access to ${d.grant.resourceName}.`);
+			refreshWorkdriveReach();
 		} catch (e) {
 			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to grant WorkDrive folder");
 		}
@@ -555,6 +612,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			await api(`/v1/workdrive/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
 			setWorkdriveGrants((grants) => grants.filter((g) => g.id !== grant.id));
 			setWorkdriveMsg(`Removed access to ${grant.resourceName}.`);
+			refreshWorkdriveReach();
 		} catch (e) {
 			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to remove WorkDrive access");
 		}
@@ -978,97 +1036,35 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				)}
 
 				{showsDrive && (
-				<div className="flex items-center justify-between gap-3 mb-3">
-					<div className="text-sm">
-						<span className="font-semibold">Google Drive</span>{" "}
-						{driveStatus?.connected
-							? <span className="text-green">· connected{driveStatus.email ? ` (${driveStatus.email})` : ""}</span>
-							: <span className="text-muted">· not connected</span>}
-					</div>
-					{driveStatus?.connected ? (
-						<button type="button" onClick={disconnectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
-							Disconnect
-						</button>
-					) : (
-						<button type="button" onClick={connectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-							Connect Drive
-						</button>
-					)}
-				</div>
-				)}
-				{showsDrive && driveStatus?.connected && (
-					<div className="mb-4 pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
-						<div className="flex gap-2 flex-wrap mb-2">
-							<input
-								value={driveGrantRef}
-								onChange={(e) => setDriveGrantRef(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") addDriveGrant(); }}
-								aria-label="Google Drive folder to grant this agent"
-								placeholder="Google Drive folder URL or ID"
-								className="flex-1 min-w-0 sm:min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
-							/>
-							<button type="button" onClick={addDriveGrant} disabled={!driveGrantRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">
-								Grant folder
-							</button>
-						</div>
-						<div className="flex flex-col gap-1.5">
-							{driveGrants.length === 0 ? (
-								<p className="text-xs text-muted">No Drive folders granted to this agent yet.</p>
-							) : driveGrants.map((grant) => (
-								<div key={grant.id} className="flex items-center justify-between gap-2 text-xs bg-paper border border-line rounded-lg px-2.5 py-2">
-									<span className="min-w-0 truncate">{grant.resourceName}</span>
-									<button type="button" onClick={() => removeDriveGrant(grant)} className="shrink-0 text-muted hover:text-red">Remove</button>
-								</div>
-							))}
-						</div>
-					</div>
+					<FileConnectorPanel
+						label="Google Drive"
+						connected={driveStatus?.connected === true}
+						account={driveStatus?.email}
+						reach={driveStatus?.reach}
+						grants={driveGrants}
+						grantRef={driveGrantRef}
+						onGrantRefChange={setDriveGrantRef}
+						onConnect={connectDrive}
+						onDisconnect={disconnectDrive}
+						onAddGrant={addDriveGrant}
+						onRemoveGrant={(g) => removeDriveGrant(g as ConnectorGrant)}
+					/>
 				)}
 
 				{showsWorkdrive && (
-				<div className="flex items-center justify-between gap-3 mb-3">
-					<div className="text-sm">
-						<span className="font-semibold">Zoho WorkDrive</span>{" "}
-						{workdriveStatus?.connected
-							? <span className="text-green">· connected{workdriveStatus.account ? ` (${workdriveStatus.account})` : ""}</span>
-							: <span className="text-muted">· not connected</span>}
-					</div>
-					{workdriveStatus?.connected ? (
-						<button type="button" onClick={disconnectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
-							Disconnect
-						</button>
-					) : (
-						<button type="button" onClick={connectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-							Connect WorkDrive
-						</button>
-					)}
-				</div>
-				)}
-				{showsWorkdrive && workdriveStatus?.connected && (
-					<div className="mb-4 pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
-						<div className="flex gap-2 flex-wrap mb-2">
-							<input
-								value={workdriveGrantRef}
-								onChange={(e) => setWorkdriveGrantRef(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") addWorkdriveGrant(); }}
-								aria-label="Zoho WorkDrive folder to grant this agent"
-								placeholder="Zoho WorkDrive folder URL or ID"
-								className="flex-1 min-w-0 sm:min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
-							/>
-							<button type="button" onClick={addWorkdriveGrant} disabled={!workdriveGrantRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">
-								Grant folder
-							</button>
-						</div>
-						<div className="flex flex-col gap-1.5">
-							{workdriveGrants.length === 0 ? (
-								<p className="text-xs text-muted">No WorkDrive folders granted to this agent yet.</p>
-							) : workdriveGrants.map((grant) => (
-								<div key={grant.id} className="flex items-center justify-between gap-2 text-xs bg-paper border border-line rounded-lg px-2.5 py-2">
-									<span className="min-w-0 truncate">{grant.resourceName}</span>
-									<button type="button" onClick={() => removeWorkdriveGrant(grant)} className="shrink-0 text-muted hover:text-red">Remove</button>
-								</div>
-							))}
-						</div>
-					</div>
+					<FileConnectorPanel
+						label="Zoho WorkDrive"
+						connected={workdriveStatus?.connected === true}
+						account={workdriveStatus?.account}
+						reach={workdriveStatus?.reach}
+						grants={workdriveGrants}
+						grantRef={workdriveGrantRef}
+						onGrantRefChange={setWorkdriveGrantRef}
+						onConnect={connectWorkdrive}
+						onDisconnect={disconnectWorkdrive}
+						onAddGrant={addWorkdriveGrant}
+						onRemoveGrant={(g) => removeWorkdriveGrant(g as ConnectorGrant)}
+					/>
 				)}
 
 				{/* Goes with the Gmail row: it pointed at "Connect Gmail above", which is now gone. */}

@@ -85,6 +85,7 @@ function testEnv(opts: TestEnvOptions = {}) {
 	const keys = opts.keys ?? {};
 	const grants = opts.grants ?? [];
 	const agentRequests: Request[] = [];
+	const runs: string[] = [];
 	const DB = {
 		prepare(sql: string) {
 			return {
@@ -134,6 +135,15 @@ function testEnv(opts: TestEnvOptions = {}) {
 						},
 						async all() {
 							if (sql.includes("FROM instance_connector_grants")) {
+								// The account-wide reach query (#357) binds (user_id, provider) only.
+								if (sql.includes("WHERE user_id = ?1 AND provider = ?2")) {
+									const [userId, provider] = args;
+									return {
+										results: grants
+											.filter((g) => g.user_id === userId && g.provider === provider)
+											.map((g) => ({ instance_id: g.instance_id })),
+									};
+								}
 								const [instanceId, userId, provider] = args;
 								return {
 									results: grants.filter((g) => (
@@ -146,6 +156,13 @@ function testEnv(opts: TestEnvOptions = {}) {
 							return { results: [] };
 						},
 						async run() {
+							runs.push(sql);
+							if (sql.startsWith("DELETE FROM instance_connector_grants") && sql.includes("WHERE user_id = ?1")) {
+								const [userId, provider] = args;
+								for (let i = grants.length - 1; i >= 0; i--) {
+									if (grants[i].user_id === userId && grants[i].provider === provider) grants.splice(i, 1);
+								}
+							}
 							return {};
 						},
 					};
@@ -174,6 +191,8 @@ function testEnv(opts: TestEnvOptions = {}) {
 			ZOHO_CLIENT_SECRET: "zoho-secret",
 		} as unknown as Env,
 		agentRequests,
+		grants,
+		runs,
 	};
 }
 
@@ -408,5 +427,73 @@ describe("connector route authorization", () => {
 			content: "Nested WorkDrive notes",
 			source: "workdrive",
 		});
+	});
+});
+
+// #357 — disconnect used to delete only the token row, leaving every folder grant standing and
+// invisible, so a reconnect (months later, possibly a different Google account) silently re-armed
+// all of them. Disconnect now means revoke, and /status states the reach before anything is clicked.
+describe("disconnect revokes the folder grants it was silently keeping (#357)", () => {
+	it("reports the blast radius on /status", async () => {
+		const app = connectorApp();
+		const { env } = testEnv({
+			keys: { google_drive: await keyRow("drive-refresh") },
+			grants: [
+				grant("google_drive", "folder-a", "grant-a"),
+				{ ...grant("google_drive", "folder-b", "grant-b"), instance_id: "inst-2" },
+				grant("zoho_workdrive", "wd-folder", "grant-wd"),
+			],
+		});
+
+		const res = await app.request("/v1/drive/status", { headers: await authHeaders() }, env);
+		const data = await res.json<{ connected: boolean; reach: { grants: number; instances: number } }>();
+
+		expect(data.connected).toBe(true);
+		// Only Drive's grants, and the two instances they span — not the WorkDrive one.
+		expect(data.reach).toEqual({ grants: 2, instances: 2 });
+	});
+
+	it("deletes the user's Drive grants along with the token, and says how many", async () => {
+		const app = connectorApp();
+		const { env, grants } = testEnv({
+			keys: { google_drive: await keyRow("drive-refresh") },
+			grants: [
+				grant("google_drive", "folder-a", "grant-a"),
+				{ ...grant("google_drive", "folder-b", "grant-b"), instance_id: "inst-2" },
+				grant("zoho_workdrive", "wd-folder", "grant-wd"),
+			],
+		});
+
+		const res = await app.request("/v1/drive/google", { method: "DELETE", headers: await authHeaders() }, env);
+		const data = await res.json<{ success: boolean; revoked: { grants: number; instances: number } }>();
+
+		expect(res.status).toBe(200);
+		expect(data.revoked).toEqual({ grants: 2, instances: 2 });
+		// The WorkDrive grant is a different connector's decision and must survive.
+		expect(grants.map((g) => g.id)).toEqual(["grant-wd"]);
+	});
+
+	it("does not touch another connector's grants when WorkDrive disconnects", async () => {
+		const app = connectorApp();
+		const { env, grants } = testEnv({
+			keys: { zoho_workdrive: await keyRow("wd-refresh") },
+			grants: [grant("google_drive", "folder-a", "grant-a"), grant("zoho_workdrive", "wd-folder", "grant-wd")],
+		});
+
+		const res = await app.request("/v1/workdrive/zoho", { method: "DELETE", headers: await authHeaders() }, env);
+		const data = await res.json<{ revoked: { grants: number; instances: number } }>();
+
+		expect(data.revoked).toEqual({ grants: 1, instances: 1 });
+		expect(grants.map((g) => g.id)).toEqual(["grant-a"]);
+	});
+
+	it("skips the grant DELETE entirely when there is nothing to revoke", async () => {
+		const app = connectorApp();
+		const { env, runs } = testEnv({ keys: { google_drive: await keyRow("drive-refresh") } });
+
+		const res = await app.request("/v1/drive/google", { method: "DELETE", headers: await authHeaders() }, env);
+
+		expect(await res.json()).toMatchObject({ revoked: { grants: 0, instances: 0 } });
+		expect(runs.some((sql) => sql.startsWith("DELETE FROM instance_connector_grants"))).toBe(false);
 	});
 });

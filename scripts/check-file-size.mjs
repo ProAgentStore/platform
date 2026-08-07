@@ -145,7 +145,9 @@ const PINS = {
 	// +3 more: the write-access checkboxes are built from `per_call` tools as well, so the
 	// connector a chip tells you to grant actually has a switch. Three lines, all of them the
 	// explanation of why a read-scoped tool belongs in a WRITE list.
-	"store/console/src/tabs/SettingsTab.tsx": 1171,
+	// #357 extracted the Drive/WorkDrive blocks — one <FileConnectorPanel/>, rendered twice —
+	// so the tab shrank while gaining the reconnect affordance and the blast-radius line.
+	"store/console/src/tabs/SettingsTab.tsx": 1167,
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.

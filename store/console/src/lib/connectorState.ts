@@ -48,3 +48,30 @@ export function showsConnector(status: ConnectorStatus | null | undefined): bool
 	const state = connectorState(status);
 	return state === "connected" || state === "disconnected";
 }
+
+/** What a file connector's disconnect would destroy: folder grants, across agents (#357). */
+export interface ConnectorReach {
+	grants: number;
+	instances: number;
+}
+
+/**
+ * The disconnect confirmation for a file connector, stating the blast radius (#357).
+ *
+ * Disconnecting Drive/WorkDrive deleted only the account's token row and left every per-instance
+ * folder grant standing — invisible in both directions, so reconnecting re-armed all of them with
+ * no user action. Disconnect now revokes, which is what "I revoked that" already meant to the
+ * person clicking it; this is where the product says so, BEFORE the click rather than after.
+ *
+ * The counts come from the status route rather than the grant list on screen, because the reach
+ * is account-wide: the grants being destroyed mostly belong to agents this page is not showing.
+ */
+export function disconnectPrompt(label: string, reach?: ConnectorReach | null): string {
+	const kept = `Documents already imported stay in each agent's knowledge base.`;
+	if (!reach || reach.grants === 0) {
+		return `Disconnect ${label}?\n\nNo agent currently holds a ${label} folder grant. ${kept}`;
+	}
+	const folders = reach.grants === 1 ? "1 folder grant" : `${reach.grants} folder grants`;
+	const agents = reach.instances === 1 ? "1 agent" : `${reach.instances} agents`;
+	return `Disconnect ${label}?\n\nThis also REVOKES ${folders} across ${agents}. Reconnecting will not bring them back — you would grant each folder again.\n\n${kept}`;
+}
