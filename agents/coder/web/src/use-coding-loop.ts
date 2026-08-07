@@ -220,7 +220,17 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	// mid-loop would silently redirect the loop to drive the WRONG Engine with the old
 	// objective. Stop on switch (the user restarts it explicitly on the new session). Not on
 	// first mount (prev === current), so a fresh session isn't spuriously "stopped".
+	//
+	// The dep list is `[sessionId]` ON PURPOSE and the suppression below is the reason, not an
+	// oversight. This is an EDGE DETECTOR: it must run when the session id changes and at no
+	// other time. `emitSystem` is redeclared on every render, so listing it would re-run the
+	// effect on every render — the opposite of what the list is stating — and taking Biome's
+	// advice on a dep list in this codebase has already shipped an outage once (#309, which
+	// killed every instance tab in production). The closure it captures is not stale in any way
+	// that matters: `emitSystem` only reads `instanceId` and the very `sessionId` this effect is
+	// keyed on.
 	const prevSessionRef = useRef(sessionId);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: edge detector on sessionId — emitSystem is a fresh closure each render, so listing it would fire this every render (see above).
 	useEffect(() => {
 		if (prevSessionRef.current === sessionId) return;
 		prevSessionRef.current = sessionId;

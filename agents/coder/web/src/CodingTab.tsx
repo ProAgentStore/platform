@@ -9,6 +9,10 @@ import { useCodingLoop } from "./use-coding-loop";
 import { repoTitle } from "./repo-title";
 import { resolveRunnerOnline } from "./runner-online";
 import { isEngineBusy, anyEngineBusy } from "./engine-busy";
+import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
+import { parseRepoInput } from "./repo-input";
+import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
+import { chatMessagesFrom, lastTerminalSnapshot, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
@@ -16,7 +20,7 @@ import RepoIssues from "./RepoIssues";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
-import { engineAuthBadge, type EngineAuthReport } from "./engine-auth-view";
+import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
 import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, Cpu, RotateCw } from "lucide-react";
 
 interface Props {
@@ -113,7 +117,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// `openSession` on purpose: a finished run is exactly the moment the session goes away, and
 	// exactly the moment the user must not be shown an empty screen with a "Start a session"
 	// button where their work used to be.
-	const historyRepoId = !openSession && repos.length ? repos[0].id : null;
+	//
+	// Scoped to the solo layout, which is the only place <RepoHistory/> renders — and the
+	// condition is written to match that layout's own guard exactly. Without it a multi-repo
+	// agent fired a `?limit=300` timeline read for repos[0] every time it landed on the list and
+	// then discarded the answer.
+	const historyRepoId = !openSession && singleRepo && repos.length === 1 ? repos[0].id : null;
 	useEffect(() => {
 		if (!historyRepoId) {
 			setRepoHistory(null);
@@ -346,33 +355,25 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch {}
 	}, [instanceId, openSession]);
 
-	// Status of the currently-open session — the terminal poll's busy signal AND the header badge
-	// (CODER-005). A primitive string (not the repoStatuses object) so the header effect re-pushes
-	// only when the status actually changes — depending on the object would re-fire every poll (a
-	// render storm).
-	const openStatus = openSession
-		? repoStatuses[openSession.repoId] || (runnerOnline === false ? "offline" : "idle")
-		: "idle";
-	// The heaviest sustained poll in the app — the whole tmux pane, every 1.5s, over the relay.
-	// "Busy" here is deliberately wider than the engine's own runState: a send that has not been
-	// acknowledged yet (`summaryBusy`) and a running Loop both mean output is imminent, and
-	// waiting out a slow tick before the pane starts moving would read as a hang.
-	const terminalBusy = isEngineBusy(openStatus) || summaryBusy || loop.loopOn;
+	// State of the currently-open session — the terminal poll's busy signal AND the header badge
+	// (CODER-005). Reconciled once, in ./repo-status, so the badge and the repo row cannot answer
+	// the same question differently. A primitive (not the repoStatuses object) so the header
+	// effect re-pushes only when the state actually changes — depending on the object would
+	// re-fire every poll (a render storm).
+	const openState: RepoState = openSession
+		? resolveRepoState({ state: repoStatuses[openSession.repoId], runnerOnline, hasActiveSession: true })
+		: "ready";
+	const terminalBusy = terminalPollBusy({ state: openState, sending: summaryBusy, looping: loop.loopOn });
 	useTieredPolling(pollTerminal, { activeMs: 1500, passiveMs: 6000 }, terminalBusy, !!openSession);
 
 	// Summary polling (4.5s)
 	const pollSummary = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
-			const entries = (d.chat || d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
-				.map((e) => ({
-					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
-					content: e.content || e.text || "",
-					time: e.createdAt,
-					audioKey: e.audioKey,
-				}));
+			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
+			const entries = chatMessagesFrom(d);
+			// Only when there is something: an empty answer here means a failed/racing read, and
+			// replacing a live thread with [] would blank the conversation mid-session.
 			if (entries.length > 0) setSummaryHistory(entries);
 		} catch {}
 	}, [instanceId, openSession]);
@@ -412,50 +413,31 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch {}
 		// Load history — ?full=1 so we get BOTH the chat AND the persisted terminal snapshots.
 		try {
-			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline?full=1`);
-			const entries = (d.chat || d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
-				.map((e) => ({
-					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
-					content: e.content || e.text || "",
-					time: e.createdAt,
-					audioKey: e.audioKey,
-				}));
-			setSummaryHistory(entries);
-			// Last persisted tmux snapshot → the Terminal view's DB fallback. Show it right
+			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline?full=1`);
+			setSummaryHistory(chatMessagesFrom(d));
+			// Last persisted terminal snapshot → the Terminal view's DB fallback. Show it right
 			// away so the terminal isn't blank before the first live capture; a live pane
 			// (if the session is running) overwrites it on the next poll.
-			const lastTerm = (d.timeline || []).filter((e) => e.type === "terminal").slice(-1)[0];
-			const saved = (lastTerm?.content || lastTerm?.text || "").trim();
+			const saved = lastTerminalSnapshot(d);
 			if (saved) { setSavedTerminal(saved); setTerminalText(saved); }
 		} catch (e) {
 			console.error("[coding] timeline load failed:", e);
 		}
 	}, [instanceId, navigate, copilot]);
 
-	// Auto-open a session on mount ONLY for a deep link (URL session id) or the repo the user
-	// was last working on (persisted). With neither, land on the repo LIST view (openSession
-	// stays null) rather than auto-opening whatever active session happens to be first — that
-	// yanked users into a session they didn't ask for.
+	// Auto-open a session on mount ONLY for a deep link (URL session id), a one-repo agent's live
+	// session, or the repo the user was last working on (persisted). With none of those, land on
+	// the repo LIST view (openSession stays null) rather than auto-opening whatever active session
+	// happens to be first — that yanked users into a session they didn't ask for. The choice
+	// itself is pure and lives in ./session-open, with the reasoning for each branch.
 	useEffect(() => {
-		if (autoOpenedRef.current || !sessions.length) return;
-		let target: CodingSession | undefined;
-		if (initialSessionId) {
-			target = sessions.find((s) => s.id === initialSessionId);
-		} else if (singleRepo) {
-			// One repo: attach to its live session, always. There is nothing to disambiguate and
-			// nothing to hide — the terminal renders INSIDE the Terminal tab, with Issues and
-			// Builds still one click away. (This was briefly disabled, back when opening a session
-			// took over the whole page and buried the other views; the solo layout removed that
-			// reason, and leaving it off just meant a live session sat behind an "Open session"
-			// button on the tab whose entire purpose is to show it.)
-			target = sessions.find((s) => s.status === "active");
-		} else {
-			// Multi-repo: restore the last repo you were in — a real question when there are
-			// several — but only if it still has a live session.
-			const lastRepo = loadLastRepo(instanceId);
-			target = lastRepo ? sessions.find((s) => s.repoId === lastRepo && s.status === "active") : undefined;
-		}
+		if (autoOpenedRef.current) return;
+		const target = pickAutoOpenSession({
+			sessions,
+			initialSessionId,
+			singleRepo,
+			lastRepoId: loadLastRepo(instanceId),
+		});
 		if (target) {
 			autoOpenedRef.current = true;
 			openTerminal(target);
@@ -583,20 +565,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	};
 
 	const addRepo = async () => {
-		const val = addRepoInput.trim();
-		if (!val) return;
-		// Detect input type: local path vs clone URL vs owner/repo
-		const body: Record<string, string> = {};
-		if (val.startsWith("~") || val.startsWith("/")) {
-			body.localPath = val;
-		} else if (val.includes("://") || val.includes(".git")) {
-			body.cloneUrl = val;
-		} else if (val.includes("/")) {
-			body.githubRepo = val;
-			body.cloneUrl = `https://github.com/${val}.git`;
-		} else {
-			body.name = val;
-		}
+		// One box, four different request bodies — classified in ./repo-input, where the
+		// distinctions (and the `.github.io` misread they used to make) are stated and tested.
+		const body = parseRepoInput(addRepoInput);
+		if (!body) return;
 		try {
 			await api(`/v1/instances/${instanceId}/coding/repos`, {
 				method: "POST",
@@ -673,24 +645,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const copySummaryJson = async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
-			// Copy only the last 10 messages (history is kept server-side; the clipboard
-			// just gets the recent context).
-			const entries = (d.chat || d.timeline || [])
-				.slice(-10)
-				.map((e) => ({
-					type: e.type,
-					role: e.role,
-					content: e.content || e.text || "",
-					seq: e.seq,
-				}));
+			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
+			const entries = timelineExcerpt(d);
 			await navigator.clipboard.writeText(JSON.stringify({ sessionId: openSession.id, count: entries.length, timeline: entries }, null, 2));
 		} catch (e) {
 			alert("Copy failed: " + (e instanceof Error ? e.message : String(e)));
 		}
 	};
 
-	const getActiveSession = (repoId: string) => sessions.find((s) => s.repoId === repoId && s.status === "active");
+	const getActiveSession = (repoId: string) => activeSessionFor(sessions, repoId);
 
 	// "Work on this" (Issues panel): pre-fill an objective from the issue, open the repo's
 	// session, and let the user review + send. Never auto-runs (approve-first). Fetch the
@@ -730,15 +693,14 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	};
 
-	const repoLabel = (r: CodingRepo) => {
-		const active = getActiveSession(r.id);
-		const st = repoStatuses[r.id];
-		if (!active) return runnerOnline === false ? "Runner offline" : "Ready";
-		if (isEngineBusy(st)) return "Working...";
-		if (st === "idle") return "Ready";
-		if (st === "offline") return "Runner offline";
-		return "Active";
-	};
+	// The phrase under a repo's name. One reconciliation of the two signals, shared with the
+	// session badge — see ./repo-status for which wins when they disagree.
+	const repoLabel = (r: CodingRepo) =>
+		repoStatusLabel({
+			state: repoStatuses[r.id],
+			runnerOnline,
+			hasActiveSession: !!getActiveSession(r.id),
+		});
 
 	const [repoMenuOpen, setRepoMenuOpen] = useState(false);
 	const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -752,8 +714,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		else startSession(r.id);
 	};
 
-	// Push session header override to parent when session is open
-	const openRepo = openSession ? repos.find((r) => getActiveSession(r.id)?.id === openSession.id) : null;
+	// Push session header override to parent when session is open. The repo is looked up by the
+	// session's own `repoId` (./session-open) — asking which repo has this as its ACTIVE session
+	// answered "none" for an ENDED one, and the header then printed a raw UUID in place of the
+	// repo's name.
+	const openRepo = repoForSession(repos, openSession);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: event handlers intentionally read current component state; the header only needs to refresh when visible header state changes.
 	useEffect(() => {
 		// NOT for the single-repo surface. That view keeps the normal instance header and carries
@@ -824,7 +789,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							</>
 						)}
 				</div>
-				<AgentStatusBadge status={openStatus} />
+				<AgentStatusBadge state={openState} />
 				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
 				{copilot && (
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
@@ -883,7 +848,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// Deps so this only re-runs when the header's VISIBLE content changes. With no
 		// deps it was a render storm: each run handed setChildHeader a fresh element →
 		// re-rendered the parent → this child → effect again, continuously.
-	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openStatus, singleRepo]);
+	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openState, singleRepo]);
 
 	const settingsModal = settingsRepoId
 		? (() => {
@@ -894,11 +859,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			})()
 		: null;
 
-	// Claude Code signed-out CTA — the headless engine surfaces a login error in its
-	// transcript when the runner machine has no (or expired) Claude credentials.
-	const claudeSignedOut =
-		openSession?.clientType === "claude" &&
-		/not logged in|please run \/login|invalid api key|oauth token (is |has )?(expired|revoked)/i.test(terminalText);
+	// Claude Code signed-out CTA — the headless engine surfaces a login error in its transcript
+	// when the runner machine has no (or expired) Claude credentials. The pattern (and the
+	// engine gate that keeps a Codex user from being told to run `claude setup-token`) is in
+	// ./engine-auth-view, with the rest of the credential reporting.
+	const claudeSignedOut = isClaudeSignedOut(openSession, terminalText);
 
 	// ── Single-repo agent: one surface, three views, navigation never hidden ──
 	//
@@ -1163,14 +1128,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 }
 
 /**
- * Working / Idle / Error badge for the open session (CODER-005). Derived from the session's
- * runState (`repoStatuses`) + runner connectivity. Compact on mobile: the coloured dot is
- * always shown (with a tooltip); the text label appears from `sm` up so it fits the 48px header.
+ * Working / Idle / Error badge for the open session (CODER-005). The reconciliation of runState
+ * and runner connectivity is ./repo-status's; this renders its verdict. Compact on mobile: the
+ * coloured dot is always shown (with a tooltip); the text label appears from `sm` up so it fits
+ * the 48px header.
  */
-function AgentStatusBadge({ status }: { status: string }) {
-	const working = isEngineBusy(status);
-	const error = status === "offline";
-	const label = working ? "Working" : error ? "Error" : "Idle";
+function AgentStatusBadge({ state }: { state: RepoState }) {
+	const { label, tone } = sessionBadge(state);
+	const working = tone === "working";
+	const error = tone === "error";
 	const base = "inline-flex items-center gap-1 text-[0.6rem] font-bold px-1.5 py-0.5 rounded shrink-0";
 	if (working) {
 		return (

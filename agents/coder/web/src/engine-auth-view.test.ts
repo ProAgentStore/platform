@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { engineAuthBadge, type EngineAuthReport } from "./engine-auth-view.js";
+import { engineAuthBadge, type EngineAuthReport, isClaudeSignedOut } from "./engine-auth-view.js";
 
 const report = (over: Partial<EngineAuthReport> = {}): EngineAuthReport => ({
 	mode: "auto",
@@ -64,5 +64,54 @@ describe("engineAuthBadge — the money question, in the session header", () => 
 		expect(engineAuthBadge(report({ mode: "subscription" }))?.detail).toMatch(/Set to Claude subscription/);
 		expect(engineAuthBadge(report({ mode: "auto" }))?.detail).toMatch(/Set to Automatic/);
 		expect(engineAuthBadge(report({ mode: "machine" }))?.detail).toMatch(/Set to This machine's login/);
+	});
+});
+
+describe("isClaudeSignedOut — the `claude setup-token` CTA", () => {
+	// There is no field for this: a child process reports it by PRINTING it, so the console reads
+	// the captured transcript. The pattern is the whole of the rule, and it decides whether the
+	// user is handed a fix or left staring at a session that looks merely idle.
+	const claude = { clientType: "claude" };
+
+	const PHRASES = [
+		"Error: not logged in",
+		"Please run /login to continue",
+		"invalid api key · fix external API key",
+		"Your OAuth token has expired",
+		"oauth token is revoked",
+		"OAuth token expired",
+	];
+
+	it("fires on every phrasing the engine is known to print", () => {
+		for (const line of PHRASES) {
+			expect(isClaudeSignedOut(claude, `some earlier output\n${line}\nmore output`)).toBe(true);
+		}
+	});
+
+	it("is case-insensitive — the CLI does not capitalise consistently", () => {
+		expect(isClaudeSignedOut(claude, "NOT LOGGED IN")).toBe(true);
+		expect(isClaudeSignedOut(claude, "Invalid API Key")).toBe(true);
+	});
+
+	it("stays quiet on an ordinary transcript", () => {
+		expect(isClaudeSignedOut(claude, "(waiting...)")).toBe(false);
+		expect(isClaudeSignedOut(claude, "")).toBe(false);
+		// The words, but about something else — a test the agent is running, not its own auth.
+		expect(isClaudeSignedOut(claude, "PASS  auth.test.ts > rejects a login attempt")).toBe(false);
+	});
+
+	it("is gated on the ENGINE, not just the words", () => {
+		// Codex and Grok have their own sign-in flows and their own way of saying "invalid api
+		// key". Telling their user to run `claude setup-token` is advice for a program they are
+		// not running.
+		expect(isClaudeSignedOut({ clientType: "codex" }, "invalid api key")).toBe(false);
+		expect(isClaudeSignedOut({ clientType: "grok" }, "not logged in")).toBe(false);
+		// A session whose engine the API did not report is not assumed to be Claude.
+		expect(isClaudeSignedOut({}, "not logged in")).toBe(false);
+	});
+
+	it("is inert with no session open", () => {
+		expect(isClaudeSignedOut(null, "not logged in")).toBe(false);
+		expect(isClaudeSignedOut(undefined, "not logged in")).toBe(false);
 	});
 });

@@ -68,3 +68,21 @@ export function engineAuthBadge(auth: EngineAuthReport | null | undefined): Engi
 	const detail = `Set to ${MODE_LABEL[auth.mode]} · child process`;
 	return { label, detail, tone: auth.warning ? "warn" : "neutral", note: auth.note ?? null };
 }
+
+/**
+ * Is Claude Code signed out on the runner machine?
+ *
+ * There is no field for this. The headless engine reports it the only way a child process can —
+ * by printing it — so the console reads the captured transcript. That makes the pattern the whole
+ * of the rule, and it decides whether the user is shown a `claude setup-token` CTA, so it belongs
+ * next to the rest of the credential reporting rather than inline in a render.
+ *
+ * Gated on the ENGINE, not just the words. Codex and Grok have their own sign-in flows and their
+ * own way of saying "invalid api key"; telling their user to run `claude setup-token` would be
+ * advice for a program they are not running.
+ */
+const SIGNED_OUT = /not logged in|please run \/login|invalid api key|oauth token (is |has )?(expired|revoked)/i;
+
+export function isClaudeSignedOut(session: { clientType?: string } | null | undefined, terminalText: string): boolean {
+	return session?.clientType === "claude" && SIGNED_OUT.test(terminalText);
+}

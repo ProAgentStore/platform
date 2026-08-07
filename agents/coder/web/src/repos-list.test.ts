@@ -137,24 +137,25 @@ describe("Work on this issue actually starts work", () => {
 
 describe("the Terminal tab shows the terminal", () => {
 	const tab = src("CodingTab.tsx");
-	const autoOpen = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
 
-	it("attaches a one-repo agent to its live session automatically", () => {
-		// It briefly did not, and that was right while opening a session took over the whole page
-		// and buried Builds and Issues. The solo layout renders the terminal INSIDE its tab, so
-		// there is nothing left to hide — and leaving it off put a live session behind an
-		// "Open session" button on the tab whose only job is to show it.
-		expect(autoOpen).toContain("} else if (singleRepo) {");
-		expect(autoOpen).toContain('sessions.find((s) => s.status === "active")');
+	// The three branches that used to be asserted here as SOURCE STRINGS inside the effect
+	// ("} else if (singleRepo) {") are now driven directly — see session-open.test.ts, which
+	// answers questions this file never could, like what a deep link to an ENDED session does.
+	// What is left here is the wiring: the effect must still USE that decision and still feed it
+	// the remembered repo, which no unit test of the pure module can see.
+	it("delegates the choice rather than re-deriving it", () => {
+		const autoOpen = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
+		expect(autoOpen).toContain("pickAutoOpenSession({");
+		expect(autoOpen).toContain("lastRepoId: loadLastRepo(instanceId)");
+		expect(autoOpen).toContain("singleRepo,");
+		expect(autoOpen).toContain("initialSessionId,");
 	});
 
-	it("still restores the LAST repo only when there are several", () => {
-		// "Which repo was I in" is a real question with many and a meaningless one with one.
-		expect(autoOpen).toContain("loadLastRepo(instanceId)");
-	});
-
-	it("still honours a deep link to a specific session, for everyone", () => {
-		expect(autoOpen).toContain("if (initialSessionId) {");
+	it("still runs at most ONCE per mount", () => {
+		// A later `sessions` refresh (loadCoding on start/end/add) must not re-open a session the
+		// user has since closed, or yank them off the Terminal view.
+		const autoOpen = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
+		expect(autoOpen).toContain("if (autoOpenedRef.current) return;");
 	});
 
 	it("offers Start — never Open — when nothing is running", () => {

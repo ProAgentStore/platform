@@ -159,7 +159,14 @@ const PINS = {
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
-	"agents/coder/web/src/CodingTab.tsx": 1230,
+	// 1230 → 1196 at #305, and the small number is the honest one: what is left in this file is
+	// JSX and fetch, which this repo's own coverage config says is e2e's job. What moved is the
+	// DECISIONS — the repo/session status vocabulary the row phrase, the header badge and the
+	// terminal poll each reconciled separately (repo-status.ts), what the add-repo box accepted
+	// (repo-input.ts), which session opens by itself and which repo a session is in
+	// (session-open.ts), and the timeline→conversation mapping that was written out twice
+	// verbatim (timeline-chat.ts). Each replaced a prose paragraph with a test that executes it.
+	"agents/coder/web/src/CodingTab.tsx": 1196,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
