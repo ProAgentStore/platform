@@ -20,6 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, for the migration guard below: it compares each migration's DDL
+          # against the commit that introduced it, and a depth-1 checkout has no such commit
+          # for any file — the check would pass by verifying nothing. `--require-history`
+          # makes that state a failure rather than a quiet tick, so the two must move together.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -44,6 +50,17 @@ jobs:
         # the same commit — otherwise the lines just removed stay available as headroom,
         # which is numerically what happened. Tests are excluded on purpose.
         run: node scripts/check-file-size.mjs
+      - name: Migration hygiene (#369)
+        # Two files claimed 0092. Nothing broke — they happen to sort in the order someone
+        # would want — but the number stopped being what decides order, and how it happened
+        # (four agents landing migrations in parallel, two picking the same free number
+        # minutes apart) is a race that recurs. Fails on a NEW duplicate; the historical pair
+        # is recorded as an exception with the reason it may not be renamed, since wrangler
+        # keys applied migrations by filename and both have already run in production.
+        # Also fails when a migration's DDL changes after the commit that introduced it —
+        # comments excluded, because correcting a comment that says something untrue is the
+        # one edit to a shipped migration that is always right (0080, 2026-08-07).
+        run: node scripts/check-migrations.mjs --require-history
       - name: Guard heavy-test isolation (#253)
         # Keeps real-browser / real-socket tests inside the `integration` project, which
         # is where they get a budget sized for real I/O instead of vitest's 5s default.
