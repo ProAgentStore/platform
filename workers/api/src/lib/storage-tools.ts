@@ -227,7 +227,7 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "send_to_cli",
-		description: "Send an instruction to the coding Engine (CLI running in tmux) for a specific repo. The Engine will execute it.",
+		description: "Send an instruction to the coding Engine (the CLI running on your machine) for a specific repo. The Engine will execute it.",
 		parameters: {
 			repo_name: { type: "string", description: "Repository name", required: true },
 			message: { type: "string", description: "Instruction to send to the CLI", required: true },

@@ -2,10 +2,29 @@ import { useState, useCallback, useEffect } from "react";
 import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { BarChart3, Info, RefreshCw } from "lucide-react";
+import { AlertTriangle, BarChart3, Info, RefreshCw } from "lucide-react";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
 interface Day { date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
+/**
+ * What the dollars above LEAVE OUT, counted (#348).
+ *
+ * A coding CLI driven through the terminal connector — tmux, kitty, iTerm2 — writes no ledger row,
+ * because a pane carries rendered text and not the CLI's own usage record. Before this the page
+ * simply showed a smaller total, and a smaller total reads as cheaper. It is not cheaper, it is
+ * invisible: the same binary on the same repo sends the same thing to the API either way.
+ *
+ * `windowDays` matters because the trace this is counted from prunes at 14 days, so the count can
+ * cover a shorter period than the dollars beside it. The page says which rather than implying they
+ * line up.
+ */
+interface Unmetered {
+	drives: number;
+	aiCliDrives: number;
+	instances: number;
+	lastAt: number | null;
+	windowDays: number;
+}
 interface UsageData {
 	range: string;
 	totals: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number };
@@ -13,6 +32,7 @@ interface UsageData {
 	byModel: Bucket[];
 	byKind: Bucket[];
 	byAgent: Bucket[];
+	unmetered?: Unmetered;
 }
 
 const RANGES = [
@@ -140,6 +160,8 @@ export default function Usage() {
 		const fresh = totals?.inputTokens ?? 0;
 		return read + fresh > 0 && read > 0 ? read / (read + fresh) : null;
 	})();
+	const unmetered = data?.unmetered;
+	const hasUnmetered = (unmetered?.drives ?? 0) > 0;
 	const empty = !!data && totals && totals.calls === 0;
 	// Only worth explaining the engine caveat to someone who actually codes with an agent.
 	const hasCodingUsage = !!data?.byKind.some((b) => b.key === "engine" || b.key === "coding" || b.key === "copilot");
@@ -158,7 +180,7 @@ export default function Usage() {
 			<p className="text-sm text-muted mb-2">
 				Token usage and cost across all your agents. Most rows are <b>estimated</b> from list prices on your own key (BYOK) — not a bill. Coding-engine rows are the exception: the CLI reports what it actually spent. History starts when tracking was enabled.
 			</p>
-			<Scope />
+			<Scope unmetered={unmetered} />
 
 			{/* Range selector */}
 			<div className="flex gap-1 mb-4">
@@ -173,13 +195,24 @@ export default function Usage() {
 			{loading && !data ? (
 				<p className="text-center py-8 text-muted text-sm">Loading…</p>
 			) : empty ? (
-				<div className="text-center py-10 px-4 bg-panel border border-line rounded-xl">
-					<BarChart3 size={28} className="mx-auto text-muted-soft mb-2" />
-					<div className="font-semibold text-sm">No usage in this range</div>
-					<div className="text-sm text-muted mt-1">Chat with an agent or run a task — usage shows up here.</div>
-				</div>
+				<>
+					{/* "No usage" is a claim, and it is false when the work done this range went through a
+					    path that cannot be measured. An account that drove Claude Code in tmux all week
+					    would otherwise be told it did nothing — the $0 lie in its purest form. */}
+					<UnmeteredNotice unmetered={unmetered} />
+					<div className="text-center py-10 px-4 bg-panel border border-line rounded-xl">
+						<BarChart3 size={28} className="mx-auto text-muted-soft mb-2" />
+						<div className="font-semibold text-sm">{hasUnmetered ? "No measured usage in this range" : "No usage in this range"}</div>
+						<div className="text-sm text-muted mt-1">
+							{hasUnmetered
+								? "Everything your agents did this range ran on a path the platform cannot meter — so this page has nothing to total, not nothing to report."
+								: "Chat with an agent or run a task — usage shows up here."}
+						</div>
+					</div>
+				</>
 			) : data && totals ? (
 				<>
+					<UnmeteredNotice unmetered={unmetered} />
 					{/* Headline totals */}
 					<div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
 						<Stat label="Est. cost" value={usd(totals.costMicros)} accent />
@@ -260,7 +293,8 @@ export default function Usage() {
  * says "engine spend is included" without qualifying it is a new version of the same
  * looks-complete problem.
  */
-function Scope() {
+function Scope({ unmetered }: { unmetered?: Unmetered }) {
+	const drives = unmetered?.drives ?? 0;
 	return (
 		<details className="mb-3 group">
 			<summary className="flex items-center gap-1.5 text-xs text-muted-soft cursor-pointer hover:text-muted list-none [&::-webkit-details-marker]:hidden">
@@ -284,6 +318,23 @@ function Scope() {
 						appears nowhere here — deliberately absent rather than shown as zero. If you run a coding session on
 						one of them, your real spend is higher than the figure above.
 					</li>
+					<li>
+						· <b className="text-ink">Anything driven through a terminal.</b> When an agent types into a tmux,
+						kitty or iTerm2 pane, all the platform gets back is the rendered text — not the CLI’s own record of
+						what the turn cost. That holds even for Claude Code: the same binary is measured when the Pilot runs
+						it directly and unmeasured through a pane, so a terminal-driven session is not cheaper than a Pilot
+						one, it is invisible.
+						{drives > 0 && (
+							<>
+								{" "}
+								<b className="text-ink">
+									{drives.toLocaleString()} such {drives === 1 ? "drive" : "drives"}
+								</b>{" "}
+								{drives === 1 ? "was" : "were"} recorded in the last {unmetered?.windowDays ?? 14} days
+								{(unmetered?.aiCliDrives ?? 0) > 0 && <> — {unmetered?.aiCliDrives} with an AI coding CLI running in the pane</>}.
+							</>
+						)}
+					</li>
 				</ul>
 				<p className="text-xs text-muted-soft mt-3">
 					Apart from the measured engine rows, everything here is priced from published list prices at the time of
@@ -292,6 +343,38 @@ function Scope() {
 				</p>
 			</div>
 		</details>
+	);
+}
+
+/**
+ * The one thing on this page that must not be behind a disclosure triangle.
+ *
+ * `<Scope />` is a collapsed `<details>`, which is right for "these numbers are estimates" — a
+ * standing caveat a reader can take on trust. It is wrong for "the headline is short by an unknown
+ * amount", because that changes what the headline MEANS, and a reader comparing two agents will
+ * never open it in time. So the count sits next to the total, visible, and only when there is
+ * something to say — an account that never drives a terminal sees nothing.
+ *
+ * It states a COUNT and refuses to state a cost. There is no honest dollar figure to put here:
+ * inventing one from a token estimate, or scraping it out of pane output, would replace a known
+ * gap with a confident wrong number, which is the failure this whole thing exists to undo.
+ */
+function UnmeteredNotice({ unmetered }: { unmetered?: Unmetered }) {
+	if (!unmetered || unmetered.drives <= 0) return null;
+	const { drives, aiCliDrives, windowDays } = unmetered;
+	return (
+		<div className="mb-4 flex gap-2 items-start bg-panel border border-line rounded-xl px-3 py-2.5 text-sm">
+			<AlertTriangle size={15} className="text-accent shrink-0 mt-0.5" />
+			<div>
+				<b>This total is incomplete.</b>{" "}
+				{drives.toLocaleString()} {drives === 1 ? "drive" : "drives"} through a terminal
+				{aiCliDrives > 0 && <> ({aiCliDrives} with an AI coding CLI running)</>} in the last {windowDays} days
+				could not be measured — a pane returns rendered text, not the CLI’s usage record.
+				<div className="text-xs text-muted-soft mt-0.5">
+					Their real cost is unknown, not zero. No estimate is shown because there is nothing honest to estimate from.
+				</div>
+			</div>
+		</div>
 	);
 }
 

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { capturePane, createSession, killSession, listSessionsDetailed, runCommand as tmuxRunCommand, sendKey as tmuxSendKey, sendText as tmuxSendText, sessionExists } from "./tmux.js";
+import { capturePane, createSession, killSession, listSessionsDetailed, runCommand as tmuxRunCommand, sendKey as tmuxSendKey, sendText as tmuxSendText, sessionExists, tmuxExec } from "./tmux.js";
 
 export type TerminalBackend = "tmux" | "kitty" | "iterm2";
 
@@ -61,6 +61,72 @@ export function captureTerminalTarget(target: string, opts: { backend?: Terminal
 			return kittyExec(["@", "get-text", "--match", `id:${t.id}`, "--extent", "all"], 5000);
 		case "iterm2":
 			return itermSessionScript(t.id, "return contents of theSession");
+	}
+}
+
+/**
+ * The foreground command running in a target right now — `claude`, `node`, `zsh`, … (#348).
+ *
+ * The platform cannot measure what an AI CLI inside a pane spends: a pane holds rendered text, not
+ * the stream-json `result` event `headless.ts` reads. So the cloud records the drive as UNMETERED
+ * instead, and this is the one fact that makes that record specific rather than generic. It is a
+ * name, never a number — no cost figure is ever parsed out of pane output, because a scraped
+ * dollar amount would be a guess dressed as a measurement.
+ *
+ * Returns `null` when it cannot be read (no such target, iTerm2, a backend that will not say).
+ * `null` means UNREADABLE and must not be flattened into "nothing was running" upstream: the
+ * distinction is the entire point of recording this at all.
+ */
+export function activeTerminalCommand(target: string, backend?: TerminalBackend): string | null {
+	let t: { backend: TerminalBackend; id: string };
+	try {
+		t = splitTerminalTarget(target, backend);
+	} catch {
+		return null;
+	}
+	try {
+		switch (t.backend) {
+			case "tmux": {
+				const out = tmuxExec(["display-message", "-p", "-t", t.id, "#{pane_current_command}"]).trim();
+				return out || null;
+			}
+			case "kitty":
+				return kittyForegroundCommand(t.id);
+			// iTerm2 exposes no cheap, reliable foreground-process query. Saying so is the honest
+			// answer; guessing from the pane's last line would not be.
+			case "iterm2":
+				return null;
+		}
+	} catch {
+		return null;
+	}
+}
+
+/** The foreground process of a kitty window, from `kitty @ ls`. Null if it can't be determined. */
+function kittyForegroundCommand(id: string): string | null {
+	try {
+		const parsed = JSON.parse(kittyExec(["@", "ls"], 5000)) as unknown;
+		if (!Array.isArray(parsed)) return null;
+		for (const osWindow of parsed) {
+			const tabs = Array.isArray((osWindow as { tabs?: unknown }).tabs) ? (osWindow as { tabs: unknown[] }).tabs : [];
+			for (const tab of tabs) {
+				const windows = Array.isArray((tab as { windows?: unknown }).windows) ? (tab as { windows: unknown[] }).windows : [];
+				for (const win of windows) {
+					const row = win as Record<string, unknown>;
+					if (String(row.id ?? "") !== id) continue;
+					const procs = Array.isArray(row.foreground_processes) ? (row.foreground_processes as unknown[]) : [];
+					for (const p of procs) {
+						const cmdline = (p as { cmdline?: unknown }).cmdline;
+						const first = Array.isArray(cmdline) ? String(cmdline[0] ?? "").trim() : "";
+						if (first) return first;
+					}
+					return null;
+				}
+			}
+		}
+		return null;
+	} catch {
+		return null;
 	}
 }
 

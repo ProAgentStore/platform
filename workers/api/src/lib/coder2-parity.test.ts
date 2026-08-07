@@ -45,7 +45,7 @@ describe("Repo Coder matches the hardcoded Coder", () => {
 
 	it("keeps the local coding runtime and the durable Pilot", () => {
 		const caps = configFromSeed("coder-repo").capabilities as Record<string, unknown>;
-		expect(caps.runtime).toBe("coding"); // `pags up` drives a real CLI in tmux
+		expect(caps.runtime).toBe("coding"); // `pags up` spawns a real CLI as a child process
 		expect(caps.workflow).toBe("CODING_SESSION"); // the durable Pilot, not a client loop
 		expect(caps.surfaces).toEqual(["coding"]); // the console renders the Coding tab
 	});

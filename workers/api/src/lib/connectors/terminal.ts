@@ -1,7 +1,14 @@
 // Generic local terminal connector. The cloud side owns auth/consent/tool policy; the local
 // runner owns backend-specific adapters (tmux, kitty remote control, iTerm2 AppleScript).
+//
+// METERING: this connector drives CLIs the platform cannot measure (#348). A pane carries
+// rendered text, so an AI coding CLI running in one spends real tokens that reach no ledger row —
+// and a missing row on a page of dollars reads as zero dollars. Every WRITE therefore records an
+// explicit "not measured" observation via `recordUnmeteredEngineActivity`, so the gap is a
+// quantity a reader can see rather than a silence they mistake for thrift.
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
+import { noteUnmeteredDrive } from "../engine-metering.js";
 
 type Backend = "tmux" | "kitty" | "iterm2";
 
@@ -94,7 +101,9 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			if ("error" in r) return { content: r.error, success: false };
 			const command = String(input.command ?? "");
 			if (!command.trim()) return { content: "A `command` is required.", success: false };
-			const res = await callRunner<{ pane?: string }>(r.conn, "/terminal/run", { target: requireTarget(input), backend: backend(input), command });
+			const target = requireTarget(input);
+			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/terminal/run", { target, backend: backend(input), command });
+			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
 			return { content: res.pane ?? "Command sent.", success: true };
 		},
 	},
@@ -122,7 +131,9 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 				? input.keys.map((k) => String(k).trim()).filter(Boolean)
 				: String(input.keys ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 			if (input.text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
-			const res = await callRunner<{ pane?: string }>(r.conn, "/terminal/send", { target: requireTarget(input), backend: backend(input), text: input.text == null ? undefined : String(input.text), keys });
+			const target = requireTarget(input);
+			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/terminal/send", { target, backend: backend(input), text: input.text == null ? undefined : String(input.text), keys });
+			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
 			return { content: res.pane ?? "Sent.", success: true };
 		},
 	},

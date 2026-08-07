@@ -320,7 +320,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
 		if (b.text != null) sendText(session, String(b.text));
 		for (const k of b.keys ?? []) sendKey(session, String(k));
-		return json(res, 200, { session, pane: capturePane(session, 200) });
+		// `activeCommand` rides along on every WRITE so the cloud can record what it just drove
+		// (#348). It is a process name, never a cost — see activeTerminalCommand's comment.
+		const { activeTerminalCommand } = await import("./coding/terminal.js");
+		return json(res, 200, { session, pane: capturePane(session, 200), activeCommand: activeTerminalCommand(session, "tmux") });
 	}
 	if (req.method === "POST" && path === "/tmux/run") {
 		const { runCommand, capturePane, sessionExists } = await import("./coding/tmux.js");
@@ -331,7 +334,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
 		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
 		runCommand(session, command);
-		return json(res, 200, { session, command, pane: capturePane(session, 200) });
+		const { activeTerminalCommand } = await import("./coding/terminal.js");
+		return json(res, 200, { session, command, pane: capturePane(session, 200), activeCommand: activeTerminalCommand(session, "tmux") });
 	}
 	if (req.method === "POST" && path === "/tmux/session") {
 		const { createSession, killSession, sessionExists } = await import("./coding/tmux.js");
@@ -368,22 +372,26 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { target, pane: captureTerminalTarget(target, { backend, lines: b.lines }) });
 	}
 	if (req.method === "POST" && path === "/terminal/run") {
-		const { runTerminalCommand } = await import("./coding/terminal.js");
+		const { runTerminalCommand, activeTerminalCommand } = await import("./coding/terminal.js");
 		const b = await readJson<{ target?: string; backend?: string; command?: string }>(req);
 		const target = String(b.target || "").trim();
 		const command = String(b.command ?? "");
 		if (!target) return json(res, 400, { error: "A `target` is required." });
 		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
 		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
-		return json(res, 200, { target, command, pane: runTerminalCommand(target, command, backend) });
+		const pane = runTerminalCommand(target, command, backend);
+		// Read AFTER the command lands, so `claude "fix x"` reports `claude` rather than the shell
+		// that was sitting there a moment earlier (#348).
+		return json(res, 200, { target, command, pane, activeCommand: activeTerminalCommand(target, backend) });
 	}
 	if (req.method === "POST" && path === "/terminal/send") {
-		const { sendTerminalKeys } = await import("./coding/terminal.js");
+		const { sendTerminalKeys, activeTerminalCommand } = await import("./coding/terminal.js");
 		const b = await readJson<{ target?: string; backend?: string; text?: string; keys?: string[] }>(req);
 		const target = String(b.target || "").trim();
 		if (!target) return json(res, 400, { error: "A `target` is required." });
 		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
-		return json(res, 200, { target, pane: sendTerminalKeys(target, { backend, text: b.text == null ? undefined : String(b.text), keys: b.keys ?? [] }) });
+		const pane = sendTerminalKeys(target, { backend, text: b.text == null ? undefined : String(b.text), keys: b.keys ?? [] });
+		return json(res, 200, { target, pane, activeCommand: activeTerminalCommand(target, backend) });
 	}
 	if (req.method === "POST" && path === "/terminal/session") {
 		const { createTerminalTarget, killTerminalTarget } = await import("./coding/terminal.js");

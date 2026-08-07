@@ -9,8 +9,13 @@
 // them unless the instance has "tmux" write-consent (instance_connector_consent, 0051).
 // This is the terminal surface any permitted agent can use to drive shells, git, and
 // even other CLIs (Claude/Codex) running in the user's own tmux sessions.
+//
+// METERING: a pane is rendered text, so a coding CLI driven here spends tokens the platform
+// cannot measure (#348). Every write records an explicit "not measured" observation rather than
+// contributing nothing — a session missing from a ledger of dollars otherwise reads as free.
 import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
+import { noteUnmeteredDrive } from "../engine-metering.js";
 
 /** Resolve the live runner for this instance, or a helpful error string. */
 async function resolveRunner(ctx: RegistryToolCtx): Promise<{ conn: RunnerConn } | { error: string }> {
@@ -91,7 +96,8 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const session = requireSession(input);
 			const command = String(input.command ?? "");
 			if (!command.trim()) return { content: "A `command` is required.", success: false };
-			const res = await callRunner<{ pane?: string }>(r.conn, "/tmux/run", { session, command });
+			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/tmux/run", { session, command });
+			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
 			return { content: res.pane ?? `Ran in ${session}.`, success: true };
 		},
 	},
@@ -118,7 +124,8 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const text = input.text != null ? String(input.text) : undefined;
 			const keys = String(input.keys ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 			if (text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
-			const res = await callRunner<{ pane?: string }>(r.conn, "/tmux/send", { session, text, keys });
+			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/tmux/send", { session, text, keys });
+			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
 			return { content: res.pane ?? `Sent to ${session}.`, success: true };
 		},
 	},

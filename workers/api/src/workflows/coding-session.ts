@@ -109,7 +109,7 @@ const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
 
 /**
  * The coding orchestrator's remote brain: a durable Cloudflare Workflow that
- * drives the user's local coding CLI (in tmux) toward an objective — read the
+ * drives the user's local coding CLI (a child process, not tmux) toward an objective — read the
  * pane, ask Claude (BYOK) for the next instruction, send it, wait for idle,
  * repeat. On a stuck/needs-input it hands off to the human via the same console
  * takeover, polls until resolved, then resumes. Durable steps → survives the 30s

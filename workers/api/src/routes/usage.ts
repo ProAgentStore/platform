@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { aggregateUsage, type UsageRow } from "../lib/usage.js";
+import { unmeteredUsageSummary } from "../lib/engine-metering.js";
 import type { Env } from "../types.js";
 
 /**
@@ -55,5 +56,12 @@ usageRoutes.get("/", async (c) => {
 		days ? { fromDay: dayUtc(days - 1), toDay: dayUtc(0), agentNames } : { agentNames },
 	);
 
-	return c.json({ range, ...summary });
+	// What the figures above LEAVE OUT, as a measured quantity rather than a silence (#348).
+	// A CLI driven through the terminal connector writes no ledger row, so without this the page
+	// reports a total that is complete-looking and short. `windowDays` is returned because the
+	// trace prunes at 14 days: the count can cover less than the dollars beside it, and the page
+	// says which rather than implying they match.
+	const unmetered = await unmeteredUsageSummary(c.env, session.uid, { rangeDays: days ?? undefined });
+
+	return c.json({ range, ...summary, unmetered });
 });
