@@ -449,3 +449,56 @@ export async function loadPipeline(env: Env, instanceId: string, userId: string,
 	if (!def || validatePipeline(def) !== null) return null;
 	return def as PipelineDef;
 }
+
+/** What an instance actually has, split by whether the definition would run. */
+export interface PipelineInventory {
+	/** Names whose definition passes `validatePipeline` — the ones `loadPipeline` will return. */
+	valid: string[];
+	/** Names that are present but whose definition does not validate, so they can never run. */
+	invalid: string[];
+}
+
+/**
+ * The pipeline names an instance HAS, rather than whether it has one particular name (#363).
+ *
+ * `loadPipeline` collapses three different answers into a single `null`: no such name, a name
+ * whose definition does not validate, and an instance whose config could not be read at all.
+ * That is fine for the run path — all three mean "cannot run it" — but it is why a connection
+ * naming a pipeline the target does not have was created without a word: the create-time check
+ * could not tell "you typed it wrong" apart from "we could not look".
+ *
+ * Returns null for the third case only. A row that isn't there or a config that won't parse is a
+ * FAILED READ, not evidence of absence, and the asymmetry #354 documents applies — ownership is
+ * already proven by the time this runs, so refusing (or warning) on a null would turn a D1 blip
+ * into a confidently-wrong claim about the user's wiring.
+ */
+export async function pipelineNamesFor(env: Env, instanceId: string, userId: string): Promise<PipelineInventory | null> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ config: string }>();
+	if (!row) return null;
+	let cfg: Record<string, unknown>;
+	try {
+		cfg = JSON.parse(row.config || "{}") as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+	return pipelineInventory(cfg.pipelines);
+}
+
+/**
+ * Split a stored `config.pipelines` map into valid and invalid names. Pure, so the phrasing
+ * rules in `connection-pipeline.ts` can be tested without a database.
+ *
+ * An instance with NO pipelines block resolves to an empty inventory, not null: "this agent has
+ * no pipelines" is a fact we read successfully, and it is exactly the case a connection naming
+ * one should be warned about.
+ */
+export function pipelineInventory(raw: unknown): PipelineInventory {
+	const valid: string[] = [];
+	const invalid: string[] = [];
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { valid, invalid };
+	for (const [name, def] of Object.entries(raw as Record<string, unknown>)) {
+		if (def && validatePipeline(def) === null) valid.push(name);
+		else invalid.push(name);
+	}
+	return { valid: valid.sort(), invalid: invalid.sort() };
+}

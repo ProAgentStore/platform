@@ -219,6 +219,9 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 			setPipeline("");
 			setClauses([{ ...EMPTY_CLAUSE }]);
 			setAnyClause(false);
+			// The reload is what shows the create-time warnings (#363): the listing annotates every
+			// row with the same sentences the create path returns, so the new edge appears already
+			// carrying its warning — while the human is still here — and keeps carrying it.
 			await load();
 		} catch (e) {
 			// A filter the server can prove would never match is a 400 here rather than a chain
@@ -370,6 +373,12 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 								{/* A predicate that is not on screen is indistinguishable from a broken chain. */}
 								{filter && <div className="text-[0.7rem] text-muted-soft break-words">only when {filter}</div>}
 								<div className={`text-[0.7rem] ${toneClass(health.tone)}`}>{health.text}</div>
+								{/* #363: rows written before the create-time check existed may already name a
+								    pipeline the target does not have. Surfaced, not removed — "Remove" is right
+								    there, and a connection the user wrote is theirs to delete. */}
+								{(cn.warnings ?? []).map((w) => (
+									<div key={w} className="text-[0.7rem] text-yellow break-words">{w}</div>
+								))}
 							</div>
 							<button type="button" disabled={busy} onClick={() => removeConnection(cn.id)} className={chip}>Remove</button>
 						</div>

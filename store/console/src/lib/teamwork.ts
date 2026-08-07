@@ -30,6 +30,13 @@ export interface Connection {
 	config?: Record<string, unknown>;
 	enabled?: boolean;
 	createdAt?: string;
+	/**
+	 * What is wrong with this edge, phrased by the server (#363) — today, a `run_pipeline`
+	 * connection naming a pipeline the target agent does not have. Server-owned rather than
+	 * re-derived here for the reason #358 gives: the console must not be able to disagree with
+	 * the validator in either direction, and only the server can see the target's pipelines.
+	 */
+	warnings?: string[];
 }
 
 export interface Delivery {

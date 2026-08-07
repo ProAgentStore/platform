@@ -30,7 +30,8 @@ import {
 import { classifyDeliveryFailure, connectorsUsedByPipeline, pipelineWiringWarnings, reconnectMessage } from "./connectors/unattended.js";
 import { getConnector } from "./connectors/registry.js";
 import { getRegistryTool } from "./tool-registry.js";
-import { loadPipeline } from "./pipeline.js";
+import { loadPipeline, pipelineInventory, type PipelineInventory } from "./pipeline.js";
+import { connectionPipelineWarning } from "./connection-pipeline.js";
 import { HttpError } from "./auth.js";
 
 /** The HTTP status an error carries, when it carries one — `HttpError` is what every connector
@@ -67,6 +68,13 @@ export interface ConnectionView {
 	config: Record<string, unknown>;
 	enabled: boolean;
 	createdAt: string;
+	/**
+	 * What is wrong with this edge as it stands, in the same words the create path would have
+	 * used (#363). Surfaced rather than fixed: rows written before the create-time check existed
+	 * may already name a pipeline the target does not have, and a connection the user wrote is
+	 * theirs to delete — the same choice #358 made for impossible triggers. Empty when fine.
+	 */
+	warnings: string[];
 }
 
 function parseConfigJson(s: string | null): Record<string, unknown> {
@@ -79,7 +87,7 @@ function parseConfigJson(s: string | null): Record<string, unknown> {
 	}
 }
 
-function toView(row: ConnectionRow): ConnectionView {
+function toView(row: ConnectionRow, warnings: string[] = []): ConnectionView {
 	return {
 		id: row.id,
 		sourceInstanceId: row.source_instance_id,
@@ -89,6 +97,7 @@ function toView(row: ConnectionRow): ConnectionView {
 		config: parseConfigJson(row.config),
 		enabled: !!row.enabled,
 		createdAt: row.created_at,
+		warnings,
 	};
 }
 
@@ -99,14 +108,75 @@ async function ownsInstance(env: Env, instanceId: string, userId: string): Promi
 	return !!row;
 }
 
-/** List the caller's connections, most recent first; optionally scoped to one source instance. */
+/** What a target instance is CALLED and what pipelines it has — the two facts a `run_pipeline`
+ *  edge is judged against. `null` inventory means the read failed; see `pipelineNamesFor`. */
+interface TargetFacts {
+	label: string;
+	inventory: PipelineInventory | null;
+}
+
+/** Read the pipeline facts for a set of target instances in ONE query, so annotating a listing
+ *  costs a single round trip rather than one per row. Owner-scoped, like every other read here. */
+async function targetFactsFor(env: Env, userId: string, instanceIds: readonly string[]): Promise<Map<string, TargetFacts>> {
+	const out = new Map<string, TargetFacts>();
+	const ids = [...new Set(instanceIds)].filter(Boolean);
+	if (!ids.length) return out;
+	const placeholders = ids.map((_, i) => `?${i + 2}`).join(", ");
+	const { results } = await env.DB.prepare(
+		`SELECT ai.id AS id, ai.config AS config, a.name AS agent_name
+       FROM agent_instances ai JOIN agents a ON a.id = ai.agent_id
+      WHERE ai.user_id = ?1 AND ai.id IN (${placeholders})`,
+	)
+		.bind(userId, ...ids)
+		.all<{ id: string; config: string | null; agent_name: string | null }>();
+	for (const row of results ?? []) {
+		let cfg: Record<string, unknown> = {};
+		let readable = true;
+		try {
+			cfg = JSON.parse(row.config || "{}") as Record<string, unknown>;
+		} catch {
+			readable = false;
+		}
+		const named = typeof cfg.name === "string" && cfg.name.trim() ? cfg.name.trim() : null;
+		out.set(row.id, {
+			label: `"${named ?? row.agent_name ?? row.id}"`,
+			inventory: readable ? pipelineInventory(cfg.pipelines) : null,
+		});
+	}
+	return out;
+}
+
+/** The warnings a stored edge deserves right now. Today that is the target's pipeline (#363);
+ *  the connector-wiring warnings (#181) stay on the create path, where they cost one read. */
+function storedWarnings(row: ConnectionRow, facts: TargetFacts | undefined): string[] {
+	if (row.action !== "run_pipeline") return [];
+	const config = parseConfigJson(row.config);
+	const warning = connectionPipelineWarning(typeof config.pipeline === "string" ? config.pipeline : null, facts?.label ?? "", facts?.inventory ?? null);
+	return warning ? [warning] : [];
+}
+
+/**
+ * List the caller's connections, most recent first; optionally scoped to one source instance.
+ *
+ * Each row carries its own `warnings` (#363). Rows written before the create-time check existed
+ * may already name a pipeline their target does not have, and the listing is the only place that
+ * can say so — deleting someone's connection for them is not ours to do, surfacing it as broken
+ * is, which is the call #358 made for the same class of already-invalid row.
+ */
 export async function listConnections(env: Env, userId: string, opts: { sourceInstanceId?: string } = {}): Promise<ConnectionView[]> {
 	const sql = opts.sourceInstanceId
 		? "SELECT * FROM agent_connections WHERE user_id = ?1 AND source_instance_id = ?2 ORDER BY created_at DESC"
 		: "SELECT * FROM agent_connections WHERE user_id = ?1 ORDER BY created_at DESC";
 	const stmt = opts.sourceInstanceId ? env.DB.prepare(sql).bind(userId, opts.sourceInstanceId) : env.DB.prepare(sql).bind(userId);
 	const { results } = await stmt.all<ConnectionRow>();
-	return (results ?? []).map(toView);
+	const rows = results ?? [];
+	// Only `run_pipeline` names something whose existence can be checked; the other actions
+	// dispatch into the target's own DO, which every instance has.
+	const targets = rows.filter((r) => r.action === "run_pipeline").map((r) => r.target_instance_id);
+	// An annotation must never take the listing down with it: a failed read leaves every row
+	// unannotated, which is exactly what the listing did before this existed.
+	const facts = await targetFactsFor(env, userId, targets).catch(() => new Map<string, TargetFacts>());
+	return rows.map((row) => toView(row, storedWarnings(row, facts.get(row.target_instance_id))));
 }
 
 /** Ops the routing predicate accepts — the `filter` step's vocabulary, kept identical. */
@@ -180,24 +250,33 @@ export async function createConnection(
 		.bind(id, userId, input.sourceInstanceId, eventType, input.targetInstanceId, input.action, JSON.stringify(input.config ?? {}))
 		.run();
 	const row = await env.DB.prepare("SELECT * FROM agent_connections WHERE id = ?1").bind(id).first<ConnectionRow>();
-	return {
-		ok: true,
-		connection: toView(row as ConnectionRow),
-		warnings: await unattendedWarningsFor(env, userId, input.targetInstanceId, input.action, input.config),
-	};
+	const warnings = await unattendedWarningsFor(env, userId, input.targetInstanceId, input.action, input.config);
+	// The same list on the view and beside it: the create response and the later listing then say
+	// the same thing about the same edge, which is the drift #358 spent its design on avoiding.
+	return { ok: true, connection: toView(row as ConnectionRow, warnings), warnings };
 }
 
 /**
- * Warnings about wiring a connector that cannot survive unattended into this edge (#181).
+ * Warnings about this edge, computed while the human is still present.
+ *
+ * Two of them, both about `run_pipeline` and both advisory:
+ *
+ *  • the named pipeline does not exist on the target (#363) — a typo, a rename, or an edge
+ *    pointed at the wrong agent. The one case that most deserved a warning used to produce
+ *    none, because the lookup below opened with `if (!def) return []`;
+ *  • a connector on the pipeline's path cannot survive unattended (#181).
  *
  * Warnings, not errors — the same call `validateConnectionFilter` makes about a filter, and for
  * the same reason: a chain that looks healthy but cannot run is worse than one that says so. A
  * connection fires with nobody present, so an `interactive-only` credential anywhere on the
- * target's path means the chain works until the token lapses and then stops.
+ * target's path means the chain works until the token lapses and then stops. And a pipeline can
+ * legitimately be added to the target after the edge is wired, which is why the missing-pipeline
+ * case stays a warning rather than becoming a 400.
  *
- * Reach is honest about its limit: only `run_pipeline` names something whose connectors can be
- * resolved statically. The other actions (`insert_record`, `create_task`, `add_knowledge`) touch
- * only platform storage and have no external credential to lose.
+ * Reach is honest about its limit: only `run_pipeline` names something whose existence and whose
+ * connectors can be resolved statically. The other actions (`insert_record`, `create_task`,
+ * `add_knowledge`) dispatch into the target's own Durable Object, which every instance has, and
+ * have no external credential to lose.
  */
 async function unattendedWarningsFor(
 	env: Env,
@@ -208,10 +287,18 @@ async function unattendedWarningsFor(
 ): Promise<string[]> {
 	if (action !== "run_pipeline") return [];
 	const name = typeof config?.pipeline === "string" ? config.pipeline.trim() : "";
+	// No name at all is under-specified, not provably broken: `executeTriggerAction` lets the
+	// event PAYLOAD carry its own `pipeline`, so an edge without `config.pipeline` can still run.
 	if (!name) return [];
 	try {
 		const def = await loadPipeline(env, targetInstanceId, userId, name);
-		if (!def) return [];
+		if (!def) {
+			// #363: the pipeline is not there. Say so NOW, naming it and the agent it was looked
+			// for on — the alternative is a dead letter hours later on an edge that looked healthy.
+			const facts = (await targetFactsFor(env, userId, [targetInstanceId])).get(targetInstanceId);
+			const warning = connectionPipelineWarning(name, facts?.label ?? "", facts?.inventory ?? null);
+			return warning ? [warning] : [];
+		}
 		const used = connectorsUsedByPipeline(def.steps, (tool) => getRegistryTool(tool)?.connector);
 		return pipelineWiringWarnings(used, getConnector, "connection");
 	} catch {
