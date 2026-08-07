@@ -364,7 +364,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.get("/:instanceId/apply-tips", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
-		const inst = await requireOwnedInstance(c.env, instanceId, session.uid);
+		await requireOwnedInstance(c.env, instanceId, session.uid);
 		// The ATS cache is per-USER (shared across the user's apply runs), so only an agent that
 		// actually DOES applying may read it — otherwise it surfaces a user's application history
 		// inside unrelated agents (e.g. Coder). Defense-in-depth behind the console gate.

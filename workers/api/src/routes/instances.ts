@@ -442,14 +442,9 @@ instanceRoutes.put("/:instanceId/runner-node", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
 	const node = normalizeRunnerNode(body.runnerNode);
-	// Read-merge-write the instance config so we never clobber sibling fields.
-	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
-		.bind(instanceId, session.uid)
-		.first<{ config: string | null }>();
-	let cfg: Record<string, unknown> = {};
-	try { cfg = JSON.parse(row?.config || "{}") as Record<string, unknown>; } catch { cfg = {}; }
-	// Patch just this key (#231) — pinning a runner must not clobber a Settings or behaviour
-	// change saved from another tab between the read and the write.
+	// Patch just this key (#231) — pinning a runner must not clobber a Settings or behaviour change
+	// saved from another tab between the read and the write. That refactor left its read-merge-write
+	// SELECT behind, parsed into a `cfg` nothing read: the second discarded config read here (#350).
 	if (node) await patchInstanceConfig(c.env, instanceId, session.uid, "runnerNode", node);
 	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "runnerNode");
 	return c.json({ runnerNode: node || null });
@@ -607,13 +602,18 @@ instanceRoutes.delete("/:instanceId/voice-settings", async (c) => {
 });
 
 /** Rename this instance (per-instance display name — distinguishes multiple
- *  instances of the same agent on the dashboard). Empty name = back to the agent's. */
+ *  instances of the same agent on the dashboard). Empty name = back to the agent's.
+ *  Gated on `requireOwnedInstance`, not the `readInstanceConfig` it discarded (#350): that
+ *  answers `{}` for a row that is not yours exactly as for an owned instance with no config, so
+ *  it could not tell them apart and never threw. The writes bind `user_id` — nothing crossed
+ *  tenants — but a stranger got `200 {"name":…}` for an UPDATE matching zero rows, and a route
+ *  must not report success for work it did not do. */
 instanceRoutes.put("/:instanceId/name", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
 	const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
-	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	await requireOwnedInstance(c.env, instanceId, session.uid);
 	if (name) await patchInstanceConfig(c.env, instanceId, session.uid, "displayName", name);
 	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "displayName");
 	return c.json({ name: name || null });

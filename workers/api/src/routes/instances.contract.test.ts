@@ -155,12 +155,14 @@ function surface(): Array<{ method: string; path: string }> {
 /**
  * Bodies for the routes that VALIDATE before they check ownership. Without these the probe
  * short-circuits on a 400 and never reaches the tenant gate — it would assert that a
- * missing field is rejected, which is not the property under test. `POST /:instanceId/chat`
- * is the clearest case: it reads `message` first, so `{}` gets a stranger a 400 and the
- * ownership SELECT never runs.
+ * missing field is rejected, which is not the property under test.
+ *
+ * `POST /:instanceId/chat` used to be the clearest case and is deliberately NOT here any
+ * more (#350): it now runs the ownership SELECT first, so an empty body from a stranger is
+ * 404. Leaving it out is what makes that ordering an assertion — put a body back and the
+ * probe stops being able to see the difference.
  */
 const BODIES: Record<string, unknown> = {
-	"POST /:instanceId/chat": { message: "probe" },
 	"POST /:instanceId/system-message": { content: "probe" },
 	"POST /:instanceId/loop-decide": { objective: "probe", messages: [], iteration: 1, maxIterations: 2 },
 	"POST /:instanceId/board/status": { jobKey: "j1", status: "" },
@@ -462,16 +464,12 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/trace": [401, 404],
 	"PUT /:instanceId/voice-settings": [401, 404],
 	"DELETE /:instanceId/voice-settings": [401, 404],
-	// ⚠ FOUND BY THIS TABLE, recorded rather than fixed — this commit moves code (#305).
-	// `PUT /:instanceId/name` has no tenant gate at all: no `requireOwnedInstance`, and
-	// `readInstanceConfig` answers `{}` for a row that is not yours rather than throwing. So a
-	// caller who owns nothing is told `{"name":"probe"}` and 200.
-	//
-	// It is not a cross-tenant WRITE — `patchInstanceConfig`/`removeInstanceConfigKey` both bind
-	// `user_id`, so the UPDATE matches zero rows (asserted below, and again by the write probe).
-	// It is a route reporting success for work it did not do, which is its own kind of wrong: the
-	// console shows the new name until it reloads. Pinned here so it moves only on purpose.
-	"PUT /:instanceId/name": [401, 200],
+	// Was [401, 200] — the hole this table found (#305) and #350 closed. `readInstanceConfig`
+	// answers `{}` for a row that is not yours exactly as it does for an owned instance with no
+	// config, so reading it was never a tenant check; the route is gated on `requireOwnedInstance`
+	// now. The probe still sends a well-formed `{name:"probe"}` (see BODIES) so this asserts that
+	// a REAL rename is refused, not merely that a malformed one is.
+	"PUT /:instanceId/name": [401, 404],
 	"GET /:instanceId/settings": [401, 404],
 	"PUT /:instanceId/settings": [401, 404],
 	"GET /:instanceId/runtime/status": [401, 404],
@@ -564,7 +562,6 @@ describe("what a stranger gets from every route", () => {
 	const ANSWERS_A_STRANGER: Record<string, string> = {
 		"GET /my/instances": "IS the tenant query (WHERE i.user_id = ?1) — answers with an empty list",
 		"GET /behaviour-schema": "the behaviour field table: the same static vocabulary for every agent, public by design",
-		"PUT /:instanceId/name": "⚠ no tenant gate — 200 for a rename that wrote nothing. See the note in GATES.",
 	};
 
 	it("only the documented routes answer a caller who owns nothing", () => {
@@ -579,20 +576,19 @@ describe("what a stranger gets from every route", () => {
 		).toEqual(Object.keys(ANSWERS_A_STRANGER).sort());
 	});
 
-	it("no route writes anything for a caller who owns nothing, beyond the recorded no-op", async () => {
-		// The status probe cannot see this: `PUT /:instanceId/name` returns 200 AND issues an
-		// UPDATE. What makes that survivable is that the statement binds user_id, so it matches
-		// zero rows — a scoped no-op, not a cross-tenant write. Every other route must not reach
-		// a write at all, which is the stronger property and the one asserted exactly here.
+	it("no route writes anything for a caller who owns nothing", async () => {
+		// A status probe cannot see a write. `PUT /:instanceId/name` used to answer 200 AND issue
+		// an UPDATE; what made that survivable rather than a cross-tenant write was that the
+		// statement bound user_id and matched zero rows. Since #350 it refuses before writing at
+		// all, so the exception is gone and this asserts the stronger property for every route on
+		// the surface: a caller who owns nothing never reaches a statement.
 		const stranger = await signSession("stranger", SECRET, { roles: ["user"] });
 		const writers: Record<string, string[]> = {};
 		for (const { method, path } of surface()) {
 			const { writes } = await probe(method, path, stranger);
 			if (writes.length) writers[`${method} ${path}`] = writes;
 		}
-		expect(Object.keys(writers)).toEqual(["PUT /:instanceId/name"]);
-		// …and even that one is owner-scoped, so it changes nothing that belongs to anyone else.
-		for (const sql of writers["PUT /:instanceId/name"]) expect(sql).toContain("user_id = ?");
+		expect(writers).toEqual({});
 	});
 
 	it("the list route really is empty for a stranger, not merely 200", async () => {

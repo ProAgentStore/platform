@@ -32,16 +32,21 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.post("/:instanceId/chat", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
-		const { message, audioKey, dictation } = await c.req.json<{ message: string; audioKey?: string; dictation?: string }>();
-		if (!message) throw new HttpError(400, "message required");
 
-		// Verify ownership
+		// Ownership BEFORE validation (#350). The other order is an existence oracle: a stranger
+		// sending `{}` got 400 "message required" for an instance that exists and 400 for one that
+		// does not — but a WELL-FORMED body got 404 only for the second, so the pair of answers
+		// distinguished "not yours" from "no such id". Nothing else on this surface leaks that, and
+		// checking the tenant first costs the same single SELECT it always did.
 		const instance = await c.env.DB.prepare(
 			"SELECT id, agent_id FROM agent_instances WHERE id = ?1 AND user_id = ?2",
 		)
 			.bind(instanceId, session.uid)
 			.first<InstanceRow>();
 		if (!instance) throw new HttpError(404, "Instance not found");
+
+		const { message, audioKey, dictation } = await c.req.json<{ message: string; audioKey?: string; dictation?: string }>();
+		if (!message) throw new HttpError(400, "message required");
 
 		const doId = c.env.AGENT.idFromName(instanceId);
 		const stub = c.env.AGENT.get(doId);
