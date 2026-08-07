@@ -55,7 +55,7 @@ for tool execution.
 >
 > **The next frontier — open the vocabulary.** The capability *fields* are now declarative, but
 > their *values* are still closed enums backed by code: `workflow` is a fixed set
-> (`JOB_APPLY`/`CODING_SESSION`/`INSURANCE_QUOTES`) and connectors are hand-written modules. The
+> (`JOB_APPLY`/`CODING_SESSION`/`BROWSER_TASK`) and connectors are hand-written modules. The
 > two unlocks: (1) **declarative connectors** — a connector becomes a reviewed JSON manifest
 > instead of a `.ts` + deploy (see [`connector-manifest.md`](./connector-manifest.md)); (2)
 > **declarative behavior** — retire the `workflow` enum in favor of composed steps/triggers so a

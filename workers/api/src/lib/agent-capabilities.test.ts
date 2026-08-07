@@ -36,6 +36,28 @@ describe("agentCapabilities", () => {
 		expect(agentCapabilities({ category: "code" }).surfaces).toEqual(["coding"]);
 	});
 
+	it("derives nothing for the insurance slug/category — its workflow never existed (#375)", () => {
+		// The branch resolved `workflow: "INSURANCE_QUOTES"`, which no `[[workflows]]` binding
+		// backed, plus a surface the console registry renders no tab for. That is a runtime claim
+		// with nothing behind it: `lintAgentClaims` read the agent as runtime-backed and stopped
+		// warning about copy nothing could deliver.
+		for (const agent of [{ slug: "like4like-insurance-quotes" }, { category: "insurance" }]) {
+			const caps = agentCapabilities(agent);
+			expect(caps.surfaces, JSON.stringify(agent)).toEqual([]);
+			expect(caps.workflow).toBeNull();
+			expect(caps.runtime).toBeNull();
+		}
+	});
+
+	it("drops a STORED workflow the platform does not run, on read", () => {
+		// Rows persisted while the enum was wider must not keep resolving to a brain nothing
+		// starts — the write-side sanitizer only fixes an agent on its next save.
+		const cfg = JSON.stringify({ capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "INSURANCE_QUOTES" } });
+		expect(agentCapabilities({ config: cfg }).workflow).toBeNull();
+		const ok = JSON.stringify({ capabilities: { surfaces: [], runtime: "browser", workflow: "BROWSER_TASK" } });
+		expect(agentCapabilities({ config: ok }).workflow).toBe("BROWSER_TASK");
+	});
+
 	it("is empty for a generic agent (no apply/coding UI leaks)", () => {
 		const caps = agentCapabilities({ slug: "site-monitor", category: "productivity" });
 		expect(caps.surfaces).toEqual([]);
@@ -190,6 +212,10 @@ describe("agentCapabilities", () => {
 				runtime: null,
 				workflow: null,
 			});
+			// Including the one that used to be accepted here while nothing ran it (#375).
+			expect(sanitizeDeclaredCapabilities({ workflow: "INSURANCE_QUOTES" })).toEqual({ workflow: null });
+			// …and the one the console's picker never offered, which is the whole point.
+			expect(sanitizeDeclaredCapabilities({ workflow: "BROWSER_TASK" })).toEqual({ workflow: "BROWSER_TASK" });
 			expect(sanitizeDeclaredCapabilities({ runtime: null, workflow: null })).toEqual({
 				runtime: null,
 				workflow: null,

@@ -1,7 +1,7 @@
 // browser connector (#103) — a LOCAL connector reached over the runner relay (like tmux),
 // bridging the runner's real-Chrome browser hands into the Tier-1 tool registry. A pure
 // config/data agent can then drive a browser by DECLARING `capabilities.tools: [browser_*]`,
-// instead of only via the Tier-0 workflow path (JobApplyWorkflow / INSURANCE_QUOTES). The
+// instead of only via the Tier-0 workflow path (JobApplyWorkflow / BrowserTaskWorkflow). The
 // runner hands are the SAME ones the apply workflow drives: POST /browser/snapshot (ARIA tree)
 // + POST /browser/act (act by snapshot ref / ARIA role+name) — no CSS selectors.
 //

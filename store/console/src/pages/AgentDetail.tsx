@@ -3,6 +3,7 @@ import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
+import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
@@ -66,12 +67,17 @@ export default function AgentDetail() {
 	const [capSurfaces, setCapSurfaces] = useState<string[]>([]);
 	const [capRuntime, setCapRuntime] = useState("");
 	const [capWorkflow, setCapWorkflow] = useState("");
+	// The workflow vocabulary is SERVED (#375), never listed here — the server's catalog is what
+	// the sanitizer and the run_browse gate read, and a second hand-kept list is how the picker
+	// came to offer a workflow bound to nothing while hiding the one the platform enforces.
+	const [capWorkflowChoices, setCapWorkflowChoices] = useState<WorkflowChoice[]>([]);
 	const [capToolsText, setCapToolsText] = useState("");
-	type CapsResp = { customSurfaces?: Array<Omit<CSurface, "clientId">>; surfaces?: string[]; runtime?: string | null; workflow?: string | null; tools?: string[]; customSurfacesEnabled?: boolean };
+	type CapsResp = { customSurfaces?: Array<Omit<CSurface, "clientId">>; surfaces?: string[]; runtime?: string | null; workflow?: string | null; tools?: string[]; workflowOptions?: WorkflowChoice[]; customSurfacesEnabled?: boolean };
 	const applyCaps = useCallback((d: CapsResp) => {
 		setCapSurfaces(Array.isArray(d.surfaces) ? d.surfaces : []);
 		setCapRuntime(d.runtime ?? "");
 		setCapWorkflow(d.workflow ?? "");
+		setCapWorkflowChoices(d.workflowOptions ?? []);
 		setCapToolsText((d.tools || []).join(" "));
 	}, []);
 	const saveCapabilities = async () => {
@@ -450,10 +456,9 @@ export default function AgentDetail() {
 								<label className="flex flex-col gap-1 text-xs font-semibold">
 									Workflow <span className="text-muted-soft font-normal">(autonomous brain)</span>
 									<select value={capWorkflow} onChange={(e) => setCapWorkflow(e.target.value)} className="bg-paper border border-line rounded px-2 py-1 text-sm font-normal">
-										<option value="">none</option>
-										<option value="JOB_APPLY">JOB_APPLY</option>
-										<option value="CODING_SESSION">CODING_SESSION</option>
-										<option value="INSURANCE_QUOTES">INSURANCE_QUOTES</option>
+										{workflowPickerRows(capWorkflowChoices, capWorkflow).map((w) => (
+											<option key={w.value} value={w.value} title={w.description}>{w.label}</option>
+										))}
 									</select>
 								</label>
 							</div>

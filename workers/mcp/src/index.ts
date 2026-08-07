@@ -530,7 +530,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						z.object({
 							surfaces: z.array(z.string()).optional(),
 							runtime: z.enum(["browser", "coding"]).nullable().optional(),
-							workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES", "BROWSER_TASK"]).nullable().optional(),
+							// CANONICAL SOURCE: `workers/api/src/lib/agent-workflows.ts` `AGENT_WORKFLOWS`.
+							// A transport-side mirror (the API re-validates), kept honest by the drift
+							// test in `agent-workflows.test.ts` — this list carried INSURANCE_QUOTES,
+							// which no `[[workflows]]` binding backs, for as long as three others did.
+							workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "BROWSER_TASK"]).nullable().optional(),
 							tools: z.array(z.string()).optional(),
 						}),
 						// Some MCP clients stringify nested object args — accept a JSON string too

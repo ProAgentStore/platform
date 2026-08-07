@@ -15,6 +15,7 @@
  */
 
 import { parseSurfaceOptions, serializeSurfaceOptions } from "./surface-options.js";
+import { type AgentWorkflow, isAgentWorkflow } from "./agent-workflows.js";
 import { isAllowedBundleUrl } from "./origins.js";
 
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
@@ -88,8 +89,10 @@ export interface AgentCapabilities {
 	surfaces: AgentSurface[];
 	/** Local runner runtime the brain drives. */
 	runtime: AgentRuntimeKind;
-	/** Brain workflow binding name, when the agent has an autonomous loop. */
-	workflow: "JOB_APPLY" | "CODING_SESSION" | "INSURANCE_QUOTES" | "BROWSER_TASK" | null;
+	/** Brain workflow binding name, when the agent has an autonomous loop. Derived from the
+	 *  workflow catalog (lib/agent-workflows.ts), so a value that no `[[workflows]]` binding
+	 *  backs cannot enter this type — the state #375 was about. */
+	workflow: AgentWorkflow | null;
 	/** Declared tool allowlist — names from the platform tool catalog (see
 	 *  agent-do-tools `TOOL_CATALOG`). When present it is AUTHORITATIVE: the agent gets
 	 *  exactly these catalog tools plus the universal BASE facilities, replacing the
@@ -359,7 +362,9 @@ const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "r
  *  the platform already implements — no arbitrary code, so the blast radius is bounded
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
 const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
-const KNOWN_WORKFLOWS = new Set(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES", "BROWSER_TASK"]);
+// Workflows are NOT listed here: `isAgentWorkflow` asks the catalog that the picker is served
+// from, so the vocabulary a creator is offered and the vocabulary this validator accepts are one
+// list. They were two, and each had drifted the other way (#375).
 
 /** The subset of capabilities a creator declares through the create/update routes:
  *  the closed-enum power fields + the tool allowlist. customSurfaces/settingsSchema/
@@ -398,7 +403,7 @@ export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabiliti
 		out.runtime = KNOWN_RUNTIMES.has(o.runtime as Exclude<AgentRuntimeKind, null>) ? (o.runtime as AgentRuntimeKind) : null;
 	}
 	if ("workflow" in o) {
-		out.workflow = typeof o.workflow === "string" && KNOWN_WORKFLOWS.has(o.workflow) ? (o.workflow as AgentCapabilities["workflow"]) : null;
+		out.workflow = isAgentWorkflow(o.workflow) ? o.workflow : null;
 	}
 	// Presence of a tools array (even empty → clear) is honored; junk → [].
 	if (Array.isArray(o.tools)) out.tools = sanitizeToolList(o.tools) ?? [];
@@ -461,7 +466,11 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 		return {
 			surfaces,
 			runtime: declared.runtime ?? null,
-			workflow: declared.workflow ?? null,
+			// Filtered on READ as well as on write, exactly like `surfaces` above: a row persisted
+			// while the enum was wider (`INSURANCE_QUOTES`, #375) would otherwise keep resolving to a
+			// workflow nothing runs, which `lintAgentClaims` reads as "runtime-backed" and a picker
+			// would keep showing as a real choice.
+			workflow: isAgentWorkflow(declared.workflow) ? declared.workflow : null,
 			tools,
 			customSurfaces,
 			...withOptions,
@@ -476,8 +485,11 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 		base = { surfaces: ["apply"], runtime: "browser", workflow: "JOB_APPLY" };
 	} else if (agent.slug === "coder" || agent.category === "code") {
 		base = { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" };
-	} else if (agent.slug === "like4like-insurance-quotes" || agent.category === "insurance") {
-		base = { surfaces: ["insurance"], runtime: "browser", workflow: "INSURANCE_QUOTES" };
+		// There is no `insurance` branch (#375). It derived `workflow: "INSURANCE_QUOTES"`, which no
+		// `[[workflows]]` binding ever backed, alongside a surface the console registry renders no tab
+		// for — so what it resolved was a runtime claim with nothing behind it, which is worse than
+		// resolving nothing. No migration seeds that slug or category; an agent that wants a browser
+		// brain declares `runtime:"browser"` + `workflow:"BROWSER_TASK"` like every other one.
 	} else {
 		base = { surfaces: [], runtime: null, workflow: null };
 	}

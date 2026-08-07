@@ -683,8 +683,26 @@ components:
         workflow:
           type: string
           nullable: true
-          description: Durable Workflow binding this agent's autonomous loop uses.
-          enum: [JOB_APPLY, CODING_SESSION, INSURANCE_QUOTES, BROWSER_TASK, null]
+          description: |
+            Durable Workflow binding this agent's autonomous loop uses. Every member is a real
+            `[[workflows]]` binding — `run_browse` is refused outright unless this is
+            `BROWSER_TASK`. Unknown values are dropped to `null` on read and on write.
+          enum: [JOB_APPLY, CODING_SESSION, BROWSER_TASK, null]
+        workflowOptions:
+          type: array
+          readOnly: true
+          description: |
+            The Workflow picker's whole vocabulary, annotated for this agent — served so the
+            creator editor renders the same list the platform validates against instead of
+            keeping its own. A stored value the platform runs nothing for comes back with
+            `unavailable: true` rather than being omitted, so it can be seen and cleared.
+          items:
+            type: object
+            properties:
+              value: { type: string }
+              label: { type: string }
+              description: { type: string }
+              unavailable: { type: boolean }
         tools:
           type: array
           description: |

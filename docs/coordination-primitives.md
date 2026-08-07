@@ -66,7 +66,7 @@ generalize, generalized only as far as this consumer forces.
   closing).
 - **Cross-agent delegation** — delegate a goal to *another instance's* brain (the "manager + workers"
   shape for the multi-agent marketplace). Needs a real second consumer beyond Coder.
-- **Retire the `workflow` closed enum** — behavior (`JOB_APPLY`/`CODING_SESSION`/`INSURANCE_QUOTES`)
+- **Retire the `workflow` closed enum** — behavior (`JOB_APPLY`/`CODING_SESSION`/`BROWSER_TASK`)
   becomes declarative (composed steps/triggers), so a creator can define a *new* autonomous loop.
   The larger "open the vocabulary" frontier from the strategy doc.
 

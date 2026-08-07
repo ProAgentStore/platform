@@ -180,7 +180,7 @@ Design goal: **invisible in normal use, decisive in a runaway.**
 - **#142 (open)** — trust gating before a creator may declare `runtime`/`workflow`. Gates the
   above for third parties.
 - **#160 (open, deferred)** — `capabilities.workflow` is still a **closed enum**
-  (`JOB_APPLY`/`CODING_SESSION`/`INSURANCE_QUOTES`) backed by code. You can *select* Coder's brain;
+  (`JOB_APPLY`/`CODING_SESSION`/`BROWSER_TASK`) backed by code. You can *select* Coder's brain;
   you cannot *define* one.
 
 So #160 is the real blocker on "configurable Coder," and supervision is the blocker on "Coder's

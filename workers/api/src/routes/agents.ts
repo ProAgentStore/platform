@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { workflowChoices } from "../lib/agent-workflows.js";
 import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
 import { HttpError, isSuspended, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
@@ -523,7 +524,13 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	} catch { /* malformed config */ }
 	// Report the gate so the creator editor can say "this feature is off" instead of letting a
 	// creator author a surface that will never render and never be told why (#186).
-	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, customSurfacesEnabled: customSurfacesEnabled(c.env) });
+	//
+	// `workflowOptions` is the picker's whole vocabulary, served from the same catalog the
+	// sanitizer validates against (#375). The console used to hold its own `<option>` list, which
+	// drifted both ways at once — it offered INSURANCE_QUOTES, bound to nothing, and omitted
+	// BROWSER_TASK, the only value the platform enforces. Annotated for THIS agent, so a stored
+	// value the platform no longer runs comes back visible instead of silently reading as "none".
+	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
 });
 
 /** Declare the agent's custom (published) console surfaces — owner only. Stored in
@@ -586,6 +593,9 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		runtime: caps.runtime ?? null,
 		workflow: caps.workflow ?? null,
 		tools: caps.tools ?? [],
+		// Re-served on the write path too, so a save that clears a no-longer-runnable value also
+		// clears the row the editor was showing for it (#375).
+		workflowOptions: workflowChoices(caps.workflow),
 		customSurfacesEnabled: customSurfacesEnabled(c.env),
 		...(claimWarnings.length ? { warnings: claimWarnings } : {}),
 	});
