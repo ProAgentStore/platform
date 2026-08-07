@@ -41,9 +41,24 @@ import {
  *    browser is a second scheduler, and the day the two disagree the console shows a time at
  *    which nothing happens.
  *  • #19 — the run history that has always been recorded is finally readable, per trigger.
+ *  • #358 — the action picker is rendered from the SERVER's per-instance answer, not from a
+ *    hardcoded label list. The old list offered "Run browser task" on all 26 instances when one
+ *    could perform it, and the store route accepted every one, so a schedule that could never do
+ *    anything saved cleanly and looked healthy. The gate lives in the API (three doors: console,
+ *    API, MCP); this makes the picker agree with it by reading the same answer.
  */
 
 type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
+
+/** One row of `GET /v1/triggers/actions` — the vocabulary, judged against THIS instance. */
+interface TriggerActionOffer {
+	action: TriggerActionType;
+	label: string;
+	available: boolean;
+	/** Why not, in the words the save path would use. Null when available. */
+	reason: string | null;
+	requires: string | null;
+}
 type ConnectorProviderType = "google_drive" | "zoho_workdrive";
 
 export interface ConnectorGrant {
@@ -63,6 +78,8 @@ interface InstanceTrigger {
 	enabled: boolean;
 	schedule?: string | null;
 	config?: Record<string, unknown>;
+	/** Why this saved trigger can never run here (#358), or null/absent when it can. */
+	unavailable?: string | null;
 	webhookUrl?: string;
 	lastRunAt?: string | null;
 	nextRunAt?: string | null;
@@ -93,16 +110,6 @@ const MAPPABLE: Partial<Record<TriggerActionType, Array<{ id: string; label: str
 	],
 	log_event: [{ id: "message", label: "Logged message", hint: "event.summary" }],
 };
-
-const ACTION_LABELS: Array<[TriggerActionType, string]> = [
-	["create_task", "Create task"],
-	["add_knowledge", "Add knowledge"],
-	["sync_connector", "Sync folder"],
-	["run_pipeline", "Run pipeline"],
-	["insert_record", "Insert record"],
-	["run_browse", "Run browser task"],
-	["log_event", "Log event"],
-];
 
 const inputClass = "text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full";
 
@@ -135,9 +142,11 @@ export default function TriggersSection({
 	const [events, setEvents] = useState<Record<string, TriggerEvent[]>>({});
 	const [loadingHistory, setLoadingHistory] = useState(false);
 	const [openPayload, setOpenPayload] = useState<string | null>(null);
+	const [offers, setOffers] = useState<TriggerActionOffer[]>([]);
 
 	const grants = provider === "google_drive" ? driveGrants : workdriveGrants;
 	const mappableFields = MAPPABLE[action];
+	const selectedOffer = offers.find((o) => o.action === action);
 
 	const loadTriggers = useCallback(async () => {
 		try {
@@ -148,7 +157,20 @@ export default function TriggersSection({
 		}
 	}, [instanceId]);
 
+	// The picker's whole vocabulary, judged against THIS instance (#358). Nothing is rendered
+	// from a list held here: an option this console invented would be one the API has never
+	// heard of, and an option it judged for itself would be one the API might refuse.
+	const loadActions = useCallback(async () => {
+		try {
+			const d = await api<{ actions?: TriggerActionOffer[] }>(`/v1/triggers/actions?instanceId=${encodeURIComponent(instanceId)}`);
+			setOffers(d.actions || []);
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : "Failed to load trigger actions");
+		}
+	}, [instanceId]);
+
 	useEffect(() => { loadTriggers(); }, [loadTriggers]);
+	useEffect(() => { loadActions(); }, [loadActions]);
 
 	/** The config object exactly as it will be POSTed — one definition, used by both the live
 	 *  preview and the save, so the thing validated is the thing stored. */
@@ -191,7 +213,9 @@ export default function TriggersSection({
 			try {
 				const d = await api<PreviewResp>("/v1/triggers/preview", {
 					method: "POST",
-					body: JSON.stringify({ type, action, schedule: scheduleStr, config: draftConfig, count: 3 }),
+					// instanceId so the preview also reports an action this agent cannot perform —
+					// same class of problem as config that would be stored and then ignored (#358).
+					body: JSON.stringify({ instanceId, type, action, schedule: scheduleStr, config: draftConfig, count: 3 }),
 				});
 				if (previewSeq.current === seq) setPreview(d);
 			} catch {
@@ -199,7 +223,7 @@ export default function TriggersSection({
 			}
 		}, 350);
 		return () => clearTimeout(t);
-	}, [built, localError, type, action, draftConfig]);
+	}, [built, localError, type, action, draftConfig, instanceId]);
 
 	const defaultName = () =>
 		action === "sync_connector" ? `${provider === "google_drive" ? "Google Drive" : "WorkDrive"} sync`
@@ -308,11 +332,29 @@ export default function TriggersSection({
 				</label>
 				<label className="flex flex-col gap-1">
 					<span className="text-xs font-semibold">Action</span>
-					<select value={action} onChange={(e) => setAction(e.target.value as TriggerActionType)} className={inputClass}>
-						{ACTION_LABELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+					<select value={action} onChange={(e) => setAction(e.target.value as TriggerActionType)} className={inputClass} disabled={!offers.length}>
+						{offers.length === 0 ? (
+							<option value={action}>Loading actions…</option>
+						) : (
+							// An action this agent cannot perform is DISABLED, not hidden: a picker
+							// that quietly has fewer entries on some agents teaches nothing, and
+							// "why can't I schedule a browser run here?" is answered by the reason
+							// below rather than by an option that is simply absent.
+							offers.map((o) => (
+								<option key={o.action} value={o.action} disabled={!o.available}>
+									{o.label}{o.available ? "" : " — not supported by this agent"}
+								</option>
+							))
+						)}
 					</select>
 				</label>
 			</div>
+
+			{/* The reason, verbatim from the server, if a saved trigger's action is selected on an
+			    agent that cannot run it (reachable by editing an older row). */}
+			{selectedOffer && !selectedOffer.available && (
+				<p className="text-xs text-red mb-3">{selectedOffer.reason}</p>
+			)}
 
 			{/* Schedule editor (#18) — presets, so the common cases never require cron. */}
 			{type === "cron" && (
@@ -519,6 +561,15 @@ export default function TriggersSection({
 									{trigger.nextRunAt && (
 										<div className="text-xs text-muted-soft mt-0.5">
 											Next {formatRun(trigger.nextRunAt, tz).local} {tz || "UTC"} · {countdownTo(trigger.nextRunAt)}
+										</div>
+									)}
+									{/* A row saved before the create-time gate, wired to an action this
+									    agent cannot perform (#358). It is not deleted or disabled for
+									    the user — that is theirs — but it stops looking healthy, which
+									    is what let it fail silently on a schedule for months. */}
+									{trigger.unavailable && (
+										<div className="text-xs text-red mt-1">
+											<span className="font-semibold">This trigger can never run. </span>{trigger.unavailable}
 										</div>
 									)}
 									{health && <div className={`text-xs mt-1 ${health.tone === "bad" ? "text-red" : health.tone === "warn" ? "text-yellow" : "text-muted"}`}>{health.text}</div>}

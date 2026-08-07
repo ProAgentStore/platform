@@ -39,7 +39,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"create_instance_trigger",
-		"Create a webhook, cron, or connector-sync trigger on a subscribed private instance. Use sync_connector with config.provider and config.grant_id for Google Drive or Zoho WorkDrive folder syncs.",
+		"Create a webhook, cron, or connector-sync trigger on a subscribed private instance. Use sync_connector with config.provider and config.grant_id for Google Drive or Zoho WorkDrive folder syncs. An action the instance's agent cannot perform (e.g. run_browse without a BROWSER_TASK workflow) is refused with 400 and the missing capability, rather than saved as a trigger that would silently never run.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
