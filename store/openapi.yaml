@@ -763,6 +763,15 @@ components:
         enabled: { type: boolean }
         schedule: { type: string, nullable: true, description: Cron expression; `null` for webhook triggers. }
         config: { type: object, additionalProperties: true }
+        unavailable:
+          type: string
+          nullable: true
+          description: |
+            Why this saved trigger can never run on this agent, or `null` when it can. A row wired
+            to an action the agent's capabilities do not support (e.g. `run_browse` without
+            `workflow: BROWSER_TASK`) is refused at create time now, but rows predating that gate
+            exist — they are reported here rather than deleted or disabled, because a trigger the
+            user wrote is theirs to remove.
         lastRunAt: { type: string, nullable: true }
         nextRunAt: { type: string, nullable: true }
         failureCount: { type: integer }
@@ -7091,6 +7100,54 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /v1/triggers/actions:
+    get:
+      summary: Which trigger actions this instance can actually perform
+      description: |
+        The whole action vocabulary, annotated for one instance. An action whose executor requires
+        a capability the agent does not declare comes back with `available: false` and the reason
+        — the same sentence `POST /v1/triggers` refuses it with — so a picker can disable the
+        option and say why instead of offering work that can never happen.
+
+        Unavailable actions are returned, not filtered out: the user's question is "why can't I
+        schedule this here?", and the answer is the reason on a disabled row.
+      operationId: listTriggerActions
+      tags: [Triggers]
+      parameters:
+        - { name: instanceId, in: query, required: true, description: The instance the actions are judged against (ownership is checked)., schema: { type: string } }
+      responses:
+        "200":
+          description: The action vocabulary for this instance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        action: { type: string, description: "The action id, e.g. `run_browse`." }
+                        label: { type: string, description: Human label for a picker. }
+                        available: { type: boolean, description: Can this instance perform it? }
+                        reason:
+                          type: string
+                          nullable: true
+                          description: Why not, in the words the save path would use. `null` when available.
+                        requires:
+                          type: string
+                          nullable: true
+                          description: The capability the agent must declare, when the action needs one.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The instance is not active
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /v1/triggers/preview:
     post:
       summary: Preview a trigger before saving it
@@ -7107,6 +7164,12 @@ paths:
             schema:
               type: object
               properties:
+                instanceId:
+                  type: string
+                  description: |
+                    Optional. When given (ownership is checked), an action this agent's
+                    capabilities cannot perform is reported through `issues` too — the same
+                    class of problem as config that would be stored and then ignored.
                 type:
                   type: string
                   enum: [webhook, cron]

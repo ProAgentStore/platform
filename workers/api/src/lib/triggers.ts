@@ -1,4 +1,6 @@
 import { HttpError } from "./auth.js";
+import { capabilitiesForInstance } from "./agent-capabilities.js";
+import { runnerSkipMessage } from "./trigger-capability.js";
 import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
 import { cronFields, isValidTimeZone, nextCronInstant } from "./cron-time.js";
 import { applyMapping } from "./trigger-config.js";
@@ -38,10 +40,12 @@ import type { Env } from "../types.js";
 /** The trigger vocabulary moved to `./trigger-types.js` — a leaf, so a module that only
  *  NAMES an action doesn't inherit this file's executor graph (#293). Re-exported here
  *  because this is still where triggers are validated, stored and run. */
+import { TRIGGER_ACTIONS } from "./trigger-types.js";
 import type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType } from "./trigger-types.js";
 export type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType };
 
-const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse"]);
+/** Derived from the one vocabulary (#358) — this used to be a third copy of the same seven names. */
+const ACTIONS = new Set<TriggerAction>(TRIGGER_ACTIONS);
 const TYPES = new Set<TriggerType>(["webhook", "cron"]);
 const MAX_PAYLOAD_CHARS = 16_000;
 
@@ -54,7 +58,7 @@ export function assertTriggerType(value: unknown): TriggerType {
 
 export function assertTriggerAction(value: unknown): TriggerAction {
 	if (typeof value !== "string" || !ACTIONS.has(value as TriggerAction)) {
-		throw new HttpError(400, "trigger action must be create_task, add_knowledge, log_event, sync_connector, run_pipeline, insert_record, or run_browse");
+		throw new HttpError(400, `trigger action must be one of: ${TRIGGER_ACTIONS.join(", ")}`);
 	}
 	return value as TriggerAction;
 }
@@ -346,13 +350,17 @@ export async function executeTriggerAction(
 			if (status !== 503 && status !== 409) throw e;
 			const offline = status === 503;
 			resultPayload = { skipped: true, reason: offline ? "runner offline" : "a run is already in progress", url };
+			// #358: the offline text used to name `pags up` unconditionally. For an agent whose
+			// capabilities declare no runtime that is a false remedy — `pags up` skips it — so the
+			// message is derived from what the agent actually declares.
+			const caps = offline ? await capabilitiesForInstance(env, target.instance_id, target.user_id).catch(() => null) : null;
 			await notifyUser(
 				env,
 				target.user_id,
 				"trigger",
 				"⏭️ Scheduled run skipped",
 				offline
-					? `${target.name}: your runner is offline — run \`pags up\`. It'll try again next schedule.`
+					? runnerSkipMessage(target.name, caps)
 					: `${target.name}: a run is already in progress; skipping this one.`,
 				instanceBoardLink(target.instance_id),
 			).catch(() => undefined);
