@@ -410,6 +410,51 @@ instanceStorageRoutes.put("/:id/memory", async (c) => {
 	});
 });
 
+// ── Agent tasks — the DO task store the owner could not see (#337) ──────────
+//
+// Named `agent-tasks`, NOT `tasks`: `/v1/instances/:id/tasks` is already the runtime/board
+// list (`instance_runtime_tasks`), a different store with a different lifecycle. The two
+// were confusable enough when only one of them was visible.
+//
+// These proxy the SAME DO handlers `/v1/agents/:id/tasks` uses for templates — the DO store
+// stays the single source of truth; what was missing was an instance-scoped door to it,
+// since chatRoutes mounts only at /v1/agents and resolves `:id` against the `agents` table.
+// Ownership is the standard `agent_instances … WHERE id = ?1 AND user_id = ?2`.
+
+instanceStorageRoutes.get("/:id/agent-tasks", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/tasks");
+});
+
+instanceStorageRoutes.post("/:id/agent-tasks", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/tasks", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
+instanceStorageRoutes.put("/:id/agent-tasks/:taskId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const taskId = c.req.param("taskId");
+	return proxyDO(c, instance.id, `/tasks/${encodeURIComponent(taskId)}`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
+instanceStorageRoutes.delete("/:id/agent-tasks/:taskId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const taskId = c.req.param("taskId");
+	return proxyDO(c, instance.id, `/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+});
+
 instanceStorageRoutes.get("/:id/state", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);

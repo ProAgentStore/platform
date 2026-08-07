@@ -4,6 +4,7 @@
  */
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentTask, MemoryEntry } from "../agent-types.js";
+import { MAX_TASKS } from "./agent-tasks.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
 import { fenceUntrusted } from "./untrusted-fence.js";
 
@@ -258,6 +259,17 @@ export async function executeTool(
 				};
 				if (!title)
 					return { name: call.name, content: "title required", success: false };
+				// The store is durable and, before #337, only the agent itself ever marked a task
+				// complete — so without a ceiling "the agent keeps a list" becomes an unbounded pile
+				// of self-assigned work that steers every future turn. Refuse honestly and name the
+				// way out rather than silently dropping the write.
+				const held = await storage.list<AgentTask>({ prefix: "task:" });
+				if (held.size >= MAX_TASKS)
+					return {
+						name: call.name,
+						content: `Task limit reached (${MAX_TASKS} tasks). Complete or delete some before creating more.`,
+						success: false,
+					};
 				const task: AgentTask = {
 					id: crypto.randomUUID(),
 					title,

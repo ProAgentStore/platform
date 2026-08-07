@@ -110,7 +110,14 @@ const PINS = {
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.
-	"workers/api/src/agent-do.ts": 1079,
+	// +19 for #337: the DO task store gets the treatment memory already had — a create-time
+	// ceiling, provenance pinned on update (an owner edit takes ownership; nothing on the HTTP
+	// path can move it back), and a delete that 404s instead of claiming success on a key that
+	// was never there. Raised rather than split: each is two or three lines inside a handler
+	// that must stay with its siblings, and every DECISION they encode — staleness, the
+	// injection cap, the ceiling, the read shape — lives in lib/agent-tasks.ts, which is where
+	// a split would have put them anyway.
+	"workers/api/src/agent-do.ts": 1098,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.

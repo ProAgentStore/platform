@@ -5569,6 +5569,113 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/agent-tasks:
+    get:
+      summary: Read the agent's own task list
+      description: |
+        The instance Durable Object's task store — written by the agent's BASE `create_task`
+        tool and injected into its system prompt every turn. **Not** the Board: that is
+        `/v1/instances/{instanceId}/tasks`, a separate runtime work queue.
+
+        Each task carries `assignedBy` as provenance (`user` = owner-written, marked
+        `(user-set)` in the prompt and protected from the agent retiring it unasked; `self` =
+        the agent wrote it). `stale` marks a task nothing has updated for `limits.staleDays` —
+        it stays stored and listed but stops being injected; any edit revives it. At most
+        `limits.injected` tasks reach the prompt, most recently updated first.
+      operationId: getInstanceAgentTasks
+      tags: [Storage]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Tasks plus the store's limits
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+                  limits:
+                    type: object
+                    properties:
+                      max: { type: integer }
+                      injected: { type: integer }
+                      staleDays: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Add a task to the agent's task list
+      description: "Tasks created through this route are `assignedBy: user` and protected from the agent retiring them unasked. Fails with 409 once the store reaches its task limit."
+      operationId: createInstanceAgentTask
+      tags: [Storage]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: The created task
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Task limit reached — complete or delete some first
+
+  /v1/instances/{instanceId}/agent-tasks/{taskId}:
+    put:
+      summary: Edit one of the agent's tasks
+      description: |
+        Title, description and status. An edit through this route takes ownership of the task
+        (`assignedBy: user`), the same way a memory edit becomes `source: user` — provenance
+        only ever moves agent → owner. Editing also refreshes `updatedAt`, which revives a
+        task that had aged out of the prompt.
+      operationId: updateInstanceAgentTask
+      tags: [Storage]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                status: { type: string, enum: [pending, in_progress, blocked, complete] }
+      responses:
+        "200":
+          description: The updated task
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Delete one of the agent's tasks
+      description: Deleting a task that does not exist fails honestly rather than reporting success.
+      operationId: deleteInstanceAgentTask
+      tags: [Storage]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/state:
     get:
       summary: Read the instance's Durable Object state

@@ -6,6 +6,7 @@ import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./a
 import { registryToolNameSet, registryTools, runRegistryTool } from "./lib/tool-registry.js";
 import { configureBoardForAgent } from "./lib/board.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
+import { renderActiveTasks } from "./lib/agent-tasks.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
 import { stableStringify } from "./lib/stable-json.js";
@@ -267,13 +268,10 @@ export async function runAgentThink(opts: {
 		" not memory. If the user asks you to change how you answer, call set_behaviour; to tell them" +
 		" your current manner, call get_behaviour. Never store a communication preference with write_memory.";
 
-	const activeTasks = tasks.filter((t) => t.status !== "complete");
-	if (activeTasks.length > 0) {
-		systemPrompt += "\n\n## Active Tasks\n";
-		for (const t of activeTasks) {
-			systemPrompt += `- [${t.status}] ${t.title}: ${t.description}\n`;
-		}
-	}
+	// Provenance, the staleness cutoff and the injection cap live in lib/agent-tasks.ts (#337) —
+	// this block is agent-WRITABLE durable state on the instruction path, so what reaches the
+	// prompt is a decision worth testing rather than an inline filter.
+	systemPrompt += renderActiveTasks(tasks);
 
 	if (userId) {
 		const userCtx = await engine.getUserContext(userId);

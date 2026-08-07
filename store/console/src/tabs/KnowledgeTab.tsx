@@ -4,11 +4,12 @@ import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
 import FilesSection from "../components/FilesSection";
 import MemorySection from "../components/MemorySection";
+import TasksSection from "../components/TasksSection";
 import VectorsSection from "../components/VectorsSection";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 
-type KbSubTab = "docs" | "memory" | "files" | "index" | "credentials" | "rules";
+type KbSubTab = "docs" | "memory" | "tasks" | "files" | "index" | "credentials" | "rules";
 
 interface DriveFile {
 	id: string;
@@ -385,6 +386,9 @@ export default function KnowledgeTab({ instanceId }: Props) {
 	const subTabs: { id: KbSubTab; label: string }[] = [
 		{ id: "docs", label: "Documents" },
 		{ id: "memory", label: "Memory" },
+		// Beside Memory, not the Board: same class of state — agent-written, prompt-injected,
+		// durable — and until #337 the only one of them with no owner surface at all.
+		{ id: "tasks", label: "Tasks" },
 		{ id: "files", label: "Files" },
 		{ id: "index", label: "Index" },
 		{ id: "credentials", label: "Credentials" },
@@ -655,6 +659,8 @@ export default function KnowledgeTab({ instanceId }: Props) {
 
 			{/* Memory */}
 			{subTab === "memory" && <MemorySection instanceId={instanceId} active={subTab === "memory"} />}
+
+			{subTab === "tasks" && <TasksSection instanceId={instanceId} active={subTab === "tasks"} />}
 
 			{/* Files */}
 			{subTab === "files" && (

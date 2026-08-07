@@ -73,6 +73,7 @@ import {
 	previewOf,
 	type InflightTurn,
 } from "./lib/chat-inflight.js";
+import { MAX_TASKS, taskListPayload } from "./lib/agent-tasks.js";
 import { json } from "./lib/do-json.js";
 import { logError } from "./lib/error-log.js";
 import { platformAiBinding } from "./lib/platform-settings.js";
@@ -838,8 +839,10 @@ export class AgentDO extends DurableObject<Env> {
 		return [...all.values()];
 	}
 
+	/** Owner-facing read (#337) — shape, staleness and limits come from lib/agent-tasks.ts, the
+	 *  same module the prompt renders from, so the badge and the prompt cannot disagree. */
 	private async handleGetTasks(): Promise<Response> {
-		return json({ tasks: await this.getAllTasks() });
+		return json(taskListPayload(await this.getAllTasks()));
 	}
 
 	private async handleCreateTask(request: Request): Promise<Response> {
@@ -848,11 +851,16 @@ export class AgentDO extends DurableObject<Env> {
 			description?: string;
 		}>();
 		if (!title) return json({ error: "title required" }, 400);
+		const existing = await this.getAllTasks();
+		if (existing.length >= MAX_TASKS)
+			return json({ error: `Task limit reached (${MAX_TASKS}). Delete or complete some first.` }, 409);
 		const task: AgentTask = {
 			id: crypto.randomUUID(),
 			title,
 			description: description || "",
 			status: "pending",
+			// Only an owner-authenticated route reaches this handler — the agent's own
+			// `create_task` writes DO storage directly and never speaks HTTP (#337).
 			assignedBy: "user",
 			createdAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
@@ -868,10 +876,17 @@ export class AgentDO extends DurableObject<Env> {
 		const existing = await this.ctx.storage.get<AgentTask>(`task:${id}`);
 		if (!existing) return json({ error: "Task not found" }, 404);
 		const updates = await request.json<Partial<AgentTask>>();
-		const updated = {
+		const updated: AgentTask = {
 			...existing,
 			...updates,
 			id: existing.id,
+			createdAt: existing.createdAt,
+			// An owner who edits a task has taken it on — same rule memory uses, where an edit
+			// through the owner route becomes `source: "user"`. It also means provenance can only
+			// ever move agent → owner: nothing on this path can launder a self-assigned task back
+			// into looking self-assigned once a human has vouched for it, and the agent's own
+			// `update_task` never reaches here to move it the other way (#337).
+			assignedBy: "user",
 			updatedAt: new Date().toISOString(),
 		};
 		await this.ctx.storage.put(`task:${id}`, updated);
@@ -879,7 +894,11 @@ export class AgentDO extends DurableObject<Env> {
 	}
 
 	private async handleDeleteTask(id: string): Promise<Response> {
-		await this.ctx.storage.delete(`task:${id}`);
+		// Report the truth: an owner deleting a task the agent will keep re-reading needs to
+		// know whether it is actually gone, and a blanket `success` on a missing key is how a
+		// stale prompt entry survives a delete that appeared to work (#337).
+		const existed = await this.ctx.storage.delete(`task:${id}`);
+		if (!existed) return json({ error: "Task not found" }, 404);
 		return json({ success: true });
 	}
 

@@ -223,6 +223,46 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		expect(doCalls[0].path).toContain("/memory/some%20key");
 	});
 
+	// #337: the DO task store had no instance-scoped door at all — chatRoutes mounts only at
+	// /v1/agents and resolves `:id` against the `agents` table, so an instance id 404'd there
+	// while the tasks kept steering every prompt.
+	it("owner reads agent-tasks → proxies GET /tasks keyed by instance id", async () => {
+		const { app, env, doCalls, setDoResponse } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
+		setDoResponse(() => Response.json({ tasks: [{ id: "t1", assignedBy: "self", stale: false }] }));
+		const res = await get(app, env, "/v1/instances/i1/agent-tasks", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect((await res.json() as any).tasks[0].assignedBy).toBe("self");
+		expect(doCalls[0].agentDoName).toBe("i1");
+		expect(doCalls[0].path).toBe("/tasks");
+	});
+
+	it("404s agent-tasks for an instance the caller does not own, without touching the DO", async () => {
+		const { app, env, doCalls } = buildApp({ instances: [{ id: "i1", user_id: "owner" }] });
+		const res = await get(app, env, "/v1/instances/i1/agent-tasks", await tokenFor("attacker"));
+		expect(res.status).toBe(404);
+		expect(doCalls).toHaveLength(0);
+	});
+
+	it("POST agent-tasks forwards the body to the instance DO", async () => {
+		const { app, env, doCalls, setDoResponse } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
+		setDoResponse(() => Response.json({ id: "t2" }, { status: 201 }));
+		const res = await json(app, env, "POST", "/v1/instances/i1/agent-tasks", { title: "Renew the domain" }, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		expect(doCalls[0]).toMatchObject({ path: "/tasks", method: "POST" });
+		expect((doCalls[0].body as any).title).toBe("Renew the domain");
+	});
+
+	it("PUT/DELETE agent-tasks/:taskId reach the DO's per-task path, id-encoded", async () => {
+		const { app, env, doCalls, setDoResponse } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
+		setDoResponse(() => Response.json({ ok: true }));
+		await json(app, env, "PUT", "/v1/instances/i1/agent-tasks/t%201", { status: "complete" }, await tokenFor("u1"));
+		await app.request("/v1/instances/i1/agent-tasks/t%201", {
+			method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("u1")}` },
+		}, env);
+		expect(doCalls[0]).toMatchObject({ path: "/tasks/t%201", method: "PUT" });
+		expect(doCalls[1]).toMatchObject({ path: "/tasks/t%201", method: "DELETE" });
+	});
+
 	it("DELETE messages clears the conversation via the DO", async () => {
 		const { app, env, doCalls, setDoResponse } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
 		setDoResponse(() => Response.json({ cleared: true }));

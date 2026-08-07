@@ -152,6 +152,23 @@ export interface KnowledgeDoc {
 	createdAt?: string;
 }
 
+/**
+ * A task in the instance Durable Object's `task:` store — the agent's own list, injected into
+ * its prompt every turn (#337). Distinct from `RuntimeTask`, which is the Board.
+ */
+export interface AgentTaskEntry {
+	id: string;
+	title: string;
+	description?: string;
+	status: string;
+	/** Provenance: "user" is owner-written and marked (user-set) in the prompt. */
+	assignedBy?: "user" | "self" | "system";
+	createdAt?: string;
+	updatedAt?: string;
+	/** Server-computed: too old to still be injected, but not deleted. */
+	stale?: boolean;
+}
+
 export interface MemoryEntry {
 	key: string;
 	type: string;
