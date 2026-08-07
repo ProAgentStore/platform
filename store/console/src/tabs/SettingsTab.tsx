@@ -11,6 +11,7 @@ import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
 import McpConnections from "../components/McpConnections";
 import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
+import { showsConnector } from "../lib/connectorState";
 
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
@@ -609,6 +610,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
+	// #353: a connector with no OAuth client on this deployment is not ON this page — it used to
+	// be a red warning plus a dead row with no button. Why, and the three states: lib/connectorState.
+	const showsEmail = showsConnector(emailStatus);
+	const showsDrive = showsConnector(driveStatus);
+	const showsWorkdrive = showsConnector(workdriveStatus);
+
 	return (
 		// min-w-0 lets this shrink inside the flex scroll wrapper; overflow-x-hidden is a
 		// hard guard so no rigid-width descendant can ever make the whole page scroll
@@ -931,16 +938,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					/>
 				)}
 
-				{emailStatus && !emailStatus.configured && (
-					<p className="text-xs text-red mb-2">Email connection isn’t configured on this deployment yet.</p>
-				)}
-				{driveStatus && !driveStatus.configured && (
-					<p className="text-xs text-red mb-2">Google Drive connection isn’t configured on this deployment yet.</p>
-				)}
-				{workdriveStatus && !workdriveStatus.configured && (
-					<p className="text-xs text-red mb-2">Zoho WorkDrive connection isn’t configured on this deployment yet.</p>
-				)}
-
 				{/* GitHub identity — account-level. Needed for Coder build status + repo access
 				    (esp. if you signed in with Google, whose github_login is your email). */}
 				<div className="flex items-start justify-between gap-3 mb-3">
@@ -957,6 +954,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				</div>
 				{githubMsg && <p className="text-xs text-green mb-3 -mt-1">{githubMsg}</p>}
 
+				{showsEmail && (
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
 						<span className="font-semibold">Gmail</span>{" "}
@@ -964,19 +962,19 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							? <span className="text-green">· connected{emailStatus.email ? ` (${emailStatus.email})` : ""}</span>
 							: <span className="text-muted">· not connected</span>}
 					</div>
-					{emailStatus?.configured && (
-						emailStatus.connected ? (
-							<button type="button" onClick={disconnectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
-								Disconnect
-							</button>
-						) : (
-							<button type="button" onClick={connectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-								Connect Gmail
-							</button>
-						)
+					{emailStatus?.connected ? (
+						<button type="button" onClick={disconnectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+							Disconnect
+						</button>
+					) : (
+						<button type="button" onClick={connectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
+							Connect Gmail
+						</button>
 					)}
 				</div>
+				)}
 
+				{showsDrive && (
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
 						<span className="font-semibold">Google Drive</span>{" "}
@@ -984,19 +982,18 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							? <span className="text-green">· connected{driveStatus.email ? ` (${driveStatus.email})` : ""}</span>
 							: <span className="text-muted">· not connected</span>}
 					</div>
-					{driveStatus?.configured && (
-						driveStatus.connected ? (
-							<button type="button" onClick={disconnectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
-								Disconnect
-							</button>
-						) : (
-							<button type="button" onClick={connectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-								Connect Drive
-							</button>
-						)
+					{driveStatus?.connected ? (
+						<button type="button" onClick={disconnectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+							Disconnect
+						</button>
+					) : (
+						<button type="button" onClick={connectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
+							Connect Drive
+						</button>
 					)}
 				</div>
-				{driveStatus?.connected && (
+				)}
+				{showsDrive && driveStatus?.connected && (
 					<div className="mb-4 pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
 						<div className="flex gap-2 flex-wrap mb-2">
 							<input
@@ -1024,6 +1021,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</div>
 				)}
 
+				{showsWorkdrive && (
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
 						<span className="font-semibold">Zoho WorkDrive</span>{" "}
@@ -1031,19 +1029,18 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							? <span className="text-green">· connected{workdriveStatus.account ? ` (${workdriveStatus.account})` : ""}</span>
 							: <span className="text-muted">· not connected</span>}
 					</div>
-					{workdriveStatus?.configured && (
-						workdriveStatus.connected ? (
-							<button type="button" onClick={disconnectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
-								Disconnect
-							</button>
-						) : (
-							<button type="button" onClick={connectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-								Connect WorkDrive
-							</button>
-						)
+					{workdriveStatus?.connected ? (
+						<button type="button" onClick={disconnectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+							Disconnect
+						</button>
+					) : (
+						<button type="button" onClick={connectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
+							Connect WorkDrive
+						</button>
 					)}
 				</div>
-				{workdriveStatus?.connected && (
+				)}
+				{showsWorkdrive && workdriveStatus?.connected && (
 					<div className="mb-4 pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
 						<div className="flex gap-2 flex-wrap mb-2">
 							<input
@@ -1071,6 +1068,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</div>
 				)}
 
+				{/* Goes with the Gmail row: it pointed at "Connect Gmail above", which is now gone. */}
+				{showsEmail && (
 				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
 					<input
 						type="checkbox"
@@ -1080,7 +1079,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					/>
 					<span>Allow <b>this agent</b> to read my inbox for sign-in links &amp; codes</span>
 				</label>
-				{!emailStatus?.connected && (
+				)}
+				{showsEmail && !emailStatus?.connected && (
 					<p className="text-xs text-muted mt-1">Connect Gmail above to enable this.</p>
 				)}
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}

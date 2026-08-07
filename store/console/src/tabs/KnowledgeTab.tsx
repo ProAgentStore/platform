@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
+import { showsConnector } from "../lib/connectorState";
 import FilesSection from "../components/FilesSection";
 import MemorySection from "../components/MemorySection";
 import TasksSection from "../components/TasksSection";
@@ -482,8 +483,15 @@ export default function KnowledgeTab({ instanceId }: Props) {
 							<div className="flex gap-1.5 flex-wrap">
 								<button type="button" onClick={openNew} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ New</button>
 								<button type="button" onClick={() => setShowUrl((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ URL</button>
+								{/* #353: an import source the deployment has no OAuth client for is not offered.
+								    Its panel's only advice is "connect it in Settings", where — correctly — it
+								    is no longer listed, so the button led to a dead end nobody could leave. */}
+								{showsConnector(driveStatus) && (
 								<button type="button" onClick={() => setShowDrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ Drive</button>
+								)}
+								{showsConnector(workdriveStatus) && (
 								<button type="button" onClick={() => setShowWorkdrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ WorkDrive</button>
+								)}
 								<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
 									+ File
 									<input type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,.xml" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
