@@ -5871,10 +5871,20 @@ paths:
                       type: object
                       properties:
                         name: { type: string }
-                        connector: { type: string }
-                        allowed: { type: boolean }
+                        connector: { type: string, description: "The connector that provides it — and the one whose write consent applies. Not always the agent's surface name: a `tmux`-surface agent's tools come from the `terminal` connector." }
+                        scope: { type: string, enum: [read, write] }
+                        allowed: { type: boolean, description: "Is this tool part of this agent at all (declared, and not switched off by the owner)? Deliberately NOT folded with write consent — see `writeConsent`." }
                         disabled: { type: boolean }
-                        reason: { type: string, description: "Why it is refused, e.g. `not_declared`, `no_consent`, `disabled`." }
+                        reason: { type: string, enum: [ok, not_declared, disabled_by_owner], description: "Why `allowed` is what it is." }
+                        writeConsent:
+                          type: string
+                          enum: [n/a, granted, required, per_call]
+                          description: >-
+                            The SEPARATE write-consent verdict (#351). `required` means the tool is this agent's
+                            but every call is refused until write access for `connector` is granted. `per_call`
+                            means the answer is decided per call: a caller-chosen HTTP method (`http_request`,
+                            #307 — reads run, a mutating verb is refused), or outbound MCP (#262 — each call also
+                            needs a grant for that endpoint and remote tool).
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -6797,7 +6807,12 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     post:
       summary: Add a subordinate
-      description: Cycles, towers, excessive fan-out and two-managers are all rejected here, while the human is looking at the form — every one of them is otherwise invisible until it has already spent money.
+      description: >-
+        Cycles, towers, excessive fan-out and two-managers are all rejected here, while the human is
+        looking at the form — every one of them is otherwise invisible until it has already spent money.
+        So is a supervisor whose AGENT declares no supervision tool (#354): the graph is instance-level
+        and the ability is agent-level, and an edge the runtime can never use is not worth writing. The
+        SUBORDINATE needs nothing declared — being delegated to is not a capability.
       operationId: createSupervision
       tags: [Tools]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
