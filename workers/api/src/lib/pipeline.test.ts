@@ -21,7 +21,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { attachAudit, auditStepEntry, collectReferences, executePipelineStep, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
+import { attachAudit, auditStepEntry, collectReferences, coverageShortfall, declaredParamDefaults, executePipelineStep, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -463,5 +463,46 @@ describe("pipelineInventory", () => {
 
 	it("sorts, so the warning text does not depend on JSON key order", () => {
 		expect(pipelineInventory({ z: good, a: good }).valid).toEqual(["a", "z"]);
+	});
+});
+
+// ── The bound, and saying what it left ────────────────────────────────────────────────
+describe("declaredParamDefaults", () => {
+	it("collects only the params that declare one", () => {
+		const def = { params: { city: { type: "string" }, max_places: { type: "number", default: 300 } } };
+		expect(declaredParamDefaults(def)).toEqual({ max_places: 300 });
+	});
+
+	it("keeps an explicit falsy default — 0 and false are answers, not absences", () => {
+		const def = { params: { limit: { type: "number", default: 0 }, dry: { type: "boolean", default: false } } };
+		expect(declaredParamDefaults(def)).toEqual({ limit: 0, dry: false });
+	});
+
+	it("is empty for a definition that declares no params at all", () => {
+		expect(declaredParamDefaults({})).toEqual({});
+	});
+});
+
+describe("coverageShortfall", () => {
+	it("reports what a bounding step left unexamined", () => {
+		expect(coverageShortfall("slice", { count: 120, dropped: 380 })).toBe(
+			"slice examined 120 of 500 record(s) — 380 were left unexamined by the cap. Raise the cap, or narrow the search, if you need the rest.",
+		);
+	});
+
+	it("says nothing when the cap did not bind", () => {
+		expect(coverageShortfall("slice", { count: 12, dropped: 0 })).toBeNull();
+	});
+
+	it("ignores a filter's drops — deciding against a record is not failing to look at it", () => {
+		// `filter` reports `dropped` too, and warning on it would put a line on every run that
+		// filters anything, which trains a reader to skip exactly the line that matters.
+		expect(coverageShortfall("filter", { count: 3, dropped: 97 })).toBeNull();
+	});
+
+	it("tolerates a step output that isn't the envelope it expects", () => {
+		expect(coverageShortfall("slice", null)).toBeNull();
+		expect(coverageShortfall("slice", [1, 2, 3])).toBeNull();
+		expect(coverageShortfall("slice", "nope")).toBeNull();
 	});
 });

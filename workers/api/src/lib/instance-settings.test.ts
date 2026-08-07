@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SettingsField } from "./agent-capabilities.js";
-import { applySettingsPatch, resolveSettingsValues, settingsPromptBlock } from "./instance-settings.js";
+import { applySettingsPatch, paramsWithDefaults, resolveSettingsValues, settingsPromptBlock } from "./instance-settings.js";
 
 const SCHEMA: SettingsField[] = [
 	{
@@ -100,5 +100,27 @@ describe("settingsPromptBlock", () => {
 	it("returns empty when nothing is set", () => {
 		expect(settingsPromptBlock(SCHEMA, {})).toBe("");
 		expect(settingsPromptBlock([], {})).toBe("");
+	});
+});
+
+describe("paramsWithDefaults", () => {
+	it("layers caller over setting over declared default", () => {
+		expect(paramsWithDefaults({ max_places: 300, mode: "fast" }, { max_places: 120 }, { city: "Sydney" })).toEqual({
+			max_places: 120,
+			mode: "fast",
+			city: "Sydney",
+		});
+		expect(paramsWithDefaults({ max_places: 300 }, { max_places: 120 }, { max_places: 40 })).toEqual({ max_places: 40 });
+	});
+
+	it("treats an undefined argument as not supplied, so it cannot un-bound a capped step", () => {
+		// A trigger that builds `{city, max_places: cfg.max}` with nothing configured would
+		// otherwise shadow the default with undefined — and `slice` reads an absent limit as
+		// "keep everything", which is exactly the unbounded run the default exists to prevent.
+		expect(paramsWithDefaults({ max_places: 300 }, {}, { max_places: undefined })).toEqual({ max_places: 300 });
+	});
+
+	it("changes nothing for a definition with no defaults and an agent with no settings", () => {
+		expect(paramsWithDefaults({}, {}, { city: "Hobart" })).toEqual({ city: "Hobart" });
 	});
 });

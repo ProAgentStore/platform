@@ -101,7 +101,14 @@ function parseReshape(spec: string): Array<[string, string]> {
 		});
 }
 
-function applyResponseMap(data: unknown, map: string): unknown {
+/**
+ * Exported so a pipeline test can project a fixture through the SAME grammar the connector runs,
+ * rather than hand-writing what it thinks the `responseMap` produces. That hand-written mock is how
+ * the lead-finder's per-step payload size went unmeasured: the test's projection carried whatever
+ * the author typed, so the definition's real output shape — the thing that overflowed the 1MiB
+ * Workflow step limit on a large city — was never the thing under test.
+ */
+export function applyResponseMap(data: unknown, map: string): unknown {
 	const m = map.trim();
 	const arrIdx = m.indexOf("[]");
 	if (arrIdx === -1) return getPath(data, m); // plain dotted path

@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { attachAudit, auditStepEntry, capStepOutput, executePipelineStep, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
+import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, executePipelineStep, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { closeRun } from "../lib/pipeline-runs.js";
@@ -96,6 +96,10 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			// Per-record audit trail (issue #98): one entry per step's decision, accumulated as
 			// the runner walks, then attached to each output record before the sink persists it.
 			const trail: AuditEntry[] = [{ step: "input", detail: `run "${pipeline.name}" (${trigger}) with ${Object.keys(params).length} param(s)`, at: new Date().toISOString() }];
+			// What a bounding step left unexamined, carried to the run's own detail line so the
+			// console says "capped" where it says how the run went — a warn event alone is only
+			// found by someone who already suspects something.
+			const shortfalls: string[] = [];
 
 			for (let i = 0; i < pipeline.steps.length; i++) {
 				const s = pipeline.steps[i];
@@ -117,6 +121,18 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				lastOutput = result.output;
 				// Capture this step's DECISION onto the trail (first-class, not reconstructed).
 				trail.push(auditStepEntry(s, i, result));
+				// A cap that fired is a COVERAGE fact, not a step outcome: the step succeeded, and
+				// without this the run reports a tidy completed sweep of a city it only partly
+				// looked at. Logged where a reader already is (the trace + the run's detail line).
+				const shortfall = coverageShortfall(s.tool, result.output);
+				if (shortfall) {
+					shortfalls.push(shortfall);
+					trail.push({ step: `step ${i}: coverage`, detail: shortfall, at: new Date().toISOString() });
+					await step.do(`s${i}-capped`, async () => {
+						await logEvent(env, { source: "pipeline", event: "pipeline.capped", level: "warn", message: shortfall, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, bind } }).catch(() => undefined);
+						return null;
+					});
+				}
 				await step.do(`s${i}-trace`, async () => {
 					await logEvent(env, { source: "pipeline", event: "pipeline.step", level: result.success ? "info" : "warn", message: `${s.tool} → ${bind}: ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, bind, success: result.success } }).catch(() => undefined);
 					return null;
@@ -206,9 +222,14 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// inflating `added` (which means net-new) for the sweeps that re-see everything.
 				const persisted = updated ? `, ${updated} updated` : "";
 				const sinkNote = pipeline.sink ? `, ${added} → ${pipeline.sink.collection}${persisted}` : persisted;
+				// The cap rides in the detail for the same reason `updated` does: it is the part of
+				// "how did this run go" the counts cannot express. `seen` counts what was EXAMINED,
+				// so without this line a capped sweep of Sydney and a complete sweep of Hobart read
+				// identically — the run says it covered everything when it covered the first N.
+				const capNote = shortfalls.length ? `; ${shortfalls.join("; ")}` : "";
 				// NOT best-effort — see `run-close-fail`. Reporting `{outcome:"completed"}` from a step
 				// that failed to record the completion is the exact "success without the work" shape.
-				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}`);
+				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}${capNote}`);
 				return null;
 			});
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };

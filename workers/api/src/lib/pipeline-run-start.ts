@@ -2,7 +2,9 @@
 // `run_pipeline` tool and the POST /v1/instances/:id/pipelines/:name/run endpoint so both
 // audit + start a run identically. Cron/webhook triggers (#92) call this same helper —
 // that's the clean hook for trigger wiring, which is NOT built here.
-import { loadPipeline } from "./pipeline.js";
+import { declaredParamDefaults, loadPipeline } from "./pipeline.js";
+import { paramsWithDefaults, resolveSettingsValues, type SettingsValue } from "./instance-settings.js";
+import type { AgentCapabilities } from "./agent-capabilities.js";
 import { logEvent } from "./events.js";
 import { openRun } from "./pipeline-runs.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
@@ -16,6 +18,32 @@ import type { Env } from "../types.js";
 export type StartTrigger = NonNullable<PipelineRunParams["trigger"]>;
 
 export type StartResult = { ok: true; runId: string; workflowId: string } | { ok: false; error: string };
+
+/**
+ * The subscriber's configured settings, as a map of param-name → value.
+ *
+ * A second read of `agent_instances.config` after `loadPipeline`'s, deliberately: folding the two
+ * would make the loader return two unrelated things, and this one is skipped entirely for the many
+ * agents that declare no settings schema at all. A failed read yields no values rather than an
+ * error — a D1 blip must not stop a run whose params the caller already supplied.
+ */
+async function settingValuesFor(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	capabilities: AgentCapabilities | null,
+): Promise<Record<string, SettingsValue>> {
+	const schema = capabilities?.settingsSchema;
+	if (!schema?.length) return {};
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ config: string }>().catch(() => null);
+	if (!row) return {};
+	try {
+		const cfg = JSON.parse(row.config || "{}") as Record<string, unknown>;
+		return resolveSettingsValues(schema, cfg.settings);
+	} catch {
+		return {};
+	}
+}
 
 /**
  * Load the named pipeline from the instance's config, audit the start, and kick the durable
@@ -53,9 +81,14 @@ export async function startPipelineRun(
 	// Deliberately NOT closed when the run ends: `delegate_goal` returns a run HANDLE and the
 	// subordinate keeps working afterwards, so closing here would refuse the very work it started.
 	const budgetId = pipelineOpensDelegations(pipeline) ? (await openBudget(env, userId, instanceId)).id : undefined;
+	// What the run actually gets: caller > subscriber setting > declared default. Resolved HERE,
+	// once, so the journaled params, the `pipeline.requested` audit line, the run row and the
+	// workflow all agree on the values the walk used — resolving them per step would let a settings
+	// edit mid-run change the meaning of a resumed step.
+	const effectiveParams = paramsWithDefaults(declaredParamDefaults(pipeline), await settingValuesFor(env, instanceId, userId, capabilities), params);
 	const runId = crypto.randomUUID();
 	// Audit the start BEFORE the kick so a failed create still leaves a record of who asked.
-	await logEvent(env, { source: "pipeline", event: "pipeline.requested", message: `Start "${name}" via ${trigger}`, userId, instanceId, traceId: runId, context: { pipeline: name, trigger, params, ...(parentTraceId ? { parentTraceId } : {}) } }).catch(() => undefined);
+	await logEvent(env, { source: "pipeline", event: "pipeline.requested", message: `Start "${name}" via ${trigger}`, userId, instanceId, traceId: runId, context: { pipeline: name, trigger, params: effectiveParams, ...(parentTraceId ? { parentTraceId } : {}) } }).catch(() => undefined);
 	// The join between the two runs, logged under the PARENT's trace so following the chain
 	// forward is one query: the parent's trace names the run it set off.
 	if (parentTraceId) {
@@ -64,7 +97,7 @@ export async function startPipelineRun(
 	// Open the run RECORD (issue #98) at kick, status 'running'. The workflow updates counts
 	// + closes it. Opening here (not in the workflow) means a run that fails to start still
 	// leaves a row, and the row exists before the first step runs.
-	await openRun(env, { runId, userId, instanceId, pipeline: name, trigger, params });
-	const wf = await env.PIPELINE_RUN.create({ params: { instanceId, userId, pipeline, params, runId, trigger, budgetId, declaredTools } satisfies PipelineRunParams });
+	await openRun(env, { runId, userId, instanceId, pipeline: name, trigger, params: effectiveParams });
+	const wf = await env.PIPELINE_RUN.create({ params: { instanceId, userId, pipeline, params: effectiveParams, runId, trigger, budgetId, declaredTools } satisfies PipelineRunParams });
 	return { ok: true, runId, workflowId: wf.id };
 }

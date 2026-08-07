@@ -42,6 +42,23 @@ export interface PipelineStep {
 	forEach?: PipelineInputValue;
 }
 
+/**
+ * One declared run parameter. `default` is what the runner uses when the caller supplies nothing
+ * (`lib/pipeline-run-start.ts`, #394).
+ *
+ * It exists because "unset" and "zero" are different answers and only one of them is safe. A bound
+ * expressed as `{"$param":"max_places"}` on a `slice` resolves to `undefined` when nobody passes it,
+ * and an absent `limit` means KEEP EVERYTHING — so the one step whose job is to bound the run is
+ * also the step that silently stops bounding it the moment the wiring forgets a param. A default
+ * declared next to the param makes the bound a property of the DEFINITION rather than of every
+ * call site that has to remember it.
+ */
+export interface PipelineParam {
+	type: string;
+	description?: string;
+	default?: string | number | boolean;
+}
+
 export interface PipelineSink {
 	/** Target instance collection (#91) the final records are upserted into. */
 	collection: string;
@@ -52,8 +69,8 @@ export interface PipelineSink {
 /** A pipeline definition — pure data, storable per instance (see loadPipeline). */
 export interface PipelineDef {
 	name: string;
-	/** Declared run params (names → JSON type hint). Advisory; validation is name-based. */
-	params?: Record<string, { type: string; description?: string }>;
+	/** Declared run params (names → JSON type hint + optional default). Validation is name-based. */
+	params?: Record<string, PipelineParam>;
 	steps: PipelineStep[];
 	sink?: PipelineSink;
 }
@@ -101,6 +118,47 @@ export function capStepOutput(result: StepResult, tool: string, index: number): 
 			"or narrow the search that produced it.",
 		output: null,
 	};
+}
+
+/**
+ * The values a definition declares as its own defaults, for the params that carry one.
+ *
+ * Applied UNDER everything else at kick, so an explicit argument always wins and the default only
+ * fills a gap.
+ */
+export function declaredParamDefaults(def: Pick<PipelineDef, "params">): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [name, decl] of Object.entries(def.params ?? {})) {
+		if (decl && typeof decl === "object" && decl.default !== undefined) out[name] = decl.default;
+	}
+	return out;
+}
+
+/**
+ * Steps whose job is to BOUND a list, and which therefore report a `dropped` count that means
+ * "records this run never looked at" rather than "records this run decided against".
+ *
+ * `filter` also reports `dropped` and is deliberately not here: dropping is the whole point of a
+ * filter, and a warning per filtered record would be noise that trains a reader to ignore the line.
+ */
+const BOUNDING_TOOLS = new Set(["slice"]);
+
+/**
+ * The sentence to publish when a bounding step left records unexamined — null when it didn't (#394).
+ *
+ * A cap that quietly keeps the first N is the same class of defect as the crash it replaces: the run
+ * closes `completed`, the counts look like a full sweep, and nothing anywhere says the city was only
+ * partly covered. The platform's rule is that a workflow which bounds coverage says what it left,
+ * so this is surfaced as a warn-level trace event AND carried into the run's own detail line, not
+ * buried in a step's JSON body where the 160-character trace excerpt never reaches it.
+ */
+export function coverageShortfall(tool: string, output: unknown): string | null {
+	if (!BOUNDING_TOOLS.has(tool) || !output || typeof output !== "object" || Array.isArray(output)) return null;
+	const o = output as Record<string, unknown>;
+	const dropped = typeof o.dropped === "number" ? o.dropped : 0;
+	const kept = typeof o.count === "number" ? o.count : 0;
+	if (dropped <= 0) return null;
+	return `${tool} examined ${kept} of ${kept + dropped} record(s) — ${dropped} were left unexamined by the cap. Raise the cap, or narrow the search, if you need the rest.`;
 }
 
 /**

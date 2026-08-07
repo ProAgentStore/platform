@@ -3,7 +3,12 @@
   "params": {
     "city": { "type": "string", "description": "City to sweep, e.g. \"Sydney, NSW\" — geocoded to the search centre." },
     "type": { "type": "string", "description": "Google Places includedType, e.g. \"cafe\" / \"restaurant\"." },
-    "radius": { "type": "number", "description": "searchNearby radius in metres around each grid cell (e.g. 900)." }
+    "radius": { "type": "number", "description": "searchNearby radius in metres around each grid cell (e.g. 900)." },
+    "max_places": {
+      "type": "number",
+      "description": "Most places one sweep examines after the grid is collapsed (default 300). The grid can return 500 (25 cells × maxResultCount 20); anything past the cap is NOT examined and the run reports how many were left, never dropping them silently. Overridden per instance by the agent's `max_places` setting.",
+      "default": 300
+    }
   },
   "steps": [
     {
@@ -45,7 +50,7 @@
             }
           }
         },
-        "responseMap": "places[].{place_id:id,name:displayName.text,address:formattedAddress,phone:nationalPhoneNumber,websiteUri:websiteUri,lat:location.latitude,lng:location.longitude,maps_url:googleMapsUri,addressComponents:addressComponents}"
+        "responseMap": "places[].{place_id:id,name:displayName.text,address:formattedAddress,phone:nationalPhoneNumber,websiteUri:websiteUri,lat:location.latitude,lng:location.longitude,maps_url:googleMapsUri,country:addressComponents[types~=country].longText,state:addressComponents[types~=administrative_area_level_1].longText,city:addressComponents[types~=locality].longText,suburb:addressComponents[types~=sublocality].longText}"
       }
     },
     {
@@ -57,19 +62,21 @@
       }
     },
     {
+      "tool": "slice",
+      "bind": "bounded",
+      "inputs": {
+        "items": { "$ref": "flat.items" },
+        "limit": { "$param": "max_places" }
+      }
+    },
+    {
       "tool": "map",
       "bind": "shaped",
       "inputs": {
-        "items": { "$ref": "flat.items" },
-        "keep": ["place_id", "name", "address", "phone", "lat", "lng", "maps_url"],
+        "items": { "$ref": "bounded.items" },
+        "keep": ["place_id", "name", "address", "phone", "lat", "lng", "maps_url", "country", "state", "city", "suburb"],
         "rename": { "websiteUri": "website_url" },
-        "derive": { "category": { "$param": "type" }, "status": "new" },
-        "extract": {
-          "country": "addressComponents[types~=country].longText",
-          "state": "addressComponents[types~=administrative_area_level_1].longText",
-          "city": "addressComponents[types~=locality].longText",
-          "suburb": "addressComponents[types~=sublocality].longText"
-        }
+        "derive": { "category": { "$param": "type" }, "status": "new" }
       }
     },
     {

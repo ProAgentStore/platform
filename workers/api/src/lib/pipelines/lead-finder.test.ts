@@ -17,12 +17,12 @@ import leadFinder from "./lead-finder.json" with { type: "json" };
 // The REAL pure step handlers — we route the transform steps to these so the logic is
 // genuinely tested, not faked.
 import { STEP_TOOLS } from "../steps.js";
-import { getPath } from "../connectors/http.js";
+import { applyResponseMap, getPath } from "../connectors/http.js";
 
 // Mock the tool-registry boundary the runner (and the enrich step) dispatch through.
 // getRegistryTool must know every tool the JSON names (so validatePipeline passes);
 // runRegistryTool routes pure tools to their real handlers and stubs the I/O tools.
-const KNOWN = new Set(["geocode", "fan_out", "http_request", "flatten", "map", "enrich", "filter", "dedupe_upsert", "http_reachable"]);
+const KNOWN = new Set(["geocode", "fan_out", "http_request", "flatten", "slice", "map", "enrich", "filter", "dedupe_upsert", "http_reachable"]);
 
 // Captured sink writes so we can assert what landed in the `leads` collection.
 let upserted: Array<Record<string, unknown>> = [];
@@ -94,12 +94,49 @@ const BUSINESSES: Record<string, Array<Record<string, unknown>>> = {
 	],
 };
 
+/**
+ * A CAPITAL-CITY cell: `maxResultCount` (20) places, each with the full typed-component array
+ * Google returns for a real street address.
+ *
+ * The size is the point. 25 cells × 20 places is the grid's structural maximum and is what Sydney
+ * and Brisbane actually returned; Hobart and Launceston returned 83–116 places in total and are
+ * the only shape the earlier fixture covered.
+ */
+function bigCityPlaces(cell: number): Array<Record<string, unknown>> {
+	return Array.from({ length: 20 }, (_, n) => {
+		const i = cell * 20 + n;
+		return {
+			id: `ChIJ${String(i).padStart(4, "0")}wXwXwXwXwXwXwXwXwXwX`,
+			displayName: { text: `Corner Espresso ${i}`, languageCode: "en" },
+			formattedAddress: `${i} King Street, Newtown NSW 2042, Australia`,
+			nationalPhoneNumber: "(02) 9800 1111",
+			websiteUri: i % 3 === 0 ? undefined : `https://business-number-${i}.example.com.au`,
+			location: { latitude: -33.895112 + i * 1e-5, longitude: 151.179012 + i * 1e-5 },
+			googleMapsUri: `https://maps.google.com/?cid=${i}0000000000`,
+			addressComponents: [
+				{ longText: String(i), shortText: String(i), types: ["street_number"], languageCode: "en" },
+				{ longText: "King Street", shortText: "King St", types: ["route"], languageCode: "en" },
+				{ longText: "Newtown", shortText: "Newtown", types: ["locality", "political"], languageCode: "en" },
+				{ longText: "Marrickville", shortText: "Marrickville", types: ["sublocality_level_1", "sublocality", "political"], languageCode: "en" },
+				{ longText: "Inner West Council", shortText: "Inner West Council", types: ["administrative_area_level_2", "political"], languageCode: "en" },
+				{ longText: "New South Wales", shortText: "NSW", types: ["administrative_area_level_1", "political"], languageCode: "en" },
+				{ longText: "Australia", shortText: "AU", types: ["country", "political"], languageCode: "en" },
+				{ longText: "2042", shortText: "2042", types: ["postal_code"], languageCode: "en" },
+			],
+		};
+	});
+}
+
+/** When set, every grid cell returns a full page — the "city big enough to matter" case. */
+let bigCity = false;
+
 // Which cell (by grid index) returns which businesses. Everything else returns an empty page.
 // The grid in the JSON is extentKm 2 / stepKm 1 → 25 cells; we seed three of them.
 let cellCounter = 0;
 function placesForCell(_body: unknown): Array<Record<string, unknown>> {
 	// The runner calls http_request once per cell in grid order; seed the first three cells.
 	const idx = cellCounter++;
+	if (bigCity) return bigCityPlaces(idx);
 	if (idx === 0) return BUSINESSES.cellA;
 	if (idx === 1) return BUSINESSES.cellB;
 	if (idx === 2) return BUSINESSES.cellDup;
@@ -108,7 +145,7 @@ function placesForCell(_body: unknown): Array<Record<string, unknown>> {
 
 const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<string, unknown>) => {
 	// ── real pure / step transforms ────────────────────────────────────────
-	if (name === "map" || name === "filter" || name === "flatten" || name === "fan_out" || name === "enrich") {
+	if (name === "map" || name === "filter" || name === "flatten" || name === "fan_out" || name === "enrich" || name === "slice") {
 		const r = await realHandler(name)(ctx as never, input);
 		return { name, content: r.content, success: r.success };
 	}
@@ -117,20 +154,13 @@ const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<s
 		return { name, content: JSON.stringify({ lat: -33.8915, lng: 151.1795, country: "Australia", state: "New South Wales", locality: "Newtown", formatted: "Newtown NSW 2042, Australia" }), success: true };
 	}
 	if (name === "http_request") {
-		// Per-cell Places searchNearby, AFTER the pipeline's responseMap projection. Each cell
-		// returns its slice of businesses (as {status,data:[…]} — the http_request envelope).
-		const projected = placesForCell(input.body).map((p) => ({
-			place_id: p.id,
-			name: (p.displayName as { text: string }).text,
-			address: p.formattedAddress,
-			phone: p.nationalPhoneNumber ?? null,
-			websiteUri: p.websiteUri ?? null,
-			lat: (p.location as { latitude: number }).latitude,
-			lng: (p.location as { longitude: number }).longitude,
-			maps_url: p.googleMapsUri,
-			addressComponents: p.addressComponents, // raw Google typed-component array (#116)
-		}));
-		return { name, content: JSON.stringify({ status: 200, data: projected }), success: true };
+		// Per-cell Places searchNearby. The mock returns Google's RAW body and runs the
+		// definition's own `responseMap` over it through the real connector grammar — the
+		// projection is the thing under test, not something the test restates. A hand-written
+		// projection here is why the payload the definition really carries between steps went
+		// unmeasured until it overflowed the 1MiB Workflow step limit on a large city.
+		const raw = { places: placesForCell(input.body) };
+		return { name, content: JSON.stringify({ status: 200, data: applyResponseMap(raw, String(input.responseMap ?? "")) }), success: true };
 	}
 	if (name === "http_reachable") {
 		const url = String(input.url ?? "");
@@ -159,7 +189,8 @@ vi.mock("../tool-registry.js", () => ({
 }));
 
 // Import AFTER the mock so pipeline.ts + steps.ts bind the mocked runRegistryTool.
-import { attachAudit, auditStepEntry, executePipelineStep, stepBind, validatePipeline, resolveInputValue, type PipelineDef, type StepResult, type AuditEntry } from "../pipeline.js";
+import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, declaredParamDefaults, executePipelineStep, stepBind, validatePipeline, resolveInputValue, type PipelineDef, type StepResult, type AuditEntry } from "../pipeline.js";
+import { paramsWithDefaults } from "../instance-settings.js";
 import type { Env } from "../../types.js";
 
 /**
@@ -181,22 +212,29 @@ beforeEach(() => {
 	runRegistryTool.mockClear();
 	upserted = [];
 	cellCounter = 0;
+	bigCity = false;
 });
 
 // Drive the full JSON pipeline through the real runner, step by step, exactly as the durable
-// runner (workflows/pipeline-run.ts) does. Returns the outputs map + the audit trail.
-async function drivePipeline(def: PipelineDef) {
+// runner (workflows/pipeline-run.ts) does — including `capStepOutput`, which is what turns an
+// oversized step into a failure, and the declared param defaults the kick path applies. Returns
+// the outputs map + the audit trail + the per-step coverage notices.
+async function drivePipeline(def: PipelineDef, extraParams: Record<string, unknown> = {}) {
 	const outputs: Record<string, unknown> = {};
 	const trail: AuditEntry[] = [];
 	const results: StepResult[] = [];
+	const shortfalls: string[] = [];
+	const runParams = paramsWithDefaults(declaredParamDefaults(def), {}, { ...params, ...extraParams });
 	for (let i = 0; i < def.steps.length; i++) {
 		const step = def.steps[i];
-		const r = await executePipelineStep(ctx, step, i, outputs, params);
+		const r = capStepOutput(await executePipelineStep(ctx, step, i, outputs, runParams), step.tool, i);
 		results.push(r);
 		outputs[stepBind(step, i)] = r.output;
 		trail.push(auditStepEntry(step, i, r));
+		const note = coverageShortfall(step.tool, r.output);
+		if (note) shortfalls.push(note);
 	}
-	return { outputs, trail, results };
+	return { outputs, trail, results, shortfalls };
 }
 
 describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () => {
@@ -204,18 +242,27 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		expect(validatePipeline(leadFinder)).toBeNull();
 	});
 
-	it("declares the epic's params (city, type, radius) and sinks into `leads`", () => {
+	it("declares the epic's params (city, type, radius) + a bound, and sinks into `leads`", () => {
 		const def = leadFinder as unknown as PipelineDef;
-		expect(Object.keys(def.params ?? {}).sort()).toEqual(["city", "radius", "type"]);
+		expect(Object.keys(def.params ?? {}).sort()).toEqual(["city", "max_places", "radius", "type"]);
+		// The bound carries its own default. A `slice` whose limit is an unsupplied `$param`
+		// resolves to undefined, and an absent limit KEEPS EVERYTHING — so without this the one
+		// step that bounds the sweep stops bounding it whenever the caller omits the param.
+		expect(def.params?.max_places.default).toBe(300);
 		expect(def.sink?.collection).toBe("leads");
 		expect(def.sink?.keyField).toBe("place_id");
 	});
 
-	it("uses the full-sweep step chain (geocode→fan_out→http_request/forEach→flatten→map→enrich→filter→dedupe)", () => {
+	it("uses the full-sweep step chain (geocode→fan_out→http_request/forEach→flatten→slice→map→enrich→filter→dedupe)", () => {
 		const def = leadFinder as unknown as PipelineDef;
 		expect(def.steps.map((s) => s.tool)).toEqual([
-			"geocode", "fan_out", "http_request", "flatten", "map", "enrich", "map", "filter", "dedupe_upsert",
+			"geocode", "fan_out", "http_request", "flatten", "slice", "map", "enrich", "map", "filter", "dedupe_upsert",
 		]);
+		// The bound sits BEFORE `enrich`, the only per-item connector call in the chain: capping
+		// after it would bound the payload while leaving the spend (one HTTP probe per place)
+		// unbounded, which is the other half of what `slice` exists for.
+		const tools = def.steps.map((s) => s.tool);
+		expect(tools.indexOf("slice")).toBeLessThan(tools.indexOf("enrich"));
 		// the Places request runs once PER grid cell (forEach over grid.cells).
 		const places = def.steps.find((s) => s.tool === "http_request")!;
 		expect(places.forEach).toEqual({ $ref: "grid.cells" });
@@ -237,6 +284,10 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		const flat = (outputs.flat as { items: unknown[] }).items;
 		// 3 distinct businesses across cells + 1 duplicate (Corner Espresso re-seen) = 4 records.
 		expect(flat.length).toBe(4);
+		// A small city is well under the cap, so the bound passes everything through and reports
+		// nothing dropped — the cap must not turn into a quiet 300-record ceiling on every sweep.
+		expect((outputs.bounded as { items: unknown[]; dropped: number }).items.length).toBe(4);
+		expect((outputs.bounded as { dropped: number }).dropped).toBe(0);
 
 		// map: geo fields populated from Google's typed addressComponents (the #116 fix).
 		const shaped = (outputs.shaped as { items: Array<Record<string, unknown>> }).items;
@@ -339,7 +390,7 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		expect(rows(enriched.items).find((x) => x.place_id === "b")?.reachable).toMatchObject({ ok: false });
 	});
 
-	it("GAP #4 CLOSED (addressComponents type-select, #116): map populates geo from Google's typed array", async () => {
+	it("GAP #4 CLOSED (addressComponents type-select, #116): the type-predicate populates geo from Google's typed array", async () => {
 		const ac = BUSINESSES.cellA[0].addressComponents;
 		// type-predicate getPath selects the element whose types[] contains the token.
 		expect(getPath(ac, "[types~=locality].longText")).toBeUndefined(); // needs a named array field
@@ -356,5 +407,72 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		expect(shaped.items[0].city).toBe("Newtown");
 		expect(shaped.items[0].state).toBe("New South Wales");
 		expect(shaped.items[0].country).toBe("Australia");
+	});
+});
+
+// ── A CITY BIG ENOUGH TO MATTER (#394) ──────────────────────────────────────────
+// Three production runs of this pipeline died on Sydney and Brisbane with
+// `WorkflowInternalError: Step s3-flatten-1 output is too large. Maximum allowed size is 1MiB.`
+// Every run that completed afterwards was Hobart or Launceston — 83–116 places — which is the
+// only size the fixture above covers, so the suite stayed green through all three crashes.
+describe("lead-finder on a full grid (the 1MiB step-output ceiling)", () => {
+	it("completes a 25-cell × 20-place sweep without any step exceeding the journal limit", async () => {
+		bigCity = true;
+		const def = leadFinder as unknown as PipelineDef;
+		const { outputs, results } = await drivePipeline(def);
+
+		// `capStepOutput` is the runner's own guard: an over-limit step comes back failed with the
+		// "over the 1MiB per-step limit" message instead of its data. Nothing may trip it.
+		const capped = results.filter((r) => !r.success);
+		expect(capped.map((r) => r.content)).toEqual([]);
+
+		// The grid really did return its structural maximum — this is not a small city in disguise.
+		expect((outputs.flat as { items: unknown[] }).items.length).toBe(500);
+		// …and the sweep reached the sink, which is what "crashes on any city big enough to
+		// matter" cost: nothing at all was stored, not even a partial sweep.
+		expect(upserted.length).toBeGreaterThan(0);
+	});
+
+	it("carries the geo fields WITHOUT Google's raw addressComponents crossing a step boundary", async () => {
+		// The payload driver, measured: at 500 places the raw typed-component arrays are ~73% of
+		// the bytes, which is the whole difference between a 1.46MB flatten output and a 0.46MB
+		// one. Projecting them to four strings in the connector's `responseMap` is what keeps the
+		// records small, and it happens before the data is ever journaled.
+		bigCity = true;
+		const def = leadFinder as unknown as PipelineDef;
+		const { outputs } = await drivePipeline(def);
+		const flat = (outputs.flat as { items: Array<Record<string, unknown>> }).items;
+		expect(flat[0].addressComponents).toBeUndefined();
+		expect(flat[0]).toMatchObject({ country: "Australia", state: "New South Wales", city: "Newtown", suburb: "Marrickville" });
+		// The bytes, asserted rather than inferred — this is the number that was over the line.
+		const bytes = new TextEncoder().encode(JSON.stringify({ items: flat, count: flat.length }, null, 2)).length;
+		expect(bytes).toBeLessThan(900_000);
+	});
+
+	it("caps the sweep at max_places and SAYS how many it left, rather than dropping them quietly", async () => {
+		bigCity = true;
+		const def = leadFinder as unknown as PipelineDef;
+		const { outputs, shortfalls } = await drivePipeline(def, { max_places: 120 });
+
+		const bounded = outputs.bounded as { items: unknown[]; count: number; dropped: number };
+		expect(bounded.items.length).toBe(120);
+		expect(bounded.dropped).toBe(380);
+		// A bound that silently keeps the first N is the same defect as the crash it replaces: the
+		// run closes "completed" with tidy counts over a city it only partly looked at.
+		expect(shortfalls).toEqual(["slice examined 120 of 500 record(s) — 380 were left unexamined by the cap. Raise the cap, or narrow the search, if you need the rest."]);
+		// The cap is the ONLY thing bounding the per-item reachability probes, so it must bind
+		// before them: 120 places in, 120 probes, not 500.
+		const probes = runRegistryTool.mock.calls.filter((c) => c[0] === "http_reachable");
+		expect(probes.length).toBeLessThanOrEqual(120);
+	});
+
+	it("applies the declared default when nobody passes a cap", async () => {
+		// The live wiring passes {city, type, radius} and nothing else — an unsupplied `$param`
+		// resolves to undefined, and `slice` treats an absent limit as "keep everything".
+		bigCity = true;
+		const def = leadFinder as unknown as PipelineDef;
+		const { outputs, shortfalls } = await drivePipeline(def);
+		expect((outputs.bounded as { items: unknown[] }).items.length).toBe(300);
+		expect(shortfalls[0]).toMatch(/examined 300 of 500/);
 	});
 });

@@ -115,6 +115,50 @@ describe("startPipelineRun — the declared-tools gate", () => {
 	});
 });
 
+// ── The params a run actually walks with ────────────────────────────────────────
+describe("startPipelineRun — caller > subscriber setting > declared default", () => {
+	const CAPPED = {
+		name: "leads",
+		params: { city: { type: "string" }, max_places: { type: "number", default: 300 } },
+		steps: [{ tool: "slice", inputs: { limit: { $param: "max_places" } } }],
+	};
+	const SETTINGS_SCHEMA = [{ id: "max_places", label: "Places per sweep", type: "number" }];
+	const kicked = (create: { mock: { calls: unknown[][] } }) => (create.mock.calls[0][0] as { params: { params: Record<string, unknown> } }).params.params;
+
+	it("fills an unsupplied param from the definition's default", async () => {
+		// The live wiring passes {city, type, radius} and nothing else. Without this the `slice`
+		// limit resolves to undefined, `slice` keeps everything, and the sweep is unbounded again.
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: CAPPED } }, create);
+		await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger");
+		expect(kicked(create)).toEqual({ city: "Sydney", max_places: 300 });
+	});
+
+	it("lets the subscriber's setting of the same name override the default", async () => {
+		// The point of putting the knob in settingsSchema: before this, settings reached the chat
+		// prompt only, so an agent whose behaviour IS its pipelines had a Settings card that
+		// changed nothing about what those pipelines did.
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: CAPPED }, settings: { max_places: 120 } }, create, { settingsSchema: SETTINGS_SCHEMA });
+		await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger");
+		expect(kicked(create)).toEqual({ city: "Sydney", max_places: 120 });
+	});
+
+	it("still lets an explicit argument win over both", async () => {
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: CAPPED }, settings: { max_places: 120 } }, create, { settingsSchema: SETTINGS_SCHEMA });
+		await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney", max_places: 40 }, "chat");
+		expect(kicked(create)).toEqual({ city: "Sydney", max_places: 40 });
+	});
+
+	it("leaves a definition without defaults, on an agent without settings, exactly as it was", async () => {
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: PIPE } }, create);
+		await startPipelineRun(env, "i1", "u1", "leads", { city: "Hobart" }, "api");
+		expect(kicked(create)).toEqual({ city: "Hobart" });
+	});
+});
+
 // ── #382 ────────────────────────────────────────────────────────────────────────
 describe("startPipelineRun — one delegation pool per run", () => {
 	it("opens ONE pool for a definition that delegates, and hands it to every step", async () => {

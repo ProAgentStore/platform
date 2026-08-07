@@ -39,6 +39,30 @@ export function resolveSettingsValues(
 }
 
 /**
+ * The run params a pipeline should actually see (#394): an explicit argument wins, then the
+ * subscriber's setting of the same id, then the definition's declared default.
+ *
+ * Settings reach a pipeline at all because a knob the console renders must be the knob the run
+ * obeys. Before this they reached only the chat prompt, so an agent whose behaviour IS its pipelines
+ * had a Settings card that changed nothing about what its pipelines did — the subscriber's only
+ * real lever was editing the trigger's `config.params` by hand, which the console does not offer.
+ * A setting id therefore addresses a param BY NAME, exactly.
+ *
+ * A caller's `undefined` is treated as "not supplied" rather than "set to nothing": a trigger that
+ * builds its params object with an optional key present-but-undefined would otherwise shadow the
+ * default and un-bound the very step the default exists to bound.
+ */
+export function paramsWithDefaults(
+	declared: Record<string, unknown>,
+	settings: Record<string, SettingsValue>,
+	params: Record<string, unknown>,
+): Record<string, unknown> {
+	const supplied: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(params)) if (v !== undefined) supplied[k] = v;
+	return { ...declared, ...settings, ...supplied };
+}
+
+/**
  * Apply a subscriber patch over the currently stored values. Only known field ids
  * whose value type-checks are kept (text capped at 500 chars). Returns the next
  * stored map, plus — when a `voiceLanguage` field was set in THIS patch — the
