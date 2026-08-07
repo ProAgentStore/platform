@@ -110,7 +110,7 @@ export function resolveVoiceStatus(input: {
 }
 
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
-export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit" | "next";
+export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit" | "next" | "scrap";
 
 /** Per-instance overrides for the command keywords (Settings → Voice). Empty/absent =
  *  use the built-in defaults for repeat/mute/unmute/exit/next; stop-words are OFF unless configured. */
@@ -125,6 +125,8 @@ export interface VoiceCommandWords {
 	exit?: string[];
 	/** Phrases that move you to the next agent asking for you (#277). */
 	next?: string[];
+	/** Phrases that scrap the last turn (#342). Whole-utterance ONLY — see SCRAP_BY_LANG. */
+	scrap?: string[];
 }
 
 /** "Unmute" phrasings per language. The mirror of MUTE_BY_LANG — matched ONLY while muted
@@ -209,6 +211,52 @@ const NEXT_BY_LANG: Record<string, string[]> = {
 	ja: ["次", "エージェント切り替え"],
 	ko: ["다음", "에이전트 전환"],
 	hi: ["अगला", "एजेंट बदलो"],
+};
+
+/**
+ * "Scrap the last turn" phrasings per language (#342) — the FIRST destructive command in this
+ * vocabulary, and matched by a stricter rule than any of them.
+ *
+ * ── Why the usual multi-word rule is wrong here
+ *
+ * `phraseMatchesTranscript` lets a MULTI-word phrase match as a whole-word run anywhere in an
+ * utterance, on the reasoning that two words together are distinctive enough not to hijack normal
+ * speech. That reasoning does not survive this word list. Both of these are ordinary sentences:
+ *
+ *     "don't scrap that, keep it"          → contains "scrap that"
+ *     "scrap that idea and let's move on"  → contains "scrap that"
+ *
+ * The first is the user REFUSING the action and would perform it; the second is talking about a
+ * plan and would delete the plan. Every other command in this file is recoverable — mute, unmute,
+ * repeat, switch agent — so a false positive costs a moment's confusion. This one destroys a
+ * message. So `matchVoiceCommand` matches scrap with `{ whole: true }`: the ENTIRE utterance must
+ * be the phrase, the same precision the single-word rule already gives "mute" and "stop", applied
+ * regardless of word count. "Scrap that." fires; the two sentences above stay messages, as does
+ * "we should scrap that approach".
+ *
+ * ── What is deliberately NOT in the English list
+ *
+ * Bare "delete that". A subscriber talking to the Coder says exactly that about a file, and the
+ * whole-utterance rule cannot tell the two apart — it is the one phrase here whose most likely
+ * meaning is something else entirely. "delete that message" and "delete last message" say which
+ * object they mean, so they stay. "ignore that" / "disregard that" stay too: as a complete
+ * utterance they already mean "do not act on what I just said", which IS this command.
+ *
+ * Lists are short and every entry is multi-word by choice. A bare word would be legal under the
+ * whole-utterance rule, but a one-syllable slip of the recogniser should not be able to reach a
+ * destructive action at all — and none of these languages needs one to say it naturally.
+ */
+const SCRAP_BY_LANG: Record<string, string[]> = {
+	en: ["scrap that", "scrap last message", "scrap the last message", "scratch that", "disregard that", "ignore that", "forget that", "delete that message", "delete last message", "delete the last message"],
+	es: ["descarta eso", "olvida eso", "ignora eso", "borra el último mensaje"],
+	fr: ["oublie ça", "annule ça", "ignore ça", "supprime le dernier message"],
+	de: ["vergiss das", "streich das", "ignorier das", "letzte nachricht löschen"],
+	it: ["dimentica questo", "ignora questo", "cancella l'ultimo messaggio"],
+	pt: ["esquece isso", "ignora isso", "apaga a última mensagem"],
+	zh: ["取消这条", "删掉这条", "忽略这条", "刚才那句不算"],
+	ja: ["今のなし", "取り消して", "今のは無視して"],
+	ko: ["방금 취소", "방금 건 취소", "무시해 줘"],
+	hi: ["इसे हटाओ", "भूल जाओ"],
 };
 
 /** "Mute" phrasings per language (2-letter code). Whole-utterance only. English is the
@@ -302,11 +350,16 @@ function escapeRegExp(s: string): string {
  *    and it's what makes a two-word wake/mute phrase usable in a longer utterance.
  * "mute mute" is ONE two-word phrase (space-preserved by the delimiter parse), so "mute" alone
  * — only half the phrase — does NOT match.
+ *
+ * `opts.whole` forces the single-word rule onto a phrase of ANY length: the utterance must BE the
+ * phrase. Used by the destructive `scrap` command (#342), where the substring reading would fire
+ * on "don't scrap that, keep it" — see SCRAP_BY_LANG.
  */
-export function phraseMatchesTranscript(normalizedTranscript: string, phrase: string): boolean {
+export function phraseMatchesTranscript(normalizedTranscript: string, phrase: string, opts?: { whole?: boolean }): boolean {
 	const p = normalizeTranscript(phrase);
 	if (!p) return false;
 	if (normalizedTranscript === p) return true;
+	if (opts?.whole) return false; // whole-utterance only, regardless of word count
 	if (!p.includes(" ")) return false; // single word → whole-utterance only
 	return new RegExp(`(?:^| )${escapeRegExp(p)}(?: |$)`).test(normalizedTranscript);
 }
@@ -324,13 +377,13 @@ export function matchVoiceCommand(
 	text: string,
 	words?: VoiceCommandWords,
 	lang?: string,
-	state?: { muted?: boolean; canSwitch?: boolean },
+	state?: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean },
 ): VoiceCommand | null {
 	const t = normalizeTranscript(text);
 	const l = langKey(lang);
 	const pick = (custom: string[] | undefined, table: Record<string, string[]>) =>
 		custom?.length ? custom : (table[l] ?? table.en);
-	const hit = (phrases: string[]) => phrases.some((p) => phraseMatchesTranscript(t, p));
+	const hit = (phrases: string[], opts?: { whole?: boolean }) => phrases.some((p) => phraseMatchesTranscript(t, p, opts));
 	// "next" is a command ONLY where something can act on it (#277). The voice stack has no
 	// idea what an agent roster is, so the consumer opting in — by passing a handler — is what
 	// turns the word on. Everywhere else ("next" said to the Coder's Co-pilot, which has no
@@ -357,6 +410,14 @@ export function matchVoiceCommand(
 	// word ("say unmute to turn the mic back on") rather than commanding it.
 	if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
 	if (canSwitch && hit(pick(words?.next, NEXT_BY_LANG))) return "next";
+	// "scrap" (#342). Gated on `canScrap` for the same two reasons `next` is gated on `canSwitch`,
+	// and one more. (1) A surface with no delete path — the Coder's Co-pilot — must leave the word
+	// as ordinary speech rather than swallow it. (2) The consumer passing a handler is what turns
+	// it on, so nothing here has to know what a transcript is. (3) It is the flag the caller drops
+	// on INTERIM transcripts: a partial of "scrap that idea and let's move on" is momentarily
+	// exactly "scrap that", so a destructive command must only ever be judged on a FINAL utterance,
+	// where the whole-utterance rule below can actually see the whole utterance.
+	if (state?.canScrap && hit(pick(words?.scrap, SCRAP_BY_LANG), { whole: true })) return "scrap";
 	if (hit(pick(words?.repeat, REPEAT_BY_LANG))) return "repeat";
 	if (hit(pick(words?.mute, MUTE_BY_LANG))) return "mute";
 	return null;
@@ -461,6 +522,7 @@ export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords,
 		unmute: UNMUTE_BY_LANG,
 		exit: EXIT_BY_LANG,
 		next: NEXT_BY_LANG,
+		scrap: SCRAP_BY_LANG,
 	};
 	const table = TABLES[command];
 	const custom = words?.[command];
@@ -477,6 +539,11 @@ export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords,
  *
  * Returns the command (if any) and the message with the command phrase removed. A turn that
  * IS the command yields an empty message, so nothing is sent.
+ *
+ * `scrap` (#342) is deliberately ABSENT from the candidate list. It matches whole-utterance only,
+ * so there is never a message half to keep — and the trailing form is precisely the dangerous one:
+ * "let's rewrite the parser, scrap that" would delete the previous exchange AND send a truncated
+ * request. Callers check for it separately, on a final turn, before reaching here.
  */
 export function splitTrailingCommand(
 	text: string,

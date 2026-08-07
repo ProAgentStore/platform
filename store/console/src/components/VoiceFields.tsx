@@ -42,6 +42,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 	const [unmuteWords, setUnmuteWords] = useState("");
 	const [exitWords, setExitWords] = useState("");
 	const [nextWords, setNextWords] = useState("");
+	const [scrapWords, setScrapWords] = useState("");
 	const [stopWords, setStopWords] = useState("");
 	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
 	const [confirmLanguage, setConfirmLanguage] = useState(true);
@@ -69,6 +70,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 		setUnmuteWords(list(vs.unmuteWords));
 		setExitWords(list(vs.exitWords));
 		setNextWords(list(vs.nextWords));
+		setScrapWords(list(vs.scrapWords));
 		setStopWords(list(vs.stopWords));
 		setStopSpeechKeyword(typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword : "");
 		setConfirmLanguage(vs.confirmLanguage !== false);
@@ -315,6 +317,11 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					<span className="block text-xs font-semibold mb-0.5">Next-agent keywords</span>
 					<input value={nextWords} onChange={(e) => setNextWords(e.target.value)} onBlur={() => saveVoice({ nextWords })} placeholder="next, switch agent  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
 					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Moves you to the agent that's asking for you, and says which one out loud. Nothing waiting? It says so and stays put. A one-word keyword only fires when it's your whole sentence, so “what's next?” is still a message.</span>
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Scrap-turn keywords</span>
+					<input value={scrapWords} onChange={(e) => setScrapWords(e.target.value)} onBlur={() => saveVoice({ scrapWords })} placeholder="scrap that, scratch that  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Deletes your last exchange — your message, the reply and the tool log — after showing you what it's about to remove. The only destructive voice command, so it fires ONLY when the phrase is your entire sentence: “don't scrap that, keep it” stays a message. It can't undo what the turn already did, and says so.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>

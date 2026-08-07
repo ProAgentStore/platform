@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Trash2, Loader2 } from "lucide-react";
-import { api } from "@proagentstore/sdk/client";
 import type { ChatMessageLike } from "@proagentstore/sdk/ui";
 import { deleteTurnPrompt, turnEffectSummary, STOP_RUN_PROMPT } from "../lib/turnEffects";
+import { deleteTurnRequest } from "../lib/deleteTurn";
 
 /**
  * Delete ONE turn from the transcript (#342) — sibling of the copy button, same bubble corner.
@@ -48,11 +48,7 @@ export default function DeleteTurnButton({
 		if (!confirm(deleteTurnPrompt(turnEffectSummary(messages, message.id)))) return;
 		setBusy(true);
 		try {
-			const res = await api<{ ids?: string[] }>(
-				`/v1/instances/${instanceId}/messages/${encodeURIComponent(message.id)}`,
-				{ method: "DELETE" },
-			);
-			onDeleted(res.ids?.length ? res.ids : [message.id]);
+			onDeleted(await deleteTurnRequest(instanceId, message.id));
 			if (runActive && onStopRun && confirm(STOP_RUN_PROMPT)) onStopRun();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));

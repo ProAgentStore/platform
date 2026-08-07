@@ -625,3 +625,76 @@ describe('splitTrailingCommand — "next" (#277)', () => {
 		expect(r.text).toBe("deploy the worker, switch agent");
 	});
 });
+
+describe('matchVoiceCommand — "scrap" (#342: the first DESTRUCTIVE command in the vocabulary)', () => {
+	const CAN = { canScrap: true };
+
+	it("fires when the utterance IS the phrase", () => {
+		expect(matchVoiceCommand("scrap that", undefined, "en", CAN)).toBe("scrap");
+		expect(matchVoiceCommand("Scrap that.", undefined, "en", CAN)).toBe("scrap");
+		expect(matchVoiceCommand("scratch that", undefined, "en", CAN)).toBe("scrap");
+		expect(matchVoiceCommand("delete last message", undefined, "en", CAN)).toBe("scrap");
+	});
+
+	// Whisper renders an emphatic pair as a hyphenated compound sometimes — the #334 near-miss.
+	// The shared normaliser spaces punctuation in every script, so this holds by construction; the
+	// test pins it, because a destructive command cannot afford intermittency.
+	it("survives the punctuation the user cannot see or control", () => {
+		expect(matchVoiceCommand("scrap-that", undefined, "en", CAN)).toBe("scrap");
+		expect(matchVoiceCommand("  SCRAP   THAT!!  ", undefined, "en", CAN)).toBe("scrap");
+	});
+
+	// THE reason this command does not use the ordinary multi-word rule. A multi-word phrase
+	// normally matches as a whole-word run anywhere in an utterance; both of these contain
+	// "scrap that", and the first is the user explicitly REFUSING the action.
+	it("does not fire inside a sentence that merely contains the phrase", () => {
+		expect(matchVoiceCommand("don't scrap that, keep it", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("scrap that idea and let's move on", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("we should scrap that approach", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("ignore that warning for now", undefined, "en", CAN)).toBeNull();
+	});
+
+	// A subscriber says this to the Coder about a file constantly, and the whole-utterance rule
+	// cannot tell the two readings apart — so the bare form is not in the table at all.
+	it('bare "delete that" is left alone — its likeliest meaning is a file, not a turn', () => {
+		expect(matchVoiceCommand("delete that", undefined, "en", CAN)).toBeNull();
+	});
+
+	// The gate. A surface with no delete path passes the words through as speech, and the same
+	// flag is what callers drop on INTERIM transcripts so a partial can never fire a delete.
+	it("is inert unless the consumer opted in", () => {
+		expect(matchVoiceCommand("scrap that", undefined, "en")).toBeNull();
+		expect(matchVoiceCommand("scrap that", undefined, "en", { canScrap: false })).toBeNull();
+	});
+
+	// Muted means the mic is closed; the always-on control listener still runs, and a destructive
+	// command reached through it would act on audio the user believes is not being heard.
+	it("does not fire while muted", () => {
+		expect(matchVoiceCommand("scrap that", undefined, "en", { muted: true, canScrap: true })).toBeNull();
+	});
+
+	it("respects the per-language table and custom overrides", () => {
+		expect(matchVoiceCommand("取消这条", undefined, "zh", CAN)).toBe("scrap");
+		expect(matchVoiceCommand("scrap that", undefined, "zh", CAN)).toBeNull();
+		expect(matchVoiceCommand("bin it", { scrap: ["bin it"] }, "en", CAN)).toBe("scrap");
+		expect(matchVoiceCommand("scrap that", { scrap: ["bin it"] }, "en", CAN)).toBeNull();
+	});
+
+	it("does not disturb the existing vocabulary", () => {
+		expect(matchVoiceCommand("repeat", undefined, "en", CAN)).toBe("repeat");
+		expect(matchVoiceCommand("mute", undefined, "en", CAN)).toBe("mute");
+		expect(matchVoiceCommand("exit voice", undefined, "en", CAN)).toBe("exit");
+		expect(matchVoiceCommand("wake up", undefined, "en", { muted: true, canScrap: true })).toBe("unmute");
+	});
+});
+
+describe('splitTrailingCommand — "scrap" is deliberately not a candidate (#342)', () => {
+	// The trailing form is the dangerous one: acting on it would delete the previous exchange AND
+	// send a truncated request. A whole-utterance command has no message half to keep, so the
+	// splitter never learns the word and these stay ordinary speech.
+	it("leaves a trailing scrap phrase in the message", () => {
+		const r = splitTrailingCommand("let's rewrite the parser, scrap that", undefined, "en", { canSwitch: true });
+		expect(r.command).toBeNull();
+		expect(r.text).toBe("let's rewrite the parser, scrap that");
+	});
+});

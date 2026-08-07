@@ -96,7 +96,14 @@ const PINS = {
 	// "stop" silences the agent immediately rather than after the teardown await. Raised rather than
 	// split — all three are one expression each at a call site that must stay where it is; the
 	// decisions themselves are pure and live in gate.ts, audio.ts/prompt.ts and convo.ts.
-	"packages/sdk/src/voice/use-voice.ts": 1550,
+	// +58 for #342 ("scrap that"), and most of that is prose rather than logic. The code is one
+	// option, two refs, one words ref threaded through the five existing matcher call sites, and
+	// two dispatch branches. The rest says WHY three of those five call sites deliberately
+	// withhold the flag that enables the command: they judge INTERIM transcripts, and a partial of
+	// "scrap that idea and let's move on" is momentarily exactly "scrap that". That reasoning has
+	// to live at each site it constrains — a reader deleting the "missing" branch is the failure —
+	// and the matching rule it depends on is pure and lives in convo.ts.
+	"packages/sdk/src/voice/use-voice.ts": 1608,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -110,7 +117,11 @@ const PINS = {
 	// split — the button, its confirmation and its request live in components/DeleteTurnButton.tsx,
 	// and what a turn DID (the sentence the confirmation is really for) is pure and lives in
 	// lib/turnEffects.ts, which is where a split would have put them anyway.
-	"store/console/src/pages/InstanceDetail.tsx": 1263,
+	// +13 more for the voice half of #342: the `onScrap` option and the ref indirection it needs
+	// (the handler wants the thread and the delete callback, both defined below the useVoice call
+	// — the same shape `voiceRef` already uses here). The staging, the last-turn rule and the
+	// quoted confirmation live in lib/deleteTurn.ts + lib/turnEffects.ts.
+	"store/console/src/pages/InstanceDetail.tsx": 1276,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

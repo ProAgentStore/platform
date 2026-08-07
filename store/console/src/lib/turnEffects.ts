@@ -60,3 +60,19 @@ export function deleteTurnPrompt(effects: string | null): string {
 /** Asked only when a run is still going: the transcript is gone, the work is not. */
 export const STOP_RUN_PROMPT =
 	"That turn is deleted, but a run is still going. Stop it too?";
+
+/**
+ * The confirmation for the VOICE trigger ("scrap that", #342), which differs from the button's in
+ * one way that carries all the safety: it QUOTES the turn.
+ *
+ * The button is aimed — the user pointed at a bubble, so the dialog only has to ask. The voice
+ * command is aimed by the same unreliable channel that produced the problem it is fixing: #332 is
+ * standing evidence that silence transcribes into real-looking phrases, so "scrap that" can itself
+ * arrive as noise. Showing the words about to be destroyed is what turns a yes/no into a decision
+ * — and it is also the only way to catch the case where the command was heard correctly but landed
+ * on the wrong turn because a later one arrived first.
+ */
+export function scrapPreviewPrompt(said: string, effects: string | null): string {
+	const quoted = said.length > 240 ? `${said.slice(0, 240)}…` : said;
+	return `Scrap your last turn?\n\nYou said:\n“${quoted}”\n\n${deleteTurnPrompt(effects).replace(/^Delete this turn\?\n\n/, "")}`;
+}

@@ -77,6 +77,9 @@ export interface VoiceSettings {
 	exitWords: string[];
 	/** Phrases that move you to the agent asking for you (#277). */
 	nextWords: string[];
+	/** Phrases that scrap the last turn (#342). Whole-utterance only — a destructive command
+	 *  must not be reachable from the middle of a sentence. */
+	scrapWords: string[];
 	stopWords: string[];
 	stopSpeechKeyword: string;
 	confirmLanguage: boolean;
@@ -146,6 +149,7 @@ export function defaultVoiceSettings(): VoiceSettings {
 		unmuteWords: [],
 		exitWords: [],
 		nextWords: [],
+		scrapWords: [],
 		stopWords: [],
 		stopSpeechKeyword: "",
 		confirmLanguage: true,
@@ -190,6 +194,7 @@ export function sanitizeVoiceSettings(raw: unknown, base: VoiceSettings = defaul
 		unmuteWords: has("unmuteWords") ? parseVoiceWords(o.unmuteWords) : base.unmuteWords,
 		exitWords: has("exitWords") ? parseVoiceWords(o.exitWords) : base.exitWords,
 		nextWords: has("nextWords") ? parseVoiceWords(o.nextWords) : base.nextWords,
+		scrapWords: has("scrapWords") ? parseVoiceWords(o.scrapWords) : base.scrapWords,
 		stopWords: has("stopWords") ? parseVoiceWords(o.stopWords) : base.stopWords,
 		stopSpeechKeyword: typeof o.stopSpeechKeyword === "string" ? o.stopSpeechKeyword.trim().slice(0, 40) : base.stopSpeechKeyword,
 		confirmLanguage: has("confirmLanguage") ? o.confirmLanguage !== false : base.confirmLanguage,

@@ -23,6 +23,7 @@ import GlossedMessage from "../components/GlossedMessage";
 import SpokenMessage from "../components/SpokenMessage";
 import SystemMessage from "../components/SystemMessage";
 import DeleteTurnButton from "../components/DeleteTurnButton";
+import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 
 /**
@@ -186,8 +187,17 @@ function InstancePage() {
 
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
 	const doSendRef = useRef<(text: string, meta?: { audioKey?: string; dictation?: string }) => void>(() => {});
+	/** "scrap that" (#342). Same indirection as `voiceRef` below and for the same reason: the
+	 *  handler needs the thread and the delete callback, both defined further down. */
+	const scrapRef = useRef<() => void>(() => {});
 	const voice = useVoice(id, {
 		onSend: (text, meta) => doSendRef.current(text, meta),
+		/**
+		 * "scrap that" (#342) — the transcript surface is the only place that can delete a turn,
+		 * so passing this handler is what turns the word on here and leaves it ordinary speech
+		 * everywhere else. It STAGES: the confirmation quotes the turn before anything goes.
+		 */
+		onScrap: () => scrapRef.current(),
 		/**
 		 * "next" (#277) — move to the agent asking for you, without touching the screen.
 		 *
@@ -816,6 +826,9 @@ function InstancePage() {
 		const gone = new Set(ids);
 		setMessages((prev) => prev.filter((m) => !m.id || !gone.has(m.id)));
 	}, []);
+
+	// The voice trigger for the same delete: last turn only, quoted before it goes.
+	scrapRef.current = useScrapLastTurn({ instanceId: id, messagesRef, onDeleted: dropMessages });
 
 	const clearChat = async () => {
 		if (!id || !confirm("Clear all messages?")) return;
