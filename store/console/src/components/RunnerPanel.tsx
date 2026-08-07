@@ -176,6 +176,11 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 									</div>
 									<div className={`text-[0.7rem] mt-1 ${t.tone === "attached" ? "text-green" : t.tone === "online" ? "text-amber-500" : "text-muted-soft"}`}>{t.statusText}</div>
 									<div className="text-[0.7rem] text-muted-soft mt-0.5">{t.meta}</div>
+									{/* The names this machine used to answer to (#393). Shown rather than swallowed:
+									    pins, relay names and session rows are all still keyed by hostname, so this
+									    is what a stranded pin literally says — and it is how the user recognises
+									    their own laptop under last week's name. */}
+									{t.alsoKnownAs && <div className="text-[0.7rem] text-muted-soft mt-0.5 truncate">{t.alsoKnownAs}</div>}
 								</button>
 							);
 						})}

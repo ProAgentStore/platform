@@ -37,6 +37,8 @@ export interface NodeDetail {
 /** One of the user's machines, from `GET /v1/terminals/nodes`. */
 export interface Machine {
 	node: string;
+	/** Names this machine has also answered to, freshest first (#393). */
+	aka?: string[];
 	placement?: string;
 	runnerVersion?: string;
 	lastSeenAt?: string | null;
@@ -103,6 +105,8 @@ export interface MachineTile {
 	pinned: boolean;
 	/** "local · v0.3.3 · seen 4m ago" */
 	meta: string;
+	/** "also RLs-MacBook-Air.local", or "" when this machine has only ever had one name. */
+	alsoKnownAs: string;
 }
 
 /** One machine tile: the dot's tone, the phrase under it, and whether this agent is pinned there. */
@@ -113,8 +117,16 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string):
 		node: m.node,
 		tone,
 		statusText: attached ? "Attached · online" : m.connected ? "Online · agent not attached" : "Offline",
-		pinned: runnerNode === m.node,
+		// Pinned to THIS MACHINE — under any name it has used. A pin left on a hostname the machine
+		// stopped using still routes here (`aliasNodesFor`), so testing the current name alone told
+		// the user their agent was pinned somewhere else while it was in fact running right here.
+		pinned: runnerNode === m.node || (m.aka || []).includes(runnerNode),
 		meta: `${m.placement === "managed" ? "cloud" : "local"}${m.runnerVersion ? ` · v${m.runnerVersion}` : ""} · seen ${agoShort(m.lastSeenAt)}`,
+		// Named rather than hidden: the pins, the relay and the session rows are all still keyed by
+		// hostname, so these strings are what a stranded pin literally says. Seeing them is how a
+		// user recognises their own laptop under last week's name instead of a machine they do not
+		// know — the fold is only trustworthy if what it folded stays visible.
+		alsoKnownAs: (m.aka || []).length ? `also ${(m.aka || []).join(" · ")}` : "",
 	};
 }
 

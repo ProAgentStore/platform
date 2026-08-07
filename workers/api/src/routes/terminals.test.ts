@@ -4,6 +4,7 @@ import { groupTerminalNodes } from "./terminals.js";
 const nodeRow = (over: Partial<Parameters<typeof groupTerminalNodes>[0][number]> = {}) => ({
 	instance_id: "i1", runner_node: "macbook", placement: "local", runner_version: "0.4.16",
 	status: "active", last_seen_at: "2026-07-14T10:00:00Z", updated_at: "2026-07-14T10:00:00Z",
+	machine_id: null,
 	instance_config: null, agent_name: "Coder", agent_slug: "coder", agent_category: null, agent_config: null, ...over,
 });
 const sessionRow = (over: Partial<Parameters<typeof groupTerminalNodes>[1][number]> = {}) => ({
@@ -85,5 +86,82 @@ describe("groupTerminalNodes", () => {
 
 	it("skips rows with an empty runner_node", () => {
 		expect(groupTerminalNodes([nodeRow({ runner_node: "" })], [])).toHaveLength(0);
+	});
+});
+
+describe("groupTerminalNodes — one machine, several names (#393)", () => {
+	// The reported screen: one laptop rendered as three machines, two of them permanently offline,
+	// because a registration is keyed by a hostname that moves under the machine (#379).
+	const renamed = [
+		nodeRow({ runner_node: "Mac", machine_id: "m-1", last_seen_at: "2026-08-08T09:00:00Z" }),
+		nodeRow({ runner_node: "RLs-MacBook-Air.local", machine_id: "m-1", last_seen_at: "2026-08-07T09:00:00Z" }),
+		nodeRow({ runner_node: "RLs-MacBook-Air", machine_id: "m-1", last_seen_at: "2026-07-16T22:00:00Z" }),
+	];
+
+	it("folds every name of one machine into a single entry, freshest name winning", () => {
+		const nodes = groupTerminalNodes(renamed, []);
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0].node).toBe("Mac");
+		expect(nodes[0].machineId).toBe("m-1");
+		expect(nodes[0].aka).toEqual(["RLs-MacBook-Air.local", "RLs-MacBook-Air"]);
+	});
+
+	it("takes the freshest name whatever order the rows arrive in", () => {
+		const nodes = groupTerminalNodes([...renamed].reverse(), []);
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0].node).toBe("Mac");
+		expect(nodes[0].aka).toContain("RLs-MacBook-Air.local");
+	});
+
+	it("keeps TWO machines apart even when their hostnames are identical", () => {
+		// The inverse hazard: identity is the id each machine persists, never the name. Two Macs
+		// must never merge just because DHCP called them the same thing.
+		const nodes = groupTerminalNodes([
+			nodeRow({ instance_id: "i1", runner_node: "Mac", machine_id: "m-1" }),
+			nodeRow({ instance_id: "i2", runner_node: "Mac", machine_id: "m-2" }),
+		], []);
+		expect(nodes).toHaveLength(2);
+		expect(nodes.map((n) => n.machineId).sort()).toEqual(["m-1", "m-2"]);
+	});
+
+	it("leaves rows with no machine id separate — without the proof they ARE separate", () => {
+		const nodes = groupTerminalNodes([
+			nodeRow({ runner_node: "Mac", machine_id: null }),
+			nodeRow({ runner_node: "RLs-MacBook-Air.local", machine_id: null }),
+		], []);
+		expect(nodes).toHaveLength(2);
+		expect(nodes.every((n) => n.machineId === null)).toBe(true);
+		expect(nodes.every((n) => n.aka.length === 0)).toBe(true);
+	});
+
+	it("gathers the sessions of every name onto the one machine", () => {
+		const nodes = groupTerminalNodes(renamed, [
+			sessionRow({ id: "s-new", runner_node: "Mac" }),
+			sessionRow({ id: "s-old", runner_node: "RLs-MacBook-Air.local" }),
+		]);
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0].sessions.map((s) => s.sessionId).sort()).toEqual(["s-new", "s-old"]);
+	});
+
+	it("marks an instance bound when it is pinned to an OLDER name of this machine", () => {
+		// The live defect this fixes: six instances pinned to a name the laptop stopped using still
+		// route here via aliasing, so rendering them as unbound contradicts what actually happens.
+		const cfg = JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" });
+		const nodes = groupTerminalNodes([
+			nodeRow({ instance_id: "i1", runner_node: "Mac", machine_id: "m-1", instance_config: cfg, last_seen_at: "2026-08-08T09:00:00Z" }),
+			nodeRow({ instance_id: "i1", runner_node: "RLs-MacBook-Air.local", machine_id: "m-1", instance_config: cfg, last_seen_at: "2026-08-07T09:00:00Z" }),
+		], []);
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0].instances).toHaveLength(1);
+		expect(nodes[0].instances[0].bound).toBe(true);
+	});
+
+	it("does not mark an instance bound to a DIFFERENT machine", () => {
+		const nodes = groupTerminalNodes([
+			nodeRow({ instance_id: "i1", runner_node: "Mac", machine_id: "m-1", instance_config: JSON.stringify({ runnerNode: "Sergeys-Mac-mini.local" }) }),
+			nodeRow({ instance_id: "i2", runner_node: "Sergeys-Mac-mini.local", machine_id: "m-2" }),
+		], []);
+		const mac = nodes.find((n) => n.node === "Mac");
+		expect(mac?.instances[0].bound).toBe(false);
 	});
 });

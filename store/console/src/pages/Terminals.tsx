@@ -10,7 +10,7 @@ import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
+interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -85,6 +85,9 @@ export default function Terminals() {
 									<div className="font-semibold text-sm flex items-center gap-2 flex-wrap">
 										<Terminal size={14} className="text-muted shrink-0" />
 										<span className="truncate">{n.node}</span>
+										{/* Last week's name for the same machine (#393) — the string a stranded pin
+										    still carries, so it is what makes the fold recognisable rather than magic. */}
+										{!!n.aka?.length && <span className="text-[0.7rem] text-muted-soft truncate shrink-0">also {n.aka.join(" · ")}</span>}
 										<span className={`text-[0.65rem] font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-green/15 text-green" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
 									</div>
 									<div className="text-xs text-muted-soft mt-0.5">
