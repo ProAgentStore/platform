@@ -587,3 +587,25 @@ instanceStorageRoutes.delete("/:id/messages", async (c) => {
 	await deleteVoiceAudio(c.env.STORAGE, session.uid, instance.id, audioKeys).catch(() => undefined);
 	return res;
 });
+
+/**
+ * Delete ONE turn (#342) — the exchange containing this message, not just the line pointed at.
+ *
+ * The same shape as the clear above, and deliberately so: ONE retention rule for a transcript and
+ * its recording, whether you drop the whole conversation or a single bad turn. The DO resolves the
+ * turn and returns the audio ids it removed; this deletes exactly those R2 objects. Anything that
+ * diverged here would leave orphaned recordings behind for the narrow path only, which is the kind
+ * of gap nobody notices until a bucket is full of audio for messages that no longer exist.
+ */
+instanceStorageRoutes.delete("/:id/messages/:messageId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const messageId = c.req.param("messageId");
+	const res = await proxyDO(c, instance.id, `/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+	const body = (await res.clone().json().catch(() => ({}))) as { audioKeys?: unknown };
+	const audioKeys = Array.isArray(body.audioKeys) ? body.audioKeys.filter((k): k is string => typeof k === "string") : [];
+	// Best-effort and AFTER the delete, as above: failing to reclaim bytes must not fail the
+	// user's delete, and a 404 from the DO carries no keys anyway.
+	await deleteVoiceAudio(c.env.STORAGE, session.uid, instance.id, audioKeys).catch(() => undefined);
+	return res;
+});

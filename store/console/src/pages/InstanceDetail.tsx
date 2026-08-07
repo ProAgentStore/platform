@@ -22,6 +22,7 @@ import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
 import SpokenMessage from "../components/SpokenMessage";
 import SystemMessage from "../components/SystemMessage";
+import DeleteTurnButton from "../components/DeleteTurnButton";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 
 /**
@@ -809,6 +810,13 @@ function InstancePage() {
 		}
 	};
 
+	/** Remove exactly the ids the server deleted (#342) — never a locally-recomputed span, so the
+	 *  thread can't diverge from the log if the two rules ever drift apart. */
+	const dropMessages = useCallback((ids: string[]) => {
+		const gone = new Set(ids);
+		setMessages((prev) => prev.filter((m) => !m.id || !gone.has(m.id)));
+	}, []);
+
 	const clearChat = async () => {
 		if (!id || !confirm("Clear all messages?")) return;
 		try {
@@ -1109,6 +1117,9 @@ function InstancePage() {
 										}`}
 									>
 										<CopyButton text={m.content} />
+										{/* #342: one turn, not one line — the server resolves the span and returns
+										    the ids it removed, and those are what leave the thread here. */}
+										{id && <DeleteTurnButton instanceId={id} message={m} messages={messages} runActive={loopOn} onStopRun={() => void stopLoop()} onDeleted={dropMessages} />}
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (

@@ -2270,6 +2270,58 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/messages/{messageId}:
+    delete:
+      summary: Delete one turn
+      description: |
+        Deletes the EXCHANGE containing this message — the user's message, the agent's reply and
+        the tool-log system message written with it — not the single line pointed at. An assistant
+        or tool message resolves back to the ask it answered; the span ends at the next user
+        message. The voice recording (`audioKey`) and the live dictation stored on each message go
+        with them, so a transcript and its audio have one retention rule whether you clear the
+        whole conversation or a single turn.
+
+        Deleting a turn does NOT undo what the turn did. Tool calls, memory writes, tickets and
+        runs it started all persist, and conversation summaries already computed over it are
+        aggregates that cannot be un-mixed. The deleted turn is absent from the model's context on
+        the next request, which is the point: a noise message stops shaping later replies.
+      operationId: deleteInstanceTurn
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: messageId
+          in: path
+          required: true
+          description: Any message in the turn — the user's, the reply, or the tool log.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Turn deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+                    description: How many messages the turn contained.
+                  ids:
+                    type: array
+                    description: The message ids actually removed — the server's span, not the caller's guess.
+                    items: { type: string }
+                  audioKeys:
+                    type: array
+                    description: The voice recordings removed alongside the transcripts.
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No message with that id in this instance's log (or the instance is not yours).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /v1/instances/{instanceId}/knowledge:
     get:
       summary: Get instance knowledge base

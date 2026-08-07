@@ -74,6 +74,7 @@ import {
 	type InflightTurn,
 } from "./lib/chat-inflight.js";
 import { MAX_TASKS, taskListPayload } from "./lib/agent-tasks.js";
+import { turnSpanFor } from "./lib/chat-turns.js";
 import { json } from "./lib/do-json.js";
 import { logError } from "./lib/error-log.js";
 import { platformAiBinding } from "./lib/platform-settings.js";
@@ -244,6 +245,8 @@ export class AgentDO extends DurableObject<Env> {
 				return this.handleGetMessages(url);
 			if (path === "/messages" && request.method === "DELETE")
 				return this.handleClearMessages();
+			if (path.startsWith("/messages/") && request.method === "DELETE")
+				return this.handleDeleteTurn(decodeURIComponent(path.slice("/messages/".length)));
 			if (path === "/system-message" && request.method === "POST") {
 				const { content } = await request.json<{ content: string }>();
 				if (content) {
@@ -785,6 +788,39 @@ export class AgentDO extends DurableObject<Env> {
 			await (await this.getStorageEngine(state.agentId)).clearConversationDerived().catch(() => undefined);
 		}
 		return json({ deleted: keys.length, audioKeys });
+	}
+
+	/**
+	 * Delete ONE turn (#342) — the exchange containing `messageId`, resolved by `turnSpanFor`.
+	 *
+	 * The same three things go together that Clear chat already ties together, and for the same
+	 * reason: the message record, the `audioKey` of its recording, and the `dictation` captured
+	 * beside it (#319). The dictation needs no handling at all — it is stored ON the message, so
+	 * it shares the transcript's lifetime by construction; that was the point of putting it there
+	 * rather than in a second store with a second retention rule to keep in step. The audio is the
+	 * one piece that lives elsewhere (R2, outside the DO), so its ids are RETURNED for the route to
+	 * delete — never a prefix sweep, which would take the Coder Co-pilot's recordings with it.
+	 *
+	 * What is NOT removed, deliberately: conversation summaries and the facts extracted from them.
+	 * Clear chat drops those wholesale because it is dropping everything; for one turn there is no
+	 * precise removal — a summary is an aggregate over twenty messages and cannot be un-mixed. The
+	 * console says so plainly in the confirmation rather than implying the turn is unmade, which is
+	 * the same honesty rule the deletion itself is for: an accurate record, not a flattering one.
+	 */
+	private async handleDeleteTurn(messageId: string): Promise<Response> {
+		if (!messageId) return json({ error: "message id required" }, 400);
+		const all = await this.ctx.storage.list<AgentMessage>({ prefix: "msg:" });
+		// `list` returns keys in lexicographic order and the key is `msg:{ISO createdAt}:{id}`,
+		// so this is already log order — the ordering `turnSpanFor` assumes.
+		const entries = [...all.entries()].map(([key, msg]) => ({ key, ...msg }));
+		const span = turnSpanFor(entries, messageId);
+		// An id that is not in the log resolves to nothing rather than to its neighbours.
+		if (!span.length) return json({ error: "Message not found" }, 404);
+		await this.ctx.storage.delete(span.map((m) => m.key));
+		const audioKeys = span
+			.map((m) => (m as { audioKey?: unknown }).audioKey)
+			.filter((k): k is string => typeof k === "string" && !!k);
+		return json({ deleted: span.length, ids: span.map((m) => m.id), audioKeys });
 	}
 
 	// ── Memory ─────────────────────────────────────────────────────────────────

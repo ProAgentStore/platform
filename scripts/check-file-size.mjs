@@ -105,7 +105,12 @@ const PINS = {
 	// message's 18-line render block leaving for components/SystemMessage.tsx; the scroll rule
 	// and the timestamp arithmetic are pure and live in lib/chatScroll.ts + lib/messageStamp.ts,
 	// which is where a split would have put them anyway.
-	"store/console/src/pages/InstanceDetail.tsx": 1252,
+	// +11 for #342: a per-turn delete button beside the copy button, and the `dropMessages`
+	// callback that removes exactly the ids the SERVER reported deleting. Raised rather than
+	// split — the button, its confirmation and its request live in components/DeleteTurnButton.tsx,
+	// and what a turn DID (the sentence the confirmation is really for) is pure and lives in
+	// lib/turnEffects.ts, which is where a split would have put them anyway.
+	"store/console/src/pages/InstanceDetail.tsx": 1263,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -137,7 +142,12 @@ const PINS = {
 	// that must stay with its siblings, and every DECISION they encode — staleness, the
 	// injection cap, the ceiling, the read shape — lives in lib/agent-tasks.ts, which is where
 	// a split would have put them anyway.
-	"workers/api/src/agent-do.ts": 1098,
+	// +36 for #342: deleting ONE turn. The handler is the clear-messages handler's shape applied to
+	// a span — list, delete the keys, return the audio ids for the route to drop — plus the prose
+	// saying which of the three things a delete removes and, more importantly, which it cannot.
+	// Raised rather than split: it belongs beside the clear it must not diverge from, and the
+	// DECISION it encodes (what a turn IS) is pure and lives in lib/chat-turns.ts.
+	"workers/api/src/agent-do.ts": 1134,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
