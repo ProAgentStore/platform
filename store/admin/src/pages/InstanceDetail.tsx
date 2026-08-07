@@ -23,7 +23,8 @@ interface Detail {
 	boardItems: Array<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>;
 	consents: Array<{ connector: string; scope: string; created_at: string }>;
 	recentErrors: Array<{ id: string; created_at: string; source: string; status: number | null; message: string }>;
-	usage30d: { calls: number; input_tokens: number; output_tokens: number; cost_micros: number };
+	/** Two dollar figures, never one (#346): list-price value, and the charged subset of it. */
+	usage30d: { calls: number; input_tokens: number; output_tokens: number; value_micros: number; charged_micros: number };
 }
 
 export default function InstanceDetail() {
@@ -111,8 +112,9 @@ export default function InstanceDetail() {
 
 				<Panel title="30-day usage">
 					<div className="grid grid-cols-2 gap-3 text-sm">
-						<div><div className="text-2xl font-bold text-accent">{fmtUsd(u.cost_micros)}</div><div className="text-xs text-muted mt-1">est. cost (BYOK)</div></div>
-						<div><div className="text-2xl font-bold">{fmtInt(u.calls)}</div><div className="text-xs text-muted mt-1">AI calls</div></div>
+						<div><div className="text-2xl font-bold text-accent">{fmtUsd(u.value_micros)}</div><div className="text-xs text-muted mt-1">AI value (list price)</div></div>
+						<div><div className="text-2xl font-bold">{fmtUsd(u.charged_micros)}</div><div className="text-xs text-muted mt-1">of which charged</div></div>
+						<div><div className="text-lg font-bold">{fmtInt(u.calls)}</div><div className="text-xs text-muted mt-1">AI calls</div></div>
 						<div><div className="text-lg font-bold">{fmtInt(u.input_tokens)}</div><div className="text-xs text-muted mt-1">input tokens</div></div>
 						<div><div className="text-lg font-bold">{fmtInt(u.output_tokens)}</div><div className="text-xs text-muted mt-1">output tokens</div></div>
 					</div>

@@ -14,7 +14,9 @@ interface UserDetailResp {
 		subscription_status: string | null;
 		created_at: string;
 		updated_at: string;
-		spend30dMicros: number;
+		/** List-price value of all AI (30d) — not a bill. `charged30dMicros` is the money part. */
+		value30dMicros: number;
+		charged30dMicros: number;
 		suspended: boolean;
 		suspended_at: string | null;
 		suspended_reason: string | null;
@@ -56,7 +58,7 @@ export default function UserDetail() {
 				{isSelf ? <span className="text-muted-soft text-base font-normal ml-2">(you)</span> : null}
 			</h1>
 			<p className="text-sm text-muted mb-4">
-				{u.github_name} · roles: {u.roles.join(", ")} · sub: {u.subscription_status || "none"} · spend 30d: {fmtUsd(u.spend30dMicros)} · joined {u.created_at?.slice(0, 10)}
+				{u.github_name} · roles: {u.roles.join(", ")} · sub: {u.subscription_status || "none"} · AI value 30d: {fmtUsd(u.value30dMicros)} ({fmtUsd(u.charged30dMicros)} charged) · joined {u.created_at?.slice(0, 10)}
 			</p>
 
 			{u.suspended ? (

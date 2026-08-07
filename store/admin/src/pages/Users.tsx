@@ -6,7 +6,7 @@ import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 interface AdminUser {
 	id: string; github_login: string; github_name: string; roles: string[];
 	subscription_status: string | null; created_at: string;
-	agents_owned: number; active_instances: number; key_providers: string[]; spend30dMicros: number;
+	agents_owned: number; active_instances: number; key_providers: string[]; value30dMicros: number; charged30dMicros: number;
 	/** Moderation state — visible in the list so a blocked account is obvious without a click. */
 	suspended: boolean; suspended_reason: string | null;
 }
@@ -32,7 +32,7 @@ export default function Users() {
 					{!data.users.length ? <Empty label="No users match." /> : (
 						<table className="w-full text-sm">
 							<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
-								<th className="py-1.5">Login</th><th>Roles</th><th className="text-right">Agents</th><th className="text-right">Instances</th><th>Keys</th><th className="text-right">Spend 30d</th>
+								<th className="py-1.5">Login</th><th>Roles</th><th className="text-right">Agents</th><th className="text-right">Instances</th><th>Keys</th><th className="text-right" title="List-price value of AI consumed. Not a bill — see Charged.">Value 30d</th><th className="text-right" title="The part someone is actually charged for (own API key, or paid by us).">Charged 30d</th>
 							</tr></thead>
 							<tbody>
 								{data.users.map((u) => (
@@ -45,7 +45,8 @@ export default function Users() {
 										<td className="text-right">{u.agents_owned}</td>
 										<td className="text-right">{u.active_instances}</td>
 										<td>{u.key_providers.join(", ") || "—"}</td>
-										<td className="text-right">{fmtUsd(u.spend30dMicros)}</td>
+										<td className="text-right">{fmtUsd(u.value30dMicros)}</td>
+										<td className="text-right">{fmtUsd(u.charged30dMicros)}</td>
 									</tr>
 								))}
 							</tbody>

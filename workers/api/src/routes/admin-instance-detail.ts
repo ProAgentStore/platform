@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, requireAdmin } from "../lib/auth.js";
 import { relayConnected } from "../lib/runner-client.js";
+import { CHARGED_SQL } from "../lib/usage-payer.js";
 import type { Env } from "../types.js";
 
 /**
@@ -105,19 +106,24 @@ adminInstanceDetailRoutes.get("/instances/:id/detail", async (c) => {
 			context: string | null;
 		}>(),
 
-		// 30-day usage/cost rollup, scoped to this instance.
+		// 30-day usage rollup, scoped to this instance. TWO dollar figures, never one (#346):
+		// `value_micros` is list price on every row — the operator's "how busy is this instance"
+		// number, which would read near-zero for a subscription-run Coder if it were filtered —
+		// and `charged_micros` is the subset anyone is actually billed for.
 		c.env.DB.prepare(
 			`SELECT COUNT(*) AS calls,
 			        COALESCE(SUM(input_tokens), 0) AS input_tokens,
 			        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-			        COALESCE(SUM(cost_micros), 0) AS cost_micros
+			        COALESCE(SUM(cost_micros), 0) AS value_micros,
+			        COALESCE(SUM(CASE WHEN ${CHARGED_SQL} THEN cost_micros ELSE 0 END), 0) AS charged_micros
 			 FROM ai_usage
 			 WHERE instance_id = ?1 AND created_at >= ?2`,
 		).bind(id, thirtyDaysAgo()).first<{
 			calls: number;
 			input_tokens: number;
 			output_tokens: number;
-			cost_micros: number;
+			value_micros: number;
+			charged_micros: number;
 		}>(),
 	]);
 
@@ -152,7 +158,7 @@ adminInstanceDetailRoutes.get("/instances/:id/detail", async (c) => {
 		boardItems: board.results ?? [],
 		consents: consents.results ?? [],
 		recentErrors: errors.results ?? [],
-		usage30d: usage ?? { calls: 0, input_tokens: 0, output_tokens: 0, cost_micros: 0 },
+		usage30d: usage ?? { calls: 0, input_tokens: 0, output_tokens: 0, value_micros: 0, charged_micros: 0 },
 	});
 });
 

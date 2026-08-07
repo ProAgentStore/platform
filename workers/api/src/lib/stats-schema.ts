@@ -152,12 +152,12 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 	},
 	{
 		id: "usage.cost",
-		label: "Estimated AI cost",
+		label: "AI value (list price)",
 		kinds: ["number", "line"],
-		describes: "Estimated USD spend across every AI call this agent made.",
+		describes: "What this agent's AI calls would cost at published list prices.",
 		unit: "usd_micros",
 		caveat:
-			"An ESTIMATE, not a bill. Keys are yours (BYOK) so the real provider invoice is never visible here; cached input is priced at 0.1x list, and rows tagged as reported-not-estimated carry a figure the engine reported rather than one we computed.",
+			"NOT a bill, and not filtered to what anyone was charged (#346): work an engine did on your Claude subscription is counted here at list price and charged to you at nothing. Keys are yours (BYOK) so the real provider invoice is never visible here; cached input is priced at 0.1x list, and rows tagged as reported-not-estimated carry a figure the engine reported rather than one we computed. The Usage page splits the same figure by who pays.",
 		params: [],
 	},
 	{

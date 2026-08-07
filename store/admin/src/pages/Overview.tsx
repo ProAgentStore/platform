@@ -9,7 +9,7 @@ interface Overview {
 	instancesActive: number;
 	errors24h: number;
 	aiCalls24h: number;
-	spend30dMicros: number;
+	value30dMicros: number;
 	platformSpend30dMicros: number;
 }
 interface Spending {

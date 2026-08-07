@@ -2,6 +2,7 @@ import type { Env, SessionPayload } from "../types.js";
 import { agentCapabilities } from "./agent-capabilities.js";
 import { relayConnected } from "./runner-client.js";
 import { registryTools } from "./tool-registry.js";
+import { CHARGED_SQL } from "./usage-payer.js";
 
 // toolName → { connector, scope } for connector-provided registry tools (built once).
 // Only tools that declare a connector are relevant to the connector admin views.
@@ -34,7 +35,18 @@ export interface AdminUserRow {
 	agents_owned: number;
 	active_instances: number;
 	key_providers: string[];
-	spend30dMicros: number;
+	/**
+	 * Notional list-price value of this user's AI consumption over 30 days — NOT a bill (#346).
+	 *
+	 * It was called `spend30dMicros` while summing every row, which is the claim #343 was made of:
+	 * an engine session on the owner's Claude subscription accrues real tokens at a list-price
+	 * figure nobody is charged. The sum still counts everything, deliberately — this column is how
+	 * an operator sees who is USING the platform, and filtering it to charged rows would make a
+	 * subscription-heavy account read as idle. It just no longer says "spend".
+	 */
+	value30dMicros: number;
+	/** The subset that is money someone owes (`payer` byok-api / platform). The cost-governance one. */
+	charged30dMicros: number;
 	/** Moderation state (#34) — surfaced in the list so an operator can see who is blocked. */
 	suspended: boolean;
 	suspended_at: string | null;
@@ -53,7 +65,8 @@ interface RawUserRow {
 	agents_owned: number;
 	active_instances: number;
 	key_providers: string | null;
-	spend_30d_micros: number;
+	value_30d_micros: number;
+	charged_30d_micros: number;
 	suspended: number | null;
 	suspended_at: string | null;
 	suspended_reason: string | null;
@@ -82,7 +95,8 @@ function shapeUser(r: RawUserRow): AdminUserRow {
 		agents_owned: r.agents_owned || 0,
 		active_instances: r.active_instances || 0,
 		key_providers: r.key_providers ? r.key_providers.split(",").filter(Boolean) : [],
-		spend30dMicros: r.spend_30d_micros || 0,
+		value30dMicros: r.value_30d_micros || 0,
+		charged30dMicros: r.charged_30d_micros || 0,
 		suspended: !!r.suspended,
 		suspended_at: r.suspended_at ?? null,
 		suspended_reason: r.suspended_reason ?? null,
@@ -94,7 +108,8 @@ const USER_SELECT = `SELECT u.id, u.github_login, u.github_name, u.avatar_url, u
 	        (SELECT COUNT(*) FROM agents a WHERE a.owner_id = u.id) AS agents_owned,
 	        (SELECT COUNT(*) FROM agent_instances i WHERE i.user_id = u.id AND i.status = 'active') AS active_instances,
 	        (SELECT GROUP_CONCAT(k.provider) FROM user_api_keys k WHERE k.user_id = u.id) AS key_providers,
-	        (SELECT COALESCE(SUM(x.cost_micros), 0) FROM ai_usage x WHERE x.user_id = u.id AND x.created_at >= ?) AS spend_30d_micros
+	        (SELECT COALESCE(SUM(x.cost_micros), 0) FROM ai_usage x WHERE x.user_id = u.id AND x.created_at >= ?) AS value_30d_micros,
+	        (SELECT COALESCE(SUM(x.cost_micros), 0) FROM ai_usage x WHERE x.user_id = u.id AND x.created_at >= ? AND ${CHARGED_SQL}) AS charged_30d_micros
 	 FROM users u`;
 
 /** "YYYY-MM-DD HH:MM:SS" for `days` ago (UTC), matching D1 datetime('now'). */
@@ -114,7 +129,8 @@ export async function listUsers(
 
 	let listSql = USER_SELECT;
 	let countSql = "SELECT COUNT(*) AS n FROM users u";
-	const listBinds: unknown[] = [since];
+	// Two `?` before any search term: the value rollup's window, then the charged rollup's.
+	const listBinds: unknown[] = [since, since];
 	const countBinds: unknown[] = [];
 	if (search) {
 		const like = `%${search}%`;
@@ -433,26 +449,39 @@ export interface AdminOverviewStats {
 	instancesActive: number;
 	errors24h: number;
 	aiCalls24h: number;
-	spend30dMicros: number;
+	/** List-price value of ALL AI in the window — the activity figure, not a bill (#346). */
+	value30dMicros: number;
+	/** What the platform itself is billed for: `payer = 'platform'`. Money, and ours. */
 	platformSpend30dMicros: number;
 }
 
 export async function getOverviewStats(env: Env): Promise<AdminOverviewStats> {
 	const d1 = sinceTs(1);
 	const d30 = sinceTs(30);
-	const one = async (sql: string, ...b: unknown[]) =>
-		(await env.DB.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
-	const [users, agents, agentsPublished, instancesActive, errors24h, aiCalls24h, spend30d, platformSpend30d] = await Promise.all([
-		one("SELECT COUNT(*) AS n FROM users"),
-		one("SELECT COUNT(*) AS n FROM agents"),
-		one("SELECT COUNT(*) AS n FROM agents WHERE visibility = 'published'"),
-		one("SELECT COUNT(*) AS n FROM agent_instances WHERE status = 'active'"),
-		one("SELECT COUNT(*) AS n FROM error_log WHERE created_at >= ?", d1),
-		one("SELECT COUNT(*) AS n FROM ai_usage WHERE created_at >= ?", d1),
-		one("SELECT COALESCE(SUM(cost_micros),0) AS n FROM ai_usage WHERE created_at >= ?", d30),
-		one("SELECT COALESCE(SUM(cost_micros),0) AS n FROM ai_usage WHERE provider = 'platform' AND created_at >= ?", d30),
+	// Reads the first column whatever it is aliased, so each aggregate can carry a name that says
+	// what it is (#346) rather than every one of them answering to `n`.
+	const scalar = async (sql: string, ...b: unknown[]) => {
+		const row = await env.DB.prepare(sql).bind(...b).first<Record<string, unknown>>();
+		return Number(Object.values(row ?? {})[0] ?? 0) || 0;
+	};
+	const [users, agents, agentsPublished, instancesActive, errors24h, aiCalls24h, value30d, platformSpend30d] = await Promise.all([
+		scalar("SELECT COUNT(*) AS n FROM users"),
+		scalar("SELECT COUNT(*) AS n FROM agents"),
+		scalar("SELECT COUNT(*) AS n FROM agents WHERE visibility = 'published'"),
+		scalar("SELECT COUNT(*) AS n FROM agent_instances WHERE status = 'active'"),
+		scalar("SELECT COUNT(*) AS n FROM error_log WHERE created_at >= ?", d1),
+		scalar("SELECT COUNT(*) AS n FROM ai_usage WHERE created_at >= ?", d1),
+		scalar("SELECT COALESCE(SUM(cost_micros),0) AS value_micros FROM ai_usage WHERE created_at >= ?", d30),
+		// Platform-paid, on the payer axis rather than the vendor one. `recordPlatformUsage` writes
+		// provider AND payer as 'platform' in the same INSERT, so for rows written since migration
+		// 0092 the two are the same set; older rows have a NULL payer and are attributed by vendor,
+		// which for OUR Workers AI binding states the same fact rather than inferring it.
+		scalar(
+			"SELECT COALESCE(SUM(cost_micros),0) AS charged_micros FROM ai_usage WHERE (payer = 'platform' OR (payer IS NULL AND provider = 'platform')) AND created_at >= ?",
+			d30,
+		),
 	]);
-	return { users, agents, agentsPublished, instancesActive, errors24h, aiCalls24h, spend30dMicros: spend30d, platformSpend30dMicros: platformSpend30d };
+	return { users, agents, agentsPublished, instancesActive, errors24h, aiCalls24h, value30dMicros: value30d, platformSpend30dMicros: platformSpend30d };
 }
 
 export interface AdminUserDetail {
@@ -465,8 +494,10 @@ export interface AdminUserDetail {
 
 /** Full detail for one user, or null if not found. Never returns key material. */
 export async function getUserDetail(env: Env, id: string): Promise<AdminUserDetail | null> {
-	// USER_SELECT's spend sub-query has the first `?` (since); the id is the second.
-	const raw = await env.DB.prepare(`${USER_SELECT} WHERE u.id = ?`).bind(sinceTs(30), id).first<RawUserRow>();
+	// USER_SELECT's two usage sub-queries take the first two `?` (both the same window); the id
+	// is the third.
+	const since = sinceTs(30);
+	const raw = await env.DB.prepare(`${USER_SELECT} WHERE u.id = ?`).bind(since, since, id).first<RawUserRow>();
 	if (!raw) return null;
 	const [agents, instances, keys, errors] = await Promise.all([
 		env.DB.prepare("SELECT id, slug, name, visibility, status, created_at FROM agents WHERE owner_id = ? ORDER BY created_at DESC").bind(id).all<AdminUserDetail["agents"][number]>(),

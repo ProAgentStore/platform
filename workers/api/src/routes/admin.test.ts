@@ -150,8 +150,8 @@ const USAGE_ROWS = [
 
 describe("GET /v1/admin/users", () => {
 	const USER_ROWS = [
-		{ id: "u1", github_login: "alice", github_name: "Alice", avatar_url: "", roles: '["user","admin"]', subscription_status: "active", created_at: "2026-07-01 00:00:00", updated_at: "2026-08-01 00:00:00", agents_owned: 2, active_instances: 1, key_providers: "anthropic,openai", spend_30d_micros: 12345 },
-		{ id: "u2", github_login: "bob", github_name: "Bob", avatar_url: "", roles: null, subscription_status: "none", created_at: "2026-07-02 00:00:00", updated_at: "2026-08-01 00:00:00", agents_owned: 0, active_instances: 0, key_providers: null, spend_30d_micros: 0 },
+		{ id: "u1", github_login: "alice", github_name: "Alice", avatar_url: "", roles: '["user","admin"]', subscription_status: "active", created_at: "2026-07-01 00:00:00", updated_at: "2026-08-01 00:00:00", agents_owned: 2, active_instances: 1, key_providers: "anthropic,openai", value_30d_micros: 12345, charged_30d_micros: 500 },
+		{ id: "u2", github_login: "bob", github_name: "Bob", avatar_url: "", roles: null, subscription_status: "none", created_at: "2026-07-02 00:00:00", updated_at: "2026-08-01 00:00:00", agents_owned: 0, active_instances: 0, key_providers: null, value_30d_micros: 0, charged_30d_micros: 0 },
 	];
 
 	it("403s a non-admin", async () => {
@@ -168,7 +168,10 @@ describe("GET /v1/admin/users", () => {
 		expect(body.total).toBe(2);
 		expect(body.users[0].roles).toEqual(["user", "admin"]);
 		expect(body.users[0].key_providers).toEqual(["anthropic", "openai"]);
-		expect(body.users[0].spend30dMicros).toBe(12345);
+		expect(body.users[0].value30dMicros).toBe(12345);
+		// Value and charge are separate columns, and the charged one carries the payer filter —
+		// a per-user figure an operator reads as a bill must not include a subscription's tokens.
+		expect(body.users[0].charged30dMicros).toBe(500);
 		// null roles / null providers degrade safely
 		expect(body.users[1].roles).toEqual(["user"]);
 		expect(body.users[1].key_providers).toEqual([]);
@@ -183,7 +186,7 @@ describe("GET /v1/admin/users/:id", () => {
 	});
 
 	it("returns detail with empty sub-collections", async () => {
-		const detail = { id: "u1", github_login: "alice", github_name: "Alice", avatar_url: "", roles: '["user"]', subscription_status: "none", created_at: "2026-07-01 00:00:00", updated_at: "2026-08-01 00:00:00", agents_owned: 0, active_instances: 0, key_providers: null, spend_30d_micros: 0 };
+		const detail = { id: "u1", github_login: "alice", github_name: "Alice", avatar_url: "", roles: '["user"]', subscription_status: "none", created_at: "2026-07-01 00:00:00", updated_at: "2026-08-01 00:00:00", agents_owned: 0, active_instances: 0, key_providers: null, value_30d_micros: 0, charged_30d_micros: 0 };
 		const { app, env } = testApp({ userDetail: detail });
 		const res = await req(app, env, "/v1/admin/users/u1", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
@@ -205,6 +208,7 @@ describe("new operator views (#31/#33)", () => {
 		expect(b.users).toBe(5);
 		expect(b.agents).toBe(3);
 		expect(b).toHaveProperty("platformSpend30dMicros");
+		expect(b).toHaveProperty("value30dMicros");
 	});
 
 	it("GET /v1/admin/agents lists agents with owner + instance count", async () => {

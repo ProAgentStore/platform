@@ -109,11 +109,18 @@ interface Executor {
 
 // ── D1 helpers ──────────────────────────────────────────────────────────────
 
+/**
+ * One number from a one-row query, read from the FIRST column whatever it is aliased.
+ *
+ * Not `AS v` any more: a dollar aggregate has to carry a name that says whether it is value or a
+ * charge (#346), and a reader that insisted on one alias would have forced every query to answer
+ * to the same anonymous letter.
+ */
 async function scalar(ctx: StatsCtx, sql: string, ...extra: unknown[]): Promise<number> {
 	const row = await ctx.env.DB.prepare(sql)
 		.bind(ctx.instanceId, ctx.userId, ...extra)
-		.first<{ v: number | null }>();
-	return Number(row?.v ?? 0);
+		.first<Record<string, unknown>>();
+	return Number(Object.values(row ?? {})[0] ?? 0) || 0;
 }
 
 async function groups(ctx: StatsCtx, sql: string, limit: number, extra: unknown[]): Promise<StatsValue> {
@@ -162,11 +169,13 @@ export const STATS_EXECUTORS: Record<string, Executor> = {
 		daily: (ctx, _p, period) => usageTokens(ctx, period),
 	},
 
+	// The source id is stored in every agent's stats schema, so it stays `usage.cost` — what it
+	// REPORTS is notional value, which the label, the caveat and the SQL alias now all say.
 	"usage.cost": {
 		async point(ctx, _p, period) {
-			return { type: "scalar", unit: unitFor("usage.cost"), value: await usageCost(ctx, period) };
+			return { type: "scalar", unit: unitFor("usage.cost"), value: await usageValue(ctx, period) };
 		},
-		daily: (ctx, _p, period) => usageCost(ctx, period),
+		daily: (ctx, _p, period) => usageValue(ctx, period),
 	},
 
 	"runs.count": {
@@ -308,10 +317,19 @@ async function usageTokens(ctx: StatsCtx, period: StatsPeriod): Promise<number> 
 	);
 }
 
-async function usageCost(ctx: StatsCtx, period: StatsPeriod): Promise<number> {
+/**
+ * List-price VALUE of this instance's AI, not a bill (#346).
+ *
+ * Unfiltered on purpose: this is a dashboard number answering "how much AI is my agent using",
+ * and restricting it to charged rows would show $0.00 for a Coder whose engine runs on the
+ * owner's Claude subscription — an agent that plainly did a great deal of work. The alias says
+ * `value_micros` so nothing downstream can read it as money without renaming it first; the
+ * source's own label and caveat (`stats-schema.ts`) say the same thing to the user.
+ */
+async function usageValue(ctx: StatsCtx, period: StatsPeriod): Promise<number> {
 	return scalar(
 		ctx,
-		`SELECT COALESCE(SUM(cost_micros), 0) AS v FROM ai_usage
+		`SELECT COALESCE(SUM(cost_micros), 0) AS value_micros FROM ai_usage
 		  WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3 AND created_at < ?4`,
 		period.startText,
 		period.endText,
