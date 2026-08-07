@@ -50,6 +50,16 @@ export interface CodingSessionParams {
 	 */
 	loopRunId?: string | null;
 	/**
+	 * Steps the Pilot may drive in one round, when the caller named a number (#374).
+	 *
+	 * Absent keeps the historical 40. This exists because the caller's "Max iterations" was
+	 * recorded on the `agent_loop_runs` row and enforced nowhere, so a run could truthfully report
+	 * "iteration 40 of 10". Per ROUND rather than per run: a round restarts only after a HUMAN has
+	 * answered a stuck/needs-input handoff, so this bounds the unattended stretch — which is the
+	 * stretch the number is being typed about.
+	 */
+	maxSteps?: number;
+	/**
 	 * The single-flight claim this run holds on the session (#208). Released when the run ends —
 	 * including the early no-runner return, which is exactly where a claim would otherwise be
 	 * stranded and lock the session out of every future run.

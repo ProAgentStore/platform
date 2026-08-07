@@ -40,6 +40,39 @@ export function shouldEndSessionAfterRun(input: { openedByRun: boolean }): boole
 }
 
 /**
+ * Should the Pilot stop what it is doing, and what do we tell the human?
+ *
+ * TWO signals, and until #374 only one of them was read. The session's own status was — Kill / End
+ * / Restart take a session out of `active` and the Pilot's next capture sees it. The loop-run's
+ * `cancel_requested` flag was NOT: `POST /loop/:runId/cancel` set it, `AgentLoopWorkflow` read it,
+ * and `CodingSessionWorkflow` never did. That was survivable only while the Coding tab's Loop ran
+ * in the browser, where Stop meant "stop scheduling the next `setTimeout`" and worked by accident
+ * of the loop living in the tab. Moving that Loop onto the Pilot without this would have taken the
+ * working Stop button away and left the cancel flag set on a run that carried on spending.
+ *
+ * The cancel wins over the session status when both are set, because it carries the better
+ * sentence: "you stopped it" is a fact about a decision somebody made, and "the session ended" is
+ * what it looks like from underneath.
+ *
+ * What is deliberately NOT a stop:
+ *  - `suspended` — `pags up --force` on another machine suspends sessions owned by other nodes and
+ *    `reassignSessionNode` leaves the status alone, so a session legitimately relocated to a live
+ *    machine can sit suspended. Treating it as a stop would end a healthy run at step 0.
+ *  - an UNREADABLE status (null) — a D1 blip must not abort a good run.
+ */
+export interface PilotStop {
+	stop: boolean;
+	/** Why, when it is something other than the session simply going away. Feeds `CodingResult.detail`. */
+	reason?: string;
+}
+
+export function pilotStopSignal(input: { sessionStatus?: string | null; cancelRequested?: boolean }): PilotStop {
+	if (input.cancelRequested) return { stop: true, reason: "Stopped by you." };
+	const status = input.sessionStatus;
+	return status === "ended" || status === "error" ? { stop: true } : { stop: false };
+}
+
+/**
  * Why work cannot start on a repo, in words that name the ACTUAL blocker.
  *
  * `connectivity` is the same classification `subordinate_status` shows the supervisor, so the

@@ -310,7 +310,12 @@ const PINS = {
 	// injection from becoming a standing instruction, and a reader who finds the routes without
 	// finding that sentence will eventually add a third writer. The rules themselves are pure and
 	// tested in lib/agent-direction.ts; the store's compare-and-swap is in lib/supervision.ts.
-	"workers/api/src/routes/tools.ts": 885,
+	// +8 at #374: `POST /:id/loop` accepts an optional `repoId`, so the Coding tab's Loop can name
+	// the session it is looking at instead of the coding driver taking `repos[0]`. One field, one
+	// coercion, and five lines saying why a generic verb carries a driver-specific target — which
+	// is the part a reader has to be told, because the obvious reading is that it does not belong
+	// here. The choice it feeds (and its two refusals) is pure and tested in lib/loop-drivers.ts.
+	"workers/api/src/routes/tools.ts": 893,
 };
 
 /**

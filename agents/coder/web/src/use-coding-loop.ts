@@ -1,6 +1,13 @@
 import { useState, useRef, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { isEngineBusy } from "./engine-busy";
+import {
+	issueWasHandled,
+	loopOutcomeNotice,
+	loopRunEnded,
+	loopStartFailureNotice,
+	loopStartNotice,
+	type LoopRunSnapshot,
+} from "./coding-loop-run";
 
 /** The next issue proposed to work (issues-mode). Body included so we build a real objective. */
 export interface ProposedIssue {
@@ -13,19 +20,33 @@ export interface ProposedIssue {
 interface CodingLoopOpts {
 	instanceId: string;
 	sessionId: string | null;
-	/** The repo the open session belongs to — the issue source for issues-mode. */
+	/** The repo the open session belongs to — the issue source, and the engine the run drives. */
 	repoId?: string | null;
 	/** "direct" = user types each objective; "issues" = source it from the next open issue. */
 	workMode?: "direct" | "issues";
 	onMessage: (msg: { role: string; content: string }) => void;
 }
 
+/**
+ * The Coding tab's Loop: a WATCHER over a server-driven run (#374).
+ *
+ * It used to be the loop itself — `setTimeout`, `/capture`, `/loop-decide`, relay to `/message` —
+ * which put an autonomous driver on the human-typing path and therefore outside merge authority
+ * (#314), the one-driver-per-engine claim (#208) and the delegation budget (#184). It now presses
+ * the same `POST /loop` button the Assistant tab presses, which dispatches through
+ * `lib/loop-drivers.ts` to the Pilot with all three in force, and polls `/loop/:runId` to report.
+ *
+ * The decisions it still makes — what the thread says, and whether issues-mode may strike an issue
+ * off — are in ./coding-loop-run, with the reasoning for each.
+ */
 export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direct", onMessage }: CodingLoopOpts) {
 	const [loopOn, setLoopOn] = useState(false);
 	const [loopObjective, setLoopObjective] = useState("");
 	const [loopIteration, setLoopIteration] = useState(0);
 	const [loopMax, setLoopMax] = useState(10);
 	const [showLoopForm, setShowLoopForm] = useState(false);
+	// The run being watched. Null while starting, and again once it reaches a terminal state.
+	const [runId, setRunId] = useState<string | null>(null);
 	// Issues-mode: the issue currently proposed for approval (null = none pending).
 	const [proposedIssue, setProposedIssue] = useState<ProposedIssue | null>(null);
 	const [issueBusy, setIssueBusy] = useState(false);
@@ -43,37 +64,22 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 
 	const loopOnRef = useRef(false);
 	const loopObjectiveRef = useRef("");
-	const loopIterationRef = useRef(0);
 	const loopMaxRef = useRef(10);
+	const runIdRef = useRef<string | null>(null);
 	const onMessageRef = useRef(onMessage);
-	const summaryRef = useRef<{ role: string; content: string }[]>([]);
 	const repoIdRef = useRef<string | null | undefined>(repoId);
 	const workModeRef = useRef(workMode);
 	// Issues declined or already completed THIS run — skipped when proposing the next.
 	const excludeRef = useRef<Set<number>>(new Set());
-	// The issue currently being looped (issues-mode), so 'done' can mark it handled + advance.
+	// The issue currently being looped (issues-mode), so a clean finish can mark it handled + advance.
 	const activeIssueRef = useRef<ProposedIssue | null>(null);
 	loopOnRef.current = loopOn;
 	loopObjectiveRef.current = loopObjective;
-	loopIterationRef.current = loopIteration;
 	loopMaxRef.current = loopMax;
+	runIdRef.current = runId;
 	onMessageRef.current = onMessage;
 	repoIdRef.current = repoId;
 	workModeRef.current = workMode;
-
-	/** Update the summary history ref (call from parent when summaryHistory changes). */
-	const syncHistory = (history: { role: string; content: string }[]) => {
-		summaryRef.current = history;
-	};
-
-	// The loop self-schedules via setTimeout. Track the pending id so we can cancel it
-	// on unmount — otherwise navigating away mid-loop keeps firing runStep on a dead
-	// component (network calls + setState + the whole closure graph pinned alive).
-	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	useEffect(() => () => {
-		loopOnRef.current = false;
-		if (timerRef.current) clearTimeout(timerRef.current);
-	}, []);
 
 	// ── Issues-mode: propose / approve / skip ────────────────────────────────
 	const proposeNextIssueRef = useRef<() => Promise<void>>(async () => {});
@@ -96,98 +102,89 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	};
 	const proposeNextIssue = () => proposeNextIssueRef.current();
 
-	const runStepRef = useRef<() => Promise<void>>(async () => {});
-	runStepRef.current = async () => {
-		if (!loopOnRef.current || !sessionId) return;
+	/**
+	 * Poll the run the server is driving.
+	 *
+	 * The old version of this function WAS the loop; this one only reports. Note what it does not
+	 * do: it never sends anything to the engine, so there is no path from this tab to the Engine
+	 * that skips the Pilot's screen.
+	 */
+	const pollRunRef = useRef<() => Promise<void>>(async () => {});
+	pollRunRef.current = async () => {
+		const rid = runIdRef.current;
+		if (!rid) return;
 		try {
-			const capture = await api<{ pane?: string; runState?: string }>(
-				`/v1/instances/${instanceId}/coding/sessions/${sessionId}/capture`,
-			);
-			const termSnap = capture.pane || "(empty terminal)";
-			const runState = capture.runState || "idle";
-
-			if (isEngineBusy(runState)) {
-				timerRef.current = setTimeout(() => runStepRef.current?.(), 3000);
-				return;
-			}
-
-			const recent = [
-				...summaryRef.current.slice(-4).map((m) => ({ role: m.role, content: m.content })),
-				{ role: "assistant", content: `[Terminal output]\n${termSnap.slice(-2000)}` },
-			];
-
-			const decision = await api<{ decision: string; nextInstruction?: string; reason?: string }>(
-				`/v1/instances/${instanceId}/loop-decide`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						objective: loopObjectiveRef.current,
-						messages: recent,
-						iteration: loopIterationRef.current,
-						maxIterations: loopMaxRef.current,
-					}),
-				},
-			);
-
-			if (!loopOnRef.current) return;
-
-			if (decision.decision === "continue" && decision.nextInstruction) {
-				setLoopIteration((i) => i + 1);
-				emitSystem(`Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}`);
-
-				await api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/message`, {
-					method: "POST",
-					body: JSON.stringify({ text: decision.nextInstruction }),
-				});
-
-				timerRef.current = setTimeout(() => runStepRef.current?.(), 5000);
-			} else if (decision.decision === "done") {
-				setLoopOn(false);
-				emitSystem(`Loop complete: ${decision.reason || "Objective met."}`);
-				// Issues-mode: this issue is handled → don't re-propose it, then offer the next
-				// one for approval (approve-per-issue — never auto-chain without the human).
-				if (workModeRef.current === "issues" && activeIssueRef.current) {
-					excludeRef.current.add(activeIssueRef.current.number);
-					activeIssueRef.current = null;
-					void proposeNextIssueRef.current();
-				}
-			} else {
-				setLoopOn(false);
-				emitSystem(`Loop ${decision.decision}: ${decision.reason || "Needs your input."}`);
-				// Escalated/failed → keep the issue (NOT marked done) so you can retry it.
-			}
-		} catch (e) {
+			const run = await api<LoopRunSnapshot>(`/v1/instances/${instanceId}/loop/${rid}`);
+			setLoopIteration(run.iteration ?? 0);
+			if (!loopRunEnded(run)) return;
 			setLoopOn(false);
-			emitSystem(`Loop error: ${e instanceof Error ? e.message : String(e)}`);
+			loopOnRef.current = false;
+			setRunId(null);
+			runIdRef.current = null;
+			emitSystem(loopOutcomeNotice(run));
+			// Issues-mode: only a clean finish strikes the issue off and offers the next one for
+			// approval (approve-per-issue — never auto-chain without the human). Every other ending
+			// leaves it open so it can be retried; see ./coding-loop-run.
+			const issue = activeIssueRef.current;
+			activeIssueRef.current = null;
+			if (workModeRef.current === "issues" && issue && issueWasHandled(run)) {
+				excludeRef.current.add(issue.number);
+				void proposeNextIssueRef.current();
+			}
+		} catch {
+			// A transient read failure must not kill the WATCHER — the run is durable and carries
+			// on regardless of whether this tab can see it. Clearing the run id here would stop the
+			// poll while the Pilot kept driving and spending, with no counter and no Stop button:
+			// on screen, identical to a run that finished.
 		}
 	};
 
+	// 3s, matching the Assistant tab's watcher. Only while there is something to watch.
+	useEffect(() => {
+		if (!loopOn || !runId) return;
+		const t = setInterval(() => { void pollRunRef.current(); }, 3000);
+		void pollRunRef.current();
+		return () => clearInterval(t);
+	}, [loopOn, runId]);
+
 	/** Start the loop with an explicit objective (issues-mode approves an issue this way). */
-	const startWith = (objective: string) => {
+	const startWith = async (objective: string) => {
 		const obj = objective.trim();
-		if (!obj || !sessionId) return;
+		// The REPO, not the session: the driver opens or reuses the session itself, and it is the
+		// repo id that tells it which engine the user means. On a multi-repo Coder, omitting it
+		// would drive `repos[0]` — a different checkout, and a different session's driver claim.
+		if (!obj || !repoIdRef.current) return;
 		loopObjectiveRef.current = obj;
 		setLoopObjective(obj);
+		// Optimistic, so the Stop control and the counter appear on the tap rather than after a
+		// round trip that includes opening a session on the user's laptop.
 		setLoopOn(true);
+		loopOnRef.current = true;
 		setLoopIteration(0);
 		setShowLoopForm(false);
-		emitSystem(`Loop started: ${obj.length > 120 ? `${obj.slice(0, 120)}…` : obj}`);
-		api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/message`, {
-			method: "POST",
-			body: JSON.stringify({ text: obj }),
-		})
-			.then(() => {
-				timerRef.current = setTimeout(() => runStepRef.current?.(), 5000);
-			})
-			// Without this, a failed first instruction (runner offline, session ended, network
-			// blip) left `loopOn` true with NOTHING scheduled: the Stop button and counter 0
-			// appeared, the thread said "Loop started", and then nothing ever happened. The
-			// rejection escaped as an unhandled promise and the user's only escape was Stop.
-			.catch((e: unknown) => {
-				setLoopOn(false);
-				loopOnRef.current = false;
-				emitSystem(`Couldn't start the loop: ${e instanceof Error ? e.message : String(e)}`);
+		try {
+			const run = await api<{ runId: string; driver?: string }>(`/v1/instances/${instanceId}/loop`, {
+				method: "POST",
+				body: JSON.stringify({ objective: obj, maxIterations: loopMaxRef.current, repoId: repoIdRef.current }),
 			});
+			// Stop pressed while the start was in flight. The run EXISTS now, so flipping a local
+			// flag would leave it driving the engine with nothing watching it — cancel it instead.
+			if (!loopOnRef.current) {
+				await api(`/v1/instances/${instanceId}/loop/${run.runId}/cancel`, { method: "POST" }).catch(() => {});
+				return;
+			}
+			emitSystem(loopStartNotice({ driver: run.driver, objective: obj, maxIterations: loopMaxRef.current }));
+			setRunId(run.runId);
+			runIdRef.current = run.runId;
+		} catch (e) {
+			// Without this, a refused start (runner offline, the session already driven, no such
+			// repo) left `loopOn` true with nothing to watch: the Stop button and counter 0
+			// appeared and then nothing ever happened.
+			setLoopOn(false);
+			loopOnRef.current = false;
+			activeIssueRef.current = null;
+			emitSystem(loopStartFailureNotice(e));
+		}
 	};
 
 	const start = () => startWith(loopObjectiveRef.current || loopObjective);
@@ -198,7 +195,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		if (!iss) return;
 		activeIssueRef.current = iss;
 		setProposedIssue(null);
-		startWith(`Fix issue #${iss.number}: ${iss.title}${iss.body ? `\n\n${iss.body}` : ""}`);
+		void startWith(`Fix issue #${iss.number}: ${iss.title}${iss.body ? `\n\n${iss.body}` : ""}`);
 	};
 
 	/** Skip the proposed issue (leave it open) and propose the next. */
@@ -208,18 +205,41 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		void proposeNextIssue();
 	};
 
-	const stop = () => {
-		setLoopOn(false);
+	/**
+	 * Stop = ask the server to cancel; the watcher stays up and reports the real ending.
+	 *
+	 * Cooperative, so the Pilot finishes its current step and settles its spend before it stops —
+	 * which on a coding run is minutes, not seconds. Faking a local "stopped" here would be a lie
+	 * about an engine that is still editing the repo, so the thread says what is actually
+	 * happening and the counter keeps moving until the run really ends.
+	 */
+	const stop = async () => {
+		const rid = runIdRef.current;
 		setProposedIssue(null);
-		activeIssueRef.current = null;
-		emitSystem("Loop stopped by user.");
+		if (!rid) {
+			// Nothing started yet (or the start is still in flight — `startWith` reads this flag
+			// after its POST and cancels the run it created).
+			setLoopOn(false);
+			loopOnRef.current = false;
+			activeIssueRef.current = null;
+			emitSystem("Loop stopped by user.");
+			return;
+		}
+		try {
+			await api(`/v1/instances/${instanceId}/loop/${rid}/cancel`, { method: "POST" });
+			emitSystem("Stopping the loop — the engine finishes its current step first.");
+		} catch (e) {
+			// Deliberately does NOT clear the watcher: the run is durable and is still going, so
+			// pretending otherwise would remove the counter and the Stop button from a run that is
+			// still spending — on screen, identical to a stop that worked.
+			emitSystem(`Couldn't stop the loop — it's still running. ${e instanceof Error ? e.message : ""}`.trim());
+		}
 	};
 
-	// Halt the loop when the OPEN SESSION changes. The loop self-schedules via runStepRef,
-	// which always reads the CURRENT `sessionId` prop — so switching to another repo's session
-	// mid-loop would silently redirect the loop to drive the WRONG Engine with the old
-	// objective. Stop on switch (the user restarts it explicitly on the new session). Not on
-	// first mount (prev === current), so a fresh session isn't spuriously "stopped".
+	// Detach when the OPEN SESSION changes. The run belongs to a repo and keeps going on the
+	// server; this tab simply stops watching one it is no longer looking at. It is NOT cancelled —
+	// that would make switching repos mid-run destroy work, and durability is the point of the
+	// change. Not on first mount (prev === current), so a fresh session isn't spuriously reported.
 	//
 	// The dep list is `[sessionId]` ON PURPOSE and the suppression below is the reason, not an
 	// oversight. This is an EDGE DETECTOR: it must run when the session id changes and at no
@@ -237,16 +257,17 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		if (!loopOnRef.current) return;
 		loopOnRef.current = false;
 		setLoopOn(false);
-		if (timerRef.current) clearTimeout(timerRef.current);
+		setRunId(null);
+		runIdRef.current = null;
 		setProposedIssue(null);
 		activeIssueRef.current = null;
-		emitSystem("Loop stopped — you switched sessions.");
+		emitSystem("You switched sessions — the loop keeps running on the server. Stop it from Settings → Loop runs.");
 	}, [sessionId]);
 
 	return {
 		loopOn, loopObjective, setLoopObjective, loopIteration, loopMax, setLoopMax,
 		showLoopForm, setShowLoopForm,
-		start, stop, syncHistory,
+		start, stop,
 		// Issues-mode
 		proposedIssue, issueBusy, proposeNextIssue, approveProposedIssue, skipProposedIssue,
 	};

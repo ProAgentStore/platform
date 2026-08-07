@@ -164,7 +164,12 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		const label = describe(decision.action);
 		actionLog.push(label);
 		transcript.push(label);
-		await deps.onEvent?.("action", label);
+		// The ACTION rides along with its label. `describe` truncates to 120 characters and
+		// prefixes the kind, which is right for a step log and useless as a transcript entry —
+		// and the Pilot has to write the instruction it drove into `coding_timeline` VERBATIM
+		// (#374). That record used to come from the `/message` route the browser Loop relayed
+		// through, and nothing replaces it once the Pilot drives the engine instead.
+		await deps.onEvent?.("action", label, decision.action);
 		await deps.act(decision.action);
 		// After sending an instruction, let the CLI run to completion before the
 		// next decision — otherwise the brain reasons over a stale (pre-response)

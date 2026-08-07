@@ -771,11 +771,18 @@ toolRoutes.post("/:id/loop", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as {
 		objective?: string;
 		maxIterations?: number;
+		repoId?: string;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
 	const objective = String(body.objective ?? "").trim();
 	if (!objective) throw new HttpError(400, "objective is required");
 	if (objective.length > 2000) throw new HttpError(400, "objective too long");
+	// Which repo, when the caller knows (#374). Optional because it is driver-specific: a
+	// supervisor delegating a goal names an agent, not a checkout, and the chat driver ignores it
+	// entirely — but the Coding tab is open on ONE session and `repos[0]` is the wrong engine for
+	// it. Not ownership-checked here: `pickLoopRepo` matches it against `listRepos`, which is
+	// already scoped to this caller and instance.
+	const repoId = typeof body.repoId === "string" && body.repoId.trim() ? body.repoId.trim() : undefined;
 
 	const maxIterations = sanitizeMaxIterations(body.maxIterations);
 	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
@@ -795,6 +802,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 		userId: session.uid,
 		objective,
 		maxIterations,
+		repoId,
 		budgetId: budget.id,
 		depth: 0,
 	});

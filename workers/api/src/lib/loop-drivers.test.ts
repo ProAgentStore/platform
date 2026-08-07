@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_LOOP_DRIVER, loopDriverFor, LOOP_DRIVER_IDS } from "./loop-drivers.js";
+import { DEFAULT_LOOP_DRIVER, loopDriverFor, LOOP_DRIVER_IDS, pickLoopRepo } from "./loop-drivers.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -178,6 +178,37 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 	});
 });
 
+describe("pickLoopRepo — WHICH engine an objective reaches (#374)", () => {
+	const repos = [{ id: "r1" }, { id: "r2" }, { id: "r3" }];
+
+	it("takes the first when the caller does not care", () => {
+		// A supervisor's `delegate_goal` names an agent, not a checkout — unchanged behaviour.
+		expect(pickLoopRepo(repos)).toEqual({ ok: true, repo: { id: "r1" } });
+		expect(pickLoopRepo(repos, null)).toEqual({ ok: true, repo: { id: "r1" } });
+		expect(pickLoopRepo(repos, "")).toEqual({ ok: true, repo: { id: "r1" } });
+	});
+
+	it("takes the one the caller named", () => {
+		// The Coding tab's Loop, which is open on ONE session and means that one. `repos[0]` would
+		// claim a different session's driver and drive an engine the user is not looking at.
+		expect(pickLoopRepo(repos, "r3")).toEqual({ ok: true, repo: { id: "r3" } });
+	});
+
+	it("REFUSES a repo this agent does not have, rather than falling back to the first", () => {
+		// A fallback here is not a lenient default, it is the wrong repository being edited — and
+		// unlike a refusal, that is not recoverable once the engine has run.
+		const out = pickLoopRepo(repos, "r9");
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).toMatch(/not on this agent/i);
+	});
+
+	it("says what to do when the agent has no repos at all", () => {
+		const out = pickLoopRepo([]);
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).toMatch(/no repository/i);
+	});
+});
+
 describe("the coding driver's preconditions are refusals, not crashes", () => {
 	it("says what to do when the agent has no repo", async () => {
 		const { env } = stubEnv({ repos: [] });
@@ -205,6 +236,47 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		expect(created[0].binding).toBe("CODING_SESSION");
 		// And it OWNS what it opened, so the Pilot cleans it up rather than leaking an idle session.
 		expect(created[0].params.sessionOpenedByRun).toBe(true);
+	});
+
+	it("drives the repo the CALLER named, not the agent's first one (#374)", async () => {
+		// The Coding tab's Loop is open on one session. Routing it through this driver without a
+		// target would have handed the objective to `repos[0]` — on a multi-repo Coder, an engine
+		// in a different checkout, whose session's driver claim it would also take.
+		const { env, created } = stubEnv({
+			repos: [
+				{ id: "r1", name: "first/repo", instance_id: "i1", user_id: "u1" },
+				{ id: "r2", name: "second/repo", instance_id: "i1", user_id: "u1" },
+			],
+			session: { id: "s1", client_type: "claude", status: "active" },
+		});
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repoId: "r2" });
+		expect(out.ok).toBe(true);
+		expect(created[0].params.repoId).toBe("r2");
+		expect((created[0].params.goal as { repo: string }).repo).toBe("second/repo");
+	});
+
+	it("refuses a repo that is not this agent's, and starts nothing", async () => {
+		const { env, created } = stubEnv({
+			repos: [{ id: "r1", name: "first/repo", instance_id: "i1", user_id: "u1" }],
+			session: { id: "s1", client_type: "claude", status: "active" },
+		});
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repoId: "nope" });
+		expect(out).toMatchObject({ ok: false, status: 409 });
+		expect(created).toHaveLength(0);
+	});
+
+	it("hands the Pilot the caller's step cap — and nothing when the caller named none", async () => {
+		// `maxIterations` reached the `agent_loop_runs` row and stopped there, so a supervisor
+		// could read "iteration 40 of 10": the Pilot's own per-round cap is 40 and nothing told it
+		// otherwise. Absent stays absent so `delegate_goal`, which usually names no number, keeps
+		// the Pilot's default instead of inheriting sanitizeMaxIterations' fallback of 10.
+		const withCap = stubEnv({ repos: [{ id: "r1", name: "r" }], session: { id: "s1", client_type: "claude" } });
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: withCap.env, ...base, maxIterations: 25 });
+		expect(withCap.created[0].params.maxSteps).toBe(25);
+
+		const without = stubEnv({ repos: [{ id: "r1", name: "r" }], session: { id: "s1", client_type: "claude" } });
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: without.env, ...base });
+		expect(without.created[0].params.maxSteps).toBeUndefined();
 	});
 
 	it("does not claim ownership of a session it merely reused", async () => {

@@ -6789,6 +6789,12 @@ paths:
               properties:
                 objective: { type: string, maxLength: 2000 }
                 maxIterations: { type: integer, description: Clamped to the platform ceiling. }
+                repoId:
+                  type: string
+                  description: >
+                    Coding agents only — which repository this run is for. Omit and the agent's
+                    first repo is used, which is what a delegated goal means. A repo that is not
+                    on this agent is refused rather than falling back.
                 budget:
                   type: object
                   properties:

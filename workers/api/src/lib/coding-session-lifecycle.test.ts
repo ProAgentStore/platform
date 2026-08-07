@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { noSessionMessage, shouldEndSessionAfterRun } from "./coding-session-lifecycle.js";
+import { noSessionMessage, pilotStopSignal, shouldEndSessionAfterRun } from "./coding-session-lifecycle.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 
 const NOW = Date.parse("2026-08-06T06:00:00Z");
@@ -40,6 +40,53 @@ describe("shouldEndSessionAfterRun", () => {
 		// And a run that opened its own session must clean up whether it succeeded or not.
 		expect(shouldEndSessionAfterRun({ openedByRun: false })).toBe(false);
 		expect(shouldEndSessionAfterRun({ openedByRun: true })).toBe(true);
+	});
+});
+
+describe("pilotStopSignal — the Pilot's Stop button (#374)", () => {
+	it("stops on the loop-run cancel flag, which nothing in the Pilot used to read", () => {
+		// THE regression this guards. `POST /loop/:runId/cancel` sets `cancel_requested`;
+		// `AgentLoopWorkflow` reads it at the top of each iteration and `CodingSessionWorkflow`
+		// never did. Harmless while the Coding tab's Loop lived in the browser (Stop meant "stop
+		// scheduling"), fatal the moment that Loop became a Pilot run: the user would press Stop,
+		// the server would record it, and the engine would keep going and keep spending.
+		expect(pilotStopSignal({ sessionStatus: "active", cancelRequested: true })).toEqual({
+			stop: true,
+			reason: "Stopped by you.",
+		});
+	});
+
+	it("still stops when the session is ended or errored", () => {
+		// Kill / End / Restart. The pre-existing signal, unchanged.
+		expect(pilotStopSignal({ sessionStatus: "ended" }).stop).toBe(true);
+		expect(pilotStopSignal({ sessionStatus: "error" }).stop).toBe(true);
+	});
+
+	it("says nothing extra when the session simply went away", () => {
+		// A bare `cancelled` outcome reads as "the run was stopped"; adding a reason here would
+		// claim a decision nobody made.
+		expect(pilotStopSignal({ sessionStatus: "ended" }).reason).toBeUndefined();
+	});
+
+	it("prefers the user's reason when both signals are set", () => {
+		// Stop → cancel flag → the Pilot ends the session on its way out, so both are true at the
+		// close. "Stopped by you" is the fact; "the session ended" is what that looks like from
+		// underneath, and reporting it would make a deliberate stop unattributable.
+		expect(pilotStopSignal({ sessionStatus: "ended", cancelRequested: true }).reason).toBe("Stopped by you.");
+	});
+
+	it("does NOT stop on `suspended`", () => {
+		// `pags up --force` on another machine suspends sessions owned by other nodes, and
+		// `reassignSessionNode` deliberately leaves the status alone — so a session relocated to a
+		// live machine can legitimately sit suspended. Stopping here would end a healthy run at
+		// step 0, undoing the relocation the workflow performs a few lines earlier.
+		expect(pilotStopSignal({ sessionStatus: "suspended" }).stop).toBe(false);
+	});
+
+	it("does NOT stop on an unreadable status", () => {
+		// A D1 blip must not abort a run that is working.
+		expect(pilotStopSignal({ sessionStatus: null }).stop).toBe(false);
+		expect(pilotStopSignal({}).stop).toBe(false);
 	});
 });
 

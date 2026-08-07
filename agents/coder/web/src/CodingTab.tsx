@@ -142,7 +142,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		api(`/v1/instances/${instanceId}/coding/work-mode`, { method: "PUT", body: JSON.stringify({ workMode: mode }) }).catch(() => {});
 	};
 
-	// Loop (extracted hook)
+	// Loop — a watcher over a server-driven run since #374. (`syncHistory` went with the browser
+	// loop: the thread was context for a `/loop-decide` call this tab no longer makes.)
 	const loop = useCodingLoop({
 		instanceId,
 		sessionId: openSession?.id ?? null,
@@ -150,7 +151,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		workMode,
 		onMessage: (msg) => setSummaryHistory((prev) => [...prev, msg]),
 	});
-	loop.syncHistory(summaryHistory);
 	const [summaryBusy, setSummaryBusy] = useState(false);
 	const [chatInput, setChatInput] = useState("");
 	const [termInput, setTermInput] = useState("");

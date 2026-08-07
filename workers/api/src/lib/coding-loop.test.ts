@@ -96,6 +96,27 @@ describe("runCodingLoop", () => {
 		expect(r.outcome).toBe("done");
 	});
 
+	it("hands the action itself to onEvent, not only its truncated label (#374)", async () => {
+		// The Pilot writes the instruction it drove into `coding_timeline` so the Co-pilot thread
+		// and the repo history (#257) still record an autonomous run — a record that used to come
+		// from the `/message` route the browser Loop relayed through. `describe()` prefixes the
+		// kind and cuts at 120 characters, which is right for a step log and wrong for a
+		// transcript, so the raw action rides along.
+		const long = `refactor ${"the storage layer ".repeat(20)}`.trim();
+		const events: Array<{ type: string; message: string; data?: unknown }> = [];
+		const { deps } = harness([
+			{ action: { kind: "message", text: long } },
+			{ finish: { status: "done", detail: "ok" } },
+		]);
+		deps.onEvent = (type, message, data) => {
+			events.push({ type, message, data });
+		};
+		await runCodingLoop(deps, GOAL);
+		const action = events.find((e) => e.type === "action");
+		expect(action?.message.length).toBeLessThan(long.length); // the label really is lossy
+		expect(action?.data).toEqual({ kind: "message", text: long });
+	});
+
 	// ── Merge authority (#314) ────────────────────────────────────────────────
 	//
 	// The literal shape of run 73ffc073: one objective saying "merge each before starting the next",

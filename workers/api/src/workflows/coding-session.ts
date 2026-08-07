@@ -14,7 +14,7 @@ import { runWatchSession } from "./coding-watch.js";
 import type { CodingSessionParams } from "./coding-session-params.js";
 import { isRunnerGone, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../lib/runner-availability.js";
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
-import { shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
+import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
 import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
@@ -37,7 +37,7 @@ import {
 	type MergePolicy,
 } from "../lib/coding-authority.js";
 import { actsInWindow } from "../lib/instance-work.js";
-import { finishLoopRun, recordIteration } from "../lib/agent-loop-store.js";
+import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
 export type { CodingSessionParams } from "./coding-session-params.js";
@@ -358,9 +358,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 * `coding_sessions` row out of 'active'. Reading it here makes those buttons a clean stop
 		 * — the loop finishes its current step and returns `cancelled` — instead of the run only
 		 * ending indirectly when a later capture happens to fail.
+		 *
+		 * The SECOND signal is the loop run's own cancel flag (#374). `POST /loop/:runId/cancel`
+		 * has always written it and `AgentLoopWorkflow` has always read it; this workflow did not,
+		 * which was survivable only while the Coding tab's Loop ran in the browser and Stop meant
+		 * "stop scheduling the next setTimeout". Now that Stop reaches the Pilot, it has to be read
+		 * here or the button would be recorded and ignored. Which of the two wins, and what is
+		 * deliberately NOT a stop, is `pilotStopSignal`.
 		 */
 		const capture = async (): Promise<CodingPaneSnapshot & { sessionId: string }> => {
-			const [snap, row] = await Promise.all([
+			const [snap, row, cancelRequested] = await Promise.all([
 				// `drainUsage` — an autonomous Pilot run is exactly the case where no console is
 				// open, so this is the only path collecting the Engine's own spend (#267) for the
 				// longest and most expensive sessions the platform has.
@@ -374,6 +381,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					.bind(sessionId, instanceId, userId)
 					.first<{ status: string }>()
 					.catch(() => null),
+				// Degrades to "not cancelled" on a read failure, for the same reason an unreadable
+				// session status does: a D1 blip must not abort a run that is working.
+				event.payload.loopRunId
+					? isCancelRequested(env, event.payload.loopRunId).catch(() => false)
+					: Promise.resolve(false),
 			]);
 			const { usage, acts, ...pane } = snap;
 			// The SAME snapshot carries how the engine authenticated (runtime.ts sets it on every
@@ -413,16 +425,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// stated here too rather than inferred from the loop's step budget. Throttled in the
 			// store, so a 2-second poll writes a row once a minute.
 			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
-			// ONLY a terminal status cancels. `suspended` is not one: `pags up --force` on another
-			// machine suspends sessions owned by other nodes, and `resumeSessionsForNode` only
-			// revives them for a MATCHING runner_node — while `reassignSessionNode` deliberately
-			// leaves the status alone. So a session relocated to a live machine can legitimately
-			// sit `suspended`, and treating that as cancellation would end a healthy run at step 0
-			// with no explanation, replacing the relocation this workflow does a few lines above.
-			// A read that FAILED (null) must not cancel either, or a D1 blip aborts a good run.
+			// Which signals stop a run, which deliberately do not (`suspended`, an unreadable
+			// status), and which reason the human is given when both fire — all of it is the pure
+			// `pilotStopSignal`, so it can be stated as a table rather than as a comment defending
+			// an inline ternary nothing could execute.
+			//
 			// `pane`, not `snap`: the drained usage AND acts have been persisted and must not be
 			// carried into the workflow's step state, where a replay would drag them around forever.
-			return row && (row.status === "ended" || row.status === "error") ? { ...pane, cancelled: true } : pane;
+			const stop = pilotStopSignal({ sessionStatus: row?.status, cancelRequested });
+			return stop.stop ? { ...pane, cancelled: true, stopReason: stop.reason } : pane;
 		};
 
 		const deps: CodingDeps = {
@@ -513,6 +524,21 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					if (type === "action" && event.payload.loopRunId) {
 						await postToChat(`**Loop → engine** (step ${at}): ${message}`);
 					}
+					// …and in the SESSION's own transcript, as a `command` row (#374).
+					//
+					// Not a duplicate of the line above: that one is the Assistant thread, this one
+					// is `coding_timeline`, which is what the Co-pilot thread renders and what the
+					// repo history (#257) keeps forever. Until the Coding tab's Loop moved onto the
+					// Pilot, every instruction it sent went through the `/message` route and landed
+					// here; driving the engine directly would have made the repo's own record of an
+					// autonomous run silently empty. Ungated by `loopRunId` for the same reason the
+					// refusal above is: it records what was driven, not who asked.
+					const driven = type === "action" && (data as CodingActionKind | undefined)?.kind === "message"
+						? (data as { text: string }).text
+						: "";
+					if (driven) {
+						await appendTimeline(env, { sessionId, instanceId, userId, type: "command", content: driven }).catch(() => undefined);
+					}
 					// Heartbeat the single-flight claim. Without it a run longer than
 					// STALE_DRIVER_MS would expire its OWN claim and a second Pilot could take the
 					// session out from under it — the exact collision the claim exists to prevent.
@@ -573,7 +599,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			});
 
 			for (let round = 0; round < 12; round++) {
-				result = await runCodingLoop(deps, goal, { maxSteps: 40 });
+				// The caller's cap when it named one, the historical 40 when it did not (#374).
+				result = await runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? 40 });
 				// userHint is consumed by the round above — clear it so stale handoff input
 				// isn't re-injected into later rounds that don't get a fresh value.
 				goal.userHint = undefined;

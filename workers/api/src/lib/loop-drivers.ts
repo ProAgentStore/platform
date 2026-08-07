@@ -39,6 +39,14 @@ export interface LoopStartInput {
 	/** Depth in the supervision tree. 0 when the owner starts it from their own chat. */
 	depth: number;
 	/**
+	 * WHICH repository, for a driver that has more than one to choose from (#374).
+	 *
+	 * Absent means "you pick", which is what a supervisor delegating a goal has always meant — it
+	 * knows an agent, not a checkout. The Coding tab knows exactly which repo the user is looking
+	 * at, and on a multi-repo Coder `repos[0]` is simply the wrong engine to drive.
+	 */
+	repoId?: string;
+	/**
 	 * Open an observable "Delegated: …" board card. Only a SUPERVISOR's run gets one — an owner
 	 * pressing Loop on their own agent was not delegated to by anybody, and a card that says so
 	 * would be a lie. Their coding run is already on the board as its session card (#206).
@@ -106,6 +114,33 @@ const chatDriver: LoopDriver = {
 	},
 };
 
+export type LoopRepoChoice<T> = { ok: true; repo: T } | { ok: false; error: string };
+
+/**
+ * Which repo a coding run is for, and what to say when there isn't one.
+ *
+ * Pure, because it is a DECISION with two distinct failure messages and it used to be `repos[0]`.
+ * That was correct for the only caller it had (a supervisor delegating to an agent), and wrong the
+ * moment the Coding tab's Loop started coming through here (#374): a multi-repo Coder open on its
+ * third repo would have handed the objective to its first, claimed THAT session's driver, and
+ * driven an engine the user was not looking at.
+ *
+ * A named repo that is not on this agent is refused rather than falling back to the first one.
+ * Silently working the wrong repository is exactly the outcome a fallback produces, and it is not
+ * recoverable — the engine has already edited a checkout nobody asked it to touch.
+ */
+export function pickLoopRepo<T extends { id: string }>(repos: readonly T[], repoId?: string | null): LoopRepoChoice<T> {
+	if (!repoId) {
+		return repos[0]
+			? { ok: true, repo: repos[0] }
+			: { ok: false, error: "This coding agent has no repository yet — add one on its Coding tab first." };
+	}
+	const found = repos.find((r) => r.id === repoId);
+	return found
+		? { ok: true, repo: found }
+		: { ok: false, error: "That repository is not on this agent — reload the Coding tab and try again." };
+}
+
 /**
  * Drive the coding ENGINE through the durable Pilot.
  *
@@ -118,10 +153,9 @@ const codingDriver: LoopDriver = {
 	async start(input) {
 		const { env, instanceId, userId, objective } = input;
 		const repos = await listRepos(env, instanceId, userId).catch(() => []);
-		const repo = repos[0];
-		if (!repo) {
-			return { ok: false, status: 409, error: "This coding agent has no repository yet — add one on its Coding tab first." };
-		}
+		const chosen = pickLoopRepo(repos, input.repoId);
+		if (!chosen.ok) return { ok: false, status: 409, error: chosen.error };
+		const repo = chosen.repo;
 		// Connectivity FIRST, and from the same resolver delegation itself uses — so the refusal
 		// names the real blocker. The old code went straight to "no live session" and appended
 		// "(and run `pags up`)" unconditionally, which fired with the runner connected and
@@ -225,6 +259,15 @@ const codingDriver: LoopDriver = {
 				cloneUrl: repo.cloneUrl ?? undefined,
 				branch: repo.branch || undefined,
 				goal: { objective, repo: repo.name, clientType: session.clientType },
+				// The number in the caller's "Max iterations" box, honoured (#374).
+				//
+				// It reached the run ROW and stopped there, so `check_delegation` could report
+				// "iteration 40 of 10" — the Pilot's own per-round cap is 40 and nothing told it
+				// otherwise. Passed only when the caller actually named one: a supervisor's
+				// `delegate_goal` usually does not, and that path keeps the Pilot's default rather
+				// than inheriting `sanitizeMaxIterations`'s fallback of 10 and getting shorter runs
+				// than it asked for.
+				maxSteps: input.maxIterations === undefined ? undefined : maxIterations,
 				boardTaskId,
 				budgetId: input.budgetId,
 				depth: input.depth,
