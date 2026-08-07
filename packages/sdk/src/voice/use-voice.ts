@@ -48,12 +48,12 @@ import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, type VoiceConfig } from "./config.js";
 import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
-import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
+import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
-import { planFinalizedTurn, planSend, utteranceSoFar } from "./turn.js";
+import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
 import { VoiceStt } from "./stt.js";
@@ -245,6 +245,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 		paused: pausedForThinkingRef.current,
 		muted: mutedRef.current,
 	}), []);
+	/** The same idea for the dictation gate: its two flags read TOGETHER, at the moment of the
+	 *  decision, in the shape the pure verdicts take (`endOfTurnAction`, `planNoiseRejection`).
+	 *  Both of them ask "did real words happen this turn?" and both must answer it the same way —
+	 *  a gate that never ran vouches for nothing, wherever the question is asked from. */
+	const gateSnapshot = useCallback(() => {
+		const g = gateRef.current;
+		return g ? { isAlive: g.isAlive(), heardSpeech: g.heardSpeech() } : null;
+	}, []);
 
 	const stopAudioMonitor = useCallback(() => {
 		gateRef.current?.stop();
@@ -395,8 +403,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// Whisper (which would hallucinate a phrase), no "Transcribing/Working".
 						// Only trust a gate that's proven alive, so a dead recognizer can't
 						// black-hole real speech (then we fall back to sending + the noise filter).
-						const g = gateRef.current;
-						if (endOfTurnAction(g ? { isAlive: g.isAlive(), heardSpeech: g.heardSpeech() } : null) === "discard") {
+						if (endOfTurnAction(gateSnapshot()) === "discard") {
 							idleRecycleRef.current = true;
 							clearVoiceText();
 							sttRef.current?.stopDiscard();
@@ -422,7 +429,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			};
 			analyserRef.current = { ctx, analyser, source, stream, ownsStream, raf: requestAnimationFrame(tick) };
 		} catch {}
-	}, [stopAudioMonitor, readGuard, dictate, clearVoiceText]);
+	}, [stopAudioMonitor, readGuard, gateSnapshot, dictate, clearVoiceText]);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -498,6 +505,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// The user "didn't say anything", or said it in a language we can't be sure we heard.
 			// Ditch the recording and let the mic recycle instead of sending a phantom turn.
 			setPaused(false);
+			// The bubble was cleared by `finalize` before we got here, so a drop at this point is
+			// invisible from every side — which is precisely why #377 could not be confirmed from the
+			// data. Fixed message (de-duped per 30s), evidence in the context.
+			reportClientError("voice", `voice turn dropped before sending — ${plan.reason}`, { transcript: text.slice(0, 200), path: "send" });
 			// The language nudge asks them to repeat — never an automatic language switch. Noise
 			// gets no notice at all: there is nothing for the user to do about a turn they didn't
 			// take, and telling them there was one is the confusing part.
@@ -914,8 +925,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const recovered = stripStopWord(soFar, stopWordsRef.current).text.trim();
 			flushSync(() => clearVoiceText());
 			// The echo tail can still put a word of the agent's own voice in front of a real turn;
-			// the same noise filter emitSend uses keeps a pure-noise "turn" out of the composer.
-			if (recovered && !isNoiseTranscript(recovered)) onRecoveredTextRef.current?.(recovered);
+			// the same noise filter emitSend uses keeps a pure-noise "turn" out of the composer. A
+			// rejection HERE is the #377 shape too — the bubble is already gone one line above, so a
+			// dropped recovery leaves nothing anywhere. When the gate vouched for the speech it goes
+			// to the composer anyway: that is visible and editable, never auto-sent, which is the
+			// whole recover contract (#175) and costs a line the user can clear if we were wrong.
+			if (recovered) {
+				const noise = planNoiseRejection(recovered, { gate: gateSnapshot() });
+				if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: recovered.slice(0, 200), path: "recover" });
+				else onRecoveredTextRef.current?.(recovered);
+			}
 			return;
 		}
 
@@ -1041,9 +1060,22 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (isFinal && text.trim()) {
 					const t = text.trim();
 					// Silence/echo hallucination ("you", ".", "\"") — you weren't talking. Don't
-					// send, don't chime; clear the placeholder and let the mic keep listening
-					// (onEnd reopens it). This is the "I'm not talking, don't submit" fix.
-					if (isNoiseTranscript(t, biasPrompt())) { flushSync(() => clearVoiceText()); return; }
+					// send, don't chime; let the mic keep listening (onEnd reopens it). This is the
+					// "I'm not talking, don't submit" fix, and it is unchanged. What changed (#377) is
+					// what the rejection COSTS: it used to clear the turn outright, so a user who HAD
+					// spoken watched their words appear and then vanish with nothing written anywhere.
+					// `planNoiseRejection` asks the gate which of the two happened.
+					const noise = planNoiseRejection(t, { transcribePrompt: biasPrompt(), gate: gateSnapshot() });
+					if (noise.action !== "pass") {
+						// Logged either way. A discard is the case that could not be confirmed from the
+						// data at all — no message, no trace event, no error row — and the transcript
+						// rides in the context because it is the only evidence of what came back.
+						reportClientError("voice", noise.report, { transcript: t.slice(0, 200), path: "handsFree" });
+						// `failed` keeps the live capture on the bubble with a reason and the existing
+						// Dismiss, instead of erasing the words the user just watched appear.
+						flushSync(() => { if (noise.action === "keep") dictate({ type: "failed", note: noise.note, at: Date.now() }); else clearVoiceText(); });
+						return;
+					}
 					finalize(t);
 				} else if (!isFinal && text.trim()) {
 					// Streaming partial (gpt-4o-transcribe) — the words land live in the pending
@@ -1114,7 +1146,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// not the composer.
 			flushSync(() => dictate({ type: "speech", text, at: Date.now() }));
 		}
-	}, [stopAudioMonitor, readGuard, setPaused, dictate, clearVoiceText, biasPrompt]);
+	}, [stopAudioMonitor, readGuard, gateSnapshot, setPaused, dictate, clearVoiceText, biasPrompt]);
 
 	const makeStt = useCallback(async () => {
 		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page reload, and
@@ -1305,7 +1337,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 			ttsSpeaking: !!ttsRef.current?.speaking,
 			dictation: dictationRef.current,
 		});
-		if (prep.recoverText && !isNoiseTranscript(prep.recoverText)) onRecoveredTextRef.current?.(prep.recoverText);
+		// Same rule as the recover path above: the switch is about to destroy this utterance, so a
+		// rejection is only silent where nothing vouches for the speech — and even then it leaves a
+		// breadcrumb rather than the turn evaporating on the way to another agent (#377).
+		if (prep.recoverText) {
+			const noise = planNoiseRejection(prep.recoverText, { gate: gateSnapshot() });
+			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: prep.recoverText.slice(0, 200), path: "switch" });
+			else onRecoveredTextRef.current?.(prep.recoverText);
+		}
 		if (prep.cancelSpeech) ttsRef.current?.cancel();
 		setSpeaking(false);
 		speakEndedAtRef.current = Date.now();
@@ -1314,7 +1353,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		stopConvoRef.current();
 		clearVoiceText();
 		onNextRef.current?.({ carryMode: prep.carryMode });
-	}, [clearVoiceText]);
+	}, [clearVoiceText, gateSnapshot]);
 	nextFromCommandRef.current = nextFromCommand;
 
 	// One hands-free session app-wide: entering hands-free stops any OTHER active session first,

@@ -107,6 +107,58 @@ export function planFinalizedTurn(
 	return text ? { action: "send", text, command, switchAfter } : { action: "none", command, switchAfter };
 }
 
+/** The dictation gate's answer to "did real words happen this turn?", read at the moment of the
+ *  decision. Null where there is no gate at all (browser-dictation mode, iOS Safari). */
+export type GateReading = { isAlive: boolean; heardSpeech: boolean } | null | undefined;
+
+/**
+ * What a NOISE rejection costs the user (#377) — `pass` (it wasn't noise), or a rejection that
+ * either keeps the words or discards them, and in both cases says what to record about it.
+ *
+ * `keep` says the words must SURVIVE; it does not say where. On the send path that is the pending
+ * bubble, marked `failed` with `note` on it; on the recover paths it is the composer. Both are
+ * the same contract read on different surfaces: the user decides what happens to their speech,
+ * and they can only decide while it is still on screen.
+ */
+export type NoiseRejection =
+	| { action: "pass" }
+	| { action: "keep"; note: string; report: string }
+	| { action: "discard"; report: string };
+
+/** Shown on the failed bubble under "Not transcribed" — the reason, not a status. */
+const NOISE_NOTE = "Came back as noise, so nothing was sent — these are the words heard live.";
+/** Fixed strings: `reportClientError` de-dups on source+message, so a burst collapses to one row
+ *  instead of flooding the log. What differs per turn belongs in the context, not here. */
+const NOISE_KEPT = "voice turn rejected as noise — the live capture was kept";
+const NOISE_DISCARDED = "voice turn rejected as noise — nothing was heard, discarded";
+
+/**
+ * Decide what a noise verdict DOES to the turn behind it.
+ *
+ * `isNoiseTranscript` answers one question — "is this text junk?" — and every caller read a yes
+ * as "nothing was said". Those are different claims, and the difference is the whole bug: the
+ * rejected turn was cleared, taking the bubble, the live capture #319 went to trouble to keep,
+ * and any record that a turn had happened at all. The user watched their own words appear and
+ * then vanish, and there was no message, no trace event and no error row to confirm it with.
+ *
+ * The gate already knows which claim is true. If a PROVEN-ALIVE browser-dictation gate heard real
+ * words this turn then the user spoke and the transcriber failed to render it — a `failed` turn,
+ * not an empty one, which is exactly the status `reduceDictation` documents as "the words we DID
+ * hear must survive so nothing is silently lost". Same trust rule as `endOfTurnAction`: a gate
+ * that never ran vouches for nothing.
+ *
+ * A missing gate therefore `discard`s, deliberately. Where there is no gate there is no live
+ * capture either — in Whisper mode the recorder produces nothing until the clip uploads — so
+ * "keeping the words" would leave a bubble reading "(nothing was captured)" on screen: a dead
+ * affordance over a turn nobody took. Noise rejection stays exactly as it was (#332); what
+ * changes is only what a rejection costs.
+ */
+export function planNoiseRejection(text: string, cfg: { transcribePrompt?: string; gate?: GateReading } = {}): NoiseRejection {
+	if (!isNoiseTranscript(text, cfg.transcribePrompt)) return { action: "pass" };
+	if (!cfg.gate?.isAlive || !cfg.gate.heardSpeech) return { action: "discard", report: NOISE_DISCARDED };
+	return { action: "keep", note: NOISE_NOTE, report: NOISE_KEPT };
+}
+
 /**
  * What to do with a transcript that is about to become a message: drop it (and why), or send it
  * — with the live capture beside it and, only when there is really a recording, an audio key.

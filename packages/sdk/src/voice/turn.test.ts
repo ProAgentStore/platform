@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { matchVoiceCommand, splitTrailingCommand, stripStopWord, type VoiceCommandWords } from "./convo.js";
-import { type FinalizedTurn, planFinalizedTurn, planSend, utteranceSoFar } from "./turn.js";
+import { type FinalizedTurn, planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
 
 describe("utteranceSoFar", () => {
 	it("prepends the accumulated buffer in hands-free browser dictation", () => {
@@ -275,6 +275,58 @@ describe("planSend", () => {
 	});
 });
 
+describe("planNoiseRejection", () => {
+	const heardIt = { isAlive: true, heardSpeech: true };
+	const heardNothing = { isAlive: true, heardSpeech: false };
+
+	it("passes anything that is not noise, whatever the gate says", () => {
+		for (const gate of [heardIt, heardNothing, null, undefined]) {
+			expect(planNoiseRejection("run the tests", { gate })).toEqual({ action: "pass" });
+		}
+	});
+
+	it("KEEPS the words when the gate heard real speech this turn", () => {
+		// #377: the transcript is junk, but the user did speak — the transcriber failed to render
+		// it. Clearing the turn here took the bubble and the live capture with it, so the words the
+		// user watched appear a second earlier were gone with no record that a turn happened.
+		const v = planNoiseRejection("Thank you.", { gate: heardIt });
+		expect(v.action).toBe("keep");
+		expect(v.action === "keep" && v.note).toBeTruthy();
+	});
+
+	it("discards silently when a live gate heard nothing — it really was noise", () => {
+		expect(planNoiseRejection("Thank you.", { gate: heardNothing }).action).toBe("discard");
+	});
+
+	it("discards when there is no gate, or one that never ran", () => {
+		// Same trust rule as endOfTurnAction — but the DEFAULT is the opposite way round on purpose:
+		// where there is no gate (iOS, browser-dictation mode) there is no live capture either, so
+		// "keeping the words" would put an empty "(nothing was captured)" bubble on screen.
+		expect(planNoiseRejection("you", { gate: null }).action).toBe("discard");
+		expect(planNoiseRejection("you", {}).action).toBe("discard");
+		expect(planNoiseRejection("you", { gate: { isAlive: false, heardSpeech: true } }).action).toBe("discard");
+	});
+
+	it("keeps a turn rejected as a bias echo when the gate vouched for it", () => {
+		// The #332 guard is unchanged — the transcript is still not sent. But `acceptSpeech` already
+		// stops the gate vouching for the agent's own voice, so a gate that DID vouch means a human
+		// spoke and the clip came back as our own vocabulary anyway.
+		expect(planNoiseRejection("Coder Lead", { transcribePrompt: "Coder Lead", gate: heardIt }).action).toBe("keep");
+		expect(planNoiseRejection("Coder Lead", { transcribePrompt: "Coder Lead", gate: heardNothing }).action).toBe("discard");
+	});
+
+	it("reports BOTH rejections, with a fixed message so a burst de-dups", () => {
+		// A silent discard is why the report behind #377 could not be confirmed from the data: there
+		// was nothing in the trace or the error log for a turn that never became a message.
+		const kept = planNoiseRejection("Thank you.", { gate: heardIt });
+		const dropped = planNoiseRejection("Thank you.", { gate: heardNothing });
+		expect(kept.action === "keep" && kept.report).toMatch(/noise/);
+		expect(dropped.action === "discard" && dropped.report).toMatch(/noise/);
+		// reportClientError de-dups on source+message, so what differs per turn must NOT be in it.
+		expect(planNoiseRejection("uh", { gate: heardNothing })).toEqual(dropped);
+	});
+});
+
 /**
  * The interim/final distinction (#342), pinned as a COUNT rather than a comment.
  *
@@ -303,4 +355,14 @@ describe("command matcher call sites", () => {
 		expect(all.match(/commandStateFor\("final"/g)?.length, "the finished hands-free turn, the push-to-talk final").toBe(2);
 	});
 
+	/**
+	 * The same shape of guard for the same shape of bug (#377). Three sites in the hook called
+	 * `isNoiseTranscript` directly and read a `true` as "nothing was said" — so a turn the gate had
+	 * heard was cleared, live capture and all, with nothing written anywhere. What a rejection
+	 * COSTS is now one decision, and it is also what decides whether the loss is logged; a site
+	 * that goes back to the raw predicate would reintroduce the erasure quietly.
+	 */
+	it("makes no noise decision in the hook without planNoiseRejection", () => {
+		expect(sources["use-voice.ts"].match(/isNoiseTranscript\(/g)?.length ?? 0).toBe(0);
+	});
 });

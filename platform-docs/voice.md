@@ -63,6 +63,13 @@ differs from the configured voice language, it is treated as a mis-detection: it
 you. The configured language is authoritative; STT and TTS follow it. Toggle with the
 per-instance `confirmLanguage` setting (default on).
 
+**A turn you really spoke is never erased.** Silence and background noise make the transcriber
+invent a phrase, so a transcript that comes back as filler is rejected rather than sent — but
+"the transcript is noise" and "nothing was said" are different claims. When the live gate heard
+real words this turn, the pending bubble stays on screen carrying what was heard, marked *Not
+transcribed* with a reason and a **Dismiss**; only a turn nothing vouched for disappears. Either
+way the rejection is recorded, so a turn that never became a message still leaves a trace.
+
 ## Text-to-speech
 
 Browser `SpeechSynthesis` or OpenAI TTS (voice picker + speed). iOS/Safari require a gesture,
