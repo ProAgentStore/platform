@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ownerOf, parseGithubRepo, pickNextIssue } from "./coding.js";
+// The pure helpers moved to `coding-shared.ts` with the #305 split — they are what all four
+// coding route modules needed, which is exactly why they are no longer in any one of them.
+import { ownerOf, parseGithubRepo, pickNextIssue } from "./coding-shared.js";
 // Engine presets + sign-in moved to lib/ so the workflow stops importing a routes module.
 import { type CodingEngine, deriveClientType, engineAuthFor } from "../lib/coding-engines.js";
 import { delegationTaskRecord } from "../lib/delegation.js";

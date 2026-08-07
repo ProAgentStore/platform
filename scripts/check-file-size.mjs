@@ -74,12 +74,14 @@ const PINS = {
 	// composition/account), the largest of which is under 300 lines — so its entry is gone
 	// rather than lowered, which is what this guard asks for when a file drops under LIMIT.
 	//
-	// +5 at #314: `mergePolicy` on the repo-update route — the per-repo half of merge authority.
-	// Raised rather than split. The parsing and the whole policy vocabulary live in
-	// lib/coding-authority.ts (a split would have put them there anyway); what is left here is the
-	// three lines that read one field off a body, which belong with the other fields of the same
-	// PUT and would be worse anywhere else.
-	"workers/api/src/routes/coding.ts": 1778,
+	// `workers/api/src/routes/coding.ts` was the largest that remained, at 1778 lines and 39
+	// routes. #305 split it along the same kind of boundary — coding-repos.ts (what the agent is
+	// pointed at), coding-brains.ts (the three routes that call a MODEL), coding-diagnostics.ts
+	// (the reconcile-and-explain view), coding-shared.ts (the tenant gate and the four things all
+	// four modules need). What is left is the session lifecycle at 684 lines, so its entry is gone
+	// rather than lowered. Each sibling is registered from the exact position its block occupied,
+	// and coding.contract.test.ts derives the route table, the order and each module's ownership
+	// by driving the handlers — the evidence that the split moved no behaviour.
 	// 1696 → 853 at #305. Three contiguous route blocks left for sibling modules along the seams
 	// the registrations already had — instances-tasks.ts (the board/ticket surface and the
 	// instance_runtime_tasks mirror it all reconciles against), instances-chat.ts (the AgentDO
