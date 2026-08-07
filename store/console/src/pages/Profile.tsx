@@ -152,8 +152,12 @@ export default function Profile() {
 					<div className="min-w-0 flex-1">
 						<div className="font-display text-xl font-bold [overflow-wrap:anywhere]">{user.display_name || user.login}</div>
 						<div className="text-sm text-muted [overflow-wrap:anywhere]">@{user.login}</div>
+						{/* flex-wrap, because the parent's min-w-0 lets the COLUMN shrink but a nowrap
+						    row inside it cannot — it just pushes past the edge. All three real roles
+						    still fit at 320px today, so this is the fragility rather than a live
+						    overflow; VoiceFields' chip rows already wrap for the same reason (#333). */}
 						{user.roles && (
-							<div className="flex gap-1.5 mt-1.5">
+							<div className="flex flex-wrap gap-1.5 mt-1.5">
 								{user.roles.map(r => (
 									<span key={r} className={`text-[0.7rem] px-2 py-0.5 rounded-full font-semibold ${r === "admin" ? "bg-red/15 text-red" : r === "creator" ? "bg-accent/15 text-purple-400" : "bg-blue/15 text-blue"}`}>{r}</span>
 								))}

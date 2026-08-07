@@ -1677,24 +1677,57 @@ test.describe("ProAgentStore authenticated Console", () => {
  * those two are what the assertions look at — plus any OTHER element inside main that has quietly
  * become horizontally pannable, which is what a user feels as "the page scrolls sideways" even
  * when the document does not (#235).
+ *
+ * ── `wide`, and why `docOv` cannot be the guard (#333)
+ *
+ * #333 proposed asserting `documentElement.scrollWidth - clientWidth` on every route. That would
+ * assert NOTHING here: the app root is `h-dvh overflow-hidden` (Layout.tsx), so the document is
+ * exactly the viewport and `docOv` is structurally 0 no matter what overflows inside. It is kept
+ * below only as a cheap tripwire for that root class changing.
+ *
+ * The hole #333 correctly identified is in `scrollers`, which only looks at elements whose OWN
+ * `overflow-x` is `auto`/`scroll`. The failure mode it is worried about — a `flex` row that cannot
+ * wrap — has `overflow-x: visible`, so it widens its ancestors and is skipped here. `wide` closes
+ * that by measuring GEOMETRY instead: any element whose right edge is past the viewport.
+ *
+ * Descendants of a nested scroller are excused, because a strip that pans on purpose (the
+ * instance sub-tabs) has content past the edge by design. The walk stops AT `<main>`, which is
+ * `overflow-auto` on the pages that scroll vertically — treating that as a licence would excuse
+ * the whole page and put the hole straight back.
  */
 async function measureOverflow(page: Page) {
 	return page.evaluate(() => {
 		const m = document.querySelector("main");
 		const scrollers: string[] = [];
+		const wide: string[] = [];
+		const name = (h: HTMLElement) => {
+			const cls = typeof h.className === "string" ? h.className : "";
+			return `${h.tagName.toLowerCase()}${h.id ? `#${h.id}` : ""}.${cls.split(/\s+/).slice(0, 3).join(".")}`;
+		};
+		const insideScroller = (el: HTMLElement) => {
+			for (let p = el.parentElement; p && p !== m; p = p.parentElement) {
+				const ox = getComputedStyle(p).overflowX;
+				if (ox === "auto" || ox === "scroll") return true;
+			}
+			return false;
+		};
 		for (const el of Array.from(m?.querySelectorAll("*") ?? [])) {
 			const h = el as HTMLElement;
 			const over = h.scrollWidth - h.clientWidth;
-			if (over <= 1) continue;
 			const ox = getComputedStyle(h).overflowX;
-			if (ox !== "auto" && ox !== "scroll") continue;
-			const cls = typeof h.className === "string" ? h.className : "";
-			scrollers.push(`${h.tagName.toLowerCase()}${h.id ? `#${h.id}` : ""}.${cls.split(/\s+/).slice(0, 3).join(".")} (+${over}px)`);
+			if (over > 1 && (ox === "auto" || ox === "scroll")) {
+				scrollers.push(`${name(h)} (+${over}px)`);
+			}
+			const r = h.getBoundingClientRect();
+			if (r.width > 0 && r.right > window.innerWidth + 1 && !insideScroller(h)) {
+				wide.push(`${name(h)} (right ${Math.round(r.right)} > ${window.innerWidth})`);
+			}
 		}
 		const nav = document.querySelector('header nav[aria-label="Primary"]');
 		return {
 			mainOv: m ? m.scrollWidth - m.clientWidth : 0,
 			docOv: document.documentElement.scrollWidth - window.innerWidth,
+			wide,
 			// The primary nav used to be the ONLY thing that panned on a phone, and the guard
 			// explicitly excused it — so the guard was green on the page users said scrolled
 			// sideways. It is hidden below sm now (the hamburger carries it), so it must measure 0
@@ -1710,7 +1743,9 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 	// only shows below the sm: breakpoint (640px) and needs real content to trigger.
 	// 320px is the narrowest phone still in use (iPhone SE 1st gen) and the width where a row
 	// of fixed-width controls stops fitting; 375 is the common floor.
-	const WIDTHS = [320, 375];
+	// 390 added at #333 — it is the width the report named (iPhone 12/13/14), and a row that fits
+	// at 375 and not at 390 is impossible, but a row sized off a 390-wide breakpoint is not.
+	const WIDTHS = [320, 375, 390];
 
 	// Routes rendered with the mock's seeded content — empty pages can't reproduce the
 	// bug (their max-content is small), so we cover the content-bearing pages that had it.
@@ -1738,10 +1773,13 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 				await page.locator("main").waitFor();
 				await page.waitForTimeout(300); // let async content settle
 
-				const { mainOv, docOv, navOv } = await measureOverflow(page);
+				const { mainOv, docOv, navOv, wide } = await measureOverflow(page);
 				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
 				expect(docOv, `page overflows by ${docOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
 				expect(navOv, `primary nav pans by ${navOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
+				// The `overflow-x: visible` case the other three miss: content past the right edge
+				// that is clipped rather than scrollable, so nothing reports it and nobody can reach it.
+				expect(wide, `content past the right edge at ${width}w on ${route}: ${wide.join(", ")}`).toEqual([]);
 			});
 		}
 	}
@@ -1792,7 +1830,7 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 		],
 	};
 
-	for (const width of [320, 360, 375]) {
+	for (const width of [320, 360, 375, 390]) {
 		test(`no horizontal scroll at ${width}px — /console/profile`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockSignedInConsole(page, realistic);
@@ -1807,13 +1845,39 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 			await page.getByRole("button", { name: "Show" }).click();
 			await page.waitForTimeout(200);
 
-			const { mainOv, docOv, navOv, scrollers } = await measureOverflow(page);
+			const { mainOv, docOv, navOv, scrollers, wide } = await measureOverflow(page);
 			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
 			// A pannable strip inside the page reads as horizontal page scroll on a touch device
 			// even when nothing reports document overflow. Profile has no legitimate one.
 			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
 		});
 	}
+
+	/**
+	 * The roles row, past what an account can actually hold (#333).
+	 *
+	 * Deliberately NOT folded into `realistic` above, and deliberately labelled as a stress case:
+	 * the platform has exactly three roles, all three are in the real fixture, and all three fit
+	 * at 320px. Pretending otherwise would be the same dishonesty as the fixture that made #235
+	 * look fixed.
+	 *
+	 * It is here because the row is `flex`, and a `flex` row does not wrap unless told to — so
+	 * with the real data the wrap is never exercised and could be deleted without a test noticing.
+	 * Verified to fail on `wide` at 320px with `flex-wrap` removed, and to pass with it.
+	 */
+	test("the roles row wraps rather than pushing past the edge", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		await mockSignedInConsole(page, { ...realistic, user: { ...realistic.user, roles: ["user", "creator", "admin", "moderator"] } });
+		await page.goto("/console/profile");
+		await page.waitForLoadState("networkidle");
+		await page.locator("main").waitFor();
+		await page.waitForTimeout(200);
+
+		const { mainOv, wide } = await measureOverflow(page);
+		expect(wide, `roles row pushed content past the right edge: ${wide.join(", ")}`).toEqual([]);
+		expect(mainOv).toBeLessThanOrEqual(1);
+	});
 });
