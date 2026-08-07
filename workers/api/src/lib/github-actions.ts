@@ -28,11 +28,23 @@ export type WorkflowRunsResult = { runs: Array<Record<string, unknown>> } | { st
 export async function fetchWorkflowRuns(
 	repo: string,
 	token: string | undefined,
-	opts: { perPage?: number; page?: number } = {},
+	opts: { perPage?: number; page?: number; branch?: string; event?: string; status?: string } = {},
 ): Promise<WorkflowRunsResult> {
 	const perPage = opts.perPage ?? 1;
 	const page = opts.page ?? 1;
-	const qs = `per_page=${perPage}${page > 1 ? `&page=${page}` : ""}`;
+	// The query used to be per_page + page ONLY, so `runs[0]` meant "the newest run across every
+	// workflow in the repo, on any branch, from any trigger" — which is how the deploy watcher
+	// ended up calling a green `ci.yml` a deploy and re-firing as each of seven workflows landed
+	// (#359). Filters are opt-in so the existing console/connector callers are unchanged.
+	const qs = [
+		`per_page=${perPage}`,
+		page > 1 ? `page=${page}` : "",
+		opts.branch ? `branch=${encodeURIComponent(opts.branch)}` : "",
+		opts.event ? `event=${encodeURIComponent(opts.event)}` : "",
+		opts.status ? `status=${encodeURIComponent(opts.status)}` : "",
+	]
+		.filter(Boolean)
+		.join("&");
 	try {
 		const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs?${qs}`, { headers: actionsHeaders(token) });
 		if (!res.ok) return { status: res.status };
