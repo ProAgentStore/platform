@@ -424,6 +424,58 @@ export function matchVoiceCommand(
 }
 
 /**
+ * Which kind of transcript is being judged. A PARTIAL is the recognizer's running guess at a
+ * sentence still being spoken; a FINAL is an utterance the user finished.
+ */
+export type TranscriptKind = "partial" | "final";
+
+/**
+ * The `state` argument for {@link matchVoiceCommand}, derived from the kind of transcript the
+ * caller holds — so the one rule that depends on that kind is applied in a single place.
+ *
+ * `scrap` (#342) is the only DESTRUCTIVE word in the vocabulary, and it is the only one that is
+ * unsafe to judge on a partial: "scrap that idea and let's move on" passes through the partial
+ * "scrap that" on its way to being said, and the whole-utterance rule that makes the command
+ * precise cannot see a whole utterance yet. Three of the five matcher call sites feed partials
+ * (the dictation gate, the always-on control listener, the interim keyword path) and two feed
+ * finished turns.
+ *
+ * That distinction used to be an OMISSION at three call sites plus a paragraph each explaining
+ * why the flag was missing — a shape whose failure mode is a reader "fixing" the inconsistency.
+ * Here the kind is stated at every site and a partial cannot enable the command even when the
+ * consumer has one: the flag is dropped on the way in, not merely never passed.
+ */
+export function commandStateFor(
+	kind: TranscriptKind,
+	ctx: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean },
+): { muted: boolean; canSwitch: boolean; canScrap: boolean } {
+	return {
+		muted: ctx.muted === true,
+		canSwitch: ctx.canSwitch === true,
+		canScrap: kind === "final" && ctx.canScrap === true,
+	};
+}
+
+/**
+ * Does this transcript carry the configured STOP-SPEECH keyword while the agent is actually
+ * talking (#153)? Substring + case-insensitive, unlike every other command here: it interrupts
+ * playback, so hearing it inside a longer sentence is the point.
+ *
+ * Gated on the agent SPEAKING, which is what contains a false match — there is nothing to
+ * interrupt otherwise, and the two call sites (the control listener and the main result path)
+ * both check it BEFORE the echo guard would drop the result as the agent's own voice.
+ *
+ * An empty or whitespace-only keyword means the feature is OFF. It used to mean "match any text
+ * containing a space", because the emptiness test ran on the un-trimmed setting.
+ */
+export function matchesStopSpeech(s: { keyword: string | undefined; text: string; ttsSpeaking: boolean }): boolean {
+	if (!s.ttsSpeaking) return false;
+	const kw = (s.keyword ?? "").trim().toLowerCase();
+	if (!kw) return false;
+	return s.text.toLowerCase().includes(kw);
+}
+
+/**
  * Should the ALWAYS-ON background control-word listener be running right now (#153)? It's a
  * lightweight dictation loop, SEPARATE from the main recording pipeline, whose only job is to
  * catch a control word (mute / stop) at ANY moment — while TTS plays, while the agent is

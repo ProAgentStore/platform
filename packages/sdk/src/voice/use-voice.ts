@@ -9,6 +9,10 @@
  *   machine.ts   may the mic open? is this result echo, a real turn, or a late one to
  *                recover? what phase are we in?        (canOpenMic/classifyResult/derivePhase)
  *   convo.ts     is this utterance a command? a stop-word? a restart loop? a wrong language?
+ *                may a transcript of THIS kind be judged for a destructive one?
+ *   turn.ts      what IS this finished turn — scrap, repeat, a message with a command on the
+ *                end? and may this transcript be released as a message at all?
+ *                                                  (planFinalizedTurn/planSend/utteranceSoFar)
  *   vad.ts       has the user stopped talking?
  *   audio.ts     mic level; is this transcript noise/hallucination?
  *   gate.ts      did real speech happen this turn?
@@ -46,8 +50,9 @@ import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, storedDictation, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
+import { planFinalizedTurn, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
 import { VoiceStt } from "./stt.js";
@@ -298,15 +303,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 								echoing: isEchoing(readGuard(), now),
 							})
 						) {
-							// No `canScrap` here, deliberately (#342): the gate's transcript is a LIVE
-							// running capture, so mid-sentence it is momentarily exactly "scrap that"
-							// on the way to "scrap that idea and let's move on". The destructive
-							// command is judged only where the whole utterance is actually whole.
+							// "partial": the gate's transcript is a LIVE running capture, so mid-sentence
+							// it is momentarily exactly "scrap that" on the way to "scrap that idea and
+							// let's move on". commandStateFor drops the destructive flag (#342).
 							const cmd = matchVoiceCommand(
 								text,
 								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
 								voiceLangRef.current,
-								{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
+								commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
 							);
 							if (cmd) {
 								// Act NOW — the user asked for silence and should get it immediately,
@@ -460,44 +464,40 @@ export function useVoice(instanceId: string | undefined, opts: {
 			try { debug = typeof localStorage !== "undefined" && !!localStorage.getItem("pags:voice-debug"); } catch {}
 			if (debug) reportClientError("voice-transcript", "final transcript dropped content heard live", { heard, final: text });
 		}
-		// Universal gate: never submit a noise/hallucination transcript ("you", ".", "\"",
-		// "Thank you." on silence/echo). The user "didn't say anything" — drop it, ditch the
-		// recording, and let the mic recycle instead of sending a phantom turn.
-		// The bias prompt is passed so a transcript that is only our OWN vocabulary read back —
-		// the agent's name arriving from silence (#332) — is caught here too, not just filler.
-		if (isNoiseTranscript(text, transcribePromptRef.current)) {
-			lastAudioBlobRef.current = null;
-			setPaused(false);
-			return;
-		}
-		// Language lock (#126): a transcript detected as a DIFFERENT language than configured is
-		// a mis-detection (Whisper briefly hearing Korean/Japanese). Do NOT send it — that made
-		// the agent respond in a language the user never chose. Drop it and nudge them to repeat
-		// in their language, instead of assuming. Never auto-switches languages.
-		if (confirmLanguageRef.current && transcriptLanguageMismatch(text, voiceLangRef.current)) {
-			lastAudioBlobRef.current = null;
-			setPaused(false);
-			flushSync(() => setInterim("Didn't catch your language — please say that again."));
-			setTimeout(() => setInterim((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
-			return;
-		}
-		// The live capture, kept BESIDE the transcript on the message rather than only in a
-		// console.warn (#319). Null whenever there is nothing to compare — see storedDictation.
-		const dictation = storedDictation(heard, text) ?? undefined;
+		// The two gates a transcript must clear (noise, then language) and whether this turn has a
+		// recording worth an audio key — decided together, in order, by `planSend`.
 		const blob = lastAudioBlobRef.current;
 		lastAudioBlobRef.current = null;
-		// Only attach a replay audioKey when there's ACTUAL audio bytes. A zero-byte blob
-		// would mint an audioKey whose upload 400s ("empty audio") and whose replay 404s —
-		// so send the text alone in that case.
-		if (blob && blob.size > 0 && instanceId) {
+		const plan = planSend(text, {
+			heard,
+			transcribePrompt: transcribePromptRef.current,
+			confirmLanguage: confirmLanguageRef.current,
+			lang: voiceLangRef.current,
+			audioBytes: blob?.size ?? 0,
+			instanceId,
+		});
+		if (plan.action === "drop") {
+			// The user "didn't say anything", or said it in a language we can't be sure we heard.
+			// Ditch the recording and let the mic recycle instead of sending a phantom turn.
+			setPaused(false);
+			// The language nudge asks them to repeat — never an automatic language switch. Noise
+			// gets no notice at all: there is nothing for the user to do about a turn they didn't
+			// take, and telling them there was one is the confusing part.
+			if (plan.reason === "language") {
+				flushSync(() => setInterim("Didn't catch your language — please say that again."));
+				setTimeout(() => setInterim((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
+			}
+			return;
+		}
+		if (plan.attachAudio && blob && instanceId) {
 			const turnId = crypto.randomUUID();
-			onSendRef.current(text, { audioKey: turnId, dictation });
+			onSendRef.current(plan.text, { audioKey: turnId, dictation: plan.dictation });
 			void uploadVoiceAudio(instanceId, turnId, blob);
 		} else {
-			// No saved audio (browser dictation, or no instance) — send the raw text.
+			// No saved audio (browser dictation, an empty clip, or no instance) — send the raw text.
 			// NOTE: must be onSendRef, NOT emitSendRef — the latter is THIS function and
 			// would recurse forever (stack overflow) on every dictation send.
-			onSendRef.current(text, dictation ? { dictation } : undefined);
+			onSendRef.current(plan.text, plan.dictation ? { dictation: plan.dictation } : undefined);
 		}
 	};
 	const emitSendRef = useRef(emitSend);
@@ -802,11 +802,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const handleControlResult = useCallback((text: string) => {
 		if (!text?.trim() || !commandsEnabledRef.current) return;
-		// Stop-speech keyword: interrupt the agent's TTS the instant it's heard (substring,
-		// case-insensitive) — only while actually speaking, so a stray match is contained.
-		const stopKw = stopSpeechKeywordRef.current.toLowerCase();
-		if (stopKw && ttsRef.current?.speaking && text.toLowerCase().includes(stopKw)) {
-			ttsRef.current.cancel();
+		// Stop-speech keyword: interrupt the agent's TTS the instant it's heard.
+		if (matchesStopSpeech({ keyword: stopSpeechKeywordRef.current, text, ttsSpeaking: !!ttsRef.current?.speaking })) {
+			ttsRef.current?.cancel();
 			setSpeaking(false);
 			speakEndedAtRef.current = Date.now();
 			return;
@@ -814,17 +812,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Control words — honored at ANY time. `muted` is passed so unmute is matched ONLY while
 		// muted (and mute/repeat are inert there); see matchVoiceCommand.
 		//
-		// No `canScrap` (#342). This recognizer is wired to check INTERIM as well as final results
-		// — that is what makes it able to catch "mute" the instant it is spoken — and a partial is
-		// exactly what a destructive command must never be judged on. The cost is that "scrap
-		// that" said WHILE the agent is talking does nothing; the mic reopens a moment later and
-		// the main path hears it. Missing a delete is the cheap failure; performing one nobody
-		// finished asking for is not.
+		// "partial" (#342): this recognizer is wired to check INTERIM as well as final results —
+		// that is what makes it able to catch "mute" the instant it is spoken — so the destructive
+		// flag is dropped. The cost is that "scrap that" said WHILE the agent is talking does
+		// nothing; the mic reopens a moment later and the main path hears it. Missing a delete is
+		// the cheap failure; performing one nobody finished asking for is not.
 		const cmd = matchVoiceCommand(
 			text,
 			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
 			voiceLangRef.current,
-			{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
+			commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
 		);
 		if (cmd === "mute") muteFromCommandRef.current();
 		else if (cmd === "unmute") unmuteFromCommandRef.current();
@@ -861,9 +858,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// configured keyword appears (case-insensitive substring) while TTS is playing, halt
 		// playback + clear the queue immediately. Only acts when the agent is actually speaking,
 		// so a false match just ends the agent's own turn early (contained). Opt-in per instance.
-		const stopKw = stopSpeechKeywordRef.current.toLowerCase();
-		if (stopKw && ttsRef.current?.speaking && text.toLowerCase().includes(stopKw)) {
-			ttsRef.current.cancel(); // cancel current + any queued utterances
+		if (matchesStopSpeech({ keyword: stopSpeechKeywordRef.current, text, ttsSpeaking: !!ttsRef.current?.speaking })) {
+			ttsRef.current?.cancel(); // cancel current + any queued utterances
 			setSpeaking(false);
 			speakEndedAtRef.current = Date.now();
 			flushSync(() => clearVoiceText());
@@ -892,11 +888,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (!isFinal) return;
 			// Browser dictation accumulates across results, so the recovered turn is everything
 			// said this capture, not just the last fragment.
-			const pending = convoOnRef.current && !sttIsWhisperRef.current ? pendingTextRef.current : "";
+			const soFar = utteranceSoFar({ pending: pendingTextRef.current, text, handsFree: convoOnRef.current, isWhisper: sttIsWhisperRef.current });
 			pendingTextRef.current = "";
 			if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 			lastAudioBlobRef.current = null; // nothing is being sent, so no replay clip to attach
-			const recovered = stripStopWord(`${pending} ${text}`.trim(), stopWordsRef.current).text.trim();
+			const recovered = stripStopWord(soFar, stopWordsRef.current).text.trim();
 			flushSync(() => clearVoiceText());
 			// The echo tail can still put a word of the agent's own voice in front of a real turn;
 			// the same noise filter emitSend uses keeps a pure-noise "turn" out of the composer.
@@ -921,19 +917,18 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// both conversation and push-to-talk. A final-only result (no interim) still falls
 		// through to the existing final-path handling below.
 		//
-		// `canScrap` is withheld here (#342) — this is the partial path by definition, and the
+		// "partial" by definition (#342), so commandStateFor drops the destructive flag: the
 		// sentence "scrap that idea and let's move on" passes through the partial "scrap that" on
-		// its way to being said. Scrap is handled on the FINAL, in `finalize` and in the
+		// its way to being said. Scrap is handled on the FINAL, in `planFinalizedTurn` and in the
 		// push-to-talk final below.
 		if (!isFinal && commandsEnabledRef.current) {
-			const pending = convoOnRef.current && !sttIsWhisperRef.current ? pendingTextRef.current : "";
-			const combined = `${pending} ${text}`.trim();
+			const combined = utteranceSoFar({ pending: pendingTextRef.current, text, handsFree: convoOnRef.current, isWhisper: sttIsWhisperRef.current });
 			const cmd = combined
 				? matchVoiceCommand(
 						combined,
 						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
 						voiceLangRef.current,
-						{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
+						commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
 					)
 				: null;
 			if (cmd) {
@@ -960,52 +955,48 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 		// Conversation mode.
 		if (convoOnRef.current) {
-			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current };
-			// Finalize a hands-free turn: honor a repeat/mute command, else strip a trailing
-			// stop-word and send. Shared by the Whisper path, the silence timer, and the
-			// stop-word early-flush so all three behave identically.
+			// Finalize a hands-free turn. WHAT the turn is — scrap / repeat / a message with a
+			// trailing command / nothing but a command — is decided by `planFinalizedTurn`, on a
+			// "final" transcript, so the ordering that makes it safe is unit-tested rather than
+			// read. What is left here is the sequencing that ordering demands. Shared by the
+			// Whisper path, the silence timer, and the stop-word early-flush so all three behave
+			// identically.
 			const finalize = (msg: string) => {
 				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 				if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
 				pendingTextRef.current = "";
-				let body = msg;
-				// "…, next" is a message AND a departure, and the ORDER is the point: the message
-				// belongs to the agent being LEFT, so it is sent from here before the switch tears
-				// the session down. Switching first would fire it at whoever we land on.
-				let switchAfter = false;
-				// "scrap" (#342), checked HERE — on a finished turn — and before the splitter, which
-				// deliberately does not know the word. A whole-utterance command has no message half
-				// to keep, so there is nothing to send and nothing to strip: the turn was the
-				// command. `onScrap` only STAGES a delete for the consumer to confirm; nothing is
-				// removed on the strength of one transcript.
-				if (commandsEnabledRef.current && canScrapRef.current && matchVoiceCommand(msg, cmdWords, voiceLangRef.current, { muted: mutedRef.current, canScrap: true }) === "scrap") {
+				const plan = planFinalizedTurn(msg, {
+					commandsEnabled: commandsEnabledRef.current,
+					canScrap: canScrapRef.current,
+					canSwitch: canSwitchRef.current,
+					muted: mutedRef.current,
+					words: { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
+					lang: voiceLangRef.current,
+					stopWords: stopWordsRef.current,
+				});
+				// `onScrap` only STAGES a delete for the consumer to confirm; nothing is removed on
+				// the strength of one transcript.
+				if (plan.action === "scrap") {
 					flushSync(() => clearVoiceText());
 					onScrapRef.current?.();
 					return;
 				}
-				if (commandsEnabledRef.current) {
-					// A control word at the END of a turn is BOTH a command and a finished message
-					// ("run the tests, mute"). Acting on it and dropping the turn threw away what
-					// the user dictated — they asked for silence and lost their request with it.
-					// Split instead: apply the command, send what came before.
-					const split = splitTrailingCommand(msg, cmdWords, voiceLangRef.current, { muted: mutedRef.current, canSwitch: canSwitchRef.current });
-					body = split.text;
-					if (split.command === "repeat") {
-						flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
-						repeatLastRef.current();
-						return; // "repeat" asks to hear the LAST reply — sending a new message first would replace it
-					}
-					if (split.command === "mute") muteFromCommandRef.current();
-					else if (split.command === "unmute") unmuteFromCommandRef.current();
-					else if (split.command === "exit") exitFromCommandRef.current();
-					else if (split.command === "next") switchAfter = true;
+				if (plan.action === "repeat") {
+					// "repeat" asks to hear the LAST reply — sending a new message first would replace it.
+					flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					repeatLastRef.current();
+					return;
 				}
-				const t = stripStopWord(body, stopWordsRef.current).text.trim();
-				if (!t) {
+				// The trailing command applies FIRST — the user asked for silence in the same breath
+				// as the request, and getting it after the send is getting it late.
+				if (plan.command === "mute") muteFromCommandRef.current();
+				else if (plan.command === "unmute") unmuteFromCommandRef.current();
+				else if (plan.command === "exit") exitFromCommandRef.current();
+				if (plan.action === "none") {
 					// Nothing to send — the turn was the command. Leave now rather than sitting on
 					// a mic the user has already walked away from.
 					flushSync(() => clearVoiceText());
-					if (switchAfter) nextFromCommandRef.current();
+					if (plan.switchAfter) nextFromCommandRef.current();
 					return;
 				}
 				flushSync(() => {
@@ -1016,10 +1007,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 					setMicOn(false);
 					playThinkingChime();
 				});
-				emitSendRef.current(t);
-				// The reply to this turn lands in the agent's own transcript and outlives the tab
-				// (#252) — the #278 indicator is what makes that visible from wherever we go next.
-				if (switchAfter) nextFromCommandRef.current();
+				emitSendRef.current(plan.text);
+				// "…, next" is a message AND a departure, and the ORDER is the point: the message
+				// belongs to the agent being LEFT, so it is sent from here before the switch tears
+				// the session down. Switching first would fire it at whoever we land on. The reply
+				// lands in that agent's own transcript and outlives the tab (#252) — the #278
+				// indicator is what makes that visible from wherever we go next.
+				if (plan.switchAfter) nextFromCommandRef.current();
 			};
 			finalizeRef.current = finalize; // so the max-duration timer can end the turn identically
 			// Whisper: `text` is the full transcribed turn (our VAD already detected the
@@ -1054,7 +1048,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// waiting for its final. Latch so the trailing final is swallowed; finalize strips the
 			// stop-word and sends what came before (or nothing if the stop-word was said alone).
 			if (!isFinal && text.trim() && stopWordsRef.current.length) {
-				const combinedNow = `${pendingTextRef.current} ${text}`.trim();
+				const combinedNow = utteranceSoFar({ pending: pendingTextRef.current, text, handsFree: true, isWhisper: false });
 				if (stripStopWord(combinedNow, stopWordsRef.current).ended) {
 					handledUtteranceRef.current = true;
 					finalize(combinedNow);
@@ -1082,10 +1076,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 					text.trim(),
 					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
 					voiceLangRef.current,
-					// A FINAL result — the only place a destructive command is allowed to be judged
+					// "final" — one of only two sites where a destructive command may be judged
 					// (#342). Tap-to-talk is also where the auto-VAD is off, so this really is the
 					// whole utterance the user chose to send, not a guess at where they stopped.
-					{ muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current },
+					commandStateFor("final", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
 				);
 				if (cmd === "repeat") { repeatLastRef.current(); return; }
 				if (cmd === "mute") { muteFromCommandRef.current(); return; }

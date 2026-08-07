@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandPhrases, decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
+import { commandPhrases, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -696,5 +696,66 @@ describe('splitTrailingCommand — "scrap" is deliberately not a candidate (#342
 		const r = splitTrailingCommand("let's rewrite the parser, scrap that", undefined, "en", { canSwitch: true });
 		expect(r.command).toBeNull();
 		expect(r.text).toBe("let's rewrite the parser, scrap that");
+	});
+});
+
+describe("commandStateFor", () => {
+	it("drops the destructive flag on a PARTIAL, even when the consumer can delete", () => {
+		// The three live-partial call sites pass `canScrap: true` and get `false` back. That is
+		// the point: the flag is refused on the way IN rather than never passed, so the rule
+		// cannot be undone by a reader who notices one site "missing" what its siblings have.
+		expect(commandStateFor("partial", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: false });
+		expect(commandStateFor("final", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: true });
+	});
+
+	it("makes the same words a delete on a final and ordinary speech on a partial", () => {
+		const partial = commandStateFor("partial", { canScrap: true, canSwitch: true });
+		const final = commandStateFor("final", { canScrap: true, canSwitch: true });
+		expect(matchVoiceCommand("scrap that", undefined, "en", partial)).toBeNull();
+		expect(matchVoiceCommand("scrap that", undefined, "en", final)).toBe("scrap");
+		// Everything else is unaffected by the kind — only the destructive word is withheld,
+		// so a partial keeps catching "mute" the instant it is spoken (#153/#228).
+		for (const [text, cmd] of [
+			["mute", "mute"],
+			["exit voice", "exit"],
+			["repeat", "repeat"],
+			["switch agent", "next"],
+		] as const) {
+			expect(matchVoiceCommand(text, undefined, "en", partial), text).toBe(cmd);
+			expect(matchVoiceCommand(text, undefined, "en", final), text).toBe(cmd);
+		}
+	});
+
+	it("passes muted and canSwitch through as booleans, defaulting to off", () => {
+		expect(commandStateFor("final", {})).toEqual({ muted: false, canSwitch: false, canScrap: false });
+		expect(commandStateFor("final", { muted: true, canSwitch: true })).toEqual({ muted: true, canSwitch: true, canScrap: false });
+	});
+});
+
+describe("matchesStopSpeech", () => {
+	const speaking = { ttsSpeaking: true };
+
+	it("matches as a substring, case-insensitively — it interrupts, so mid-sentence counts", () => {
+		expect(matchesStopSpeech({ keyword: "stop", text: "okay STOP please", ...speaking })).toBe(true);
+		expect(matchesStopSpeech({ keyword: "STOP", text: "okay stop please", ...speaking })).toBe(true);
+	});
+
+	it("is inert unless the agent is actually talking — there is nothing to interrupt", () => {
+		expect(matchesStopSpeech({ keyword: "stop", text: "stop", ttsSpeaking: false })).toBe(false);
+	});
+
+	it("is off when no keyword is configured", () => {
+		expect(matchesStopSpeech({ keyword: "", text: "anything at all", ...speaking })).toBe(false);
+		expect(matchesStopSpeech({ keyword: undefined, text: "anything at all", ...speaking })).toBe(false);
+	});
+
+	it("treats a whitespace-only keyword as OFF, not as 'any text containing a space'", () => {
+		// The emptiness test used to run on the un-trimmed setting, so a keyword of " " halted
+		// playback on almost every result the control listener saw.
+		expect(matchesStopSpeech({ keyword: "   ", text: "tell me about the parser", ...speaking })).toBe(false);
+	});
+
+	it("does not match text without the keyword", () => {
+		expect(matchesStopSpeech({ keyword: "stop", text: "keep going", ...speaking })).toBe(false);
 	});
 });

@@ -103,7 +103,15 @@ const PINS = {
 	// "scrap that idea and let's move on" is momentarily exactly "scrap that". That reasoning has
 	// to live at each site it constrains — a reader deleting the "missing" branch is the failure —
 	// and the matching rule it depends on is pure and lives in convo.ts.
-	"packages/sdk/src/voice/use-voice.ts": 1608,
+	// 1608 → 1602 at #305, and the small number is the honest one: this slice moved the last two
+	// inline DECISIONS out (voice/turn.ts — what a finished hands-free turn IS, and whether a
+	// transcript may be released as a message) and left the sequencing, which is what this file is
+	// for. Both chains are order-sensitive and every ordering in them is a bug someone shipped, so
+	// what changed is that a unit test can now adjudicate them; the dispatch that replaced each
+	// chain is nearly as long as the chain was. `commandStateFor` is the same trade at the five
+	// matcher call sites: the interim/final distinction is now stated at each site and enforced on
+	// the way in, rather than being an omission plus a paragraph explaining the omission.
+	"packages/sdk/src/voice/use-voice.ts": 1602,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
