@@ -6,6 +6,17 @@ import { publicRoutes } from "./public.js";
 import type { Env } from "../types.js";
 
 /**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+
+/**
  * INTEGRATION test for the public (no-auth) routes — agent detail, developer
  * profile, trial chat, and the authenticated webhook-ingest path. Drives the real
  * handlers end-to-end through the Hono app. Only the D1 + AgentDO boundaries are
@@ -175,7 +186,7 @@ describe("GET /v1/public/agents/:id", () => {
 		const { wrap } = buildApp({ agents: [{ id: "a1", slug: "draft", visibility: "draft" }] });
 		const res = await wrap("/v1/public/agents/a1");
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("not found");
+		expect((await jsonBody(res)).error).toContain("not found");
 	});
 
 	it("returns a published agent's public detail row", async () => {
@@ -183,7 +194,7 @@ describe("GET /v1/public/agents/:id", () => {
 		const { wrap } = buildApp({ agents: [row] });
 		const res = await wrap("/v1/public/agents/coder"); // resolvable by slug too
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.slug).toBe("coder");
 		expect(body.subscriber_count).toBe(3);
 	});
@@ -194,7 +205,7 @@ describe("GET /v1/public/developers/:login", () => {
 		const { wrap } = buildApp({ users: [] });
 		const res = await wrap("/v1/public/developers/ghost");
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Developer not found");
+		expect((await jsonBody(res)).error).toContain("Developer not found");
 	});
 
 	it("returns the profile + published agents, NEVER leaking roles", async () => {
@@ -209,7 +220,7 @@ describe("GET /v1/public/developers/:login", () => {
 		const { wrap } = buildApp({ users: [user], agents });
 		const res = await wrap("/v1/public/developers/alice");
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.developer.login).toBe("alice");
 		expect(body.developer.name).toBe("Alice"); // falls back to github_name when display_name empty
 		expect(body.developer.agentCount).toBe(1); // only the published one
@@ -227,7 +238,7 @@ describe("POST /v1/public/agents/:id/try (trial chat)", () => {
 			method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
 		});
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("message required");
+		expect((await jsonBody(res)).error).toContain("message required");
 	});
 
 	it("404s an unpublished agent", async () => {
@@ -250,7 +261,7 @@ describe("POST /v1/public/agents/:id/try (trial chat)", () => {
 			body: JSON.stringify({ message: "hi" }),
 		});
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.reply).toBe("hello");
 		expect(typeof body.sessionId).toBe("string"); // server-derived, ip-hashed
 		// The template copy path ran: init + a KB POST both happened.
@@ -281,7 +292,7 @@ describe("POST /v1/public/agents/:id/try (trial chat)", () => {
 			body: JSON.stringify({ message: "one more" }),
 		});
 		expect(res.status).toBe(429);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.error).toContain("Trial limit reached");
 		// It must NOT have forwarded the chat once the cap is hit.
 		expect(doCalls.some((c) => c.path === "/chat")).toBe(false);
@@ -295,8 +306,8 @@ describe("POST /v1/public/agents/:id/try (trial chat)", () => {
 			headers: { "Content-Type": "application/json", "CF-Connecting-IP": "7.7.7.7" },
 			body: JSON.stringify({ message: "hi", sessionId }),
 		});
-		const a = (await (await call("client-chosen-A")).json()) as any;
-		const b = (await (await call("client-chosen-B")).json()) as any;
+		const a = await jsonBody(await call("client-chosen-A"));
+		const b = await jsonBody(await call("client-chosen-B"));
 		// Different client-supplied sessionIds → SAME server session id (tied to IP).
 		expect(a.sessionId).toBe(b.sessionId);
 	});
@@ -350,7 +361,7 @@ describe("POST /v1/public/webhook/:instanceId/ingest", () => {
 			body: JSON.stringify({ title: "t", content: "c" }),
 		});
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Instance not found");
+		expect((await jsonBody(res)).error).toContain("Instance not found");
 	});
 
 	it("400s when title/content missing", async () => {
@@ -361,7 +372,7 @@ describe("POST /v1/public/webhook/:instanceId/ingest", () => {
 			body: JSON.stringify({ title: "only-title" }),
 		});
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("title and content required");
+		expect((await jsonBody(res)).error).toContain("title and content required");
 	});
 
 	it("owner ingests a doc → forwards to the instance DO and returns 201", async () => {
@@ -375,10 +386,10 @@ describe("POST /v1/public/webhook/:instanceId/ingest", () => {
 			body: JSON.stringify({ title: "Report", content: "the body", source: "zapier" }),
 		});
 		expect(res.status).toBe(201);
-		expect((await res.json() as any).id).toBe("doc-9");
+		expect((await jsonBody(res)).id).toBe("doc-9");
 		const post = doCalls.find((c) => c.path === "/knowledge" && c.method === "POST");
 		expect(post).toBeTruthy();
-		expect((post!.body as any).title).toBe("Report");
-		expect((post!.body as any).source).toBe("zapier");
+		expect(rec(post!.body).title).toBe("Report");
+		expect(rec(post!.body).source).toBe("zapier");
 	});
 });

@@ -6,6 +6,17 @@ import { chatRoutes } from "./chat.js";
 import type { Env } from "../types.js";
 
 /**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+
+/**
  * INTEGRATION test for the agent (creator-facing) chat/memory/tasks/state/knowledge
  * routes. Drives the real handlers through the Hono app: auth (requireUser) →
  * ownership gate (resolveAgent, mock D1) → AgentDO proxy (recording stub) → JSON.
@@ -124,21 +135,21 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 		const { app, env } = buildApp([{ id: "a1", owner_id: "u1" }]);
 		const res = await json(app, env, "POST", "/v1/agents/a1/chat", {}, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("message required");
+		expect((await jsonBody(res)).error).toContain("message required");
 	});
 
 	it("404s when the agent does not exist", async () => {
 		const { app, env } = buildApp([]);
 		const res = await json(app, env, "POST", "/v1/agents/ghost/chat", { message: "hi" }, await tokenFor("u1"));
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Agent not found");
+		expect((await jsonBody(res)).error).toContain("Agent not found");
 	});
 
 	it("403s when the caller does not own the agent (and is not admin)", async () => {
 		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "owner", name: "A" }]);
 		const res = await json(app, env, "POST", "/v1/agents/a1/chat", { message: "hi" }, await tokenFor("attacker"));
 		expect(res.status).toBe(403);
-		expect((await res.json() as any).error).toContain("Not your agent");
+		expect((await jsonBody(res)).error).toContain("Not your agent");
 		// It never reached the DO.
 		expect(doCalls).toHaveLength(0);
 	});
@@ -148,12 +159,12 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 		setDoResponse(() => Response.json({ reply: "hello" }));
 		const res = await json(app, env, "POST", "/v1/agents/a1/chat", { message: "hi" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).reply).toBe("hello");
+		expect((await jsonBody(res)).reply).toBe("hello");
 		const chat = doCalls.find((c) => c.path === "/chat");
 		expect(chat).toBeTruthy();
-		expect((chat!.body as any).message).toBe("hi");
-		expect((chat!.body as any).userId).toBe("u1"); // server-pinned uid
-		expect((chat!.body as any).agentName).toBe("Coder");
+		expect(rec(chat!.body).message).toBe("hi");
+		expect(rec(chat!.body).userId).toBe("u1"); // server-pinned uid
+		expect(rec(chat!.body).agentName).toBe("Coder");
 		expect(usageWrites).toHaveLength(1);
 	});
 
@@ -162,7 +173,7 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 		setDoResponse(() => Response.json({ reply: "ok" }));
 		const res = await json(app, env, "POST", "/v1/agents/a1/chat", { message: "hi" }, await tokenFor("adm", ["user", "admin"]));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).reply).toBe("ok");
+		expect((await jsonBody(res)).reply).toBe("ok");
 	});
 
 	it("propagates a non-OK DO status to the caller", async () => {
@@ -170,7 +181,7 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 		setDoResponse(() => Response.json({ error: "rate limited" }, { status: 429 }));
 		const res = await json(app, env, "POST", "/v1/agents/a1/chat", { message: "hi" }, await tokenFor("u1"));
 		expect(res.status).toBe(429);
-		expect((await res.json() as any).error).toBe("rate limited");
+		expect((await jsonBody(res)).error).toBe("rate limited");
 	});
 
 	it("does not throw an opaque 500 when the DO returns a non-JSON body (hard crash)", async () => {
@@ -180,7 +191,7 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 		const res = await json(app, env, "POST", "/v1/agents/a1/chat", { message: "hi" }, await tokenFor("u1"));
 		expect(res.status).toBe(500);
 		// The real DO body is surfaced (traceable) instead of a masked "Internal server error".
-		expect((await res.json() as any).error).toContain("CPU time");
+		expect((await jsonBody(res)).error).toContain("CPU time");
 	});
 });
 
@@ -326,7 +337,7 @@ describe("GET /v1/agents/:id/messages + memory + tasks (owner-scoped DO proxy)",
 		setDoResponse(() => Response.json({ messages: [{ id: "m1" }] }));
 		const res = await get(app, env, "/v1/agents/a1/messages?limit=5", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).messages).toHaveLength(1);
+		expect((await jsonBody(res)).messages).toHaveLength(1);
 		expect(doCalls[0].path).toContain("/messages?limit=5");
 	});
 
@@ -335,10 +346,10 @@ describe("GET /v1/agents/:id/messages + memory + tasks (owner-scoped DO proxy)",
 		setDoResponse(() => Response.json({ saved: true }));
 		const res = await json(app, env, "PUT", "/v1/agents/a1/memory", { key: "k", value: "v" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).saved).toBe(true);
+		expect((await jsonBody(res)).saved).toBe(true);
 		const put = doCalls.find((c) => c.path === "/memory" && c.method === "PUT");
 		expect(put).toBeTruthy();
-		expect((put!.body as any).key).toBe("k");
+		expect(rec(put!.body).key).toBe("k");
 	});
 
 	it("POST tasks preserves the DO's 201 status", async () => {
@@ -346,7 +357,7 @@ describe("GET /v1/agents/:id/messages + memory + tasks (owner-scoped DO proxy)",
 		setDoResponse(() => Response.json({ id: "t1" }, { status: 201 }));
 		const res = await json(app, env, "POST", "/v1/agents/a1/tasks", { title: "do it" }, await tokenFor("u1"));
 		expect(res.status).toBe(201);
-		expect((await res.json() as any).id).toBe("t1");
+		expect((await jsonBody(res)).id).toBe("t1");
 	});
 
 	it("blocks a non-owner from reading memory (403, no DO hit)", async () => {
@@ -365,7 +376,7 @@ describe("knowledge routes (owner-scoped DO proxy)", () => {
 			method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("u1")}` },
 		}, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).deleted).toBe(true);
+		expect((await jsonBody(res)).deleted).toBe(true);
 		const del = doCalls.find((c) => c.method === "DELETE");
 		expect(del!.path).toContain("/knowledge/doc-7");
 	});
@@ -375,6 +386,6 @@ describe("knowledge routes (owner-scoped DO proxy)", () => {
 		setDoResponse(() => Response.json({ error: "bad url" }, { status: 400 }));
 		const res = await json(app, env, "POST", "/v1/agents/a1/knowledge/ingest-url", { url: "x" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toBe("bad url");
+		expect((await jsonBody(res)).error).toBe("bad url");
 	});
 });

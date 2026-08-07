@@ -6,6 +6,16 @@ import { toolRoutes } from "./tools.js";
 import type { Env } from "../types.js";
 
 /**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+
+/**
  * INTEGRATION test: drives the real tool route handlers end-to-end through the Hono
  * app — auth (verifySession) → ownership gate (requireOwnedInstance, mock D1) →
  * the real connector-tool registry / connector-consent lib → JSON response. No handler
@@ -91,7 +101,7 @@ describe("GET /v1/instances/:id/tools (integration)", () => {
 		const { app, env } = buildApp({ owns: [] }); // u1 owns nothing
 		const res = await get(app, env, "/v1/instances/inst-1/tools", await tokenFor("u1"));
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Instance not found");
+		expect((await jsonBody(res)).error).toContain("Instance not found");
 	});
 
 	it("returns the real connector-tool registry with schemas for the owner", async () => {
@@ -122,7 +132,7 @@ describe("POST /v1/instances/:id/tools/:name (integration)", () => {
 			body: "{}",
 		}, env);
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Unknown tool");
+		expect((await jsonBody(res)).error).toContain("Unknown tool");
 	});
 
 	it("400s when required schema fields are missing (real schema validation)", async () => {
@@ -134,7 +144,7 @@ describe("POST /v1/instances/:id/tools/:name (integration)", () => {
 			body: "{}",
 		}, env);
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("Missing required field");
+		expect((await jsonBody(res)).error).toContain("Missing required field");
 	});
 });
 
@@ -153,7 +163,7 @@ describe("consent routes (integration, cross-boundary write + read)", () => {
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
 		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: false }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).enabled).toBe(false);
+		expect((await jsonBody(res)).enabled).toBe(false);
 		expect(writes.some((w) => w.sql.includes("DELETE FROM instance_connector_consent"))).toBe(true);
 	});
 

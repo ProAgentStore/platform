@@ -6,6 +6,17 @@ import { keysRoutes } from "./keys.js";
 import type { Env } from "../types.js";
 
 /**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
+
+/**
  * INTEGRATION test for the key-vault routes: request → auth (verifySession) → route
  * handler → REAL envelope crypto (encryptKey/decryptKey via WebCrypto) → a stateful
  * in-memory `user_api_keys` table → JSON response. The PUT→reveal round-trip proves the
@@ -116,7 +127,7 @@ describe("PUT /v1/keys/:provider (integration)", () => {
 		const { app, env } = buildApp();
 		const res = await json(app, env, "PUT", "/v1/keys/madeup", { key: "x" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("Unknown provider");
+		expect((await jsonBody(res)).error).toContain("Unknown provider");
 	});
 
 	it("400s a key that clearly belongs to ANOTHER provider (real validation)", async () => {
@@ -124,7 +135,7 @@ describe("PUT /v1/keys/:provider (integration)", () => {
 		const { app, env } = buildApp();
 		const res = await json(app, env, "PUT", "/v1/keys/anthropic", { key: "sk-not-anthropic" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("OpenAI");
+		expect((await jsonBody(res)).error).toContain("OpenAI");
 	});
 
 	it("ACCEPTS a shape we don't recognise — a provider changing format must not lock users out", async () => {
@@ -155,7 +166,7 @@ describe("PUT → reveal round-trip (integration, real AES-256-GCM)", () => {
 		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-example-roundtrip-not-a-real-key" }, tok);
 		const res = await app.request("/v1/keys/openai/reveal", { headers: { Authorization: `Bearer ${tok}` } }, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).key).toBe("sk-example-roundtrip-not-a-real-key");
+		expect((await jsonBody(res)).key).toBe("sk-example-roundtrip-not-a-real-key");
 	});
 
 	it("404s reveal for a different user (owner scoping — can't read another's key)", async () => {
@@ -173,14 +184,14 @@ describe("GET /v1/keys/status + DELETE (integration)", () => {
 		const tok = await tokenFor("u1");
 		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-status-example-not-a-real-key" }, tok);
 
-		const before = await (await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env)).json() as any;
-		expect(before.providers.find((p: any) => p.id === "openai").hasKey).toBe(true);
-		expect(before.providers.find((p: any) => p.id === "anthropic").hasKey).toBe(false);
+		const before = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
+		expect(rows(before.providers).find((p) => p.id === "openai")?.hasKey).toBe(true);
+		expect(rows(before.providers).find((p) => p.id === "anthropic")?.hasKey).toBe(false);
 
 		const del = await json(app, env, "DELETE", "/v1/keys/openai", undefined, tok);
 		expect(del.status).toBe(200);
 
-		const after = await (await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env)).json() as any;
-		expect(after.providers.find((p: any) => p.id === "openai").hasKey).toBe(false);
+		const after = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
+		expect(rows(after.providers).find((p) => p.id === "openai")?.hasKey).toBe(false);
 	});
 });

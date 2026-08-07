@@ -6,6 +6,17 @@ import { agentRoutes } from "./agents.js";
 import type { Env } from "../types.js";
 
 /**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+
+/**
  * INTEGRATION test for the agent CRUD routes — list/detail/create/update/delete/
  * clone + capabilities & settings-schema. Drives the real handlers through the Hono
  * app: auth (requireUser/requireCreator) → ownership/role gates → mock D1 (canned
@@ -138,7 +149,7 @@ describe("GET /v1/agents (public list)", () => {
 		] });
 		const res = await app.request("/v1/agents", {}, env);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.agents.map((a: any) => a.slug)).toEqual(["pub"]);
 	});
 });
@@ -156,7 +167,7 @@ describe("GET /v1/agents/my/agents", () => {
 		] });
 		const res = await get(app, env, "/v1/agents/my/agents", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.agents).toHaveLength(1);
 		expect(body.agents[0].slug).toBe("mine");
 	});
@@ -167,7 +178,7 @@ describe("GET /v1/agents/:id (detail visibility)", () => {
 		const { app, env } = buildApp({ agents: [] });
 		const res = await get(app, env, "/v1/agents/ghost");
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Agent not found");
+		expect((await jsonBody(res)).error).toContain("Agent not found");
 	});
 
 	it("404s an unpublished agent to an anonymous caller", async () => {
@@ -180,7 +191,7 @@ describe("GET /v1/agents/:id (detail visibility)", () => {
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "pub", owner_id: "u1", visibility: "published", name: "Pub" }] });
 		const res = await get(app, env, "/v1/agents/pub");
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.slug).toBe("pub");
 		expect(body.owner_id).toBeUndefined(); // stripped for non-owners
 	});
@@ -189,7 +200,7 @@ describe("GET /v1/agents/:id (detail visibility)", () => {
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "draft", owner_id: "u1", visibility: "draft", name: "D" }] });
 		const res = await get(app, env, "/v1/agents/draft", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.owner_id).toBe("u1");
 	});
 
@@ -222,35 +233,35 @@ describe("POST /v1/agents (create — requires creator)", () => {
 		const { app, env } = buildApp();
 		const res = await json(app, env, "POST", "/v1/agents", { slug: "new-a", name: "New" }, await tokenFor("u1", ["user"]));
 		expect(res.status).toBe(403);
-		expect((await res.json() as any).error).toContain("Creator access required");
+		expect((await jsonBody(res)).error).toContain("Creator access required");
 	});
 
 	it("400s a missing slug/name", async () => {
 		const { app, env } = buildApp();
 		const res = await json(app, env, "POST", "/v1/agents", { name: "New" }, await tokenFor("u1", ["creator"]));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("slug and name required");
+		expect((await jsonBody(res)).error).toContain("slug and name required");
 	});
 
 	it("400s an invalid slug format", async () => {
 		const { app, env } = buildApp();
 		const res = await json(app, env, "POST", "/v1/agents", { slug: "Bad_Slug", name: "New" }, await tokenFor("u1", ["creator"]));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("lowercase alphanumeric");
+		expect((await jsonBody(res)).error).toContain("lowercase alphanumeric");
 	});
 
 	it("409s a taken slug", async () => {
 		const { app, env } = buildApp({ takenSlugs: ["dupe"] });
 		const res = await json(app, env, "POST", "/v1/agents", { slug: "dupe", name: "Dup" }, await tokenFor("u1", ["creator"]));
 		expect(res.status).toBe(409);
-		expect((await res.json() as any).error).toContain("already taken");
+		expect((await jsonBody(res)).error).toContain("already taken");
 	});
 
 	it("creates the agent, inits its DO, and returns id+slug (201)", async () => {
 		const { app, env, writes, doCalls } = buildApp();
 		const res = await json(app, env, "POST", "/v1/agents", { slug: "brand-new", name: "Brand New", personality: "helpful" }, await tokenFor("creatorUid", ["creator"]));
 		expect(res.status).toBe(201);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.slug).toBe("brand-new");
 		expect(typeof body.id).toBe("string");
 		// A row was inserted...
@@ -260,7 +271,7 @@ describe("POST /v1/agents (create — requires creator)", () => {
 		// ...and its DO was initialized.
 		const init = doCalls.find((c) => c.path === "/init");
 		expect(init).toBeTruthy();
-		expect((init!.body as any).name).toBe("Brand New");
+		expect(rec(init!.body).name).toBe("Brand New");
 	});
 });
 
@@ -281,14 +292,14 @@ describe("PUT /v1/agents/:id (update)", () => {
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
 		const res = await json(app, env, "PUT", "/v1/agents/a1", { notAllowed: "x" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("Nothing to update");
+		expect((await jsonBody(res)).error).toContain("Nothing to update");
 	});
 
 	it("owner updates allowed fields → builds a scoped UPDATE and returns success", async () => {
 		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
 		const res = await json(app, env, "PUT", "/v1/agents/a1", { name: "Renamed", visibility: "published", bogus: "ignored" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).success).toBe(true);
+		expect((await jsonBody(res)).success).toBe(true);
 		const upd = writes.find((w) => w.sql.startsWith("UPDATE agents SET"));
 		expect(upd).toBeTruthy();
 		// id is bound as ?1, then only the allowed fields.
@@ -310,7 +321,7 @@ describe("DELETE /v1/agents/:id", () => {
 		const { app, env, batches } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
 		const res = await app.request("/v1/agents/a1", { method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("u1")}` } }, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).success).toBe(true);
+		expect((await jsonBody(res)).success).toBe(true);
 		expect(batches).toHaveLength(1);
 		const sqls = batches[0].map((s) => s.sql);
 		expect(sqls.some((s) => s.includes("DELETE FROM agent_executions"))).toBe(true);
@@ -330,7 +341,7 @@ describe("POST /v1/agents/:id/clone", () => {
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "src", owner_id: "u1", visibility: "published" }] });
 		const res = await json(app, env, "POST", "/v1/agents/src/clone", {}, await tokenFor("u2", ["creator"]));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("slug required");
+		expect((await jsonBody(res)).error).toContain("slug required");
 	});
 
 	it("404s cloning an unpublished / missing source", async () => {
@@ -343,7 +354,7 @@ describe("POST /v1/agents/:id/clone", () => {
 		const { app, env, writes, doCalls } = buildApp({ agents: [{ id: "a1", slug: "src", owner_id: "u1", visibility: "published", name: "Src", model: "m" }] });
 		const res = await json(app, env, "POST", "/v1/agents/src/clone", { slug: "my-fork" }, await tokenFor("cloner", ["creator"]));
 		expect(res.status).toBe(201);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.slug).toBe("my-fork");
 		expect(body.clonedFrom).toBe("a1");
 		const insert = writes.find((w) => w.sql.includes("INSERT INTO agents"));
@@ -365,7 +376,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: null }] });
 		const res = await get(app, env, "/v1/agents/a1/settings-schema", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).settingsSchema).toEqual([]);
+		expect((await jsonBody(res)).settingsSchema).toEqual([]);
 	});
 
 	it("owner writes a sanitized settings-schema → persists merged config", async () => {
@@ -373,7 +384,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		const schema = [{ id: "target_language", label: "Language", type: "select", options: [{ value: "en", label: "English" }, { value: "es", label: "Spanish" }] }];
 		const res = await json(app, env, "PUT", "/v1/agents/a1/settings-schema", { settingsSchema: schema }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(Array.isArray(body.settingsSchema)).toBe(true);
 		expect(body.settingsSchema[0].id).toBe("target_language");
 		expect(body.settingsSchema[0].options).toHaveLength(2);
@@ -395,7 +406,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 			customSurfaces: [{ id: "s1", label: "Ok", bundleUrl: "https://proagentstore.online/s1.js" }],
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect(((await res.json()) as any).error).toMatch(/disabled/i);
+		expect((await jsonBody(res)).error).toMatch(/disabled/i);
 		expect(writes.find((w) => w.sql.includes("UPDATE agents SET config"))).toBeUndefined();
 	});
 
@@ -415,7 +426,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 			],
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.customSurfaces.map((s: any) => s.id)).toEqual(["s1", "rel"]);
 		expect(body.customSurfacesEnabled).toBe(true);
 	});
@@ -442,7 +453,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 			surfaces: ["coding", "bogus"], runtime: "gpu", workflow: "CODING_SESSION", tools: ["read_terminal"],
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.surfaces).toEqual(["coding"]); // unknown surface dropped
 		expect(body.runtime).toBeNull(); // unknown runtime → null
 		expect(body.workflow).toBe("CODING_SESSION");
@@ -458,7 +469,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: JSON.stringify({ capabilities: { surfaces: ["repo"], runtime: null, workflow: null, tools: ["search_knowledge"] } }) }] });
 		const res = await get(app, env, "/v1/agents/a1/capabilities", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.surfaces).toEqual(["repo"]);
 		expect(body.tools).toEqual(["search_knowledge"]);
 	});

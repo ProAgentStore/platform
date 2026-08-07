@@ -6,6 +6,16 @@ import { resetEraCache } from "../lib/connectors/mcp.js";
 import { toolRoutes } from "./tools.js";
 import { unfenceUntrusted } from "../lib/untrusted-fence.js";
 
+/**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+
 const SECRET = "test-secret";
 
 /** The tool-policy gate (#tools) resolves the AGENT's declared capabilities, so a fixture
@@ -112,13 +122,13 @@ describe("GET /v1/instances/:id/tools", () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.tools.map((t: any) => t.name)).toContain("github_workflow_runs");
 	});
 	it("emits each tool's jsonSchema verbatim (draft-07 object schema)", async () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		const tool = body.tools.find((t: any) => t.name === "github_workflow_runs");
 		expect(tool.jsonSchema.type).toBe("object");
 		expect(tool.jsonSchema.properties.repo.type).toBe("string");
@@ -138,7 +148,7 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/tools/github_workflow_runs", { method: "POST", body: JSON.stringify({ repo: "owner/name" }) }, await tok("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.name).toBe("github_workflow_runs");
 		expect(body.success).toBe(false);
 		expect(body.content).toMatch(/not connected|not configured/i);
@@ -148,7 +158,7 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		// github_workflow_runs requires `repo`; omit it.
 		const res = await req(app, env, "/v1/instances/i1/tools/github_workflow_runs", { method: "POST", body: "{}" }, await tok("u1"));
 		expect(res.status).toBe(400);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.error).toMatch(/required field: repo/i);
 	});
 	it("400s when a field has the wrong basic type", async () => {
@@ -162,7 +172,7 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 			await tok("u1"),
 		);
 		expect(res.status).toBe(400);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.error).toMatch(/"number" must be a number/i);
 	});
 	it("passes validation when required fields are present + well-typed (reaches the handler)", async () => {
@@ -176,7 +186,7 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		);
 		// Validation passed → handler ran → GitHub not configured → 200 with success:false.
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.content).toMatch(/not connected|not configured/i);
 	});
 	it("invokes the generic http_request tool through the SAME route — no bespoke route (issue #95)", async () => {
@@ -192,7 +202,7 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 			await tok("u1"),
 		);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.name).toBe("http_request");
 		expect(body.success).toBe(true);
 		// #308: the envelope is fenced as untrusted remote text at the connector, so this surface
@@ -208,7 +218,7 @@ describe("GET /v1/instances/:id/pipelines (issue #97)", () => {
 		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE) });
 		const res = await req(app, env, "/v1/instances/i1/pipelines", {}, await tok("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.pipelines).toHaveLength(1);
 		expect(body.pipelines[0]).toMatchObject({ name: "sweep", steps: 1, sink: "results", valid: true });
 	});
@@ -240,7 +250,7 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE), create });
 		const res = await req(app, env, "/v1/instances/i1/pipelines/sweep/run", { method: "POST", body: JSON.stringify({ params: { repo: "owner/name" } }) }, await tok("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.ok).toBe(true);
 		expect(body.workflowId).toBe("wf-99");
 		expect(body.runId).toBeTruthy();
@@ -306,7 +316,7 @@ describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {
 		const { app, env } = testApp({ owned: true, runs });
 		const res = await req(app, env, "/v1/instances/i1/pipeline-runs", {}, await tok("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.runs).toHaveLength(1);
 		expect(body.runs[0].pipeline).toBe("leads");
 		expect(body.runs[0].seen).toBe(3);
@@ -456,7 +466,7 @@ describe("tool policy gate (undeclared tools are refused on every surface)", () 
 		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
 		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "POST", body: JSON.stringify({ url: "https://x.test" }) }, await tok("u1"));
 		expect(res.status).toBe(403);
-		expect(((await res.json()) as any).error).toContain("not one of this agent's tools");
+		expect((await jsonBody(res)).error).toContain("not one of this agent's tools");
 	});
 
 	it("still runs a tool the agent does declare", async () => {
@@ -467,7 +477,7 @@ describe("tool policy gate (undeclared tools are refused on every surface)", () 
 
 	it("reports a verdict for EVERY tool, so the UI can show what is blocked and why", async () => {
 		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
-		const body = (await (await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"))).json()) as any;
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1")));
 		const allowed = body.tools.filter((t: any) => t.allowed).map((t: any) => t.name);
 		expect(allowed).toContain("github_workflow_runs");
 		expect(allowed).not.toContain("http_request");
@@ -478,7 +488,7 @@ describe("tool policy gate (undeclared tools are refused on every surface)", () 
 
 	it("?allowed=true narrows to just the runnable set", async () => {
 		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
-		const body = (await (await req(app, env, "/v1/instances/i1/tools?allowed=true", {}, await tok("u1"))).json()) as any;
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/tools?allowed=true", {}, await tok("u1")));
 		expect(body.tools.every((t: any) => t.allowed)).toBe(true);
 	});
 });
@@ -527,7 +537,7 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 		const { app, env } = testApp({ agentConfig: AGENT, config: JSON.stringify({ disabledTools: ["http_request"] }) });
 		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "POST", body: JSON.stringify({ url: "https://x.test" }) }, await tok("u1"));
 		expect(res.status).toBe(403);
-		expect(((await res.json()) as any).error).toContain("switched off");
+		expect((await jsonBody(res)).error).toContain("switched off");
 	});
 });
 
@@ -553,7 +563,7 @@ describe("PUT /v1/instances/:id/connectors/:connector/consent", () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/connectors/repo-local/consent", { method: "PUT", body: JSON.stringify({ enabled: true }) }, await tok("u1"));
 		expect(res.status).toBe(400);
-		expect(((await res.json()) as any).error).toMatch(/read-only/i);
+		expect((await jsonBody(res)).error).toMatch(/read-only/i);
 	});
 
 	// Revocation stays unvalidated on purpose: rows written before this check existed, or whose

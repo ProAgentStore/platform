@@ -4,6 +4,17 @@ import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { adminRoutes } from "./admin.js";
 
+/**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
+
 const TEST_SECRET = "test-secret";
 
 /**
@@ -153,7 +164,7 @@ describe("GET /v1/admin/users", () => {
 		const { app, env } = testApp({ userRows: USER_ROWS, userCount: 2 });
 		const res = await req(app, env, "/v1/admin/users", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.total).toBe(2);
 		expect(body.users[0].roles).toEqual(["user", "admin"]);
 		expect(body.users[0].key_providers).toEqual(["anthropic", "openai"]);
@@ -176,7 +187,7 @@ describe("GET /v1/admin/users/:id", () => {
 		const { app, env } = testApp({ userDetail: detail });
 		const res = await req(app, env, "/v1/admin/users/u1", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.user.github_login).toBe("alice");
 		expect(body.agents).toEqual([]);
 		expect(body.recentErrors).toEqual([]);
@@ -190,7 +201,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp({ userCount: 5, agentCount: 3 });
 		const res = await req(app, env, "/v1/admin/overview", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const b = (await res.json()) as any;
+		const b = await jsonBody(res);
 		expect(b.users).toBe(5);
 		expect(b.agents).toBe(3);
 		expect(b).toHaveProperty("platformSpend30dMicros");
@@ -201,7 +212,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp({ agentRows });
 		const res = await req(app, env, "/v1/admin/agents", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const b = (await res.json()) as any;
+		const b = await jsonBody(res);
 		expect(b.agents[0].slug).toBe("coder");
 		expect(b.agents[0].instances).toBe(4);
 	});
@@ -213,7 +224,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp({ agentDetail });
 		const res = await req(app, env, "/v1/admin/agents/coder", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const b = (await res.json()) as any;
+		const b = await jsonBody(res);
 		expect(b.agent.slug).toBe("coder");
 		expect(b.agent.connectors).toContain("github");
 		expect(b.connectorTools[0].connector).toBe("github");
@@ -240,7 +251,7 @@ describe("new operator views (#31/#33)", () => {
 		expect((await req(denied.app, denied.env, "/v1/admin/instances", await token("u2", ["user"]))).status).toBe(403);
 		const { app, env } = testApp({ instanceRows: [{ id: "i1", agent_id: "a1", agent_name: "Coder", owner_login: "alice", status: "active", created_at: "2026-08-01 00:00:00" }] });
 		const res = await req(app, env, "/v1/admin/instances", await token("u1", ["admin"]));
-		expect((await res.json() as any).instances[0].agent_name).toBe("Coder");
+		expect(rows((await jsonBody(res)).instances)[0].agent_name).toBe("Coder");
 	});
 
 	it("GET /v1/admin/terminals → 403 non-admin, node list for admin", async () => {
@@ -249,7 +260,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp(); // no runtime nodes → empty
 		const res = await req(app, env, "/v1/admin/terminals", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const b = (await res.json()) as any;
+		const b = await jsonBody(res);
 		expect(b).toHaveProperty("nodes");
 		expect(Array.isArray(b.nodes)).toBe(true);
 	});
@@ -260,7 +271,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/admin/connectors", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const b = (await res.json()) as any;
+		const b = await jsonBody(res);
 		expect(b).toHaveProperty("connectors");
 		expect(b).toHaveProperty("consents");
 		expect(b.connectors.map((c: any) => c.connector)).toContain("github");
@@ -271,7 +282,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp({ errorRows });
 		const res = await req(app, env, "/v1/admin/errors", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).errors[0].message).toBe("boom");
+		expect(rows((await jsonBody(res)).errors)[0].message).toBe("boom");
 	});
 
 	it("GET /v1/admin/errors/summary groups into signatures", async () => {
@@ -282,7 +293,7 @@ describe("new operator views (#31/#33)", () => {
 		const { app, env } = testApp({ errorRows });
 		const res = await req(app, env, "/v1/admin/errors/summary", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const b = (await res.json()) as any;
+		const b = await jsonBody(res);
 		expect(b.signatures[0].count).toBe(2);
 		expect(b.signatures[0].users).toBe(2);
 	});
@@ -299,7 +310,7 @@ describe("GET /v1/admin/usage", () => {
 		const { app, env } = testApp({ usageRows: USAGE_ROWS });
 		const res = await req(app, env, "/v1/admin/usage?range=30d", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.totals.calls).toBe(2);
 		expect(body.byUser.map((b: any) => b.label).sort()).toEqual(["alice", "bob"]);
 		expect(body.split.platformPaid.calls).toBe(1);
@@ -312,7 +323,7 @@ describe("GET /v1/admin/spending", () => {
 		const { app, env } = testApp({ usageRows: USAGE_ROWS, platformAiEnabled: true });
 		const res = await req(app, env, "/v1/admin/spending", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any;
+		const body = await jsonBody(res);
 		expect(body.byok.costMicros).toBe(10500);
 		expect(body.platformAiEnabled).toBe(true);
 		expect(body.platformPaid.metered).toBe(true);

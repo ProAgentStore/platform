@@ -6,6 +6,18 @@ import { instanceStorageRoutes, storageRoutes } from "./storage.js";
 import type { Env } from "../types.js";
 
 /**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
+
+/**
  * INTEGRATION test for the storage proxy routes (collections/files/search/activity/
  * memory/state/knowledge + repo ingest). Drives the real handlers end-to-end:
  * auth (requireUser) → ownership gate (resolveAgent for agent routes,
@@ -114,7 +126,7 @@ describe("agent storage routes (ownership + DO proxy)", () => {
 		const { app, env } = buildApp({ agents: [] });
 		const res = await get(app, env, "/v1/agents/ghost/collections", await tokenFor("u1"));
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Agent not found");
+		expect((await jsonBody(res)).error).toContain("Agent not found");
 	});
 
 	it("403s a non-owner (no DO hit)", async () => {
@@ -129,7 +141,7 @@ describe("agent storage routes (ownership + DO proxy)", () => {
 		setDoResponse(() => Response.json({ collections: [{ name: "leads" }] }));
 		const res = await get(app, env, "/v1/agents/a1/collections", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).collections[0].name).toBe("leads");
+		expect(rows((await jsonBody(res)).collections)[0].name).toBe("leads");
 		expect(doCalls[0].path).toBe("/collections");
 		expect(doCalls[0].agentDoName).toBe("a1"); // keyed by agent id
 	});
@@ -139,10 +151,10 @@ describe("agent storage routes (ownership + DO proxy)", () => {
 		setDoResponse(() => Response.json({ matches: [{ score: 0.9 }] }));
 		const res = await json(app, env, "POST", "/v1/agents/a1/search", { query: "hello" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).matches).toHaveLength(1);
+		expect((await jsonBody(res)).matches).toHaveLength(1);
 		const search = doCalls.find((c) => c.path === "/search");
 		expect(search!.method).toBe("POST");
-		expect((search!.body as any).query).toBe("hello");
+		expect(rec(search!.body).query).toBe("hello");
 	});
 
 	it("record name + query string are forwarded (encoded) to the DO", async () => {
@@ -161,7 +173,7 @@ describe("agent storage routes (ownership + DO proxy)", () => {
 			method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("adm", ["user", "admin"])}` },
 		}, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).deleted).toBe(true);
+		expect((await jsonBody(res)).deleted).toBe(true);
 		expect(doCalls[0].method).toBe("DELETE");
 		expect(doCalls[0].path).toContain("/records/r1");
 	});
@@ -171,7 +183,7 @@ describe("agent storage routes (ownership + DO proxy)", () => {
 		setDoResponse(() => Response.json({ error: "no such collection" }, { status: 404 }));
 		const res = await get(app, env, "/v1/agents/a1/collections/nope", await tokenFor("u1"));
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toBe("no such collection");
+		expect((await jsonBody(res)).error).toBe("no such collection");
 	});
 });
 
@@ -187,7 +199,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		const { app, env, doCalls } = buildApp({ instances: [{ id: "i1", user_id: "owner" }] });
 		const res = await get(app, env, "/v1/instances/i1/collections", await tokenFor("attacker"));
 		expect(res.status).toBe(404);
-		expect((await res.json() as any).error).toContain("Instance not found");
+		expect((await jsonBody(res)).error).toContain("Instance not found");
 		expect(doCalls).toHaveLength(0);
 	});
 
@@ -196,7 +208,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		setDoResponse(() => Response.json({ memory: [{ key: "name" }] }));
 		const res = await get(app, env, "/v1/instances/i1/memory", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).memory[0].key).toBe("name");
+		expect(rows((await jsonBody(res)).memory)[0].key).toBe("name");
 		expect(doCalls[0].agentDoName).toBe("i1"); // instance id, not agent id
 		expect(doCalls[0].path).toBe("/memory");
 	});
@@ -208,7 +220,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		expect(res.status).toBe(200);
 		const put = doCalls.find((c) => c.path === "/state" && c.method === "PUT");
 		expect(put).toBeTruthy();
-		expect((put!.body as any).guardrails.maxLength).toBe(500);
+		expect(rec(put!.body).guardrails.maxLength).toBe(500);
 	});
 
 	it("DELETE memory/:key forwards an (encoded) DELETE to the instance DO", async () => {
@@ -218,7 +230,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 			method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("u1")}` },
 		}, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).deleted).toBe(true);
+		expect((await jsonBody(res)).deleted).toBe(true);
 		expect(doCalls[0].method).toBe("DELETE");
 		expect(doCalls[0].path).toContain("/memory/some%20key");
 	});
@@ -231,7 +243,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		setDoResponse(() => Response.json({ tasks: [{ id: "t1", assignedBy: "self", stale: false }] }));
 		const res = await get(app, env, "/v1/instances/i1/agent-tasks", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).tasks[0].assignedBy).toBe("self");
+		expect(rows((await jsonBody(res)).tasks)[0].assignedBy).toBe("self");
 		expect(doCalls[0].agentDoName).toBe("i1");
 		expect(doCalls[0].path).toBe("/tasks");
 	});
@@ -249,7 +261,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		const res = await json(app, env, "POST", "/v1/instances/i1/agent-tasks", { title: "Renew the domain" }, await tokenFor("u1"));
 		expect(res.status).toBe(201);
 		expect(doCalls[0]).toMatchObject({ path: "/tasks", method: "POST" });
-		expect((doCalls[0].body as any).title).toBe("Renew the domain");
+		expect(rec(doCalls[0].body).title).toBe("Renew the domain");
 	});
 
 	it("PUT/DELETE agent-tasks/:taskId reach the DO's per-task path, id-encoded", async () => {
@@ -270,7 +282,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 			method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("u1")}` },
 		}, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).cleared).toBe(true);
+		expect((await jsonBody(res)).cleared).toBe(true);
 		expect(doCalls[0]).toMatchObject({ path: "/messages", method: "DELETE" });
 	});
 });
@@ -282,14 +294,14 @@ describe("instance repo ingestion (real URL validation)", () => {
 		const { app, env } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
 		const res = await json(app, env, "POST", "/v1/instances/i1/ingest-repo", {}, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("repoUrl required");
+		expect((await jsonBody(res)).error).toContain("repoUrl required");
 	});
 
 	it("400s a non-GitHub URL (parseGithubUrl rejects it)", async () => {
 		const { app, env } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
 		const res = await json(app, env, "POST", "/v1/instances/i1/ingest-repo", { repoUrl: "https://gitlab.com/foo/bar" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("GitHub");
+		expect((await jsonBody(res)).error).toContain("GitHub");
 	});
 
 	it("404s the ingest when the instance isn't owned (before any DO call)", async () => {
@@ -304,13 +316,13 @@ describe("instance repo ingestion (real URL validation)", () => {
 		setDoResponse(() => Response.json({ status: "queued" }));
 		const res = await json(app, env, "POST", "/v1/instances/i1/ingest-repo", { repoUrl: "https://github.com/octocat/hello", branch: "main" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).status).toBe("queued");
+		expect((await jsonBody(res)).status).toBe("queued");
 		const ingest = doCalls.find((c) => c.path === "/ingest-repo");
 		expect(ingest).toBeTruthy();
-		expect((ingest!.body as any).repoUrl).toBe("https://github.com/octocat/hello");
-		expect((ingest!.body as any).branch).toBe("main");
+		expect(rec(ingest!.body).repoUrl).toBe("https://github.com/octocat/hello");
+		expect(rec(ingest!.body).branch).toBe("main");
 		// GitHub App is unconfigured in the test env → no installation token injected.
-		expect((ingest!.body as any).token).toBeUndefined();
+		expect(rec(ingest!.body).token).toBeUndefined();
 	});
 
 	it("ingest-repo/status proxies a GET to the DO", async () => {
@@ -318,7 +330,7 @@ describe("instance repo ingestion (real URL validation)", () => {
 		setDoResponse(() => Response.json({ repos: [{ key: "octocat/hello", progress: 1 }] }));
 		const res = await get(app, env, "/v1/instances/i1/ingest-repo/status", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).repos[0].key).toBe("octocat/hello");
+		expect(rows((await jsonBody(res)).repos)[0].key).toBe("octocat/hello");
 		expect(doCalls[0]).toMatchObject({ path: "/ingest-repo/status", method: "GET" });
 	});
 });
