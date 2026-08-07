@@ -93,8 +93,17 @@ const PINS = {
 	"packages/sdk/src/voice/use-voice.ts": 1550,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
-	"store/console/src/pages/InstanceDetail.tsx": 1245,
-	"agents/coder/web/src/CodingTab.tsx": 1217,
+	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
+	// REFRESHING one (the loop watcher's 3s poll is the latter, and scrolling on it is the bug),
+	// which costs the flag, the guard and the pinned-flag reset. Paid for in part by the system
+	// message's 18-line render block leaving for components/SystemMessage.tsx; the scroll rule
+	// and the timestamp arithmetic are pure and live in lib/chatScroll.ts + lib/messageStamp.ts,
+	// which is where a split would have put them anyway.
+	"store/console/src/pages/InstanceDetail.tsx": 1252,
+	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
+	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
+	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
+	"agents/coder/web/src/CodingTab.tsx": 1225,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs

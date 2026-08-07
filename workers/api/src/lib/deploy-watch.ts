@@ -32,6 +32,28 @@ export type DeployNotifyDecision =
 	| { notify: true; seenId: string; title: string; body: string; url: string };
 
 /**
+ * Where a deploy notification sends you — the repo's Builds view in the console (#338).
+ *
+ * It used to be `run.url`, the GitHub Actions run. That is cross-origin, and a notification
+ * click hands its target to an already-open tab via `WindowClient.navigate()`, which is
+ * same-origin ONLY by spec. So with the console open the navigate rejected, the service worker
+ * swallowed it, and the click just focused a tab that had not moved — while with the console
+ * CLOSED the same click reached `openWindow()` and did open GitHub. Same click, two outcomes,
+ * differing by whether the app was already running.
+ *
+ * There is no per-deploy page in the product to aim at, and deferring the notification until
+ * one existed would not help: the only per-run artifact is GitHub's own, which is exactly the
+ * thing we cannot navigate to. So this links the stable parent that is already there when the
+ * sweep runs — the repo — and the Builds view inside it carries the run, its history, and a
+ * one-click "View run" out to GitHub for the CI log itself.
+ *
+ * Consumer: `deepLinkedBuildsRepo` in store/console/src/lib/deepLink.ts.
+ */
+export function deployDeepLink(instanceId: string, repoId: string): string {
+	return `/console/instances/${instanceId}/coding?builds=${encodeURIComponent(repoId)}`;
+}
+
+/**
  * Should this run produce a notification, and what should the new watermark be?
  *
  * Pure so the one genuinely dangerous case is testable: **first sight of a repo must never
@@ -44,6 +66,8 @@ export function decideDeployNotification(
 	run: WatchedRun | null,
 	lastNotifiedRunId: string | null,
 	repoName: string,
+	/** Same-origin click target — see `deployDeepLink`. The GitHub run URL is NOT usable here. */
+	deepLink: string,
 ): DeployNotifyDecision {
 	if (!run) return { notify: false, seenId: lastNotifiedRunId, reason: "no-run" };
 	// `completed` is the only state worth interrupting someone for. queued/in_progress will
@@ -61,12 +85,13 @@ export function decideDeployNotification(
 		seenId: run.id,
 		title: ok ? `✅ Deployed${n}` : `❌ Build failed${n}`,
 		body: ok ? `${repoName} is live.` : `${repoName} — ${run.conclusion || "failed"}. Open the run to see why.`,
-		url: run.url,
+		url: deepLink,
 	};
 }
 
 interface RepoRow {
 	id: string;
+	instance_id: string;
 	user_id: string;
 	name: string;
 	github_repo: string;
@@ -83,7 +108,7 @@ export async function runDeployWatch(env: Env): Promise<void> {
 		// Oldest-checked first, so a bounded batch still rotates over every repo instead of
 		// starving the tail.
 		const { results } = await env.DB.prepare(
-			`SELECT id, user_id, name, github_repo, last_deploy_run_id
+			`SELECT id, instance_id, user_id, name, github_repo, last_deploy_run_id
 			   FROM coding_repos
 			  WHERE github_repo IS NOT NULL AND github_repo <> ''
 			  ORDER BY COALESCE(last_deploy_checked_at, '') ASC
@@ -116,7 +141,12 @@ export async function runDeployWatch(env: Env): Promise<void> {
 						}
 					: null;
 
-			const decision = decideDeployNotification(run, repo.last_deploy_run_id, repo.name);
+			const decision = decideDeployNotification(
+				run,
+				repo.last_deploy_run_id,
+				repo.name,
+				deployDeepLink(repo.instance_id, repo.id),
+			);
 			if (decision.notify) {
 				await notifyUser(env, repo.user_id, "deploy", decision.title, decision.body, decision.url).catch(() => undefined);
 			}

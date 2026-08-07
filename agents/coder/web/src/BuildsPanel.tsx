@@ -167,10 +167,16 @@ function RepoHistory({ instanceId, repoId, repoName, onBack }: {
  * The two are the same idea at different scales: the fleet list exists to choose a repo, so with
  * one repo the choice is already made. Driven off how many repos there are, not off an agent slug.
  */
-export default function BuildsPanel({ instanceId }: { instanceId: string }) {
+export default function BuildsPanel({ instanceId, initialRepoId }: {
+	instanceId: string;
+	/** Open straight into this repo's history — a deploy notification's deep link (#338). */
+	initialRepoId?: string;
+}) {
 	const [builds, setBuilds] = useState<Build[]>([]);
 	const [loaded, setLoaded] = useState(false);
-	const [openRepoId, setOpenRepoId] = useState<string | null>(null);
+	// Initial state, not an effect: the deep link is where this mount CAME from, and syncing it
+	// afterwards would drag the user back here every time they pressed the panel's back arrow.
+	const [openRepoId, setOpenRepoId] = useState<string | null>(initialRepoId ?? null);
 
 	const load = useCallback(async () => {
 		try {

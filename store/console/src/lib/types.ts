@@ -195,5 +195,11 @@ export interface Notification {
 	read: boolean;
 	instanceId?: string;
 	createdAt: string;
+	/**
+	 * Where clicking it should land — the same same-origin console path the push notification
+	 * carries (#338). Stored per row since migration 0026 and returned by `SELECT *`; the list
+	 * simply never read it, so an in-app row for a deploy (which has no `instanceId`) did nothing.
+	 */
+	url?: string;
 	data?: Record<string, unknown>;
 }

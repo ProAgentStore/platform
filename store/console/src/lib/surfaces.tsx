@@ -10,6 +10,7 @@ import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
 import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
+import { deepLinkedBuildsRepo } from "./deepLink";
 import type { BoardColumn, SettingsField } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -174,6 +175,10 @@ export const SURFACES: SurfaceDef[] = [
 				// — which carries the same repo/git/issue read tools from the registry. The
 				// legacy hardcoded Coder declares nothing and keeps its Co-pilot.
 				copilot={surfaceOptions?.coding?.copilot !== false}
+				// Arriving from a deploy notification (#338). Read straight off the location rather
+				// than threaded through SurfaceContext: this is a deep link, so the surface is
+				// mounting fresh on the navigation that carried it, and no later render changes it.
+				initialBuildsRepoId={deepLinkedBuildsRepo(window.location.search) ?? undefined}
 			/>
 		),
 	},

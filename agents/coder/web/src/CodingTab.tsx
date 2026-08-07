@@ -37,6 +37,12 @@ interface Props {
 	 * (default) for the legacy hardcoded Coder, which is deliberately left exactly as it was.
 	 */
 	copilot?: boolean;
+	/**
+	 * Open on Builds, showing this repo's run history — the deploy notification's landing spot
+	 * (#338). The notification fires from a cron sweep, so the only thing that exists when it is
+	 * written is the repo; the build view is the stable parent that holds the run it is about.
+	 */
+	initialBuildsRepoId?: string;
 }
 
 // Remember the repo the user was last working on, per instance, so returning to the Coding
@@ -54,7 +60,7 @@ function loadLastRepo(instanceId: string): string | null {
 /** Returned by /capture when the engine is waiting for a human to sign in. */
 type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; evidence: string; guidance: string };
 
-export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false, copilot = true }: Props) {
+export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false, copilot = true, initialBuildsRepoId }: Props) {
 	const navigate = useNavigate();
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
@@ -143,8 +149,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [showAddRepo, setShowAddRepo] = useState(false);
 	const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null);
 	const [showEngines, setShowEngines] = useState(false);
-	// Landing view toggle: the repos list vs. the Builds status panel (CODER-004).
-	const [landingView, setLandingView] = useState<"repos" | "builds">("repos");
+	// Landing view toggle: the repos list vs. the Builds status panel (CODER-004). A deploy
+	// notification deep-links straight to Builds (#338) — both layouts, since which one this
+	// agent uses depends on how many repos it owns and the notification cannot know.
+	const [landingView, setLandingView] = useState<"repos" | "builds">(initialBuildsRepoId ? "builds" : "repos");
 	/**
 	 * The single-repo agent's surface: three views, one nav row, always visible.
 	 *
@@ -153,7 +161,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 * other view behind a back arrow. Terminal / Issues / Builds are the three things this agent
 	 * actually has, so they are the navigation.
 	 */
-	const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">("terminal");
+	const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">(initialBuildsRepoId ? "builds" : "terminal");
 	/**
 	 * Loop presets (#234). These were five literals right here, handed to the Co-pilot view alone —
 	 * so an agent with `copilot:false` had no presets at all, and nobody could edit or extend them.
@@ -994,7 +1002,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						)}
 					</div>
 				)}
-				{soloView === "builds" && <BuildsPanel instanceId={instanceId} />}
+				{soloView === "builds" && <BuildsPanel instanceId={instanceId} initialRepoId={initialBuildsRepoId} />}
 				{settingsModal}
 				{showEngines && (
 					<EnginesModal
@@ -1133,7 +1141,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					onOpenEngines={() => setShowEngines(true)}
 				/>
 			) : (
-				<BuildsPanel instanceId={instanceId} />
+				<BuildsPanel instanceId={instanceId} initialRepoId={initialBuildsRepoId} />
 			)}
 			{settingsModal}
 			{showEngines && (

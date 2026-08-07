@@ -21,6 +21,8 @@ import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
 import SpokenMessage from "../components/SpokenMessage";
+import SystemMessage from "../components/SystemMessage";
+import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 
 /**
  * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
@@ -360,18 +362,26 @@ function InstancePage() {
 	const runtimeWatchBusy = thinking || !!loopRunId || runnerOnline === false;
 	useTieredPolling(checkRuntime, { activeMs: 4000, passiveMs: 20000 }, runtimeWatchBusy, hasRuntime);
 
-	// Load last N messages (newest at the bottom)
-	const loadMessages = useCallback(async () => {
+	/**
+	 * Load the last N messages (newest at the bottom). `initial` separates OPENING a conversation
+	 * from REFRESHING one — this is also the loop watcher's 3s transcript refresh, and scrolling
+	 * unconditionally here yanked the reader to the bottom every poll (#335; lib/chatScroll.ts).
+	 */
+	const loadMessages = useCallback(async (opts?: { initial?: boolean }) => {
 		if (!id) return;
 		try {
 			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=${PAGE}`);
 			const msgs = data.messages || [];
 			setMessages(msgs);
 			setHasMore(msgs.length >= PAGE);
-			// Scroll to bottom after initial load
+			const initial = opts?.initial === true;
+			if (!shouldScrollAfterLoad({ initial, pinned: atBottomRef.current })) return;
 			requestAnimationFrame(() => {
 				if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 			});
+			// `atBottom` survives an instance switch (the page is reused), so an opening load must
+			// reset it or the jump-to-latest button lingers from the previous thread.
+			if (initial) setAtBottom(true);
 		} catch (e) { console.error("[chat] loadMessages failed:", e); }
 	}, [id]);
 
@@ -405,7 +415,9 @@ function InstancePage() {
 		setLoadingMore(false);
 	}, [id, loadingMore, hasMore]);
 
-	useEffect(() => { loadMessages(); }, [loadMessages]);
+	// Mount, and every instance switch — the one case that lands on the newest message
+	// regardless of where the reader was left in the PREVIOUS conversation.
+	useEffect(() => { loadMessages({ initial: true }); }, [loadMessages]);
 
 	// Scroll to bottom only when NEW messages are added (not when loading older)
 	const prevCountRef = useRef(0);
@@ -468,7 +480,10 @@ function InstancePage() {
 	 * into the transcript, once each.
 	 */
 	const emitSystemChat = useCallback((content: string, persist = true) => {
-		setMessages((prev) => [...prev, { role: "system", content }]);
+		// Stamp it here as well as server-side: a `persist:false` notice (an adopted run, #252)
+		// is never written to the DO, so a refresh will never hand it back with a `createdAt`,
+		// and it would be the one row in the thread with no time on it (#336).
+		setMessages((prev) => [...prev, { role: "system", content, createdAt: new Date().toISOString() }]);
 		if (id && persist) {
 			api(`/v1/instances/${id}/system-message`, {
 				method: "POST",
@@ -535,12 +550,12 @@ function InstancePage() {
 				setMessages((prev) => [...prev, data.message!]);
 				speakRef.current(data.message.content);
 			} else {
-				setMessages((prev) => [...prev, { role: "system", content: "No response. Check Profile → API Keys." }]);
+				setMessages((prev) => [...prev, { role: "system", content: "No response. Check Profile → API Keys.", createdAt: new Date().toISOString() }]);
 			}
 		} catch (e) {
 			setMessages((prev) => [
 				...prev,
-				{ role: "system", content: `Error: ${e instanceof Error ? e.message : String(e)}` },
+				{ role: "system", content: `Error: ${e instanceof Error ? e.message : String(e)}`, createdAt: new Date().toISOString() },
 			]);
 		}
 		setThinking(false);
@@ -1045,7 +1060,7 @@ function InstancePage() {
 							    scroll region stays selectable and accessible. */}
 							<div
 								ref={chatRef}
-								onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
+								onScroll={(e) => setAtBottom(isPinnedToBottom(e.currentTarget))}
 								className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : ""}`}
 						>
 							{hasMore && (
@@ -1070,21 +1085,14 @@ function InstancePage() {
 										);
 								}
 								// Regular system messages (loop status, etc.) — deliberately NOT collapsed.
+								// The shape, and the stamp these rows never had (#336), live in the component.
 								if (classifyMessage(m) === "system") {
-									// A one-liner keeps the pill; anything longer or formatted gets a block and is
-									// rendered as markdown. The loop's result is full of `code` and **bold** — a
-									// whitespace-pre-wrap pill printed those as literal characters, in a shape
-									// built for six words.
-									const long = m.content.length > 90 || m.content.includes("\n");
 									return (
-										<SafeHtmlView
+										<SystemMessage
 											key={messageKey(m, i)}
-											className={
-												long
-													? "bg-yellow/10 text-yellow self-center rounded-xl px-4 py-2.5 text-xs border border-yellow/15 max-w-[90%] w-full msg-md leading-relaxed"
-													: "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]"
-											}
-											html={renderMd(m.content)}
+											content={m.content}
+											createdAt={m.createdAt}
+											prevCreatedAt={messages[i - 1]?.createdAt}
 										/>
 									);
 								}

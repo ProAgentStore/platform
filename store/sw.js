@@ -48,20 +48,41 @@ self.addEventListener("push", (event) => {
 	);
 });
 
+/**
+ * Open what the notification is about (#338).
+ *
+ * `WindowClient.navigate()` is **same-origin only** by spec, so an off-origin target can never
+ * move an already-open tab. That used to be caught and shrugged off ("focus anyway"), which is
+ * not a fallback — it is a no-op indistinguishable from a broken notification, and it made the
+ * bug intermittent: with no console tab open the same click reached `openWindow()`, where
+ * cross-origin IS allowed, and worked. So an off-origin target skips the tab loop entirely, and
+ * a navigate that rejects falls THROUGH to openWindow instead of focusing a tab that did not
+ * move. (Producers should send a same-origin console path — see deployDeepLink.)
+ *
+ * The `/console` match covers every route of the SPA — /usage and /preferences included, which
+ * is intended: they are the app, and a deep link is meant to move whichever tab it is in.
+ */
 self.addEventListener("notificationclick", (event) => {
 	event.notification.close();
 	const target = (event.notification.data && event.notification.data.url) || "/console/";
 	event.waitUntil(
 		(async () => {
-			const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-			for (const client of clientList) {
-				if (client.url.includes("/console") && "focus" in client) {
+			let sameOrigin = true;
+			try {
+				sameOrigin = new URL(target, self.location.origin).origin === self.location.origin;
+			} catch (_e) {
+				sameOrigin = false;
+			}
+			if (sameOrigin) {
+				const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+				for (const client of clientList) {
+					if (!client.url.includes("/console") || !("focus" in client)) continue;
 					try {
 						await client.navigate(target);
+						return client.focus();
 					} catch (_e) {
-						/* navigation may be blocked cross-origin; focus anyway */
+						break; // the tab could not be moved — open a window instead of focusing a stale one
 					}
-					return client.focus();
 				}
 			}
 			if (self.clients.openWindow) return self.clients.openWindow(target);

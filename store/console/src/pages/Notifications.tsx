@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Notification } from "../lib/types";
 import { pushSupported, pushPermission, enablePush, sendTestPush } from "../lib/push";
+import { notificationRoute } from "../lib/deepLink";
 
 export default function Notifications() {
 	const navigate = useNavigate();
@@ -56,8 +57,14 @@ export default function Notifications() {
 							className={`p-3 text-left bg-panel border border-line rounded-lg cursor-pointer hover:border-accent transition-all ${n.read ? "opacity-60" : ""}`}
 							onClick={async () => {
 								if (!n.read) await markRead(n.id);
-								// Navigate to the relevant instance if possible
-								if (n.instanceId) navigate(`/instances/${n.instanceId}`);
+								// The row's own deep link first — it is the specific place the notification is
+								// about (#338). A deploy has no `instanceId` on the row, so before this the
+								// only clickable outcome for one was a silent reload.
+								const route = notificationRoute(n.url);
+								if (route) navigate(route);
+								else if (n.instanceId) navigate(`/instances/${n.instanceId}`);
+								// A pre-#338 row points at GitHub Actions: open it where it lives.
+								else if (n.url?.startsWith("https://")) window.open(n.url, "_blank", "noopener");
 								else load();
 							}}
 						>
