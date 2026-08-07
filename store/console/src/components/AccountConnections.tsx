@@ -130,7 +130,13 @@ export default function AccountConnections() {
 
 			{/* GitHub — an identity link, not a stored token. See the component header. */}
 			<div className="flex items-start justify-between gap-3 mb-3">
-				<div className="text-sm min-w-0">
+				{/* `min-w-0` lets the COLUMN shrink; it does not make the STRING shorter. Every row
+				    here names an account, and an account name is one unbreakable token — a login, or
+				    an email — so the column shrinks to nothing and the token runs off the right edge,
+				    panning <main> by up to 205px at a phone width. `[overflow-wrap:anywhere]` is what
+				    lowers the min-content width so it wraps instead, and is what Profile already does
+				    to the display name and @login for the same reason (#333). */}
+				<div className="text-sm min-w-0 [overflow-wrap:anywhere]">
 					<span className="font-semibold">GitHub</span>{" "}
 					{githubLinked
 						? <span className="text-green">· connected as {githubLinked}</span>
@@ -155,7 +161,10 @@ export default function AccountConnections() {
 					? <p className="text-xs text-muted">No other accounts can be connected on this deployment yet.</p>
 					: rows.map((entry) => (
 						<div key={entry.id} className="flex items-start justify-between gap-3 mb-3">
-							<div className="text-sm min-w-0">
+							{/* Same unbreakable-token problem as the GitHub row above — this is the one
+							    that was actually reported, because `connectionSummary` prints the whole
+							    Google/Zoho email. */}
+							<div className="text-sm min-w-0 [overflow-wrap:anywhere]">
 								<span className="font-semibold">{entry.label}</span>{" "}
 								<span className={entry.connected ? "text-green" : "text-muted"}>· {connectionSummary(entry)}</span>
 								{/* Standing, not only in the confirm dialog: what a disconnect destroys should be

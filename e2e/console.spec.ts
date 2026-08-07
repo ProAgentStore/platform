@@ -29,7 +29,39 @@ interface OpsMockOptions {
 	user?: Record<string, unknown>;
 	profile?: { fields: Array<Record<string, unknown>>; profile: Record<string, string> };
 	providers?: Array<Record<string, unknown>>;
+	/** `GET /v1/connectors` — see DEFAULT_CONNECTORS for why the default is not empty. */
+	connectors?: Array<Record<string, unknown>>;
 }
+
+/**
+ * The connector catalog `GET /v1/connectors` serves, with an account connected (#333).
+ *
+ * This is a DEFAULT rather than an opt-in, because the absence of it is what hid the bug. The
+ * route was not mocked at all, so it fell through to the unhandled-route 500 that closes the
+ * handler; `AccountConnections` catches that and renders "No other accounts can be connected on
+ * this deployment yet." Every mobile guard on Preferences was therefore measuring a Connections
+ * section with **no rows in it** — the exact hollow-fixture failure #235 was closed on, one page
+ * over, and the reason two rounds of measurement on this ticket reported the page clean.
+ *
+ * The account is an email because that is what the connected account IS on all three of these,
+ * and an email is one unbreakable token: it is the thing that overflowed.
+ */
+const DEFAULT_CONNECTORS = [
+	{ id: "gmail", label: "Gmail", auth: "oauth", grantModel: "user", configured: true, connected: true, account: "sergey.ivochkin@rocketlab.com.au", connectedAt: "2026-07-01T00:00:00Z", reach: null, flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" } },
+	{ id: "google_drive", label: "Google Drive", auth: "oauth", grantModel: "instance-resource", configured: true, connected: true, account: "sergey.ivochkin@rocketlab.com.au", connectedAt: "2026-07-01T00:00:00Z", reach: { grants: 3, instances: 2 }, flow: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" } },
+	{ id: "zoho_workdrive", label: "Zoho WorkDrive", auth: "oauth", grantModel: "instance-resource", configured: true, connected: false, account: null, connectedAt: null, reach: null, flow: { start: "/v1/workdrive/zoho/start", disconnect: "/v1/workdrive/zoho" } },
+];
+
+/**
+ * The notification vocabulary `GET /v1/preferences` serves (#360).
+ *
+ * Same reason as above: `NotificationPreferences` is `if (!types.length) return null`, so with no
+ * vocabulary in the fixture that whole section rendered NOTHING and no guard had ever visited it.
+ */
+const DEFAULT_NOTIFICATION_TYPES = [
+	{ id: "task.needs_human", label: "An agent needs your input", description: "A run has stopped and is waiting on you — a CAPTCHA, or a value it does not have.", alerts: true },
+	{ id: "deploy.finished", label: "Deployment finished", description: "A build of one of your agents completed or failed.", alerts: false },
+];
 
 function defaultOpsPayload() {
 	return {
@@ -620,10 +652,11 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			return json({ id: "task-approval", status: "cancelled" });
 		}
 		if (path === "/v1/keys/status") return json({ providers: options.providers ?? [] });
+		if (path === "/v1/connectors") return json({ connectors: options.connectors ?? DEFAULT_CONNECTORS });
 		// Account preferences (#211) — voice/translation defaults shared by every agent.
 		if (path === "/v1/preferences") {
 			if (method === "PUT") { savedPreferences = JSON.parse(route.request().postData() || "{}"); return json({ preferences: savedPreferences }); }
-			return json({ preferences: { voice: { speed: 130, sttMode: "openai" } }, languages: [{ name: "Chinese", tag: "zh-CN" }, { name: "English", tag: "en-US" }] });
+			return json({ preferences: { voice: { speed: 130, sttMode: "openai" } }, languages: [{ name: "Chinese", tag: "zh-CN" }, { name: "English", tag: "en-US" }], notificationTypes: DEFAULT_NOTIFICATION_TYPES });
 		}
 		if (path === "/v1/profile") return json(options.profile ?? { fields: [], profile: {} });
 		if (path === "/v1/instances/inst-1/voice-settings") {
@@ -2210,5 +2243,65 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w / 1.3x on ${route}`).toBeLessThanOrEqual(1);
 			});
 		}
+	}
+});
+
+/**
+ * Preferences, with an account actually connected to something (#333).
+ *
+ * This is the half of #333 that two rounds of measurement reported as "not reproducible", and the
+ * reason is the fixture rather than the browser: `GET /v1/connectors` was never mocked, so the
+ * Connections section rendered its "nothing to connect on this deployment" line and the rows that
+ * carry the overflowing string did not exist. `NotificationPreferences` returns `null` on an empty
+ * vocabulary, so that section did not exist either. Two of the page's five sections were absent
+ * from every run that declared the page clean — the same hollow fixture as #235, which is the
+ * failure this file has now made twice.
+ *
+ * With the rows present, `<main>` gains **15px of horizontal pan at 390px and 85px at 320px**, at
+ * ordinary 1x text. `docOv` stays 0 throughout, exactly as predicted — the app root is
+ * `h-dvh overflow-hidden`, so `<main>` is the thing that pans, and everything except the runaway
+ * email stops at the viewport. That is why the report was "scrollable into empty space on the
+ * right, with no content out there": the content out there is one line of email.
+ *
+ * The address is plus-addressed because that is the shape of a real Google account and it is what
+ * the reporter's own account looks like — NOT a stress case in the sense the roles-row test is one.
+ * The plain form (`DEFAULT_CONNECTORS`) reproduces too, at 320px and 1.3x text, which is what the
+ * 1.3x block above now covers.
+ */
+test.describe("mobile — Preferences with a connected account (#333)", () => {
+	const connected = {
+		user: { githubLinked: "serge-ivo-development" },
+		connectors: DEFAULT_CONNECTORS.map((c) =>
+			c.account ? { ...c, account: "sergey.ivochkin+proagentstore.console@rocketlab.com.au" } : c,
+		),
+	};
+
+	for (const width of [320, 360, 375, 390]) {
+		test(`no horizontal scroll at ${width}px — /console/preferences`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockSignedInConsole(page, connected);
+			await page.goto("/console/preferences");
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+			await page.waitForTimeout(300);
+
+			// Every section rendered, named one by one. The point of this block is that the two the
+			// old fixture skipped are the two that matter, so "the page loaded" is not the check.
+			await expect(page.getByRole("heading", { name: "Connections" })).toBeVisible();
+			await expect(page.getByText("sergey.ivochkin+proagentstore.console@rocketlab.com.au").first()).toBeVisible();
+			await expect(page.getByRole("button", { name: "Connect Zoho WorkDrive" })).toBeVisible();
+			await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+			await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+			await expect(page.getByRole("heading", { name: "Timezone" })).toBeVisible();
+			await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
+
+			const { mainOv, docOv, navOv, scrollers, wide } = await measureOverflow(page);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			// Preferences has no strip that pans on purpose, so any is a defect.
+			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
+		});
 	}
 });
