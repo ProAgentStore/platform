@@ -135,18 +135,18 @@ describe("list_subordinates", () => {
 		// `subscription`, not `status` — the field is agent_instances.status, the SUBSCRIPTION
 		// lifecycle, which reads "active" for an idle agent and an on-fire one alike. Naming it
 		// `status` invited the model to read it as work state; subordinate_status answers that.
-		expect(JSON.parse(r.content)).toEqual([{ instanceId: "sub", name: "Repo Coder", subscription: "active" }]);
+		expect(JSON.parse(r.content).subordinates).toEqual([{ instanceId: "sub", name: "Repo Coder", subscription: "active" }]);
 	});
 
 	it("prefers a per-instance display name when the owner set one", async () => {
 		const env = buildEnv({ instances: [{ id: "sub", status: "active", config: JSON.stringify({ displayName: "API repo" }), agent_name: "Repo Coder" }] });
-		expect(JSON.parse((await tool("list_subordinates").handler(ctx(env) as never, {})).content)[0].name).toBe("API repo");
+		expect(roster(await tool("list_subordinates").handler(ctx(env) as never, {}))[0].name).toBe("API repo");
 	});
 
 	it("still lists a subordinate whose config is malformed", async () => {
 		// A broken config must not make an agent invisible to its supervisor.
 		const env = buildEnv({ instances: [{ id: "sub", status: "active", config: "{not json", agent_name: "Repo Coder" }] });
-		expect(JSON.parse((await tool("list_subordinates").handler(ctx(env) as never, {})).content)[0].name).toBe("Repo Coder");
+		expect(roster(await tool("list_subordinates").handler(ctx(env) as never, {}))[0].name).toBe("Repo Coder");
 	});
 
 	it("says so plainly when there is nobody to delegate to", async () => {

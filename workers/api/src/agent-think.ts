@@ -7,6 +7,8 @@ import { registryToolNameSet, registryTools, runRegistryTool } from "./lib/tool-
 import { configureBoardForAgent } from "./lib/board.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 import { renderActiveTasks } from "./lib/agent-tasks.js";
+import { renderDirections } from "./lib/agent-direction.js";
+import { directionRosterFor } from "./lib/supervision.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
 import { parseAccountPreferences } from "./lib/preferences.js";
@@ -283,6 +285,24 @@ export async function runAgentThink(opts: {
 	// this block is agent-WRITABLE durable state on the instruction path, so what reaches the
 	// prompt is a decision worth testing rather than an inline filter.
 	systemPrompt += renderActiveTasks(tasks);
+
+	// ## Your Agents (#330) — the standing DIRECTION this supervisor holds for each subordinate.
+	//
+	// On the prompt rather than only in `list_subordinates` because that is what "durable" has to
+	// mean here: asked what FWS should be working on, the Lead previously answered from recent runs
+	// and board items, which are HISTORY, not intent. Direction that lives only in a chat is lost
+	// when the thread rolls over and re-stated by the user every session.
+	//
+	// Derived from the record on every turn, never copied into memory or a system prompt (#315): a
+	// direction the owner changes in Settings must change what the agent believes on its very next
+	// turn. Gated on the agent declaring a supervision tool, so the two-statement cost is paid only
+	// by an agent that supervises somebody, and best-effort — a failed read must never take a turn
+	// down.
+	const supervisionTools = toolNamesFor(capabilities);
+	if (userId && (supervisionTools.has("delegate_goal") || supervisionTools.has("list_subordinates"))) {
+		const roster = await directionRosterFor(env, userId, state.agentId).catch(() => []);
+		systemPrompt += renderDirections(roster);
+	}
 
 	if (userId) {
 		const userCtx = await engine.getUserContext(userId);

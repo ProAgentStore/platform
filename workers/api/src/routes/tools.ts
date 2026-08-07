@@ -26,7 +26,7 @@ import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pi
 import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
-import { listSupervision, createSupervision, deleteSupervision } from "../lib/supervision.js";
+import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
 import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
@@ -708,6 +708,52 @@ toolRoutes.delete("/:id/supervision/:sid", async (c) => {
 	const removed = await deleteSupervision(c.env, session.uid, c.req.param("sid"));
 	if (!removed) throw new HttpError(404, "supervision link not found");
 	return c.json({ ok: true });
+});
+
+/**
+ * The subordinate's standing DIRECTION (#330) — the epic, on the edge that already names the pair.
+ *
+ * THIS ROUTE IS THE ONLY WAY `setBy: "user"` IS EVER WRITTEN, and that is the security boundary,
+ * not a detail of the URL. A direction is durable and reaches the supervisor's prompt on every
+ * later turn, so an agent able to write its own would turn one prompt injection — in a repo file,
+ * an issue body, a remote MCP resource — into a STANDING instruction. The `set_direction` tool
+ * writes DO-side through the registry and never speaks HTTP, so provenance can only ever move
+ * agent → owner: the agent proposes here (`setBy: "agent"`, surfaced as `proposedDirection`), and
+ * confirming it means the owner re-sending the text through this route.
+ *
+ * Same reasoning, same mechanism as memory's `(user-set)` marker and #337's tasks.
+ */
+toolRoutes.put("/:id/supervision/:sid/direction", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { direction?: unknown; text?: unknown };
+	// `direction` or `text` — the field is called `direction` in the payload the console reads
+	// back, and a body that names it either way means the same thing.
+	const raw = typeof body.direction === "string" ? body.direction : typeof body.text === "string" ? body.text : "";
+	const res = await setSupervisionDirection(c.env, session.uid, {
+		supervisorInstanceId: instanceId,
+		supervisionId: c.req.param("sid"),
+		text: raw,
+		setBy: "user",
+	});
+	if (!res.ok) throw new HttpError(res.status as 400, res.error);
+	return c.json(res.supervision);
+});
+
+/** Clearing it is how the owner CLOSES an epic — no lifecycle, no status field, one delete. */
+toolRoutes.delete("/:id/supervision/:sid/direction", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const res = await setSupervisionDirection(c.env, session.uid, {
+		supervisorInstanceId: instanceId,
+		supervisionId: c.req.param("sid"),
+		text: null,
+		setBy: "user",
+	});
+	if (!res.ok) throw new HttpError(res.status as 400, res.error);
+	return c.json(res.supervision);
 });
 
 /**

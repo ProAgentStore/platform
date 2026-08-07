@@ -20,7 +20,8 @@ import { accountTimeZone } from "../account-timezone.js";
 import { localStamp } from "../agent-clock.js";
 import { delegateToInstance } from "../delegate-instance.js";
 import { getLoopRun } from "../agent-loop-store.js";
-import { loadGraph } from "../supervision.js";
+import { directionsForSupervisor, loadGraph, setSupervisionDirection } from "../supervision.js";
+import { DIRECTION_LEGEND, MAX_DIRECTION_CHARS, directionPayload, type AgentDirection } from "../agent-direction.js";
 import { subordinatesOf } from "../supervision-graph.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
 import { actsInWindow, recentActsForInstances, recentRunsForInstances, recentWorkForInstances, type ActItem } from "../instance-work.js";
@@ -66,6 +67,12 @@ export interface SubordinateRow {
 	agentConfigRaw: string | null;
 	/** The typed settings the agent declares, so a stored value can be reported with its LABEL. */
 	settingsSchema: SettingsField[];
+	/**
+	 * The standing direction for THIS edge (#330), or null. Carries its own `setBy`, because the
+	 * whole point is that a direction the owner set and one the agent proposed are different
+	 * claims — see `directionPayload`.
+	 */
+	direction: AgentDirection | null;
 }
 
 /**
@@ -118,6 +125,9 @@ async function subordinateSummaries(ctx: SupervisionCtx): Promise<SubordinateRow
 	// passed is matched against these rows afterwards, never queried directly.
 	const ids = subordinatesOf(await loadGraph(ctx.env, userId), supervisorId);
 	if (!ids.length) return [];
+	// The epics (#330), read on the same indexed table the graph came from. Best-effort: a
+	// supervisor that cannot read its directions must still be able to see and drive its agents.
+	const directions = await directionsForSupervisor(ctx.env, userId, supervisorId).catch(() => new Map<string, AgentDirection>());
 	const placeholders = ids.map((_, i) => `?${i + 2}`).join(",");
 	// `agent_instances` has NO name column — a per-instance display name lives in
 	// config.displayName (set by PUT /:id/name), and everything else falls back to the template's
@@ -159,6 +169,7 @@ async function subordinateSummaries(ctx: SupervisionCtx): Promise<SubordinateRow
 			configRaw: r.config,
 			agentConfigRaw: r.agent_config,
 			settingsSchema: caps.settingsSchema ?? [],
+			direction: directions.get(r.id) ?? null,
 		};
 	});
 }
@@ -294,6 +305,7 @@ async function observeSubordinates(
 		actsById.set(a.instanceId, list);
 	}
 	const zone = await zonePromise;
+	const directionById = new Map(subs.map((s) => [s.instanceId, s.direction] as const));
 	const withConnectivity = view.subordinates.map((s) => {
 		const repo = repoStates.get(s.instanceId);
 		const theActs = actsById.get(s.instanceId) ?? [];
@@ -312,6 +324,10 @@ async function observeSubordinates(
 			// Always present, including when it could not be read — `available: false` is an answer;
 			// an omitted key is an invitation to infer one.
 			config: configById.get(s.instanceId),
+			// The epic (#330), under `direction` when the owner set it and `proposedDirection` when
+			// this agent did — never the same key for both, or a direction the agent lifted out of a
+			// repo file three turns ago reads back as the owner's standing intent.
+			...directionPayload(directionById.get(s.instanceId) ?? null),
 			// Absent when unknown (no repo, no runner, an older runner) — never a fabricated
 			// "clean on main", which a supervisor would act on.
 			...(repo ? { repo } : {}),
@@ -344,7 +360,9 @@ async function observeSubordinates(
 					"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
 					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing. " +
 					TIMES_LEGEND +
-					CONFIG_LEGEND,
+					CONFIG_LEGEND +
+					" " +
+					DIRECTION_LEGEND,
 				...view,
 				subordinates: withConnectivity,
 			},
@@ -401,14 +419,21 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		connector: "supervision",
 		scope: "read",
 		description:
-			"The roster of agents this one supervises — instance id, name, and SUBSCRIPTION state (active/paused), which is NOT what they are doing. Use subordinate_status to see what each is working on. You may only delegate to agents that appear here.",
+			"The roster of agents this one supervises — instance id, name, SUBSCRIPTION state (active/paused, which is NOT what they are doing) and each one's standing DIRECTION: what your owner has said that agent is for. Use subordinate_status to see what each is working on. You may only delegate to agents that appear here.",
 		jsonSchema: { type: "object", properties: {} },
 		handler: async (ctx) => {
 			const subs = await subordinateSummaries(ctx);
 			if (!subs.length) return { content: NO_SUBORDINATES, success: true };
-			// Roster only — the columns are an implementation detail of subordinate_status.
-			const roster = subs.map((s) => ({ instanceId: s.instanceId, name: s.name, subscription: s.subscription }));
-			return { content: JSON.stringify(roster, null, 2), success: true };
+			// Roster only — the columns are an implementation detail of subordinate_status. The
+			// direction belongs here though: "what is this agent for" is a roster question, and it
+			// is the one thing the Lead previously had to reconstruct from history.
+			const roster = subs.map((s) => ({
+				instanceId: s.instanceId,
+				name: s.name,
+				subscription: s.subscription,
+				...directionPayload(s.direction),
+			}));
+			return { content: JSON.stringify({ legend: DIRECTION_LEGEND, subordinates: roster }, null, 2), success: true };
 		},
 	},
 	{
@@ -588,6 +613,48 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			// paths return the good answer is robust to which one it picks.
 			const only = String(input.instanceId ?? "").trim() || undefined;
 			return observeSubordinates(ctx, only);
+		},
+	},
+	{
+		name: "set_direction",
+		tier: "connector",
+		connector: "supervision",
+		// WRITE: it puts durable text on the supervision edge, which every later turn reads. It is
+		// behind the per-instance write-consent gate (#90) like every other write tool — and behind
+		// the stronger rule below, which consent does not substitute for.
+		scope: "write",
+		description:
+			"PROPOSE the standing direction for an agent you supervise — one or two sentences saying what that agent is FOR (\"finish the voice port and keep the suite green\"), not a task for today. It is durable: it survives this conversation and is shown to you on every later turn. " +
+			"You cannot overwrite a direction your OWNER set — only they can change or clear that, and what you record here is a PROPOSAL until they confirm it in Settings. " +
+			"This is not where work goes: to make something happen now, use delegate_goal. Direction is what the goals are in service OF.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				instanceId: { type: "string", description: "Which subordinate — its NAME (\"FAS platform\") or its instance id." },
+				direction: { type: "string", description: `The standing direction, in a sentence or two (max ${MAX_DIRECTION_CHARS} characters).` },
+			},
+			required: ["instanceId", "direction"],
+		},
+		handler: async (ctx, input) => {
+			const target = resolveSubordinate(await subordinateSummaries(ctx), String(input.instanceId ?? ""));
+			if (!target.ok) return { content: target.message, success: false };
+			const res = await setSupervisionDirection(ctx.env, ctx.userId ?? "", {
+				supervisorInstanceId: ctx.instanceId ?? "",
+				subordinateInstanceId: target.row.instanceId,
+				text: String(input.direction ?? ""),
+				// NEVER "user" from a tool. The owner's authority is carried by the HTTP session on
+				// PUT /v1/instances/:id/supervision/:sid/direction and by nothing else; if this line
+				// could be reached with "user", a prompt injection in a repo file would become a
+				// standing instruction the model has no way to recognise as its own.
+				setBy: "agent",
+			});
+			if (!res.ok) return { content: res.error, success: false };
+			return {
+				content:
+					`Recorded as a PROPOSED direction for ${target.row.name}: "${res.supervision.direction?.text ?? ""}". ` +
+					"It is not yet your owner's direction — tell them what you proposed and why, and they confirm it on the agent's Teamwork settings.",
+				success: true,
+			};
 		},
 	},
 ];
