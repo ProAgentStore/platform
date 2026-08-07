@@ -70,6 +70,29 @@ export async function isSuspended(c: Context<{ Bindings: Env }>, uid: string): P
 }
 
 /**
+ * The `users.roles` column as a list of role names.
+ *
+ * A row that is not a JSON array of strings simply has NO roles. It must not throw: the read
+ * below resolves admin from `roles` OR from `github_login`, and those two live inside one
+ * `try` whose catch is there for "the DB is unavailable". A `JSON.parse` that raised — or a
+ * parsed value with no `.includes` — used to jump out of that block and skip the allowlist
+ * check on the very next line, so ONE malformed blob silently cost a legitimate operator
+ * their break-glass path. `lib/external-usage.ts` reads the same column and already scopes
+ * its parse this way; this brings the two into line.
+ *
+ * Fails closed either way: an unparseable `roles` never grants admin.
+ */
+function rolesOf(raw: string | null | undefined): string[] {
+	if (!raw) return [];
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed.filter((r): r is string => typeof r === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
+/**
  * Resolve whether a session is an admin (issue #28), defense-in-depth:
  *   1. the role baked into the session token (fast path), then
  *   2. a LIVE `users.roles` read — so a freshly granted/revoked admin takes effect
@@ -93,7 +116,7 @@ export async function isAdmin(
 		const row = await c.env.DB.prepare("SELECT roles, github_login FROM users WHERE id = ?1")
 			.bind(session.uid)
 			.first<{ roles: string; github_login: string }>();
-		if (row?.roles && (JSON.parse(row.roles) as string[]).includes("admin")) return true;
+		if (rolesOf(row?.roles).includes("admin")) return true;
 		if (row?.github_login && allow.includes(row.github_login.toLowerCase())) return true;
 	} catch {
 		// DB unavailable — uid allowlist above is the only remaining path

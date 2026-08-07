@@ -1,8 +1,8 @@
 import type { Context } from "hono";
 import { describe, expect, it } from "vitest";
-import { HttpError, requireUser } from "./auth.js";
+import { HttpError, isAdmin, requireUser } from "./auth.js";
 import { signSession } from "./session.js";
-import type { Env } from "../types.js";
+import type { Env, SessionPayload } from "../types.js";
 
 describe("HttpError", () => {
 	it("has status and message", () => {
@@ -74,5 +74,37 @@ describe("requireUser — suspension gate (#34)", () => {
 	it("still 401s an invalid token before ever touching the DB", async () => {
 		await expect(requireUser(ctx("not-a-token", db({ suspended: 0 })))).rejects.toMatchObject({ status: 401 });
 		await expect(requireUser(ctx(undefined, db({ suspended: 0 })))).rejects.toMatchObject({ status: 401 });
+	});
+});
+
+describe("isAdmin — a malformed roles column is not an exception", () => {
+	/** Context for isAdmin: it reads env.DB and env.ADMIN_ALLOWLIST, never the request. */
+	function adminCtx(row: unknown, allowlist = ""): Context<{ Bindings: Env }> {
+		return { env: { ADMIN_ALLOWLIST: allowlist, DB: db(row) } } as unknown as Context<{ Bindings: Env }>;
+	}
+	const user = { uid: "u1", roles: ["user"] } as SessionPayload;
+
+	it("grants admin from a well-formed roles column", async () => {
+		expect(await isAdmin(adminCtx({ roles: '["user","admin"]' }), user)).toBe(true);
+	});
+
+	it("does NOT let a malformed roles column cost the operator their allowlist path", async () => {
+		// The regression: `roles` and `github_login` are resolved inside ONE try whose catch
+		// means "the DB is unavailable". `JSON.parse("{oops")` threw out of the block, so the
+		// github_login check on the next line never ran — one bad blob in a column nothing
+		// validates, and a legitimate break-glass admin was silently locked out.
+		const ctxWith = adminCtx({ roles: "{oops", github_login: "operator" }, "operator");
+		expect(await isAdmin(ctxWith, user)).toBe(true);
+	});
+
+	it("fails closed: an unparseable or non-array roles value never grants admin", async () => {
+		for (const roles of ["{oops", '"admin"', "null", '{"admin":true}', "[]"]) {
+			expect(await isAdmin(adminCtx({ roles }), user)).toBe(false);
+		}
+	});
+
+	it("ignores non-string entries rather than throwing on them", async () => {
+		expect(await isAdmin(adminCtx({ roles: '[null,{"x":1},"admin"]' }), user)).toBe(true);
+		expect(await isAdmin(adminCtx({ roles: "[1,2,3]" }), user)).toBe(false);
 	});
 });
