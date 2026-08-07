@@ -5,6 +5,7 @@ import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { resolveSettingsValues, settingsPromptBlock } from "../lib/instance-settings.js";
 import { deriveFromUrl } from "../lib/board.js";
 import { logError } from "../lib/error-log.js";
+import { triggerActionDenial } from "../lib/trigger-capability.js";
 import type { BrowserTaskJob } from "../lib/browser-task-loop.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
@@ -42,13 +43,23 @@ export interface StartBrowseInput {
  * Mirrors startJobApply — same single-flight, same task/workflow shape.
  */
 export async function startBrowserTask(env: Env, instanceId: string, userId: string, input: StartBrowseInput): Promise<{ workflowId: string; taskId: string }> {
-	await requireLiveRuntime(env, instanceId, userId); // throws if no runner
-
+	// Capability BEFORE connectivity (#358). These two preconditions fail differently on purpose:
+	// a 503 is transient and environmental, so `executeTriggerAction` records it as a SKIP with
+	// failure_count untouched and retries next schedule, while a 400 is a real failure. Asking
+	// the environmental question first meant an agent that can never do this — no BROWSER_TASK
+	// workflow — never reached the permanent check at all: it 503'd, was recorded as a skip, and
+	// the owner was told to run `pags up` on every fire, forever. The free, deterministic,
+	// zero-cost question goes first, so the answer is the true one.
 	const inst = await env.DB.prepare("SELECT agent_id, config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ agent_id: string; config: string | null }>();
 	if (!inst) throw new BrowseError("instance not found", 404);
 	const agentRow = await env.DB.prepare("SELECT slug, category, config FROM agents WHERE id = ?1").bind(inst.agent_id).first<{ slug: string | null; category: string | null; config: string | null }>();
 	const caps = agentCapabilities({ slug: agentRow?.slug, category: agentRow?.category, config: agentRow?.config });
-	if (caps.workflow !== "BROWSER_TASK") throw new BrowseError("this agent is not a browser-task agent", 400);
+	// One sentence, shared with the trigger validator and the console picker, so the reason a
+	// browser run is refused reads the same wherever you meet it.
+	const denial = triggerActionDenial("run_browse", caps);
+	if (denial) throw new BrowseError(denial, 400);
+
+	await requireLiveRuntime(env, instanceId, userId); // throws 503 if no runner
 
 	const agentCfg = parseJson(agentRow?.config);
 	const instCfg = parseJson(inst.config);

@@ -195,7 +195,12 @@ const PINS = {
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
-	"workers/api/src/lib/triggers.ts": 839,
+	// +8 at #358 (two imports, one capability lookup, five lines of why): the run_browse skip
+	// notification is derived from what the agent DECLARES instead of unconditionally naming
+	// `pags up`, which for a cloud-only agent is a command that cannot help. Raised rather than
+	// split — the sentences themselves are pure and tested in lib/trigger-capability.ts, so what
+	// is left here is the one lookup that feeds them.
+	"workers/api/src/lib/triggers.ts": 847,
 	"packages/browser-runner/src/coding/headless.ts": 819,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a

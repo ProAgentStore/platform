@@ -4,6 +4,7 @@ import { encryptKey } from "./crypto.js";
 import { applyJitter, dispatchTrigger, nextRunAt, normalizeSchedule, previewRuns, publicWebhookUrl, type TriggerRow } from "./triggers.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
 import { startBrowserTask } from "../routes/instances-browse.js";
+import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
 // #92: dispatchTrigger's run_pipeline branch calls startPipelineRun (which loads the pipeline
@@ -456,6 +457,29 @@ describe("trigger action: run_browse (#172)", () => {
 		const env = baseEnv();
 		(startBrowserTask as Mock).mockRejectedValue(Object.assign(new Error("boom"), { status: 500 }));
 		await expect(dispatchTrigger(env, browseTrigger({ url: "https://x.test/go" }), "cron", {})).rejects.toThrow(/boom/);
+	});
+
+	// #358: the skip notification used to name `pags up` unconditionally. On a cloud-only agent
+	// that is a false remedy — `pags up` skips instances whose capabilities.runtime is null, so
+	// the user runs it, reads "None of your agents need a local runner", and the trigger keeps
+	// skipping. Every fire. Forever.
+	it("a 503 skip on a CLOUD-ONLY agent does not tell the user to run pags up", async () => {
+		const agent = { slug: "lead-finder", category: "sales", config: JSON.stringify({ capabilities: { surfaces: [], runtime: null, workflow: null } }) };
+		const env = {
+			DB: {
+				prepare() {
+					const stmt = { bind: () => stmt, first: async () => agent, all: async () => ({ results: [] }), run: async () => ({}) };
+					return stmt;
+				},
+			},
+			AGENT: { idFromName: (name: string) => ({ name }), get: () => ({ fetch: async () => Response.json({}, { status: 200 }) }) },
+		} as unknown as Env;
+		(startBrowserTask as Mock).mockRejectedValue(Object.assign(new Error("No runner connected. Start it with: pags up"), { status: 503 }));
+		const res = await dispatchTrigger(env, browseTrigger({ url: "https://x.test/go" }), "cron", {});
+		expect(res.ok).toBe(true);
+		const body = (notifyUser as Mock).mock.calls.at(-1)?.[4] as string;
+		expect(body).not.toContain("pags up");
+		expect(body).toContain("needs no runner");
 	});
 });
 

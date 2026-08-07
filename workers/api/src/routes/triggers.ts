@@ -20,6 +20,8 @@ import {
 	type TriggerType,
 } from "../lib/triggers.js";
 import { validateTriggerConfig } from "../lib/trigger-config.js";
+import { triggerActionDenial, triggerActionOffers } from "../lib/trigger-capability.js";
+import { agentCapabilities, capabilitiesForInstance, type AgentCapabilities } from "../lib/agent-capabilities.js";
 import type { Env } from "../types.js";
 
 export const triggerRoutes = new Hono<{ Bindings: Env }>();
@@ -54,7 +56,7 @@ function publicOrigin(requestUrl: string): string {
 	return "https://api.proagentstore.online";
 }
 
-function presentTrigger(trigger: TriggerRow, origin: string) {
+function presentTrigger(trigger: TriggerRow, origin: string, unavailable: string | null = null) {
 	return {
 		id: trigger.id,
 		userId: trigger.user_id,
@@ -70,6 +72,16 @@ function presentTrigger(trigger: TriggerRow, origin: string) {
 		// config you were shown and the config that ran were different objects. They are now
 		// the same one, which also means anything the console renders is guaranteed honoured.
 		config: parseConfig(trigger.config) as Record<string, unknown>,
+		/**
+		 * Why this saved trigger can never run, or null (#358).
+		 *
+		 * Rows predating the create-time gate exist, and some of them are wired to an action their
+		 * agent cannot perform. They are NOT deleted or disabled here: silently failing forever is
+		 * the bug, but a trigger the user wrote is theirs to remove. Surfacing it as broken — in
+		 * the same sentence the save path would have refused it with — leaves the decision where
+		 * it belongs while ending the pretence that the row is healthy.
+		 */
+		unavailable,
 		lastRunAt: trigger.last_run_at,
 		nextRunAt: trigger.next_run_at,
 		failureCount: trigger.failure_count,
@@ -94,6 +106,42 @@ function assertValidConfig(action: TriggerAction, type: TriggerType, config: unk
 }
 
 /**
+ * Refuse an action this instance's agent cannot perform (#358).
+ *
+ * SERVER-side deliberately, and not in the console: there are three equal doors onto this
+ * surface — the console, this API, and the MCP tool `create_instance_trigger` (which posts here)
+ * — so a picker-only fix would leave two of them open.
+ */
+async function assertActionPossible(env: Env, userId: string, instanceId: string, action: TriggerAction): Promise<void> {
+	const caps = await capabilitiesForInstance(env, instanceId, userId).catch(() => null);
+	const denial = triggerActionDenial(action, caps);
+	if (denial) throw new HttpError(400, denial);
+}
+
+/**
+ * Capabilities for every instance these triggers point at, in ONE query.
+ *
+ * The listing spans instances (`GET /v1/triggers` with no `instanceId` returns the whole
+ * account), and resolving them one at a time would be a request per row.
+ */
+async function capabilitiesForTriggers(env: Env, userId: string, triggers: readonly TriggerRow[]): Promise<Map<string, AgentCapabilities>> {
+	const ids = [...new Set(triggers.map((t) => t.instance_id))];
+	const out = new Map<string, AgentCapabilities>();
+	if (!ids.length) return out;
+	const placeholders = ids.map((_, i) => `?${i + 2}`).join(", ");
+	const { results } = await env.DB.prepare(
+		`SELECT i.id AS instance_id, a.slug AS slug, a.category AS category, a.config AS config
+       FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+      WHERE i.user_id = ?1 AND i.id IN (${placeholders})`,
+	)
+		.bind(userId, ...ids)
+		.all<{ instance_id: string; slug: string | null; category: string | null; config: string | null }>()
+		.catch(() => ({ results: [] as Array<{ instance_id: string; slug: string | null; category: string | null; config: string | null }> }));
+	for (const row of results ?? []) out.set(row.instance_id, agentCapabilities(row, env));
+	return out;
+}
+
+/**
  * POST /v1/triggers/preview — "if I saved this, what would happen?" (#16 + #18)
  *
  * Answers two questions the console cannot answer for itself without lying:
@@ -109,8 +157,8 @@ function assertValidConfig(action: TriggerAction, type: TriggerType, config: unk
  * problems as you type, not fail on the first one. The save path still returns 400.
  */
 triggerRoutes.post("/preview", async (c) => {
-	await requireUser(c);
-	const body = await c.req.json<{ type?: string; action?: string; schedule?: string; config?: Record<string, unknown>; count?: number }>().catch(() => ({}) as Record<string, never>);
+	const session = await requireUser(c);
+	const body = await c.req.json<{ instanceId?: string; type?: string; action?: string; schedule?: string; config?: Record<string, unknown>; count?: number }>().catch(() => ({}) as Record<string, never>);
 	const type: TriggerType = body.type === "cron" ? "cron" : "webhook";
 	let action: TriggerAction = "create_task";
 	try {
@@ -119,6 +167,16 @@ triggerRoutes.post("/preview", async (c) => {
 		// An unknown action is the caller's bug, not something to 500 over — validate what we can.
 	}
 	const issues = validateTriggerConfig(action, type, body.config);
+	// #358: an action this agent cannot perform is exactly the kind of thing the preview exists
+	// to say — "it would be stored and then never work" is the same class as "it would be stored
+	// and then ignored". Only when an instance is named, since the check is per-agent.
+	if (body.instanceId) {
+		const instanceId = body.instanceId.trim();
+		await requireOwnedInstance(c.env, session.uid, instanceId);
+		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
+		const denial = triggerActionDenial(action, caps);
+		if (denial) issues.push(denial);
+	}
 	const timezone = typeof body.config?.timezone === "string" ? body.config.timezone : undefined;
 	const jitterMinutes = typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined;
 	let schedule: string | null = null;
@@ -149,7 +207,29 @@ triggerRoutes.get("/", async (c) => {
 		`SELECT * FROM agent_triggers WHERE ${where} ORDER BY created_at DESC LIMIT 200`,
 	).bind(...binds).all<TriggerRow>();
 	const origin = publicOrigin(c.req.url);
-	return c.json({ triggers: (results ?? []).map((t) => presentTrigger(t, origin)) });
+	const caps = await capabilitiesForTriggers(c.env, session.uid, results ?? []);
+	return c.json({
+		triggers: (results ?? []).map((t) =>
+			presentTrigger(t, origin, triggerActionDenial(t.action, caps.get(t.instance_id) ?? null)),
+		),
+	});
+});
+
+/**
+ * GET /v1/triggers/actions?instanceId=… — the action vocabulary, annotated for one instance.
+ *
+ * The console's picker renders from THIS rather than from a hardcoded label list, which is what
+ * let it offer "Run browser task" on 25 agents that would refuse it. Unavailable actions come
+ * back with `available:false` and the reason, so the picker can disable the option and say why
+ * instead of quietly having fewer entries on some agents than others.
+ */
+triggerRoutes.get("/actions", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.query("instanceId")?.trim();
+	if (!instanceId) throw new HttpError(400, "instanceId required");
+	await requireOwnedInstance(c.env, session.uid, instanceId);
+	const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
+	return c.json({ actions: triggerActionOffers(caps) });
 });
 
 triggerRoutes.post("/", async (c) => {
@@ -168,6 +248,7 @@ triggerRoutes.post("/", async (c) => {
 	const type = assertTriggerType(body.type);
 	const action = assertTriggerAction(body.action || "create_task");
 	const name = sanitizeTriggerName(body.name);
+	await assertActionPossible(c.env, session.uid, instance.id, action);
 	assertValidConfig(action, type, body.config);
 	const schedule = type === "cron" ? normalizeSchedule(body.schedule) : null;
 	const timezone = typeof body.config?.timezone === "string" ? body.config.timezone : undefined;
@@ -211,6 +292,12 @@ triggerRoutes.put("/:id", async (c) => {
 	}>();
 	const name = body.name === undefined ? trigger.name : sanitizeTriggerName(body.name);
 	const action: TriggerAction = body.action === undefined ? trigger.action : assertTriggerAction(body.action);
+	// Only when the action is being CHANGED. An update that renames a trigger, or disables one,
+	// must keep working on a row that is already impossible — otherwise the only way to tidy up
+	// after this gate lands is to delete, which is a worse answer than "turn it off".
+	if (body.action !== undefined && body.action !== trigger.action) {
+		await assertActionPossible(c.env, session.uid, trigger.instance_id, action);
+	}
 	// Validate against the config that will END UP stored under the action that will end up set —
 	// an update that only changes `action` can strand config that was valid for the old one.
 	const stored = parseConfig(trigger.config) as Record<string, unknown>;
@@ -247,7 +334,8 @@ triggerRoutes.put("/:id", async (c) => {
 		)
 		.run();
 	const updated = await requireOwnedTrigger(c.env, session.uid, trigger.id);
-	return c.json({ trigger: presentTrigger(updated, publicOrigin(c.req.url)) });
+	const caps = await capabilitiesForInstance(c.env, updated.instance_id, session.uid).catch(() => null);
+	return c.json({ trigger: presentTrigger(updated, publicOrigin(c.req.url), triggerActionDenial(updated.action, caps)) });
 });
 
 triggerRoutes.delete("/:id", async (c) => {

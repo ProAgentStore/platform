@@ -20,6 +20,27 @@ export type TriggerType = "webhook" | "cron";
 export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
 export type TriggerEventType = TriggerType | "manual";
 
+/**
+ * The action vocabulary, as DATA (#358).
+ *
+ * There were three copies of it: the validator's `ACTIONS` set, the sentence in its own error
+ * message, and `ACTION_LABELS` in the console's picker. The console's copy is the one that
+ * mattered — it offered every action on every agent, including ones the executor refuses, so a
+ * cron trigger that could never do anything saved cleanly and looked healthy in the list.
+ *
+ * One array, so the picker cannot offer what the validator has never heard of, and an eighth
+ * action appears in both by being added here once.
+ */
+export const TRIGGER_ACTIONS: readonly TriggerAction[] = [
+	"create_task",
+	"add_knowledge",
+	"sync_connector",
+	"run_pipeline",
+	"insert_record",
+	"run_browse",
+	"log_event",
+];
+
 export interface TriggerRow {
 	id: string;
 	user_id: string;
