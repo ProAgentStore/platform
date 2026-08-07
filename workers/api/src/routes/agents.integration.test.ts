@@ -15,6 +15,7 @@ import type { Env } from "../types.js";
  */
 const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
 const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
 
 /**
  * INTEGRATION test for the agent CRUD routes — list/detail/create/update/delete/
@@ -150,7 +151,7 @@ describe("GET /v1/agents (public list)", () => {
 		const res = await app.request("/v1/agents", {}, env);
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.agents.map((a: any) => a.slug)).toEqual(["pub"]);
+		expect(rows(body.agents).map((a) => a.slug)).toEqual(["pub"]);
 	});
 });
 
@@ -427,7 +428,7 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.customSurfaces.map((s: any) => s.id)).toEqual(["s1", "rel"]);
+		expect(rows(body.customSurfaces).map((s) => s.id)).toEqual(["s1", "rel"]);
 		expect(body.customSurfacesEnabled).toBe(true);
 	});
 
@@ -498,7 +499,7 @@ describe("a fully-declared agent is creatable in ONE call (self-serve, no migrat
 		expect(res.status).toBe(201);
 		const cfgWrite = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
 		expect(cfgWrite, "config was never written").toBeTruthy();
-		const cfg = JSON.parse(String((cfgWrite as any).args[0]));
+		const cfg = JSON.parse(String(cfgWrite!.args[0]));
 		expect(cfg.capabilities.tools).toEqual(CAPS.tools);
 		// TOP level — nested under capabilities it parses fine and renders nothing.
 		expect(Array.isArray(cfg.settingsSchema)).toBe(true);
@@ -519,7 +520,7 @@ describe("a fully-declared agent is creatable in ONE call (self-serve, no migrat
 			slug: "bogus", name: "Bogus", capabilities: { runtime: "telepathy", surfaces: ["coding"] },
 		}, await tokenFor("u1", ["user", "creator"]));
 		const cfgWrite = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
-		const cfg = JSON.parse(String((cfgWrite as any).args[0]));
+		const cfg = JSON.parse(String(cfgWrite!.args[0]));
 		expect(cfg.capabilities.runtime).toBeNull();
 		expect(cfg.capabilities.surfaces).toEqual(["coding"]);
 	});

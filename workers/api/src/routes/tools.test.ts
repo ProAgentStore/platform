@@ -7,6 +7,18 @@ import { toolRoutes } from "./tools.js";
 import { unfenceUntrusted } from "../lib/untrusted-fence.js";
 
 /**
+ * Knowingly-partial test doubles, and the only `any` left in this file.
+ *
+ * A `RegistryToolCtx` carries a whole `Env` of bindings and a four-method `ConnectorClient`;
+ * the tool under test touches one or two of them. Declaring an interface for that subset would
+ * put a second, unmaintained shape in front of the compiler and have it vouch for that, and
+ * `as unknown as X` is the same claim with the lint rule switched off. So the cast is kept on
+ * purpose and kept HERE — one place that says "fake", instead of call sites that imply otherwise.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fake = <T,>(v: T): any => v;
+
+/**
  * Readers for JSON that came back from a route, for use in assertions.
  *
  * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
@@ -15,6 +27,8 @@ import { unfenceUntrusted } from "../lib/untrusted-fence.js";
  * only thing making a claim about the shape, which is what a test is for.
  */
 const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
+const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
 
 const SECRET = "test-secret";
 
@@ -123,13 +137,13 @@ describe("GET /v1/instances/:id/tools", () => {
 		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.tools.map((t: any) => t.name)).toContain("github_workflow_runs");
+		expect(rows(body.tools).map((t) => t.name)).toContain("github_workflow_runs");
 	});
 	it("emits each tool's jsonSchema verbatim (draft-07 object schema)", async () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
 		const body = await jsonBody(res);
-		const tool = body.tools.find((t: any) => t.name === "github_workflow_runs");
+		const tool = rows(body.tools).find((t) => t.name === "github_workflow_runs");
 		expect(tool.jsonSchema.type).toBe("object");
 		expect(tool.jsonSchema.properties.repo.type).toBe("string");
 		expect(tool.jsonSchema.required).toContain("repo");
@@ -255,9 +269,9 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 		expect(body.workflowId).toBe("wf-99");
 		expect(body.runId).toBeTruthy();
 		expect(create).toHaveBeenCalledTimes(1);
-		const arg = create.mock.calls[0][0] as any;
-		expect(arg.params.pipeline.name).toBe("sweep");
-		expect(arg.params.params).toEqual({ repo: "owner/name" });
+		const arg = rec(create.mock.calls[0][0]);
+		expect(rec(rec(arg.params).pipeline).name).toBe("sweep");
+		expect(rec(arg.params).params).toEqual({ repo: "owner/name" });
 		expect(arg.params.trigger).toBe("api");
 		expect(arg.params.userId).toBe("u1");
 	});
@@ -478,18 +492,18 @@ describe("tool policy gate (undeclared tools are refused on every surface)", () 
 	it("reports a verdict for EVERY tool, so the UI can show what is blocked and why", async () => {
 		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
 		const body = await jsonBody(await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1")));
-		const allowed = body.tools.filter((t: any) => t.allowed).map((t: any) => t.name);
+		const allowed = rows(body.tools).filter((t) => t.allowed).map((t) => t.name);
 		expect(allowed).toContain("github_workflow_runs");
 		expect(allowed).not.toContain("http_request");
-		expect(body.tools.find((t: any) => t.name === "http_request").reason).toBe("not_declared");
+		expect(rows(body.tools).find((t) => t.name === "http_request")?.reason).toBe("not_declared");
 		// No write tool survives for a read-only agent — the assertion an auditor actually wants.
-		expect(body.tools.filter((t: any) => t.allowed && t.scope === "write")).toEqual([]);
+		expect(rows(body.tools).filter((t) => t.allowed && t.scope === "write")).toEqual([]);
 	});
 
 	it("?allowed=true narrows to just the runnable set", async () => {
 		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
 		const body = await jsonBody(await req(app, env, "/v1/instances/i1/tools?allowed=true", {}, await tok("u1")));
-		expect(body.tools.every((t: any) => t.allowed)).toBe(true);
+		expect(rows(body.tools).every((t) => t.allowed)).toBe(true);
 	});
 });
 
@@ -499,7 +513,7 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 	it("persists the off-switch onto the instance config", async () => {
 		let written = "";
 		const { app, env } = testApp({ agentConfig: AGENT });
-		(env.DB as any).prepare = (sql: string) => ({
+		fake(env.DB).prepare = (sql: string) => ({
 			bind: (...args: unknown[]) => ({
 				first: async () =>
 					sql.includes("JOIN agents")

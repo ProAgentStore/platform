@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { approxTokens, estimatePlatformCostMicros, PLATFORM_CF_PRICE } from "./ai-pricing.js";
 import { recordPlatformUsage } from "./usage.js";
 
+/**
+ * Knowingly-partial test doubles, and the only `any` left in this file.
+ *
+ * A `RegistryToolCtx` carries a whole `Env` of bindings and a four-method `ConnectorClient`;
+ * the tool under test touches one or two of them. Declaring an interface for that subset would
+ * put a second, unmaintained shape in front of the compiler and have it vouch for that, and
+ * `as unknown as X` is the same claim with the lint rule switched off. So the cast is kept on
+ * purpose and kept HERE — one place that says "fake", instead of call sites that imply otherwise.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fake = <T,>(v: T): any => v;
+
 describe("platform cost estimation (issue #44)", () => {
 	it("approxTokens is ~4 chars/token, floors at 0", () => {
 		expect(approxTokens(400)).toBe(100);
@@ -22,7 +34,7 @@ describe("recordPlatformUsage", () => {
 		const run = vi.fn(async () => ({}));
 		const bind = vi.fn(() => ({ run }));
 		const prepare = vi.fn(() => ({ bind }));
-		return { db: { DB: { prepare } as any }, prepare, bind, run };
+		return { db: fake({ DB: { prepare } }), prepare, bind, run };
 	}
 
 	it("inserts a provider=platform row with an estimated cost", async () => {

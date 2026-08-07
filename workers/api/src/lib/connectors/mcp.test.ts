@@ -131,9 +131,9 @@ interface ScriptEntry {
  * era-detection and version-negotiation paths are exercised.
  */
 function mockRpc(script: Record<string, ScriptEntry | ScriptEntry[]>, opts: { sessionId?: string } = {}) {
-	const calls: Array<{ url: string; headers: Headers; body: any }> = [];
+	const calls: Array<{ url: string; headers: Headers; body: unknown }> = [];
 	const seen = new Map<string, number>();
-	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
 		const parsedBody = JSON.parse(String(init?.body ?? "{}"));
 		calls.push({ url: String(url), headers: new Headers(init?.headers), body: parsedBody });
 		const method = parsedBody.method;

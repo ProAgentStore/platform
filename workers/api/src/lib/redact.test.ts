@@ -12,14 +12,14 @@ describe("redactText", () => {
 
 describe("redactSecrets", () => {
 	it("redacts secret-named keys regardless of value", () => {
-		const out = redactSecrets({ apiKey: "whatever", token: "x", nested: { password: "p", ok: "keep" } }) as any;
+		const out = redactSecrets({ apiKey: "whatever", token: "x", nested: { password: "p", ok: "keep" } }) as Record<string, unknown>;
 		expect(out.apiKey).toBe("[redacted]");
 		expect(out.token).toBe("[redacted]");
 		expect(out.nested.password).toBe("[redacted]");
 		expect(out.nested.ok).toBe("keep");
 	});
 	it("masks secret-shaped values under innocent keys", () => {
-		const out = redactSecrets({ note: "my key sk-abcdefghij1234567890" }) as any;
+		const out = redactSecrets({ note: "my key sk-abcdefghij1234567890" }) as Record<string, unknown>;
 		expect(out.note).toContain("[redacted]");
 	});
 	it("handles arrays + primitives + null", () => {

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRegistryTool, runRegistryTool } from "./tool-registry.js";
 import { differsFrom } from "./steps.js";
 import type { RegistryToolCtx } from "./tool-registry.js";
-import type { ConnectorClient } from "./connectors/client.js";
 
 // Resolve steps from the REGISTRY — proves each is registered (dispatchable via
 // runRegistryTool for the #97 runner, and via POST …/tools/:name with no bespoke route).
@@ -16,11 +15,29 @@ const reachableT = getRegistryTool("http_reachable")!;
 const geocodeT = getRegistryTool("geocode")!;
 const extractT = getRegistryTool("extract_contacts")!;
 
-const baseCtx = { env: {} as any } as RegistryToolCtx;
+/**
+ * Knowingly-partial test doubles, and the ONLY `any` left in this file.
+ *
+ * A step tool takes a full `RegistryToolCtx` — a whole `Env` of bindings, a `ConnectorClient`
+ * with four methods — and the tools under test touch almost none of it. Declaring an interface
+ * for the subset each one happens to use would put a second, unmaintained shape in front of the
+ * compiler and have it vouch for that; `as unknown as X` is the same claim with the lint rule
+ * switched off. So the cast stays, deliberately, and stays HERE: one place that says it is a
+ * fake, instead of fifteen call sites that quietly imply they are not.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fakeEnv = (bindings: Record<string, unknown> = {}): any => bindings;
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fakeConnectorClient = (impl: unknown = {}): any => (typeof impl === "function" ? impl : () => impl);
 
-function parse(content: string): any {
-	return JSON.parse(content);
+const baseCtx = { env: fakeEnv() } as RegistryToolCtx;
+
+/** A tool's JSON reply. Fields are `unknown` — the `expect` below is the check. */
+function parse(content: string): Record<string, unknown> {
+	return JSON.parse(content) as Record<string, unknown>;
 }
+/** One field narrowed to a list of records, so `.map`/`.find` need no `any`. */
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -93,7 +110,7 @@ describe("filter", () => {
 				{ field: "reachable", op: "eq", value: false },
 			],
 		});
-		const kept = parse(r.content).items.map((x: any) => x.id);
+		const kept = rows(parse(r.content).items).map((x) => x.id);
 		expect(kept).toEqual([1, 2]);
 	});
 
@@ -124,7 +141,7 @@ describe("flatten", () => {
 		const r = await flattenT.handler(baseCtx, { items: aoa });
 		const parsed = parse(r.content);
 		expect(parsed.count).toBe(3); // 3 places, NOT 2 cells (the GAP #1 fix)
-		expect(parsed.items.map((x: any) => x.place_id)).toEqual(["a", "b", "c"]);
+		expect(rows(parsed.items).map((x) => x.place_id)).toEqual(["a", "b", "c"]);
 	});
 
 	it("default depth 1 leaves deeper nesting intact; depth:2 flattens further", async () => {
@@ -145,7 +162,7 @@ describe("flatten", () => {
 			{ status: 200, data: [{ place_id: "b" }, { place_id: "c" }] },
 		];
 		const r = await flattenT.handler(baseCtx, { items: perCell, path: "data" });
-		expect(parse(r.content).items.map((x: any) => x.place_id)).toEqual(["a", "b", "c"]);
+		expect(rows(parse(r.content).items).map((x) => x.place_id)).toEqual(["a", "b", "c"]);
 	});
 
 	// ── #243, milder sibling of slice.limit ───────────────────────────────────
@@ -172,7 +189,7 @@ describe("flatten", () => {
 // inserts; PUT updates. Proves insert-vs-update routing + that we never double-insert a
 // key that already exists (respecting the collection's unique constraint).
 function mockAgentStub(seen: Record<string, string>, stored: Record<string, Record<string, unknown>> = {}) {
-	const calls: Array<{ method: string; url: string; body?: any }> = [];
+	const calls: Array<{ method: string; url: string; body?: unknown }> = [];
 	const fetch = vi.fn(async (req: Request) => {
 		const url = new URL(req.url);
 		const method = req.method;
@@ -190,7 +207,7 @@ function mockAgentStub(seen: Record<string, string>, stored: Record<string, Reco
 		if (method === "PUT") return new Response(JSON.stringify({ id: "existing" }), { status: 200 });
 		return new Response("no", { status: 404 });
 	});
-	const env = { AGENT: { idFromName: (n: string) => n, get: () => ({ fetch }) } } as any;
+	const env = fakeEnv({ AGENT: { idFromName: (n: string) => n, get: () => ({ fetch }) } });
 	return { env, calls };
 }
 
@@ -259,7 +276,7 @@ describe("fan_out — pages (cursor drive + concurrency cap)", () => {
 		// Mock the underlying fetch that http_request → safeFetch calls: two pages then a
 		// null cursor. Also asserts the cursor is threaded into the request inputs.
 		const seenTokens: string[] = [];
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any) => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL) => {
 			const url = new URL(String(u));
 			const token = url.searchParams.get("pageToken") || "";
 			seenTokens.push(token);
@@ -269,8 +286,8 @@ describe("fan_out — pages (cursor drive + concurrency cap)", () => {
 			return new Response(JSON.stringify(page), { status: 200, headers: { "Content-Type": "application/json" } });
 		});
 		const ctx = {
-			env: {} as any,
-			connectorClient: (() => ({}) as unknown as ConnectorClient) as any,
+			env: fakeEnv(),
+			connectorClient: fakeConnectorClient(),
 		} as RegistryToolCtx;
 		const r = await fanOutT.handler(ctx, {
 			mode: "pages",
@@ -295,7 +312,7 @@ describe("fan_out — pages (cursor drive + concurrency cap)", () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
 			new Response(JSON.stringify({ items: [{ id: 1 }], next: "always" }), { status: 200, headers: { "Content-Type": "application/json" } }),
 		);
-		const ctx = { env: {} as any, connectorClient: (() => ({}) as unknown as ConnectorClient) as any } as RegistryToolCtx;
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
 		const r = await fanOutT.handler(ctx, {
 			mode: "pages", cursorParam: "pageToken", itemsPath: "data.items", maxPages: 3,
 			request: { method: "GET", url: "https://api.test/s", query: { pageToken: "{{pageToken}}" }, pagination: { type: "nextPageToken", path: "next" } },
@@ -324,7 +341,7 @@ describe("enrich", () => {
 	it("the reachability enrich-merge (the lead-finder 'is this site up' half)", async () => {
 		// enrich with http_reachable; {$item:"websiteUri"} feeds each item's url. Mock the wire:
 		// one live site, one dead host.
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any) => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL) => {
 			if (String(u).includes("live")) return new Response("hi", { status: 200 });
 			throw new Error("ECONNREFUSED");
 		});
@@ -338,10 +355,10 @@ describe("enrich", () => {
 			as: "reachable",
 			concurrency: 2,
 		});
-		const items = parse(r.content).items;
+		const items = rows(parse(r.content).items);
 		// each place now carries {ok,code} under `reachable` — correlated to ITS url.
-		expect(items.find((x: any) => x.place_id === "a").reachable).toMatchObject({ ok: true, code: 200 });
-		expect(items.find((x: any) => x.place_id === "b").reachable).toMatchObject({ ok: false, code: null });
+		expect(items.find((x) => x.place_id === "a")!.reachable).toMatchObject({ ok: true, code: 200 });
+		expect(items.find((x) => x.place_id === "b")!.reachable).toMatchObject({ ok: false, code: null });
 	});
 
 	it("filter can then test the merged field → 'keep no-website OR unreachable' fully composes", async () => {
@@ -359,12 +376,12 @@ describe("enrich", () => {
 				{ field: "reachable.ok", op: "eq", value: false },
 			],
 		});
-		expect(parse(r.content).items.map((x: any) => x.place_id)).toEqual(["a", "b"]);
+		expect(rows(parse(r.content).items).map((x) => x.place_id)).toEqual(["a", "b"]);
 	});
 
 	it("fails without tool/as", async () => {
-		expect((await enrichT.handler(baseCtx, { items: [{ a: 1 }], as: "x" } as any)).success).toBe(false);
-		expect((await enrichT.handler(baseCtx, { items: [{ a: 1 }], tool: "map" } as any)).success).toBe(false);
+		expect((await enrichT.handler(baseCtx, { items: [{ a: 1 }], as: "x" })).success).toBe(false);
+		expect((await enrichT.handler(baseCtx, { items: [{ a: 1 }], tool: "map" })).success).toBe(false);
 	});
 });
 
@@ -410,7 +427,7 @@ describe("geocode", () => {
 		let calledUrl = "";
 		let calledKey = "";
 		let calledBody = "";
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any, init?: any) => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL, init?: RequestInit) => {
 			const req = u instanceof Request ? u : new Request(String(u), init);
 			calledUrl = req.url;
 			calledKey = req.headers.get("X-Goog-Api-Key") || "";
@@ -428,14 +445,14 @@ describe("geocode", () => {
 			}), { status: 200, headers: { "Content-Type": "application/json" } });
 		});
 		const ctx = {
-			env: {} as any,
+			env: fakeEnv(),
 			instanceId: "inst1",
-			connectorClient: ((provider: string) => ({
-				connector: { id: provider } as any,
+			connectorClient: fakeConnectorClient((provider: string) => ({
+				connector: { id: provider },
 				token: async () => "VAULT_KEY",
-				requireGrant: async () => ({}) as any,
+				requireGrant: async () => ({}),
 				fetch: async () => new Response(""),
-			})) as any,
+			})),
 		} as RegistryToolCtx;
 		const r = await geocodeT.handler(ctx, { address: "Sydney, NSW" });
 		expect(r.success).toBe(true);
@@ -453,8 +470,8 @@ describe("geocode", () => {
 			new Response(JSON.stringify({ places: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
 		);
 		const ctx = {
-			env: {} as any, instanceId: "inst1",
-			connectorClient: (() => ({ token: async () => "K" }) as unknown as ConnectorClient) as any,
+			env: fakeEnv(), instanceId: "inst1",
+			connectorClient: fakeConnectorClient({ token: async () => "K" }),
 		} as RegistryToolCtx;
 		const r = await geocodeT.handler(ctx, { address: "Nowhereville" });
 		expect(r.success).toBe(false);
@@ -462,7 +479,7 @@ describe("geocode", () => {
 	});
 
 	it("rejects an unsupported provider", async () => {
-		const ctx = { env: {} as any, connectorClient: (() => ({}) as unknown as ConnectorClient) as any } as RegistryToolCtx;
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
 		const r = await geocodeT.handler(ctx, { address: "x", provider: "bing" });
 		expect(r.success).toBe(false);
 	});
@@ -541,7 +558,7 @@ describe("lead-finder expressible from the catalog (issue #94 acceptance)", () =
 			items: mapped, any: true,
 			where: [{ field: "websiteUri", op: "missing" }, { field: "reachable", op: "eq", value: false }],
 		})).content).items;
-		expect(filtered.map((x: any) => x.place_id)).toEqual(["b", "c"]);
+		expect(rows(filtered).map((x) => x.place_id)).toEqual(["b", "c"]);
 
 		const { env, calls } = mockAgentStub({});
 		const stored = JSON.parse((await runRegistryTool("dedupe_upsert", { env, instanceId: "inst1" } as RegistryToolCtx, {
@@ -849,7 +866,7 @@ describe("enrich — a step whose every call failed is not a successful step", (
 	});
 
 	it("reports a PARTIAL failure count while still returning the good records", async () => {
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any) => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL) => {
 			if (String(u).includes("live")) return new Response("hi", { status: 200 });
 			throw new Error("ECONNREFUSED");
 		});

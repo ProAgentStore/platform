@@ -8,10 +8,22 @@ import { FENCE_TAG, unfenceUntrusted } from "../untrusted-fence.js";
 // MCP proxy, and POST …/tools/web_search with no bespoke route).
 const webSearch = getRegistryTool("web_search")!;
 
+/**
+ * Knowingly-partial test doubles, and the only `any` left in this file.
+ *
+ * A `RegistryToolCtx` carries a whole `Env` of bindings and a four-method `ConnectorClient`;
+ * the tool under test touches one or two of them. Declaring an interface for that subset would
+ * put a second, unmaintained shape in front of the compiler and have it vouch for that, and
+ * `as unknown as X` is the same claim with the lint rule switched off. So the cast is kept on
+ * purpose and kept HERE — one place that says "fake", instead of call sites that imply otherwise.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fake = <T,>(v: T): any => v;
+
 /** Mock globalThis.fetch (what safeFetch calls). Records the URL + init. */
 function mockFetch(status: number, body: unknown) {
 	const calls: Array<{ url: string; init: RequestInit }> = [];
-	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
 		calls.push({ url: String(url), init: init || {} });
 		return new Response(typeof body === "string" ? body : JSON.stringify(body), {
 			status,
@@ -24,10 +36,10 @@ function mockFetch(status: number, body: unknown) {
 /** A ctx whose connectorClient("web-search").token() returns the vault key + a cx env. */
 function ctxWithKey(key: string, cx = "CSE_ID"): RegistryToolCtx {
 	const client = { token: async () => key } as unknown as ConnectorClient;
-	return { env: { WEB_SEARCH_CX: cx } as any, connectorClient: () => client } as RegistryToolCtx;
+	return { env: fake({ WEB_SEARCH_CX: cx }), connectorClient: () => client } as RegistryToolCtx;
 }
 
-function parse(content: string): any {
+function parse(content: string): Record<string, unknown> {
 	try {
 		// #308: web_search fences its envelope as untrusted remote text (titles + snippets are
 		// written by whoever ranked for the query). The pipeline binder unwraps it identically —
@@ -103,7 +115,7 @@ describe("web_search — Google Custom Search wiring", () => {
 	});
 	it("no CSE id (no cx, no env) → clean failure, no request", async () => {
 		const { calls } = mockFetch(200, {});
-		const noCx = { env: {} as any, connectorClient: () => ({ token: async () => "K" }) as any } as RegistryToolCtx;
+		const noCx = { env: fake({}), connectorClient: () => fake({ token: async () => "K" }) } as RegistryToolCtx;
 		const r = await webSearch.handler(noCx, { query: "x" });
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/cx|WEB_SEARCH_CX/i);
@@ -132,7 +144,7 @@ describe("web_search — api-key from vault, never leaked", () => {
 	});
 	it("fails cleanly (no request) when no key is connected", async () => {
 		const { calls } = mockFetch(200, {});
-		const noKey = { env: { WEB_SEARCH_CX: "CSE" } as any, connectorClient: () => ({ token: async () => "" }) as any } as RegistryToolCtx;
+		const noKey = { env: fake({ WEB_SEARCH_CX: "CSE" }), connectorClient: () => fake({ token: async () => "" }) } as RegistryToolCtx;
 		const r = await webSearch.handler(noKey, { query: "x" });
 		expect(r.success).toBe(false);
 		expect(calls).toHaveLength(0);

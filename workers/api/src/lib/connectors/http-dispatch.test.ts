@@ -21,11 +21,23 @@ import type { RegistryToolCtx } from "../tool-registry.js";
 import { unfenceUntrusted } from "../untrusted-fence.js";
 
 const httpRequest = getRegistryTool("http_request")!;
-const baseCtx = { env: {} as any } as RegistryToolCtx;
+
+/**
+ * Knowingly-partial test doubles, and the only `any` left in this file.
+ *
+ * A `RegistryToolCtx` carries a whole `Env` of bindings and a four-method `ConnectorClient`;
+ * the tool under test touches one or two of them. Declaring an interface for that subset would
+ * put a second, unmaintained shape in front of the compiler and have it vouch for that, and
+ * `as unknown as X` is the same claim with the lint rule switched off. So the cast is kept on
+ * purpose and kept HERE — one place that says "fake", instead of call sites that imply otherwise.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fake = <T,>(v: T): any => v;
+const baseCtx = { env: fake({}) } as RegistryToolCtx;
 
 async function run(input: Record<string, unknown>, ctx: RegistryToolCtx = baseCtx) {
 	const r = await httpRequest.handler(ctx, input);
-	let parsed: any;
+	let parsed: Record<string, unknown>;
 	try {
 		// #308: a successful envelope is fenced; unwrap the way the pipeline binder does.
 		parsed = JSON.parse(unfenceUntrusted(r.content));
@@ -89,7 +101,7 @@ describe("http_request — SSRF guard surfaced via the shared safeFetch (mocked 
 			},
 			// A POST is a write, so it needs the instance's http write consent (#307) before it can
 			// reach safeFetch at all. Granted here because the subject of this test is the dispatch.
-			{ env: { DB: { prepare: () => ({ bind: () => ({ first: async () => ({ ok: 1 }) }) }) } } as any, instanceId: "inst1", userId: "u1" } as RegistryToolCtx,
+			{ env: fake({ DB: { prepare: () => ({ bind: () => ({ first: async () => ({ ok: 1 }) }) }) } }), instanceId: "inst1", userId: "u1" } as RegistryToolCtx,
 		);
 		expect(r.success).toBe(true);
 		expect(safeFetch).toHaveBeenCalledTimes(1);

@@ -274,7 +274,7 @@ describe("new operator views (#31/#33)", () => {
 		const b = await jsonBody(res);
 		expect(b).toHaveProperty("connectors");
 		expect(b).toHaveProperty("consents");
-		expect(b.connectors.map((c: any) => c.connector)).toContain("github");
+		expect(rows(b.connectors).map((c) => c.connector)).toContain("github");
 	});
 
 	it("GET /v1/admin/errors returns the cross-user log", async () => {
@@ -312,7 +312,7 @@ describe("GET /v1/admin/usage", () => {
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
 		expect(body.totals.calls).toBe(2);
-		expect(body.byUser.map((b: any) => b.label).sort()).toEqual(["alice", "bob"]);
+		expect(rows(body.byUser).map((b) => b.label).sort()).toEqual(["alice", "bob"]);
 		expect(body.split.platformPaid.calls).toBe(1);
 		expect(body.split.byok.calls).toBe(1);
 	});

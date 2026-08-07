@@ -162,6 +162,17 @@ vi.mock("../tool-registry.js", () => ({
 import { attachAudit, auditStepEntry, executePipelineStep, stepBind, validatePipeline, resolveInputValue, type PipelineDef, type StepResult, type AuditEntry } from "../pipeline.js";
 import type { Env } from "../../types.js";
 
+/**
+ * Readers for JSON that came back from a route, for use in assertions.
+ *
+ * Every field is `unknown`, not `any`. These response shapes are not declared types anywhere in
+ * the worker, so an interface written here would be a second source of truth that nothing keeps
+ * in step — and the compiler would then vouch for it. `unknown` leaves the `expect` below as the
+ * only thing making a claim about the shape, which is what a test is for.
+ */
+const rec = (v: unknown): Record<string, unknown> => (v ?? {}) as Record<string, unknown>;
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
+
 const env = {} as Env;
 const ctx = { env, userId: "u1", instanceId: "i1" };
 const params = { city: "Newtown, NSW", type: "cafe", radius: 900 };
@@ -209,7 +220,7 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		const places = def.steps.find((s) => s.tool === "http_request")!;
 		expect(places.forEach).toEqual({ $ref: "grid.cells" });
 		// per-cell body plugs the cell's lat/lng via the #114 dotted-item convention.
-		const center = (places.inputs as any).body.locationRestriction.circle.center;
+		const center = rec(rec(rec(rec(places.inputs).body).locationRestriction).circle).center;
 		expect(center.latitude).toEqual({ $param: "item.lat" });
 		expect(center.longitude).toEqual({ $param: "item.lng" });
 	});
@@ -324,8 +335,8 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		const enriched = JSON.parse(
 			(await realHandler("enrich")(ctx as never, { items: places, tool: "http_reachable", input: { url: { $item: "websiteUri" } }, as: "reachable" })).content,
 		);
-		expect(enriched.items.find((x: any) => x.place_id === "a").reachable).toMatchObject({ ok: true });
-		expect(enriched.items.find((x: any) => x.place_id === "b").reachable).toMatchObject({ ok: false });
+		expect(rows(enriched.items).find((x) => x.place_id === "a")?.reachable).toMatchObject({ ok: true });
+		expect(rows(enriched.items).find((x) => x.place_id === "b")?.reachable).toMatchObject({ ok: false });
 	});
 
 	it("GAP #4 CLOSED (addressComponents type-select, #116): map populates geo from Google's typed array", async () => {

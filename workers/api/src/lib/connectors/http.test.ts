@@ -10,14 +10,26 @@ import { FENCE_TAG, unfenceUntrusted } from "../untrusted-fence.js";
 const httpRequest = getRegistryTool("http_request")!;
 
 /**
+ * Knowingly-partial test doubles, and the only `any` left in this file.
+ *
+ * A `RegistryToolCtx` carries a whole `Env` of bindings and a four-method `ConnectorClient`;
+ * the tool under test touches one or two of them. Declaring an interface for that subset would
+ * put a second, unmaintained shape in front of the compiler and have it vouch for that, and
+ * `as unknown as X` is the same claim with the lint rule switched off. So the cast is kept on
+ * purpose and kept HERE — one place that says "fake", instead of call sites that imply otherwise.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: deliberate partial double — see the block above.
+const fake = <T,>(v: T): any => v;
+
+/**
  * A DB that answers the write-consent lookup (#307) with `granted`.
  *
  * Most tests below are about interpolation/responseMap/pagination and use a mutating method only
  * because the API they model does; they run WITH consent so the subject of the test stays the
  * subject. The gate itself has its own describe block, which drives this both ways.
  */
-function consentEnv(granted: boolean): any {
-	return { DB: { prepare: () => ({ bind: () => ({ first: async () => (granted ? { ok: 1 } : null) }) }) } };
+function consentEnv(granted: boolean) {
+	return fake({ DB: { prepare: () => ({ bind: () => ({ first: async () => (granted ? { ok: 1 } : null) }) }) } });
 }
 
 // A ctx with no vault (api-key tests inject their own connectorClient), consented to write.
@@ -26,7 +38,7 @@ const baseCtx = { env: consentEnv(true), instanceId: "inst1", userId: "u1" } as 
 /** Mock globalThis.fetch (what safeFetch calls). Records the URL + init it was given. */
 function mockFetch(status: number, body: unknown) {
 	const calls: Array<{ url: string; init: RequestInit }> = [];
-	const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+	const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
 		calls.push({ url: String(url), init: init || {} });
 		return new Response(typeof body === "string" ? body : JSON.stringify(body), {
 			status,
@@ -45,7 +57,7 @@ async function run(input: Record<string, unknown>, ctx: RegistryToolCtx = baseCt
 	// anyway — so the shape test is the parse itself rather than a guess at the first character.
 	return { ...r, parsed: safeParse(r.content) };
 }
-function safeParse(s: string): any {
+function safeParse(s: string): Record<string, unknown> {
 	try {
 		// #308: the envelope is fenced as untrusted remote text. The pipeline binder unwraps it the
 		// same way (pipeline.ts `parseOutput`), so unfencing here IS the production read path.
@@ -209,7 +221,7 @@ describe("http_request — api-key from vault (mocked connectorClient)", () => {
 	});
 	it("fails cleanly (no request) when api-key mode is set but no key is connected", async () => {
 		const { calls } = mockFetch(200, {});
-		const noKey = { env: {} as any, connectorClient: () => ({ token: async () => "" }) as any } as RegistryToolCtx;
+		const noKey = { env: fake({}), connectorClient: () => fake({ token: async () => "" }) } as RegistryToolCtx;
 		const r = await run({ url: "https://places.googleapis.com/v1/x", auth: { mode: "api-key", key: { in: "header", name: "X-Goog-Api-Key" } } }, noKey);
 		expect(r.success).toBe(false);
 		expect(calls).toHaveLength(0);
@@ -471,7 +483,7 @@ describe("http_request — auth mode:none (no credential injected)", () => {
 		const { calls } = mockFetch(200, {});
 		// A ctx that would throw if connectorClient were ever touched — proves it isn't.
 		const ctx = {
-			env: {} as any,
+			env: fake({}),
 			connectorClient: () => {
 				throw new Error("connectorClient must not be called for mode:none");
 			},
@@ -596,13 +608,13 @@ describe("http_request — per-call write consent (#307)", () => {
 
 	it("fails closed when the consent lookup throws", async () => {
 		const { calls } = mockFetch(200, {});
-		const boom = {
+		const boom = fake({
 			DB: {
 				prepare: () => {
 					throw new Error("D1 down");
 				},
 			},
-		} as any;
+		});
 		const r = await run({ method: "POST", url: "https://api.example.com/x" }, { env: boom, instanceId: "inst1", userId: "u1" } as RegistryToolCtx);
 		expect(r.success).toBe(false);
 		expect(calls).toHaveLength(0);
