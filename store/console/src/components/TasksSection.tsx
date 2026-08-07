@@ -16,6 +16,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { AgentTaskEntry } from "../lib/types";
+import Button from "./Button";
+import Card from "./Card";
 
 const STATUSES = ["pending", "in_progress", "blocked", "complete"] as const;
 
@@ -96,7 +98,7 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 		<div>
 			<div className="flex justify-between items-center gap-2 mb-1">
 				<h3 className="text-base font-bold">Agent Tasks</h3>
-				<button type="button" onClick={() => setShowAdd((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ Add</button>
+				<Button variant="primary" onClick={() => setShowAdd((s) => !s)}>+ Add</Button>
 			</div>
 			{/* Say what this list DOES, because its effect is invisible: these lines go into the
 			    agent's prompt on every turn, which is the whole reason the tab exists. */}
@@ -109,14 +111,14 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 			</p>
 
 			{showAdd && (
-				<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+				<Card className="mb-3">
 					<input aria-label="Task title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Title (e.g. Renew the domain before September)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 					<textarea aria-label="Task description" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} placeholder="Description (optional)" className="mb-2 w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 					<div className="flex gap-2">
-						<button type="button" onClick={addTask} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
-						<button type="button" onClick={() => setShowAdd(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+						<Button variant="primary" onClick={addTask}>Save</Button>
+						<Button onClick={() => setShowAdd(false)}>Cancel</Button>
 					</div>
-				</div>
+				</Card>
 			)}
 
 			{tasks.length === 0 ? (
@@ -131,7 +133,7 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 					</div>
 					<div className="flex flex-col gap-2">
 						{tasks.map((t) => (
-							<div key={t.id} className="bg-panel border border-line rounded-lg p-3">
+							<Card key={t.id}>
 								<div className="flex justify-between items-start gap-2">
 									<div className="min-w-0">
 										<span className="font-semibold text-sm break-words">{t.title}</span>
@@ -147,8 +149,8 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 										)}
 									</div>
 									<div className="flex gap-1.5 shrink-0">
-										<button type="button" onClick={() => { setEditId(t.id); setEditTitle(t.title); setEditDescription(t.description || ""); setEditStatus(t.status); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">Edit</button>
-										<button type="button" onClick={() => deleteTask(t.id)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-red hover:bg-red/10 font-semibold">Delete</button>
+										<Button onClick={() => { setEditId(t.id); setEditTitle(t.title); setEditDescription(t.description || ""); setEditStatus(t.status); }}>Edit</Button>
+										<Button variant="danger" onClick={() => deleteTask(t.id)}>Delete</Button>
 									</div>
 								</div>
 								{editId === t.id ? (
@@ -163,14 +165,14 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 											))}
 										</select>
 										<div className="flex gap-2 mt-2">
-											<button type="button" onClick={() => saveTask(t.id)} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
-											<button type="button" onClick={() => setEditId(null)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+											<Button variant="primary" onClick={() => saveTask(t.id)}>Save</Button>
+											<Button onClick={() => setEditId(null)}>Cancel</Button>
 										</div>
 									</div>
 								) : (
 									t.description && <div className="text-sm text-muted mt-1">{t.description}</div>
 								)}
-							</div>
+							</Card>
 						))}
 					</div>
 				</>

@@ -4,6 +4,7 @@ import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import ErrorBoundary from "./ErrorBoundary";
 import ConversationPill from "./ConversationPill";
+import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal } from "lucide-react";
@@ -156,14 +157,15 @@ export default function Layout() {
 
 				{/* Hamburger — only when default nav is showing */}
 				{!navHidden && (
-					<button
-						type="button"
-						className="lg:hidden shrink-0 text-xl text-muted hover:text-ink hover:bg-line rounded-md px-1.5 py-1"
+					<Button
+						variant="ghost"
+						size="icon"
+						className="lg:hidden shrink-0"
 						onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
 						aria-label="Open menu"
 					>
 						<Menu size={20} />
-					</button>
+					</Button>
 				)}
 				{!navHidden && menuOpen && (
 					<nav
@@ -225,9 +227,9 @@ function PushPrompt() {
 			<div className="text-sm text-ink flex-1 min-w-[8rem]">
 				<b>Turn on alerts</b> so your agent can reach you the moment it needs an answer — even when this tab is closed.
 			</div>
-			<button type="button" onClick={onEnable} disabled={busy} className="order-2 sm:order-none px-4 py-2 rounded-lg bg-accent text-white text-sm font-bold disabled:opacity-50 shrink-0 whitespace-nowrap">
+			<Button variant="primary" size="lg" onClick={onEnable} disabled={busy} className="order-2 sm:order-none shrink-0 whitespace-nowrap">
 				{busy ? "Enabling…" : "🔔 Enable alerts"}
-			</button>
+			</Button>
 			<button type="button" onClick={onDismiss} className="text-muted hover:text-ink shrink-0 order-3 sm:order-none" aria-label="Dismiss"><X size={16} /></button>
 		</div>
 	);

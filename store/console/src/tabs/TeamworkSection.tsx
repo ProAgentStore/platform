@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatTime } from "@proagentstore/sdk/ui";
+import Button from "../components/Button";
+import Card from "../components/Card";
 import {
 	buildConnectionConfig,
 	canDelegate,
@@ -281,10 +283,9 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		setClauses((cs) => cs.map((c, n) => (n === i ? { ...c, ...patch } : c)));
 
 	const field = "text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full min-w-0";
-	const chip = "text-xs px-2 py-1 rounded-lg border border-line hover:bg-paper shrink-0";
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+		<Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Teamwork</h3>
 			<p className="text-sm text-muted mb-4">
 				How this agent works with your others.{" "}
@@ -318,7 +319,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					<div key={l.id} className="text-sm border border-line rounded-lg px-3 py-2 mb-1">
 						<div className="flex items-center justify-between gap-2">
 							<span className="truncate">{nameOf(l.subordinateInstanceId)}</span>
-							<button type="button" disabled={busy} onClick={() => removeSupervision(l.id)} className={chip}>Remove</button>
+							<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeSupervision(l.id)}>Remove</Button>
 						</div>
 						<div className={`text-xs mt-1 ${toneClass(state.tone)}`}>{state.label}</div>
 						<div className="flex flex-col sm:flex-row gap-2 mt-1">
@@ -331,12 +332,12 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 								className={field}
 							/>
 							<div className="flex gap-2 shrink-0">
-								<button type="button" disabled={busy || !canSave} onClick={() => saveDirection(l.id, value.trim())} className={`${chip} disabled:opacity-40`}>
+								<Button size="sm" className="shrink-0" disabled={busy || !canSave} onClick={() => saveDirection(l.id, value.trim())}>
 									{l.direction?.setBy === "agent" && !dirty ? "Confirm" : "Save"}
-								</button>
+								</Button>
 								{/* Clearing IS closing the epic — there is no lifecycle and nothing
 								    auto-closes it, because a subordinate finishing a task cannot know. */}
-								{l.direction && <button type="button" disabled={busy} onClick={() => saveDirection(l.id, null)} className={chip}>Clear</button>}
+								{l.direction && <Button size="sm" className="shrink-0" disabled={busy} onClick={() => saveDirection(l.id, null)}>Clear</Button>}
 							</div>
 						</div>
 					</div>
@@ -348,7 +349,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 						<option value="">Add an agent to supervise…</option>
 						{others.map((i) => <option key={i.id} value={i.id}>{i.name || i.agentName || i.slug || i.id}</option>)}
 					</select>
-					<button type="button" disabled={busy || !subordinate} onClick={addSupervision} className="text-sm px-3 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-40 whitespace-nowrap">Add agent</button>
+					<Button variant="primary" size="lg" className="whitespace-nowrap" disabled={busy || !subordinate} onClick={addSupervision}>Add agent</Button>
 				</div>
 				) : (
 					<div className="text-xs text-yellow mt-2">This agent can’t delegate — its tools include none of the supervision tools, so these links do nothing. Remove them, or supervise from an agent that can.</div>
@@ -380,7 +381,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 									<div key={w} className="text-[0.7rem] text-yellow break-words">{w}</div>
 								))}
 							</div>
-							<button type="button" disabled={busy} onClick={() => removeConnection(cn.id)} className={chip}>Remove</button>
+							<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeConnection(cn.id)}>Remove</Button>
 						</div>
 					);
 				})}
@@ -393,7 +394,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					<select aria-label="Connection action" value={action} onChange={(e) => setAction(e.target.value as (typeof ACTIONS)[number])} className={field}>
 						{ACTIONS.map((a) => <option key={a} value={a}>{a.replace(/_/g, " ")}</option>)}
 					</select>
-					<button type="button" disabled={busy || !eventType.trim() || !target} onClick={addConnection} className="text-sm px-3 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-40 whitespace-nowrap">Add event</button>
+					<Button variant="primary" size="lg" className="whitespace-nowrap" disabled={busy || !eventType.trim() || !target} onClick={addConnection}>Add event</Button>
 				</div>
 				{action === "run_pipeline" && (
 					<input value={pipeline} onChange={(e) => setPipeline(e.target.value)} aria-label="Pipeline to run on the target agent" placeholder="Pipeline name to run on the target" className={`${field} mt-2`} />
@@ -431,20 +432,20 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 									className={field}
 								/>
 							)}
-							<button
-								type="button"
+							<Button
+								size="sm"
+								className="shrink-0"
 								aria-label={`Remove condition ${i + 1}`}
 								disabled={clauses.length === 1}
 								onClick={() => setClauses((cs) => cs.filter((_, n) => n !== i))}
-								className={`${chip} disabled:opacity-30`}
 							>
 								−
-							</button>
+							</Button>
 						</div>
 					))}
-					<button type="button" onClick={() => setClauses((cs) => [...cs, { ...EMPTY_CLAUSE }])} className={chip}>
+					<Button size="sm" className="shrink-0" onClick={() => setClauses((cs) => [...cs, { ...EMPTY_CLAUSE }])}>
 						+ Add condition
-					</button>
+					</Button>
 					{/* The strict-equality trap, stated once rather than discovered by a chain that
 					    silently carries nothing: "4" is not 4, and quoting forces text. */}
 					<p className="text-[0.7rem] text-muted-soft mt-2">
@@ -509,12 +510,12 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 										<div className="flex flex-col gap-1 shrink-0">
 											{/* Retries wait out someone else's outage; when it is over, replay is the fix. */}
 											{d.status === "dead" && (
-												<button type="button" disabled={busy} onClick={() => replay(d.id)} className={chip}>Replay</button>
+												<Button size="sm" className="shrink-0" disabled={busy} onClick={() => replay(d.id)}>Replay</Button>
 											)}
 											{d.traceId && (
-												<button type="button" onClick={() => toggleTrace(d)} className={chip}>
+												<Button size="sm" className="shrink-0" onClick={() => toggleTrace(d)}>
 													{openTrace === d.id ? "Hide run" : "Run"}
-												</button>
+												</Button>
 											)}
 										</div>
 									</div>
@@ -538,6 +539,6 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 			</div>
 
 			{msg && <div className="text-xs text-red mt-3">{msg}</div>}
-		</div>
+		</Card>
 	);
 }

@@ -3,7 +3,10 @@ import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
 import { showsConnector } from "../lib/connectorState";
+import { buttonClass, cardClass } from "../lib/control-classes";
 import FilesSection from "../components/FilesSection";
+import Button from "../components/Button";
+import Card from "../components/Card";
 import MemorySection from "../components/MemorySection";
 import TasksSection from "../components/TasksSection";
 import VectorsSection from "../components/VectorsSection";
@@ -434,9 +437,9 @@ export default function KnowledgeTab({ instanceId }: Props) {
 									className="flex-1 min-w-[12rem] bg-panel border border-line rounded-lg px-3 py-2 text-sm font-semibold"
 								/>
 								<div className="flex gap-1.5">
-									<button type="button" onClick={() => setPreview((p) => !p)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">{preview ? "Write" : "Preview"}</button>
-									<button type="button" onClick={saveDoc} disabled={savingDoc} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">{savingDoc ? "Saving…" : "Save"}</button>
-									<button type="button" onClick={() => (openId === "__new__" ? closeDoc() : setEditing(false))} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+									<Button onClick={() => setPreview((p) => !p)}>{preview ? "Write" : "Preview"}</Button>
+									<Button variant="primary" onClick={saveDoc} disabled={savingDoc}>{savingDoc ? "Saving…" : "Save"}</Button>
+									<Button onClick={() => (openId === "__new__" ? closeDoc() : setEditing(false))}>Cancel</Button>
 								</div>
 							</div>
 							{preview ? (
@@ -465,8 +468,8 @@ export default function KnowledgeTab({ instanceId }: Props) {
 									<h3 className="text-base font-bold truncate">{openDoc.title}</h3>
 								</div>
 								<div className="flex gap-1.5">
-									<button type="button" onClick={() => startEdit(openDoc)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">Edit</button>
-									<button type="button" onClick={() => deleteDoc(openDoc.id)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-red hover:bg-red/10 font-semibold">Delete</button>
+									<Button onClick={() => startEdit(openDoc)}>Edit</Button>
+									<Button variant="danger" onClick={() => deleteDoc(openDoc.id)}>Delete</Button>
 								</div>
 							</div>
 							{openDoc.source && <div className="text-xs text-muted-soft mb-2">{openDoc.source}{openDoc.createdAt ? ` · ${formatTime(openDoc.createdAt)}` : ""}</div>}
@@ -481,18 +484,18 @@ export default function KnowledgeTab({ instanceId }: Props) {
 						<div className="flex justify-between items-center gap-2 mb-3 flex-wrap">
 							<h3 className="text-base font-bold">Documents</h3>
 							<div className="flex gap-1.5 flex-wrap">
-								<button type="button" onClick={openNew} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ New</button>
-								<button type="button" onClick={() => setShowUrl((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ URL</button>
+								<Button variant="primary" onClick={openNew}>+ New</Button>
+								<Button onClick={() => setShowUrl((s) => !s)}>+ URL</Button>
 								{/* #353: an import source the deployment has no OAuth client for is not offered.
 								    Its panel's only advice is "connect it in Settings", where — correctly — it
 								    is no longer listed, so the button led to a dead end nobody could leave. */}
 								{showsConnector(driveStatus) && (
-								<button type="button" onClick={() => setShowDrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ Drive</button>
+								<Button onClick={() => setShowDrive((s) => !s)}>+ Drive</Button>
 								)}
 								{showsConnector(workdriveStatus) && (
-								<button type="button" onClick={() => setShowWorkdrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ WorkDrive</button>
+								<Button onClick={() => setShowWorkdrive((s) => !s)}>+ WorkDrive</Button>
 								)}
-								<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
+								<label className={buttonClass("secondary", "md", "cursor-pointer")}>
 									+ File
 									<input type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,.xml" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
 								</label>
@@ -500,18 +503,18 @@ export default function KnowledgeTab({ instanceId }: Props) {
 						</div>
 
 						{showUrl && (
-							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+							<Card className="mb-3">
 								<input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} aria-label="URL to import into the knowledge base" placeholder="https://..." className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 								<input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} aria-label="Title for the imported page" placeholder="Title (auto-detected)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 								<div className="flex gap-2">
-									<button type="button" onClick={addUrl} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Import</button>
-									<button type="button" onClick={() => setShowUrl(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+									<Button variant="primary" onClick={addUrl}>Import</Button>
+									<Button onClick={() => setShowUrl(false)}>Cancel</Button>
 								</div>
-							</div>
+							</Card>
 						)}
 
 						{showDrive && (
-							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+							<Card className="mb-3">
 								{driveStatus?.connected ? (
 									<>
 										{driveGrants.length === 0 ? (
@@ -534,15 +537,15 @@ export default function KnowledgeTab({ instanceId }: Props) {
 												placeholder="Search granted folder"
 												className="flex-1 min-w-[12rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 											/>
-											<button type="button" onClick={searchDrive} disabled={driveLoading} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
+											<Button variant="primary" onClick={searchDrive} disabled={driveLoading}>
 												{driveLoading ? "Loading..." : "List"}
-											</button>
+											</Button>
 											{driveFolderId && driveFolderId !== driveGrants.find((g) => g.id === driveGrantId)?.resourceId && (
-												<button type="button" onClick={() => { const grant = driveGrants.find((g) => g.id === driveGrantId); setDriveFolderId(grant?.resourceId || ""); setDriveFiles([]); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">
+												<Button onClick={() => { const grant = driveGrants.find((g) => g.id === driveGrantId); setDriveFolderId(grant?.resourceId || ""); setDriveFiles([]); }}>
 													Root
-												</button>
+												</Button>
 											)}
-											<button type="button" onClick={() => setShowDrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+											<Button onClick={() => setShowDrive(false)}>Cancel</Button>
 										</div>
 										)}
 										{driveFiles.length > 0 && (
@@ -551,20 +554,15 @@ export default function KnowledgeTab({ instanceId }: Props) {
 													const folder = isDriveFolder(f);
 													const supported = supportedDriveFile(f);
 													return (
-														<div key={f.id} className="bg-paper border border-line rounded-lg p-3 flex items-start justify-between gap-3">
+														<Card key={f.id} tone="paper" className="flex items-start justify-between gap-3">
 															<div className="min-w-0">
 																<div className="text-sm font-semibold truncate">{f.name}</div>
 																<div className="text-xs text-muted truncate">{folder ? "Folder" : f.mimeType}</div>
 															</div>
-															<button
-																type="button"
-																disabled={(!folder && !supported) || importingDriveId === f.id}
-																onClick={() => folder ? openDriveFolder(f) : importDriveFile(f)}
-																className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
-															>
+															<Button className="disabled:hover:border-line disabled:hover:text-muted" disabled={(!folder && !supported) || importingDriveId === f.id} onClick={() => folder ? openDriveFolder(f) : importDriveFile(f)}>
 																{importingDriveId === f.id ? "Importing..." : folder ? "Open" : supported ? "Import" : "Unsupported"}
-															</button>
-														</div>
+															</Button>
+														</Card>
 													);
 												})}
 											</div>
@@ -574,11 +572,11 @@ export default function KnowledgeTab({ instanceId }: Props) {
 									<p className="text-sm text-muted">Connect Google Drive in Settings before importing Drive files.</p>
 								)}
 								{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
-							</div>
+							</Card>
 						)}
 
 						{showWorkdrive && (
-							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+							<Card className="mb-3">
 								{workdriveStatus?.connected ? (
 									<>
 										{workdriveGrants.length === 0 ? (
@@ -593,15 +591,15 @@ export default function KnowledgeTab({ instanceId }: Props) {
 											>
 												{workdriveGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.resourceName}</option>)}
 											</select>
-												<button type="button" onClick={() => listWorkdriveFolder()} disabled={workdriveLoading || !workdriveRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
+												<Button onClick={() => listWorkdriveFolder()} disabled={workdriveLoading || !workdriveRef.trim()}>
 													{workdriveLoading ? "Listing..." : "List folder"}
-												</button>
+												</Button>
 												{workdriveRef && workdriveRef !== workdriveGrants.find((g) => g.id === workdriveGrantId)?.resourceId && (
-													<button type="button" onClick={() => { const grant = workdriveGrants.find((g) => g.id === workdriveGrantId); setWorkdriveRef(grant?.resourceId || ""); setWorkdriveFiles([]); setWorkdriveNextOffset(null); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">
+													<Button onClick={() => { const grant = workdriveGrants.find((g) => g.id === workdriveGrantId); setWorkdriveRef(grant?.resourceId || ""); setWorkdriveFiles([]); setWorkdriveNextOffset(null); }}>
 														Root
-													</button>
+													</Button>
 												)}
-												<button type="button" onClick={() => setShowWorkdrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+												<Button onClick={() => setShowWorkdrive(false)}>Cancel</Button>
 											</div>
 										)}
 										{workdriveFiles.length > 0 && (
@@ -610,31 +608,21 @@ export default function KnowledgeTab({ instanceId }: Props) {
 													const folder = isWorkdriveFolder(f);
 													const supported = supportedWorkdriveFile(f);
 													return (
-														<div key={f.id} className="bg-paper border border-line rounded-lg p-3 flex items-start justify-between gap-3">
+														<Card key={f.id} tone="paper" className="flex items-start justify-between gap-3">
 															<div className="min-w-0">
 																<div className="text-sm font-semibold truncate">{f.name}</div>
 																<div className="text-xs text-muted truncate">{folder ? "Folder" : f.mimeType || f.extension || f.type}</div>
 															</div>
-															<button
-																type="button"
-																disabled={(!folder && !supported) || importingWorkdriveId === f.id || workdriveLoading}
-																onClick={() => folder ? openWorkdriveFolder(f) : importWorkdriveFile(f)}
-																className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
-															>
+															<Button className="disabled:hover:border-line disabled:hover:text-muted" disabled={(!folder && !supported) || importingWorkdriveId === f.id || workdriveLoading} onClick={() => folder ? openWorkdriveFolder(f) : importWorkdriveFile(f)}>
 																{importingWorkdriveId === f.id ? "Importing..." : folder ? "Open" : supported ? "Import" : "Unsupported"}
-															</button>
-														</div>
+															</Button>
+														</Card>
 													);
 												})}
 												{workdriveNextOffset !== null && (
-													<button
-														type="button"
-														onClick={() => listWorkdriveFolder(workdriveRef, workdriveNextOffset, true)}
-														disabled={workdriveLoading}
-														className="self-start text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50"
-													>
+													<Button className="self-start" onClick={() => listWorkdriveFolder(workdriveRef, workdriveNextOffset, true)} disabled={workdriveLoading}>
 														{workdriveLoading ? "Loading..." : "Load more"}
-													</button>
+													</Button>
 												)}
 											</div>
 										)}
@@ -643,7 +631,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 									<p className="text-sm text-muted">Connect Zoho WorkDrive in Settings before importing WorkDrive files.</p>
 								)}
 								{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
-							</div>
+							</Card>
 						)}
 
 						{docs.length === 0 ? (
@@ -651,7 +639,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 						) : (
 							<div className="flex flex-col gap-2">
 								{docs.map((d) => (
-									<button key={d.id} type="button" onClick={() => openView(d)} className="text-left bg-panel border border-line rounded-lg p-3 flex justify-between items-start gap-3 hover:border-accent transition-colors">
+									<button key={d.id} type="button" onClick={() => openView(d)} className={cardClass("panel", "text-left flex justify-between items-start gap-3 hover:border-accent transition-colors")}>
 										<div className="min-w-0">
 											<div className="font-semibold text-sm truncate">{d.title}</div>
 											<div className="text-xs text-muted mt-0.5 line-clamp-1">{(d.content || "").replace(/[#*_`>-]/g, "").trim().slice(0, 100) || d.source || "Empty"}</div>
@@ -697,10 +685,10 @@ export default function KnowledgeTab({ instanceId }: Props) {
 					) : (
 						<div className="flex flex-col gap-2">
 							{credentials.map((c) => (
-								<div key={c.id} className="bg-panel border border-line rounded-lg p-3">
+								<Card key={c.id}>
 									<div className="font-semibold text-sm">{c.domain}</div>
 									{c.username && <div className="text-xs text-muted mt-0.5">{c.username}</div>}
-								</div>
+								</Card>
 							))}
 						</div>
 					)}
@@ -722,9 +710,9 @@ export default function KnowledgeTab({ instanceId }: Props) {
 						className="min-h-[130px] w-full mb-2"
 					/>
 					<div className="flex items-center gap-2">
-						<button type="button" onClick={saveInstructions} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">
+						<Button variant="primary" onClick={saveInstructions}>
 							Save instructions
-						</button>
+						</Button>
 						{instrStatus && <span className="text-xs text-muted">{instrStatus}</span>}
 					</div>
 				</div>

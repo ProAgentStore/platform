@@ -10,6 +10,7 @@
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { reportClientError } from "@proagentstore/sdk/client";
+import Button from "./Button";
 
 interface Props {
 	children: ReactNode;
@@ -54,20 +55,12 @@ export default class ErrorBoundary extends Component<Props, State> {
 							The rest of the console still works — try again, or head back to your agents.
 						</p>
 						<div className="flex gap-2 justify-center">
-							<button
-								type="button"
-								onClick={() => this.setState({ error: null })}
-								className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold"
-							>
+							<Button variant="primary" size="lg" onClick={() => this.setState({ error: null })}>
 								Try again
-							</button>
-							<button
-								type="button"
-								onClick={() => window.location.reload()}
-								className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted font-semibold"
-							>
+							</Button>
+							<Button size="lg" onClick={() => window.location.reload()}>
 								Reload
-							</button>
+							</Button>
 						</div>
 					</div>
 				</div>

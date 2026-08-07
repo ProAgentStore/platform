@@ -12,6 +12,7 @@ import { API, getToken } from "@proagentstore/sdk/client";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { X, Download } from "lucide-react";
+import Button from "./Button";
 
 const PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -107,12 +108,12 @@ export default function FilePreview({ instanceId, file, onClose }: {
 					<div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-line shrink-0">
 						<div className="text-sm font-semibold truncate">{file.name}</div>
 						<div className="flex items-center gap-1.5 shrink-0">
-							<button type="button" onClick={download} title="Download" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold flex items-center gap-1.5">
+							<Button onClick={download} title="Download">
 								<Download size={13} /> Download
-							</button>
-							<button type="button" onClick={onClose} title="Close" className="text-xs px-2 py-1.5 rounded-lg border border-line text-muted hover:text-accent">
+							</Button>
+							<Button size="icon" onClick={onClose} title="Close" aria-label="Close preview">
 								<X size={14} />
-							</button>
+							</Button>
 						</div>
 					</div>
 				<div className="flex-1 min-h-0 overflow-auto bg-paper">

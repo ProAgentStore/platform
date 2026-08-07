@@ -60,7 +60,7 @@ undo without noticing:
   same silent-failure mode §1 describes for a token that does not exist.
 - **Prefer a component over `@apply`.** The zero count is worth keeping: `@apply` was the v3 answer
   to "this control is repeated 291 times", and it moves the duplication into CSS rather than
-  removing it. The answer here is the component layer (#366), not a `.btn` class.
+  removing it. The answer here is the component layer (§3, built at #366), not a `.btn` class.
 
 ## 1. Tokens
 
@@ -146,6 +146,18 @@ were chosen individually rather than from a scale. The effective type scale is ~
 This is real drift, and it is **not** worth a lint yet: 174 call sites with nowhere to go is 174
 blocked edits. It needs #366's primitives (a `Badge`, a `Label`) to absorb the small ones first.
 
+**#366 built the absorber and did not spend it, and the honest number moved the wrong way: 180 on
+2026-08-08, not 174.** The `Button` and `Badge` primitives (§3) own the type step for every control
+they render, so no migrated call site writes one and no new one can — but the controls migrated
+were already on `text-xs`/`text-sm`, so the arbitrary count is **unchanged**. Saying otherwise
+would credit this with work it did not do.
+
+What the remaining 180 need is a real scale STEP for the 110 uses of the 11.2px size — a `--text-*`
+entry in `@theme` — and that cannot be added to the console alone: `designTokens.test.ts` holds the
+console and admin `@theme` blocks equal (§5.3) and the second copy lives in `store/admin`, so it is
+one commit across both trees or it is a broken guard. Same constraint as the pigment→intent rename
+in §6.
+
 Weight: `font-semibold` (254) and `font-bold` (172) do nearly all the work; `font-medium` (25) is a
 minority third weight. `font-display` (Fraunces) appears 11 times — page titles only.
 
@@ -159,6 +171,35 @@ Bare `rounded` is mostly older code.
 Control padding clusters on `px-3 py-1.5` (83) for a normal button, `px-2.5 py-1.5` (38) for a small
 one, `px-3 py-2` (60) for an input, `px-1.5 py-0.5` (22) for a chip. Gaps cluster on `gap-2` (180) and
 `gap-1.5` (58) inside a control, `gap-3` (68) between them.
+
+### The atomic layer: one table, three components (#366)
+
+Those clusters were 47 distinct padding+radius combinations across 266 `<button>` elements, and the
+two biggest — `px-3 py-1.5` (58) and `px-2.5 py-1.5` (22) — differ by 2px and nothing else. Nobody
+chose that difference 22 times.
+
+`store/console/src/lib/control-classes.ts` is now the single answer, as DATA: `BUTTON_SIZE` (four
+steps: `sm` · `md` · `lg` · `icon`), `BUTTON_VARIANT` (four intents: `primary` · `secondary` ·
+`ghost` · `danger`), `CARD_GEOMETRY` (one, `rounded-xl p-3 sm:p-4`) and `BADGE_BASE`. `components/`
+holds the three thin presentational wrappers — `Button`, `Card`, `Badge` — and `buttonClass` /
+`cardClass` are exported for the handful of call sites that must look like a control without being
+one (a `<label>` wrapping a hidden file input cannot be a `<button>`).
+
+Three properties are load-bearing, each asserted in `control-classes.test.ts`:
+
+- **Size and variant are separate axes.** A variant carries colour and weight and no padding; a
+  size carries padding, radius and a type step and no colour. A variant that also sized itself
+  would multiply back out into the combinations this replaces.
+- **Every utility is written out whole.** Tailwind v4 finds classes by scanning source text, so an
+  interpolated `` `rounded-${size}` `` generates nothing — the same silent-nothing failure as a
+  dead colour token (§1), with no build error. `components/Page.tsx` learned this first.
+- **The badge's tones come from `lib/statusBadge.ts`**, not a private copy. #368 refused to invent
+  a third status vocabulary; a fourth here would be the same mistake with better intentions.
+
+**What the vocabulary deliberately does not model**, because inventing a variant for each would be
+a table describing one call site: a `rounded-full` pill, a segmented control with an active arm, a
+card-shaped button with a selected state, and an icon button drawn over content with its own
+scrim. Those stay hand-written and are counted (§5).
 
 Mobile: form controls are forced to `font-size: 16px; min-height: 44px` below 640px (`index.css`).
 Both numbers are deliberate — 16px is the threshold below which iOS Safari zooms the viewport on
@@ -223,13 +264,27 @@ and each matching a defect that actually shipped:
 3. **The console and admin `@theme` blocks are equal** — the admin file claims its tokens are "shared
    with the console"; they are shared by copy, so nothing was keeping the claim true.
 
+**`store/console/src/lib/control-shapes.test.ts`** — also in the unit suite, added at #366. **No new
+`<button>` may draw its own box**: a ratchet over any button whose class attribute names both a
+padding and a radius utility, pinned exactly at 125 (console), 15 (admin) and 48 (Coder UI), and it
+may only go down. 47 shapes accumulated because nothing failed when a fifteenth appeared, and a
+sweep without a ratchet is a photograph of a tree that keeps growing — #367's guard caught five
+defects that landed on main from another author *while its own sweep was running*.
+
+Stated so the number is not read as "all of it": it covers `<button>` only. A `<Link>` styled as a
+button is not counted, which also means the ratchet is **evadable** by swapping the tag; cards and
+badges are not counted either, because `<div>` is the wrong unit to scan and padding+radius does
+not tell a card from a code block. And it says nothing about whether the variant chosen was the
+right one — that is taste, and the paragraph below applies.
+
 **Not enforceable, and honest to say so:** spacing rhythm, whether a given control should be a button
 or a link, information density, when a surface is `panel` versus `paper`, icon choice, and whether
 `/10` or `/15` is the right tint. These are judgement, and a lint that pretended to check them would
 only teach people to suppress it.
 
-**Deliberately not enforced yet:** the type scale (see §2 — needs #366 first) and the marketing-vs-SPA
-palette split (§4 — resolving it is a restyling decision about the marketing pages, not a lint).
+**Deliberately not enforced yet:** the type scale (see §2 — the primitives that absorb it exist since
+#366, the `@theme` step they would name does not) and the marketing-vs-SPA palette split (§4 —
+resolving it is a restyling decision about the marketing pages, not a lint).
 
 ## 6. Open
 
@@ -240,14 +295,22 @@ palette split (§4 — resolving it is a restyling decision about the marketing 
   `--color-danger` as an *alias* beside `--color-red` without migrating ~200 call sites would leave two
   names for one idea — the failure #368 explicitly refused when it declined to invent a third status
   vocabulary. The intent layer in `lib/statusBadge.ts` is what keeps the eventual rename cheap.
-- Collapse the 17 arbitrary type sizes into a scale, after #366 (§2). Measured rendered, 2026-08-08
+- Collapse the remaining arbitrary type sizes into a scale (§2). Measured rendered, 2026-08-08
   (#390): **148 sub-12px strings on Terminals**, 100 on Activity, and 9.9px body copy under form
-  controls on the instance Settings tab — nine of the values sit inside a 2px band.
+  controls on the instance Settings tab — nine of the values sit inside a 2px band. #366 built the
+  primitives that absorb them and took the migrated call sites; the rest needs a `--text-*` step in
+  BOTH `@theme` blocks, so it is the same two-tree commit as the rename above.
+- **Finish the button migration.** #366 took 57 of 182 sites — the shared component family, the
+  Knowledge tab and TeamworkSection's `chip`. Still hand-written: `AgentDetail`, `RunDetail`,
+  `InstanceDetail`, `Profile`, `BoardTab`, `SettingsTab`, `StatsTab`, `TmuxTab`, `DataTab`,
+  `TriggersSection`, `LoopPresetsSection`, and all of `store/admin` and `agents/coder/web`. The
+  ratchet in §5 holds each tree where it stands meanwhile.
 - **Decide whether this document may become prescriptive, and about what.** It is descriptive by
   design, and the two floors an audit keeps asking for — a minimum tap target (#389: 40 controls
   under 40px on the Assistant screen, 12×12px checkboxes on Behaviour, a 16px *Remove* on Repo) and
   a minimum readable font size (#390) — cannot be recorded here without changing that. Both belong
-  in the component layer (#366) rather than at 291 + 168 call sites, so the sequencing is #367 →
-  #366 → adopt; the open question is only whether the numbers live *here* once they exist.
+  in the component layer, which now exists (§3): a floor written into `BUTTON_SIZE` applies to every
+  control that renders through it, and the ratchet in §5 is what stops a new one bypassing it. The
+  open question is only whether the numbers live *here* once they exist.
 - Decide whether the marketing pages adopt the SPA palette or keep their own (§4).
 - Clear `store/admin`'s two pinned dead utilities (§5) and drop its pin to zero.

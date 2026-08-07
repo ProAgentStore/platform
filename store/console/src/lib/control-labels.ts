@@ -21,7 +21,14 @@
  * `placeholder` is NOT a name. It disappears the moment you type, several screen readers skip
  * it, and it is the single most common reason a field "looks labelled" and is not. It is
  * reported separately as a weak name so a caller can decide.
+ *
+ * The tag scanner moved to `jsx-tags.ts` at #366, when a second source-scanning guard
+ * (`control-shapes.ts`) needed the same one. Its subtleties — an arrow function's `>` is not
+ * the end of a tag, a `//` inside an https URL is not a comment — are each a bug someone
+ * already shipped, and a second copy would be a second chance to reintroduce one.
  */
+
+import { type JsxTag, lineOf, scanTags } from "./jsx-tags";
 
 export type NameSource = "aria-labelledby" | "aria-label" | "id" | "wrapping-label" | "title" | "placeholder" | "none";
 
@@ -49,61 +56,6 @@ const CONTROLS = new Set(["input", "select", "textarea"]);
  */
 const SELF_NAMING_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image"]);
 
-/**
- * Blank out comments before scanning, keeping every newline so lines and indices still line up.
- *
- * Prose about markup is not markup. A comment saying "a `<tr onClick>` is reachable by mouse and
- * by nothing else" is a description of the bug being FIXED on the next line, and reporting it is
- * the same false-positive class this file's header is about.
- *
- * Only the three shapes this codebase actually writes are masked: a JSX brace-slash-star block,
- * and a slash-star or double-slash comment that STARTS a line. Nothing mid-line is touched,
- * because a double slash inside "https://…" and a slash-star inside a glob are both ordinary
- * string content, and blanking to end-of-line there would erase the attributes that name a
- * control.
- */
-function maskComments(source: string): string {
-	const blank = (m: string) => m.replace(/[^\n]/g, " ");
-	return source
-		.replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
-		.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, blank)
-		.replace(/^[ \t]*\/\/[^\n]*/gm, blank);
-}
-
-/**
- * Split JSX into tags, respecting that a `>` can appear inside a `{...}` expression or a
- * string attribute (`placeholder=">"`, `onChange={(e) => …}` — that arrow is the common case
- * and a naive `/<[^>]*>/` truncates the tag right before the attributes that name it).
- */
-function scanTags(input: string): { name: string; body: string; index: number; selfClosing: boolean; closing: boolean }[] {
-	const source = maskComments(input);
-	const out: { name: string; body: string; index: number; selfClosing: boolean; closing: boolean }[] = [];
-	for (let i = 0; i < source.length; i++) {
-		if (source[i] !== "<") continue;
-		const nameMatch = /^<(\/?)([A-Za-z][A-Za-z0-9]*)/.exec(source.slice(i, i + 40));
-		if (!nameMatch) continue;
-		let depth = 0;
-		let quote = "";
-		let j = i + nameMatch[0].length;
-		for (; j < source.length; j++) {
-			const c = source[j];
-			if (quote) {
-				if (c === quote) quote = "";
-				continue;
-			}
-			if (c === '"' || c === "'") quote = c;
-			else if (c === "{") depth++;
-			else if (c === "}") depth--;
-			else if (c === ">" && depth <= 0) break;
-		}
-		if (j >= source.length) continue;
-		const body = source.slice(i, j + 1);
-		out.push({ name: nameMatch[2], body, index: i, selfClosing: /\/>$/.test(body), closing: nameMatch[1] === "/" });
-		i = j;
-	}
-	return out;
-}
-
 const attr = (body: string, name: string): string | null => {
 	const m = new RegExp(`\\s${name}=(?:"([^"]*)"|'([^']*)'|\\{)`).exec(body);
 	if (!m) return null;
@@ -113,8 +65,7 @@ const hasAttr = (body: string, name: string) => new RegExp(`\\s${name}[=\\s/>]`)
 
 /** Every `<input>`/`<select>`/`<textarea>` in the source, with how it is named. */
 export function findControls(source: string): ControlFinding[] {
-	const tags = scanTags(source);
-	const lineAt = (index: number) => source.slice(0, index).split("\n").length;
+	const tags: JsxTag[] = scanTags(source);
 	const out: ControlFinding[] = [];
 	// Depth of open <label> ancestors, so a control wrapped in one is treated as named.
 	let labelDepth = 0;
@@ -145,7 +96,7 @@ export function findControls(source: string): ControlFinding[] {
 								? "placeholder"
 								: "none";
 
-		out.push({ tag: lower, line: lineAt(tag.index), via, type, excerpt: tag.body.replace(/\s+/g, " ").slice(0, 120) });
+		out.push({ tag: lower, line: lineOf(source, tag.index), via, type, excerpt: tag.body.replace(/\s+/g, " ").slice(0, 120) });
 	}
 	return out;
 }
@@ -187,5 +138,5 @@ export interface ClickTargetFinding {
 export function findMouseOnlyClickTargets(source: string): ClickTargetFinding[] {
 	return scanTags(source)
 		.filter((t) => !t.closing && NON_INTERACTIVE.has(t.name) && hasAttr(t.body, "onClick") && !hasAttr(t.body, "role"))
-		.map((t) => ({ tag: t.name, line: source.slice(0, t.index).split("\n").length, excerpt: t.body.replace(/\s+/g, " ").slice(0, 120) }));
+		.map((t) => ({ tag: t.name, line: lineOf(source, t.index), excerpt: t.body.replace(/\s+/g, " ").slice(0, 120) }));
 }

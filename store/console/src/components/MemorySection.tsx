@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { MemoryEntry } from "../lib/types";
+import Button from "./Button";
+import Card from "./Card";
 
 export default function MemorySection({ instanceId, active }: { instanceId: string; active: boolean }) {
 	const [memories, setMemories] = useState<MemoryEntry[]>([]);
@@ -73,11 +75,11 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 		<div>
 			<div className="flex justify-between items-center gap-2 mb-3">
 				<h3 className="text-base font-bold">Agent Memory</h3>
-				<button type="button" onClick={() => setShowAddMem((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ Add</button>
+				<Button variant="primary" onClick={() => setShowAddMem((s) => !s)}>+ Add</Button>
 			</div>
 
 			{showAddMem && (
-				<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+				<Card className="mb-3">
 					<input aria-label="Memory key" value={newMemKey} onChange={(e) => setNewMemKey(e.target.value)} placeholder="Key (e.g. language)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 					<select aria-label="Memory type" value={newMemType} onChange={(e) => setNewMemType(e.target.value)} className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm">
 						{["identity", "knowledge", "preference", "skill", "context"].map((t) => (
@@ -86,10 +88,10 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 					</select>
 					<textarea aria-label="Memory content" value={newMemContent} onChange={(e) => setNewMemContent(e.target.value)} placeholder="Content" className="mb-2 w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 					<div className="flex gap-2">
-						<button type="button" onClick={addMemory} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
-						<button type="button" onClick={() => setShowAddMem(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+						<Button variant="primary" onClick={addMemory}>Save</Button>
+						<Button onClick={() => setShowAddMem(false)}>Cancel</Button>
 					</div>
-				</div>
+				</Card>
 			)}
 
 			{memories.length === 0 ? (
@@ -97,7 +99,7 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 			) : (
 				<div className="flex flex-col gap-2">
 					{memories.map((m) => (
-						<div key={m.key} className="bg-panel border border-line rounded-lg p-3">
+						<Card key={m.key}>
 							<div className="flex justify-between items-start gap-2">
 								<div className="min-w-0">
 									<span className="font-semibold text-sm break-all">{m.key}</span>
@@ -105,8 +107,8 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 									{m.source && <span className="text-xs text-muted-soft ml-2">{m.source}</span>}
 								</div>
 								<div className="flex gap-1.5 shrink-0">
-									<button type="button" onClick={() => { setEditMemKey(m.key); setEditMemContent(m.content); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">Edit</button>
-									<button type="button" onClick={() => deleteMemory(m.key)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-red hover:bg-red/10 font-semibold">Delete</button>
+									<Button onClick={() => { setEditMemKey(m.key); setEditMemContent(m.content); }}>Edit</Button>
+									<Button variant="danger" onClick={() => deleteMemory(m.key)}>Delete</Button>
 								</div>
 							</div>
 							{editMemKey === m.key ? (
@@ -115,14 +117,14 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 									    open at once, and "Content" three times over says nothing about which. */}
 									<textarea aria-label={`Content of memory ${m.key}`} value={editMemContent} onChange={(e) => setEditMemContent(e.target.value)} className="w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 									<div className="flex gap-2 mt-2">
-										<button type="button" onClick={() => saveMemory(m)} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
-										<button type="button" onClick={() => setEditMemKey(null)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										<Button variant="primary" onClick={() => saveMemory(m)}>Save</Button>
+										<Button onClick={() => setEditMemKey(null)}>Cancel</Button>
 									</div>
 								</div>
 							) : (
 								<div className="text-sm text-muted mt-1">{m.content}</div>
 							)}
-						</div>
+						</Card>
 					))}
 				</div>
 			)}

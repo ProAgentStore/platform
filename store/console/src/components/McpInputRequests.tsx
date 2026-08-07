@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { AlertCircle, Loader2 } from "lucide-react";
+import Button from "./Button";
 import {
 	answerPayload,
 	closedNote,
@@ -135,23 +136,13 @@ export default function McpInputRequests({ instanceId }: { instanceId: string })
 						{missing.length > 0 && <p className="text-[0.7rem] text-yellow mt-1">Still needed: {missing.join(", ")}</p>}
 						{error && <p className="text-[0.7rem] text-red mt-1">{error}</p>}
 						<div className="flex gap-2 mt-2">
-							<button
-								type="button"
-								disabled={busy === req.id || missing.length > 0}
-								onClick={() => void respond(req, "submit")}
-								className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold disabled:opacity-50 flex items-center gap-1.5"
-							>
+							<Button variant="primary" disabled={busy === req.id || missing.length > 0} onClick={() => void respond(req, "submit")}>
 								{busy === req.id && <Loader2 size={12} className="animate-spin" />}
 								Send answer
-							</button>
-							<button
-								type="button"
-								disabled={busy === req.id}
-								onClick={() => void respond(req, "cancel")}
-								className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold text-muted hover:text-fg disabled:opacity-50"
-							>
+							</Button>
+							<Button disabled={busy === req.id} onClick={() => void respond(req, "cancel")}>
 								Cancel
-							</button>
+							</Button>
 						</div>
 					</div>
 				);

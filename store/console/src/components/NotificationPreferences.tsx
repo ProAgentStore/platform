@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import Card from "./Card";
 
 /** One row of the vocabulary, as `GET /v1/preferences` serves it. */
 export interface NotificationTypeSpec {
@@ -72,7 +73,7 @@ export default function NotificationPreferences({
 	if (!types.length) return null;
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+		<Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Notifications</h3>
 			<p className="text-xs text-muted mb-3">
 				Which updates may reach your phone. Applies to <b>every</b> device you have enabled alerts
@@ -108,6 +109,6 @@ export default function NotificationPreferences({
 			})}
 
 			{msg && <p className="text-xs text-red mt-2">{msg}</p>}
-		</div>
+		</Card>
 	);
 }

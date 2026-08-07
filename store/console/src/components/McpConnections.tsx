@@ -16,6 +16,7 @@ import {
 	type McpReport,
 	type McpSurfaceReport,
 } from "../lib/mcpConnections";
+import Button from "./Button";
 
 /**
  * MCP Connections (#266) — the guided lifecycle for a user-named MCP endpoint:
@@ -149,14 +150,9 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					placeholder={`Access token for ${endpoint}`}
 					className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-paper border border-line rounded font-mono"
 				/>
-				<button
-					type="button"
-					disabled={!tokenValue.trim() || busyTool === `cred::${endpoint}`}
-					onClick={() => saveCredential(endpoint, { token: tokenValue.trim() })}
-					className="px-2 py-1 text-xs font-semibold bg-accent text-white rounded disabled:opacity-40"
-				>
+				<Button size="sm" variant="primary" disabled={!tokenValue.trim() || busyTool === `cred::${endpoint}`} onClick={() => saveCredential(endpoint, { token: tokenValue.trim() })}>
 					Save
-				</button>
+				</Button>
 				<button type="button" className="text-xs text-muted-soft hover:underline" onClick={() => { setTokenFor(""); setTokenValue(""); }}>
 					Cancel
 				</button>
@@ -445,14 +441,9 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 						placeholder="https://example.com/mcp"
 						className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-paper border border-line rounded"
 					/>
-				<button
-					type="button"
-					disabled={!url.trim() || testing}
-					onClick={() => runTest(url.trim(), openAuth ? "none" : "vault")}
-					className="px-2.5 py-1 text-xs font-semibold bg-accent text-white rounded disabled:opacity-40"
-				>
+				<Button size="sm" variant="primary" disabled={!url.trim() || testing} onClick={() => runTest(url.trim(), openAuth ? "none" : "vault")}>
 					{testing ? "Testing…" : "Test connection"}
-				</button>
+				</Button>
 			</div>
 			<label className="flex items-center gap-1.5 text-[0.68rem] text-muted-soft mt-1 cursor-pointer">
 				<input type="checkbox" checked={openAuth} onChange={(e) => setOpenAuth(e.target.checked)} className="w-3 h-3 accent-accent" />
@@ -480,14 +471,9 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					{(report.status === "credential_missing" || report.status === "credential_expired" || report.status === "auth_required") && (
 						<div className="flex flex-wrap items-center gap-2 mt-1">
 							{canAuthorize(report) && (
-								<button
-									type="button"
-									disabled={authorizing === report.endpoint}
-									onClick={() => authorize(report.endpoint, presetFor(presets, report.endpoint)?.scope ?? null)}
-									className="px-2 py-1 text-xs font-semibold bg-accent text-white rounded disabled:opacity-40"
-								>
+								<Button size="sm" variant="primary" disabled={authorizing === report.endpoint} onClick={() => authorize(report.endpoint, presetFor(presets, report.endpoint)?.scope ?? null)}>
 									{authorizing === report.endpoint ? "Waiting for sign-in…" : report.status === "credential_missing" ? "Connect" : "Reconnect"}
-								</button>
+								</Button>
 							)}
 							{tokenFor !== report.endpoint && (
 								<button type="button" className="text-[0.68rem] text-accent hover:underline" onClick={() => { setTokenFor(report.endpoint); setTokenValue(""); }}>

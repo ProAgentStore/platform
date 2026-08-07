@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { type Machine, machinesToShow, machineTile, type NodeDetail, pinnedWarning, runnerReading } from "../lib/runnerPanel";
+import Button from "./Button";
+import Card from "./Card";
 
 /**
  * The Runner card: is this agent's machine up, and which machine should it be?
@@ -20,8 +22,6 @@ export interface RunnerPanelProps {
 
 /** `GET /v1/instances/:id/runner-node`. */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: NodeDetail[]; resolvedNode?: string | null };
-
-const CARD = "bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4";
 
 export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 	const runsOnLabelId = useId();
@@ -98,10 +98,10 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 
 	if (!needsRunner) {
 		return (
-			<div className={`${CARD} text-sm text-muted`}>
+			<Card className="mb-3 sm:mb-4 text-sm text-muted">
 				<h3 className="text-base font-bold mb-1">Runner</h3>
 				This agent runs entirely in the cloud — no local runner (<code className="text-accent">pags up</code>) needed.
-			</div>
+			</Card>
 		);
 	}
 
@@ -114,10 +114,10 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 	const attachment = (runtimeInfo as { attachment?: { message?: string; remedy?: string | null } } | null)?.attachment;
 
 	return (
-		<div className={CARD}>
+		<Card className="mb-3 sm:mb-4">
 			<div className="flex items-center justify-between gap-2 mb-1">
 				<h3 className="text-base font-bold">Runner</h3>
-				<button type="button" onClick={refresh} disabled={refreshing} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">{refreshing ? "Refreshing…" : "Refresh"}</button>
+				<Button onClick={refresh} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</Button>
 			</div>
 			<div className="text-sm text-muted leading-relaxed">
 				{runtimeInfo ? (
@@ -211,6 +211,6 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 				{!runnerNode && tiles.length > 0 && <p className="text-xs text-amber-500 mt-2">Pick a machine above to run this agent on.</p>}
 				{runnerNodeMsg && <p className="text-xs text-muted mt-1">{runnerNodeMsg}</p>}
 			</div>
-		</div>
+		</Card>
 	);
 }

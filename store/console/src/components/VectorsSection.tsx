@@ -6,6 +6,8 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import Button from "./Button";
+import Card from "./Card";
 
 interface VectorSource {
 	sourceType: "knowledge" | "message" | "file" | "collection" | "repo";
@@ -92,9 +94,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 		<div>
 			<div className="flex justify-between items-center gap-2 mb-3">
 				<h3 className="text-base font-bold">Search index</h3>
-				<button type="button" onClick={load} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">
-					Refresh
-				</button>
+				<Button onClick={load}>Refresh</Button>
 			</div>
 
 			<p className="text-xs text-muted mb-3">
@@ -126,7 +126,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 							{stats.sources.map((s) => {
 								const key = `${s.sourceType}:${s.sourceId}`;
 								return (
-									<div key={key} className="bg-panel border border-line rounded-lg p-3">
+									<Card key={key}>
 										<button type="button" onClick={() => setExpanded(expanded === key ? null : key)} className="w-full flex justify-between items-center gap-3 text-left">
 											<span className="text-sm font-semibold truncate">{s.name}</span>
 											<span className="text-xs text-muted shrink-0">
@@ -139,7 +139,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 												<p className="text-xs text-muted whitespace-pre-wrap">{s.preview}…</p>
 											</div>
 										)}
-									</div>
+									</Card>
 								);
 							})}
 						</div>
@@ -147,7 +147,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 				</div>
 
 				{/* Test search — the co-pilot column */}
-				<div className="order-1 lg:order-2 min-w-0 lg:sticky lg:top-16 bg-panel border border-line rounded-lg p-3">
+				<Card className="order-1 lg:order-2 min-w-0 lg:sticky lg:top-16">
 					<div className="flex gap-2">
 						<input
 							value={query}
@@ -157,9 +157,9 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 							placeholder="Test what the agent can find, e.g. “ice machine capacity”"
 							className="flex-1 bg-paper border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"
 						/>
-						<button type="button" onClick={runSearch} disabled={searching || !query.trim()} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
+						<Button variant="primary" onClick={runSearch} disabled={searching || !query.trim()}>
 							{searching ? "Searching…" : "Search"}
-						</button>
+						</Button>
 					</div>
 					{searchError && <div className="text-xs text-red mt-2">{searchError}</div>}
 					{hits && (
@@ -178,13 +178,13 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 								</div>
 							))}
 							{hits.length > 5 && (
-								<button type="button" onClick={() => setShowAll((v) => !v)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold self-start">
+								<Button className="self-start" onClick={() => setShowAll((v) => !v)}>
 									{showAll ? "Show top 5" : `Show ${hits.length - 5} more matches`}
-								</button>
+								</Button>
 							)}
 						</div>
 					)}
-				</div>
+				</Card>
 			</div>
 		</div>
 	);

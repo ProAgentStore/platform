@@ -1,0 +1,118 @@
+import { describe, expect, it } from "vitest";
+import { BADGE_BASE, BUTTON_BASE, BUTTON_SIZE, BUTTON_VARIANT, CARD_GEOMETRY, CARD_TONE, badgeClass, buttonClass, cardClass } from "./control-classes.js";
+import { INTENT_CLASS } from "./statusBadge.js";
+
+/**
+ * The tables, tested as tables (#366).
+ *
+ * A variant→class map earns its existence by being enumerable: the properties below are true of
+ * EVERY entry, checked by iterating the record, and adding a fifth variant without a font-weight
+ * or a sixth size with two radii fails here rather than in a screenshot. A ternary chain could
+ * not be asserted this way, which is the reason this is a record.
+ */
+
+const utilities = (cls: string) => cls.split(/\s+/).filter(Boolean);
+/** Utilities that set one CSS property, ignoring `hover:`/`sm:`/`disabled:` state variants. */
+const unprefixed = (cls: string) => utilities(cls).filter((u) => !u.includes(":"));
+
+describe("the button size ramp", () => {
+	it.each(Object.entries(BUTTON_SIZE))("%s names exactly one radius", (_size, cls) => {
+		expect(unprefixed(cls).filter((u) => u.startsWith("rounded"))).toHaveLength(1);
+	});
+
+	it.each(Object.entries(BUTTON_SIZE))("%s names padding", (_size, cls) => {
+		expect(unprefixed(cls).some((u) => /^p[xy]?-/.test(u))).toBe(true);
+	});
+
+	/**
+	 * The rule the issue asks for in words: "Nothing below `text-xs` (12px) for anything a user
+	 * reads." `text-[0.7rem]` is 11.2px and was on 110 elements including button labels. A size
+	 * step reintroducing an arbitrary rem value would put the type drift back inside the thing
+	 * that exists to absorb it.
+	 */
+	it("uses only named Tailwind type steps, never an arbitrary rem value", () => {
+		for (const cls of Object.values(BUTTON_SIZE)) {
+			expect(cls).not.toMatch(/text-\[/);
+		}
+	});
+
+	it("gives the icon size no type step, because it holds an icon", () => {
+		expect(BUTTON_SIZE.icon).not.toMatch(/\btext-/);
+	});
+});
+
+describe("the button variant table", () => {
+	it.each(Object.entries(BUTTON_VARIANT))("%s names exactly one font weight", (_variant, cls) => {
+		expect(unprefixed(cls).filter((u) => u.startsWith("font-"))).toHaveLength(1);
+	});
+
+	it.each(Object.entries(BUTTON_VARIANT))("%s has a hover state", (_variant, cls) => {
+		// The defect this pins: `primary` shipped with no hover at all for 266 buttons' worth of
+		// call sites, while `--color-accent-hover` sat declared in @theme for exactly that.
+		expect(utilities(cls).some((u) => u.startsWith("hover:"))).toBe(true);
+	});
+
+	it.each(Object.entries(BUTTON_VARIANT))("%s carries no padding or radius of its own", (_variant, cls) => {
+		// Colour and shape are separate axes; a variant that also sized itself would multiply
+		// back out into the 47 combinations this replaces.
+		expect(utilities(cls).some((u) => /^(?:p[xy]?-|rounded)/.test(u))).toBe(false);
+	});
+});
+
+describe("buttonClass", () => {
+	it("defaults to the secondary control at medium — the shape 85 call sites had written by hand", () => {
+		expect(buttonClass()).toBe(`${BUTTON_BASE} ${BUTTON_SIZE.md} ${BUTTON_VARIANT.secondary}`);
+	});
+
+	it("appends the caller's position classes last and only when given", () => {
+		expect(buttonClass("primary", "sm", "shrink-0")).toBe(`${BUTTON_BASE} ${BUTTON_SIZE.sm} ${BUTTON_VARIANT.primary} shrink-0`);
+		expect(buttonClass("primary", "sm")).not.toMatch(/\s$/);
+	});
+
+	it("dims a disabled control whatever the variant", () => {
+		// Written at only some call sites before, in three strengths (30/40/50).
+		for (const variant of Object.keys(BUTTON_VARIANT) as (keyof typeof BUTTON_VARIANT)[]) {
+			expect(buttonClass(variant)).toMatch(/\bdisabled:opacity-50\b/);
+		}
+	});
+
+	/**
+	 * A flex button ignores `text-align`, so `justify-center` is what keeps a `w-full` button's
+	 * label centred. Dropping it while keeping `inline-flex` left-aligns every wide button — a
+	 * regression with no compile error and no failing selector.
+	 */
+	it("keeps justify-center beside inline-flex", () => {
+		expect(BUTTON_BASE).toContain("inline-flex");
+		expect(BUTTON_BASE).toContain("justify-center");
+	});
+});
+
+describe("cardClass", () => {
+	it("has ONE geometry, whichever tone is asked for", () => {
+		for (const tone of Object.keys(CARD_TONE) as (keyof typeof CARD_TONE)[]) {
+			expect(cardClass(tone)).toContain(CARD_GEOMETRY);
+		}
+	});
+
+	it("keeps the responsive padding as the default rather than one of three", () => {
+		// `rounded-xl p-3 sm:p-4` (34 sites) beat `rounded-xl p-4` (18) and `rounded-lg p-3` (15).
+		expect(CARD_GEOMETRY).toContain("sm:p-4");
+		expect(unprefixed(CARD_GEOMETRY).filter((u) => u.startsWith("rounded"))).toEqual(["rounded-xl"]);
+	});
+
+	it("differs between tones only in the fill", () => {
+		const diff = utilities(CARD_TONE.paper).filter((u) => !utilities(CARD_TONE.panel).includes(u));
+		expect(diff).toEqual(["bg-paper"]);
+	});
+});
+
+describe("badgeClass", () => {
+	it("takes its colour from the shared intent layer, not a copy of it", () => {
+		// #368 refused to invent a third status vocabulary; a private table here would be a fourth.
+		expect(badgeClass("success")).toBe(`${BADGE_BASE} ${INTENT_CLASS.success}`);
+	});
+
+	it("defaults to neutral", () => {
+		expect(badgeClass()).toContain(INTENT_CLASS.neutral);
+	});
+});

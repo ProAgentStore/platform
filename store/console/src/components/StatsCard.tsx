@@ -3,6 +3,7 @@ import { AlertTriangle, X } from "lucide-react";
 import { barPercents, sharePercent, sparklineGeometry, xForIndex } from "../lib/stats-chart";
 import { dayLabel, formatValue, gapNote, isAllGaps, partialNote } from "../lib/stats-format";
 import type { StatsCardKind, StatsCardValue, StatsData, StatsUnit } from "../lib/stats-types";
+import Card from "./Card";
 
 /**
  * One stats card (#311) — a DUMB renderer over what the API already decided.
@@ -44,7 +45,7 @@ export default function StatsCard({ card, sourceLabel, onRemove, busy }: StatsCa
 		.join(" · ");
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 flex flex-col gap-2 min-w-0">
+		<Card className="flex flex-col gap-2 min-w-0">
 			<div className="flex items-start justify-between gap-2">
 				<div className="min-w-0">
 					<h3 className="text-sm font-bold truncate" title={card.title}>
@@ -74,7 +75,7 @@ export default function StatsCard({ card, sourceLabel, onRemove, busy }: StatsCa
 			{/* Shown for any card that actually renders a number. On an error card there is no figure
 			    for it to qualify, and printing it there would read as a caveat about the failure. */}
 			{!card.error && card.caveat && <p className="text-[0.7rem] leading-snug text-muted-soft border-t border-line pt-2">{card.caveat}</p>}
-		</div>
+		</Card>
 	);
 }
 
