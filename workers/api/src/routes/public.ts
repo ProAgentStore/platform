@@ -5,6 +5,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { recordFunnelEvent, shouldCountView } from "../lib/store-funnel.js";
 import type { Env } from "../types.js";
 
 export const publicRoutes = new Hono<{ Bindings: Env }>();
@@ -27,13 +28,15 @@ publicRoutes.get("/agents/:id", async (c) => {
 		.first();
 	if (!row) throw new HttpError(404, "Agent not found");
 
-	// Track view event (fire-and-forget)
-	c.executionCtx.waitUntil(
-		c.env.DB.prepare(
-			`INSERT INTO usage (id, agent_id, user_id, event, metadata, created_at)
-       VALUES (?1, ?2, '', 'view', '{}', datetime('now'))`,
-		).bind(crypto.randomUUID(), (row as Record<string, unknown>).id).run().catch(() => {}),
-	);
+	// Count the view (fire-and-forget). This used to INSERT into `usage` with `user_id = ''`,
+	// which violated that column's foreign key on EVERY request and was thrown away by a
+	// `.catch(() => {})` — see migration 0095. `recordFunnelEvent` reports its own failures to
+	// the durable error log instead, and the crawler filter keeps the number about people.
+	if (shouldCountView(c.req.header("User-Agent"))) {
+		c.executionCtx.waitUntil(
+			recordFunnelEvent(c.env, String((row as Record<string, unknown>).id), "view"),
+		);
+	}
 
 	return c.json(row);
 });
@@ -110,6 +113,12 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 	// Ensure initialized (idempotent — init checks if state exists)
 	const stateRes = await stub.fetch(new Request("https://agent/state"));
 	if (stateRes.status === 404) {
+		// A 404 here means this trial DO has never been initialised, which is the one moment in
+		// this route that IS the start of a trial. Counting per request would count every message
+		// of one conversation; counting here is deduped by the DO's own existence, and the DO is
+		// keyed by (agent, hashed IP), so a returning visitor resumes rather than re-starting.
+		c.executionCtx.waitUntil(recordFunnelEvent(c.env, agent.id, "trial_start"));
+
 		// Copy template state
 		const templateStub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 		const templateRes = await templateStub.fetch(

@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
+import { resetFunnelReportingForTests } from "../lib/store-funnel.js";
 import { publicRoutes } from "./public.js";
 import type { Env } from "../types.js";
 
@@ -30,12 +31,19 @@ interface DbOpts {
 	agents?: Record<string, unknown>[];
 	users?: Record<string, unknown>[];
 	instances?: Array<{ id: string; user_id: string; status: string }>;
+	/** Make every funnel upsert throw — stands in for the FK violation of #383. */
+	failFunnelWrites?: boolean;
 }
 
 interface DoCall {
 	path: string;
 	method: string;
 	body?: unknown;
+}
+
+interface DbWrite {
+	sql: string;
+	args: unknown[];
 }
 
 interface DoOpts {
@@ -60,6 +68,7 @@ function buildApp(db: DbOpts = {}, doOpts: DoOpts = {}) {
 	const instances = db.instances ?? [];
 	const doCalls: DoCall[] = [];
 	const usageWrites: unknown[][] = [];
+	const writes: DbWrite[] = [];
 
 	const env = {
 		SESSION_SIGNING_KEY: SECRET,
@@ -106,6 +115,10 @@ function buildApp(db: DbOpts = {}, doOpts: DoOpts = {}) {
 							},
 							async run() {
 								if (sql.includes("INSERT INTO usage")) usageWrites.push(args);
+								if (db.failFunnelWrites && sql.includes("INTO agent_funnel_daily")) {
+									throw new Error("FOREIGN KEY constraint failed");
+								}
+								writes.push({ sql, args });
 								return { meta: { changes: 1 } };
 							},
 						};
@@ -173,13 +186,34 @@ function buildApp(db: DbOpts = {}, doOpts: DoOpts = {}) {
 		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 		throw err;
 	});
-	// executionCtx.waitUntil is used by the view-tracker; give the test a no-op.
-	const wrap = (path: string, init?: RequestInit) =>
-		app.request(path, init, env, { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext);
-	return { app, env, doCalls, usageWrites, wrap };
+	// executionCtx.waitUntil carries the funnel counters (#383). The real runtime keeps the
+	// isolate alive until they settle, so the test has to as well — a no-op stub would make
+	// every assertion about them race the write it is asserting on.
+	const pending: Promise<unknown>[] = [];
+	const wrap = async (path: string, init?: RequestInit) => {
+		const res = await app.request(path, init, env, {
+			waitUntil(p: Promise<unknown>) {
+				pending.push(p);
+			},
+			passThroughOnException() {},
+		} as unknown as ExecutionContext);
+		await Promise.allSettled(pending.splice(0));
+		return res;
+	};
+	return { app, env, doCalls, usageWrites, writes, wrap };
 }
 
 const tokenFor = (uid: string, roles: string[] = ["user"]) => signSession(uid, SECRET, { roles });
+
+/** A plausible browser UA — `shouldCountView` refuses to count a request without one. */
+const BROWSER_UA =
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
+
+// The failure-report latch is module-level (one report per isolate), so a test that expects
+// a report must not inherit a latch set by the test before it.
+beforeEach(() => {
+	resetFunnelReportingForTests();
+});
 
 describe("GET /v1/public/agents/:id", () => {
 	it("404s an unpublished / missing agent", async () => {
@@ -197,6 +231,47 @@ describe("GET /v1/public/agents/:id", () => {
 		const body = await jsonBody(res);
 		expect(body.slug).toBe("coder");
 		expect(body.subscriber_count).toBe(3);
+	});
+});
+
+/**
+ * The funnel counters (#383). Before this, `view` was an INSERT into `usage` binding
+ * `user_id = ''` against `user_id TEXT NOT NULL REFERENCES users(id)` — a foreign-key
+ * violation on every request, swallowed by `.catch(() => {})` inside a `waitUntil`.
+ */
+describe("GET /v1/public/agents/:id — view counting", () => {
+	const published = { id: "a1", slug: "coder", name: "Coder", visibility: "published" };
+
+	it("counts the view into agent_funnel_daily, with no user id anywhere in the statement", async () => {
+		const { wrap, writes, usageWrites } = buildApp({ agents: [published] });
+		await wrap("/v1/public/agents/coder", { headers: { "User-Agent": BROWSER_UA } });
+		const view = writes.find((w) => w.sql.includes("INTO agent_funnel_daily"));
+		expect(view, "a browser view must be counted").toBeTruthy();
+		expect(view?.args).toEqual(["a1", expect.any(String), "view"]);
+		expect(view?.sql).not.toContain("user_id");
+		// And it must NOT go back into `usage`, whose FK is what made it impossible.
+		expect(usageWrites).toHaveLength(0);
+	});
+
+	it("does not count a crawler, or a caller that sends no User-Agent", async () => {
+		const bot = buildApp({ agents: [published] });
+		await bot.wrap("/v1/public/agents/coder", { headers: { "User-Agent": "Googlebot/2.1" } });
+		expect(bot.writes.some((w) => w.sql.includes("agent_funnel_daily"))).toBe(false);
+
+		const bare = buildApp({ agents: [published] });
+		await bare.wrap("/v1/public/agents/coder");
+		expect(bare.writes.some((w) => w.sql.includes("agent_funnel_daily"))).toBe(false);
+	});
+
+	it("REPORTS a failed count to the durable error log instead of swallowing it", async () => {
+		const { wrap, writes } = buildApp({ agents: [published], failFunnelWrites: true });
+		const res = await wrap("/v1/public/agents/coder", { headers: { "User-Agent": BROWSER_UA } });
+		// The visitor still gets their page — a counter must never break what it counts.
+		expect(res.status).toBe(200);
+		const logged = writes.find((w) => w.sql.includes("INSERT INTO error_log"));
+		expect(logged, "the reason must survive the request that produced it").toBeTruthy();
+		expect(String(logged?.args[2])).toBe("store-funnel");
+		expect(logged?.args[1]).toBeNull(); // no user id — the counter stays cookieless
 	});
 });
 
@@ -296,6 +371,36 @@ describe("POST /v1/public/agents/:id/try (trial chat)", () => {
 		expect(body.error).toContain("Trial limit reached");
 		// It must NOT have forwarded the chat once the cap is hit.
 		expect(doCalls.some((c) => c.path === "/chat")).toBe(false);
+	});
+
+	it("counts trial_start exactly when the trial DO is created (#383)", async () => {
+		// Nothing in the codebase wrote this event, so `funnel.trials` was 0 for every agent
+		// forever — a funnel asserting a measurement nobody took.
+		const agent = { id: "a1", slug: "coder", visibility: "published", model: "m", name: "Coder" };
+		const { wrap, writes } = buildApp(
+			{ agents: [agent] },
+			{ stateExists: false, chatReply: { reply: "hello" }, messageCount: 0 },
+		);
+		await wrap("/v1/public/agents/coder/try", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "CF-Connecting-IP": "1.2.3.4" },
+			body: JSON.stringify({ message: "hi" }),
+		});
+		const trial = writes.find((w) => w.sql.includes("INTO agent_funnel_daily"));
+		expect(trial?.args).toEqual(["a1", expect.any(String), "trial_start"]);
+	});
+
+	it("does NOT count a trial_start for each message of an existing trial", async () => {
+		// A trial STARTS once. Counting per request would make `trials` a message count, and the
+		// step of the funnel it is supposed to measure would silently stop existing.
+		const agent = { id: "a1", slug: "coder", visibility: "published", model: "m", name: "Coder" };
+		const { wrap, writes } = buildApp({ agents: [agent] }, { stateExists: true, messageCount: 4, chatReply: { reply: "ok" } });
+		await wrap("/v1/public/agents/coder/try", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "CF-Connecting-IP": "1.2.3.4" },
+			body: JSON.stringify({ message: "again" }),
+		});
+		expect(writes.some((w) => w.sql.includes("agent_funnel_daily"))).toBe(false);
 	});
 
 	it("derives the same trial session id for the same IP (cap can't be reset by client sessionId)", async () => {

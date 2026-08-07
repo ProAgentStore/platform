@@ -242,6 +242,8 @@ adminModerationRoutes.delete("/agents/:id", async (c) => {
 	const stmts = [
 		c.env.DB.prepare("DELETE FROM agent_executions WHERE agent_id = ?1").bind(id),
 		c.env.DB.prepare("DELETE FROM usage WHERE agent_id = ?1").bind(id),
+		// No FK on agent_funnel_daily (migration 0095) — cascade by hand, like `usage` above.
+		c.env.DB.prepare("DELETE FROM agent_funnel_daily WHERE agent_id = ?1").bind(id),
 		c.env.DB.prepare("DELETE FROM agents WHERE id = ?1").bind(id),
 	];
 	if (active > 0) {

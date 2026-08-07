@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { readFunnelCounts } from "../lib/store-funnel.js";
 import type { Env } from "../types.js";
 
 export const analyticsRoutes = new Hono<{ Bindings: Env }>();
@@ -58,14 +59,15 @@ analyticsRoutes.get("/:id/analytics", async (c) => {
 		.bind(agent.id)
 		.all();
 
-	// Funnel: views → trials → subscribes
-	const views = await c.env.DB.prepare(
-		"SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event = 'view'",
-	).bind(agent.id).first<{ count: number }>();
-
-	const trials = await c.env.DB.prepare(
-		"SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event = 'trial_start'",
-	).bind(agent.id).first<{ count: number }>();
+	// Funnel: views → trials → subscribes.
+	//
+	// The first two come from `agent_funnel_daily` (migration 0095), not `usage`. They were read
+	// off `usage` until #383, where neither could ever be non-zero: nothing wrote `trial_start`,
+	// and the `view` insert violated `usage.user_id`'s foreign key on every request. `subscribe`
+	// stays where it is — it is an authenticated act by a known user, which is what `usage` is for.
+	//
+	// History starts at 0095: there is no backfill, because there is nothing to backfill from.
+	const funnel = await readFunnelCounts(c.env, agent.id);
 
 	const subscribes = await c.env.DB.prepare(
 		"SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event = 'subscribe'",
@@ -78,8 +80,8 @@ analyticsRoutes.get("/:id/analytics", async (c) => {
 		dailyUsage: daily.results || [],
 		recentExecutions: recent.results || [],
 		funnel: {
-			views: views?.count || 0,
-			trials: trials?.count || 0,
+			views: funnel.views,
+			trials: funnel.trials,
 			subscribes: subscribes?.count || 0,
 		},
 	});

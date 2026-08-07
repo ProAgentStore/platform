@@ -723,6 +723,9 @@ agentRoutes.delete("/:id", async (c) => {
 			id,
 		),
 		c.env.DB.prepare("DELETE FROM usage WHERE agent_id = ?1").bind(id),
+		// Migration 0095 has no FK to `agents` (a view counter must never be the reason a delete
+		// fails), so the cascade is by hand here, as it already is for `usage`.
+		c.env.DB.prepare("DELETE FROM agent_funnel_daily WHERE agent_id = ?1").bind(id),
 		c.env.DB.prepare("DELETE FROM agents WHERE id = ?1").bind(id),
 	]);
 	return c.json({ success: true });
