@@ -23,6 +23,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `pnpm test` below now includes migration-hygiene.test.ts, which shells out to
+          # check-migrations.mjs --require-history. That guard REFUSES a shallow clone by
+          # design: a history-dependent check with no history passes by verifying nothing,
+          # so it fails loudly instead. Depth 1 therefore red-lined this deploy from the
+          # commit the guard landed in (48eb443) — the API fixes were merged and undeployed
+          # while Deploy Host stayed green, so the console looked fine and the worker was stale.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
