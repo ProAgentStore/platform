@@ -21,12 +21,13 @@ interface Write { sql: string; args: unknown[] }
  * than one whole-blob assignment, so the merged result no longer exists in JS for a test to
  * inspect — SQLite does the merge. These read the patch that was issued instead.
  */
+/** The path is bound (#327), so which key a patch targets is read off the bindings. */
 function patchFor(writes: Write[], key: string): unknown | undefined {
-	const w = writes.find((x) => x.sql.includes("json_set(") && x.sql.includes(`'$.${key}'`));
-	return w ? JSON.parse(w.args[0] as string) : undefined;
+	const w = writes.find((x) => x.sql.includes("json_set(") && x.args[0] === `$.${key}`);
+	return w ? JSON.parse(w.args[1] as string) : undefined;
 }
 function removedKey(writes: Write[], key: string): boolean {
-	return writes.some((x) => x.sql.includes("json_remove(") && x.sql.includes(`'$.${key}'`));
+	return writes.some((x) => x.sql.includes("json_remove(") && x.args[0] === `$.${key}`);
 }
 
 

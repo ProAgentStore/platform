@@ -51,9 +51,9 @@ function testApp(opts: { instanceBehaviour?: unknown; agentBehaviour?: unknown }
 								return row;
 							},
 							run: async () => {
-								writes.push(String(args[0]));
-								const next = JSON.parse(String(args[0])) as Record<string, unknown>;
-								instanceConfig.behaviour = next.behaviour;
+								// A targeted json_set: ?1 is the BOUND JSON path (#327), ?2 the value.
+								writes.push(String(args[1]));
+								instanceConfig.behaviour = JSON.parse(String(args[1])) as Record<string, unknown>;
 								return { success: true };
 							},
 						};

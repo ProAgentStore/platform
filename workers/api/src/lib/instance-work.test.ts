@@ -41,11 +41,14 @@ describe("recentWorkForInstances / recentRunsForInstances — cost is constant i
 	it("gives each subordinate its OWN limit, so one busy agent can't crowd out eleven", async () => {
 		// A flat `IN (…) ORDER BY updated_at DESC LIMIT n` returns the globally newest n rows —
 		// so a supervisor with one chatty subordinate sees a team of one. Per-instance branches.
-		const { env, sqls } = stubEnv();
+		const { env, sqls, binds } = stubEnv();
 		await recentWorkForInstances(env, "u1", ids(3), 4);
 		const branches = sqls[0].split("UNION ALL");
 		expect(branches).toHaveLength(3);
-		for (const b of branches) expect(b).toContain("LIMIT 4");
+		// One BOUND limit shared by every branch (#327) — the cap is a runtime value, so it is a
+		// parameter rather than text spliced into each branch.
+		for (const b of branches) expect(b).toContain("LIMIT ?2");
+		expect(binds[0][1]).toBe(4);
 	});
 
 	it("filters hidden = 0 — a cleared card must not resurface", async () => {
@@ -61,7 +64,7 @@ describe("recentWorkForInstances / recentRunsForInstances — cost is constant i
 		await recentWorkForInstances(env, "u1", ids(2));
 		expect(sqls[0]).toContain("user_id = ?1");
 		expect(binds[0][0]).toBe("u1");
-		expect(binds[0].slice(1)).toEqual(["inst-0", "inst-1"]);
+		expect(binds[0].slice(2)).toEqual(["inst-0", "inst-1"]); // ?2 is the bound limit
 	});
 
 	it("issues NO query at all for an empty id list", async () => {
@@ -78,11 +81,11 @@ describe("recentWorkForInstances / recentRunsForInstances — cost is constant i
 	it("clamps the per-instance limit so one call can't become an unbounded read", async () => {
 		const hi = stubEnv();
 		await recentWorkForInstances(hi.env, "u1", ids(1), 9999);
-		expect(hi.sqls[0]).toContain("LIMIT 25");
+		expect(hi.binds[0][1]).toBe(25);
 
 		const lo = stubEnv();
 		await recentWorkForInstances(lo.env, "u1", ids(1), 0);
-		expect(lo.sqls[0]).toContain("LIMIT 1");
+		expect(lo.binds[0][1]).toBe(1);
 	});
 });
 
@@ -149,21 +152,23 @@ describe("recentActsForInstances — what each subordinate actually DID (#294)",
 		// This module is deliberately forbidden from knowing a coding Engine exists (the coupling
 		// migration 0063 removed). Keying on `coding.act` would smuggle it back in and any other
 		// subsystem recording an act would then be invisible to a supervisor.
-		const { env, sqls } = stubEnv();
+		const { env, sqls, binds } = stubEnv();
 		await recentActsForInstances(env, "u1", ids(2));
-		expect(sqls[0]).toContain("act.consequential");
+		// Bound rather than spliced into the WHERE (#327); the name itself is what this pins.
+		expect(binds[0]).toContain("act.consequential");
 		expect(sqls[0]).not.toMatch(/coding/);
 	});
 
 	it("gives each subordinate its own limit — the crowded-out row is somebody's merge", async () => {
 		// The same reason `recentWorkForInstances` uses UNION ALL, with a sharper consequence: a flat
 		// global LIMIT would drop one agent's unreviewed merge because another agent was busier.
-		const { env, sqls } = stubEnv();
+		const { env, sqls, binds } = stubEnv();
 		await recentActsForInstances(env, "u1", ids(4), 3);
 		expect(sqls).toHaveLength(1);
 		const branches = sqls[0].split("UNION ALL");
 		expect(branches).toHaveLength(4);
-		for (const b of branches) expect(b).toContain("LIMIT 3");
+		for (const b of branches) expect(b).toContain("LIMIT ?2");
+		expect(binds[0][1]).toBe(3);
 	});
 
 	it("scopes to the owner as well as the instance", async () => {
@@ -204,7 +209,7 @@ describe("actsInWindow — one run's acts", () => {
 		const { env, sqls, binds } = stubEnv([actRow()]);
 		await actsInWindow(env, "u1", "i1", 100, 900);
 		expect(sqls[0]).toContain("ts >= ?3 AND ts <= ?4");
-		expect(binds[0]).toEqual(["i1", "u1", 100, 900]);
+		expect(binds[0]).toEqual(["i1", "u1", 100, 900, "act.consequential", 25]);
 	});
 
 	it("returns the window CHRONOLOGICALLY, so the run reads as a sequence", async () => {
@@ -214,8 +219,8 @@ describe("actsInWindow — one run's acts", () => {
 	});
 
 	it("clamps the row cap so a long run cannot return an unbounded read", async () => {
-		const { env, sqls } = stubEnv();
+		const { env, binds } = stubEnv();
 		await actsInWindow(env, "u1", "i1", 0, 1, 100_000);
-		expect(sqls[0]).toContain("LIMIT 100");
+		expect(binds[0][5]).toBe(100);
 	});
 });

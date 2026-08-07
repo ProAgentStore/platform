@@ -77,7 +77,7 @@ describe("writeLoopPresets", () => {
 		await writeLoopPresets(env, "inst-1", "user-1", [{ label: "Ship", objective: "Ship it." }]);
 		expect(writes).toHaveLength(1);
 		expect(writes[0].sql).toContain("json_set");
-		expect(writes[0].sql).toContain("$.loopPresets");
+		expect(writes[0].args[0]).toBe("$.loopPresets"); // the path is bound, not spliced (#327)
 		// The whole-blob form — the thing this must never become.
 		expect(writes[0].sql).not.toMatch(/SET\s+config\s*=\s*\?/);
 	});
@@ -88,7 +88,7 @@ describe("writeLoopPresets", () => {
 			{ label: "Ship", objective: "Ship it." },
 			{ label: "", objective: "unlabelled" },
 		]);
-		expect(JSON.parse(String(writes[0].args[0]))).toEqual([{ id: "ship", label: "Ship", objective: "Ship it." }]);
+		expect(JSON.parse(String(writes[0].args[1]))).toEqual([{ id: "ship", label: "Ship", objective: "Ship it." }]);
 	});
 
 	it("an empty list REMOVES the override rather than storing an empty one", async () => {

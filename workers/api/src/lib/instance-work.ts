@@ -81,9 +81,9 @@ const clampPer = (n: number | undefined, dflt: number) => Math.max(1, Math.min(2
  * this is 12 seeks in one round trip rather than 12 round trips. `ROW_NUMBER() OVER (PARTITION BY
  * …)` would be tidier but has zero precedent in this repo and is unverified on D1.
  */
-function unionAll(branch: (idParam: number) => string, count: number): string {
+function unionAll(branch: (idParam: number) => string, count: number, firstIdParam: number): string {
 	const parts: string[] = [];
-	for (let i = 0; i < count; i++) parts.push(`SELECT * FROM (${branch(i + 2)})`);
+	for (let i = 0; i < count; i++) parts.push(`SELECT * FROM (${branch(i + firstIdParam)})`);
 	return parts.join("\nUNION ALL\n");
 }
 
@@ -129,11 +129,12 @@ export async function recentWorkForInstances(
 			`SELECT instance_id, id, type, status, payload, updated_at
 			   FROM instance_runtime_tasks
 			  WHERE instance_id = ?${p} AND user_id = ?1 AND hidden = 0
-			  ORDER BY updated_at DESC LIMIT ${limit}`,
+			  ORDER BY updated_at DESC LIMIT ?2`,
 		instanceIds.length,
+		3,
 	);
 	const res = await env.DB.prepare(sql)
-		.bind(userId, ...instanceIds)
+		.bind(userId, limit, ...instanceIds)
 		.all<TaskRow>();
 	return (res.results ?? []).map((r) => {
 		let payload: Record<string, unknown> = {};
@@ -185,11 +186,12 @@ export async function recentRunsForInstances(
 			        max_iterations, started_at, finished_at, last_progress_at
 			   FROM agent_loop_runs
 			  WHERE instance_id = ?${p} AND user_id = ?1
-			  ORDER BY started_at DESC LIMIT ${limit}`,
+			  ORDER BY started_at DESC LIMIT ?2`,
 		instanceIds.length,
+		3,
 	);
 	const res = await env.DB.prepare(sql)
-		.bind(userId, ...instanceIds)
+		.bind(userId, limit, ...instanceIds)
 		.all<RunRow>();
 	return (res.results ?? []).map((r) => ({
 		instanceId: r.instance_id,
@@ -266,12 +268,13 @@ export async function recentActsForInstances(
 		(p) =>
 			`SELECT ${ACT_COLUMNS}
 			   FROM agent_events
-			  WHERE instance_id = ?${p} AND user_id = ?1 AND event = '${ACT_EVENT}'
-			  ORDER BY ts DESC LIMIT ${limit}`,
+			  WHERE instance_id = ?${p} AND user_id = ?1 AND event = ?3
+			  ORDER BY ts DESC LIMIT ?2`,
 		instanceIds.length,
+		4,
 	);
 	const res = await env.DB.prepare(sql)
-		.bind(userId, ...instanceIds)
+		.bind(userId, limit, ACT_EVENT, ...instanceIds)
 		.all<ActRow>();
 	return (res.results ?? []).map(toActItem);
 }
@@ -297,10 +300,10 @@ export async function actsInWindow(
 	const res = await env.DB.prepare(
 		`SELECT ${ACT_COLUMNS}
 		   FROM agent_events
-		  WHERE instance_id = ?1 AND user_id = ?2 AND event = '${ACT_EVENT}' AND ts >= ?3 AND ts <= ?4
-		  ORDER BY ts ASC LIMIT ${Math.max(1, Math.min(100, Math.floor(limit)))}`,
+		  WHERE instance_id = ?1 AND user_id = ?2 AND event = ?5 AND ts >= ?3 AND ts <= ?4
+		  ORDER BY ts ASC LIMIT ?6`,
 	)
-		.bind(instanceId, userId, fromMs, toMs)
+		.bind(instanceId, userId, fromMs, toMs, ACT_EVENT, Math.max(1, Math.min(100, Math.floor(limit))))
 		.all<ActRow>();
 	return (res.results ?? []).map(toActItem);
 }

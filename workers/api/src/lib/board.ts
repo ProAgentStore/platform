@@ -2,6 +2,7 @@ import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
+import { sqlLiteralList } from "./sql.js";
 import { TICKET_ANSWER_EVENT, TICKET_QUESTION_EVENT } from "./ticket-chat.js";
 
 /** How the board can be viewed in the console. Persisted per-instance so the choice
@@ -121,13 +122,13 @@ const BOARD_TASK_LIMIT = 1000;
  * The board polls every 2.5s, so that is the difference between a cheap feature and an
  * expensive one, and it is invisible — the query returns the right answer either way.
  *
- * Safe because these are compile-time constants from ticket-chat.ts, never user input;
- * `board.test.ts` pins that they stay quote-free and that this predicate stays character-for
- * -character identical to the migration's.
+ * Safe because these are compile-time constants from ticket-chat.ts, never user input.
+ * `sqlLiteralList` (#327) is where that stops being a claim in a comment: it rejects anything a
+ * quote could escape out of, at module load, so the exception cannot quietly widen to a value
+ * somebody later routes in from a request. `board.test.ts` additionally pins that this predicate
+ * stays character-for-character identical to the migration's.
  */
-export const TICKET_TURN_TYPES_SQL = [TICKET_QUESTION_EVENT, TICKET_ANSWER_EVENT]
-	.map((t) => `'${t}'`)
-	.join(", ");
+export const TICKET_TURN_TYPES_SQL = sqlLiteralList([TICKET_QUESTION_EVENT, TICKET_ANSWER_EVENT]);
 
 interface RawTask {
 	id?: string;

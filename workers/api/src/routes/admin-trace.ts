@@ -179,9 +179,9 @@ adminTraceRoutes.get("/trace-endpoints", async (c) => {
 				   AND json_extract(context, '$.endpoint') IS NOT NULL
 				 GROUP BY endpoint, tool
 				 ORDER BY last_ts DESC
-				 LIMIT ${limit}`,
+				 LIMIT ?2`,
 			)
-				.bind(source)
+				.bind(source, limit)
 				.all<{ endpoint: string; tool: string | null; calls: number; failures: number; users: number; instances: number; last_ts: number }>()
 		).results ?? [];
 	return c.json({ source, count: rows.length, endpoints: rows });

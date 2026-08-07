@@ -27,11 +27,12 @@ function stubEnv(initialConfig: Record<string, unknown> = {}, agentConfig: Recor
 								// `SET config = ?` would still pass if the store regressed to clobbering
 								// the blob, which is exactly the bug being prevented.
 								if (sql.includes("UPDATE")) {
-									const path = /'\$\.([A-Za-z_][A-Za-z0-9_]*)'/.exec(sql)?.[1];
+									// The path is a BOUND argument now (#327), not text in the statement.
+									const path = /^\$\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(String(args[0]))?.[1];
 									if (!path) throw new Error(`unexpected whole-blob config write: ${sql}`);
 									const cfg = JSON.parse(state.config || "{}") as Record<string, unknown>;
 									if (sql.includes("json_remove(")) delete cfg[path];
-									else cfg[path] = JSON.parse(String(args[0]));
+									else cfg[path] = JSON.parse(String(args[1]));
 									state.config = JSON.stringify(cfg);
 								}
 								return { meta: { changes: 1 } };

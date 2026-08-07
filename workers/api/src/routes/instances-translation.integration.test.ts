@@ -163,10 +163,10 @@ describe("PUT /v1/instances/:id/translation (integration)", () => {
 		expect(body.translation.fontSize).toBe("large");
 		// A targeted json_set on $.translation, not a whole-blob rewrite (#231) — a whole-blob
 		// write here would drop a settings or behaviour change saved from another tab.
-		const upd = writes.find((w) => w.sql.includes("json_set(") && w.sql.includes("'$.translation'"));
+		const upd = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.translation");
 		expect(upd).toBeTruthy();
 		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
-		const stored = JSON.parse(upd!.args[0] as string) as { target: string; enabled: boolean };
+		const stored = JSON.parse(upd!.args[1] as string) as { target: string; enabled: boolean };
 		expect(stored.target).toBe("French");
 		expect(stored.enabled).toBe(true);
 	});

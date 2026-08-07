@@ -337,13 +337,19 @@ describe("subordinate_status — the observe verb", () => {
 		// MAX_OBSERVATION_CHARS, so nothing else caps them. A loop force-pushing in circles would
 		// otherwise put tens of kilobytes of command text into every prompt this supervisor builds.
 		const env = buildEnv();
-		let limit = "";
+		let limit: unknown;
+		// The cap and the event name are BOUND now (#327), so the assertion reads the bindings
+		// rather than the statement text — which is also the only place the cap still exists.
 		const spied = { ...env, DB: { prepare(sql: string) {
-			if (sql.includes("act.consequential")) limit = sql.match(/LIMIT (\d+)/)?.[1] ?? "";
-			return (env as unknown as { DB: { prepare(s: string): unknown } }).DB.prepare(sql);
+			const stmt = (env as unknown as { DB: { prepare(s: string): { bind(...a: unknown[]): unknown } } }).DB.prepare(sql);
+			if (!sql.includes("FROM agent_events")) return stmt;
+			return { ...stmt, bind: (...args: unknown[]) => {
+				if (args.includes("act.consequential")) limit = args[1];
+				return stmt.bind(...args);
+			} };
 		} } } as unknown as Env;
 		await tool("subordinate_status").handler(ctx(spied) as never, {});
-		expect(limit).toBe(String(MAX_ACTS_PER_SUBORDINATE));
+		expect(limit).toBe(MAX_ACTS_PER_SUBORDINATE);
 	});
 
 	it("omits `acts` rather than sending an empty array", async () => {

@@ -7,6 +7,7 @@ import { registryToolNameSet, registryTools, runRegistryTool } from "./lib/tool-
 import { configureBoardForAgent } from "./lib/board.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
+import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
 import { stableStringify } from "./lib/stable-json.js";
 import { fenceUntrusted } from "./lib/untrusted-fence.js";
 import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
@@ -163,16 +164,14 @@ export async function runAgentThink(opts: {
 	let agentCfg: Record<string, unknown> = {};
 	try {
 		// Joined rather than a second query: the agent row is only wanted for the creator's
-		// behaviour default, which is not worth another round trip on every turn.
-		const row = await env.DB.prepare(
-			"SELECT i.config AS config, a.config AS agent_config FROM agent_instances i" +
-				" LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1",
-		)
-			.bind(state.agentId)
-			.first<{ config: string | null; agent_config: string | null }>();
-		if (row?.config) instanceCfg = JSON.parse(row.config) as Record<string, unknown>;
-		if (row?.agent_config) agentCfg = JSON.parse(row.agent_config) as Record<string, unknown>;
-		if (!row) {
+		// behaviour default, which is not worth another round trip on every turn. The UNSCOPED
+		// read, deliberately — a DO is addressed BY the instance id and has no session to scope
+		// to; see the function's own note for why that is a named door rather than a flag.
+		const pair = await readInstanceConfigPairForDurableObject(env, state.agentId);
+		if (pair) {
+			instanceCfg = pair.config;
+			agentCfg = pair.agentConfig;
+		} else {
 			// A TEMPLATE preview DO is keyed by the AGENT id, so the join above finds nothing and
 			// the creator previewing their own agent saw none of the behaviour they declared on it
 			// — the preview answered in a different voice from the published agent. Same fallback

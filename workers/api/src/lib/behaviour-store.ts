@@ -1,6 +1,6 @@
 import type { Env } from "../types.js";
 import { applyBehaviourPatch, resolveBehaviour, type Behaviour } from "./agent-behaviour.js";
-import { patchInstanceConfig } from "./instance-config.js";
+import { patchInstanceConfig, readInstanceConfigPair } from "./instance-config.js";
 
 /**
  * D1 access for agent behaviour (#223/#224).
@@ -12,16 +12,9 @@ import { patchInstanceConfig } from "./instance-config.js";
 
 /** Creator template default merged under the subscriber's override. */
 export async function readBehaviour(env: Env, instanceId: string, userId: string): Promise<Behaviour> {
-	const row = await env.DB.prepare(
-		"SELECT i.config AS config, a.config AS agent_config FROM agent_instances i" +
-			" LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
-	)
-		.bind(instanceId, userId)
-		.first<{ config: string | null; agent_config: string | null }>();
-	if (!row) return {};
-	const instanceCfg = parse(row.config);
-	const agentCfg = parse(row.agent_config);
-	return resolveBehaviour(agentCfg.behaviour, instanceCfg.behaviour);
+	const pair = await readInstanceConfigPair(env, instanceId, userId);
+	if (!pair) return {};
+	return resolveBehaviour(pair.agentConfig.behaviour, pair.config.behaviour);
 }
 
 /**
@@ -38,15 +31,8 @@ export async function patchBehaviour(
 	patch: unknown,
 	allowedIds?: readonly string[],
 ): Promise<{ behaviour: Behaviour; rejected: string[] }> {
-	const row = await env.DB.prepare(
-		"SELECT i.config AS config, a.config AS agent_config FROM agent_instances i" +
-			" LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
-	)
-		.bind(instanceId, userId)
-		.first<{ config: string | null; agent_config: string | null }>();
-	const cfg = parse(row?.config ?? null);
-	const { behaviour, rejected } = applyBehaviourPatch(cfg.behaviour, patch, allowedIds);
-	cfg.behaviour = behaviour;
+	const pair = await readInstanceConfigPair(env, instanceId, userId);
+	const { behaviour, rejected } = applyBehaviourPatch(pair?.config.behaviour, patch, allowedIds);
 	// Patch only `$.behaviour` (#231). A whole-blob write here is the live version of that bug:
 	// `set_behaviour` is a tool the AGENT calls, so it fires while the owner may be saving
 	// Settings in the console — two writers, different keys, and the loser vanished silently.
@@ -55,13 +41,5 @@ export async function patchBehaviour(
 	// subscriber's, so returning only the override after a write made the two disagree: on an agent
 	// that ships defaults, changing one field appeared to erase all the others until reload, and
 	// set_behaviour reported a manner the agent does not actually have.
-	return { behaviour: resolveBehaviour(parse(row?.agent_config ?? null).behaviour, behaviour), rejected };
-}
-
-function parse(raw: string | null): Record<string, unknown> {
-	try {
-		return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-	} catch {
-		return {};
-	}
+	return { behaviour: resolveBehaviour(pair?.agentConfig.behaviour, behaviour), rejected };
 }

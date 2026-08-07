@@ -319,8 +319,8 @@ describe("PUT /v1/instances/:id/name (integration)", () => {
 		expect(await res.json()).toEqual({ name: "My Agent" }); // trimmed
 		// Targeted json_set on $.displayName (#231). Siblings are preserved BY CONSTRUCTION now —
 		// the UPDATE cannot reach another key — so the assertion is on the statement issued.
-		const update = writes.find((w) => w.sql.includes("json_set(") && w.sql.includes("'$.displayName'"))!;
-		expect(JSON.parse(update.args[0] as string)).toBe("My Agent");
+		const update = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.displayName")!;
+		expect(JSON.parse(update.args[1] as string)).toBe("My Agent");
 		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
 	});
 
@@ -329,7 +329,7 @@ describe("PUT /v1/instances/:id/name (integration)", () => {
 		const res = await put(app, env, "/v1/instances/inst-1/name", { name: "" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ name: null });
-		expect(writes.some((w) => w.sql.includes("json_remove(") && w.sql.includes("'$.displayName'"))).toBe(true);
+		expect(writes.some((w) => w.sql.includes("json_remove(") && w.args[0] === "$.displayName")).toBe(true);
 		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
 	});
 });
@@ -389,7 +389,7 @@ describe("PUT /v1/instances/:id/settings (integration)", () => {
 		const body = await res.json() as { settings: Record<string, unknown> };
 		expect(body.settings.level).toBe("advanced"); // patched
 		expect(body.settings.notes).toBe("keep"); // untouched field preserved (patch semantics)
-		const cfg = JSON.parse(writes.find((w) => w.sql.includes("json_set("))!.args[0] as string);
+		const cfg = JSON.parse(writes.find((w) => w.sql.includes("json_set("))!.args[1] as string);
 		expect(cfg.level).toBe("advanced");
 	});
 });
@@ -787,7 +787,7 @@ describe("voice-settings resolve against the owner's account defaults (#211)", (
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], accountPreferences: ACCOUNT });
 		const res = await put(app, env, "/v1/instances/inst-1/voice-settings", { speed: 80 }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("json_set("))?.args ?? [])[0]));
+		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("json_set("))?.args ?? [])[1]));
 		expect(saved.speed).toBe(80);
 		expect(saved.sttMode).toBe("openai"); // inherited, not reset to "browser"
 		expect((await res.json() as { hasOverride: boolean }).hasOverride).toBe(true);
@@ -802,7 +802,7 @@ describe("voice-settings resolve against the owner's account defaults (#211)", (
 		const res = await del(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"));
 		// json_remove on $.voiceSettings alone (#231). "Only the override goes" is now guaranteed
 		// by the statement rather than by re-serialising a blob that could have gone stale.
-		expect(writes.some((w) => w.sql.includes("json_remove(") && w.sql.includes("'$.voiceSettings'"))).toBe(true);
+		expect(writes.some((w) => w.sql.includes("json_remove(") && w.args[0] === "$.voiceSettings")).toBe(true);
 		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
 		const body = await res.json() as { voiceSettings: { speed: number }; hasOverride: boolean };
 		expect(body.hasOverride).toBe(false);
@@ -849,11 +849,11 @@ describe("voice-settings resolve against the owner's account defaults (#211)", (
 			},
 		});
 		await put(app, env, "/v1/instances/inst-1/settings", { settings: { target_language: "ja-JP" } }, await tokenFor("u1"));
-		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("'$.settings'"))?.args ?? [])[0]));
+		const saved = JSON.parse(String((writes.find((w) => w.args[0] === "$.settings")?.args ?? [])[1]));
 		expect(saved.target_language).toBe("ja-JP");
 		// The point of #211: a declared voiceLanguage must not create a voiceSettings override.
 		// With per-key writes that is now visible as the absence of any $.voiceSettings statement.
-		expect(writes.some((w) => w.sql.includes("'$.voiceSettings'"))).toBe(false);
+		expect(writes.some((w) => w.args[0] === "$.voiceSettings")).toBe(false);
 	});
 });
 

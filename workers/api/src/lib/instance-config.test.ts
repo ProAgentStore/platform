@@ -27,8 +27,20 @@ describe("patchInstanceConfig", () => {
 		const { env, calls } = captureEnv();
 		await patchInstanceConfig(env, "i1", "u1", "behaviour", { tone: "warm" });
 		expect(calls[0].sql).toContain("json_set(");
-		expect(calls[0].sql).toContain("'$.behaviour'");
+		expect(calls[0].args[0]).toBe("$.behaviour");
 		expect(calls[0].sql).not.toMatch(/SET config = \?/); // never a whole-blob assignment
+	});
+
+	// The path is a BOUND ARGUMENT, not text spliced into the statement (#327). Spliced, a quote
+	// in the key ends the SQL string literal and the rest of it is parsed as SQL — the validation
+	// above was then the only boundary. Bound, a hostile key can at worst become a strange key
+	// name inside the document; nothing of it reaches the parser.
+	it("binds the JSON path rather than splicing it into the SQL", async () => {
+		const { env, calls } = captureEnv();
+		await patchInstanceConfig(env, "i1", "u1", "settings", 1);
+		expect(calls[0].sql).not.toMatch(/'\$\./);
+		expect(calls[0].sql).toContain(", ?1, json(?2))");
+		expect(calls[0].args[0]).toBe("$.settings");
 	});
 
 	// json() around the bound parameter is what preserves objects/arrays. Without it SQLite
@@ -36,8 +48,8 @@ describe("patchInstanceConfig", () => {
 	it("binds the value through json() so objects survive as objects", async () => {
 		const { env, calls } = captureEnv();
 		await patchInstanceConfig(env, "i1", "u1", "settings", { a: 1, b: ["x"] });
-		expect(calls[0].sql).toContain("json(?1)");
-		expect(calls[0].args[0]).toBe(JSON.stringify({ a: 1, b: ["x"] }));
+		expect(calls[0].sql).toContain("json(?2)");
+		expect(calls[0].args[1]).toBe(JSON.stringify({ a: 1, b: ["x"] }));
 	});
 
 	// The column defaults to '' (not '{}'), so without this a patch on a fresh instance would
@@ -52,7 +64,7 @@ describe("patchInstanceConfig", () => {
 	it("scopes the write to the owner", async () => {
 		const { env, calls } = captureEnv();
 		await patchInstanceConfig(env, "i1", "u1", "board", {});
-		expect(calls[0].sql).toContain("user_id = ?3");
+		expect(calls[0].sql).toContain("user_id = ?4");
 		expect(calls[0].args).toContain("u1");
 	});
 
@@ -64,7 +76,7 @@ describe("patchInstanceConfig", () => {
 	it("stores an explicit null rather than dropping the key", async () => {
 		const { env, calls } = captureEnv();
 		await patchInstanceConfig(env, "i1", "u1", "k", null);
-		expect(calls[0].args[0]).toBe("null");
+		expect(calls[0].args[1]).toBe("null");
 	});
 
 	// The key is concatenated into a JSON PATH, so it is validated rather than trusted — even
@@ -82,7 +94,8 @@ describe("removeInstanceConfigKey", () => {
 		const { env, calls } = captureEnv();
 		await removeInstanceConfigKey(env, "i1", "u1", "translation");
 		expect(calls[0].sql).toContain("json_remove(");
-		expect(calls[0].sql).toContain("'$.translation'");
+		expect(calls[0].sql).not.toMatch(/'\$\./);
+		expect(calls[0].args[0]).toBe("$.translation");
 	});
 
 	it("validates the key too", async () => {

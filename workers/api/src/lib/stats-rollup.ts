@@ -23,6 +23,7 @@
  * candidate query skips any instance that already has a row for the day, which is what bounds the
  * per-minute cost to "active instances not yet rolled up" rather than "every instance".
  */
+import { readInstanceConfigPair } from "./instance-config.js";
 import { logUnhandled } from "./on-error.js";
 import { resolveStatsCards, type StatsCard } from "./stats-schema.js";
 import { dayUtc, readDaily, type StatsCtx } from "./stats-sources.js";
@@ -125,21 +126,9 @@ export async function insertDailyOnce(
 }
 
 async function instanceCards(env: Env, instanceId: string, userId: string): Promise<StatsCard[]> {
-	const row = await env.DB.prepare(
-		"SELECT i.config AS config, a.config AS agent_config FROM agent_instances i" +
-			" LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
-	)
-		.bind(instanceId, userId)
-		.first<{ config: string | null; agent_config: string | null }>();
-	if (!row) return [];
-	const parse = (raw: string | null) => {
-		try {
-			return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-		} catch {
-			return {};
-		}
-	};
-	return resolveStatsCards(parse(row.agent_config).statsSchema, parse(row.config).stats);
+	const pair = await readInstanceConfigPair(env, instanceId, userId);
+	if (!pair) return [];
+	return resolveStatsCards(pair.agentConfig.statsSchema, pair.config.stats);
 }
 
 /** Delete rows older than the retention cap, a bounded batch at a time. */

@@ -276,7 +276,7 @@ describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missi
 		(env.DB as { prepare: (s: string) => unknown }).prepare = (sql: string) => ({
 			bind: (...args: unknown[]) => ({
 				first: async () => (sql.includes("FROM agent_instances") ? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" } : null),
-				run: async () => { if (sql.includes("UPDATE agent_instances")) written = String(args[0]); return {}; },
+				run: async () => { if (sql.includes("UPDATE agent_instances")) written = String(args[1]); return {}; }, // ?1 is the bound JSON path (#327)
 				all: async () => ({ results: [] }),
 			}),
 		});
@@ -483,7 +483,7 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 							? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" }
 							: null,
 				run: async () => {
-					if (sql.includes("json_set(") && sql.includes("$.disabledTools")) written = String(args[0]);
+					if (sql.includes("json_set(") && args[0] === "$.disabledTools") written = String(args[1]);
 					return { meta: { changes: 1 } };
 				},
 				all: async () => ({ results: [] }),

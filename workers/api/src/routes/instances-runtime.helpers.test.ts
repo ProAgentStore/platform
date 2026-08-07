@@ -397,9 +397,9 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		expect(await res.json()).toEqual({ runnerNode: "laptop-A" });
 		// Targeted json_set on $.runnerNode (#231): pinning a runner must not clobber a
 		// settings or behaviour change saved from another tab between read and write.
-		const update = writes.find((w) => w.sql.includes("json_set(") && w.sql.includes("'$.runnerNode'"));
+		const update = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.runnerNode");
 		expect(update).toBeTruthy();
-		expect(JSON.parse(update!.args[0] as string)).toBe("laptop-A");
+		expect(JSON.parse(update!.args[1] as string)).toBe("laptop-A");
 	});
 
 	it("clearing the pin (empty value) deletes runnerNode but keeps sibling config", async () => {
@@ -410,7 +410,7 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		// json_remove on just $.runnerNode. Siblings are now preserved BY CONSTRUCTION (#231) —
 		// the UPDATE cannot touch another key — so the assertion is on the statement, not on a
 		// merged blob the route no longer builds.
-		const update = writes.find((w) => w.sql.includes("json_remove(") && w.sql.includes("'$.runnerNode'"));
+		const update = writes.find((w) => w.sql.includes("json_remove(") && w.args[0] === "$.runnerNode");
 		expect(update).toBeTruthy();
 		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
 	});
