@@ -203,7 +203,13 @@ const PINS = {
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
 	// the ground is kept, per this ratchet's own rule.
-	"workers/mcp/src/index.ts": 1150,
+	// +4 at #375, raised late: c9ea1eb grew this file and did not move the pin with it. The
+	// growth is four lines of comment and nothing else — the zod enum LOST a member
+	// (INSURANCE_QUOTES, which no `[[workflows]]` binding backs) and gained a note naming
+	// `agent-workflows.ts` as the canonical table plus the drift test that now holds this mirror
+	// equal to it. This worker builds standalone and cannot import the catalog, so the comment is
+	// the only thing at this call site that says where the truth lives.
+	"workers/mcp/src/index.ts": 1154,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
