@@ -444,7 +444,16 @@ const PINS = {
 	// correction round) declare them with `tool_choice:"none"` instead. Omitting them is a 400 on
 	// the whole turn rather than a worse reply, which is exactly the kind of constraint that has to
 	// be written down beside the call that would otherwise look fine.
-	"workers/api/src/agent-think.ts": 1053,
+	// +1 at #416, and the line is an import. The ten-line ternary that rendered a repo's clone status
+	// left every state it did not enumerate — `needs_attention`, `unknown` — printing as the raw enum
+	// token, so #405's diagnosis ("the configured checkout … is EMPTY") was stored and never said. It
+	// is now one call to lib/repo-status-prompt.ts, where the phrase table is `satisfies
+	// Record<CloneStatus, string>`: adding a seventh status without giving it prose is a compile
+	// error, which is the actual defence — the old chain was type-safe against exactly this leak. The
+	// decisions that can be pure all are (the table, the diagnosis budget, the truncation of a
+	// runner-supplied error string) with their tests, so this file got smaller in logic and longer by
+	// one import.
+	"workers/api/src/agent-think.ts": 1054,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
