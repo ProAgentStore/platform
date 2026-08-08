@@ -981,7 +981,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						{tab("pulls", "Pulls", GitPullRequest)}
 						{tab("builds", "Builds", Hammer)}
 					</div>
-					{solo && <span className="text-xs text-muted truncate min-w-0">{repoTitle(solo)} · {repoLabel(solo)}</span>}
+					{/* `flex-1 basis-0` is what makes the `truncate` do anything (#454): a `flex-wrap` row
+					    assigns lines by HYPOTHETICAL main size before shrinking, so at auto basis this
+					    caption left for its own line and never ellipsised (65px header → 34px). `title`
+					    because the status phrase (#405, #440) is cut first at 320px. Measured in WebKit;
+					    the table and the one-line assertion are in `e2e/console.spec.ts`'s #431 block. */}
+					{solo && <span title={`${repoTitle(solo)} · ${repoLabel(solo)}`} className="text-xs text-muted truncate min-w-0 flex-1 basis-0">{repoTitle(solo)} · {repoLabel(solo)}</span>}
 					<div className="ml-auto flex gap-1 shrink-0">
 						<button type="button" onClick={() => setShowEngines(true)} title="CLI engines & sign-in" aria-label="CLI engines" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Cpu size={13} /></button>
 						{solo && <button type="button" onClick={() => setSettingsRepoId(solo.id)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><FolderCog size={13} /></button>}

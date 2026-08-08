@@ -380,7 +380,16 @@ const PINS = {
 	// route's resolver honours the instance's "Runs on" pin and the runner status dot does not, so
 	// a component guessing from `runnerOnline` reports "checked" for a list that checked nothing —
 	// which is exactly how a healthy checkout stayed marked broken for five days.
-	"agents/coder/web/src/CodingTab.tsx": 1309,
+	// +5 for #454, and all five are prose: the fix itself is two utility classes and a `title` on
+	// the line that was already there. Raised rather than split because `truncate min-w-0 flex-1
+	// basis-0` reads like four ways of saying the same thing, and the one that matters is the least
+	// obvious — `basis-0`. Without it a `flex-wrap` row assigns the caption to its own line from its
+	// HYPOTHETICAL main size, before anything is asked to shrink, so `truncate` never fires: the
+	// header measured 65px with `scrollWidth > clientWidth` FALSE, a live ellipsis doing nothing.
+	// Anyone tidying `flex-1 basis-0` away as redundant re-creates the defect, and the comment is
+	// the only thing between them and it. The measurements are in the `#431` block in
+	// e2e/console.spec.ts, which now asserts the one-line invariant rather than only recording it.
+	"agents/coder/web/src/CodingTab.tsx": 1314,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt

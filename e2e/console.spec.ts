@@ -3634,15 +3634,32 @@ test.describe("mobile — Copy and Delete clear the message timestamp (#426)", (
  * the group ends inside the viewport, the group is narrow enough to BE icon-only, and it fits on one
  * line together with the action cluster beside it.
  *
- * ── The residual, which is NOT this ticket
+ * ── The residual, which WAS not this ticket and is now fixed (#454)
  *
- * The row is still two lines tall at both widths (65px before, 62px after) and the remaining cause
- * is the repo caption, not the tabs: `text-xs text-muted truncate min-w-0` has a 219px max-content,
+ * The row was still two lines tall at both widths (65px before, 62px after) and the remaining cause
+ * was the repo caption, not the tabs: `text-xs text-muted truncate min-w-0` has a 219px max-content,
  * and flexbox collects lines from HYPOTHETICAL main size before it shrinks anything, so a `truncate`
- * item in a `flex-wrap` row wraps instead of ellipsising. It needs `flex-1`/`basis-0`, it is a
- * different element with a different root cause, and it is left for its own issue rather than
- * folded in here. `headerHeight` is therefore RECORDED in every failure message and asserted on by
- * nothing — a threshold this fix does not move would either fail forever or lock in the defect.
+ * item in a `flex-wrap` row wraps instead of ellipsising. It needed `flex-1`/`basis-0`, it was a
+ * different element with a different root cause, and it was left for its own issue rather than
+ * folded in here. `headerHeight` was therefore RECORDED in every failure message and asserted on by
+ * nothing — a threshold this fix did not move would either fail forever or lock in the defect.
+ *
+ * #454 moved it, so it is asserted now. Measured live in WebKit (not from a markup fixture) on this
+ * very block's fixture, before and after `flex-1 basis-0`:
+ *
+ *              headerHeight   caption width   scrollWidth > clientWidth
+ *     before      65 / 65        219 / 219        FALSE — a dead ellipsis
+ *     after       34 / 34        100 / 170        TRUE  — it ellipsises
+ *
+ * ONE LINE is the invariant, and `headerHeight` is the only assertion that catches a future item
+ * wrapping this row again. It is also the guard for a defect class `measureOverflow` structurally
+ * cannot see: a `flex-wrap` row does not pan the page when something does not fit, it gets TALLER,
+ * and the terminal pane starts further down the screen (#370). Every horizontal number here reads
+ * zero before and after.
+ *
+ * The caption's `scrollWidth > clientWidth` is asserted beside it, because "one line" and "the
+ * ellipsis works" are different claims: hiding the caption below `sm` would satisfy the first and
+ * delete the content the row exists for.
  *
  * ── Why the accessible name is asserted at both widths
  *
@@ -3741,8 +3758,19 @@ test.describe("mobile — the single-repo Coder tab row (#431)", () => {
 				// Content box of the row: what the group, the caption and the actions divide up.
 				rowContentWidth: Math.round(h.width - px(style.paddingLeft) - px(style.paddingRight)),
 				columnGap: Math.round(px(style.columnGap)),
-				// Recorded, deliberately NOT asserted — see the note on the residual below.
+				// Asserted since #454 — see the note on the residual above.
 				headerHeight: Math.round(h.height),
+				// The caption between the tabs and the actions. `:scope > span` is the only direct
+				// span child of the row.
+				caption: (() => {
+					const c = header.querySelector<HTMLElement>(":scope > span");
+					if (!c) return null;
+					const b = c.getBoundingClientRect();
+					// CENTRE, not top: the row is `items-center` and the caption's line box is 16px
+					// against the tab group's 26px, so on ONE line their tops legitimately differ.
+					return { top: Math.round(b.top), centre: Math.round(b.top + b.height / 2), width: Math.round(b.width), ellipsised: c.scrollWidth > c.clientWidth, title: c.getAttribute("title"), text: c.textContent };
+				})(),
+				groupCentre: Math.round(g.top + g.height / 2),
 				tabs,
 				tabRows: tops.size,
 				overflowPastViewport: Math.round(g.right - window.innerWidth),
@@ -3787,6 +3815,29 @@ test.describe("mobile — the single-repo Coder tab row (#431)", () => {
 			// clothes, which is why it is measured in the same test.
 			for (const t of m.tabs) {
 				expect(Math.min(t.width, t.height), `"${t.name}" is ${t.width}×${t.height} at ${width}w — under the 24px minimum target: ${detail}`).toBeGreaterThanOrEqual(24);
+			}
+
+			// ── ONE LINE (#454) ──
+			// The tabs, the caption and the action cluster share a baseline. 65px was two lines
+			// (three at 320px with a longer status word); 34px is one. 40 is the ceiling, between
+			// the measured value and the smallest two-line row this can produce.
+			expect(m.headerHeight, `the header is ${m.headerHeight}px at ${width}w — it has wrapped onto another line: ${detail}`).toBeLessThanOrEqual(40);
+			expect(m.caption, `the repo caption did not render, so the wrap cannot be measured: ${detail}`).not.toBeNull();
+			if (m.caption) {
+				// Same line as the tabs — the direct statement of "one line", independent of the
+				// height threshold, which a shorter caption could satisfy by accident. Compared on
+				// CENTRES with a 4px tolerance: the row is `items-center` and the two boxes are
+				// different heights, so equal tops would be the wrong assertion (it was tried, and
+				// it fails on a correctly-laid-out row: caption top 53 vs tab top 49).
+				expect(Math.abs(m.caption.centre - m.groupCentre), `the caption is on its own line at ${width}w: ${detail}`).toBeLessThanOrEqual(4);
+				// And the ellipsis is LIVE. This was FALSE before the fix: the caption sat at its
+				// full 219px max-content on a line of its own and never truncated — #393's defect
+				// class in a second costume, which the source guard cannot see because whether it
+				// is a defect depends on the PARENT wrapping.
+				expect(m.caption.ellipsised, `the caption is not ellipsising — it has room because it wrapped: ${detail}`).toBe(true);
+				// Once it ellipsises, the status phrase (#405 "Runner offline", #440 "Build
+				// failed") is the first thing cut, and that phrase is what the caption is for.
+				expect(m.caption.title, `the ellipsised caption exposes no full text on hover: ${detail}`).toBe(m.caption.text);
 			}
 
 			// And the page still does not pan, by the sweep's own definition.
