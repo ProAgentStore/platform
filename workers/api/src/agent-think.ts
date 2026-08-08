@@ -10,6 +10,8 @@ import { renderActiveTasks } from "./lib/agent-tasks.js";
 import { renderDirections } from "./lib/agent-direction.js";
 import { directionRosterFor } from "./lib/supervision.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
+import { connectorToolsPrompt } from "./lib/connector-tool-prompt.js";
+import { listConsents } from "./lib/connector-consent.js";
 import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
 import { parseAccountPreferences } from "./lib/preferences.js";
 import { clockPrompt } from "./lib/agent-clock.js";
@@ -561,12 +563,18 @@ export async function runAgentThink(opts: {
 		const enabledNames = toolNamesFor(capabilities);
 		const connectorTools = registryTools().filter((t) => t.connector && enabledNames.has(t.name));
 		if (connectorTools.length) {
-			systemPrompt +=
-				"\n\nCONNECTED TOOLS — external actions you can take DIRECTLY by calling the tool" +
-				" (never tell the user to do it themselves, and never route it through a terminal/CLI):\n" +
-				connectorTools
-					.map((t) => `- ${t.name}${t.scope === "write" ? " [write — needs the connector's consent]" : ""}: ${t.description}`)
-					.join("\n");
+			// The RESOLVED consent, not the rule (#399). The suffix used to read "[write — needs the
+			// connector's consent]" unconditionally, so a tmux agent whose four write tools were all
+			// `writeConsent:"granted"` refused the work, invented a reason, and sent its owner to
+			// switch on a setting that was already on — without ever attempting the call. Read per
+			// turn on purpose: a consent granted mid-conversation must take effect on the next
+			// message, and a stale answer here IS the bug. Fail-closed on a D1 miss, matching the
+			// gate itself (#90) — an over-cautious label costs a question, a permissive one costs a
+			// refused call the agent was told would work.
+			const grantedWrite = (await listConsents(env, state.agentId).catch(() => []))
+				.filter((r) => r.scope === "write")
+				.map((r) => r.connector);
+			systemPrompt += connectorToolsPrompt(connectorTools, grantedWrite);
 		}
 	}
 

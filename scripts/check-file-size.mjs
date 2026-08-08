@@ -416,7 +416,14 @@ const PINS = {
 	// provider-verdict test, the sentence the user reads — are, in lib/reply-truncation.ts with
 	// their tests, and agent-think.test.ts asserts over this source that there is still exactly one
 	// call site.
-	"workers/api/src/agent-think.ts": 980,
+	// +8 at #399 (two imports, one consent read, five lines of why): the connector list states the
+	// RESOLVED write consent instead of the rule that a gate exists, which is what made a tmux agent
+	// with four granted write tools refuse the work and send its owner to enable a setting that was
+	// already on. The rendering — every label, and the one sentence saying what to do when a tool
+	// genuinely IS blocked — is pure and lives in lib/connector-tool-prompt.ts with its tests. What
+	// is left here is the one thing only this function can do: read the instance's consent rows at
+	// the moment the prompt is built, which is exactly what a cache would have got wrong.
+	"workers/api/src/agent-think.ts": 988,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

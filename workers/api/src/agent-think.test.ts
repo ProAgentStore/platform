@@ -109,6 +109,30 @@ describe("chat completions are capped and their stop reason is read (#397)", () 
 	});
 });
 
+// ── #399: the connector list carries the RESOLVED consent, not the rule ─────────────
+//
+// The block used to render `[write — needs the connector's consent]` unconditionally, so a tmux
+// agent whose four write tools were all `writeConsent:"granted"` refused the work and sent its
+// owner to enable a setting that was already on. The prompt is built from data now
+// (lib/connector-tool-prompt.ts, tested there); what this asserts is that agent-think still
+// FETCHES the fact — the regression that turns the whole thing back into a rule is dropping the
+// consent read and passing an empty list, which type-checks and labels every write tool blocked.
+describe("connector tools are described with the instance's real consent (#399)", () => {
+	it("builds the block from the shared renderer instead of inline string concatenation", () => {
+		expect(findCalls(THINKER_CODE, "connectorToolsPrompt")).toHaveLength(1);
+	});
+
+	it("reads the instance's consent rows at prompt-build time", () => {
+		expect(findCalls(THINKER_CODE, "listConsents")).toHaveLength(1);
+	});
+
+	it("never states the gate as an unconditional rule again", () => {
+		// Over the RAW file, comments included: the sentence is the defect, and a copy of it left in
+		// a comment next to a call site is one revert away from being live again.
+		expect(THINKER).not.toContain("[write — needs the connector's consent]");
+	});
+});
+
 describe("cross-round dedup — a read repeats only when something CHANGED", () => {
 	// The rule is stated in agent-think.ts and worth pinning as data, because getting it wrong is
 	// invisible in both directions:
