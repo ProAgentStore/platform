@@ -211,3 +211,60 @@ describe("runAnthropic message normalization", () => {
 		expect(sentBody.messages[2].content).toContain("new question");
 	});
 });
+
+describe("runAnthropic output cap and stop reason (#397)", () => {
+	/** Capture the request body and reply with a caller-supplied Anthropic response. */
+	async function callWith(reply: Record<string, unknown>, body: Record<string, unknown>) {
+		const env = await envWithAnthropicKey();
+		let sent: Record<string, unknown> = {};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sent = JSON.parse(init.body as string);
+				return Response.json({ usage: { input_tokens: 1, output_tokens: 1 }, ...reply });
+			}),
+		);
+		const result = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [{ role: "user", content: "hi" }],
+			...body,
+		})) as Record<string, unknown>;
+		return { sent, result };
+	}
+
+	it("puts the caller's maxTokens on the wire as max_tokens", async () => {
+		const { sent } = await callWith({ content: [{ type: "text", text: "ok" }] }, { maxTokens: 4096 });
+		expect(sent.max_tokens).toBe(4096);
+	});
+
+	it("surfaces stop_reason so a truncated reply is distinguishable from a finished one", async () => {
+		// The whole defect: the fact is in the response body, one key from `content` and `usage`,
+		// and nothing read it — so a reply cut at the cap looked exactly like one that ended.
+		const cut = await callWith({ content: [{ type: "text", text: "import" }], stop_reason: "max_tokens" }, {});
+		expect(cut.result.stopReason).toBe("max_tokens");
+
+		const done = await callWith({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }, {});
+		expect(done.result.stopReason).toBe("end_turn");
+	});
+
+	it("surfaces it on the TOOL_USE return too", async () => {
+		// A round that stops mid-`tool_use` is the same loss with worse consequences: the loop acts
+		// on a half-built call. The two returns must not drift apart.
+		const { result } = await callWith(
+			{
+				content: [
+					{ type: "text", text: "calling" },
+					{ type: "tool_use", name: "repo_tree", input: { path: "." } },
+				],
+				stop_reason: "max_tokens",
+			},
+			{},
+		);
+		expect(result.tool_calls).toEqual([{ name: "repo_tree", arguments: { path: "." } }]);
+		expect(result.stopReason).toBe("max_tokens");
+	});
+
+	it("leaves stopReason undefined when the provider omits it, rather than inventing one", async () => {
+		const { result } = await callWith({ content: [{ type: "text", text: "ok" }] }, {});
+		expect(result.stopReason).toBeUndefined();
+	});
+});

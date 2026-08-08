@@ -1,6 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { toolBlurbFor, withPartialToolLog } from "./agent-think.js";
+import { findCalls, stripCommentsAndLiterals } from "./lib/source-guard.js";
 import type { AgentCapabilities } from "./lib/agent-capabilities.js";
+
+/** agent-think.ts as written, and with comments/strings blanked (line numbers preserved). */
+const THINKER = readFileSync(new URL("./agent-think.ts", import.meta.url).pathname, "utf-8");
+const THINKER_CODE = stripCommentsAndLiterals(THINKER);
 
 describe("withPartialToolLog (#24 — surface committed side effects on a late failure)", () => {
 	it("attaches the completed tool log to an Error and returns the same error", () => {
@@ -62,6 +68,44 @@ describe("toolBlurbFor (declared tools must not be described as tools the agent 
 		expect(toolBlurbFor(caps({}))).toContain("search your knowledge");
 		// An empty declared list is "declared nothing", not "declared" — must not win.
 		expect(toolBlurbFor(caps({ tools: [] }))).toContain("search your knowledge");
+	});
+});
+
+// ── #397: every chat completion names its own output cap ────────────────────────────
+//
+// The defect was not that 1024 is small — it is that chat was the ONE caller of
+// `runUserWorkersAi` that never chose, so it inherited a number picked for nothing and every
+// reply a human reads end to end was cut at ~4,000 characters. There is nothing about a
+// four-argument call with no `maxTokens` that looks wrong in review, and this path has four
+// completions in it (tool-less, per round, the #395 correction, the final answer). So the rule
+// is asserted over the SOURCE: one wrapper, and the cap and the stop-reason read live in it.
+describe("chat completions are capped and their stop reason is read (#397)", () => {
+	it("agent-think.ts calls the provider through exactly ONE wrapper", () => {
+		const calls = findCalls(THINKER_CODE, "runUserWorkersAi").map((h) => `agent-think.ts:${h.line} ${h.excerpt}`);
+		expect(
+			calls,
+			"Route the completion through `chatComplete`, the single wrapper that sets maxTokens and\n" +
+				"reads stopReason (#397). A second direct call site inherits the 1024 default and its reply\n" +
+				`is truncated with nothing saying so.\nOffenders:\n${calls.join("\n")}`,
+		).toHaveLength(1);
+	});
+
+	it("that wrapper sets an explicit cap and reads the provider's stop reason", () => {
+		expect(THINKER_CODE).toContain("maxTokens: CHAT_MAX_TOKENS");
+		expect(findCalls(THINKER_CODE, "hitOutputCap").length).toBeGreaterThan(0);
+	});
+
+	it("both delivery exits carry the truncation notice, not just the tool-using one", () => {
+		// A tool-less agent's reply is the longest kind on this platform (no tool log to break it
+		// up) and it returns from a different line. Shipping the notice on one exit only is the
+		// obvious half-fix: it passes a happy-path test and hides the cut on the surface most
+		// likely to hit it.
+		expect(findCalls(THINKER_CODE, "withTruncation")).toHaveLength(2); // the tool-less exit + `deliver`
+	});
+
+	it("the cap is a named constant, not a literal spelled at the call site", () => {
+		// A literal is how the four call sites drifted apart in the first place.
+		expect(THINKER_CODE).not.toMatch(/maxTokens:\s*\d/);
 	});
 });
 

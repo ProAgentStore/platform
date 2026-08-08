@@ -405,7 +405,18 @@ const PINS = {
 	// round calls no tools and returns early. The tool result handed on to the model and the
 	// `tool_call` broadcast is rebuilt field by field, so a client directive cannot ride out on a
 	// push channel. Picking the destination is pure and lives in lib/conversation-transfer.ts.
-	"workers/api/src/agent-think.ts": 955,
+	// +25 at #397, and it is a NET SIMPLIFICATION of the thing it grew: four hand-written
+	// `runUserWorkersAi(env, userId, effectiveModel, …)` argument lists became one `chatComplete`
+	// wrapper, so the file has fewer provider calls in it than before, not more. What it gained is
+	// the cap they all now name and the `stop_reason` read they all now share — the fact the
+	// platform had in the response body and threw away, which is why a Repo Coder reply that
+	// stopped mid-`import` was stored and shown as the whole answer. It cannot be split out: the
+	// wrapper closes over `effectiveModel`, `userId` and the turn's own truncation flag, and the
+	// flag has to be readable at BOTH delivery exits. The decisions that can be pure — the cap, the
+	// provider-verdict test, the sentence the user reads — are, in lib/reply-truncation.ts with
+	// their tests, and agent-think.test.ts asserts over this source that there is still exactly one
+	// call site.
+	"workers/api/src/agent-think.ts": 980,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

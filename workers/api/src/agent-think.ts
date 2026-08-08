@@ -25,6 +25,7 @@ import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-cal
 import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
 import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
+import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
@@ -126,6 +127,15 @@ const READ_ONLY_TOOLS = new Set([
 	"list_subordinates",
 	"subordinate_status",
 ]);
+
+/**
+ * One provider completion, in the Workers-AI-shaped form `runUserWorkersAi` normalizes to.
+ *
+ * `stopReason` is the provider's own verdict on why generation ended (#397) — the field that tells
+ * a reply cut off at the output cap from one that finished, which the platform had in the response
+ * body and threw away.
+ */
+type ChatCompletion = { response?: string; tool_calls?: unknown[]; stopReason?: string };
 
 export async function runAgentThink(opts: {
 	state: AgentState;
@@ -641,19 +651,52 @@ export async function runAgentThink(opts: {
 		}
 	}
 
-	if (!useTools) {
-		const result = (await runUserWorkersAi(
+	/**
+	 * EVERY chat completion in this function goes through here (#397).
+	 *
+	 * Chat was the one caller of `runUserWorkersAi` that never named a `maxTokens`, so it inherited
+	 * the 1024 default and each reply a human reads end to end was cut at ~4,000 characters — a Repo
+	 * Coder answer in the wild stops mid-file on the bare word `import`. A wrapper rather than four
+	 * more argument lists: there are four completions on this path (tool-less, per round, the #395
+	 * correction round, the final answer), and a fifth added later must not be able to skip the cap
+	 * or the stop-reason read. `agent-think.test.ts` asserts that over the source.
+	 */
+	let truncated = false;
+	const chatComplete = async (body: { messages: { role: string; content: string }[]; tools?: unknown[] }): Promise<ChatCompletion> => {
+		const r = (await runUserWorkersAi(
 			env,
 			userId,
 			effectiveModel,
-			{ messages: aiMessages },
+			{ ...body, maxTokens: CHAT_MAX_TOKENS },
 			{ kind: "chat", instanceId: state.agentId },
-		)) as { response?: string };
+		)) as ChatCompletion;
+		if (!truncated && hitOutputCap(r.stopReason)) {
+			truncated = true;
+			// Durable, because "the agent stopped mid-sentence" is otherwise only ever a user's
+			// impression — the fact was in the provider's response body and nothing recorded it.
+			await logEvent(env, {
+				source: "chat",
+				event: "chat.truncated",
+				level: "warn",
+				message: `Reply hit the ${CHAT_MAX_TOKENS}-token output cap and was cut off.`,
+				userId: userId ?? null,
+				instanceId: state.agentId,
+				traceId: delegation?.traceId ?? null,
+			});
+		}
+		return r;
+	};
+	/** Platform notices for the tool log. Truncation goes last so a #395 correction still leads. */
+	const withTruncation = (notices: readonly string[]): string[] =>
+		truncated ? [...notices, truncationNotice(CHAT_MAX_TOKENS)] : [...notices];
+
+	if (!useTools) {
+		const result = await chatComplete({ messages: aiMessages });
 		// A turn on a model that cannot call a tool executes nothing, so a tool RESULT written here
 		// is invention with no ambiguity left in it — and there is no correction round worth buying
 		// from a model that could not have called the tool in the first place (#395).
 		const honest = await honestReply({ reply: { text: result.response || "", calls: [] }, executed: [], log: [] });
-		return { response: honest.text, toolCalls: toolLogWithNotices([], honest.notices) };
+		return { response: honest.text, toolCalls: toolLogWithNotices([], withTruncation(honest.notices)) };
 	}
 
 	// The owner's per-tool off-switches (config.disabledTools). Applied to BOTH the
@@ -733,13 +776,7 @@ export async function runAgentThink(opts: {
 			regenerate: async (correction) => {
 				aiMessages.push({ role: "assistant", content: reply.text });
 				aiMessages.push({ role: "user", content: correction });
-				const retry = (await runUserWorkersAi(
-					env,
-					userId,
-					effectiveModel,
-					{ messages: aiMessages },
-					{ kind: "chat", instanceId: state.agentId },
-				)) as { response?: string };
+				const retry = await chatComplete({ messages: aiMessages });
 				const parsed = parseToolCallsFromText(retry.response || "", allowedToolNames);
 				return { text: parsed.text, calls: parsed.calls.map((c) => c.name) };
 			},
@@ -763,30 +800,24 @@ export async function runAgentThink(opts: {
 		// round calls no tools and returns early. Null for every turn that did not run the tool,
 		// which is the property that keeps the response channel honest.
 		const transfer = transferFromToolResults(registryResults);
-		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, honest.notices), ...(transfer ? { transfer } : {}) };
+		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, withTruncation(honest.notices)), ...(transfer ? { transfer } : {}) };
 	};
 
 	for (let round = 0; round < maxToolRounds; round++) {
-		let rawResult: Record<string, unknown>;
+		let rawResult: ChatCompletion;
 		try {
-			rawResult = (await runUserWorkersAi(
-				env,
-				userId,
-				effectiveModel,
-				{ messages: aiMessages, tools },
-				{ kind: "chat", instanceId: state.agentId },
-			)) as Record<string, unknown>;
+			rawResult = await chatComplete({ messages: aiMessages, tools });
 		} catch (err) {
 			throw withPartialToolLog(err, allToolLog);
 		}
 
-		let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
+		let toolCalls = normalizeToolCalls(rawResult.tool_calls || []);
 		// Scoped to the allowlist: an object in the reply that merely HAS a `name` key (a
 		// package.json, a lead record) is prose, not a tool call, and treating it as one
 		// discarded the model's real answer. See parse-tool-calls.ts. Parsed unconditionally now,
 		// because the walker also RETURNS the text with those spans removed (#395) and this reply
 		// is a candidate answer whichever path produced the calls.
-		const parsed = parseToolCallsFromText((rawResult.response as string) || "", allowedToolNames);
+		const parsed = parseToolCallsFromText(rawResult.response || "", allowedToolNames);
 		if (toolCalls.length === 0) toolCalls = parsed.calls;
 
 		if (toolCalls.length === 0) {
@@ -921,15 +952,9 @@ export async function runAgentThink(opts: {
 	if (allToolLog.length > 0) {
 		aiMessages.push({ role: "user", content: `Now give your final answer. ${styleReminder}` });
 	}
-	let final: { response?: string };
+	let final: ChatCompletion;
 	try {
-		final = (await runUserWorkersAi(
-			env,
-			userId,
-			effectiveModel,
-			{ messages: aiMessages },
-			{ kind: "chat", instanceId: state.agentId },
-		)) as { response?: string };
+		final = await chatComplete({ messages: aiMessages });
 	} catch (err) {
 		throw withPartialToolLog(err, allToolLog);
 	}

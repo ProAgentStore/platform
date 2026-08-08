@@ -105,6 +105,10 @@ async function runAnthropic(
 
 	const anthropicBody: Record<string, unknown> = {
 		model: "claude-sonnet-4-6",
+		// The fallback is what a caller inherits by NOT choosing, and #397 is the bill for that:
+		// chat was the one caller that never chose, so every reply a human read end to end was cut
+		// at ~4,000 characters. Every surface now names its own ceiling; this number is left where
+		// it is only so a new call site fails cheaply rather than unboundedly.
 		max_tokens: body.maxTokens ?? 1024,
 		messages,
 	};
@@ -202,6 +206,13 @@ async function runAnthropic(
 		await recordUsage(env, { ...ctx, userId, provider: "anthropic", model: (anthropicBody.model as string) || "claude-sonnet-4-6" }, usage);
 	}
 
+	// WHY the response carries the provider's verdict (#397): `stop_reason: "max_tokens"` sits in
+	// this same body, one key away from the `content` and `usage` already read, and dropping it made
+	// a reply cut off at the cap indistinguishable from one that finished. A caller cannot recover
+	// the fact later — the truncated text looks like prose that simply ended. Surfaced on BOTH
+	// returns, because a round that stops mid-`tool_use` is the same loss with worse consequences.
+	const stopReason = typeof data.stop_reason === "string" ? data.stop_reason : undefined;
+
 	if (toolUse.length > 0) {
 		return {
 			response: textParts,
@@ -210,9 +221,10 @@ async function runAnthropic(
 				arguments: t.input || {},
 			})),
 			usage,
+			stopReason,
 		};
 	}
-	return { response: textParts, usage };
+	return { response: textParts, usage, stopReason };
 }
 
 async function runCloudflareAi(
