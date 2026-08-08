@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// The real class, not a stub: `isRunnerUnreachable` is the classification under test, and mocking
+// it here would assert nothing about which errors it actually recognises.
+import { RunnerUnreachableError } from "./runner-unreachable.js";
 import type { CodingRepo, CodingSessionRecord } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -337,5 +340,57 @@ describe("continuity on the open path (#408)", () => {
 		await ensureSessionForChat(env, "inst", "u", repo);
 		expect(store.getLastFinishedSessionForRepo).not.toHaveBeenCalled();
 		expect((vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string }).resumeFrom).toBeUndefined();
+	});
+});
+
+describe("a transport failure is never stored as the repo's state (#440)", () => {
+	// The bug, measured on production and reproduced from the string itself: `pas/platform` on the
+	// Coder Home instance read `clone_status = "error"`, `clone_error = "No runner connected — run
+	// `pags up`"`, `updated_at` five days old, while the checkout held 18 entries and answered
+	// `insideWorkTree: true`. That message is `callRunner`'s pre-#341 503 text (deleted in
+	// b347f68), so this catch is the only place it can have been written from.
+	//
+	// The obvious wrong fix is to keep writing and merely improve the wording. These tests fail if
+	// anyone does that: what is asserted is that NOTHING is written.
+	beforeEach(() => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+	});
+
+	it("writes no clone status at all when the machine is unreachable", async () => {
+		vi.mocked(runner.callRunner).mockRejectedValue(new RunnerUnreachableError("No runner connected — the relay has no live socket for this agent."));
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.updateRepoClone).not.toHaveBeenCalled();
+	});
+
+	it("recognises a disconnect that crossed a step boundary and arrived as a bare message", async () => {
+		// A Workflow serialises the error, so the receiving side gets the text and not the
+		// prototype — which is why `isRunnerUnreachable` matches the marker too (#341). A guard
+		// that only did `instanceof` would let the Pilot's path go on condemning checkouts.
+		vi.mocked(runner.callRunner).mockRejectedValue(new Error("No runner connected — the relay has no live socket for this agent."));
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.updateRepoClone).not.toHaveBeenCalled();
+	});
+
+	it("still records a failure that IS about the repository", async () => {
+		// The other direction, and the reason this is a classification rather than a blanket
+		// "stop writing": a clone that fails because the repository is gone is exactly what
+		// `clone_status` is for, and #405 relies on it.
+		vi.mocked(runner.callRunner).mockRejectedValue(new Error("fatal: repository not found"));
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", { cloneStatus: "error", cloneError: "fatal: repository not found" });
+	});
+
+	it("reports the transport failure to the caller instead of losing it with the write", async () => {
+		// Not writing must not become not saying. The caller used to learn WHY by re-reading
+		// `clone_error` off the row this catch had just written; with no write, that read would
+		// return the last FILESYSTEM verdict — a different failure, possibly days old — and relay
+		// it to the owner as the reason their session did not start.
+		vi.mocked(runner.callRunner).mockRejectedValue(new RunnerUnreachableError("No runner connected — the relay has no live socket for this agent."));
+		vi.mocked(store.getRepo).mockResolvedValue({ ...repo, cloneError: "a stale verdict from Monday" });
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: false });
+		expect(!res.ok && res.startError).toMatch(/no live socket/);
+		expect(!res.ok && res.startError).not.toMatch(/Monday/);
 	});
 });

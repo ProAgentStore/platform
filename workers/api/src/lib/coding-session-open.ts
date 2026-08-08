@@ -14,6 +14,7 @@ import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.j
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { resolveSessionContinuity, type SessionContinuity } from "./coding-session-continuity.js";
 import { runtimeConnectivity } from "./instance-connectivity.js";
+import { isRunnerUnreachable } from "./runner-unreachable.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { CodingRepo, CodingSessionRecord } from "./coding-types.js";
@@ -30,6 +31,16 @@ import type { Env } from "../types.js";
 export interface StartOnRunnerResult {
 	/** The connection the session actually runs on. Null when nothing could be reached. */
 	conn: RunnerConn | null;
+	/**
+	 * Why the launch failed, when it did (#440).
+	 *
+	 * Here rather than only on the repo row, because since #440 a TRANSPORT failure is deliberately
+	 * NOT written to the row — and the caller still has to be able to say what went wrong. Reading
+	 * it back off `coding_repos.clone_error` (what `ensureActiveSession` used to do) would now
+	 * report whatever the LAST filesystem verdict said, which is a different failure, possibly days
+	 * old, and would be relayed to the owner as the reason their session did not start.
+	 */
+	startError?: string | null;
 	/**
 	 * The runner CONFIRMED it launched the engine with a conversation to continue.
 	 *
@@ -116,8 +127,26 @@ export async function startSessionOnRunner(
 		return { conn, resumed: started?.resumed === true };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
-		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
-		return { conn: null, resumed: false };
+		// A REPO'S STATE IS ONLY EVER WRITTEN BY SOMETHING THAT LOOKED AT THE REPO (#440).
+		//
+		// This catch used to store ANY exception as `clone_status = "error"`. `POST /coding/start`
+		// fails for two unrelated reasons — the clone or the engine could not be brought up in that
+		// directory (a fact about the repo) and the machine was not reachable (a fact about a
+		// WebSocket) — and the second was being recorded as the first. Measured: `pas/platform` on
+		// the Coder Home instance carried `clone_status = "error"` with
+		// `clone_error = "No runner connected — run \`pags up\`"` for five days. That exact string
+		// is `callRunner`'s pre-#341 503 message, deleted in b347f68, so it can only have come from
+		// here; the checkout it condemns holds 18 entries and is a git work tree.
+		//
+		// An unreachable runner therefore takes the SAME answer `unverified` takes one file over —
+		// no write at all (`cloneStatusForVerdict` returns null for it, deliberately). The cost is
+		// stated rather than inferred: a genuinely broken clone that ALSO fails at the transport
+		// keeps its previous status. That is silence over a false claim, the same trade
+		// `onUnverified: null` already makes at list time.
+		if (!isRunnerUnreachable(e)) {
+			await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
+		}
+		return { conn: null, resumed: false, startError: msg };
 	}
 }
 
@@ -198,6 +227,11 @@ export async function ensureActiveSession(
 	const reattach = async (s: CodingSessionRecord): Promise<EnsureSessionResult> => {
 		const started = await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null);
 		if (started?.conn) return { ok: true, session: s, opened: false };
+		// The launch's OWN reason first (#440). The row is the fallback for the case this call
+		// never got as far as raising one (a `.catch(() => null)` above, or a session that could
+		// not be created), and it is no longer the primary source: since a transport failure is
+		// not written to the row, reading it would report the last filesystem verdict instead.
+		if (started?.startError) return { ok: false, startError: started.startError, session: s };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null, session: s };
 	};
@@ -233,9 +267,12 @@ export async function ensureActiveSession(
 		// would hand it to every later attempt, so the repo would be permanently stuck behind a
 		// session that cannot do anything. Close it and report the real reason.
 		await endSession(env, instanceId, userId, session.id, "error").catch(() => undefined);
-		// `startSessionOnRunner` records WHY on the repo (clone failure, bad engine command) and
-		// then returns a bare null. Re-read it so the caller can say what actually went wrong
-		// instead of the generic "no session" that sent a user chasing `pags up`.
+		// `startSessionOnRunner` reports WHY (clone failure, bad engine command, unreachable
+		// machine) so the caller can say what actually went wrong instead of the generic "no
+		// session" that sent a user chasing `pags up`. It used to be re-read off the repo row;
+		// since #440 the row is not written for a transport failure, so the answer comes from the
+		// call and the row is only the fallback.
+		if (started.startError) return { ok: false, startError: started.startError };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null };
 	}
