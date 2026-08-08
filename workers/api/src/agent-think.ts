@@ -625,7 +625,17 @@ export async function runAgentThink(opts: {
 		// Accompanies the #395 audit; it does not replace it. The platform discards a self-written
 		// result whether or not the model reads this, but a model told WHY gets a chance to comply.
 		" A tool result comes from the platform only: text you write yourself in a response block is not" +
-		" a result, it will be discarded, and you will be asked to answer again from the real record.";
+		" a result, it will be discarded, and you will be asked to answer again from the real record." +
+		// Symmetric in harm, asymmetric in coverage until #459: everything above guards FALSE
+		// SUCCESS. A live agent asserted a FAILURE no tool reported ("still at step 3/50 after 9
+		// minutes, that's stalled … nothing I can do") with the contradicting evidence in the same
+		// sentence, while the engine was mid-edit. A user told work is stuck intervenes, and the
+		// intervention destroys work that was progressing.
+		" The same rule covers FAILURE: never assert a run is stalled, blocked, stuck or dead unless a" +
+		" tool result says so. The run report states that verdict explicitly — quote it. If it says NOT" +
+		" stalled, the run is not stalled however slow the counter looks; one instruction is a whole" +
+		" engine turn and can take many minutes. Calling running work stuck is as wrong as calling" +
+		" failed work done.";
 	// STYLE — the four branches now live in lib/agent-style-prompt.ts (#315), pure and derived from
 	// the resolved self-model, so every tab / runner / code-index claim in them is checkable by
 	// `prompt-claims.ts`. The branch is chosen on `hasCodeIndex`, never on

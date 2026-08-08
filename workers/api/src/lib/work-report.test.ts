@@ -64,7 +64,40 @@ describe("describeLoopRun", () => {
 		expect(s).toContain("completed");
 		expect(s).toContain("git pull");
 		expect(s).toContain("Already up to date");
-		expect(s).toContain("step 1/10");
+		// "step 1/10" until #459 — it read as a progress bar and is a count of instructions sent.
+		expect(s).toContain("instruction 1 of up to 10");
+		expect(s).not.toMatch(/step \d+\/\d+/);
+	});
+
+	it("#459 — a healthy run states that it is NOT stalled, rather than saying nothing", () => {
+		// The defect was silence. A live agent read "step 3/50 after 9 minutes" as a stuck progress
+		// bar, called a working run stalled, and followed it with "nothing I can do" — with the
+		// contradicting evidence in the same sentence. Liveness was only ever stated negatively, so
+		// the model had to infer the positive case, and it inferred wrong.
+		const s = describeLoopRun(run({ status: "running", finishedAt: null, iteration: 3, maxIterations: 50, startedAt: NOW - 9 * 60_000, lastProgressAt: NOW - 9 * 60_000 }), NOW);
+		expect(s).toContain("NOT stalled");
+		expect(s).not.toContain("STALLED");
+		// The step counter carries how long THIS instruction has been running, so a long step reads
+		// as a long step instead of as no progress.
+		expect(s).toContain("instruction 3 of up to 50 (this one has been running 9m)");
+	});
+
+	it("#459 — the positive claim is about the RUN, never about an engine it cannot see", () => {
+		// `lastProgressAt` is the orchestrator's last iteration, not the engine's last output. The
+		// live `runState` is behind `/capture` on the coding surface, and this module describes loop
+		// runs that may have no engine at all — asserting "engine: working" from this column would
+		// replace a false stall with a false all-clear.
+		const s = describeLoopRun(run({ status: "running", finishedAt: null, lastProgressAt: NOW - 1000 }), NOW);
+		expect(s).not.toMatch(/engine/i);
+	});
+
+	it("#459 — a finished run makes no liveness claim in either direction", () => {
+		for (const status of ["completed", "failed", "cancelled"]) {
+			const s = describeLoopRun(run({ status, lastProgressAt: NOW - STALLED_AFTER_MS - 1 }), NOW);
+			expect(s, status).not.toContain("stalled");
+			expect(s, status).not.toContain("STALLED");
+			expect(s, status).not.toContain("has been running");
+		}
 	});
 
 	it("reports a silent `running` run as STALLED rather than as live work", () => {
@@ -79,6 +112,19 @@ describe("describeLoopRun", () => {
 		const s = describeLoopRun(run({ status: "running", finishedAt: null, lastProgressAt: NOW - 1000 }), NOW);
 		expect(s).toContain("running");
 		expect(s).not.toContain("STALLED");
+	});
+
+	it("#459 — a run one second under the threshold is NOT stalled; one second over it is", () => {
+		// The boundary is the whole claim. `isStalled` is the platform's verdict and the prompt now
+		// tells the agent to quote it, so the report and the predicate must never disagree.
+		const under = run({ status: "running", finishedAt: null, lastProgressAt: NOW - STALLED_AFTER_MS + 1000 });
+		const over = run({ status: "running", finishedAt: null, lastProgressAt: NOW - STALLED_AFTER_MS - 1000 });
+		expect(isStalled(under, NOW)).toBe(false);
+		expect(describeLoopRun(under, NOW)).toContain("NOT stalled");
+		expect(isStalled(over, NOW)).toBe(true);
+		expect(describeLoopRun(over, NOW)).toContain("STALLED");
+		// The stalled branch must not also carry the reassurance — that would be both verdicts at once.
+		expect(describeLoopRun(over, NOW)).not.toContain("NOT stalled");
 	});
 
 	it("falls back to startedAt when a run has never reported progress", () => {

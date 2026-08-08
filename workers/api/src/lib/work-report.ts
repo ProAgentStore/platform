@@ -68,6 +68,27 @@ export function isStalled(run: LoopRunView, now: number): boolean {
 }
 
 /**
+ * Liveness, stated POSITIVELY (#459).
+ *
+ * The report used to say something about liveness only when a run was stalled. A healthy run got
+ * silence, and a model fills silence with an inference — on a live instance it read "step 3/50
+ * after 9 minutes" as a stuck progress bar and told the owner the run was stalled and that there
+ * was "nothing I can do", while the engine was mid-edit patching tests. The owner's next question
+ * was "why is it blocked?", and the intervention that invites — restart the session, kill the
+ * engine — destroys work that was progressing normally.
+ *
+ * `isStalled` is the platform's answer to "is this run stuck?". This makes it say the NEGATIVE
+ * answer out loud, so the agent has a verdict to quote instead of a counter to interpret.
+ *
+ * What it deliberately does NOT claim: that the ENGINE is working. `lastProgressAt` is the
+ * orchestrator's last recorded iteration, not the engine's last output — the live `runState` lives
+ * behind `/capture`, on the coding surface, and `work-report.ts` describes loop runs that may have
+ * no engine at all. Asserting "engine: working" from this column would replace a false stall with
+ * a false all-clear, which is the same defect facing the other way.
+ */
+const NOT_STALLED = `NOT stalled — a run counts as stalled only after ${Math.round(STALLED_AFTER_MS / 60_000)}m with no progress, and this one is inside that window`;
+
+/**
  * One run, in the words the agent should use about it.
  *
  * The outcome is stated FIRST and unhedged. The whole point is that when the user asks "did that
@@ -79,7 +100,14 @@ export function describeLoopRun(run: LoopRunView, now: number = Date.now(), time
 	const status = stalled ? "running but STALLED (no progress reported recently — it may have died)" : run.status;
 	parts.push(`run ${run.runId}: ${status}`);
 	parts.push(`objective: ${run.objective}`);
-	parts.push(`step ${run.iteration}/${run.maxIterations}`);
+	// "step N/M" read as a progress bar and is not one: it counts the instructions the orchestrator
+	// has SENT, and one instruction is a whole engine turn — reading files, editing, running a test
+	// suite — which legitimately takes ten minutes. "step 3/50 after 9 minutes" looks like 6% done;
+	// it was one long healthy step. Naming it an instruction, capping it with "up to", and pairing
+	// it with the elapsed time IN the current step leaves a long step legible as a long step.
+	const inStep = run.status === "running" ? ` (this one has been running ${ago(now - (run.lastProgressAt ?? run.startedAt)).replace(" ago", "")})` : "";
+	parts.push(`instruction ${run.iteration} of up to ${run.maxIterations}${inStep}`);
+	if (!stalled && run.status === "running") parts.push(NOT_STALLED);
 	if (run.stopReason) parts.push(`stopped because: ${run.stopReason}`);
 	if (run.detail) parts.push(`result: ${run.detail}`);
 	parts.push(`started ${ago(now - run.startedAt)}${at(run.startedAt, timeZone)}`);
