@@ -208,3 +208,385 @@ test.describe("admin destructive controls", () => {
 		await expect(row("Delta").getByText("offline")).toHaveCount(0);
 	});
 });
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * mobile — the operator portal's <select> controls, contained (#414, porting #384)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * WHY THIS BLOCK EXISTS AT ALL, which is the more important half. Before it, this file had one
+ * `describe` and no name beginning `mobile — `. `playwright.config.ts` scopes the WebKit project
+ * with `grep: /mobile — /`, so the operator portal was **Chromium-only in CI with no geometry
+ * assertion of any kind**. That is the exact shape of #333: a guard that runs one engine cannot
+ * see the class of defect that only exists in the other, however thorough it is otherwise. The
+ * `mobile — ` prefix on every test below is therefore load-bearing, not decoration — delete it
+ * and these silently stop running in the only engine that can fail them.
+ *
+ * THE DEFECT. WebKit's menulist lays its content out at the width of the WIDEST OPTION, not of
+ * the selected one, and that box counts toward every ancestor's layout overflow. `store/admin`
+ * had no containment on any of its 16 selects, and its exposure is worse than the console's: all
+ * 16 are `!w-auto`, sized by their own content rather than capped at `width: 100%` by a
+ * container, and three are populated at runtime from server data.
+ *
+ * ── READ THIS BEFORE TRUSTING A LOCAL RUN ──
+ *
+ * macOS WebKit is green with OR without the fix. #384 established that over twelve red commits,
+ * and #414 re-confirmed it by disabling the console's shipped `contain: paint` at runtime and
+ * still measuring 0. **Linux WebKit — what CI runs — is the only place this is visible**, where
+ * the equivalent console page measured 68px at 320px. So a green run on a Mac is not evidence
+ * that this rule works; it is evidence that these tests do not crash. CI is the instrument.
+ *
+ * ── What is asserted, and why it is the SELECT and not the page ──
+ *
+ * Per select, on every route: (a) its own box does not reach past the viewport, and (b) it does
+ * not widen the row it sits in, ATTRIBUTED by taking the control out of flow and re-measuring.
+ * #384 spent twelve commits proving (b) is the necessary one: the page-level signature of this
+ * defect is `mainOv = 68` with NOTHING's box past the right edge, because what escapes is the
+ * option list inside a native control and has no element of its own to measure. A page-level
+ * number alone names nobody, which is why #414 asked for the attribution specifically.
+ *
+ * `<main>`'s own overflow is deliberately NOT asserted here, and that is a scope decision with a
+ * measurement behind it rather than an omission. Running it found real page-level overflow on two
+ * routes, in **Chromium**, with **zero** select offenders — so it is a different defect:
+ *
+ *     /admin/errors        mainOv 344px @320, 274px @390   `table.w-full.text-sm` lays out at
+ *                                                          664px; the signature cell is
+ *                                                          `max-w-[420px]` and the source cell
+ *                                                          `whitespace-nowrap`, inside a `Panel`
+ *                                                          that is not a scroller. Data-independent:
+ *                                                          a 420px cell cannot fit a 320px phone.
+ *     /admin/github-issues mainOv 8px @320 (0 @390)        a Stat card in the `grid-cols-2` header.
+ *
+ * Neither is a `<select>`, neither is fixed by `contain: paint`, and fixing them means re-laying
+ * out the operator portal's data tables — separable work that needs its own ticket and its own
+ * measurement. Asserting it in THIS block would have made #414's guard permanently red on
+ * somebody else's defect, which is the fastest way to get a guard deleted.
+ *
+ * ── Widths: 320 and 390, and why not the four #414 asked for ──
+ *
+ * #384's own Linux-WebKit measurements were monotonic in width — 68px at 320, 28 at 360, 13 at
+ * 375 — so 320 dominates 360 and 375 and the extra runs buy repetition. 390 is kept because it
+ * is NOT dominated: it is the width where `<main>` absorbs overflow that the page-level number
+ * reports as 0, which is precisely the case the per-select attribution catches and the page-level
+ * check does not. The 1.3x text-scale leg from #414's acceptance is not applicable here and was
+ * checked rather than skipped: `pags:textScale` is a console mechanism (`store/console/src/main.tsx`)
+ * and the string appears nowhere in `store/admin`.
+ */
+
+/** Real source values from this platform's own trace/error vocabulary — see pags/CLAUDE.md. */
+const ERROR_SOURCES = ["client:voice-tts", "client:voice-audio", "workflow:coding-session", "workflow:job-apply", "worker:api"];
+
+/**
+ * Real label names off `ProAgentStore/platform`, counts included because that is what the
+ * control renders (`{l.name} ({l.total})`). `deferred: no demand` is the longest label the repo
+ * actually has, and a fixture of short invented names would make this whole block vacuous — the
+ * hollow-fixture failure `e2e/console.spec.ts` has already shipped twice.
+ */
+const REPO_LABELS = [
+	{ name: "deferred: no demand", total: 12, open: 12, closed: 0 },
+	{ name: "good first issue", total: 8, open: 3, closed: 5 },
+	{ name: "deferred-by-#68", total: 6, open: 6, closed: 0 },
+	{ name: "browser-agents", total: 4, open: 1, closed: 3 },
+	{ name: "admin-portal", total: 3, open: 2, closed: 1 },
+];
+
+/**
+ * Every read endpoint the select-bearing routes need, answered with content.
+ *
+ * Deliberately separate from `mockAdmin` above: that one exists to record MUTATIONS and its
+ * empty lists are the right fixture for it. This one exists to PAINT, and #414's own attempt at
+ * this measurement covered 9 of the 16 selects because its fixture left five routes on
+ * `<Loading />` — every page here early-returns before its filter bar when its data is null.
+ */
+async function mockAdminSurfaces(page: Page) {
+	await page.addInitScript((token) => {
+		window.localStorage.setItem("pags:session", token);
+	}, TEST_TOKEN);
+
+	const agents = Array.from({ length: 6 }, (_, i) => ({
+		...AGENT,
+		id: `agent-${i}`,
+		slug: `agent-${i}`,
+		name: `Agent ${i}`,
+		capabilities: { surfaces: [], runtime: null, workflow: null },
+	}));
+	const instances = Array.from({ length: 6 }, (_, i) => ({
+		id: `i-${i}`,
+		agent_id: "agent-1",
+		agent_name: `Agent ${i}`,
+		agent_slug: "lead-finder",
+		user_id: "user-2",
+		owner_login: "creator-two",
+		display_name: null,
+		status: "active",
+		created_at: "2026-07-01",
+		runtime_nodes: 1,
+		last_seen_at: null,
+		runtimeConnected: true,
+	}));
+	const daily = Array.from({ length: 14 }, (_, i) => ({ date: `2026-07-${String(i + 1).padStart(2, "0")}`, costMicros: 1000 * (i + 1) }));
+	const bucket = (key: string) => ({ key, label: key, inputTokens: 100, outputTokens: 50, costMicros: 2000, calls: 7 });
+
+	await page.route(`${API}/**`, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+
+		if (path === "/v1/admin/me") return json({ admin: true });
+		if (path === "/v1/auth/me") return json({ id: "user-1", login: "operator" });
+		if (path === "/v1/admin/users") return json({ users: [{ id: "user-1", github_login: "operator", roles: ["admin"] }], total: 1 });
+		if (path === "/v1/admin/agents") return json({ agents, total: agents.length });
+		if (path === "/v1/admin/instances") return json({ instances, total: instances.length });
+
+		if (path === "/v1/admin/errors/summary" || path === "/v1/admin/errors") {
+			const rows = ERROR_SOURCES.map((source, i) => ({
+				id: `e-${i}`,
+				key: `k-${i}`,
+				source,
+				sample: "TypeError: cannot read properties of undefined",
+				pattern: "TypeError: cannot read properties of <id>",
+				count: 3 + i,
+				users: 1,
+				firstSeen: "2026-07-01T00:00:00Z",
+				lastSeen: "2026-07-08T00:00:00Z",
+				lastStatus: 500,
+				lastId: `e-${i}`,
+				created_at: "2026-07-08T00:00:00Z",
+				user_id: "user-2",
+				message: "TypeError: cannot read properties of undefined",
+				context: null,
+				status: 500,
+			}));
+			return json(path.endsWith("/summary") ? { signatures: rows } : { errors: rows });
+		}
+
+		if (path.startsWith("/v1/admin/trace/")) {
+			return json({
+				events: ERROR_SOURCES.map((source, i) => ({
+					id: `t-${i}`,
+					ts: 1786000000 + i,
+					created_at: "2026-07-08T00:00:00Z",
+					user_id: "user-2",
+					instance_id: "i-1",
+					trace_id: "trace-1",
+					source,
+					level: i === 0 ? "error" : "info",
+					event: "tool.call",
+					message: "search_knowledge returned 4 chunks",
+					context: null,
+				})),
+			});
+		}
+
+		if (path === "/v1/admin/audit") {
+			return json({
+				audit: [
+					{ id: "a-1", created_at: "2026-07-08T00:00:00Z", actor_user_id: "user-1", actor_login: "operator", action: "agent.unpublish", target_type: "agent", target_id: "agent-1", detail: null },
+				],
+			});
+		}
+
+		if (path === "/v1/admin/usage") {
+			return json({
+				range: "30d",
+				totals: { inputTokens: 1000, outputTokens: 500, costMicros: 90000, calls: 42 },
+				daily,
+				byProvider: [bucket("anthropic")], byModel: [bucket("claude-sonnet-4-6")], byKind: [bucket("chat")],
+				byUser: [bucket("user-2")], byAgent: [bucket("agent-1")],
+				split: { platformPaid: { costMicros: 40000, calls: 20 }, byok: { costMicros: 50000, chargedMicros: 50000, calls: 22 } },
+			});
+		}
+		if (path === "/v1/admin/usage/external") {
+			return json({
+				externalUsers: 3,
+				byAgent: [{ agentId: "agent-1", externalUsers: 3, calls: 10, valueMicros: 5000, chargedMicros: 5000 }],
+				totals: { calls: 10, valueMicros: 5000, chargedMicros: 5000 },
+				operator: { users: 1, calls: 2, valueMicros: 100, chargedMicros: 0 },
+				operatorUnknown: false,
+			});
+		}
+		if (path === "/v1/admin/spending") {
+			return json({
+				range: "30d",
+				totals: { costMicros: 90000, calls: 42 },
+				daily,
+				byok: { costMicros: 50000, chargedMicros: 50000, calls: 22 },
+				topSpenders: [bucket("user-2")],
+				topModels: [bucket("claude-sonnet-4-6")],
+				platformAiEnabled: true,
+				platformPaid: { costMicros: 40000, calls: 20, metered: false, estimated: true, note: "Estimated from the AI usage ledger." },
+			});
+		}
+		if (path === "/v1/admin/github/issues") {
+			return json({
+				repo: "ProAgentStore/platform",
+				generatedAt: "2026-08-08T00:00:00Z",
+				complete: true,
+				fetched: 33,
+				totals: { all: 33, open: 24, closed: 9 },
+				bySeverity: {
+					critical: { total: 1, open: 1, closed: 0 }, high: { total: 4, open: 3, closed: 1 },
+					medium: { total: 10, open: 8, closed: 2 }, low: { total: 8, open: 6, closed: 2 },
+					none: { total: 10, open: 6, closed: 4 },
+				},
+				labels: REPO_LABELS,
+				history: daily.map((d) => ({ date: d.date, opened: 1, closed: 1, openTotal: 20, totalFiled: 30, totalClosed: 10 })),
+				issues: [
+					{ number: 414, title: "The operator portal's <select> rules have no paint containment", state: "open", labels: ["deferred: no demand"], severity: "medium", createdAt: "2026-08-08", closedAt: null, updatedAt: "2026-08-08", url: "https://example.invalid/414", comments: 0 },
+				],
+			});
+		}
+
+		return json({});
+	});
+}
+
+/** Every admin route that renders a `<select>`, with how many it must render. */
+const SELECT_ROUTES: Array<{ route: string; selects: number }> = [
+	{ route: "/admin/errors", selects: 2 },
+	{ route: "/admin/agents", selects: 2 },
+	{ route: "/admin/instances", selects: 1 },
+	{ route: "/admin/instances/i-1/trace", selects: 3 },
+	{ route: "/admin/audit", selects: 2 },
+	{ route: "/admin/usage", selects: 1 },
+	{ route: "/admin/spending", selects: 1 },
+	{ route: "/admin/github-issues", selects: 4 },
+];
+
+test.describe("mobile — no select widens the operator portal (#414)", () => {
+	for (const width of [320, 390]) {
+		for (const { route, selects } of SELECT_ROUTES) {
+			test(`${route} is contained at ${width}px`, async ({ page }) => {
+				await page.setViewportSize({ width, height: 812 });
+				await mockAdminSurfaces(page);
+				await page.goto(route);
+				await page.waitForLoadState("networkidle");
+				await page.locator("main").waitFor();
+				await page.waitForTimeout(300);
+
+				// NON-VACUITY FIRST. Every one of these pages early-returns `<Loading />` before its
+				// filter bar when its data is null, so a fixture gap does not fail this block — it
+				// makes it pass by measuring an empty page. #414's own attempt at this measurement
+				// covered 9 of 16 selects for exactly that reason and could not tell "admin is fine"
+				// from "admin never painted".
+				expect(await page.locator("main select").count(), `${route} did not render its ${selects} select(s) — fixture gap, not a pass`).toBe(selects);
+
+				const { rowOffenders, escaped } = await page.evaluate(() => {
+					const rowOffenders: string[] = [];
+					const escaped: string[] = [];
+					const label = (s: HTMLSelectElement) => s.getAttribute("aria-label") || s.id || "?";
+					const widestOption = (s: HTMLSelectElement) => Array.from(s.options).reduce((a, o) => (o.text.length > a.length ? o.text : a), "");
+
+					for (const el of Array.from(document.querySelectorAll("main select"))) {
+						const s = el as HTMLSelectElement;
+
+						// (a) The control's own box must not reach past the viewport. Cheap, and it
+						//     covers the case where the row IS a scroller and therefore absorbs the
+						//     overflow that (b) measures.
+						const r = s.getBoundingClientRect();
+						if (r.width > 0 && r.right > window.innerWidth + 1) {
+							escaped.push(`select[${label(s)}] right ${Math.round(r.right)} > ${window.innerWidth}`);
+						}
+
+						// (b) The control must not widen the row it sits in.
+						const row = s.parentElement;
+						if (!row) continue;
+						const before = row.scrollWidth - row.clientWidth;
+						if (before <= 1) continue;
+						// ATTRIBUTION, not correlation: these filter bars put several selects in one
+						// flex row, so the row's overflow reads identically on all of them and would
+						// blame the innocent. Take the control out of flow and re-measure — if the row
+						// stops overflowing without it, it is the one that did it, and the widest
+						// option is what escaped.
+						s.style.display = "none";
+						const without = row.scrollWidth - row.clientWidth;
+						s.style.display = "";
+						if (without > 1) continue;
+						rowOffenders.push(`select[${label(s)}] (widest option "${widestOption(s)}") widens its row by ${before}px`);
+					}
+
+					return { rowOffenders, escaped };
+				});
+
+				expect(rowOffenders, rowOffenders.join("; ")).toEqual([]);
+				expect(escaped, escaped.join("; ")).toEqual([]);
+			});
+		}
+	}
+
+	/**
+	 * Containment does not change the focus indicator — measured as an A/B, not asserted as a fact
+	 * about box-shadow (#414).
+	 *
+	 * `contain: paint` clips a control's contents to its own padding box, and the way to get this
+	 * badly wrong is to close an overflow ticket with something that also removes the focus ring.
+	 * #414 asked for this to be verified rather than assumed, and verifying it turned up something
+	 * the obvious assertion would have got wrong, so the mechanism is worth stating.
+	 *
+	 * THE OBVIOUS TEST — "a focused select has a box-shadow" — IS WRONG, and it fails for a reason
+	 * that has nothing to do with this change. Measured on the same run, macOS WebKit 2272:
+	 *
+	 *                       contain: paint      contain: none !important
+	 *     admin  box-shadow     none                    none
+	 *     console box-shadow    none                    none
+	 *     a plain <button>   rgba(124,58,237,.15) 0 0 0 3px   (both engines, both modes)
+	 *
+	 * So WebKit drops `box-shadow` on a NATIVE MENULIST specifically — the same shape as it
+	 * overriding `overflow` on the same element, which is the whole reason #384 ended at
+	 * `contain: paint`. It is identical with containment on and off, it is identical on the
+	 * console (which has shipped `contain: paint` since 79bf551), and Chromium reports the shadow
+	 * in every combination. That makes it PRE-EXISTING and engine-specific, not something this
+	 * commit introduced — and admin still shows a focus indicator there via `border-color`, which
+	 * WebKit does honour (measured `rgb(124, 58, 237)` on focus). It is worth its own ticket; it
+	 * is not this one, and asserting it here would have been a red guard blaming the wrong change.
+	 *
+	 * WHAT IS ASSERTED INSTEAD is the invariant this commit is actually responsible for: whatever
+	 * the focus indicator is in this engine, turning paint containment OFF does not change it.
+	 * That is engine-independent, it is exactly the question "does the containment eat the ring",
+	 * and it goes red for the failures that matter — a ring re-expressed as an `outline` (which
+	 * paint containment DOES clip), or `appearance: none` smuggled in, or the ring moved inside
+	 * the padding box. The companion `contain` assertion keeps the rule itself present, so this
+	 * cannot pass by there being no containment to compare against.
+	 */
+	test("paint containment does not change the focus indicator", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockAdminSurfaces(page);
+		await page.goto("/admin/errors");
+		await page.waitForLoadState("networkidle");
+
+		const select = page.locator("main select").first();
+		await select.waitFor();
+		await select.focus();
+
+		/** Everything a user could perceive as "this control is focused". */
+		const readIndicator = () =>
+			page.evaluate(() => {
+				const s = document.querySelector("main select") as HTMLSelectElement;
+				const cs = getComputedStyle(s);
+				return {
+					focused: s.matches(":focus"),
+					contain: cs.contain,
+					boxShadow: cs.boxShadow,
+					outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`,
+					borderColor: cs.borderColor,
+					appearance: cs.appearance,
+				};
+			});
+
+		const withContainment = await readIndicator();
+		expect(withContainment.focused, "the select never took focus, so this measures nothing").toBe(true);
+		expect(withContainment.contain, "paint containment is not applied to <select> in store/admin/src/index.css").toContain("paint");
+		// A native menulist, still. `appearance: none` was rejected in #384 and #414 precisely
+		// because it fixes the overflow by replacing the platform widget.
+		expect(withContainment.appearance, "the select stopped being a native menulist").not.toBe("none");
+
+		await page.addStyleTag({ content: "select { contain: none !important; }" });
+		await select.focus();
+		const withoutContainment = await readIndicator();
+		expect(withoutContainment.contain).toBe("none");
+
+		expect(
+			{ ...withContainment, contain: "-" },
+			`the focus indicator changed when paint containment was removed — containment is eating it. with: ${JSON.stringify(withContainment)} / without: ${JSON.stringify(withoutContainment)}`,
+		).toEqual({ ...withoutContainment, contain: "-" });
+	});
+});

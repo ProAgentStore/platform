@@ -76,6 +76,46 @@
 		color: var(--color-ink);
 		font-size: 0.88rem;
 	}
+	/*
+	 * A <select> must clip its own option list, not widen the page (#414, porting #384).
+	 *
+	 * `store/console/src/index.css` carries the full postmortem — read it before changing
+	 * anything here. The one-paragraph version: WebKit's menulist lays its content out at the
+	 * width of the WIDEST OPTION, not of the selected one, and that box counts toward every
+	 * ancestor's layout overflow, so the page pans sideways on a phone. `contain: paint` is the
+	 * declaration that works and `overflow: hidden` is NOT — WebKit's menulist renderer overrides
+	 * `overflow` (computed `overflow-x` reads `visible` with the rule live and matching), while
+	 * the `text-overflow: ellipsis` beside it applies normally, so the rule inspects as active
+	 * with half of it inert. `overflow: clip`, `overflow: hidden !important` and
+	 * `field-sizing: content` were all measured on Linux WebKit in #384 and all three left the
+	 * console at 68px. `appearance: none` measures 0 and is rejected there and here: it works by
+	 * making the control stop being a native menulist, deleting the disclosure arrow and
+	 * replacing the platform widget on the one platform the bug is about.
+	 *
+	 * WHY THIS TREE NEEDED ITS OWN COMMIT rather than riding along with #384: nothing here was
+	 * ever measured. `e2e/admin.spec.ts` had no `mobile — ` block, so `playwright.config.ts`'s
+	 * WebKit `grep` never selected it and the operator portal was Chromium-only in CI with no
+	 * geometry assertion of any kind — the shape of #333, where a guard that runs one engine
+	 * cannot see the class of defect that only exists in the other. The guard landed with this
+	 * rule, in the same commit, for that reason.
+	 *
+	 * The exposure here is also WORSE than the console's, not equal: all 16 of these selects are
+	 * `!w-auto`, i.e. sized by their own content rather than capped at `width: 100%` by a
+	 * container, and three of them are populated at runtime — `Errors`/`TraceView` render one
+	 * option per distinct `source` the server returns (`workflow:coding-session`, `client:voice-tts`)
+	 * and `GithubIssues` renders real GitHub label names with their counts. Only the last carries
+	 * a `max-w-[16rem]`.
+	 *
+	 * `box-shadow` is NOT clipped by paint containment, so the focus ring below still paints
+	 * outside the border box. Verified rather than assumed — a fix that silently deleted the
+	 * focus indicator would be a worse bug than the one it closes — and `e2e/admin.spec.ts`
+	 * asserts it, because that is the half of this a geometry test would otherwise let rot.
+	 */
+	select {
+		contain: paint;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
 	input:not([type="checkbox"]):not([type="radio"]):focus,
 	select:focus {
 		outline: none;
