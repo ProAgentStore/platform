@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { requireSession } from "./login.js";
+import { maybeClaimMachineNames } from "../machine-claim.js";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 
@@ -101,6 +102,20 @@ export const upCommand = new Command("up")
 		for (const inst of state.instances) {
 			writeLine(`    ${inst.name} (${inst.id.slice(0, 8)}...)`);
 		}
+
+		// Before the runner registers: offer the account's UNCLAIMED machine names (#460), so a
+		// laptop the network has renamed can say so and reconnect the pins stranded on its old
+		// names. Must happen here, ahead of the spawn — the child reads `machine.json` when it
+		// registers, and that register is what stamps the claim onto the rows.
+		//
+		// Wrapped, gated and time-bounded: `pags up` is the entry point for every runtime agent, so
+		// nothing about a convenience prompt may keep it from starting. `--headless`, a non-TTY
+		// stdin, `CI` and `PAGS_NO_PROMPT` return before any network call is made.
+		await maybeClaimMachineNames({
+			token: session.token,
+			apiBase: API_BASE,
+			headless: opts.headless,
+		}).catch(() => undefined);
 
 		state.activeInstance =
 			instances.length === 1

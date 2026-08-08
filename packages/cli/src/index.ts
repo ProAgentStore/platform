@@ -8,6 +8,7 @@ import { Command } from "commander";
 import { checkCommand } from "./commands/check.js";
 import { initCommand } from "./commands/init.js";
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/login.js";
+import { machinesCommand } from "./commands/machines.js";
 import { mcpCommand } from "./commands/mcp.js";
 import { publishCommand } from "./commands/publish.js";
 import { runnerCommand } from "./commands/runner.js";
@@ -35,6 +36,7 @@ program.addCommand(initCommand);
 program.addCommand(checkCommand);
 program.addCommand(publishCommand);
 program.addCommand(runnerCommand);
+program.addCommand(machinesCommand);
 program.addCommand(mcpCommand);
 
 try {
