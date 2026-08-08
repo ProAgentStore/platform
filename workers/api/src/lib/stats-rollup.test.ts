@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildSeries, completedDay, enumerateDays, insertDailyOnce, trendCards } from "./stats-rollup.js";
+import { findCompoundSelectOverruns } from "./sql.js";
+import {
+	activeInstancesForDay,
+	activitySourceStatements,
+	buildSeries,
+	completedDay,
+	enumerateDays,
+	insertDailyOnce,
+	trendCards,
+} from "./stats-rollup.js";
 import type { StatsCard } from "./stats-schema.js";
 import type { Env } from "../types.js";
 
@@ -32,6 +41,111 @@ function fakeStatsDb() {
 	} as unknown as Env;
 	return { env, rows };
 }
+
+/**
+ * A D1 stub for the candidate read that answers PER TABLE and records what it was asked.
+ *
+ * The shape of #423's failure is the reason this exists: the candidate query had never executed,
+ * anywhere, and the suite was green because nothing in it ever reached the query. A stub that
+ * accepts any SQL and returns a fixed list would reproduce exactly that hole, so this one keys its
+ * answer off the table named in the statement — a wrong table name returns nothing and the
+ * assertion fails.
+ */
+function fakeActivityDb(byTable: Record<string, Array<{ instance_id: string; user_id: string }>>) {
+	const asked: Array<{ sql: string; binds: unknown[] }> = [];
+	const env = {
+		DB: {
+			prepare: (sql: string) => ({
+				bind: (...binds: unknown[]) => ({
+					all: async () => {
+						asked.push({ sql, binds });
+						const table = /FROM (\w+)/.exec(sql)?.[1] ?? "";
+						const limit = Number(binds[3]) || 50;
+						return { results: (byTable[table] ?? []).slice(0, limit) };
+					},
+				}),
+			}),
+		},
+	} as unknown as Env;
+	return { env, asked };
+}
+
+/**
+ * The candidate read — the query that failed on every tick for 29 hours (#423).
+ *
+ * `stats-rollup.test.ts` covered `buildSeries`, `completedDay`, `enumerateDays`, `insertDailyOnce`
+ * and `trendCards` and NOT this, which is precisely how a query that cannot parse shipped green.
+ */
+describe("activeInstancesForDay", () => {
+	const DAY = "2026-08-06";
+
+	it("issues one statement per source, none of them a compound SELECT", () => {
+		// THE regression. Six arms of a `UNION` exceeded D1's five-term ceiling and the statement
+		// never parsed. Asserting "no overrun" would also pass if someone trimmed to five arms, so
+		// assert the structural property instead: no statement unions anything at all.
+		const statements = activitySourceStatements();
+		expect(statements.length).toBeGreaterThanOrEqual(6);
+		for (const sql of statements) {
+			expect(sql, sql).not.toMatch(/\bUNION\b/i);
+			expect(findCompoundSelectOverruns(`const q = \`${sql}\`;`), sql).toEqual([]);
+		}
+	});
+
+	it("every source is owner-scoped, day-bounded and skips days already rolled up", () => {
+		// Dropping any one of these is silent: an unscoped read is cross-tenant, an unbounded one
+		// rolls up the wrong day, and a missing NOT EXISTS re-does work every tick forever.
+		for (const sql of activitySourceStatements()) {
+			expect(sql, sql).toContain("user_id IS NOT NULL");
+			expect(sql, sql).toContain("SELECT DISTINCT instance_id, user_id");
+			expect(sql, sql).toMatch(/>= \?1 AND \w+ < \?2/);
+			expect(sql, sql).toContain("NOT EXISTS");
+			expect(sql, sql).toContain("d.day = ?3");
+		}
+	});
+
+	it("merges the sources into a SET — an instance seen in three of them is one candidate", () => {
+		const both = { instance_id: "inst-1", user_id: "user-1" };
+		const { env } = fakeActivityDb({
+			ai_usage: [both, { instance_id: "inst-2", user_id: "user-1" }],
+			agent_events: [both],
+			agent_loop_runs: [both],
+		});
+		return activeInstancesForDay(env, DAY).then((rows) => {
+			expect(rows).toHaveLength(2);
+			expect(rows.map((r) => r.instance_id).sort()).toEqual(["inst-1", "inst-2"]);
+		});
+	});
+
+	it("applies the batch cap to the MERGED set, not per source", () => {
+		// The trap called out in #423: with a per-branch cap deciding the batch, six sources seeing
+		// the same instances shrink a 50-instance tick to a handful and the backlog never drains.
+		const rows = (n: number, from: number) =>
+			Array.from({ length: n }, (_, i) => ({ instance_id: `inst-${from + i}`, user_id: "user-1" }));
+		const { env } = fakeActivityDb({ ai_usage: rows(3, 0), agent_events: rows(3, 3), pipeline_runs: rows(3, 6) });
+		return activeInstancesForDay(env, DAY, 9).then((r) => expect(r).toHaveLength(9));
+	});
+
+	it("binds text bounds to text columns and epoch-ms bounds to ms columns", () => {
+		// The two representations are not interchangeable: an ISO string compared against `ts` is
+		// silently never in range, so a source would report no activity forever rather than fail.
+		const { env, asked } = fakeActivityDb({});
+		return activeInstancesForDay(env, DAY).then(() => {
+			const byTable = new Map(asked.map((a) => [/FROM (\w+)/.exec(a.sql)?.[1] ?? "", a.binds]));
+			expect(byTable.get("ai_usage")?.[0]).toBe("2026-08-06 00:00:00");
+			expect(byTable.get("ai_usage")?.[1]).toBe("2026-08-07 00:00:00");
+			expect(byTable.get("agent_events")?.[0]).toBe(Date.parse("2026-08-06T00:00:00.000Z"));
+			expect(byTable.get("agent_events")?.[1]).toBe(Date.parse("2026-08-07T00:00:00.000Z"));
+			for (const binds of byTable.values()) expect(binds[2]).toBe(DAY);
+		});
+	});
+
+	it("drops a row missing an instance or an owner rather than rolling up an instance of 'null'", () => {
+		const { env } = fakeActivityDb({
+			ai_usage: [{ instance_id: "", user_id: "user-1" }, { instance_id: "inst-1", user_id: "" }, { instance_id: "inst-2", user_id: "user-1" }],
+		});
+		return activeInstancesForDay(env, DAY).then((rows) => expect(rows).toEqual([{ instance_id: "inst-2", user_id: "user-1" }]));
+	});
+});
 
 describe("completedDay", () => {
 	it("is YESTERDAY in UTC — today is deliberately never rolled up", () => {

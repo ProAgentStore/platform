@@ -56,49 +56,107 @@ interface ActiveRow {
 }
 
 /**
+ * One table an instance's activity can show up in, and how to bound that table to a day.
+ *
+ * ## Why this is a table and not one query (#423)
+ *
+ * These six were arms of a single `UNION` until #423. **D1 caps a compound SELECT at FIVE terms** —
+ * measured against the production database on 2026-08-08: five arms execute, six raise
+ * `D1_ERROR: too many terms in compound SELECT: SQLITE_ERROR`. That is a PARSE failure, so the
+ * statement never ran once. It was the rollup's first query, so `runStatsRollup` threw before
+ * writing anything, on every cron tick, from the deploy that shipped it (2026-08-06 23:21 UTC) —
+ * 1780 identical rows in 29 hours, ~97% of the entire error log.
+ *
+ * Six single-table reads have no such ceiling, so a seventh source is a line in this array rather
+ * than an outage. Trimming to five arms was rejected for exactly that reason: it puts the next
+ * person one commit from the same failure, and the failure is silent.
+ *
+ * `SELECT DISTINCT` is what `UNION` used to provide. Without it a busy day's `ai_usage` returns a
+ * row per model call rather than a row per instance, and the merge below would run over thousands
+ * of duplicates instead of a handful of ids.
+ */
+interface ActivitySource {
+	/** The table. A frozen constant — never a runtime value; see the guard in `sql.test.ts`. */
+	readonly table: string;
+	/** The column bounded to the day. */
+	readonly column: string;
+	/**
+	 * How that column stores time. `text` compares against midnight-aligned `YYYY-MM-DD HH:MM:SS`
+	 * so it is correct against BOTH `datetime('now')` output and ISO text; `ms` against epoch
+	 * milliseconds. See the header of `stats-sources.ts`.
+	 */
+	readonly time: "text" | "ms";
+	/**
+	 * `instance_id` is nullable on this table — some call paths know only the agent. Without the
+	 * explicit IS NOT NULL a NULL group is selected and every card is then computed against an
+	 * instance id of "null".
+	 */
+	readonly nullableInstance?: boolean;
+}
+
+/** The tables an "active instance" can be observed in. All six existed already; none was added for
+ *  the rollup, which is why the shapes differ. */
+const ACTIVITY_SOURCES: readonly ActivitySource[] = [
+	{ table: "ai_usage", column: "created_at", time: "text", nullableInstance: true },
+	{ table: "agent_trigger_events", column: "created_at", time: "text" },
+	{ table: "instance_runtime_tasks", column: "updated_at", time: "text" },
+	{ table: "agent_events", column: "ts", time: "ms", nullableInstance: true },
+	{ table: "agent_loop_runs", column: "started_at", time: "ms" },
+	{ table: "pipeline_runs", column: "started_at", time: "ms" },
+];
+
+/**
+ * One source's candidate read. `?1`/`?2` are the day bounds in that source's own representation,
+ * `?3` the day, `?4` the row cap.
+ *
+ * Exported so a test can assert the generated SQL against every source without a live D1 — the
+ * previous shape shipped with six branches nobody had executed, and a wrong column name would have
+ * been just as invisible as the compound-SELECT ceiling was.
+ */
+export function activitySourceSql(s: ActivitySource): string {
+	const notNull = s.nullableInstance ? " AND instance_id IS NOT NULL" : "";
+	return `SELECT DISTINCT instance_id, user_id FROM ${s.table}
+	         WHERE user_id IS NOT NULL${notNull}
+	           AND ${s.column} >= ?1 AND ${s.column} < ?2
+	           AND NOT EXISTS (SELECT 1 FROM agent_stats_daily d
+	                            WHERE d.instance_id = ${s.table}.instance_id AND d.day = ?3)
+	         LIMIT ?4`;
+}
+
+/** The statements `activeInstancesForDay` issues, for the test that proves each one parses. */
+export const activitySourceStatements = (): string[] => ACTIVITY_SOURCES.map(activitySourceSql);
+
+/**
  * Instances that did something on `day` and have no rollup row for it yet.
  *
- * The UNION is over tables that already exist for their own reasons — no activity table was added
- * for this. `ai_usage.instance_id` is nullable (some call paths know only the agent), hence the
- * explicit IS NOT NULL; without it a NULL group would be selected and every card would then be
- * computed against an instance id of "null".
- *
- * Text bounds are midnight-aligned so they compare correctly against BOTH `datetime('now')` and ISO
- * text — see the header of `stats-sources.ts`.
+ * The six reads are issued CONCURRENTLY and merged here, keyed on `instance_id|user_id` — the set
+ * semantics the `UNION` used to give. `limit` is applied to the MERGED set, not per branch: a
+ * per-branch cap that also decided the batch would silently shrink it to a fraction of
+ * `ROLLUP_BATCH` whenever several sources saw the same instance. The per-branch `LIMIT` that
+ * remains is only a bound on how much one source can return; it cannot lose an instance
+ * permanently, because the next tick re-reads and anything already rolled up drops out of the
+ * NOT EXISTS.
  */
 export async function activeInstancesForDay(env: Env, day: string, limit = ROLLUP_BATCH): Promise<ActiveRow[]> {
 	const startText = `${day} 00:00:00`;
 	const endText = `${dayUtc(Date.parse(`${day}T00:00:00.000Z`) + 86_400_000)} 00:00:00`;
 	const startMs = Date.parse(`${day}T00:00:00.000Z`);
 	const endMs = startMs + 86_400_000;
-	const { results } = await env.DB.prepare(
-		`WITH active AS (
-		     SELECT instance_id, user_id FROM ai_usage
-		      WHERE instance_id IS NOT NULL AND created_at >= ?1 AND created_at < ?2
-		     UNION
-		     SELECT instance_id, user_id FROM agent_trigger_events
-		      WHERE created_at >= ?1 AND created_at < ?2
-		     UNION
-		     SELECT instance_id, user_id FROM instance_runtime_tasks
-		      WHERE updated_at >= ?1 AND updated_at < ?2
-		     UNION
-		     SELECT instance_id, user_id FROM agent_events
-		      WHERE instance_id IS NOT NULL AND ts >= ?3 AND ts < ?4
-		     UNION
-		     SELECT instance_id, user_id FROM agent_loop_runs
-		      WHERE started_at >= ?3 AND started_at < ?4
-		     UNION
-		     SELECT instance_id, user_id FROM pipeline_runs
-		      WHERE started_at >= ?3 AND started_at < ?4
-		   )
-		   SELECT instance_id, user_id FROM active a
-		    WHERE a.user_id IS NOT NULL
-		      AND NOT EXISTS (SELECT 1 FROM agent_stats_daily s WHERE s.instance_id = a.instance_id AND s.day = ?5)
-		    LIMIT ?6`,
-	)
-		.bind(startText, endText, startMs, endMs, day, limit)
-		.all<ActiveRow>();
-	return results ?? [];
+	const perSource = await Promise.all(
+		ACTIVITY_SOURCES.map(async (s) => {
+			const [from, to] = s.time === "text" ? [startText, endText] : [startMs, endMs];
+			const { results } = await env.DB.prepare(activitySourceSql(s)).bind(from, to, day, limit).all<ActiveRow>();
+			return results ?? [];
+		}),
+	);
+	const merged = new Map<string, ActiveRow>();
+	for (const rows of perSource) {
+		for (const r of rows) {
+			if (!r.instance_id || !r.user_id) continue;
+			merged.set(`${r.instance_id}|${r.user_id}`, r);
+		}
+	}
+	return [...merged.values()].slice(0, limit);
 }
 
 /**

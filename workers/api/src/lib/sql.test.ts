@@ -5,7 +5,14 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findQuotedInterpolations, isValidJsonPathKey, jsonPath, sqlLiteralList } from "./sql.js";
+import {
+	D1_MAX_COMPOUND_TERMS,
+	findCompoundSelectOverruns,
+	findQuotedInterpolations,
+	isValidJsonPathKey,
+	jsonPath,
+	sqlLiteralList,
+} from "./sql.js";
 
 // ── The builders ─────────────────────────────────────────────────────────────────────────────
 
@@ -95,6 +102,46 @@ describe("findQuotedInterpolations", () => {
 	});
 });
 
+// ── The compound-SELECT ceiling, proved on fixtures ───────────────────────────────────────────
+
+describe("findCompoundSelectOverruns", () => {
+	const union = (n: number) =>
+		`const q = \`${Array.from({ length: n }, (_, i) => `SELECT ${i + 1} AS x FROM t`).join(" UNION ")}\`;`;
+
+	it("allows exactly the ceiling and flags one past it", () => {
+		expect(findCompoundSelectOverruns(union(D1_MAX_COMPOUND_TERMS))).toEqual([]);
+		const hits = findCompoundSelectOverruns(union(D1_MAX_COMPOUND_TERMS + 1));
+		expect(hits).toHaveLength(1);
+		expect(hits[0].unions).toBe(D1_MAX_COMPOUND_TERMS);
+	});
+
+	it("counts UNION ALL the same — the ceiling does not care which one you wrote", () => {
+		const src = `const q = \`${Array.from({ length: 6 }, (_, i) => `SELECT ${i} AS x FROM t`).join(" UNION ALL ")}\`;`;
+		expect(findCompoundSelectOverruns(src)).toHaveLength(1);
+	});
+
+	// error-log.ts and events.ts write their statements as ordinary double-quoted strings. A guard
+	// that only reads templates would have no opinion on half the Worker's SQL.
+	it("reads an ordinary quoted string, not only a template", () => {
+		const src = `const q = "${Array.from({ length: 6 }, (_, i) => `SELECT ${i} AS x FROM t`).join(" UNION ")}";`;
+		expect(findCompoundSelectOverruns(src)).toHaveLength(1);
+	});
+
+	// Same reason the sibling guard ignores comments: this file, `sql.ts`, and #423's own postmortem
+	// all discuss the banned shape in prose. A guard that reports its own documentation gets deleted.
+	it("ignores comments and text that is not SQL", () => {
+		expect(findCompoundSelectOverruns(`// ${union(9)}`)).toEqual([]);
+		expect(findCompoundSelectOverruns(`/* ${union(9)} */`)).toEqual([]);
+		// A verb with no clause keyword is an English sentence, not a statement — the same
+		// discrimination readsAsSql already makes for the interpolation guard.
+		expect(findCompoundSelectOverruns('const s = "union union union union union union select";')).toEqual([]);
+	});
+
+	it("sees a SQL template nested inside another template's interpolation", () => {
+		expect(findCompoundSelectOverruns(`const q = \`\${cond ? \`${"SELECT 1 FROM t UNION ".repeat(6)}SELECT 2 FROM t\` : ""}\`;`)).toHaveLength(1);
+	});
+});
+
 // ── The guard ────────────────────────────────────────────────────────────────────────────────
 
 const SRC_ROOT = new URL("../", import.meta.url).pathname; // workers/api/src
@@ -147,6 +194,45 @@ describe("no SQL string interpolates into a quoted position", () => {
 				"  • a JSON path       -> bind it, via jsonPath() (json_set/json_remove take it as an argument)",
 				"  • any runtime value -> bind it, ?N + .bind()",
 				"  • a constant that MUST be inlined for a partial index (migration 0088) -> sqlLiteralList()",
+				"",
+				offenders.join("\n"),
+			].join("\n"),
+		).toEqual([]);
+	});
+});
+
+/**
+ * No SQL literal in this Worker joins more SELECTs than D1 will parse (#423).
+ *
+ * The rollup's candidate query was a CTE with six `UNION` arms. D1 caps a compound SELECT at FIVE
+ * terms, so the statement failed to PARSE — it never executed once, on any environment, and
+ * `runStatsRollup` threw on its first line every minute for 29 hours while writing nothing. The
+ * error log took 1780 identical rows, ~97% of everything in it, and became useless for finding
+ * anything else.
+ *
+ * The reason this is a guard and not just a fixed query: the tempting repair was "trim to five
+ * arms", which leaves the ceiling one commit away and re-breaks the moment somebody adds a seventh
+ * activity source. `activeInstancesForDay` now issues one statement per source and merges in
+ * TypeScript, so there is no arm count to get wrong — and this holds the line for every OTHER
+ * query in the Worker, which is where the next one will be written.
+ */
+describe("no SQL literal exceeds D1's compound-SELECT ceiling", () => {
+	it("holds across workers/api/src", () => {
+		const offenders: string[] = [];
+		for (const f of sourceFiles()) {
+			for (const hit of findCompoundSelectOverruns(f.src)) {
+				offenders.push(`${f.rel}:${hit.line}  ${hit.unions + 1} compound terms  — ${hit.excerpt}`);
+			}
+		}
+		expect(
+			offenders,
+			[
+				`D1 parses at most ${D1_MAX_COMPOUND_TERMS} SELECTs joined by UNION in one statement (measured,`,
+				"2026-08-08). Over that it raises `too many terms in compound SELECT` at PARSE time, so the",
+				"query never runs anywhere and no amount of exercising the happy path finds it (#423).",
+				"",
+				"  • several sources -> one statement each, merged in TypeScript (see activeInstancesForDay)",
+				"  • a branch per item of a runtime list -> chunk the list; this guard CANNOT see that shape",
 				"",
 				offenders.join("\n"),
 			].join("\n"),

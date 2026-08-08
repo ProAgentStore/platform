@@ -228,6 +228,93 @@ export function findQuotedInterpolations(source: string): QuotedInterpolation[] 
 	return hits;
 }
 
+// ── The compound-SELECT ceiling ──────────────────────────────────────────────────────────────
+
+/**
+ * How many SELECTs D1 will join with UNION in one statement.
+ *
+ * MEASURED, not read off a doc page (#423). Against the production `pags` database on 2026-08-08,
+ * `SELECT 1 UNION … ` executes at five terms and raises
+ * `D1_ERROR: too many terms in compound SELECT: SQLITE_ERROR` at six — with or without `ALL`, and
+ * whether or not each term is wrapped as `SELECT * FROM (…)`. SQLite's compile-time default for
+ * `SQLITE_MAX_COMPOUND_SELECT` is 500; D1 sets it to 5, which is why nobody expected this.
+ *
+ * It is a PARSE failure. A statement over the ceiling never executes even once, so it cannot be
+ * caught by "it worked in staging" — it worked nowhere. #423 shipped a six-arm UNION that failed
+ * on every cron tick for 29 hours and produced 97% of the error log.
+ */
+export const D1_MAX_COMPOUND_TERMS = 5;
+
+/** A SQL literal that joins more SELECTs with UNION than D1 will parse. */
+export interface CompoundSelectOverrun {
+	/** 1-based line of the string that holds the statement. */
+	line: number;
+	/** `UNION` keywords counted — the compound term count is one more. */
+	unions: number;
+	excerpt: string;
+}
+
+/**
+ * SQL literals in `source` that exceed D1's compound-SELECT ceiling.
+ *
+ * WHAT IT CANNOT SEE, stated so nobody reads its silence as coverage:
+ *
+ *   • A union assembled at RUNTIME — `parts.join("\nUNION ALL\n")`, one branch per element of a
+ *     list. The literal holds one `UNION`; the ceiling is crossed by the sixth element. That shape
+ *     is live in `instance-work.ts` (`unionAll`) and a static scan cannot decide it; it needs a cap
+ *     at the point of construction. Do not add a branch-per-item union without one.
+ *   • SQL concatenated from several literals.
+ *   • A literal holding more than one statement, where the count is the sum rather than any one
+ *     statement's. Conservative in the safe direction: it can only over-report.
+ */
+export function findCompoundSelectOverruns(source: string, maxTerms = D1_MAX_COMPOUND_TERMS): CompoundSelectOverrun[] {
+	const hits: CompoundSelectOverrun[] = [];
+	const lines = source.split("\n");
+	const lineOf = (idx: number) => source.slice(0, idx).split("\n").length;
+
+	const consider = (text: string, at: number) => {
+		if (!readsAsSql(text)) return;
+		const unions = text.match(/\bUNION\b/gi)?.length ?? 0;
+		if (unions + 1 <= maxTerms) return;
+		const line = lineOf(at);
+		hits.push({ line, unions, excerpt: (lines[line - 1] ?? "").trim().slice(0, 160) });
+	};
+
+	const scan = (from: number, to: number) => {
+		let i = from;
+		while (i < to) {
+			const c = source[i];
+			const next = source[i + 1];
+			if (c === "/" && next === "/") {
+				while (i < to && source[i] !== "\n") i++;
+				continue;
+			}
+			if (c === "/" && next === "*") {
+				const end = source.indexOf("*/", i + 2);
+				i = end === -1 ? to : end + 2;
+				continue;
+			}
+			if (c === '"' || c === "'") {
+				const end = skipQuoted(source, i, c);
+				consider(source.slice(i + 1, Math.max(i + 1, end - 1)), i);
+				i = end;
+				continue;
+			}
+			if (c === "`") {
+				const tpl = readTemplate(source, i);
+				consider(tpl.text, i);
+				for (const it of tpl.interps) scan(it.bodyFrom, it.bodyTo);
+				i = tpl.end;
+				continue;
+			}
+			i++;
+		}
+	};
+
+	scan(0, source.length);
+	return hits;
+}
+
 // ── The two sanctioned builders ──────────────────────────────────────────────────────────────
 
 /** A JSON object key that can be spelled as `$.key` without quoting or escaping. */
