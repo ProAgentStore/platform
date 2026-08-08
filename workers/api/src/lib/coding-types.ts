@@ -47,6 +47,14 @@ export interface CodingRepo {
 	workdir?: string;
 	cloneStatus: CloneStatus;
 	cloneError?: string;
+	/**
+	 * When a machine last gave a DEFINITE verdict on `workdir` (#440, migration 0110).
+	 *
+	 * Undefined means nobody has looked — not "long ago". Only `/coding/repo-check` writes it, so
+	 * an unreachable machine leaves it alone; `updated_at` cannot stand in, because any edit to the
+	 * row (rename, launch URLs, merge policy) bumps that.
+	 */
+	cloneCheckedAt?: string;
 	defaultClient: CodingClientType;
 	/** Launch links — open-in-new-tab icons on the list + session view. */
 	urls?: { dev?: string; staging?: string; prod?: string };

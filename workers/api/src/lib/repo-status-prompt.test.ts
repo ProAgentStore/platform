@@ -73,11 +73,37 @@ describe("attachedReposPrompt — the diagnosis reaches the model (#416)", () =>
 		expect(out).toMatch(/not a live check/);
 	});
 
-	// No timestamp is rendered on purpose: `updated_at` is bumped by any edit to the row, so a
-	// "checked N minutes ago" would be a claim the platform cannot support. See the module comment.
+	// Still the rule, and still the more important half: a row with no recorded check time gets NO
+	// age. `updated_at` is bumped by any edit to the row, so reaching for it would be a
+	// precise-looking claim the platform cannot support — the reasoning #416 wrote down and #440
+	// answered with a column rather than by relaxing.
 	it("does not invent a time the check was taken", () => {
 		const out = attachedReposPrompt([brokenRepo]);
 		expect(out).not.toMatch(/\d+\s*(minutes?|hours?|days?)\s*ago/i);
+	});
+
+	// The other half (#440): when a machine DID look, say when — because "it is broken" and "it was
+	// broken when someone last looked, five days ago" are different claims and the agent was given
+	// no way to tell them apart.
+	it("says when a verdict was actually taken", () => {
+		const now = Date.parse("2026-08-08T09:00:00Z");
+		const out = attachedReposPrompt([{ ...brokenRepo, cloneCheckedAt: "2026-08-03 01:44:25" }], { now });
+		expect(out).toContain("(checked 5 days ago)");
+	});
+
+	it("reads the stored time as UTC, which is the only zone D1 writes", () => {
+		// `datetime('now')` has no zone marker, and `Date.parse` reads that shape as LOCAL — an
+		// off-by-the-offset age that would look exactly as authoritative as a correct one.
+		const now = Date.parse("2026-08-08T09:00:00Z");
+		const out = attachedReposPrompt([{ ...brokenRepo, cloneCheckedAt: "2026-08-08 08:56:00" }], { now });
+		expect(out).toContain("(checked 4 minutes ago)");
+	});
+
+	it("tells the model that a line with no time has NEVER been checked", () => {
+		// Without this the absent suffix reads as "no news", which is the exact inference #405 set
+		// out to prevent: the absence of a complaint is not evidence the code is there.
+		const out = attachedReposPrompt([brokenRepo]);
+		expect(out).toMatch(/NEVER been checked/);
 	});
 
 	it("returns nothing at all when there are no repos", () => {

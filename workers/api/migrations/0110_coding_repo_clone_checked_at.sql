@@ -1,0 +1,19 @@
+-- WHEN a machine last looked at this checkout (#440).
+--
+-- `repo-status-prompt.ts` asked for this column by name and explained why nothing already in the
+-- table can stand in for it:
+--
+--   "`updated_at` is bumped by any edit to the row (rename, launch URLs, merge policy), so
+--    rendering it as 'checked 3 minutes ago' would be a precise-looking claim the platform cannot
+--    actually support."
+--
+-- The inverse is what made #440 hard to see from outside: `pas/platform` carried a five-day-old
+-- `updated_at` AND a five-day-old verdict, and the two agreeing was a coincidence — an untouched
+-- timestamp is evidence about EDITS, and had to be argued into evidence about CHECKS.
+--
+-- Written only by a DEFINITE verdict from `/coding/repo-check` — a machine that could not be
+-- reached leaves it alone, because "nobody looked" is precisely what an absent time means. NULL
+-- for every existing row is therefore correct and needs no backfill: nothing recorded when those
+-- verdicts were taken, and inventing a time here would be the same false precision the column
+-- exists to remove.
+ALTER TABLE coding_repos ADD COLUMN clone_checked_at TEXT;

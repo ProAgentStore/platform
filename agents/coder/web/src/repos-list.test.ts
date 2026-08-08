@@ -215,3 +215,47 @@ describe("the Terminal tab shows the terminal", () => {
 		expect(solo).not.toContain("Open session");
 	});
 });
+
+/**
+ * #440 — the surface must offer a way to re-take a verdict, and must not present a stale one as
+ * current. Asserted on the source for the same reason as everything above: these are conditional
+ * JSX and a prop thread, and what matters is that the wiring EXISTS end to end.
+ */
+describe("a wrong or old verdict has a remedy on the page", () => {
+	const list = code("ReposList.tsx");
+	const tab = code("CodingTab.tsx");
+
+	it("offers Re-check on a repo that HAS a folder on a machine", () => {
+		// Gated on `workdir`: a cloned repo has no checkout to look at, and a control that
+		// describes a check which never happens is worse than none.
+		expect(list).toContain("/recheck`,");
+		expect(list).toContain("{r.workdir && (");
+	});
+
+	it("renders the SERVER's verdict sentence, never one composed here", () => {
+		// The console and the chat are handed the same sentence on purpose (#405) — two surfaces
+		// describing one directory two ways is the failure that keeps recurring.
+		expect(list).toContain("d.verdict?.detail");
+		expect(list).toContain("d.reason");
+	});
+
+	it("shows how old the stored verdict is, from the column and not from updatedAt", () => {
+		// `updated_at` is bumped by any edit to the row, so rendering it as an age would be a
+		// precise-looking claim the platform cannot support. That is why 0110 exists.
+		expect(list).toContain("repoFreshnessLabel(r)");
+		expect(list).not.toContain("r.updatedAt");
+	});
+
+	it("says when the list itself could not re-check", () => {
+		expect(list).toContain("staleListNotice(recheck,");
+		expect(list).toContain("repos-stale-notice");
+	});
+
+	it("CodingTab threads the server's report down rather than guessing at it", () => {
+		// Deriving "did it re-check" in the component from `runnerOnline` would be a guess: the
+		// list's resolver honours the instance's "Runs on" pin and the status dot does not, which
+		// is exactly the disagreement that made #440 unreadable from outside.
+		expect(tab).toContain("setRepoRecheck(repoData.recheck)");
+		expect(tab).toContain("recheck={repoRecheck}");
+	});
+});

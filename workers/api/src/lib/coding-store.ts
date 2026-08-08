@@ -39,6 +39,7 @@ interface RepoRow {
 	workdir: string | null;
 	clone_status: string;
 	clone_error: string | null;
+	clone_checked_at: string | null;
 	default_client: string;
 	urls: string | null;
 	instructions: string | null;
@@ -78,6 +79,10 @@ function toRepo(r: RepoRow): CodingRepo {
 		workdir: r.workdir ?? undefined,
 		cloneStatus: r.clone_status as CloneStatus,
 		cloneError: r.clone_error ?? undefined,
+		// Undefined on every row written before migration 0110, and on every row no machine has
+		// looked at since. Both mean the same thing — nobody has checked — which is why there is no
+		// backfill and no default (#440).
+		cloneCheckedAt: r.clone_checked_at ?? undefined,
 		defaultClient: client(r.default_client),
 		urls: parseRepoUrls(r.urls),
 		instructions: r.instructions || undefined,
@@ -160,18 +165,34 @@ export async function createRepo(env: Env, instanceId: string, userId: string, i
 export async function updateRepoClone(
 	env: Env,
 	repoId: string,
-	patch: { cloneStatus?: CloneStatus; cloneError?: string | null; workdir?: string; branch?: string },
+	patch: {
+		cloneStatus?: CloneStatus;
+		cloneError?: string | null;
+		workdir?: string;
+		branch?: string;
+		/**
+		 * A machine gave a DEFINITE verdict on this path just now — stamp `clone_checked_at`
+		 * (#440, migration 0110).
+		 *
+		 * Opt-IN, and only `verifyLocalWorkdir` passes it. Every other writer here is recording
+		 * something OTHER than a look at the directory (a clone that failed, a branch, a move), and
+		 * stamping those would make the column mean "last touched", which is the thing `updated_at`
+		 * already means and the reason a new column was needed at all.
+		 */
+		checkedNow?: boolean;
+	},
 ): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE coding_repos
-		 SET clone_status = COALESCE(?2, clone_status),
-		     clone_error  = ?3,
-		     workdir      = COALESCE(?4, workdir),
-		     branch       = COALESCE(?5, branch),
-		     updated_at   = datetime('now')
+		 SET clone_status     = COALESCE(?2, clone_status),
+		     clone_error      = ?3,
+		     workdir          = COALESCE(?4, workdir),
+		     branch           = COALESCE(?5, branch),
+		     clone_checked_at = CASE WHEN ?6 = 1 THEN datetime('now') ELSE clone_checked_at END,
+		     updated_at       = datetime('now')
 		 WHERE id = ?1`,
 	)
-		.bind(repoId, patch.cloneStatus ?? null, patch.cloneError ?? null, patch.workdir ?? null, patch.branch ?? null)
+		.bind(repoId, patch.cloneStatus ?? null, patch.cloneError ?? null, patch.workdir ?? null, patch.branch ?? null, patch.checkedNow ? 1 : 0)
 		.run();
 }
 

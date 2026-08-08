@@ -181,10 +181,22 @@ describe("POST /coding/repos — a local path is CHECKED before it is called rea
 	const FAKE_CONN = { instanceId: INSTANCE } as never;
 	const HEALTHY = { checked: true, path: "/home/u/dev/thing", exists: true, isDirectory: true, entryCount: 91, insideWorkTree: true, gitChecked: true };
 
-	/** The last `clone_status`/`clone_error` written for a repo, or null if nothing was written. */
+	/**
+	 * The last `clone_status`/`clone_error` written for a repo, or null if nothing was written.
+	 *
+	 * `status: null` is a real outcome since #440 and is NOT "nothing happened": the statement
+	 * COALESCEs, so a null there leaves the column alone. It is what a re-check that agreed with
+	 * the stored verdict issues — a write whose only effect is the timestamp.
+	 */
 	const statusWritten = (issued: Statement[]) => {
 		const update = issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status")).pop();
 		return update ? { status: update.binds[1], error: update.binds[2] } : null;
+	};
+
+	/** Did the last write stamp `clone_checked_at` — i.e. did a machine actually look (#440)? */
+	const checkStamped = (issued: Statement[]) => {
+		const update = issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status")).pop();
+		return update ? update.binds[5] === 1 : false;
 	};
 
 	it("asks the machine that will use the path, passing the path the owner typed", async () => {
@@ -215,13 +227,28 @@ describe("POST /coding/repos — a local path is CHECKED before it is called rea
 		expect(body.warning).toMatch(/does not exist/);
 	});
 
-	it("leaves a real checkout `ready`, and writes nothing it did not have to", async () => {
+	it("leaves a real checkout `ready`, and changes no status it did not have to", async () => {
 		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
 		callRunner.mockResolvedValue(HEALTHY);
 		const { body, issued } = await addRepo({ localPath: "~/dev/thing" });
 		expect(body.repo?.cloneStatus).toBe("ready");
 		expect(body.warning).toBeUndefined();
-		expect(statusWritten(issued)).toBeNull();
+		// #405 asserted "writes nothing" here, and #440 splits that in two: the VERDICT is
+		// unchanged (null status, so COALESCE leaves the column alone) while the TIME is recorded,
+		// because "still ready" is not a change of state and is a change of freshness. Without the
+		// second half a correct `ready` is indistinguishable from one nobody has re-confirmed for
+		// five days — which is the bug.
+		expect(statusWritten(issued)).toMatchObject({ status: null });
+		expect(checkStamped(issued)).toBe(true);
+	});
+
+	it("does NOT stamp a check time when no machine could be asked", async () => {
+		// The column's meaning depends entirely on this: absent means NOBODY LOOKED. An
+		// `unverified` verdict that writes `unknown` is still not a look at the directory, so
+		// stamping it would turn "we asked and got no answer" into "we checked".
+		const { issued } = await addRepo({ localPath: "~/dev/thing" });
+		expect(statusWritten(issued)).toMatchObject({ status: "unknown" });
+		expect(checkStamped(issued)).toBe(false);
 	});
 
 	// "Only when the runner is live" — with no machine connected there is nobody to ask, and the
@@ -291,7 +318,7 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		app.route("/v1/instances", routes);
 		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
 		const res = await app.request(`/v1/instances/${INSTANCE}/coding/repos`, { headers: { Authorization: `Bearer ${token}` } }, env);
-		return { body: (await res.json()) as { repos: Array<Record<string, unknown>> }, issued };
+		return { body: (await res.json()) as { repos: Array<Record<string, unknown>>; recheck?: Record<string, unknown> }, issued };
 	}
 
 	it("downgrades a repo whose checkout has gone since it was added", async () => {
@@ -327,10 +354,44 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		expect(callRunner).not.toHaveBeenCalled();
 	});
 
-	it("writes nothing when the verdict has not changed", async () => {
+	it("changes no verdict when the verdict has not changed — but records that it looked (#440)", async () => {
 		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
 		callRunner.mockResolvedValue({ checked: true, path: "~/dev/x", exists: true, isDirectory: true, entryCount: 3, insideWorkTree: true, gitChecked: true });
 		const { issued } = await listRepos([row()]);
+		const update = issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status")).pop();
+		// The status bind stays null (COALESCE leaves the column), the error is re-sent unchanged
+		// (it is NOT coalesced, so omitting it would clear a live diagnosis), and the check time is
+		// stamped. #405's version of this test skipped the write entirely, which is exactly how a
+		// five-day-old `ready` became unreadable as such.
+		expect(update?.binds[1]).toBeNull();
+		expect(update?.binds[5]).toBe(1);
+	});
+
+	it("says on the wire that it could NOT re-check, and why", async () => {
+		// The silent early return is the other half of #440. Two consecutive reads of this list
+		// against a five-day-old row came back byte-identical, and nothing in either response said
+		// whether the platform had looked — so "it is broken" and "nobody has looked since Monday"
+		// were the same answer.
+		const { body } = await listRepos([row()]);
+		expect(body.recheck).toMatchObject({ ran: false, checked: 0 });
+		expect(String((body.recheck as { reason?: string }).reason)).toMatch(/\S/);
+	});
+
+	it("says on the wire that it DID re-check, and how many paths answered", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "~/dev/x", exists: true, isDirectory: true, entryCount: 3, insideWorkTree: true, gitChecked: true });
+		const { body } = await listRepos([row()]);
+		expect(body.recheck).toMatchObject({ ran: true, checked: 1 });
+	});
+
+	it("counts a connected runner that gave no verdict as NOT checked", async () => {
+		// The invisible outcome the issue could not close from outside: a resolved connection whose
+		// check degrades to `unverified` writes nothing under `onUnverified: null`, and used to be
+		// indistinguishable from a successful re-check.
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ error: "Not found" });
+		const { body, issued } = await listRepos([row()]);
+		expect(body.recheck).toMatchObject({ ran: true, checked: 0 });
 		expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status"))).toBe(false);
 	});
 });
@@ -650,5 +711,96 @@ describe("PUT /coding/repos/:id — the folder is editable, and checked when it 
 			await put({ name: "renamed" }, ctx);
 			expect(updateBinds(ctx)?.[HAS_POLICIES]).toBe(0);
 		});
+	});
+});
+
+/**
+ * The escape hatch, and the instrument (#440).
+ *
+ * A row that says a healthy checkout is broken had no owner-reachable remedy: the only way out
+ * was a SUCCESSFUL list-time re-check, which needs a resolvable runner connection at that
+ * instant, fires only when someone opens the repo list, and reported nothing when it did not
+ * happen. `pas/platform` sat wrong for five days behind exactly that.
+ */
+describe("POST /coding/repos/:id/recheck — a verdict can be re-taken on purpose", () => {
+	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const localRepo = {
+		id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "pas/platform",
+		github_repo: null, provider: "local", repo_slug: null, web_url: null, clone_url: null,
+		branch: "", workdir: "~/dev/stores/pas/platform", clone_status: "error",
+		clone_error: "No runner connected — run `pags up`", default_client: "claude",
+		urls: null, instructions: null, merge_policy: null,
+		created_at: "2026-08-03 01:44:25", updated_at: "2026-08-03 01:44:25",
+	};
+
+	async function recheck(repo: Record<string, unknown> | null) {
+		const { app, env, issued } = buildApp(repo ?? undefined);
+		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const res = await app.request(
+			`/v1/instances/${INSTANCE}/coding/repos/repo-1/recheck`,
+			{ method: "POST", headers: { Authorization: `Bearer ${token}` } },
+			env,
+		);
+		return { status: res.status, body: (await res.json()) as Record<string, unknown>, issued };
+	}
+
+	it("re-takes the verdict and returns it, clearing a five-day-old transport failure", async () => {
+		// The measured row, and the measured runner answer for that exact path: 18 entries, inside
+		// a work tree. The whole point is that ONE deliberate request replaces the stale claim.
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "/Users/serge-ivo/dev/stores/pas/platform", exists: true, isDirectory: true, entryCount: 18, insideWorkTree: true, gitChecked: true });
+		const { status, body, issued } = await recheck(localRepo);
+		expect(status).toBe(200);
+		expect(body.checked).toBe(true);
+		expect(body.verdict).toMatchObject({ state: "ok" });
+		expect((body.repo as Record<string, unknown>).cloneStatus).toBe("ready");
+		const update = issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status")).pop();
+		expect(update?.binds[1]).toBe("ready");
+		expect(update?.binds[5]).toBe(1);
+	});
+
+	it("keeps the monorepo-subfolder case READY — a folder inside a work tree is a legitimate workdir", async () => {
+		// `stores/fds` holds one entry and no `.git` of its own, and reads `ready` correctly:
+		// `~/dev/stores` is itself a work tree. #405 chose `insideWorkTree` over an existence test
+		// precisely so a package inside a monorepo checkout is not condemned. A re-check must not
+		// be the thing that finally condemns it.
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "/Users/u/dev/stores/fds", exists: true, isDirectory: true, entryCount: 1, insideWorkTree: true, gitChecked: true });
+		const { body } = await recheck({ ...localRepo, workdir: "~/dev/stores/fds", clone_status: "ready", clone_error: null });
+		expect(body.verdict).toMatchObject({ state: "ok" });
+		expect((body.repo as Record<string, unknown>).cloneStatus).toBe("ready");
+	});
+
+	it("says NOBODY LOOKED rather than returning early in silence", async () => {
+		// The diagnostic half. `getBoundRunnerConn` honours the instance's "Runs on" pin and does
+		// not fall back (#379/#380), so an agent pinned to a machine that is not running `pags up`
+		// resolves null here while every pin-ignoring surface reports the machine healthy — which
+		// is why the list's silent early return was unknowable from outside.
+		getBoundRunnerConn.mockResolvedValue(null);
+		const { body } = await recheck(localRepo);
+		expect(body.checked).toBe(false);
+		expect(body.verdict).toMatchObject({ state: "unverified" });
+		expect(String(body.reason)).toMatch(/\S/);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("does not leave a stale `ready` standing when nobody could look", async () => {
+		// `onUnverified: "unknown"` — ADD's answer, not LIST's. This is a deliberate REQUEST for a
+		// verdict, so "nobody could look" is a result worth recording; leaving yesterday's `ready`
+		// would answer the question the owner asked with the claim they are doubting.
+		getBoundRunnerConn.mockResolvedValue(null);
+		const { issued } = await recheck({ ...localRepo, clone_status: "ready", clone_error: null });
+		const update = issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status")).pop();
+		expect(update?.binds[1]).toBe("unknown");
+		// Still not a look at the directory, so still no check time.
+		expect(update?.binds[5]).toBe(0);
+	});
+
+	it("refuses a repo with no local path instead of checking nothing", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		const { body } = await recheck({ ...localRepo, workdir: null, provider: "github", github_repo: "o/r", clone_url: "https://github.com/o/r.git" });
+		expect(body.checked).toBe(false);
+		expect(String(body.reason)).toMatch(/no local path/i);
+		expect(callRunner).not.toHaveBeenCalled();
 	});
 });

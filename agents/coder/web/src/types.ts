@@ -11,6 +11,12 @@ export interface CodingRepo {
 	 * machine that looked at it, so it names the path and the condition. Rendered verbatim.
 	 */
 	cloneError?: string;
+	/**
+	 * When a machine last actually looked at `workdir` (#440). Absent = NEVER — including every
+	 * row that predates the column, so the row's status is what somebody assumed rather than what
+	 * was observed. Not `updatedAt`, which any edit to the row bumps.
+	 */
+	cloneCheckedAt?: string;
 	githubRepo?: string;
 	/** Which host it lives on (#221): local | github | gitlab | bitbucket | other. */
 	provider?: string;

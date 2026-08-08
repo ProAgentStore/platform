@@ -64,6 +64,46 @@ export interface RepoStatusInput {
 	githubRepo?: string | null;
 	cloneStatus: string;
 	cloneError?: string | null;
+	/**
+	 * When a machine last gave a definite verdict on this path (#440, migration 0110).
+	 *
+	 * Absent means NOBODY HAS LOOKED — including every row that predates the column. It is not a
+	 * default, and it is not "long ago": the two are different claims and the block says which.
+	 */
+	cloneCheckedAt?: string | null;
+}
+
+/**
+ * `datetime('now')` writes `YYYY-MM-DD HH:MM:SS` with no zone, and it is UTC.
+ *
+ * Parsed explicitly rather than handed to `Date.parse`, which reads that exact shape as LOCAL
+ * time — correct by accident on a Worker and wrong anywhere else, which is the kind of difference
+ * that shows up as an off-by-ten-hours age in one environment only.
+ */
+function parseSqlTime(v: string): number {
+	const t = v.trim();
+	if (!t) return Number.NaN;
+	return Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(t) ? t.replace(" ", "T") : `${t.replace(" ", "T")}Z`);
+}
+
+/**
+ * "4 minutes ago" — or null when there is no time to report.
+ *
+ * Coarse on purpose. The claim being supported is "is this verdict current or is it stale", and a
+ * verdict is taken when someone opens the repo list, so minute-level precision would be inventing
+ * resolution the fact does not have. A future timestamp (clock skew between the DB and the Worker)
+ * reads as "just now" rather than as a negative age.
+ */
+export function checkedAgo(cloneCheckedAt: string | null | undefined, now = Date.now()): string | null {
+	if (!cloneCheckedAt) return null;
+	const at = parseSqlTime(cloneCheckedAt);
+	if (!Number.isFinite(at)) return null;
+	const mins = Math.floor(Math.max(0, now - at) / 60_000);
+	if (mins < 2) return "just now";
+	if (mins < 60) return `${mins} minutes ago`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+	return `${Math.floor(hours / 24)} days ago`;
 }
 
 /**
@@ -99,15 +139,20 @@ export function cloneStatusPhrase(status: string): string {
 	return CLONE_STATUS_PHRASE[status as CloneStatus] ?? UNRECOGNISED_PHRASE;
 }
 
-/** One line of the block: the repo, what state it is in, and — when there is one — why. */
-export function repoStatusLine(repo: RepoStatusInput, opts: { withDetail?: boolean } = {}): string {
+/** One line of the block: the repo, what state it is in, — when there is one — why, and how old that is. */
+export function repoStatusLine(repo: RepoStatusInput, opts: { withDetail?: boolean; now?: number } = {}): string {
 	const phrase = cloneStatusPhrase(repo.cloneStatus);
 	// `ready` never carries a detail: `updateRepoClone` clears `clone_error` on every write, so a
 	// leftover string on a healthy repo would be stale by construction. Every OTHER status may —
 	// this is the one-line fix, previously spelt `r.cloneStatus === "error" ? …`.
 	const detail = repo.cloneStatus === "ready" || opts.withDetail === false ? "" : (repo.cloneError ?? "").trim();
 	const label = `${repo.name}${repo.githubRepo ? ` (${repo.githubRepo})` : ""}`;
-	return `- ${label} — ${phrase}${detail ? ` — ${truncate(detail, MAX_DETAIL_CHARS)}` : ""}`;
+	// Rendered ONLY when there is a recorded time (#440). A row with none says nothing here rather
+	// than guessing, which is the same rule the whole module follows: absence of a check is not
+	// evidence, and a made-up age is exactly the precise-looking claim `updated_at` could not
+	// support.
+	const ago = checkedAgo(repo.cloneCheckedAt, opts.now);
+	return `- ${label} — ${phrase}${detail ? ` — ${truncate(detail, MAX_DETAIL_CHARS)}` : ""}${ago ? ` (checked ${ago})` : ""}`;
 }
 
 /**
@@ -121,27 +166,32 @@ export function repoStatusLine(repo: RepoStatusInput, opts: { withDetail?: boole
  * every read.
  *
  * The cost of that decision is that the agent cannot tell "it is broken" from "it was broken when
- * someone last looked", so the block says which one it is holding. There is deliberately no
- * timestamp: `updated_at` is bumped by any edit to the row (rename, launch URLs, merge policy),
- * so rendering it as "checked 3 minutes ago" would be a precise-looking claim the platform cannot
- * actually support — and inventing confidence about a path nobody looked at is the whole of #405.
- * A real `clone_checked_at` column would fix that; it needs a migration and a write in the repos
- * route, and is not this ticket.
+ * someone last looked", so the block says which one it is holding.
+ *
+ * It now also says WHEN, which #416 could not (#440). The reason it could not is worth keeping:
+ * `updated_at` is bumped by any edit to the row (rename, launch URLs, merge policy), so rendering
+ * it as "checked 3 minutes ago" would have been a precise-looking claim the platform could not
+ * support — and inventing confidence about a path nobody looked at is the whole of #405. Migration
+ * 0110 adds the column that answers the question honestly: `clone_checked_at` is written ONLY by a
+ * definite verdict, so an absent one means nobody has looked, and a five-day-old one says so out
+ * loud instead of being reconstructed from a timestamp that means something else.
  */
 const FRESHNESS_NOTE =
 	"Each status below is the LAST RECORDED verdict for that path, not a live check made for this message." +
-	" Report it as such, and if it matters right now say the owner can re-check by opening the repository list.";
+	" Where a line ends with `(checked …)` that is when a machine actually looked; a line without one has NEVER been checked," +
+	" so its status is what someone assumed, not what was observed." +
+	" Report it as such, and if it matters right now say the owner can re-check it from the repository list.";
 
 /**
  * The whole block, header included. Returns "" for no repos so the caller stays a single `+=`.
  */
-export function attachedReposPrompt(repos: readonly RepoStatusInput[]): string {
+export function attachedReposPrompt(repos: readonly RepoStatusInput[], opts: { now?: number } = {}): string {
 	if (repos.length === 0) return "";
 	// Broken repos are diagnosed first, so the cap can never spend its budget on healthy rows and
 	// then truncate the one repo the user is asking about.
 	const broken = repos.filter((r) => r.cloneStatus !== "ready" && (r.cloneError ?? "").trim().length > 0);
 	const diagnosed = new Set(broken.slice(0, MAX_DIAGNOSED));
-	const lines = repos.map((r) => repoStatusLine(r, { withDetail: diagnosed.has(r) }));
+	const lines = repos.map((r) => repoStatusLine(r, { withDetail: diagnosed.has(r), now: opts.now }));
 	const omitted = broken.slice(MAX_DIAGNOSED);
 	const tail = omitted.length
 		? `${omitted.length} further ${omitted.length === 1 ? "repository is" : "repositories are"} in a bad state and their diagnoses are omitted here (${omitted

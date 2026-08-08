@@ -2,13 +2,14 @@ import { useState, useRef, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
 import type { CodingRepo, CodingSession } from "./types";
-import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
+import { Settings, Cpu, Play, Square, Loader2, RefreshCw } from "lucide-react";
 import AddRepoForm from "./AddRepoForm";
 import RepoIssues from "./RepoIssues";
 import PullsPanel from "./PullsPanel";
 import { repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
 import { repoOpenAction } from "./repo-open";
+import { repoFreshnessLabel, staleListNotice, type RecheckReport } from "./repo-freshness";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
@@ -22,7 +23,7 @@ type TimelineEntry = { type?: string; content?: string; text?: string };
  */
 export default function ReposList({
 	instanceId,
-	repos, sessions, repoStatuses, runnerOnline,
+	repos, sessions, repoStatuses, runnerOnline, recheck, onRepoRechecked,
 	singleRepo = false, showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
 	openRepo, openingRepoId, setSettingsRepoId,
 	repoLabel, getActiveSession, onWorkOnIssue, onOpenEngines,
@@ -32,6 +33,10 @@ export default function ReposList({
 	sessions: CodingSession[];
 	repoStatuses: Record<string, string>;
 	runnerOnline: boolean | null;
+	/** What the last `GET …/coding/repos` managed to re-check, and why not when it did not (#440). */
+	recheck?: RecheckReport;
+	/** A single repo's row after an on-demand re-check, so the card updates without a full reload. */
+	onRepoRechecked?: (repo: CodingRepo) => void;
 	/** One-repo agent: hide add-repo and the "Repositories" header row. */
 	singleRepo?: boolean;
 	showAddRepo: boolean;
@@ -92,6 +97,29 @@ export default function ReposList({
 			await tts.speak(text); // resolves when playback ends
 		} catch {}
 		if (playGenRef.current === myGen) setAudio(null); // finished/failed (not superseded)
+	};
+
+	// On-demand re-check (#440). The escape hatch from a verdict that is wrong or simply old: the
+	// list's own re-check only runs when a runner connection resolves at that instant, which for a
+	// pinned agent whose machine is elsewhere is never — and it said nothing when it did not.
+	const [rechecking, setRechecking] = useState<string | null>(null);
+	const [verdicts, setVerdicts] = useState<Record<string, string>>({});
+	const recheckRepo = async (repoId: string) => {
+		setRechecking(repoId);
+		try {
+			const d = await api<{ repo?: CodingRepo; checked?: boolean; verdict?: { detail?: string }; reason?: string }>(
+				`/v1/instances/${instanceId}/coding/repos/${repoId}/recheck`,
+				{ method: "POST" },
+			);
+			if (d.repo) onRepoRechecked?.(d.repo);
+			// The server's own sentence, never a locally composed one — the same wording the agent
+			// is given to relay, so the console and the chat cannot describe one directory two ways.
+			setVerdicts((v) => ({ ...v, [repoId]: d.checked ? d.verdict?.detail || "Checked — the checkout is there." : d.reason || d.verdict?.detail || "Nobody could look at this path." }));
+		} catch {
+			setVerdicts((v) => ({ ...v, [repoId]: "The re-check could not be sent. Try again in a moment." }));
+		} finally {
+			setRechecking(null);
+		}
 	};
 
 	/** One repo, rendered identically whether it is alone or a row in the list. */
@@ -166,6 +194,33 @@ export default function ReposList({
 						</p>
 					</div>
 				)}
+				{/* HOW OLD the verdict above is, and the way to replace it (#440). Only for a repo
+				    that has a folder on a machine — a cloned repo has no checkout to look at.
+				    `flex-wrap` because "never checked" plus the button is wider than a 320px card. */}
+				{r.workdir && (
+					<div className="mt-1.5 flex items-center gap-2 flex-wrap text-2xs text-muted-soft">
+						<span>{repoFreshnessLabel(r)}</span>
+						<button
+							type="button"
+							onClick={() => recheckRepo(r.id)}
+							disabled={rechecking === r.id}
+							title="Ask the machine to look at this folder now"
+							// Deliberately NOT a boxed button: this sits inside a 2xs metadata line
+							// beside "checked 4 min ago", where a bordered pill would outweigh the
+							// fact it qualifies — and `agents/coder/web` has no shared <Button> yet,
+							// so drawing one here would add a fifteenth shape to a tree the
+							// control-shapes ratchet is holding still until its turn (#366/#367).
+							// The vertical padding IS the tap target: `text-2xs` gives a 12px line box, so
+							// `py-1` measured 23.98px in WebKit — under WCAG 2.5.8's 24px minimum by a
+							// sixteenth of a pixel, which is the kind of miss only a measurement finds.
+							className="inline-flex items-center gap-1 px-1 py-1.5 text-muted hover:text-accent underline underline-offset-2 disabled:opacity-60"
+						>
+							<RefreshCw size={11} className={rechecking === r.id ? "animate-spin" : ""} />
+							Re-check
+						</button>
+						{verdicts[r.id] && <span className="basis-full break-words text-muted">{verdicts[r.id]}</span>}
+					</div>
+				)}
 				{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
 				{/* Pulls sits with Issues, collapsed (#401): nested in a repo card it is one of several
 				    things, and an expanded PR list per repo would poll GitHub for every row on the page. */}
@@ -173,6 +228,11 @@ export default function ReposList({
 			</div>
 		);
 	};
+
+	// "The platform checked and it is broken" vs "nobody has looked since Monday" — one sentence,
+	// and it is the difference between a diagnosis and a memory (#440). Distinct from the offline
+	// CTA below: that one is about the machine, this one is about what the rows below are worth.
+	const staleNotice = staleListNotice(recheck, repos.filter((r) => r.workdir).length);
 
 	const offlineCta = runnerOnline === false && (
 		<div className="bg-yellow/10 border border-yellow/40 text-yellow rounded-lg p-2.5 mt-3 text-sm">
@@ -218,6 +278,12 @@ export default function ReposList({
 				)}
 
 				{offlineCta}
+
+				{staleNotice && (
+					<p data-testid="repos-stale-notice" className="mt-3 text-xs text-muted break-words">
+						{staleNotice}
+					</p>
+				)}
 
 				<div className="flex flex-col gap-1.5 mt-3">
 					{repos.length === 0 ? (

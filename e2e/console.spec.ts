@@ -3641,3 +3641,111 @@ test.describe("mobile — the single-repo Coder tab row (#431)", () => {
 		expect(m.tabRows, JSON.stringify(m)).toBe(1);
 	});
 });
+
+/**
+ * The repo row says HOW OLD its verdict is, and offers a way to re-take it (#440).
+ *
+ * `pas/platform` read "Path unusable" for five days, from a verdict taken by a `POST /coding/start`
+ * that failed on a closed laptop and never looked at the directory. The list's own re-check is
+ * conditional on a runner connection the instance's "Runs on" pin would not resolve, and its early
+ * return was silent — so the card stated a five-day-old memory with the same confidence as a live
+ * check, and the owner had no control that would replace it.
+ *
+ * Measured on a phone because that is where it is worst: the freshness line, the Re-check control
+ * and the "last known" notice are all new text on a 320px card that already carries a repo name, a
+ * provider badge and three buttons. `mobile — ` prefix so the block runs under WebKit too (#384).
+ */
+test.describe("mobile — a repo row dates its verdict and can re-take it (#440)", () => {
+	const multiCoder = [
+		{
+			id: "inst-1",
+			name: "Coder Home",
+			slug: "coder",
+			category: "code",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+		},
+	];
+
+	/** A local checkout, so there is a folder for a machine to look at — the only case with an age. */
+	const REPO = {
+		id: "repo-1",
+		name: "pas/platform",
+		githubRepo: "proappstore-online/platform",
+		provider: "local",
+		workdir: "~/dev/stores/pas/platform",
+		cloneStatus: "ready",
+		// Five days before the fixture's "now" is irrelevant to the assertion (the phrase is
+		// computed against the browser clock); what matters is that a time is present at all.
+		cloneCheckedAt: "2026-08-03 01:44:25",
+	};
+
+	async function openRepos(page: Page, width: number) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, { instances: multiCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/recheck")) {
+				return json({ repo: { ...REPO, cloneCheckedAt: "2026-08-08 09:00:00" }, checked: true, verdict: { state: "ok", path: "/Users/u/dev/stores/pas/platform", detail: "" } });
+			}
+			if (url.includes("/repos")) {
+				// The state the ticket is about: rows shown WITHOUT a re-check, and the server
+				// saying so rather than returning early in silence.
+				return json({
+					repos: [REPO],
+					recheck: { ran: false, checked: 0, reason: "This agent is pinned to Sergeys-Mac-mini.local, which isn't connected." },
+				});
+			}
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/builds")) return json({ builds: [] });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await page.getByRole("button", { name: "Re-check" }).first().waitFor();
+		await page.waitForTimeout(200);
+	}
+
+	for (const width of [320, 390]) {
+		test(`the freshness line and its control fit a ${width}px card`, async ({ page }) => {
+			await openRepos(page, width);
+
+			// The age is stated. Without it the row is a claim with no date on it, which is the bug.
+			await expect(page.getByText(/checked \d+[dhm]/i).first()).toBeVisible();
+
+			// And so is the fact that THIS list did not re-check — the difference between "the
+			// platform looked and it is broken" and "nobody has looked since Monday".
+			const notice = page.getByTestId("repos-stale-notice");
+			await expect(notice).toBeVisible();
+			await expect(notice).toContainText("Sergeys-Mac-mini.local");
+
+			// WCAG 2.5.8 Target Size (Minimum) — the same 24px floor #389/#431 assert on this
+			// surface. The control is deliberately not a boxed button (the control-shapes ratchet
+			// holds this tree still), so its padding is the only thing giving it a tap target.
+			const btn = page.getByRole("button", { name: "Re-check" }).first();
+			const box = await btn.boundingBox();
+			expect(box, "the Re-check control did not render").not.toBeNull();
+			expect(Math.min(box?.width ?? 0, box?.height ?? 0), `Re-check is ${box?.width}×${box?.height} at ${width}w`).toBeGreaterThanOrEqual(24);
+
+			// The new text wraps instead of panning the page. Three new strings on a card that
+			// already carries a repo name, a provider badge and three buttons is exactly where a
+			// horizontal scrollbar comes from.
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("mobile — pressing Re-check reports the verdict it got back", async ({ page }) => {
+		// The escape hatch has to SAY something. A control that silently re-runs a check leaves the
+		// owner exactly where they were: looking at a status and unable to tell whether it is now
+		// current.
+		await openRepos(page, 390);
+		await page.getByRole("button", { name: "Re-check" }).first().click();
+		await expect(page.getByText("Checked — the checkout is there.")).toBeVisible();
+		await expect(page.getByText(/checked just now/i).first()).toBeVisible();
+	});
+});

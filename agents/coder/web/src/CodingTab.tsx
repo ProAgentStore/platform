@@ -18,6 +18,7 @@ import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
 import ReposList from "./ReposList";
+import type { RecheckReport } from "./repo-freshness";
 import RepoIssues from "./RepoIssues";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
@@ -70,6 +71,8 @@ type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; 
 export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false, copilot = true, initialBuildsRepoId }: Props) {
 	const navigate = useNavigate();
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
+	// What the last repos read managed to RE-CHECK, and why not when it did not — see ./repo-freshness (#440).
+	const [repoRecheck, setRepoRecheck] = useState<RecheckReport | undefined>(undefined);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
 	const [engines, setEngines] = useState<CodingEngine[]>([]);
 	const [defaultEngine, setDefaultEngine] = useState("claude");
@@ -213,7 +216,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const loadCoding = useCallback(async () => {
 		try {
 			const [repoData, sessionData, engineData, presetData] = await Promise.all([
-				api<{ repos: CodingRepo[] }>(`/v1/instances/${instanceId}/coding/repos`),
+				api<{ repos: CodingRepo[]; recheck?: RecheckReport }>(`/v1/instances/${instanceId}/coding/repos`),
 				api<{ sessions: CodingSession[] }>(`/v1/instances/${instanceId}/coding/sessions`),
 				api<{ engines: CodingEngine[]; defaultEngineId?: string }>(`/v1/instances/${instanceId}/coding/engines`),
 				// A shortcut, never a prerequisite — an older API that doesn't serve these still
@@ -222,6 +225,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			]);
 			const repos = repoData.repos || [];
 			setRepos(repos);
+			setRepoRecheck(repoData.recheck);
 			setSessions(sessionData.sessions || []);
 			setEngines(engineData.engines || []);
 			setLoopPresets(presetData.presets || []);
@@ -240,8 +244,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					} catch { /* offline / no origin — leave as local-only */ }
 				}));
 				if (found) {
-					const fresh = await api<{ repos: CodingRepo[] }>(`/v1/instances/${instanceId}/coding/repos`).catch(() => null);
+					const fresh = await api<{ repos: CodingRepo[]; recheck?: RecheckReport }>(`/v1/instances/${instanceId}/coding/repos`).catch(() => null);
 					if (fresh?.repos) setRepos(fresh.repos);
+					if (fresh?.recheck) setRepoRecheck(fresh.recheck);
 				}
 			}
 		} catch {}
@@ -1203,6 +1208,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					sessions={sessions}
 					repoStatuses={repoStatuses}
 					runnerOnline={runnerOnline}
+					recheck={repoRecheck}
+					onRepoRechecked={(fresh) => setRepos((rs) => rs.map((r) => (r.id === fresh.id ? { ...r, ...fresh } : r)))}
 					showAddRepo={showAddRepo}
 					setShowAddRepo={setShowAddRepo}
 					addRepoInput={addRepoInput}

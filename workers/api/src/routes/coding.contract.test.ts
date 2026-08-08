@@ -186,6 +186,10 @@ async function probe(method: string, pattern: string, token?: string, suspended 
  */
 const ROUTES = [
 	"GET /:instanceId/coding/repos",
+	// The on-demand re-check (#440), registered beside the list because it is the same question
+	// asked deliberately about one repo — and because the list's own re-check is conditional on a
+	// runner connection it frequently cannot resolve.
+	"POST /:instanceId/coding/repos/:repoId/recheck",
 	"POST /:instanceId/coding/repos",
 	"POST /:instanceId/coding/repos/:repoId/detect-github",
 	"DELETE /:instanceId/coding/repos/:repoId",
@@ -270,6 +274,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 const OWNERSHIP: Record<string, string[]> = {
 	"coding-repos.ts": [
 		"GET /:instanceId/coding/repos",
+		"POST /:instanceId/coding/repos/:repoId/recheck",
 		"POST /:instanceId/coding/repos",
 		"POST /:instanceId/coding/repos/:repoId/detect-github",
 		"DELETE /:instanceId/coding/repos/:repoId",

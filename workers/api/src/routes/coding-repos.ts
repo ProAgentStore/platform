@@ -18,6 +18,10 @@ import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type Bui
 import type { IssueDetail } from "../lib/github-issues.js";
 import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedBuilds, listHostedIssues, readHostedIssue, type HostedRepoRef } from "../lib/hosted-repo.js";
 import { logError } from "../lib/error-log.js";
+// One vocabulary for "why is there no machine" — the same diagnosis `/runtime/status` and the
+// Pilot's pause both report, so this surface cannot invent a third wording for one state (#440).
+import { describeFacts } from "../lib/runner-availability.js";
+import { runtimeConnectivity } from "../lib/instance-connectivity.js";
 import { asClient } from "../lib/coding-engines.js";
 import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
@@ -95,16 +99,45 @@ async function verifyLocalWorkdir(
 	repo: CodingRepo,
 	conn: RunnerConn | null,
 	opts: { onUnverified: CloneStatus | null },
-): Promise<{ repo: CodingRepo; verdict: WorkdirVerdict }> {
+): Promise<{ repo: CodingRepo; verdict: WorkdirVerdict; checked: boolean }> {
 	const workdir = repo.workdir;
-	if (!workdir) return { repo, verdict: { state: "ok", path: "", detail: "" } };
+	if (!workdir) return { repo, verdict: { state: "ok", path: "", detail: "" }, checked: false };
 	const verdict = conn ? await checkWorkdirVia(conn, workdir) : unverified(workdir);
+	// A machine ANSWERED about this path. That is a separate fact from what it answered, and it is
+	// the one #440 is about: the row can be right and still be five days old, and nothing recorded
+	// which. `unverified` is not a look at the directory — it is the absence of one.
+	const checked = verdict.state !== "unverified";
 	const status = verdict.state === "unverified" ? opts.onUnverified : cloneStatusForVerdict(verdict);
-	if (!status) return { repo, verdict };
 	const cloneError = verdict.detail || null;
-	if (repo.cloneStatus === status && (repo.cloneError ?? null) === cloneError) return { repo, verdict };
-	await updateRepoClone(env, repo.id, { cloneStatus: status, cloneError });
-	return { repo: { ...repo, cloneStatus: status, cloneError: cloneError ?? undefined }, verdict };
+	// Is there a new VERDICT to store, as opposed to a new TIME? The two are independent since
+	// #440: "still ready" is not a change of state and IS a change of freshness.
+	const writeVerdict = status !== null && !(repo.cloneStatus === status && (repo.cloneError ?? null) === cloneError);
+	if (!checked && !writeVerdict) return { repo, verdict, checked };
+	await updateRepoClone(env, repo.id, {
+		// COALESCE leaves the column alone when this is undefined — so an identical verdict, and an
+		// `unverified` one the caller has no downgrade for, both change nothing.
+		cloneStatus: writeVerdict ? status : undefined,
+		// `clone_error` is NOT coalesced in the statement, so a time-only write has to re-send what
+		// is already there or it would silently clear a live diagnosis.
+		cloneError: writeVerdict ? cloneError : (repo.cloneError ?? null),
+		// The whole point of the column: stamped even when the verdict is identical. Skipping it —
+		// as the old "nothing changed" early return did — is what leaves a correct `ready`
+		// indistinguishable from a `ready` nobody has re-confirmed since Monday. One UPDATE per
+		// local repo per list read, bounded by `MAX_VERIFY_PER_LIST`.
+		checkedNow: checked,
+	});
+	const next = writeVerdict ? { cloneStatus: status, cloneError: cloneError ?? undefined } : {};
+	// Mirrored rather than re-read: `datetime('now')` is UTC to the second in exactly this format,
+	// so one extra SELECT per repo would buy at most a sub-second difference. The caller renders
+	// the response, so without this a re-check would answer "never checked" about the check it
+	// just performed.
+	const checkedAt = checked ? { cloneCheckedAt: sqlNow() } : {};
+	return { repo: { ...repo, ...next, ...checkedAt }, verdict, checked };
+}
+
+/** `datetime('now')`'s own format — see `verifyLocalWorkdir`. */
+function sqlNow(): string {
+	return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
 /**
@@ -115,20 +148,118 @@ async function verifyLocalWorkdir(
  */
 const MAX_VERIFY_PER_LIST = 12;
 
+/**
+ * Did this response re-check the paths it is describing, and if not, why not (#440)?
+ *
+ * The list route's re-check is CONDITIONAL — `if (!conn) return c.json({ repos })` — and the early
+ * return was silent, so a response carrying five-day-old verdicts was indistinguishable on the wire
+ * from one that had just confirmed every path. That difference is the difference between "the
+ * platform looked and it is broken" and "nobody has looked since Monday", and only the server can
+ * tell them apart.
+ *
+ * `reason` is `diagnoseAttachment`'s sentence, not a new one: the pin, the machine and the remedy
+ * are the same facts `/runtime/status` reports, and two surfaces inventing separate wordings for
+ * one connectivity state is the failure #237/#341 keep re-fixing.
+ */
+interface RecheckReport {
+	/** A machine was asked about at least one path. */
+	ran: boolean;
+	/** How many paths got a definite verdict. */
+	checked: number;
+	/** Why nothing was asked, when nothing was. */
+	reason?: string;
+}
+
+/** Why no machine could be asked — in the vocabulary `/runtime/status` already uses. */
+async function noRunnerReason(env: Env, instanceId: string, uid: string): Promise<string> {
+	const facts = await runtimeConnectivity(env, instanceId, uid).catch(() => null);
+	const d = describeFacts(facts ?? { hasRuntimeRow: false, relayConnected: false, node: null, runnerVersion: null, lastSeenAt: null });
+	return `${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
+}
+
 export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	codingRoutes.get("/:instanceId/coding/repos", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
 		const repos = await listRepos(c.env, instanceId, uid);
 		const local = repos.filter((r) => r.workdir).slice(0, MAX_VERIFY_PER_LIST);
-		if (!local.length) return c.json({ repos });
+		if (!local.length) return c.json({ repos, recheck: { ran: false, checked: 0 } satisfies RecheckReport });
 		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
-		if (!conn) return c.json({ repos });
+		// MEASURED (#440): this is the branch that fires. `getBoundRunnerConn` honours the
+		// instance's "Runs on" pin and does NOT fall back (#379/#380), so an agent pinned to a
+		// machine that is not running `pags up` resolves null here — while `/coding/browse`
+		// (`getDefaultRunnerConn`), `/coding/diagnostics` (`getRunnerConn` on the runtime row's
+		// node) and `/v1/terminals/nodes` (`relayConnected` per node) all bypass the pin and all
+		// report the machine healthy. That contradiction is why five days of no re-check looked
+		// impossible from outside. The pin is authoritative and stays so; what was missing is
+		// saying that this response did not re-check, and why.
+		if (!conn) return c.json({ repos, recheck: { ran: false, checked: 0, reason: await noRunnerReason(c.env, instanceId, uid) } satisfies RecheckReport });
 		// One relay command each, in parallel on the one socket — the worst case is a single
 		// WORKDIR_CHECK_TIMEOUT_MS, not one per repo.
 		const settled = await Promise.allSettled(local.map((r) => verifyLocalWorkdir(c.env, r, conn, { onUnverified: null })));
 		const fresh = new Map<string, CodingRepo>();
-		for (const s of settled) if (s.status === "fulfilled") fresh.set(s.value.repo.id, s.value.repo);
-		return c.json({ repos: repos.map((r) => fresh.get(r.id) ?? r) });
+		let checked = 0;
+		for (const s of settled) {
+			if (s.status !== "fulfilled") continue;
+			fresh.set(s.value.repo.id, s.value.repo);
+			if (s.value.checked) checked++;
+		}
+		// A resolved connection that answers nothing is the OTHER invisible outcome, and the one
+		// no probe from outside can see: the check degrades to `unverified`, `onUnverified: null`
+		// declines to write, and the response looks exactly like a successful re-check. Record it
+		// as a `warn` — it is not a bug in this request, it is the only evidence that a runner is
+		// connected and not answering `/coding/repo-check` (a CLI older than #405, a wedged
+		// runner, a relay timeout under parallel load).
+		if (checked < local.length) {
+			await logError(c.env, {
+				source: "coding",
+				level: "warn",
+				userId: uid,
+				message: `Workdir re-check: ${local.length - checked}/${local.length} local repos gave no verdict on a connected runner`,
+				context: { instanceId, node: conn.runnerNode ?? null, checked, total: local.length },
+			});
+		}
+		return c.json({ repos: repos.map((r) => fresh.get(r.id) ?? r), recheck: { ran: true, checked } satisfies RecheckReport });
+	});
+
+	/**
+	 * Re-take the verdict on ONE repo's checkout, on demand, and say what happened (#440).
+	 *
+	 * The escape hatch the surface did not have. Before this, the only way out of a wrong verdict
+	 * was a SUCCESSFUL list-time re-check — which needs a resolvable connection at that instant,
+	 * is triggered only by someone opening the repo list, and reported nothing when it did not
+	 * happen. So a row could sit wrong for five days with no action available to its owner and no
+	 * way for anyone to find out why.
+	 *
+	 * It is also the instrument. `onUnverified: "unknown"` is ADD's answer, not LIST's: this is a
+	 * deliberate request for a verdict, so "nobody could look" is a result worth recording rather
+	 * than a reason to leave yesterday's answer in place — and the response says which of the two
+	 * happened, instead of returning early in silence.
+	 *
+	 * Owner-scoped through `requireOwned` like every other `:instanceId` route, and it rides the
+	 * default 240/min bucket (`rateLimitDefault`) — a user-triggered relay command, at the same
+	 * rate as every other console action.
+	 */
+	codingRoutes.post("/:instanceId/coding/repos/:repoId/recheck", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+		if (!repo) throw new HttpError(404, "Repo not found");
+		// A cloned repo has no local path to look at; `clone_status` there is written by the clone
+		// itself. Saying so beats running a check that would answer about nothing.
+		if (!repo.workdir) return c.json({ repo, checked: false, reason: "This repo is cloned by the platform, not run from a folder on your machine — there is no local path to check." });
+		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
+		const { repo: fresh, verdict, checked } = await verifyLocalWorkdir(c.env, repo, conn, { onUnverified: "unknown" });
+		return c.json({
+			repo: fresh,
+			checked,
+			// The verdict itself, not just its effect on the row — that is what makes this route a
+			// diagnostic. `detail` is #405's relayable sentence; `state` is the machine-readable one.
+			verdict: { state: verdict.state, path: verdict.path, detail: verdict.detail },
+			// Only for the NO-MACHINE case. A machine that was reached and still could not answer
+			// has already said so in `verdict.detail` ("could not be verified on the connected
+			// machine: …"), and overwriting that with a connectivity sentence would report the
+			// opposite of what happened.
+			...(conn ? {} : { reason: await noRunnerReason(c.env, instanceId, uid) }),
+		});
 	});
 
 	codingRoutes.post("/:instanceId/coding/repos", async (c) => {
