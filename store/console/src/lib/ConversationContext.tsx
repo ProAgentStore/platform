@@ -9,7 +9,11 @@
  *   - `conversation` — who you are talking to and what state it is in, so the top bar can show it
  *     and get you back from anywhere;
  *   - `handoff` — a one-shot baton the arriving page consumes: which voice mode to reopen in, and
- *     what to say out loud on arrival.
+ *     what to say out loud on arrival;
+ *   - `parked` — the ONE agent you left with work still running (#450). Not a second
+ *     conversation: the mic is not open there and never was after you left. It exists because
+ *     replacing the snapshot wholesale DELETED the "still working" pill, which is the only thing
+ *     saying a run you did not stop is still going — and #279 made leaving a busy agent routine.
  *
  * The baton is what makes "next" hands-free end to end. The mic genuinely CLOSES across the move
  * (the outgoing hook tears it down on unmount) and reopens on the other side; #279 asks whether
@@ -28,7 +32,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { VoiceMode } from "@proagentstore/sdk/hooks";
 import type { ConversationSnapshot } from "./conversation";
-import { announceSwitch, nothingWaitingLine } from "./conversation";
+import { announceSwitch, nothingWaitingLine, parkedOnSwitch } from "./conversation";
 import { pickNextConversation, type NotificationLike, type RosterEntry } from "./nextAgent";
 import { backFromLine, noWayBackLine, resolveGoBack } from "./transfer";
 
@@ -43,12 +47,20 @@ export interface ConversationHandoff {
 
 interface ConversationState {
 	conversation: ConversationSnapshot | null;
+	/**
+	 * The agent you left with work STILL RUNNING, if any (#450). A second pill, and nothing else:
+	 * it is not "where you were" (that is `lastEngagedId`, which decides what "go back" and the
+	 * `next` toggle mean and must keep meaning exactly that) — it is "what is still going".
+	 */
+	parked: ConversationSnapshot | null;
 	/** The agent you were with BEFORE the current one — the toggle rule in `pickNextConversation`. */
 	lastEngagedId: string | null;
 	setConversation: (c: ConversationSnapshot) => void;
 	/** The owning page unmounted: the mic is closed, but WHO you were talking to survives. */
 	detachConversation: (instanceId: string) => void;
 	clearConversation: () => void;
+	/** Drop the second pill by hand — the way out of a run that finished while you were away. */
+	dismissParked: () => void;
 	beginHandoff: (h: ConversationHandoff) => void;
 	/** Consume the baton if it is for this instance. One-shot, by construction. */
 	takeHandoff: (instanceId: string) => ConversationHandoff | null;
@@ -56,16 +68,19 @@ interface ConversationState {
 
 const Ctx = createContext<ConversationState>({
 	conversation: null,
+	parked: null,
 	lastEngagedId: null,
 	setConversation: () => {},
 	detachConversation: () => {},
 	clearConversation: () => {},
+	dismissParked: () => {},
 	beginHandoff: () => {},
 	takeHandoff: () => null,
 });
 
 export function ConversationProvider({ children }: { children: ReactNode }) {
 	const [conversation, setConversationState] = useState<ConversationSnapshot | null>(null);
+	const [parked, setParkedState] = useState<ConversationSnapshot | null>(null);
 	const [lastEngagedId, setLastEngagedId] = useState<string | null>(null);
 	// A ref, not state: the baton is read once during the arriving page's mount effect, and a
 	// state round trip would let a re-render deliver it twice (re-announcing the switch).
@@ -76,6 +91,10 @@ export function ConversationProvider({ children }: { children: ReactNode }) {
 			// Moving to a different agent makes the previous one "last engaged" — which is what
 			// lets a back-and-forth between two agents feel like toggling rather than cycling.
 			if (prev && prev.instanceId !== c.instanceId) setLastEngagedId(prev.instanceId);
+			// …and if it was still WORKING, it is held for a second pill (#450). Decided by a pure
+			// function so it can be tested without a renderer, and so that "unchanged" is literally
+			// the same reference — this runs on every poll tick.
+			setParkedState((p) => parkedOnSwitch(p, prev, c.instanceId));
 			// Identity-stable update: this is called from a render effect on every poll tick, and
 			// a new object each time would re-render the whole Layout for nothing.
 			if (
@@ -98,6 +117,8 @@ export function ConversationProvider({ children }: { children: ReactNode }) {
 
 	const clearConversation = useCallback(() => setConversationState(null), []);
 
+	const dismissParked = useCallback(() => setParkedState(null), []);
+
 	const beginHandoff = useCallback((h: ConversationHandoff) => {
 		handoffRef.current = h;
 	}, []);
@@ -110,8 +131,8 @@ export function ConversationProvider({ children }: { children: ReactNode }) {
 	}, []);
 
 	const value = useMemo(
-		() => ({ conversation, lastEngagedId, setConversation, detachConversation, clearConversation, beginHandoff, takeHandoff }),
-		[conversation, lastEngagedId, setConversation, detachConversation, clearConversation, beginHandoff, takeHandoff],
+		() => ({ conversation, parked, lastEngagedId, setConversation, detachConversation, clearConversation, dismissParked, beginHandoff, takeHandoff }),
+		[conversation, parked, lastEngagedId, setConversation, detachConversation, clearConversation, dismissParked, beginHandoff, takeHandoff],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

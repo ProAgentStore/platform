@@ -105,6 +105,71 @@ export function resolveConversationIndicator(
 }
 
 /**
+ * Which conversation to HOLD ON TO when the current one changes (#450).
+ *
+ * The store was singular, so leaving an agent replaced its snapshot with the destination's — and
+ * with it went the "still working" pill and the one-tap route back. That was right for #278, which
+ * is about the conversation you are IN. What made it wrong is #279: an agent can now move you off
+ * one mid-run, hands-free, on your own request, and the pill was the thing telling you the run you
+ * left is still going.
+ *
+ * So exactly ONE extra is kept, and only for the reason that justifies keeping it: the outgoing
+ * conversation had work RUNNING. Two pills is the ceiling — current, plus the one you left
+ * running. An idle conversation you walked away from is not information; that is the same
+ * judgement `resolveConversationIndicator` already makes about a plain typed chat.
+ *
+ * PURE, and it returns the SAME reference when nothing changes. That is load-bearing rather than
+ * tidy: `setConversation` is called from a render effect on every poll tick, and a fresh object
+ * per tick would re-render the whole `Layout` for nothing.
+ */
+export function parkedOnSwitch(
+	parked: ConversationSnapshot | null,
+	leaving: ConversationSnapshot | null,
+	arrivingId: string,
+): ConversationSnapshot | null {
+	// Leaving an agent mid-run: it becomes the one we hold. It replaces whatever was held before,
+	// which is the ceiling being enforced — the newest still-running thing is the one you are
+	// likeliest to want back, and three pills in a 40px bar is not a header.
+	if (leaving && leaving.instanceId !== arrivingId && leaving.runActive) return leaving;
+	// Arriving AT the held one retires it: it is the current conversation now, and two pills for
+	// one agent is noise rather than information.
+	return parked && parked.instanceId === arrivingId ? null : parked;
+}
+
+/**
+ * The SECOND pill: the agent you left running (#450).
+ *
+ * Deliberately NOT `resolveConversationIndicator` with different arguments. That function's three
+ * suppression rules are about the conversation you are in and must not move; this one has exactly
+ * one rule of its own — `runActive`, the whole reason the entry was kept — plus the same "you are
+ * on its page" suppression, because the instance header is already saying it there.
+ *
+ * The honest limit, stated because the pill would otherwise imply more than it knows: nothing
+ * polls the agent you left, so `runActive` here is as fresh as the last tick before you moved. A
+ * finished run keeps its pill until you tap it (arriving re-establishes the truth) or dismiss it.
+ * That is the same staleness the single indicator has always had, not a new one — and the run
+ * completing also raises a notification, which is the channel that does chase you.
+ */
+export function resolveParkedIndicator(
+	parked: ConversationSnapshot | null | undefined,
+	pathname: string,
+): IndicatorView | null {
+	if (!parked) return null;
+	if (!parked.runActive) return null;
+	if (isOnConversationRoute(pathname, parked.instanceId)) return null;
+	return {
+		label: parked.name,
+		title: `${parked.name} is still working — tap to go back`,
+		tone: "work",
+		href: `/instances/${parked.instanceId}/chat`,
+		// Same rule as the current pill: a click is the gesture iOS needs to reopen a mic, but
+		// only into the mode the user chose. Resuming hands-free for a typist would open a live
+		// mic they never asked for.
+		resumeMode: parked.mode !== "text" ? parked.mode : null,
+	};
+}
+
+/**
  * What to SAY when the conversation moves (#277).
  *
  * The one requirement that makes voice-switching safe: in hands-free the user is not looking, so
