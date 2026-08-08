@@ -113,10 +113,23 @@ export function noActiveSessionPrompt(model: SelfModel): string {
  * presence of `repoMember:` keys in the DO, which is not the same question as "does this agent
  * declare the repo surface" — an instance can hold indexed repos without it — so the hint has to
  * ask the tab set rather than assume.
+ *
+ * **Two of the three clauses are ACCURACY, one is VOICE, and only the voice one may vary (#453).**
+ * "Grounded in the retrieved code above" and "say it isn't indexed yet rather than guessing" are
+ * anti-hallucination rules and are emitted identically in both branches. "Cite the repository +
+ * file path" is a style choice, and it is the one that contradicted plain speech: once #430 made
+ * the technicality slider reach an agent with repos, a Repo Chat owner at technicality 0 got
+ * "cite the repository + file path" and "Never mention filenames, paths…" eight lines apart in one
+ * prompt. Suppressing the whole block instead would have deleted a grounding rule to fix a wording
+ * clash — the same trade `resolveResponseStyle` already refuses when it keeps `GROUNDED` inside a
+ * declared style.
  */
-export function indexedReposPrompt(model: SelfModel): string {
+export function indexedReposPrompt(model: SelfModel, plainSpeech = false): string {
+	const cite = plainSpeech
+		? ". Describe what the code does in plain English — do not name files, paths or functions unless the user asks for them."
+		: ", and cite the repository + file path.";
 	return (
-		"\nAnswer about these repositories, grounded in the retrieved code above, and cite the repository + file path." +
+		`\nAnswer about these repositories, grounded in the retrieved code above${cite}` +
 		" If asked about code you can't find in your knowledge, say it isn't indexed yet" +
 		`${tabClause(model, "Repo", " (suggest adding it in the Repo tab)")} rather than guessing.`
 	);

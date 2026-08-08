@@ -450,6 +450,18 @@ export async function runAgentThink(opts: {
 			`include translations or pronunciation in parentheses.`;
 	}
 
+	// Response style — what the agent IS (grounding) vs what its owner ASKED for (language level),
+	// pure + tested in lib/agent-behaviour.ts. Resolved HERE, above its own prompt block, because
+	// `indexedReposPrompt` below needs `plainSpeech` (#453). Reorders no I/O: `hasCodingContext` was
+	// only ever `attachedRepos.length > 0`, in hand since the single `listRepos` at the top — the
+	// coding block below EMITS that context, it never discovered it.
+	const hasCodingContext = attachedRepos.length > 0;
+	const { codingContext, styleReminder, plainSpeech } = resolveResponseStyle({
+		repoChatStyle: state.guardrails?.responseStyle === "technical",
+		hasCodingContext,
+		behaviour,
+	});
+
 	// Repo-chat: list the repositories actually indexed, read live from the DO so
 	// the agent's awareness is authoritative (never a stale/phantom repo). Single
 	// source of truth — there is no separate "indexed repos" memory entry.
@@ -469,21 +481,18 @@ export async function runAgentThink(opts: {
 				systemPrompt += "\n\n## Indexed repositories";
 				if (ready.length) systemPrompt += `\nReady: ${ready.join("; ")}.`;
 				if (pending.length) systemPrompt += `\nStill indexing (ask again shortly): ${pending.join(", ")}.`;
-				systemPrompt += indexedReposPrompt(selfModel);
+				systemPrompt += indexedReposPrompt(selfModel, plainSpeech);
 			}
 		}
 	} catch {}
 
-	// Coding repos & sessions context (Coder instances). Inject the live registry
-	// so the Chat tab can actually answer "what's happening in repo X" instead of
-	// the old "I don't see any repos" — and flip to the technical style below,
-	// since this is a developer-facing agent, not the plain-speech default.
-	let hasCodingContext = false;
+	// Coding repos & sessions context (Coder instances). Inject the live registry so the Chat tab
+	// can actually answer "what's happening in repo X" instead of the old "I don't see any repos".
+	// It EMITS the coding context resolved above (#453); it no longer discovers it.
 	if (userId && state.agentId) {
 		try {
 			const repos = attachedRepos;
 			if (repos.length > 0) {
-				hasCodingContext = true;
 				// Resolve the runner honoring this instance's node binding (config.runnerNode),
 				// then ask the RelayDO — on the SAME node-scoped relay the runner connects to —
 				// whether it's actually live right now. DB session status can read "active" after
@@ -592,20 +601,10 @@ export async function runAgentThink(opts: {
 		}
 	}
 
-	// A "technical" response style needs the opposite of the default plain-speech
-	// rules — it must be free to cite real files, functions, and code. Two cases:
-	// the explicit repo-chat explainer (responseStyle === "technical", read-only),
-	// and any coding-capable instance (it has attached repos). Everything else
-	// keeps the concise, read-aloud voice tuned for non-technical users.
+	// `codingContext`/`styleReminder`/`plainSpeech` come from the ONE `resolveResponseStyle` hoisted
+	// above the repo block (#453) — resolving it twice is two answers to one question, and the
+	// point of the hoist is that the repo block and the style block agree.
 	//
-	// Response style: what the agent IS (grounding context) vs what its owner ASKED for (language
-	// level). Pure + tested in lib/agent-behaviour.ts — conflating the two told a plain chat agent
-	// it had repos and a terminal.
-	const { codingContext, styleReminder, plainSpeech } = resolveResponseStyle({
-		repoChatStyle: state.guardrails?.responseStyle === "technical",
-		hasCodingContext,
-		behaviour,
-	});
 	// Unconditional until #223: there was no way to ask for the steps. Now the OFF state of
 	// `showWorking` carries this same rule (see the field's `offPrompt`), so leaving it here too
 	// would contradict a subscriber who turned it on.

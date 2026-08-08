@@ -139,7 +139,10 @@ function assemblePrompt(
 		model.canStartWork || model.canDrive || model.canDelegate || model.surfaces.includes("coding")
 			? executionAuthorityPrompt(model)
 			: "",
-		opts.indexedRepos ? indexedReposPrompt(model) : "",
+		// `plainSpeech` threaded exactly as `runAgentThink` threads it (#453). Composing this block
+		// in the default voice while `styleGuidance` below got the real one is what let the
+		// contradiction sit in the sweep unnoticed.
+		opts.indexedRepos ? indexedReposPrompt(model, plainSpeech) : "",
 		opts.hasRepos ? runnerStatusPrompt(model, opts.runnerOnline) : "",
 		opts.hasRepos && !opts.activeSession ? noActiveSessionPrompt(model) : "",
 		// No `lengthRule`: the unset case is the one that shipped broken (#430), and the default it
@@ -256,6 +259,49 @@ describe("the incidents that motivated this", () => {
 		// the guard reports each, because each is a place the wording has to change.
 		expect(v.length).toBeGreaterThan(0);
 		expect(v.every((x) => x.claim === "local-runner" && x.kind === "runtime")).toBe(true);
+	});
+
+	it("#453 — a Repo Chat owner at technicality 0 is not told to cite paths and never to name paths", () => {
+		// The two sentences composed eight lines apart in one prompt. #430 made the technicality
+		// slider reach an agent with repos for the first time (`plainSpeech` was
+		// `!codingContext && !technical`), and `indexedReposPrompt` was unconditional, so the
+		// moment plain speech became reachable the two blocks started contradicting each other.
+		const CITE = "cite the repository + file path";
+		const NEVER = "Never mention filenames, paths";
+		const composed = (lowTechnicality: boolean) =>
+			assemblePrompt(REPO_CHAT, {
+				technicalSeed: true, // migration 0032 seeds guardrails.responseStyle: "technical"
+				hasRepos: false,
+				runnerOnline: false,
+				activeSession: false,
+				indexedRepos: true,
+				lowTechnicality,
+			});
+
+		const plain = composed(true);
+		expect(plain).toContain(NEVER);
+		expect(plain).not.toContain(CITE);
+		// The ACCURACY half survives plain speech — suppressing the whole block would have deleted
+		// an anti-hallucination rule to fix a style clash.
+		expect(plain).toContain("grounded in the retrieved code above");
+		expect(plain).toContain("say it isn't indexed yet");
+
+		// And the technical voice is untouched: still cites, still never plain-speech.
+		const technical = composed(false);
+		expect(technical).toContain(CITE);
+		expect(technical).not.toContain(NEVER);
+	});
+
+	it("#453 — no condition in the whole sweep composes both sentences", () => {
+		// The narrow assertion above is about Repo Chat. This is the invariant: whatever the agent,
+		// whatever the branch, "cite the path" and "never name a path" never co-occur.
+		for (const capabilities of FIRST_PARTY_AGENTS) {
+			for (const cond of CONDITIONS) {
+				const prompt = assemblePrompt(capabilities.capabilities, cond);
+				const both = prompt.includes("cite the repository + file path") && prompt.includes("Never mention filenames, paths");
+				expect(both, `${capabilities.name} ${JSON.stringify(cond)}`).toBe(false);
+			}
+		}
 	});
 
 	it("naming a tool the agent was not granted", () => {
