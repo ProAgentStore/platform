@@ -554,9 +554,11 @@ export async function capabilitiesForInstance(
  *
  * It THROWS on a database failure rather than resolving to "unconstrained": the caller
  * (`runRegistryTool`) refuses on a throw, because a ceiling that cannot be read cannot be
- * honoured, and a security boundary that opens when its store hiccups is not one. A missing row
- * is different and is NOT an error — the instance is gone, the tool has nothing to act on, and
- * the handler's own "no instance context" refusal is the honest message.
+ * honoured, and a security boundary that opens when its store hiccups is not one.
+ *
+ * A MISSING ROW is a third thing, and this signature cannot say which one it means — see
+ * `lookupConnectorConstraints`, which the gate uses for exactly that reason. Callers that only
+ * want the spec (the terminal-target route, which has already checked ownership) keep this one.
  */
 export async function connectorConstraintsForInstance(
 	env: { DB: D1Database },
@@ -564,6 +566,33 @@ export async function connectorConstraintsForInstance(
 	userId: string | undefined,
 	connector: string,
 ): Promise<ConstraintSpec | undefined> {
+	const found = await lookupConnectorConstraints(env, instanceId, userId, connector);
+	return found.instance === "found" ? found.spec : undefined;
+}
+
+/**
+ * The same lookup, telling the two ways `undefined` arises apart (#441).
+ *
+ * `spec: undefined` on a row that EXISTS means "this agent declares no ceiling" — which is every
+ * agent on the platform bar three, and must stay open, byte-for-byte. `instance: "missing"` means
+ * the join matched nothing: a deleted instance, an id belonging to somebody else, or an AGENT id
+ * handed to an instance-shaped parameter (the agent-template chat surfaces do exactly that). A
+ * ceiling that cannot be LOCATED is not a ceiling that is absent, and collapsing the two is how a
+ * declared constraint silently stopped applying on one surface while consent still refused on it.
+ *
+ * The distinction lives here rather than at the call site because it is a property of the query:
+ * only this function knows whether the row was there.
+ */
+export type ConnectorConstraintLookup =
+	| { instance: "found"; spec: ConstraintSpec | undefined }
+	| { instance: "missing" };
+
+export async function lookupConnectorConstraints(
+	env: { DB: D1Database },
+	instanceId: string,
+	userId: string | undefined,
+	connector: string,
+): Promise<ConnectorConstraintLookup> {
 	const sql = userId
 		? `SELECT a.config AS agent_config, i.config AS instance_config
 		     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
@@ -576,9 +605,9 @@ export async function connectorConstraintsForInstance(
 		agent_config: string | null;
 		instance_config: string | null;
 	}>();
-	if (!row) return undefined;
+	if (!row) return { instance: "missing" };
 	const declared = parseConfig(row.agent_config).capabilities as { surfaceOptions?: unknown } | undefined;
 	const ceiling = constraintsFor({ surfaceOptions: declared?.surfaceOptions }, connector);
 	const requested = constraintsFor({ surfaceOptions: parseConfig(row.instance_config).surfaceOptions }, connector);
-	return narrowConstraintSpec(connector, ceiling, requested);
+	return { instance: "found", spec: narrowConstraintSpec(connector, ceiling, requested) };
 }

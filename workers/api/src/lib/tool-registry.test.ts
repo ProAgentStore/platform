@@ -276,9 +276,51 @@ describe("capability-constraint gate (#404)", () => {
 		expect(r.content).toMatch(/runner|pags up/i);
 	});
 
-	it("with no instance context there is no agent to have declared one, and the handler says so", async () => {
-		const r = await runRegistryTool("terminal_list_targets", { env: {} as unknown as Env, userId: "u1" }, {});
-		expect(r.success).toBe(false);
-		expect(r.content).toMatch(/no instance context/i);
+	/**
+	 * #441: the gate used to be SKIPPED when the authority could not be resolved, which made it the
+	 * only permission-shaped check in this function that opens rather than closes on a blank. Both
+	 * neighbours fail closed — write-consent passes an empty authority to `hasConsent`, which
+	 * refuses, and the constraint read itself refuses when the store throws. These two assert the
+	 * posture rather than leaving it to an `if`, because "it opens" and "it closes" both look like
+	 * working code, and the #402 disclosure is what a call path that forgot an id costs.
+	 */
+	describe("no resolvable authority → refused, like every neighbouring gate", () => {
+		/** A DB whose constraint join matches NOTHING — a deleted instance, or an agent id. */
+		const envNoRow = () =>
+			({
+				DB: {
+					prepare: () => ({ bind: () => ({ first: async () => null }) }),
+				},
+			}) as unknown as Env;
+
+		it("refuses a constrained connector's tool when the ctx carries no instance at all", async () => {
+			// `env` has no DB: reaching the lookup would throw, and reaching the HANDLER would fail on
+			// the missing runner. Neither happens — the gate answers first, which is the deliverable.
+			const r = await runRegistryTool("terminal_list_targets", { env: {} as unknown as Env, userId: "u1" }, {});
+			expect(r.success).toBe(false);
+			expect(r.content).toMatch(/could not be resolved/i);
+			expect(r.content).toMatch(/rather than run unconstrained/i);
+		});
+
+		it("refuses an authority that is an AGENT id rather than an instance id", async () => {
+			// The live second door: the agent-template chat surfaces pass `state.agentId` into
+			// `instanceId`, so the join matches no row. "No ceiling declared" and "no such row" were
+			// the same `undefined`, and the ceiling silently stopped applying on that surface while
+			// write-consent, on the identical input, refused.
+			const r = await runRegistryTool("terminal_capture", { env: envNoRow(), userId: "u1", instanceId: "agent_kitty_operator" }, { target: "kitty:1" });
+			expect(r.success).toBe(false);
+			expect(r.content).toMatch(/could not be resolved/i);
+		});
+
+		it("but a row that EXISTS and declares nothing still runs — that is every agent today", async () => {
+			// The regression this whole change has to avoid. Reaching the handler (and failing there
+			// on the absent runner) is the proof that the gate let it through.
+			const declaresNothing = {
+				DB: { prepare: () => ({ bind: () => ({ first: async () => ({ agent_config: "{}", instance_config: "{}" }) }) }) },
+			} as unknown as Env;
+			const r = await runRegistryTool("terminal_list_targets", { env: declaresNothing, userId: "u1", instanceId: "i1" }, {});
+			expect(r.content).not.toMatch(/could not be resolved/i);
+			expect(r.content).toMatch(/runner|pags up/i);
+		});
 	});
 });

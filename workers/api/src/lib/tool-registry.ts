@@ -15,7 +15,7 @@ import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
 import { getLoopRun, listDelegatedRuns, listLoopRuns, type LoopRunView } from "./agent-loop-store.js";
 import { subordinateIdsOf } from "./supervision.js";
 import { describeWorkCheck } from "./work-report.js";
-import { capabilitiesForInstance, connectorConstraintsForInstance } from "./agent-capabilities.js";
+import { capabilitiesForInstance, type ConnectorConstraintLookup, lookupConnectorConstraints } from "./agent-capabilities.js";
 import { CONNECTOR_CONSTRAINTS, enforceConstraints } from "./surface-options.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
@@ -463,26 +463,48 @@ export async function runRegistryTool(
 	//
 	// The lookup is skipped entirely for a connector with no constraint vocabulary, so this costs
 	// one indexed read on terminal calls and nothing at all anywhere else.
+	//
+	// FAIL-CLOSED IN BOTH ITS DIRECTIONS (#441), which is the posture of every neighbouring gate in
+	// this function and most of what a gate is worth: a boundary is only useful while its answer is
+	// predictable. A ceiling that cannot be READ (the store threw) and a ceiling that cannot be
+	// LOCATED (no authority on the call, or an authority the join does not match) are both refusals.
+	// Only "the row is there and declares nothing" runs — every agent on the platform bar three,
+	// byte-identical to before any of this existed.
+	//
+	// Located-vs-absent is the distinction that had a live second door. `ctx.instanceId` holds an
+	// INSTANCE id on every production path, but the agent-TEMPLATE chat surfaces pass the agent id,
+	// and the old lookup answered `undefined` for "no ceiling" and "no such row" alike — so a
+	// creator's own trial chat of a ceiling-declaring agent was not subject to that ceiling, while
+	// the write-consent gate two blocks up refused the identical input. Hence the fix is here and
+	// not at the caller: a rule that holds only where the caller remembered is not a rule.
 	let callInput = input || {};
-	if (tool.connector && CONNECTOR_CONSTRAINTS[tool.connector]) {
+	const connector = tool.connector;
+	if (connector && CONNECTOR_CONSTRAINTS[connector]) {
 		const authority = consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf });
+		let found: ConnectorConstraintLookup = { instance: "missing" };
 		if (authority) {
-			let spec: Awaited<ReturnType<typeof connectorConstraintsForInstance>>;
 			try {
-				spec = await connectorConstraintsForInstance(ctx.env, authority, ctx.userId, tool.connector);
+				found = await lookupConnectorConstraints(ctx.env, authority, ctx.userId, connector);
 			} catch {
 				// Fail CLOSED. A ceiling that cannot be read cannot be honoured, and a boundary that
 				// opens when its store hiccups is not a boundary.
 				return {
 					name,
-					content: `This agent's declared constraints for the ${tool.connector} connector could not be read, so "${name}" was refused rather than run unconstrained. Try again.`,
+					content: `This agent's declared constraints for the ${connector} connector could not be read, so "${name}" was refused rather than run unconstrained. Try again.`,
 					success: false,
 				};
 			}
-			const gated = enforceConstraints(tool, spec, callInput);
-			if (!gated.ok) return { name, content: gated.refusal, success: false };
-			callInput = gated.input;
 		}
+		if (found.instance === "missing") {
+			return {
+				name,
+				content: `This agent's declared constraints for the ${connector} connector could not be resolved — this call names no instance for them to belong to — so "${name}" was refused rather than run unconstrained.`,
+				success: false,
+			};
+		}
+		const gated = enforceConstraints(tool, found.spec, callInput);
+		if (!gated.ok) return { name, content: gated.refusal, success: false };
+		callInput = gated.input;
 	}
 	try {
 		// Inject the connector-client factory so handlers mint tokens + enforce grant/scope

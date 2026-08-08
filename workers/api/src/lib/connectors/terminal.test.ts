@@ -103,9 +103,20 @@ describe("terminal connector — runner dispatch", () => {
 });
 
 describe("terminal connector — write consent", () => {
+	/**
+	 * Consent answers as asked; the CONSTRAINT join always finds the instance and it declares no
+	 * ceiling. The two must be told apart (#441): since the constraint gate fails closed on a row it
+	 * cannot locate, a fixture that answered `null` to every query would refuse these calls for a
+	 * reason that has nothing to do with consent — which is the thing under test here.
+	 */
 	const envConsent = (granted: boolean) =>
 		({
-			DB: { prepare() { return { bind() { return { first: async () => (granted ? { ok: 1 } : null) }; } }; } },
+			DB: {
+				prepare(sql: string) {
+					const constraintQuery = sql.includes("agent_instances");
+					return { bind() { return { first: async () => (constraintQuery ? { agent_config: "{}", instance_config: "{}" } : granted ? { ok: 1 } : null) }; } };
+				},
+			},
 		}) as unknown as Env;
 
 	it("blocks writes without terminal consent", async () => {
