@@ -4,10 +4,15 @@ ProAgentStore runs its own design system. The shared six-store
 `~/dev/stores/DESIGN-SYSTEM.md` records PAGS as out of scope (§0, decided 2026-08-07) and points
 here.
 
-This document is **descriptive**. Every number below was measured from the tree on 2026-08-07, not
-proposed. Where the console contradicts itself, that is written down as a contradiction rather than
-quietly resolved in prose — a design system that describes an app nobody built is the failure mode
-this document exists to avoid (#367).
+This document is **descriptive except in two places**. Every number below was measured from the tree,
+not proposed, and where the console contradicts itself that is written down as a contradiction
+rather than quietly resolved in prose — a design system that describes an app nobody built is the
+failure mode this document exists to avoid (#367).
+
+The two exceptions are the **type scale** (§2) and the **24px touch-target floor** (§3), both added
+2026-08-08. §6 asked whether this document may become prescriptive and about what; the answer is
+*only where the rule is enforced*. Both of those are, in CI and in the suite (§5) — a prescriptive
+sentence nothing checks is the same fiction as a description nobody wrote.
 
 ## 0. What PAGS deliberately does not take from the shared system
 
@@ -127,36 +132,50 @@ tinted status background is therefore an opacity modifier: `bg-red/10` (16 uses)
 site, which is why both `/10` and `/15` are in use for the same idea. Declaring
 `--color-{green,red,yellow,blue}-soft` would collapse those into one decision.
 
-## 2. Type
+## 2. Type — the one prescriptive rule in this document (#390)
 
-| Size | Uses | Where |
+**The scale is closed. A font size names a step; it is never written as a value.** This is the
+first rule here that says what the console *must* be rather than what it is, and it is enforced
+(§5), which is what makes it worth stating.
+
+| Step | px | Where |
 |---|---|---|
-| `text-xs` | 427 | The console's real body size — dense tables, labels, chips |
-| `text-sm` | 348 | Chat messages, form fields, primary reading text |
-| `text-base` | 53 | Section headings |
-| `text-xl` / `text-lg` | 14 / 12 | Page titles |
-| `text-2xl` / `text-3xl` | 3 / 1 | Sign-in, empty states |
-| **arbitrary `text-[…rem]`** | **174 uses across 17 distinct values** | everywhere |
+| `text-2xs` | **11** | The floor. Dense telemetry only — Terminals, Activity, log rows, chips |
+| `text-xs` | 12 | The console's real body size — tables, labels, descriptive copy |
+| `text-sm` | 14 | Chat messages, form fields, primary reading text |
+| `text-base` | 16 | Section headings |
+| `text-lg` / `text-xl` | 18 / 20 | Page titles |
+| `text-2xl` / `text-3xl` | 24 / 30 | Sign-in, empty states |
 
-The arbitrary sizes are the largest single divergence from any scale: `0.55 · 0.6 · 0.62 · 0.65 ·
-0.66 · 0.68 · 0.7 · 0.72 · 0.74 · 0.75 · 0.76 · 0.78 · 0.8 · 0.82 · 0.875 · 0.95 · 1.1rem`. Several
-are indistinguishable from each other on screen (0.65 / 0.66 / 0.68), which is the tell that they
-were chosen individually rather than from a scale. The effective type scale is ~24 sizes.
+`--text-2xs` is declared in both `@theme` blocks (§4) with its `--line-height` companion; every
+other step is Tailwind's own. **11px is a floor, not a suggestion**: anything a user reads to make
+a decision belongs at `text-xs` or above, and `text-2xs` exists because the console has two screens
+whose entire content is status text and Tailwind's scale stops at 12.
 
-This is real drift, and it is **not** worth a lint yet: 174 call sites with nowhere to go is 174
-blocked edits. It needs #366's primitives (a `Badge`, a `Label`) to absorb the small ones first.
+### What it replaced
 
-**#366 built the absorber and did not spend it, and the honest number moved the wrong way: 180 on
-2026-08-08, not 174.** The `Button` and `Badge` primitives (§3) own the type step for every control
-they render, so no migrated call site writes one and no new one can — but the controls migrated
-were already on `text-xs`/`text-sm`, so the arbitrary count is **unchanged**. Saying otherwise
-would credit this with work it did not do.
+Before this, 190 arbitrary bracketed sizes across **17 values**: `0.55 · 0.6 · 0.62 · 0.65 · 0.66 ·
+0.68 · 0.7 · 0.72 · 0.74 · 0.75 · 0.76 · 0.78 · 0.8 · 0.82 · 0.875 · 0.95 · 1.1rem`, plus five
+`10px` in `store/admin` and one `11px` in the Coder UI. Nine of them sat inside a 2px band, and
+0.68 against 0.7 is 0.32px at a 16px root — a difference nobody chose 19 times. Rendered, that was
+**148 sub-12px strings on one Terminals screen**, 100 on Activity, and 9.9px descriptive copy under
+form controls on the instance Settings tab.
 
-What the remaining 180 need is a real scale STEP for the 110 uses of the 11.2px size — a `--text-*`
-entry in `@theme` — and that cannot be added to the console alone: `designTokens.test.ts` holds the
-console and admin `@theme` blocks equal (§5.3) and the second copy lives in `store/admin`, so it is
-one commit across both trees or it is a broken guard. Same constraint as the pigment→intent rename
-in §6.
+They were collapsed by ONE mechanical rule, stated so the result is checkable rather than a matter
+of taste: **round to the nearest step; ties, and anything below the 11px floor, round UP.** The
+largest change is +2.2px (8.8px → 11) and the largest shrink is −0.8px (12.8px → 12). 173 of the
+224 sites landed on `text-2xs`. Nothing was moved by judgement, and nothing that a user reads got
+smaller.
+
+### Why the lint could not have come first
+
+The count went UP between #366 and this (174 → 180 → 190 measured across all three trees as 224):
+#366 built the `Button`/`Badge` primitives that own the type step for every control they render,
+but the controls it migrated were already on `text-xs`/`text-sm`, so it absorbed none of these.
+The sizes that drifted are on labels, table cells and descriptive copy — a component layer has
+nothing to grip. What they needed was a **destination**, and a lint before there was one is 190
+blocked edits, which is exactly what #390 said. The step is the destination; the gate is what stops
+the next one.
 
 Weight: `font-semibold` (254) and `font-bold` (172) do nearly all the work; `font-medium` (25) is a
 minority third weight. `font-display` (Fraunces) appears 11 times — page titles only.
@@ -205,6 +224,37 @@ Mobile: form controls are forced to `font-size: 16px; min-height: 44px` below 64
 Both numbers are deliberate — 16px is the threshold below which iOS Safari zooms the viewport on
 focus, 44px is Apple's minimum touch target. Do not "tidy" them.
 
+### Touch targets — the second prescriptive rule (#389)
+
+**Every control clears 24×24 CSS px in both axes.** That is WCAG 2.5.8 *Target Size (Minimum)*,
+Level AA — a published number rather than a house preference, which is what makes it assertable.
+Apple's 44 and Material's 48 are not the floor here, and the reason is arithmetic: every control in
+this console renders between 24 and 38px tall, so a 44px box floor would re-lay-out every dense row
+in the app under cover of an accessibility fix.
+
+44 is met where it matters as **reach, not box size**:
+
+- **`BUTTON_SIZE` carries `min-h-6 min-w-6` on all four steps.** A floor, not a resize — every step
+  already rendered at or above 24 (24 · 30 · 36, `icon` 24), so nothing moved on screen. It reaches
+  all 57 migrated call sites and every future one, and `control-classes.test.ts` asserts it per
+  entry so a fifth step cannot be added without it.
+- **`input[type=checkbox|radio]` are sized in the base layer**: 20px, and 24px below 640px. They
+  were the one control nothing sized at all — excluded from the form-control block (a `width: 100%`
+  checkbox is a full-row box) and therefore left at the UA default of 13×13 in Chromium, 12×12 in
+  WebKit. One rule reaches all 22 sites across the console and the operator portal; the call-site
+  `w-3 h-3` / `w-4 h-4` overrides were removed so the rule is the real size.
+- **`@utility tap-target`** grows a control's pointer region to 44px **vertically** without growing
+  its box, for the chat bubble's Copy / Delete-this-turn actions and the 11×11 replay button. The
+  restriction to one axis is the design, not a shortcut: a `::after` overlay paints with its own
+  element and siblings paint in DOM order, so a later control's wide region sits on top of an
+  earlier one's real box — Copy and Delete are 2px apart, and expanding both would put the
+  destructive one over a third of the other. The utility's comment carries that arithmetic.
+
+Where a control could not be made to clear 24 by a table change, it was fixed by hand: `RepoTab`'s
+*Show files* / *Re-index* / *Remove* were bare text with no padding, rendering 16px tall — with the
+destructive one beside the two that are not. They are `<Button size="sm">` now, and *Remove* is
+`variant="danger"`.
+
 ## 4. Where the tokens live — three copies
 
 | Surface | Where | Form |
@@ -229,15 +279,27 @@ front page.
 
 ## 5. What is enforced, and what is taste
 
-Two guards, each holding only what a machine can honestly hold.
+Four guards, each holding only what a machine can honestly hold.
 
 **`scripts/check-design-tokens.mjs`** — a CI step (`ci.yml`, alongside the other `check-*.mjs` guards),
-because it covers three trees rather than belonging to one package. **No colour utility may name a token
-nothing declares** (§1). A gate at zero for `store/console` and `agents/coder/web`; `store/admin` is
-pinned at 2, since fixing those needed a tree that had uncommitted maintainer work when this landed —
-pinned rather than excluded, so the debt is visible and may only go down. The mechanism is a pure module
-(`scripts/lib/design-tokens.mjs`) with its own tests, which is also the first test coverage any guard
-under `scripts/` has had.
+because it covers three trees rather than belonging to one package. Two rules over the same source,
+against the same `@theme`, because they are two halves of one idea — *a class name must name a
+decision, not a value*:
+
+1. **No colour utility may name a token nothing declares** (§1). A gate at zero for `store/console`
+   and `agents/coder/web`; `store/admin` is pinned at 2, since fixing those needed a tree that had
+   uncommitted maintainer work when this landed — pinned rather than excluded, so the debt is
+   visible and may only go down.
+2. **No font size may be written as a bracketed value** (§2), added at #390. A **gate at zero in all
+   three trees**, which it can be because that ticket collapsed all 224 of them onto steps first.
+   It matches length-valued brackets only — `text-[#fafafa]` and `text-[color:var(…)]` are a colour
+   and a variable, and folding them in would make the failure message wrong for them. It also
+   asserts that any declared `--text-*` step has its `--line-height` companion: a step without one
+   emits a `line-height` naming a variable that resolves to nothing, which is rule 1's failure mode
+   one property over.
+
+The mechanism is a pure module (`scripts/lib/design-tokens.mjs`) with its own tests, which is also
+the first test coverage any guard under `scripts/` has had.
 
 Two things about it are load-bearing:
 
@@ -266,8 +328,8 @@ and each matching a defect that actually shipped:
 
 **`store/console/src/lib/control-shapes.test.ts`** — also in the unit suite, added at #366. **No new
 `<button>` may draw its own box**: a ratchet over any button whose class attribute names both a
-padding and a radius utility, pinned exactly at 125 (console), 15 (admin) and 48 (Coder UI), and it
-may only go down. 47 shapes accumulated because nothing failed when a fifteenth appeared, and a
+padding and a radius utility, pinned exactly at **124** (console), 15 (admin) and 48 (Coder UI), and
+it may only go down. 47 shapes accumulated because nothing failed when a fifteenth appeared, and a
 sweep without a ratchet is a photograph of a tree that keeps growing — #367's guard caught five
 defects that landed on main from another author *while its own sweep was running*.
 
@@ -277,14 +339,29 @@ badges are not counted either, because `<div>` is the wrong unit to scan and pad
 not tell a card from a code block. And it says nothing about whether the variant chosen was the
 right one — that is taste, and the paragraph below applies.
 
+**`e2e/console.spec.ts` — "every control clears the 24px minimum target"**, added at #389, and the
+first geometry guard here that measures a rendered box rather than source text. It walks the same
+11 routes the overflow sweep visits, at 390px, in **both** Chromium and WebKit (it carries the
+`mobile — ` prefix that #384 made load-bearing), and fails on any `<button>` or checkbox/radio whose
+**effective target** is under 24×24. Effective means the union of the element's own box, its
+`::after` overlay — which is how it sees `tap-target` — and, for an input, the `<label>` that
+encloses it, because clicking that label *is* clicking the control.
+
+Two holes, said out loud. It skips a `<button>` with no background, no border and no padding — a
+link wearing a button tag — which is the same class `control-shapes.ts` excludes and for the same
+reason, and which is precisely the shape `RepoTab`'s destructive 16px *Remove* had: this guard could
+not have caught the defect that motivated it, and that one was fixed by hand. And it only sees what
+the fixture renders, so Terminals and the Behaviour tab — two of the routes the audit found worst —
+are thin here.
+
 **Not enforceable, and honest to say so:** spacing rhythm, whether a given control should be a button
 or a link, information density, when a surface is `panel` versus `paper`, icon choice, and whether
 `/10` or `/15` is the right tint. These are judgement, and a lint that pretended to check them would
 only teach people to suppress it.
 
-**Deliberately not enforced yet:** the type scale (see §2 — the primitives that absorb it exist since
-#366, the `@theme` step they would name does not) and the marketing-vs-SPA palette split (§4 —
-resolving it is a restyling decision about the marketing pages, not a lint).
+**Deliberately not enforced yet:** the marketing-vs-SPA palette split (§4 — resolving it is a
+restyling decision about the marketing pages, not a lint), and card/badge geometry (`<div>` is the
+wrong unit to scan, per the paragraph above).
 
 ## 6. Open
 
@@ -295,22 +372,26 @@ resolving it is a restyling decision about the marketing pages, not a lint).
   `--color-danger` as an *alias* beside `--color-red` without migrating ~200 call sites would leave two
   names for one idea — the failure #368 explicitly refused when it declined to invent a third status
   vocabulary. The intent layer in `lib/statusBadge.ts` is what keeps the eventual rename cheap.
-- Collapse the remaining arbitrary type sizes into a scale (§2). Measured rendered, 2026-08-08
-  (#390): **148 sub-12px strings on Terminals**, 100 on Activity, and 9.9px body copy under form
-  controls on the instance Settings tab — nine of the values sit inside a 2px band. #366 built the
-  primitives that absorb them and took the migrated call sites; the rest needs a `--text-*` step in
-  BOTH `@theme` blocks, so it is the same two-tree commit as the rename above.
 - **Finish the button migration.** #366 took 57 of 182 sites — the shared component family, the
-  Knowledge tab and TeamworkSection's `chip`. Still hand-written: `AgentDetail`, `RunDetail`,
-  `InstanceDetail`, `Profile`, `BoardTab`, `SettingsTab`, `StatsTab`, `TmuxTab`, `DataTab`,
-  `TriggersSection`, `LoopPresetsSection`, and all of `store/admin` and `agents/coder/web`. The
-  ratchet in §5 holds each tree where it stands meanwhile.
-- **Decide whether this document may become prescriptive, and about what.** It is descriptive by
-  design, and the two floors an audit keeps asking for — a minimum tap target (#389: 40 controls
-  under 40px on the Assistant screen, 12×12px checkboxes on Behaviour, a 16px *Remove* on Repo) and
-  a minimum readable font size (#390) — cannot be recorded here without changing that. Both belong
-  in the component layer, which now exists (§3): a floor written into `BUTTON_SIZE` applies to every
-  control that renders through it, and the ratchet in §5 is what stops a new one bypassing it. The
-  open question is only whether the numbers live *here* once they exist.
+  Knowledge tab and TeamworkSection's `chip`; #389 took `RepoTab`'s four. Still hand-written:
+  `AgentDetail`, `RunDetail`, `InstanceDetail`, `Profile`, `BoardTab`, `SettingsTab`, `StatsTab`,
+  `TmuxTab`, `DataTab`, `TriggersSection`, `LoopPresetsSection`, and all of `store/admin` and
+  `agents/coder/web`. Those files do not get `BUTTON_SIZE`'s 24px floor until they migrate — the
+  e2e guard is what holds them meanwhile, and only on the 11 routes it visits. The ratchet in §5
+  holds each tree where it stands.
+- **A `text-2xs` audit, one screen at a time.** The scale sweep was mechanical by design (nearest
+  step, ties up), so 173 sites landed on the 11px floor by arithmetic rather than by anyone deciding
+  the text there is telemetry. Some of it is not: `text-2xs` under a form control on the Settings
+  tab is descriptive copy and belongs at `text-xs`. That is a judgement call per screen, it is
+  exactly the kind of thing §5's last paragraph says a lint must not pretend to check, and it is now
+  cheap — moving a step is one class, not a decision about what number to invent.
+- **`tap-target` is applied to three controls, not to a class of them.** The chat Copy, Delete-turn
+  and replay buttons have it; the Coder UI's own icon controls, the Board's, and the coding
+  session's do not. Applying it wholesale is not safe — the overlap arithmetic in its comment is
+  per-layout — so widening it means measuring each dense row, which nothing here does yet.
+- **The Behaviour tab and Terminals are the routes #389 and #390 measured worst and the routes both
+  guards see least.** Neither has a fixture rich enough to render its controls, so both were fixed
+  by rule (the base-layer checkbox size, the type sweep) and neither is *held* by anything. A
+  fixture for them is the cheapest next increment on both tickets.
 - Decide whether the marketing pages adopt the SPA palette or keep their own (§4).
 - Clear `store/admin`'s two pinned dead utilities (§5) and drop its pin to zero.

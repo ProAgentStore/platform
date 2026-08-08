@@ -51,8 +51,14 @@ function sweep(root: string) {
  *
  * Admin's number moved from 13 to 15 between filing and landing: the operator portal's GitHub
  * issue monitor (341b0d1) arrived with two more, which is this guard's argument in miniature.
+ *
+ * 125 → 124 at #389: `RepoTab`'s *Index* button became `<Button variant="primary" size="lg">`
+ * when its three padding-less siblings were given real boxes. The other three never counted —
+ * they named no padding and no radius, which is precisely the shape this guard excludes, and
+ * one of them was the 16px *Remove* that deletes an indexed repository. The ratchet moving by
+ * one while the actual defect moved by four is the honest measure of what it covers.
  */
-const PINNED = { "store/console": 125, "store/admin": 15, "agents/coder/web": 48 };
+const PINNED = { "store/console": 124, "store/admin": 15, "agents/coder/web": 48 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

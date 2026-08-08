@@ -36,7 +36,7 @@ export default function SpokenMessage({ content, dictation }: { content: string;
 	return (
 		<>
 			<span className="whitespace-pre-wrap break-words">{heard ? dictation : content}</span>
-			<div className="mt-1 flex items-center gap-2 text-[0.65rem]">
+			<div className="mt-1 flex items-center gap-2 text-2xs">
 				<button
 					type="button"
 					aria-pressed={heard}

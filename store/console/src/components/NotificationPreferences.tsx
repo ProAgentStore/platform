@@ -92,7 +92,7 @@ export default function NotificationPreferences({
 					>
 						<span className="text-sm min-w-0">
 							<span className="font-semibold">{t.label}</span>
-							<span className="block text-[0.7rem] text-muted-soft mt-0.5">
+							<span className="block text-2xs text-muted-soft mt-0.5">
 								{t.description}
 								{t.alerts && !on ? " Requests for your input still come through." : ""}
 							</span>
@@ -102,7 +102,7 @@ export default function NotificationPreferences({
 							checked={on}
 							onChange={(e) => void toggle(t.id, e.target.checked)}
 							aria-label={`Notify me about ${t.label}`}
-							className="mt-0.5 shrink-0 w-4 h-4 accent-accent"
+							className="mt-0.5"
 						/>
 					</label>
 				);

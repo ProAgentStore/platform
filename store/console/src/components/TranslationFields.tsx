@@ -50,7 +50,6 @@ export default function TranslationFields({ value, onSave, languages }: Translat
 					type="checkbox"
 					checked={trEnabled}
 					onChange={(e) => saveTranslation(e.target.checked, trTarget, trTranslit, trWordTap, trFontSize)}
-					className="w-4 h-4 accent-accent"
 				/>
 				<span className="text-muted">Show translation under replies</span>
 			</label>
@@ -72,7 +71,6 @@ export default function TranslationFields({ value, onSave, languages }: Translat
 							type="checkbox"
 							checked={trTranslit}
 							onChange={(e) => saveTranslation(true, trTarget, e.target.checked, trWordTap, trFontSize)}
-							className="w-4 h-4 accent-accent"
 						/>
 						<span className="text-muted">Also show transliteration (pinyin / romaji / romanization)</span>
 					</label>
@@ -81,7 +79,6 @@ export default function TranslationFields({ value, onSave, languages }: Translat
 							type="checkbox"
 							checked={trWordTap}
 							onChange={(e) => saveTranslation(true, trTarget, trTranslit, e.target.checked, trFontSize)}
-							className="w-4 h-4 accent-accent"
 						/>
 						<span className="text-muted">Tap a word to hear it pronounced (long-press still selects text)</span>
 					</label>

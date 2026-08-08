@@ -2497,3 +2497,111 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 		});
 	}
 });
+
+/**
+ * Every control clears the 24px minimum target (#389).
+ *
+ * The audit that opened this measured 40 interactive elements under 40px on the Assistant
+ * screen alone, 12×12px checkboxes on Behaviour, and a 16px *Remove* — which deletes an
+ * indexed repository — sitting beside a 16px control that does not.
+ *
+ * ── The number this asserts, and why it is not 44
+ *
+ * **WCAG 2.5.8 Target Size (Minimum), Level AA: 24×24 CSS px, in both axes.** Apple's 44 and
+ * Material's 48 are the numbers a redesign would meet; every control in this console renders
+ * between 24 and 38px tall, so a 44px floor asserted here would fail ~40 controls per screen
+ * and the only way to green would be re-laying-out every dense row in the app under cover of
+ * an accessibility fix. 44 is met as REACH rather than as box size, by `tap-target` in
+ * `index.css`, on the smallest and most error-prone controls — and this measures that too,
+ * because it measures the target a finger actually gets rather than the border box.
+ *
+ * ── What counts as the target
+ *
+ * The union of the element's own box, its `::after` overlay (which is what `tap-target` is)
+ * and, for a checkbox or radio, the `<label>` that encloses it — because clicking that label
+ * IS clicking the control, and an `sr-only` radio inside a visible segmented arm is 1×1 by
+ * design.
+ *
+ * ── What it deliberately does not cover
+ *
+ * A `<button>` with no background, no border and no padding is a link wearing a button tag,
+ * and is skipped — the same class `control-shapes.ts` excludes, for the same reason: padding
+ * one up to 24px would move text that is meant to sit inside a sentence. That exclusion is
+ * also the hole: `RepoTab`'s *Remove* was exactly this shape, so this guard could not have
+ * caught the destructive 16px control that motivated it. That one was fixed by hand, and
+ * DESIGN-SYSTEM §5 records the gap rather than leaving it to be discovered.
+ *
+ * And it only sees what the fixture renders. Terminals and Behaviour — two of the routes the
+ * audit found worst — are thin here; this holds the routes it visits and nothing more.
+ */
+test.describe("mobile — every control clears the 24px minimum target (#389)", () => {
+	/** WCAG 2.5.8, Level AA. Not a house preference — a published, testable floor. */
+	const MIN_TARGET = 24;
+
+	const routes = [
+		"/console/",
+		"/console/instances",
+		"/console/agents/agent-1",
+		"/console/agents/agent-1/settings",
+		"/console/instances/inst-1",
+		"/console/instances/inst-1/board",
+		"/console/instances/inst-1/knowledge",
+		"/console/instances/inst-1/settings",
+		"/console/profile",
+		"/console/preferences",
+		"/console/notifications",
+	];
+
+	async function measureTargets(page: Page, min: number) {
+		return page.evaluate((floor) => {
+			const main = document.querySelector("main");
+			if (!main) return [];
+			const px = (v: string) => (v.endsWith("px") ? Number.parseFloat(v) : 0);
+
+			/** A button that draws no box of its own is a text link, and is not this defect. */
+			const isTextLink = (el: HTMLElement) => {
+				if (el.tagName !== "BUTTON") return false;
+				const s = getComputedStyle(el);
+				const opaque = s.backgroundColor !== "transparent" && !/,\s*0\)$/.test(s.backgroundColor);
+				const sides = ["Top", "Right", "Bottom", "Left"] as const;
+				const bordered = sides.some((side) => px(s[`border${side}Width`]) > 0);
+				const padded = sides.some((side) => px(s[`padding${side}`]) > 0);
+				return !opaque && !bordered && !padded;
+			};
+
+			const findings: string[] = [];
+			for (const el of Array.from(main.querySelectorAll('button, input[type="checkbox"], input[type="radio"]'))) {
+				const h = el as HTMLElement;
+				const box = h.getBoundingClientRect();
+				if (box.width === 0 && box.height === 0) continue; // not rendered at all
+				if (isTextLink(h)) continue;
+
+				// The overlay `tap-target` draws, and the label that IS the target for an input.
+				const after = getComputedStyle(h, "::after");
+				const label = h.tagName === "INPUT" ? h.closest("label")?.getBoundingClientRect() : undefined;
+				const width = Math.max(box.width, px(after.width), label?.width ?? 0);
+				const height = Math.max(box.height, px(after.height), label?.height ?? 0);
+
+				if (Math.min(width, height) + 0.5 < floor) {
+					const name = (h.getAttribute("aria-label") || h.textContent || h.getAttribute("title") || "").trim().slice(0, 30);
+					findings.push(`${Math.round(width)}×${Math.round(height)} <${h.tagName.toLowerCase()}> "${name}"`);
+				}
+			}
+			return findings;
+		}, min);
+	}
+
+	for (const route of routes) {
+		test(`no target under ${MIN_TARGET}px on ${route}`, async ({ page }) => {
+			await page.setViewportSize({ width: 390, height: 812 });
+			await mockSignedInConsole(page);
+			await page.goto(route);
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+			await page.waitForTimeout(300); // let async content settle
+
+			const findings = await measureTargets(page, MIN_TARGET);
+			expect(findings, `targets under ${MIN_TARGET}px on ${route}: ${findings.join(" · ")}`).toEqual([]);
+		});
+	}
+});

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import Button from "../components/Button";
 
 interface Props {
 	instanceId: string;
@@ -116,9 +117,9 @@ export default function RepoTab({ instanceId }: Props) {
 						placeholder="https://github.com/owner/repo"
 						className="flex-1"
 					/>
-					<button type="button" onClick={() => addRepo(url)} disabled={busy || !url.trim()} className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-50 shrink-0">
+					<Button variant="primary" size="lg" onClick={() => addRepo(url)} disabled={busy || !url.trim()} className="shrink-0">
 						{busy ? "…" : "Index"}
-					</button>
+					</Button>
 				</div>
 				{err && <p className="text-xs text-red mt-2">{err}</p>}
 				<p className="text-xs text-muted-soft mt-2">Public repos work as-is. Private repos need GitHub connected. Up to 20 repos, 300 files each.</p>
@@ -158,17 +159,21 @@ export default function RepoTab({ instanceId }: Props) {
 							{r.status === "done" && r.description && <p className="text-sm text-muted mt-2">{r.description}</p>}
 							{r.status === "error" && <p className="text-sm text-red mt-2">{r.error || "Indexing failed."}</p>}
 
+							{/* These three were bare text with no padding at all, so they rendered 16px tall
+							    — and the 16px one on the right DELETES an indexed repository, sitting
+							    beside a 16px one that does not, on a touch surface. Real controls now:
+							    `sm` is 24px, WCAG 2.5.8's minimum, and `danger` says which is which. */}
 							{!active && (
-								<div className="flex gap-3 mt-3 text-xs">
+								<div className="flex flex-wrap gap-2 mt-3">
 									{r.status === "done" && r.paths && r.paths.length > 0 && (
-										<button type="button" onClick={() => setExpanded((e) => ({ ...e, [r.key]: !e[r.key] }))} className="text-muted hover:text-accent font-semibold">
+										<Button size="sm" variant="ghost" onClick={() => setExpanded((e) => ({ ...e, [r.key]: !e[r.key] }))}>
 											{expanded[r.key] ? "▾ Hide" : "▸ Show"} files ({r.paths.length})
-										</button>
+										</Button>
 									)}
 									{r.repoUrl && (
-										<button type="button" onClick={() => addRepo(r.repoUrl as string)} disabled={busy} className="text-muted hover:text-accent font-semibold disabled:opacity-50">Re-index</button>
+										<Button size="sm" onClick={() => addRepo(r.repoUrl as string)} disabled={busy}>Re-index</Button>
 									)}
-									<button type="button" onClick={() => removeRepo(r.repoUrl, r.key)} disabled={busy} className="text-muted hover:text-red font-semibold disabled:opacity-50">Remove</button>
+									<Button size="sm" variant="danger" onClick={() => removeRepo(r.repoUrl, r.key)} disabled={busy}>Remove</Button>
 								</div>
 							)}
 

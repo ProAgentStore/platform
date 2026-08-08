@@ -66,7 +66,7 @@ export default function Browse() {
 	return (
 		<Page>
 			<div className="flex justify-between items-center mb-1">
-				<h2 className="text-[1.1rem] font-semibold">Browse agents</h2>
+				<h2 className="text-lg font-semibold">Browse agents</h2>
 			</div>
 			<p className="text-sm text-muted mb-4">Subscribe to any published agent to get your own private instance.</p>
 			{loading ? (
@@ -79,7 +79,7 @@ export default function Browse() {
 						const sub = instanceFor(a.id);
 						return (
 							<div key={a.id} className="bg-panel border border-line rounded-xl p-3 sm:p-4 flex flex-col">
-								<h3 className="text-[0.95rem] font-bold mb-1">{a.name}</h3>
+								<h3 className="text-base font-bold mb-1">{a.name}</h3>
 								<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-3 flex-1">{a.description || "No description"}</p>
 								<div className="flex gap-2 text-xs mb-3 flex-wrap">
 									{a.category && <span className="px-1.5 py-0.5 rounded font-medium bg-accent-soft text-purple-400">{a.category}</span>}

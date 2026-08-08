@@ -372,13 +372,13 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 									<span className="text-muted text-xs">({cn.action})</span>
 								</div>
 								{/* A predicate that is not on screen is indistinguishable from a broken chain. */}
-								{filter && <div className="text-[0.7rem] text-muted-soft break-words">only when {filter}</div>}
-								<div className={`text-[0.7rem] ${toneClass(health.tone)}`}>{health.text}</div>
+								{filter && <div className="text-2xs text-muted-soft break-words">only when {filter}</div>}
+								<div className={`text-2xs ${toneClass(health.tone)}`}>{health.text}</div>
 								{/* #363: rows written before the create-time check existed may already name a
 								    pipeline the target does not have. Surfaced, not removed — "Remove" is right
 								    there, and a connection the user wrote is theirs to delete. */}
 								{(cn.warnings ?? []).map((w) => (
-									<div key={w} className="text-[0.7rem] text-yellow break-words">{w}</div>
+									<div key={w} className="text-2xs text-yellow break-words">{w}</div>
 								))}
 							</div>
 							<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeConnection(cn.id)}>Remove</Button>
@@ -405,7 +405,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				<div className="mt-3 border-t border-line pt-3">
 					<div className="flex items-center flex-wrap gap-2 mb-2">
 						<span className="text-xs font-semibold">Only send when…</span>
-						<label className="text-[0.7rem] text-muted flex items-center gap-1">
+						<label className="text-2xs text-muted flex items-center gap-1">
 							<input type="checkbox" aria-label="Match any condition" checked={anyClause} onChange={(e) => setAnyClause(e.target.checked)} />
 							match any (instead of all)
 						</label>
@@ -448,7 +448,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					</Button>
 					{/* The strict-equality trap, stated once rather than discovered by a chain that
 					    silently carries nothing: "4" is not 4, and quoting forces text. */}
-					<p className="text-[0.7rem] text-muted-soft mt-2">
+					<p className="text-2xs text-muted-soft mt-2">
 						Numbers and true/false/null are read as typed. Wrap a value in quotes to keep it text — e.g. <code>"2000"</code> for a postcode.
 					</p>
 				</div>
@@ -501,11 +501,11 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 													{d.source === "trigger" ? " · via trigger" : ""}
 												</span>
 											</div>
-											<div className={`text-[0.7rem] ${toneClass(state.tone)}`}>
+											<div className={`text-2xs ${toneClass(state.tone)}`}>
 												{state.text}
 												{d.createdAt ? ` · ${formatTime(d.createdAt)}` : ""}
 											</div>
-											{d.lastError && <div className="text-[0.7rem] text-red break-words">{d.lastError}</div>}
+											{d.lastError && <div className="text-2xs text-red break-words">{d.lastError}</div>}
 										</div>
 										<div className="flex flex-col gap-1 shrink-0">
 											{/* Retries wait out someone else's outage; when it is over, replay is the fix. */}
@@ -521,11 +521,11 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 									</div>
 									{openTrace === d.id && (
 										<div className="mt-2 border-t border-line pt-2">
-											<div className="text-[0.7rem] text-muted-soft break-all mb-1">trace {d.traceId}</div>
-											{trace === null && <div className="text-[0.7rem] text-muted">Loading…</div>}
-											{trace?.length === 0 && <div className="text-[0.7rem] text-muted">No events recorded for this run.</div>}
+											<div className="text-2xs text-muted-soft break-all mb-1">trace {d.traceId}</div>
+											{trace === null && <div className="text-2xs text-muted">Loading…</div>}
+											{trace?.length === 0 && <div className="text-2xs text-muted">No events recorded for this run.</div>}
 											{trace?.map((e, i) => (
-												<div key={e.id || `${e.ts}-${i}`} className={`text-[0.7rem] ${e.level === "error" ? "text-red" : "text-muted"} break-words`}>
+												<div key={e.id || `${e.ts}-${i}`} className={`text-2xs ${e.level === "error" ? "text-red" : "text-muted"} break-words`}>
 													<code>{e.event}</code> {e.message}
 												</div>
 											))}

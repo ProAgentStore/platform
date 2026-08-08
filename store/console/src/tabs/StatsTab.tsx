@@ -350,7 +350,7 @@ function AddCard({
 			{/* What it counts, and what it does not — both shown BEFORE the card is created, not
 			    discovered afterwards. */}
 			<p className="text-xs text-muted">{source.describes}</p>
-			<p className="text-[0.7rem] text-muted-soft">{source.caveat}</p>
+			<p className="text-2xs text-muted-soft">{source.caveat}</p>
 
 			<label className="text-xs text-muted block">
 				Title

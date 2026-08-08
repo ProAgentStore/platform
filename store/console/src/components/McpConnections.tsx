@@ -332,7 +332,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 	return (
 		<div className="mb-3 pb-3 border-b border-line">
 			<div className="text-sm font-semibold mb-0.5">MCP connections</div>
-			<p className="text-[0.7rem] text-muted-soft mb-2">
+			<p className="text-2xs text-muted-soft mb-2">
 				Point this agent at a remote MCP server. Testing a URL reads the server’s own tool list — nothing is granted until you tick it. A server is identified by its
 				address, so there is no nickname to keep in sync; add as many as you like.
 			</p>
@@ -340,7 +340,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 			{/* The unbound legacy token. Shown until it is bound or discarded, because the alternative
 			    is a user whose agent silently stopped working reading the change as data loss. */}
 			{creds.legacy.present && (
-				<p className="text-[0.68rem] text-yellow mb-2 leading-snug">
+				<p className="text-2xs text-yellow mb-2 leading-snug">
 					You have an older account-wide MCP token. It isn’t bound to a server, so it is no longer sent automatically — one token reaching every server you name was the reason. Add a
 					token per server below (“Use my existing token” binds this one without retyping it), or{" "}
 					<button type="button" className="underline" disabled={busyTool === "cred::legacy"} onClick={() => discardLegacy()}>
@@ -393,7 +393,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 							</div>
 							<div className="flex flex-wrap gap-1 mt-0.5">
 								{c.grants.map((g) => (
-									<span key={g.tool} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-[0.65rem]">
+									<span key={g.tool} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-2xs">
 										{g.tool === "*" ? "*" : g.tool}
 										{g.destructive && <span className="text-red ml-1">!</span>}
 										<button type="button" className="ml-1 text-muted-soft hover:text-red" onClick={() => setGrant(c.endpoint, g.tool, false)} aria-label={`Revoke ${g.tool}`}>
@@ -412,7 +412,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 			    that names no MCP server of its own, which is the normal state of a local build. */}
 			{presets.length > 0 && (
 				<div className="flex flex-wrap gap-1.5 items-center mb-1.5">
-					<span className="text-[0.68rem] text-muted-soft">Suggested:</span>
+					<span className="text-2xs text-muted-soft">Suggested:</span>
 					{presets.map((p) => (
 						<button
 							key={p.id}
@@ -423,7 +423,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 								setUrl(p.url);
 								void runTest(p.url, "vault");
 							}}
-							className="px-2 py-0.5 text-[0.68rem] rounded-full border border-line bg-paper hover:border-accent disabled:opacity-40"
+							className="px-2 py-0.5 text-2xs rounded-full border border-line bg-paper hover:border-accent disabled:opacity-40"
 						>
 							{p.label}
 						</button>
@@ -445,8 +445,8 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					{testing ? "Testing…" : "Test connection"}
 				</Button>
 			</div>
-			<label className="flex items-center gap-1.5 text-[0.68rem] text-muted-soft mt-1 cursor-pointer">
-				<input type="checkbox" checked={openAuth} onChange={(e) => setOpenAuth(e.target.checked)} className="w-3 h-3 accent-accent" />
+			<label className="flex items-center gap-1.5 text-2xs text-muted-soft mt-1 cursor-pointer">
+				<input type="checkbox" checked={openAuth} onChange={(e) => setOpenAuth(e.target.checked)} />
 				Open server — don’t send this server’s stored token
 			</label>
 			{msg && <p className="text-xs text-green mt-1">{msg}</p>}
@@ -459,7 +459,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 						<code className="font-mono text-muted truncate max-w-[14rem]">{report.endpoint}</code>
 						{report.durationMs != null && <span className="ml-auto text-muted-soft">{report.durationMs}ms</span>}
 					</div>
-					<p className="text-[0.7rem] text-muted mt-1 leading-snug">{report.detail}</p>
+					<p className="text-2xs text-muted mt-1 leading-snug">{report.detail}</p>
 
 					{/* The credential remedy, offered at the moment the user knows which server needs it.
 					    `auth_required` is included: the server rejected what we sent, and the fix is a
@@ -476,7 +476,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 								</Button>
 							)}
 							{tokenFor !== report.endpoint && (
-								<button type="button" className="text-[0.68rem] text-accent hover:underline" onClick={() => { setTokenFor(report.endpoint); setTokenValue(""); }}>
+								<button type="button" className="text-2xs text-accent hover:underline" onClick={() => { setTokenFor(report.endpoint); setTokenValue(""); }}>
 									{report.status === "credential_missing" ? "Add a token for this server" : "Replace this server’s token"}
 								</button>
 							)}
@@ -486,7 +486,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 
 					{/* Auth model, when the server published any. Shape only — never a token. */}
 					{report.auth?.protectedResource && (
-						<p className="text-[0.68rem] text-muted-soft mt-1">
+						<p className="text-2xs text-muted-soft mt-1">
 							OAuth-protected by <code className="font-mono">{report.auth.authorizationServer}</code>
 							{report.auth.unattended === "interactive-only" && " — it issues no refresh token, so access can’t be renewed unattended."}
 							{report.auth.dynamicRegistration === false && " — it needs a pre-registered client, so connect it with a token instead."}
@@ -506,16 +506,16 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 											type="button"
 											disabled={busyTool === `smoke::${report.endpoint}`}
 											onClick={() => runSmoke(report.endpoint, preset.smokeTool as string)}
-											className="text-[0.68rem] text-accent hover:underline disabled:opacity-40"
+											className="text-2xs text-accent hover:underline disabled:opacity-40"
 										>
 											{busyTool === `smoke::${report.endpoint}` ? "Running…" : `Run ${preset.smokeTool} as a live check`}
 										</button>
 									) : (
-										<span className="text-[0.68rem] text-muted-soft">
+										<span className="text-2xs text-muted-soft">
 											Allow <code className="font-mono">{preset.smokeTool}</code> below to run a live check against this server.
 										</span>
 									)}
-									{smoke?.endpoint === report.endpoint && <p className={`text-[0.68rem] mt-0.5 ${smoke.ok ? "text-green" : "text-yellow"}`}>{smoke.text}</p>}
+									{smoke?.endpoint === report.endpoint && <p className={`text-2xs mt-0.5 ${smoke.ok ? "text-green" : "text-yellow"}`}>{smoke.text}</p>}
 								</div>
 							);
 						})()}
@@ -523,10 +523,10 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					{/* The gates. Shown even on success, because "connected" with a closed gate is
 					    the exact state that looks fine and does nothing. */}
 					{report.status === "connected" && !report.gates.callToolEnabled && (
-						<p className="text-[0.68rem] text-yellow mt-1">This agent can’t run <code className="font-mono">mcp_call_tool</code>, so nothing here is callable yet — enable it under Tools.</p>
+						<p className="text-2xs text-yellow mt-1">This agent can’t run <code className="font-mono">mcp_call_tool</code>, so nothing here is callable yet — enable it under Tools.</p>
 					)}
 					{report.status === "connected" && report.gates.callToolEnabled && !report.gates.writeConsent && (
-						<p className="text-[0.68rem] text-yellow mt-1">MCP write access is off. Granting a tool below turns it on.</p>
+						<p className="text-2xs text-yellow mt-1">MCP write access is off. Granting a tool below turns it on.</p>
 					)}
 
 					{/* Resources and prompts (#263). A server is more than its tools, and the panel used
@@ -540,12 +540,12 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					    an approval that does not exist. */}
 					{report.status === "connected" && (report.resources || report.prompts) && (
 						<div className="mt-2">
-							<div className="text-[0.7rem] font-semibold mb-1">Also on this server</div>
+							<div className="text-2xs font-semibold mb-1">Also on this server</div>
 							{([["Resources", report.resources], ["Prompts", report.prompts]] as const).map(([label, surface]) => {
 								if (!surface) return null;
 								const line = surfaceLine(surface);
 								return (
-									<div key={label} className="flex items-baseline gap-2 text-[0.68rem] mb-0.5">
+									<div key={label} className="flex items-baseline gap-2 text-2xs mb-0.5">
 										<span className="w-16 shrink-0 text-muted">{label}</span>
 										<span className={line.tone === "amber" ? "text-yellow" : "text-muted-soft"}>{line.label}</span>
 									</div>
@@ -556,7 +556,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 							{[report.resources, report.prompts]
 								.filter((s): s is McpSurfaceReport => !!s && s.state === "available" && s.count > 0 && (!s.listEnabled || !s.readEnabled))
 								.map((s) => (
-									<p key={s.detail} className="text-[0.66rem] text-yellow leading-snug mt-0.5">
+									<p key={s.detail} className="text-2xs text-yellow leading-snug mt-0.5">
 										{s.detail}
 									</p>
 								))}
@@ -566,10 +566,10 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					{report.tools.length > 0 && (
 						<div className="mt-2">
 							<div className="flex items-center gap-2 mb-1">
-								<span className="text-[0.7rem] font-semibold">Tools on this server</span>
+								<span className="text-2xs font-semibold">Tools on this server</span>
 								<button
 									type="button"
-									className="ml-auto text-[0.68rem] text-accent hover:underline"
+									className="ml-auto text-2xs text-accent hover:underline"
 									disabled={busyTool !== ""}
 									onClick={() => setGrant(report.endpoint, "*", true)}
 								>
@@ -583,13 +583,13 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 										checked={t.granted}
 										disabled={busyTool === `${report.endpoint}::${t.name}`}
 										onChange={(e) => setGrant(report.endpoint, t.name, e.target.checked)}
-										className="w-3.5 h-3.5 accent-accent mt-0.5"
+										className="mt-0.5"
 									/>
 									<span className="min-w-0">
-										<span className="font-mono text-[0.72rem] font-semibold">{t.name}</span>
-										{t.destructive && <span className="ml-1.5 text-[0.62rem] uppercase tracking-wide text-red">destructive</span>}
-										{t.description && <span className="block text-[0.66rem] text-muted-soft leading-snug">{t.description}</span>}
-										{!t.callable && t.blockedBy && <span className="block text-[0.66rem] text-yellow leading-snug">{blockerHint(t.blockedBy)}</span>}
+										<span className="font-mono text-xs font-semibold">{t.name}</span>
+										{t.destructive && <span className="ml-1.5 text-2xs uppercase tracking-wide text-red">destructive</span>}
+										{t.description && <span className="block text-2xs text-muted-soft leading-snug">{t.description}</span>}
+										{!t.callable && t.blockedBy && <span className="block text-2xs text-yellow leading-snug">{blockerHint(t.blockedBy)}</span>}
 									</span>
 								</label>
 							))}

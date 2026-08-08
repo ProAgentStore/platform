@@ -104,7 +104,7 @@ export default function McpInputRequests({ instanceId }: { instanceId: string })
 							<AlertCircle size={15} className="text-yellow shrink-0 mt-0.5" />
 							<div className="min-w-0">
 								<p className="font-semibold">{req.tool} needs something from you</p>
-								<p className="text-[0.7rem] text-muted break-all">
+								<p className="text-2xs text-muted break-all">
 									{req.endpoint}
 									{req.round > 1 && ` · round ${req.round} of ${req.maxRounds}`}
 									{left ? ` · ${left}` : ` · ${closedNote("expired")}`}
@@ -130,11 +130,11 @@ export default function McpInputRequests({ instanceId }: { instanceId: string })
 
 						{/* Said BEFORE the button, not after the click: the resume re-sends the whole call,
 						    which is the one thing about this design a person could be surprised by. */}
-						<p className="text-[0.7rem] text-muted mt-3">
+						<p className="text-2xs text-muted mt-3">
 							Answering re-sends the whole call to that server with your answer added. Cancelling sends nothing.
 						</p>
-						{missing.length > 0 && <p className="text-[0.7rem] text-yellow mt-1">Still needed: {missing.join(", ")}</p>}
-						{error && <p className="text-[0.7rem] text-red mt-1">{error}</p>}
+						{missing.length > 0 && <p className="text-2xs text-yellow mt-1">Still needed: {missing.join(", ")}</p>}
+						{error && <p className="text-2xs text-red mt-1">{error}</p>}
 						<div className="flex gap-2 mt-2">
 							<Button variant="primary" disabled={busy === req.id || missing.length > 0} onClick={() => void respond(req, "submit")}>
 								{busy === req.id && <Loader2 size={12} className="animate-spin" />}
@@ -158,13 +158,13 @@ function Field({ id, field, value, onChange }: { id: string; field: McpInputFiel
 	const inputClass = "w-full bg-paper border border-line rounded-lg px-2 py-1.5 text-sm focus:border-accent outline-none";
 	return (
 		<div className="flex flex-col gap-1">
-			<label htmlFor={id} className="text-[0.7rem] font-semibold text-muted">
+			<label htmlFor={id} className="text-2xs font-semibold text-muted">
 				{labelFor(field)}
 				{field.required && <span className="text-yellow"> *</span>}
 			</label>
-			{field.description && <span className="text-[0.7rem] text-muted">{field.description}</span>}
+			{field.description && <span className="text-2xs text-muted">{field.description}</span>}
 			{control === "checkbox" ? (
-				<input id={id} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} className="w-4 h-4 accent-accent self-start" />
+				<input id={id} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} className="self-start" />
 			) : control === "select" ? (
 				<select id={id} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} className={inputClass}>
 					<option value="">Choose…</option>

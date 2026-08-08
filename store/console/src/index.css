@@ -31,6 +31,32 @@
 	--font-body: "Manrope", system-ui, sans-serif;
 	--font-display: "Fraunces", Georgia, serif;
 	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+	/*
+	 * ONE step below Tailwind's `text-xs` (0.75rem), and the floor of the type scale (#390).
+	 *
+	 * 190 arbitrary bracketed font sizes had accumulated in this app across 17 values, nine of
+	 * them inside a 2px band — 0.68rem and 0.7rem differ by 0.32px at a 16px root, which is not
+	 * a decision anyone made. (Written as numbers rather than as the utilities they were: a
+	 * class name quoted in a comment is a class name, and DESIGN-SYSTEM §5 records the sweep
+	 * that regenerated its own broken rules out of its own postmortem.) They existed because
+	 * there was nowhere for the decision to live — every step Tailwind ships stops at 12px, and
+	 * the console's dense telemetry (Terminals renders 148 sub-12px strings on one screen)
+	 * genuinely wants one notch smaller. Declaring that notch is what lets
+	 * `check-design-tokens.mjs` gate the arbitrary form at zero instead of relocating the
+	 * problem into 190 blocked edits.
+	 *
+	 * 11px is the floor, not a suggestion: everything that was below it (8.8px, 9.6px, 9.9px —
+	 * used for descriptive copy under form controls, text a user reads to make a decision) was
+	 * raised to it. Anything a user READS should be `text-xs` or larger; this step is for dense
+	 * status text where the whole screen is telemetry.
+	 *
+	 * The line-height is declared rather than left to inherit so the step behaves like every
+	 * other one in the family: a `--text-*` with no matching `--text-*--line-height` emits a
+	 * `line-height: var(…)` that resolves to nothing, which is the same silent-nothing failure
+	 * a dead colour token has. `calc(1 / 0.6875)` is 16px, the same line box `text-xs` gets.
+	 */
+	--text-2xs: 0.6875rem;
+	--text-2xs--line-height: calc(1 / 0.6875);
 }
 
 /*
@@ -69,9 +95,33 @@
 		touch-action: manipulation;
 	}
 
-	/* Form element defaults. EXCLUDE checkbox/radio — the width:100% (and the mobile
-	 * min-height:44px below) turned them into full-row giant boxes that pushed their
-	 * label off-screen. They keep the browser's native sizing. */
+	/*
+	 * Checkbox and radio, sized on purpose (#389).
+	 *
+	 * These are excluded from the block below because a `width: 100%` (and the mobile
+	 * `min-height: 44px`) turns them into full-row boxes that push their label off-screen —
+	 * and that exclusion is exactly why they were the one control nothing sized AT ALL. The
+	 * UA default is 13×13 in Chromium and 12×12 in WebKit: a quarter of the recommended
+	 * area, and the smallest interactive thing in the whole app, on the Behaviour tab, whose
+	 * entire job is toggling how an agent talks.
+	 *
+	 * 20px normally, 24px on a touch viewport. 24 is WCAG 2.5.8's minimum target size and the
+	 * ≤640px split is the one the form-control block already makes for the same reason. One
+	 * rule reaches every checkbox and radio in this app and the operator portal; the per-site
+	 * alternative is 22 edits and a 23rd control that starts the count again.
+	 *
+	 * `flex-shrink: 0` because most of these sit in a `flex` row beside a label that will
+	 * happily squash them back below the floor — the growth is pointless without it.
+	 */
+	input[type="checkbox"],
+	input[type="radio"] {
+		width: 1.25rem;
+		height: 1.25rem;
+		flex-shrink: 0;
+		accent-color: var(--color-accent);
+	}
+
+	/* Form element defaults. EXCLUDE checkbox/radio — see the rule above. */
 	input:not([type="checkbox"]):not([type="radio"]),
 	textarea,
 	select {
@@ -211,6 +261,40 @@
 	}
 }
 
+/*
+ * A 44px-tall pointer region on a control whose VISUAL box has to stay small (#389).
+ *
+ * The chat bubble's Copy and Delete-this-turn actions are 24×24 icons drawn over the message
+ * they act on, and they are also the controls a hands-free user reaches for at the moment
+ * voice has gone wrong — i.e. when precision is lowest. Padding them up to 44 would either
+ * cover the text they sit on or push every bubble taller, so the honest fix is to grow the
+ * TARGET without growing the box.
+ *
+ * VERTICAL ONLY, and that restriction is the whole design rather than a shortcut. A ::after
+ * overlay is painted with its own element, and siblings paint in DOM order, so a LATER
+ * control's expanded region sits on top of an EARLIER one's real box. Copy and Delete are 2px
+ * apart in that corner: expanding both to 44 wide would put Delete — the destructive one —
+ * over a third of Copy, which is a worse mis-tap than the one being fixed. Vertically there
+ * is no such neighbour, and vertical is where a thumb on a scrolling list misses anyway.
+ *
+ * Consequence, said plainly: this meets WCAG 2.5.8 (24×24, and comfortably) plus 44px of
+ * reach in one axis. It does NOT make a 24px icon a 44×44 target, and nothing here pretends
+ * it does.
+ */
+@utility tap-target {
+	position: relative;
+	&::after {
+		content: "";
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 50%;
+		translate: 0 -50%;
+		height: 100%;
+		min-height: 44px;
+	}
+}
+
 /* ── Mobile ── */
 @layer base {
 	@media (max-width: 640px) {
@@ -222,6 +306,12 @@
 		select {
 			font-size: 16px;
 			min-height: 44px;
+		}
+		/* 24px = WCAG 2.5.8's minimum target, on the pointer type where it is a finger (#389). */
+		input[type="checkbox"],
+		input[type="radio"] {
+			width: 1.5rem;
+			height: 1.5rem;
 		}
 	}
 }

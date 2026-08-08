@@ -142,7 +142,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 						<option value="gpt-4o-mini-transcribe">Realtime mini — cheaper and faster, slightly less accurate</option>
 						<option value="whisper-1">Whisper (legacy) — batch only, no live words</option>
 					</select>
-					<p className="text-[0.7rem] text-muted-soft mb-4">Only the realtime models stream partial words; whisper-1 returns the whole turn at the end.</p>
+					<p className="text-2xs text-muted-soft mb-4">Only the realtime models stream partial words; whisper-1 returns the whole turn at the end.</p>
 				</>
 			)}
 
@@ -210,7 +210,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					<option value={3000}>Long — first ~3000 characters</option>
 					<option value={4096}>Maximum — ~4096 characters</option>
 				</select>
-				<p className="text-[0.7rem] text-muted-soft mt-1">A long reply is cut off at this point when spoken — the full text is always on screen. Maximum is the most the natural (OpenAI) voice will accept in one go.</p>
+				<p className="text-2xs text-muted-soft mt-1">A long reply is cut off at this point when spoken — the full text is always on screen. Maximum is the most the natural (OpenAI) voice will accept in one go.</p>
 			</div>
 
 			<div className="border-t border-line my-3" />
@@ -302,11 +302,10 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					type="checkbox"
 					checked={commandsEnabled}
 					onChange={(e) => { setCommandsEnabled(e.target.checked); saveVoice({ commandsEnabled: e.target.checked }); }}
-					className="w-4 h-4 accent-accent"
 				/>
 				Enable voice commands
 			</label>
-			<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat"/"mute" is sent as a normal message.</p>
+			<p className="text-2xs text-muted-soft mt-1">Off = a spoken "repeat"/"mute" is sent as a normal message.</p>
 
 			<div className="border-t border-line my-3" />
 
@@ -322,7 +321,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					placeholder="tmux, HeartFull, Vectorize  (comma-separated)"
 					className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm"
 				/>
-				<span className="block text-[0.7rem] text-muted-soft mt-0.5">
+				<span className="block text-2xs text-muted-soft mt-0.5">
 					Words you say that get misheard — names, products, jargon. Smart (AI) recognition is told to
 					expect them; browser dictation can't be steered, so a word that comes back <i>close</i> to one
 					of these is corrected to match. Only whole words, only a very near miss — a mishearing that
@@ -331,26 +330,26 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 			</label>
 			{inherited.length > 0 && (
 				<div className="mt-2">
-					<span className="block text-[0.7rem] text-muted-soft mb-1">
+					<span className="block text-2xs text-muted-soft mb-1">
 						{/* The one place the UNION is stated. Everything else on this panel is an override —
 						    "customise for this agent" means INSTEAD OF — and vocabulary means AS WELL AS. */}
 						Also applied here, from <b>Preferences → Voice</b> (these add to the list above, they don't replace it):
 					</span>
 					<div className="flex flex-wrap gap-1">
 						{inherited.map((t) => (
-							<span key={t} className="text-[0.7rem] bg-paper border border-line rounded-full px-2 py-0.5">{t}</span>
+							<span key={t} className="text-2xs bg-paper border border-line rounded-full px-2 py-0.5">{t}</span>
 						))}
 					</div>
 				</div>
 			)}
 			{derived.length > 0 && (
 				<div className="mt-2">
-					<span className="block text-[0.7rem] text-muted-soft mb-1">
+					<span className="block text-2xs text-muted-soft mb-1">
 						Already known — this agent's name, its repos, the agents it works with. Nothing to type:
 					</span>
 					<div className="flex flex-wrap gap-1">
 						{derived.map((t) => (
-							<span key={t} className="text-[0.7rem] bg-paper border border-line rounded-full px-2 py-0.5 opacity-70">{t}</span>
+							<span key={t} className="text-2xs bg-paper border border-line rounded-full px-2 py-0.5 opacity-70">{t}</span>
 						))}
 					</div>
 				</div>
@@ -360,7 +359,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 
 			{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
 			    above; the stop-word works whenever it's set. */}
-			<p className="text-[0.7rem] text-muted-soft mt-3">These <b>override</b> your global voice commands (Preferences → Voice) for this agent only. Leave blank to use your global default. Anything you type here wins over our built-in phrasings — the same phrase is never read as two different commands.</p>
+			<p className="text-2xs text-muted-soft mt-3">These <b>override</b> your global voice commands (Preferences → Voice) for this agent only. Leave blank to use your global default. Anything you type here wins over our built-in phrasings — the same phrase is never read as two different commands.</p>
 			<div className="grid gap-2.5 mt-2">
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Repeat keywords</span>
@@ -369,37 +368,37 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Mute keywords</span>
 					<input value={muteWords} onChange={(e) => setMuteWords(e.target.value)} onBlur={() => saveVoice({ muteWords })} placeholder="mute, mute mic  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say one to mute the mic and stop the agent mid-sentence. Say an unmute word below to come back.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Say one to mute the mic and stop the agent mid-sentence. Say an unmute word below to come back.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Unmute keywords</span>
 					<input value={unmuteWords} onChange={(e) => setUnmuteWords(e.target.value)} onBlur={() => saveVoice({ unmuteWords })} placeholder="unmute, start listening  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Only listened for while you're muted, so these words can't interrupt a normal sentence. A short beep confirms the mic is live. Not available on iOS Safari, which has no background recogniser.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Only listened for while you're muted, so these words can't interrupt a normal sentence. A short beep confirms the mic is live. Not available on iOS Safari, which has no background recogniser.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Exit-voice keywords</span>
 					<input value={exitWords} onChange={(e) => setExitWords(e.target.value)} onBlur={() => saveVoice({ exitWords })} placeholder="exit voice, text mode  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Leaves voice entirely and returns to typing — unlike mute, which keeps the session live.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Leaves voice entirely and returns to typing — unlike mute, which keeps the session live.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Next-agent keywords</span>
 					<input value={nextWords} onChange={(e) => setNextWords(e.target.value)} onBlur={() => saveVoice({ nextWords })} placeholder="next, switch agent  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Moves you to the agent that's asking for you, and says which one out loud. Nothing waiting? It says so and stays put. A one-word keyword only fires when it's your whole sentence, so “what's next?” is still a message.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Moves you to the agent that's asking for you, and says which one out loud. Nothing waiting? It says so and stays put. A one-word keyword only fires when it's your whole sentence, so “what's next?” is still a message.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Scrap-turn keywords</span>
 					<input value={scrapWords} onChange={(e) => setScrapWords(e.target.value)} onBlur={() => saveVoice({ scrapWords })} placeholder="scrap that, scratch that  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Deletes your last exchange — your message, the reply and the tool log — after showing you what it's about to remove. The only destructive voice command, so it fires ONLY when the phrase is your entire sentence: “don't scrap that, keep it” stays a message. It can't undo what the turn already did, and says so.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Deletes your last exchange — your message, the reply and the tool log — after showing you what it's about to remove. The only destructive voice command, so it fires ONLY when the phrase is your entire sentence: “don't scrap that, keep it” stays a message. It can't undo what the turn already did, and says so.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>
 					<input value={stopWords} onChange={(e) => setStopWords(e.target.value)} onBlur={() => saveVoice({ stopWords })} placeholder="e.g. copy, over  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it at the end (“…do it, <b>copy</b>”) to send immediately without waiting for a pause — it's stripped from your message. Off by default since it's an everyday word.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Say it at the end (“…do it, <b>copy</b>”) to send immediately without waiting for a pause — it's stripped from your message. Off by default since it's an everyday word.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Stop-speech keyword — interrupt the agent</span>
 					<input value={stopSpeechKeyword} onChange={(e) => setStopSpeechKeyword(e.target.value)} onBlur={() => saveVoice({ stopSpeechKeyword })} placeholder="e.g. stop stop  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it. A phrase you set here is <b>yours</b> — it won't also be read as an exit or mute word, even if it's one of our built-in ones.</span>
+					<span className="block text-2xs text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it. A phrase you set here is <b>yours</b> — it won't also be read as an exit or mute word, even if it's one of our built-in ones.</span>
 				</label>
 			</div>
 
@@ -414,7 +413,6 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					type="checkbox"
 					checked={confirmLanguage}
 					onChange={(e) => { setConfirmLanguage(e.target.checked); saveVoice({ confirmLanguage: e.target.checked }); }}
-					className="w-4 h-4 accent-accent"
 				/>
 				Ignore speech detected as a different language
 			</label>
@@ -428,11 +426,10 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					type="checkbox"
 					checked={keepAwake}
 					onChange={(e) => { setKeepAwake(e.target.checked); saveVoice({ keepAwake: e.target.checked }); }}
-					className="w-4 h-4 accent-accent"
 				/>
 				Keep the screen awake during hands-free
 			</label>
-			<p className="text-[0.7rem] text-muted-soft mt-1">Off = the screen may sleep on its own timer (saves battery, but ends the conversation when it does).</p>
+			<p className="text-2xs text-muted-soft mt-1">Off = the screen may sleep on its own timer (saves battery, but ends the conversation when it does).</p>
 		</>
 	);
 }

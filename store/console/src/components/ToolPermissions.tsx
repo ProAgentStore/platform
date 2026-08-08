@@ -93,7 +93,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 			{toolPolicy.length > 0 && (
 				<div className="mb-3 pb-3 border-b border-line">
 					<div className="text-sm font-semibold mb-0.5">Tools</div>
-					<p className="text-[0.7rem] text-muted-soft mb-2">
+					<p className="text-2xs text-muted-soft mb-2">
 						Everything this agent is allowed to do. Switch any of them off — it applies to the agent's chat, the API and MCP alike.
 						{toolScopeSummary(toolPolicy)}
 					</p>
@@ -103,15 +103,15 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 								type="checkbox"
 								checked={t.allowed}
 								onChange={(e) => toggleTool(t.name, e.target.checked)}
-								className="w-4 h-4 accent-accent mt-0.5"
+								className="mt-0.5"
 							/>
 							<span className="min-w-0">
-								<span className="font-mono text-[0.78rem] font-semibold">{t.name}</span>
-								<span className={`ml-1.5 text-[0.62rem] uppercase tracking-wide ${t.scope === "write" ? "text-red" : "text-muted"}`}>{t.scope}</span>
-								{t.connector && <span className="ml-1.5 text-[0.68rem] text-muted-soft">{t.connector}</span>}
-								{t.disabled && <span className="ml-1.5 text-[0.68rem] text-muted">— off</span>}
-								{consentChip(t) && <span className="ml-1.5 text-[0.68rem] text-amber-500">— {consentChip(t)}</span>}
-								<span className="block text-[0.68rem] text-muted-soft leading-snug">{t.description}</span>
+								<span className="font-mono text-xs font-semibold">{t.name}</span>
+								<span className={`ml-1.5 text-2xs uppercase tracking-wide ${t.scope === "write" ? "text-red" : "text-muted"}`}>{t.scope}</span>
+								{t.connector && <span className="ml-1.5 text-2xs text-muted-soft">{t.connector}</span>}
+								{t.disabled && <span className="ml-1.5 text-2xs text-muted">— off</span>}
+								{consentChip(t) && <span className="ml-1.5 text-2xs text-amber-500">— {consentChip(t)}</span>}
+								<span className="block text-2xs text-muted-soft leading-snug">{t.description}</span>
 							</span>
 						</label>
 					))}
@@ -125,7 +125,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 			{connectors.length > 0 && (
 				<div className="mb-3 pb-3 border-b border-line">
 					<div className="text-sm font-semibold mb-0.5">Agent write access</div>
-					<p className="text-[0.7rem] text-muted-soft mb-2">
+					<p className="text-2xs text-muted-soft mb-2">
 						Lets this agent act as you — click, type, and navigate — through the connector on your machine. Off by default; enable only what you want it to do.
 					</p>
 					{connectors.map((connector) => (
@@ -134,7 +134,6 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 								type="checkbox"
 								checked={granted.includes(connector)}
 								onChange={(e) => toggleConsent(connector, e.target.checked)}
-								className="w-4 h-4 accent-accent"
 							/>
 							<span className="capitalize font-semibold">{connector}</span>
 							<span className="text-muted">write access</span>
@@ -142,7 +141,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 					))}
 					{consentMsg && <p className="text-xs text-green mt-1">{consentMsg}</p>}
 					{connectors.includes("mcp") && (
-						<p className="text-[0.7rem] text-muted-soft mt-1.5">
+						<p className="text-2xs text-muted-soft mt-1.5">
 							MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.
 						</p>
 					)}

@@ -244,7 +244,7 @@ export default function CopilotView({
 				{loop.loopOn ? (
 					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative">
 						<Square size={13} />
-						<span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
+						<span className="absolute -top-1 -right-1 text-2xs bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 					</button>
 				) : (
 					<button type="button" onClick={() => { const next = !loop.showLoopForm; loop.setShowLoopForm(next); if (next && workMode === "issues" && !loop.proposedIssue) loop.proposeNextIssue(); }} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
@@ -313,13 +313,13 @@ export default function CopilotView({
 						<div className="text-xs text-muted flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Finding the next open issue…</div>
 					) : loop.proposedIssue ? (
 						<>
-							<div className="text-[0.7rem] uppercase tracking-wide text-muted-soft">Next issue — approve to work it, or skip</div>
+							<div className="text-2xs uppercase tracking-wide text-muted-soft">Next issue — approve to work it, or skip</div>
 							<div className="flex items-start gap-2">
 								<span className="text-xs font-mono text-accent shrink-0 mt-0.5">#{loop.proposedIssue.number}</span>
 								<div className="min-w-0 flex-1">
 									<div className="text-sm font-semibold break-words">{loop.proposedIssue.title}</div>
 									{loop.proposedIssue.body && <div className="text-xs text-muted mt-0.5 whitespace-pre-wrap line-clamp-4">{loop.proposedIssue.body.slice(0, 400)}</div>}
-									{loop.proposedIssue.url && <a href={loop.proposedIssue.url} target="_blank" rel="noreferrer" className="text-[0.7rem] text-accent hover:underline inline-block mt-0.5">View on GitHub ↗</a>}
+									{loop.proposedIssue.url && <a href={loop.proposedIssue.url} target="_blank" rel="noreferrer" className="text-2xs text-accent hover:underline inline-block mt-0.5">View on GitHub ↗</a>}
 								</div>
 							</div>
 							<div className="flex items-center gap-2 justify-between">
@@ -362,11 +362,11 @@ export default function CopilotView({
 						const summary = toolCallSummary(m.content);
 						return (
 							<details key={messageKey(m) || sdkMessageKey(m, i)} className="self-start max-w-[90%]">
-								<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
+								<summary className="flex items-center gap-1.5 text-2xs text-muted cursor-pointer select-none py-0.5 px-2">
 									<Wrench size={11} className="shrink-0" />
 									<span>Used {summary}</span>
 								</summary>
-								<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
+								<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-2xs text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
 							</details>
 						);
 					}
@@ -393,8 +393,8 @@ export default function CopilotView({
 							}`}
 						>
 							<CopyButton text={m.content} />
-							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
-							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
 								<SafeHtmlView className="msg-md" html={renderMd(m.content)} />
 							) : (
@@ -413,7 +413,7 @@ export default function CopilotView({
 							voice.dictation.status === "failed" ? "bg-red/10 border-red/50 text-red" : "bg-accent/60 border-white/40 text-white"
 						}`}
 					>
-						<div className="text-[0.65rem] opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
+						<div className="text-2xs opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
 							<span className="flex items-center gap-1">
 								You
 								{voice.dictation.status === "dictating" && <><Mic size={11} />Speaking…</>}
@@ -428,7 +428,7 @@ export default function CopilotView({
 							{voice.dictation.text || (voice.dictation.status === "failed" ? "(nothing was captured)" : "…")}
 						</span>
 						{voice.dictation.status === "failed" && voice.dictation.note && (
-							<div className="text-[0.65rem] mt-1 opacity-80 not-italic">{voice.dictation.note}</div>
+							<div className="text-2xs mt-1 opacity-80 not-italic">{voice.dictation.note}</div>
 						)}
 					</div>
 				)}

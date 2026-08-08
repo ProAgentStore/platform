@@ -94,7 +94,7 @@ export default function Layout() {
 					<span className={`rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm ${navHidden ? "w-6 h-6" : "w-7 h-7"}`}>
 						<Zap size={navHidden ? 14 : 16} />
 					</span>
-					<span className="font-display font-bold text-[0.95rem] hidden sm:inline">
+					<span className="font-display font-bold text-base hidden sm:inline">
 						ProAgentStore
 					</span>
 				</a>
@@ -117,7 +117,7 @@ export default function Layout() {
 									to={to}
 									title={label}
 									aria-label={label}
-									className={({ isActive }) => `shrink-0 h-8 w-7 sm:w-8 lg:w-auto lg:h-auto lg:px-2.5 px-0 py-1.5 rounded-md no-underline whitespace-nowrap transition-all flex items-center justify-center gap-1.5 text-[0.82rem] ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
+									className={({ isActive }) => `shrink-0 h-8 w-7 sm:w-8 lg:w-auto lg:h-auto lg:px-2.5 px-0 py-1.5 rounded-md no-underline whitespace-nowrap transition-all flex items-center justify-center gap-1.5 text-sm ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
 								>
 									<Icon size={15} className="shrink-0" />
 									<span className="hidden lg:inline">{label}</span>
@@ -144,7 +144,7 @@ export default function Layout() {
 						<NavLink to="/notifications" className="relative no-underline text-muted" title="Notifications">
 							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (
-								<span className="absolute -top-1 -right-1.5 bg-red text-white text-[0.55rem] w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
+								<span className="absolute -top-1 -right-1.5 bg-red text-white text-2xs w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
 									{unreadCount > 9 ? "9+" : unreadCount}
 								</span>
 							)}
@@ -178,7 +178,7 @@ export default function Layout() {
 								key={to}
 								to={to}
 								onClick={() => setMenuOpen(false)}
-								className={({ isActive }) => `text-[0.82rem] px-2.5 py-2 rounded-md no-underline whitespace-nowrap transition-all flex items-center gap-2 ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
+								className={({ isActive }) => `text-sm px-2.5 py-2 rounded-md no-underline whitespace-nowrap transition-all flex items-center gap-2 ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
 							>
 								<Icon size={15} className="shrink-0" />
 								{label}

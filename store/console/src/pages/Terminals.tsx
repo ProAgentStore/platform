@@ -87,8 +87,8 @@ export default function Terminals() {
 										<span className="truncate">{n.node}</span>
 										{/* Last week's name for the same machine (#393) — the string a stranded pin
 										    still carries, so it is what makes the fold recognisable rather than magic. */}
-										{!!n.aka?.length && <span className="text-[0.7rem] text-muted-soft truncate shrink-0">also {n.aka.join(" · ")}</span>}
-										<span className={`text-[0.65rem] font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-green/15 text-green" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
+										{!!n.aka?.length && <span className="text-2xs text-muted-soft truncate shrink-0">also {n.aka.join(" · ")}</span>}
+										<span className={`text-2xs font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-green/15 text-green" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
 									</div>
 									<div className="text-xs text-muted-soft mt-0.5">
 										{n.placement === "managed" ? "cloud" : "local"} · v{n.runnerVersion || "?"} · seen {ago(n.lastSeenAt)}
@@ -98,7 +98,7 @@ export default function Terminals() {
 
 							{/* Agents served by this machine. A 📌 marks agents PINNED to run here. */}
 							<div className="px-4 py-2.5 flex flex-wrap gap-1.5 border-b border-line/60">
-								<span className="text-[0.7rem] uppercase tracking-wide text-muted-soft self-center mr-1">Agents</span>
+								<span className="text-2xs uppercase tracking-wide text-muted-soft self-center mr-1">Agents</span>
 								{n.instances.map((i) => (
 									<Link key={i.instanceId} to={`/instances/${i.instanceId}`} title={i.bound ? "Pinned to run on this machine" : "Served by this machine"} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border no-underline transition-colors ${i.bound ? "border-accent/50 bg-accent/10 text-ink" : "border-line text-ink hover:border-accent"}`}>
 										<Circle size={7} className={i.connected ? "fill-green text-green" : "fill-muted-soft text-muted-soft"} />
@@ -120,13 +120,13 @@ export default function Terminals() {
 												{/* An "active" session under an offline machine is stranded — its runner is gone.
 												    Don't paint it green; show it amber with the reason so it reads as "not running". */}
 												{s.status === "active" && !n.connected ? (
-													<span className="text-[0.7rem] font-bold text-amber-400" title="This machine is offline — open the agent to move this session to a connected machine.">active · machine offline</span>
+													<span className="text-2xs font-bold text-amber-400" title="This machine is offline — open the agent to move this session to a connected machine.">active · machine offline</span>
 												) : (
-													<span className={`text-[0.7rem] font-bold ${sessionTone(s.status)}`}>{s.status}</span>
+													<span className={`text-2xs font-bold ${sessionTone(s.status)}`}>{s.status}</span>
 												)}
-												<span className="text-[0.7rem] text-muted-soft">{s.engine}</span>
-												{typeof s.issueNumber === "number" && <span className="text-[0.7rem] text-accent">#{s.issueNumber}</span>}
-												<span className="text-[0.7rem] text-muted-soft ml-auto shrink-0">{ago(s.updatedAt)}</span>
+												<span className="text-2xs text-muted-soft">{s.engine}</span>
+												{typeof s.issueNumber === "number" && <span className="text-2xs text-accent">#{s.issueNumber}</span>}
+												<span className="text-2xs text-muted-soft ml-auto shrink-0">{ago(s.updatedAt)}</span>
 											</div>
 											{s.terminalTail && (
 												// Colorized with the SAME renderer the Coder uses (#187) — this pane used to be
@@ -134,7 +134,7 @@ export default function Terminals() {
 												// package. The renderer escapes every byte; see terminal-render.ts.
 												<SafeHtmlView
 													as="pre"
-													className="mt-1.5 text-[0.7rem] leading-snug bg-black/30 rounded-md px-2 py-1.5 overflow-hidden max-h-16 whitespace-pre-wrap break-words font-mono"
+													className="mt-1.5 text-2xs leading-snug bg-black/30 rounded-md px-2 py-1.5 overflow-hidden max-h-16 whitespace-pre-wrap break-words font-mono"
 													html={renderTerminal(terminalTail(s.terminalTail, 400))}
 												/>
 											)}

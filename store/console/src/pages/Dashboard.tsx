@@ -63,7 +63,7 @@ export default function Dashboard() {
 			{tab === "agents" && (
 				<div>
 					<div className="flex justify-between items-center mb-4">
-						<h2 className="text-[1.1rem] font-semibold">Agents you've built</h2>
+						<h2 className="text-lg font-semibold">Agents you've built</h2>
 						<button type="button" onClick={() => navigate("/agents/new")} className="text-sm px-3 py-1.5 rounded-xl bg-accent text-white font-semibold hover:bg-accent-hover active:scale-[0.97] transition-all">+ New Agent</button>
 					</div>
 					{loading ? (
@@ -75,7 +75,7 @@ export default function Dashboard() {
 							{agents.map((a) => (
 								<button key={a.id} type="button" onClick={() => navigate(`/agents/${a.id}`)}
 									className="text-left bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
-									<h3 className="text-[0.95rem] font-bold mb-1">{a.name}</h3>
+									<h3 className="text-base font-bold mb-1">{a.name}</h3>
 									<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{a.description || "No description"}</p>
 									<div className="flex gap-2 text-xs">
 										<span className={`px-1.5 py-0.5 rounded font-medium ${tagClass(a.visibility)}`}>{a.visibility}</span>
@@ -93,7 +93,7 @@ export default function Dashboard() {
 			{tab === "instances" && (
 				<div>
 					<div className="flex justify-between items-center mb-4">
-						<h2 className="text-[1.1rem] font-semibold">Agents you've subscribed to</h2>
+						<h2 className="text-lg font-semibold">Agents you've subscribed to</h2>
 						<button type="button" onClick={() => navigate("/browse")} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-all">Browse agents</button>
 					</div>
 					{loading ? (
@@ -121,7 +121,7 @@ export default function Dashboard() {
 												<span>{id.emoji}</span>
 											</div>
 											<div className="min-w-0 flex-1">
-												<h3 className="text-[0.95rem] font-bold leading-tight truncate">{inst.name}</h3>
+												<h3 className="text-base font-bold leading-tight truncate">{inst.name}</h3>
 												{/* "FAS platform" over "Repo Coder" — which one, then what it is. */}
 												{id.subtitle && <p className="text-xs text-muted truncate">{id.subtitle}</p>}
 											</div>
@@ -149,7 +149,7 @@ export default function Dashboard() {
 			{/* Stats dashboard */}
 			{tab === "dashboard" && (
 				<div>
-					<h2 className="text-[1.1rem] font-semibold mb-4">Platform Dashboard</h2>
+					<h2 className="text-lg font-semibold mb-4">Platform Dashboard</h2>
 					{!stats ? (
 						<p className="text-center py-8 text-muted">Loading stats...</p>
 					) : (
@@ -169,7 +169,7 @@ export default function Dashboard() {
 			{tab === "tools" && (
 				<div>
 					<div className="mb-4">
-						<h2 className="text-[1.1rem] font-semibold">Platform Tools</h2>
+						<h2 className="text-lg font-semibold">Platform Tools</h2>
 						<p className="text-sm text-muted mt-1 leading-relaxed">
 							Tools are capability-gated. Coder, Repo Chat, generic agents, connectors, triggers, and MCP clients each see the tools they can actually use.
 						</p>
@@ -179,18 +179,18 @@ export default function Dashboard() {
 							<section key={group.title} className="bg-panel border border-line rounded-lg p-3 sm:p-4">
 								<div className="flex items-start justify-between gap-3 mb-3">
 									<div className="min-w-0">
-										<h3 className="text-[0.95rem] font-bold">{group.title}</h3>
+										<h3 className="text-base font-bold">{group.title}</h3>
 										<p className="text-xs text-muted mt-1 leading-relaxed">{group.description}</p>
 									</div>
-									<span className="shrink-0 text-[0.68rem] px-2 py-1 rounded-md bg-line text-muted font-semibold whitespace-nowrap">{group.scope}</span>
+									<span className="shrink-0 text-2xs px-2 py-1 rounded-md bg-line text-muted font-semibold whitespace-nowrap">{group.scope}</span>
 								</div>
 								<div className="divide-y divide-line/80">
 									{group.tools.map((tool) => (
 										<div key={tool.name} className="py-2 first:pt-0 last:pb-0">
 											<div className="flex items-start justify-between gap-2">
-												<code className="text-[0.76rem] text-ink bg-line/60 px-1.5 py-0.5 rounded break-all">{tool.name}</code>
+												<code className="text-xs text-ink bg-line/60 px-1.5 py-0.5 rounded break-all">{tool.name}</code>
 												{tool.status && (
-													<span className="text-[0.65rem] text-muted-soft border border-line rounded px-1.5 py-0.5 whitespace-nowrap">{tool.status}</span>
+													<span className="text-2xs text-muted-soft border border-line rounded px-1.5 py-0.5 whitespace-nowrap">{tool.status}</span>
 												)}
 											</div>
 											<p className="text-xs text-muted mt-1 leading-relaxed">{tool.description}</p>

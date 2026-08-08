@@ -113,7 +113,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 					{turns.map((t) => (
 						<div key={t.id} className={`text-sm rounded-lg px-3 py-2 whitespace-pre-line break-words ${t.role === "user" ? "bg-accent-soft text-ink self-end max-w-[85%]" : "bg-paper border border-line text-ink self-start max-w-[95%]"}`}>
 							{linkify(t.text)}
-							<div className="text-[0.65rem] text-muted-soft mt-1">{t.role === "user" ? "You" : "Agent"}{t.at ? ` · ${fmtStamp(t.at)}` : ""}</div>
+							<div className="text-2xs text-muted-soft mt-1">{t.role === "user" ? "You" : "Agent"}{t.at ? ` · ${fmtStamp(t.at)}` : ""}</div>
 						</div>
 					))}
 				</div>

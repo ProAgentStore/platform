@@ -26,18 +26,34 @@ describe("the button size ramp", () => {
 
 	/**
 	 * The rule the issue asks for in words: "Nothing below `text-xs` (12px) for anything a user
-	 * reads." `text-[0.7rem]` is 11.2px and was on 110 elements including button labels. A size
-	 * step reintroducing an arbitrary rem value would put the type drift back inside the thing
-	 * that exists to absorb it.
+	 * reads." The 11.2px arbitrary size was on 110 elements including button labels. #390 gave
+	 * the scale a real floor step below `text-xs`, so a size CAN now name a sub-12px step by
+	 * name — this keeps it from doing so, and keeps it from reintroducing an arbitrary rem
+	 * value, which would put the type drift back inside the thing that exists to absorb it.
 	 */
-	it("uses only named Tailwind type steps, never an arbitrary rem value", () => {
+	it("uses only named type steps at or above text-xs, never an arbitrary rem value", () => {
 		for (const cls of Object.values(BUTTON_SIZE)) {
 			expect(cls).not.toMatch(/text-\[/);
+			expect(cls).not.toMatch(/\btext-2xs\b/);
 		}
 	});
 
 	it("gives the icon size no type step, because it holds an icon", () => {
 		expect(BUTTON_SIZE.icon).not.toMatch(/\btext-/);
+	});
+
+	/**
+	 * WCAG 2.5.8 Target Size (Minimum), Level AA: 24×24 CSS px, in BOTH axes (#389).
+	 *
+	 * Asserted as a property of every entry rather than checked once, because the way this
+	 * regresses is a fifth size added later — `xs`, for some row that felt tight — with the
+	 * padding copied and the floor forgotten. Nothing renders a warning for a target that is
+	 * too small; it just gets mis-tapped, and `min-w` matters as much as `min-h` because the
+	 * narrow case is a one-character label, not a short one.
+	 */
+	it.each(Object.entries(BUTTON_SIZE))("%s clears WCAG 2.5.8's 24px minimum in both axes", (_size, cls) => {
+		expect(unprefixed(cls)).toContain("min-h-6");
+		expect(unprefixed(cls)).toContain("min-w-6");
 	});
 });
 

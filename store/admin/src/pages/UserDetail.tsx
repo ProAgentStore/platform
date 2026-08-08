@@ -184,7 +184,7 @@ function RolesEditor({ user, isSelf, onDone }: { user: UserDetailResp["user"]; i
 			<div className="text-sm font-semibold mb-1">Roles</div>
 			<div className="flex flex-wrap items-center gap-4 mb-2">
 				<label className="text-sm text-muted-soft flex items-center gap-1.5">
-					<input type="checkbox" checked disabled className="!w-auto" /> user <span className="text-xs">(always)</span>
+					<input type="checkbox" checked disabled /> user <span className="text-xs">(always)</span>
 				</label>
 				{GRANTABLE_ROLES.map((r) => {
 					const lockSelfAdmin = roleCheckboxLocked(r, isSelf, user.roles);
@@ -192,7 +192,6 @@ function RolesEditor({ user, isSelf, onDone }: { user: UserDetailResp["user"]; i
 						<label key={r} className={`text-sm flex items-center gap-1.5 ${lockSelfAdmin ? "text-muted-soft" : ""}`}>
 							<input
 								type="checkbox"
-								className="!w-auto"
 								checked={sel.includes(r)}
 								disabled={lockSelfAdmin}
 								onChange={(e) => setSel((s) => (e.target.checked ? [...new Set([...s, r])] : s.filter((x) => x !== r)))}

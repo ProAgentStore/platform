@@ -21,6 +21,15 @@
 	--font-body: "Manrope", system-ui, sans-serif;
 	--font-display: "Fraunces", Georgia, serif;
 	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+	/*
+	 * The type-scale floor (#390). Kept byte-identical to the console's copy, and held that way
+	 * by `designTokens.test.ts` — this block and the console's are one palette shared by COPY,
+	 * so a step declared in one tree and not the other is a utility that compiles to nothing in
+	 * the other. See `store/console/src/index.css` for why 11px and why the line-height is
+	 * spelled out rather than inherited.
+	 */
+	--text-2xs: 0.6875rem;
+	--text-2xs--line-height: calc(1 / 0.6875);
 }
 
 @layer base {
@@ -44,7 +53,20 @@
 	a {
 		touch-action: manipulation;
 	}
-	input,
+	/*
+	 * Checkbox and radio (#389). The console's copy of this rule carries the reasoning; the
+	 * operator portal had the same defect plus one of its own — its form-control block did NOT
+	 * exclude them, so a checkbox rendered at `width: 100%` and one call site carried a
+	 * `!w-auto` to undo it. Excluding them here is what makes the size below the real size.
+	 */
+	input[type="checkbox"],
+	input[type="radio"] {
+		width: 1.25rem;
+		height: 1.25rem;
+		flex-shrink: 0;
+		accent-color: var(--color-accent);
+	}
+	input:not([type="checkbox"]):not([type="radio"]),
 	select {
 		width: 100%;
 		background: var(--color-paper);
@@ -54,7 +76,7 @@
 		color: var(--color-ink);
 		font-size: 0.88rem;
 	}
-	input:focus,
+	input:not([type="checkbox"]):not([type="radio"]):focus,
 	select:focus {
 		outline: none;
 		border-color: var(--color-accent);

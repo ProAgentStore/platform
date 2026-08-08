@@ -109,7 +109,7 @@ export default function RepoIssues({
 								    single-line truncation on desktop where the list reads as a table. */}
 								<span className="flex-1 min-w-0 line-clamp-2 sm:truncate leading-5" title={i.title}>{i.title}</span>
 								{i.labels.slice(0, 2).map((l) => (
-									<span key={l} className="hidden sm:inline text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-semibold shrink-0">{l}</span>
+									<span key={l} className="hidden sm:inline text-2xs px-1 py-0.5 bg-accent-soft text-accent rounded font-semibold shrink-0">{l}</span>
 								))}
 								<button
 									type="button"

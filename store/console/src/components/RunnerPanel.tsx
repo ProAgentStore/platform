@@ -129,10 +129,10 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 						{/* The cause + the one command that fixes it. `pags up` is the WRONG advice when the
 						    machine is already running, which is exactly the confusing case. */}
 						{!reading.online && attachment?.message && (
-							<div className="mt-1 text-[0.8rem] text-muted-soft">
+							<div className="mt-1 text-xs text-muted-soft">
 								{attachment.message}
 								{attachment.remedy && (
-									<> Run <code className="px-1 py-0.5 rounded bg-paper border border-line font-mono text-[0.75rem]">{attachment.remedy}</code>.</>
+									<> Run <code className="px-1 py-0.5 rounded bg-paper border border-line font-mono text-xs">{attachment.remedy}</code>.</>
 								)}
 							</div>
 						)}
@@ -172,15 +172,15 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 									<div className="flex items-center gap-2 min-w-0">
 										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-green" : t.tone === "online" ? "bg-amber-500" : "bg-muted-soft"}`} />
 										<span className="font-semibold text-sm truncate">{t.node}</span>
-										{t.pinned && <span className="ml-auto shrink-0 text-[0.6rem] font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
+										{t.pinned && <span className="ml-auto shrink-0 text-2xs font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
 									</div>
-									<div className={`text-[0.7rem] mt-1 ${t.tone === "attached" ? "text-green" : t.tone === "online" ? "text-amber-500" : "text-muted-soft"}`}>{t.statusText}</div>
-									<div className="text-[0.7rem] text-muted-soft mt-0.5">{t.meta}</div>
+									<div className={`text-2xs mt-1 ${t.tone === "attached" ? "text-green" : t.tone === "online" ? "text-amber-500" : "text-muted-soft"}`}>{t.statusText}</div>
+									<div className="text-2xs text-muted-soft mt-0.5">{t.meta}</div>
 									{/* The names this machine used to answer to (#393). Shown rather than swallowed:
 									    pins, relay names and session rows are all still keyed by hostname, so this
 									    is what a stranded pin literally says — and it is how the user recognises
 									    their own laptop under last week's name. */}
-									{t.alsoKnownAs && <div className="text-[0.7rem] text-muted-soft mt-0.5 truncate">{t.alsoKnownAs}</div>}
+									{t.alsoKnownAs && <div className="text-2xs text-muted-soft mt-0.5 truncate">{t.alsoKnownAs}</div>}
 								</button>
 							);
 						})}

@@ -149,7 +149,7 @@ export default function AccountConnections() {
 					{githubLinked
 						? <span className="text-green">· connected as {githubLinked}</span>
 						: <span className="text-muted">· not connected</span>}
-					<p className="text-[0.7rem] text-muted-soft mt-0.5">
+					<p className="text-2xs text-muted-soft mt-0.5">
 						Links your GitHub username so the Coder can show build status and reach your repos.
 					</p>
 				</div>
@@ -180,7 +180,7 @@ export default function AccountConnections() {
 								{/* Standing, not only in the confirm dialog: what a disconnect destroys should be
 								    readable by someone who has NOT decided to click it yet. */}
 								{entry.connected && entry.reach && entry.reach.grants > 0 && (
-									<p className="text-[0.7rem] text-muted-soft mt-0.5">
+									<p className="text-2xs text-muted-soft mt-0.5">
 										Disconnecting revokes those grants everywhere. Reconnecting will not bring them back.
 									</p>
 								)}

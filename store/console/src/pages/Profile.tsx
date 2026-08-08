@@ -159,7 +159,7 @@ export default function Profile() {
 						{user.roles && (
 							<div className="flex flex-wrap gap-1.5 mt-1.5">
 								{user.roles.map(r => (
-									<span key={r} className={`text-[0.7rem] px-2 py-0.5 rounded-full font-semibold ${r === "admin" ? "bg-red/15 text-red" : r === "creator" ? "bg-accent/15 text-purple-400" : "bg-blue/15 text-blue"}`}>{r}</span>
+									<span key={r} className={`text-2xs px-2 py-0.5 rounded-full font-semibold ${r === "admin" ? "bg-red/15 text-red" : r === "creator" ? "bg-accent/15 text-purple-400" : "bg-blue/15 text-blue"}`}>{r}</span>
 								))}
 							</div>
 						)}
@@ -168,7 +168,7 @@ export default function Profile() {
 
 				{/* Account */}
 				<div className="mb-6">
-					<h3 className="text-[0.95rem] font-semibold mb-3">Account</h3>
+					<h3 className="text-base font-semibold mb-3">Account</h3>
 					<div className="flex justify-between items-center gap-3 py-2.5 border-b border-line text-sm min-w-0">
 						<span className="text-muted font-medium">User ID</span>
 						<span className="font-mono text-sm truncate max-w-[200px] min-w-0 text-right">{user.id}</span>
@@ -181,7 +181,7 @@ export default function Profile() {
 
 				{/* Edit Profile */}
 				<div className="mb-6">
-					<h3 className="text-[0.95rem] font-semibold mb-3">Edit Profile</h3>
+					<h3 className="text-base font-semibold mb-3">Edit Profile</h3>
 					<div className="flex flex-col gap-2">
 						<label className="flex flex-col gap-1">
 							<span className="text-xs text-muted font-semibold">Display Name</span>
@@ -213,7 +213,7 @@ export default function Profile() {
 				    Shown to everyone; the job-specific fields below are gated separately (#222). */}
 				{personalFields.length > 0 && (
 					<div className="mb-6">
-						<h3 className="text-[0.95rem] font-semibold mb-1">Personal details</h3>
+						<h3 className="text-base font-semibold mb-1">Personal details</h3>
 						<p className="text-sm text-muted mb-3">Structured info your agents use to fill forms. Private — never shown publicly.</p>
 						<div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
 							{personalFields.map(f => (
@@ -246,7 +246,7 @@ export default function Profile() {
 						</div>
 						{/* Voice commands used to live here too, writing a global setting through a
 						    different endpoint than Preferences — and losing. One home now. */}
-						<p className="text-[0.7rem] text-muted-soft mt-3">
+						<p className="text-2xs text-muted-soft mt-3">
 							Looking for hands-free voice commands? They live in <a href="/preferences" className="text-accent">Preferences → Voice</a>.
 						</p>
 					</div>
@@ -254,7 +254,7 @@ export default function Profile() {
 
 				{/* API Token */}
 				<div className="mb-6">
-					<h3 className="text-[0.95rem] font-semibold mb-3">API Token</h3>
+					<h3 className="text-base font-semibold mb-3">API Token</h3>
 					{/* Wraps rather than pushes (#235): a revealed token is long, and the row is one
 					    fixed-width span plus two buttons. `min-w-0` is what lets the span shrink at
 					    all — without it a flex child refuses to go below its content width, and the
@@ -270,7 +270,7 @@ export default function Profile() {
 
 				{/* Billing */}
 				<div className="mb-6">
-					<h3 className="text-[0.95rem] font-semibold mb-3">Billing</h3>
+					<h3 className="text-base font-semibold mb-3">Billing</h3>
 					<div className="bg-paper border border-line rounded-lg p-3">
 						<span className="text-sm text-muted">
 							ProAgentStore billing is not enabled yet. Platform access is open during preview.
@@ -280,7 +280,7 @@ export default function Profile() {
 
 				{/* API Keys */}
 				<div className="mb-6">
-					<h3 className="text-[0.95rem] font-semibold mb-3">API Keys</h3>
+					<h3 className="text-base font-semibold mb-3">API Keys</h3>
 					<p className="text-sm text-muted mb-3">Store your AI provider keys. Encrypted with AES-256-GCM.</p>
 					{keysLoading ? <p className="text-sm text-muted">Loading keys...</p> : (
 						<div className="flex flex-col gap-2">

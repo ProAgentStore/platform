@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findDeadColorUtilities, parseThemeColorTokens, stripComments } from "./design-tokens.mjs";
+import { findArbitraryFontSizes, findDeadColorUtilities, parseThemeColorTokens, parseThemeTypeSteps, stripComments } from "./design-tokens.mjs";
 
 /**
  * A guard is only worth having if it catches the defect that shipped AND stays quiet on
@@ -134,5 +134,67 @@ describe("stripComments", () => {
 	it("does not treat the // in a URL as a comment, which would hide the rest of the line", () => {
 		const src = `<input placeholder="https://example.com/mcp" className="${dead("bg", "surface")}" />`;
 		expect(utilities(src)).toEqual([dead("bg", "surface")]);
+	});
+});
+
+/**
+ * The type scale (#390). Same construction rule as above: every offending class is BUILT
+ * rather than written, so this file cannot regenerate one into the built stylesheet.
+ */
+const sized = (value) => `text-[${value}]`;
+const sizes = (src) => findArbitraryFontSizes(src).map((h) => h.utility);
+
+describe("findArbitraryFontSizes", () => {
+	it("catches the value that was on 120 elements across three trees", () => {
+		const src = `<span className="${sized("0.7rem")} text-muted">{n}</span>`;
+		expect(sizes(src)).toEqual([sized("0.7rem")]);
+	});
+
+	it("catches every unit a size can be written in", () => {
+		// admin used px, the console used rem; nothing stops the next one being em or pt.
+		const src = ["px", "rem", "em", "pt"].map((u) => sized(`10${u}`)).join(" ");
+		expect(sizes(src)).toHaveLength(4);
+	});
+
+	it("reports each distinct value on a line once, because one class list is one mistake", () => {
+		const src = `className={\`${sized("0.7rem")} x ${sized("0.7rem")} ${sized("0.65rem")}\`}`;
+		expect(sizes(src)).toEqual([sized("0.7rem"), sized("0.65rem")]);
+	});
+
+	it("leaves a named step alone", () => {
+		expect(sizes('className="text-2xs text-xs text-sm text-base text-lg"')).toEqual([]);
+	});
+
+	it("leaves a bracketed COLOUR alone — the failure message would be wrong for it", () => {
+		expect(sizes('className="text-[#fafafa] text-[color:var(--brand)] text-[length:var(--x)]"')).toEqual([]);
+	});
+
+	it("ignores prose, which is the only honest way to write about this defect", () => {
+		// A guard that fires on the comment explaining it gets suppressed rather than fixed.
+		const src = `/* nine values inside a 2px band: ${sized("0.68rem")} against ${sized("0.7rem")} */`;
+		expect(sizes(src)).toEqual([]);
+	});
+
+	it("reports the line so a human can jump to it", () => {
+		const src = `a\nb\n<span className="${sized("0.55rem")}" />`;
+		expect(findArbitraryFontSizes(src)).toEqual([{ utility: sized("0.55rem"), line: 3 }]);
+	});
+});
+
+describe("parseThemeTypeSteps", () => {
+	const css = `@theme {\n\t--color-ink: #fff;\n\t--text-2xs: 0.6875rem;\n\t--text-2xs--line-height: calc(1 / 0.6875);\n\t--font-body: "Manrope";\n}\n`;
+
+	it("reads a step as the name a utility would use, not as the raw property", () => {
+		expect([...parseThemeTypeSteps(css).steps]).toEqual(["2xs"]);
+	});
+
+	it("keeps the line-height companion out of the step list", () => {
+		// Counted as a step it would look like a `text-2xs--line-height` utility nobody wrote,
+		// and the paired-declaration check in check-design-tokens.mjs could never be satisfied.
+		expect([...parseThemeTypeSteps(css).lineHeights]).toEqual(["2xs"]);
+	});
+
+	it("finds no steps in a block that declares none", () => {
+		expect(parseThemeTypeSteps("@theme {\n\t--color-ink: #fff;\n}\n").steps.size).toBe(0);
 	});
 });

@@ -47,7 +47,7 @@ export function FileConnectorPanel({
 			<div className="text-sm mb-2">
 				<span className="font-semibold">{label}</span>{" "}
 				<span className="text-green">· connected{account ? ` (${account})` : ""}</span>
-				<p className="text-[0.7rem] text-muted-soft mt-0.5">Folders this agent may read. Other agents get their own.</p>
+				<p className="text-2xs text-muted-soft mt-0.5">Folders this agent may read. Other agents get their own.</p>
 			</div>
 			<div className="pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
 				<div className="flex gap-2 flex-wrap mb-2">
@@ -76,7 +76,7 @@ export function FileConnectorPanel({
 				{/* States the account-level consequence where the per-agent decision is made. The
 				    disconnect that destroys these now lives on another page, so this is the only place
 				    the two ends of the same permission can mention each other (#357/#355). */}
-				<p className="text-[0.68rem] text-muted-soft mt-1.5">
+				<p className="text-2xs text-muted-soft mt-1.5">
 					{reach?.grants
 						? `Disconnecting ${label} in Preferences → Connections revokes all ${reach.grants} folder grant${reach.grants === 1 ? "" : "s"} on ${reach.instances} agent${reach.instances === 1 ? "" : "s"}, including these.`
 						: `Disconnecting ${label} in Preferences → Connections revokes every folder grant, on this agent and all your others.`}

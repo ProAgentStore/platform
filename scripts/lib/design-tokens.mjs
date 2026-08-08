@@ -1,6 +1,7 @@
 /**
- * Pure logic for the dead-colour-token guard (#367). No filesystem, no process — the tree
- * walking and the exit code live in ../check-design-tokens.mjs so this half is testable.
+ * Pure logic for the two design guards that scan source (#367 dead colour tokens, #390 the
+ * type scale). No filesystem, no process — the tree walking and the exit code live in
+ * ../check-design-tokens.mjs so this half is testable.
  *
  * ── The defect ──
  *
@@ -196,4 +197,69 @@ export function findDeadColorUtilities(source, declared) {
 		});
 
 	return found;
+}
+
+/**
+ * ── The type scale (#390) ──
+ *
+ * The same defect class as above with the opposite symptom: an arbitrary font size does not
+ * fail, it works. `text-[0.7rem]` compiles perfectly, which is why 190 of them accumulated
+ * across 17 values, nine inside a 2px band, in an app whose design system says in as many
+ * words that there are no custom font-size values. Nothing could have caught it, because
+ * there was no scale to be off — every step Tailwind ships stops at 12px and the console's
+ * dense telemetry wanted one below that.
+ *
+ * `@theme` now declares that step, so the arbitrary form has somewhere to go and this can be
+ * a GATE at zero rather than a ratchet. Which is the point of the ordering the ticket asked
+ * for: linting first would have relocated the problem into 190 blocked edits and taught
+ * nothing.
+ */
+
+/** `text-[0.7rem]`, `text-[10px]`, `text-[1.1em]`, `text-[14pt]` — a font size written as a value. */
+const ARBITRARY_FONT_SIZE = /\btext-\[\s*[\d.]+\s*(?:rem|px|em|pt|ch|ex|vw|vh|%)\s*\]/g;
+
+/**
+ * Every bracketed font size in `source`, as `{ utility, line }`.
+ *
+ * Deliberately only LENGTH-valued brackets: `text-[#fff]`, `text-[color:var(--x)]` and
+ * `text-[length:var(--x)]` are a colour and a variable, not a step off the scale, and folding
+ * them in would make the failure message wrong for them. Comments are blanked first for the
+ * same reason as the colour rule — and it matters more here, because the honest way to write
+ * about this defect in a comment is to quote it.
+ */
+export function findArbitraryFontSizes(source) {
+	const found = [];
+	stripComments(source)
+		.split("\n")
+		.forEach((text, i) => {
+			const seen = new Set();
+			for (const m of text.matchAll(ARBITRARY_FONT_SIZE)) {
+				const utility = m[0].replace(/\s+/g, "");
+				if (seen.has(utility)) continue;
+				seen.add(utility);
+				found.push({ utility, line: i + 1 });
+			}
+		});
+	return found;
+}
+
+/**
+ * The type steps an `@theme` block declares, as bare utility names: `--text-2xs` → `2xs`.
+ *
+ * The `--text-*--line-height` companions are NOT steps and are filtered out. A step declared
+ * without one emits `line-height: var(…)` resolving to nothing, so the guard that consumes
+ * this asserts both halves are present — the silent-nothing failure §1 describes for colour,
+ * one property over.
+ */
+export function parseThemeTypeSteps(css) {
+	const block = css.match(/@theme\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+	const steps = new Set();
+	const lineHeights = new Set();
+	for (const line of block.split("\n")) {
+		const m = line.match(/^\s*--text-([\w-]+):/);
+		if (!m) continue;
+		if (m[1].endsWith("--line-height")) lineHeights.add(m[1].slice(0, -"--line-height".length));
+		else steps.add(m[1]);
+	}
+	return { steps, lineHeights };
 }

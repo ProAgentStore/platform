@@ -432,7 +432,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 										type="checkbox"
 										checked={agentSettings[f.id] === true}
 										onChange={(e) => saveSetting(f.id, e.target.checked)}
-										className="w-4 h-4 accent-accent"
 									/>
 									<span className="text-muted">Enabled</span>
 								</label>

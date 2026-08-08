@@ -341,7 +341,7 @@ export default function AgentDetail() {
 								) : <span className="whitespace-pre-wrap">{m.content}</span>}
 							</div>
 						))}
-						{thinking && <div className="text-muted text-sm flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" />Thinking...</div>}
+						{thinking && <div className="text-muted text-sm flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-accent animate-pulse"/>Thinking...</div>}
 					</div>
 					<div className="flex gap-1.5 pt-3 border-t border-line shrink-0">
 						<input aria-label="Message this agent" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendMessage(); }} placeholder="Send a message..." className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm" />
@@ -534,7 +534,7 @@ export default function AgentDetail() {
 										<input aria-label={`Field ${i + 1} default value`} value={f.defaultValue} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, defaultValue: e.target.value } : x))} placeholder={f.type === "toggle" ? "default: true / false" : "default (optional)"} className="w-44 bg-paper border border-line rounded px-2 py-1 text-sm" />
 										{f.type === "select" && (
 											<label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer mt-1">
-												<input type="checkbox" checked={f.voiceLanguage} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, voiceLanguage: e.target.checked } : x))} className="w-3.5 h-3.5 accent-accent" />
+												<input type="checkbox" checked={f.voiceLanguage} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, voiceLanguage: e.target.checked } : x))} />
 												Drives voice language (option values must be BCP-47 tags like zh-CN)
 											</label>
 										)}

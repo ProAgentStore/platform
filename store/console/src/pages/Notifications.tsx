@@ -96,7 +96,7 @@ export default function Notifications() {
 										    about one that finished — the same distinction a `needs_human` board card
 										    draws, and the one a per-type mute is never allowed to hide (#360). */}
 										{n.kind === "alert" && (
-											<span className="mr-1.5 align-middle text-[0.6rem] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/15 text-accent">
+											<span className="mr-1.5 align-middle text-2xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/15 text-accent">
 												Needs you
 											</span>
 										)}

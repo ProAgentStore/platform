@@ -227,7 +227,7 @@ function BucketTable({ rows, head, operatorIds }: { rows: Bucket[]; head: string
 						<td className="py-1.5 truncate max-w-[180px]">
 							{b.label || b.key}
 							{operatorIds?.has(b.key) && (
-								<span className="ml-1.5 text-[10px] uppercase tracking-wide text-accent border border-accent/40 rounded px-1 py-px align-middle">operator</span>
+								<span className="ml-1.5 text-2xs uppercase tracking-wide text-accent border border-accent/40 rounded px-1 py-px align-middle">operator</span>
 							)}
 						</td>
 						<td className="text-right">{fmtInt(b.calls)}</td>

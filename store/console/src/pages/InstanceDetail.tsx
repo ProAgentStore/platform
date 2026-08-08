@@ -51,7 +51,10 @@ function CopyButton({ text }: { text: string }) {
 			onDoubleClick={(e) => e.stopPropagation()}
 			title={copied ? "Copied" : "Copy"}
 			aria-label="Copy message"
-			className="absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
+			// 24×24 clears WCAG 2.5.8; `tap-target` adds 44px of vertical reach on top, which is
+			// the axis a thumb misses on a scrolling thread (#389). See DeleteTurnButton for why
+			// the expansion is not horizontal.
+			className="tap-target absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
 		>
 			{copied ? <Check size={16} className="text-green" /> : <Copy size={16} />}
 		</button>
@@ -952,7 +955,7 @@ function InstancePage() {
 					    now looking at. Shown on mobile too — it costs 20px and is the only identity
 					    cue there, since the name is hidden below sm. */}
 					<span
-						className="w-5 h-5 rounded-md flex items-center justify-center text-[0.7rem] shrink-0"
+						className="w-5 h-5 rounded-md flex items-center justify-center text-2xs shrink-0"
 						style={{ background: identityFor(instance).bg }}
 						title={instance.name}
 						aria-hidden="true"
@@ -966,7 +969,7 @@ function InstancePage() {
 			    permanently grey dot that just ate navbar space (worst on mobile). */}
 			{hasRuntime && (
 				<span
-					className="text-[0.7rem] font-bold px-1.5 py-0.5 rounded-full shrink-0"
+					className="text-2xs font-bold px-1.5 py-0.5 rounded-full shrink-0"
 					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
 					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
 				>
@@ -1037,11 +1040,11 @@ function InstancePage() {
 									const summary = toolCallSummary(m.content);
 										return (
 											<details key={messageKey(m, i)} className="self-start max-w-[90%]">
-												<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
+												<summary className="flex items-center gap-1.5 text-2xs text-muted cursor-pointer select-none py-0.5 px-2">
 													<Wrench size={11} className="shrink-0" />
 													<span>Used {summary}</span>
 												</summary>
-												<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
+												<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-2xs text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
 											</details>
 										);
 								}
@@ -1073,8 +1076,12 @@ function InstancePage() {
 										{/* #342: one turn, not one line — the server resolves the span and returns
 										    the ids it removed, and those are what leave the thread here. */}
 										{id && <DeleteTurnButton instanceId={id} message={m} messages={messages} runActive={loopOn} onStopRun={() => void stopLoop()} onDeleted={dropMessages} />}
-										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
+										{/* The replay button held an 11px icon and nothing else, so it WAS 11×11 — the
+										    smallest control in the app, on the thread a hands-free user reaches for when
+										    voice has gone wrong. `min-w-6` + `tap-target` make it 24 wide by 44 tall
+										    without giving every message header a taller row (#389). */}
+										{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<GlossedMessage
 												message={m}
@@ -1106,7 +1113,7 @@ function InstancePage() {
 										voice.dictation.status === "failed" ? "bg-red/10 border-red/50 text-red" : "bg-accent/60 border-white/40 text-white"
 									}`}
 								>
-									<div className="text-[0.65rem] opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
+									<div className="text-2xs opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
 										<span className="flex items-center gap-1">
 											You
 											{voice.dictation.status === "dictating" && <><Mic size={11} />Speaking…</>}
@@ -1121,7 +1128,7 @@ function InstancePage() {
 										{voice.dictation.text || (voice.dictation.status === "failed" ? "(nothing was captured)" : "…")}
 									</span>
 									{voice.dictation.status === "failed" && voice.dictation.note && (
-										<div className="text-[0.65rem] mt-1 opacity-80 not-italic">{voice.dictation.note}</div>
+										<div className="text-2xs mt-1 opacity-80 not-italic">{voice.dictation.note}</div>
 									)}
 								</div>
 							)}
@@ -1217,7 +1224,7 @@ function InstancePage() {
 							</div>
 							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
-								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-[0.55rem] rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button>
+								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-2xs rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button>
 							) : (
 								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}

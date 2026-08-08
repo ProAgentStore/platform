@@ -51,7 +51,7 @@ export default function StatsCard({ card, sourceLabel, onRemove, busy }: StatsCa
 					<h3 className="text-sm font-bold truncate" title={card.title}>
 						{card.title}
 					</h3>
-					{subtitle && <p className="text-[0.7rem] text-muted-soft truncate">{subtitle}</p>}
+					{subtitle && <p className="text-2xs text-muted-soft truncate">{subtitle}</p>}
 				</div>
 				{onRemove && (
 					<button
@@ -74,7 +74,7 @@ export default function StatsCard({ card, sourceLabel, onRemove, busy }: StatsCa
 
 			{/* Shown for any card that actually renders a number. On an error card there is no figure
 			    for it to qualify, and printing it there would read as a caveat about the failure. */}
-			{!card.error && card.caveat && <p className="text-[0.7rem] leading-snug text-muted-soft border-t border-line pt-2">{card.caveat}</p>}
+			{!card.error && card.caveat && <p className="text-2xs leading-snug text-muted-soft border-t border-line pt-2">{card.caveat}</p>}
 		</Card>
 	);
 }
@@ -188,12 +188,12 @@ function TrendChart({ card, points, unit }: { card: StatsCardValue; points: Arra
 					</circle>
 				))}
 			</svg>
-			<div className="flex justify-between text-[0.65rem] text-muted-soft">
+			<div className="flex justify-between text-2xs text-muted-soft">
 				<span>{dayLabel(points[0].day)}</span>
 				{last && <span className="text-muted tabular-nums">last {formatValue(last.value, unit)}</span>}
 				<span>{dayLabel(points[points.length - 1].day)}</span>
 			</div>
-			{note && <p className="text-[0.7rem] text-yellow/90 mt-1">{note}</p>}
+			{note && <p className="text-2xs text-yellow/90 mt-1">{note}</p>}
 		</div>
 	);
 }
@@ -227,7 +227,7 @@ function Groups({ data, bars }: { data: Extract<StatsData, { type: "groups" }>; 
 					</div>
 				))}
 			</div>
-			{partial && <p className="text-[0.7rem] text-yellow/90 mt-2">{partial}</p>}
+			{partial && <p className="text-2xs text-yellow/90 mt-2">{partial}</p>}
 		</div>
 	);
 }

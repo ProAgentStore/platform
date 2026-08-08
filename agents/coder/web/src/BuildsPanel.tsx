@@ -27,7 +27,7 @@ interface Build {
 }
 
 function StatusBadge({ state }: { state: BuildState }) {
-	const base = "inline-flex items-center gap-1 text-[0.65rem] font-bold px-1.5 py-0.5 rounded shrink-0";
+	const base = "inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0";
 	switch (state) {
 		case "success":
 			return <span className={`${base} bg-green/15 text-green`}><CheckCircle2 size={12} /> Success</span>;
@@ -71,7 +71,7 @@ function RunMeta({ run }: { run: DeploymentRun }) {
 function ViewRunLink({ url }: { url?: string }) {
 	if (!url) return null;
 	return (
-		<a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[0.65rem] font-semibold text-accent hover:underline mt-1.5">
+		<a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-2xs font-semibold text-accent hover:underline mt-1.5">
 			<ExternalLink size={11} /> View run
 		</a>
 	);
@@ -123,9 +123,9 @@ function RepoHistory({ instanceId, repoId, repoName, onBack }: {
 							<ArrowLeft size={15} />
 						</button>
 					)}
-					<span className="text-ink font-bold text-[0.95rem] truncate">{repoName}</span>
+					<span className="text-ink font-bold text-base truncate">{repoName}</span>
 				</div>
-				<span className="text-[0.65rem] text-muted-soft shrink-0">Recent GitHub Actions runs</span>
+				<span className="text-2xs text-muted-soft shrink-0">Recent GitHub Actions runs</span>
 			</div>
 
 			<div className="flex flex-col gap-1.5 mt-3">
@@ -146,7 +146,7 @@ function RepoHistory({ instanceId, repoId, repoName, onBack }: {
 								<div className="min-w-0"><RunMeta run={run} /></div>
 								<div className="flex flex-col items-end gap-1 shrink-0">
 									<StatusBadge state={buildState(run)} />
-									{run.updatedAt && <span className="text-[0.6rem] text-muted-soft">{timeAgo(run.updatedAt)}</span>}
+									{run.updatedAt && <span className="text-2xs text-muted-soft">{timeAgo(run.updatedAt)}</span>}
 								</div>
 							</div>
 							<ViewRunLink url={run.url} />
@@ -213,8 +213,8 @@ export default function BuildsPanel({ instanceId, initialRepoId }: {
 		<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-2 sm:px-4 sm:py-3">
 			<div className="bg-panel border border-line rounded-xl p-3">
 				<div className="flex justify-between items-center gap-2">
-					<span className="text-ink font-bold text-[0.95rem]">Builds</span>
-					<span className="text-[0.65rem] text-muted-soft">Latest GitHub Actions run per repo</span>
+					<span className="text-ink font-bold text-base">Builds</span>
+					<span className="text-2xs text-muted-soft">Latest GitHub Actions run per repo</span>
 				</div>
 
 				<div className="flex flex-col gap-1.5 mt-3">
@@ -257,7 +257,7 @@ export default function BuildsPanel({ instanceId, initialRepoId }: {
 										</div>
 										<div className="flex flex-col items-end gap-1 shrink-0">
 											{b.available && <StatusBadge state={state} />}
-											{b.run?.updatedAt && <span className="text-[0.6rem] text-muted-soft">{timeAgo(b.run.updatedAt)}</span>}
+											{b.run?.updatedAt && <span className="text-2xs text-muted-soft">{timeAgo(b.run.updatedAt)}</span>}
 										</div>
 									</div>
 								</button>

@@ -113,7 +113,7 @@ function DailyChart({ daily, metric }: { daily: Day[]; metric: "cost" | "tokens"
 				})}
 			</svg>
 			{daily.length > 0 && (
-				<div className="flex justify-between text-[0.65rem] text-muted-soft px-1">
+				<div className="flex justify-between text-2xs text-muted-soft px-1">
 					<span>{daily[0].date.slice(5)}</span>
 					<span>{daily[daily.length - 1].date.slice(5)}</span>
 				</div>
@@ -273,7 +273,7 @@ export default function Usage() {
 							<div className="flex gap-1">
 								{(["cost", "tokens"] as const).map((m) => (
 									<button key={m} type="button" onClick={() => setMetric(m)}
-										className={`text-[0.7rem] px-2 py-1 rounded border font-semibold capitalize ${metric === m ? "border-accent text-accent" : "border-line text-muted-soft"}`}>{m}</button>
+										className={`text-2xs px-2 py-1 rounded border font-semibold capitalize ${metric === m ? "border-accent text-accent" : "border-line text-muted-soft"}`}>{m}</button>
 								))}
 							</div>
 						</div>
@@ -438,7 +438,7 @@ function UnmeteredNotice({ unmetered }: { unmetered?: Unmetered }) {
 function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
 	return (
 		<div className="bg-panel border border-line rounded-xl px-3 py-2.5">
-			<div className="text-[0.7rem] uppercase tracking-wide text-muted-soft">{label}</div>
+			<div className="text-2xs uppercase tracking-wide text-muted-soft">{label}</div>
 			<div className={`text-lg font-bold tabular-nums ${accent ? "text-accent" : ""}`}>{value}</div>
 		</div>
 	);

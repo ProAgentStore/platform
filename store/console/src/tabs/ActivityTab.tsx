@@ -114,15 +114,15 @@ export default function ActivityTab({ instanceId }: { instanceId: string }) {
 									<span className="text-base shrink-0 w-5 text-center">{meta.icon}</span>
 									<span className="flex-1 min-w-0 text-sm break-words">{meta.label(e.data ?? {})}</span>
 									{e.channel && (
-										<span className="shrink-0 text-[0.65rem] text-muted-soft border border-line rounded px-1 py-0.5 hidden sm:inline">
+										<span className="shrink-0 text-2xs text-muted-soft border border-line rounded px-1 py-0.5 hidden sm:inline">
 											{e.channel}
 										</span>
 									)}
-									<span className="shrink-0 text-[0.7rem] text-muted-soft">{formatTime(e.createdAt)}</span>
-									{hasDetail && <span className="shrink-0 text-[0.7rem] text-muted-soft w-3">{open ? "▲" : "▼"}</span>}
+									<span className="shrink-0 text-2xs text-muted-soft">{formatTime(e.createdAt)}</span>
+									{hasDetail && <span className="shrink-0 text-2xs text-muted-soft w-3">{open ? "▲" : "▼"}</span>}
 								</button>
 								{open && hasDetail && (
-									<pre className="text-[0.7rem] text-muted bg-panel/60 border-t border-line px-3 py-2 overflow-x-auto whitespace-pre-wrap break-words">
+									<pre className="text-2xs text-muted bg-panel/60 border-t border-line px-3 py-2 overflow-x-auto whitespace-pre-wrap break-words">
 										{JSON.stringify(e.data, null, 2)}
 									</pre>
 								)}

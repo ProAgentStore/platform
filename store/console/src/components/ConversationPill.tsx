@@ -39,13 +39,13 @@ export default function ConversationPill() {
 				}`}
 			>
 				<span
-					className="w-5 h-5 rounded-full flex items-center justify-center text-[0.7rem] shrink-0"
+					className="w-5 h-5 rounded-full flex items-center justify-center text-2xs shrink-0"
 					style={{ background: conversation.bg }}
 					aria-hidden="true"
 				>
 					{conversation.emoji}
 				</span>
-				<span className="hidden sm:inline text-[0.72rem] font-semibold truncate">{view.label}</span>
+				<span className="hidden sm:inline text-xs font-semibold truncate">{view.label}</span>
 				{/* The state dot carries the meaning on mobile, where the label is hidden: pulsing
 				    accent = still working, plain = parked with the mic closed. */}
 				<span

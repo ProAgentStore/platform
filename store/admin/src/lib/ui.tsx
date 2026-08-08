@@ -108,7 +108,7 @@ export function BarChart({
 				<span className="text-xs text-muted-soft">total {format(total)}</span>
 			</div>
 			<div className="relative flex items-end gap-px border-l border-b border-line pl-1" style={{ height }}>
-				<span className="absolute -top-0.5 right-1 text-[10px] text-muted-soft">{format(max)}</span>
+				<span className="absolute -top-0.5 right-1 text-2xs text-muted-soft">{format(max)}</span>
 				{points.map((p, i) => (
 					// biome-ignore lint/a11y/noStaticElementInteractions: hover-only chart-bar highlight, no click action; the same value is exposed natively via the inner bar's title attribute
 					<div key={p.date} className="flex-1 flex items-end h-full min-w-0" onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)}>
@@ -120,7 +120,7 @@ export function BarChart({
 					</div>
 				))}
 			</div>
-			<div className="flex justify-between text-[10px] text-muted-soft mt-1">
+			<div className="flex justify-between text-2xs text-muted-soft mt-1">
 				<span>{md(points[0].date)}</span>
 				<span>{md(points[points.length - 1].date)}</span>
 			</div>

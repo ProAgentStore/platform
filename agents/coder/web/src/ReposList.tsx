@@ -101,7 +101,7 @@ export default function ReposList({
 							    labelled as having no remote at all. */}
 							{repoTitle(r)}
 							{repoProviderBadge(r) && (
-								<span className="text-[0.6rem] px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">{repoProviderBadge(r)}</span>
+								<span className="text-2xs px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">{repoProviderBadge(r)}</span>
 							)}
 						</div>
 						<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
@@ -111,7 +111,7 @@ export default function ReposList({
 								<span className={`w-2 h-2 rounded-full ${active && status !== "offline" ? "bg-green" : "bg-muted"}`} />
 							)}
 							{repoLabel(r)}
-							{r.instructions && <span className="text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
+							{r.instructions && <span className="text-2xs px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
 						</div>
 					</div>
 					<div className="flex gap-1.5 shrink-0 items-center">
@@ -156,7 +156,7 @@ export default function ReposList({
 		<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
 			<div className="bg-panel border border-line rounded-xl p-3">
 				<div className="flex justify-between items-center gap-2">
-					<span className="text-ink font-bold text-[0.95rem]">{singleRepo ? "Repository" : "Repositories"}</span>
+					<span className="text-ink font-bold text-base">{singleRepo ? "Repository" : "Repositories"}</span>
 					<div className="flex gap-1.5">
 						{enginesButton}
 						{/* A one-repo agent cannot use this — its repo comes from its settings. */}

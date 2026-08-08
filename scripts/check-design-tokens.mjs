@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
- * check-design-tokens.mjs — no colour utility may name a token nothing declares (#367).
+ * check-design-tokens.mjs — two rules over the same three trees:
+ *
+ *   1. no colour utility may name a token nothing declares (#367);
+ *   2. no font size may be written as a bracketed value instead of a scale step (#390).
+ *
+ * They live together because they scan the same source, against the same `@theme`, and
+ * because they are two halves of one idea: a class name must name a DECISION, not a value.
  *
  * PAGS runs its own design system (`DESIGN-SYSTEM.md`; it is deliberately out of scope of
  * the shared six-store spec as of 2026-08-07 — dark-only, own tokens). Owning it is a
@@ -14,6 +20,12 @@
  * `border` left on v4's `currentColor` default, i.e. a near-white line on a black page,
  * which is exactly what #368 fixed in DataTab and what this found in four more places.
  *
+ * The type rule catches the mirror image: a bracketed font size does not fail, it WORKS,
+ * which is how 190 of them accumulated across 17 values with nine inside a 2px band. It is
+ * a gate at zero in all three trees because #390 collapsed every one of them onto a step —
+ * a lint with nowhere for the decision to go is 190 blocked edits, which is why this rule
+ * could not have landed with #367.
+ *
  * Gate where the tree is clean, ratchet where it is not — the same rule ci.yml's lint step
  * follows. `store/admin` carries two hits in a tree with uncommitted maintainer work this
  * batch, so it is pinned rather than excluded: excluding it would hide the debt, and a
@@ -26,7 +38,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findDeadColorUtilities, parseThemeColorTokens } from "./lib/design-tokens.mjs";
+import { findArbitraryFontSizes, findDeadColorUtilities, parseThemeColorTokens, parseThemeTypeSteps } from "./lib/design-tokens.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -58,9 +70,15 @@ function* sourceFiles(dir) {
 	}
 }
 
-let failed = false;
+/** Every source file of a surface, with its repo-relative path, read once per rule. */
+function* surfaceSources(surface) {
+	for (const file of sourceFiles(resolve(ROOT, surface.src))) {
+		yield { rel: relative(ROOT, file).split(sep).join("/"), source: readFileSync(file, "utf8") };
+	}
+}
 
-for (const surface of SURFACES) {
+/** Rule 1 (#367): no colour utility names a token nothing declares. Returns true when OK. */
+function checkColours(surface) {
 	const declared = parseThemeColorTokens(readFileSync(resolve(ROOT, surface.theme), "utf8"));
 	if (declared.size < 10) {
 		console.error(
@@ -72,27 +90,23 @@ for (const surface of SURFACES) {
 	}
 
 	const offenders = [];
-	for (const file of sourceFiles(resolve(ROOT, surface.src))) {
-		const rel = relative(ROOT, file).split(sep).join("/");
-		for (const hit of findDeadColorUtilities(readFileSync(file, "utf8"), declared)) {
-			offenders.push({ ...hit, rel });
-		}
+	for (const { rel, source } of surfaceSources(surface)) {
+		for (const hit of findDeadColorUtilities(source, declared)) offenders.push({ ...hit, rel });
 	}
 
 	if (offenders.length === surface.pinned) {
 		const how = surface.pinned === 0 ? "clean" : `at its pin of ${surface.pinned}`;
 		console.log(`✓ ${surface.name}: every colour utility names a declared token (${how}).`);
-		continue;
+		return true;
 	}
 
-	failed = true;
 	if (offenders.length < surface.pinned) {
 		console.error(
 			`\n✗ ${surface.name} is down to ${offenders.length} dead colour utility(ies), below its pin of ${surface.pinned}.\n` +
 				`  Lower \`pinned\` for it in scripts/check-design-tokens.mjs in the same commit, or the\n` +
 				"  ground you just took is left available as headroom.",
 		);
-		continue;
+		return false;
 	}
 
 	console.error(
@@ -108,6 +122,55 @@ for (const surface of SURFACES) {
 			"  If a legitimate Tailwind keyword is being misread as a colour, add it to\n" +
 			"  NON_COLOR_VALUES in scripts/lib/design-tokens.mjs.",
 	);
+	return false;
+}
+
+/**
+ * Rule 2 (#390): no font size is written as a bracketed value. A gate at zero, everywhere.
+ *
+ * The step check runs first and on its own: a scale step declared with no matching
+ * `--text-*--line-height` emits a `line-height` that resolves to nothing, so the utility
+ * silently inherits one — the colour rule's failure mode one property over, and the reason
+ * the sweep this rule closes could point every call site at a step that half-works.
+ */
+function checkTypeScale(surface) {
+	const { steps, lineHeights } = parseThemeTypeSteps(readFileSync(resolve(ROOT, surface.theme), "utf8"));
+	for (const step of steps) {
+		if (lineHeights.has(step)) continue;
+		console.error(
+			`\n✗ ${surface.theme} declares a --text-${step} step with no --text-${step}--line-height.\n` +
+				"  Tailwind emits a line-height naming the missing variable, which resolves to nothing\n" +
+				"  and silently inherits. Declare both, or neither.",
+		);
+		return false;
+	}
+
+	const offenders = [];
+	for (const { rel, source } of surfaceSources(surface)) {
+		for (const hit of findArbitraryFontSizes(source)) offenders.push({ ...hit, rel });
+	}
+
+	if (offenders.length === 0) {
+		console.log(`✓ ${surface.name}: every font size names a scale step (${steps.size} declared here).`);
+		return true;
+	}
+
+	console.error(`\n✗ ${surface.name}: ${offenders.length} font size(s) written as a value instead of a step:\n`);
+	for (const o of offenders) console.error(`  ${o.rel}:${o.line}  ${o.utility}`);
+	console.error(
+		"\n  DESIGN-SYSTEM.md §2 fixes the scale: text-2xs · xs · sm · base · lg · xl · 2xl · 3xl.\n" +
+			"  Pick the nearest step; below the 11px floor, round UP — that floor is the whole point\n" +
+			"  of #390, and 0.32px between two neighbouring values is not a decision anyone made.\n" +
+			"  A genuinely new step is a --text-* entry (with its --line-height) in BOTH @theme\n" +
+			"  blocks, since designTokens.test.ts holds them equal.",
+	);
+	return false;
+}
+
+let failed = false;
+for (const surface of SURFACES) {
+	if (!checkColours(surface)) failed = true;
+	if (!checkTypeScale(surface)) failed = true;
 }
 
 process.exit(failed ? 1 : 0);

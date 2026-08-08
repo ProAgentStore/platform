@@ -309,7 +309,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 										<span className="w-2.5 h-2.5 rounded-full" style={{ background: col.color }} />
 										{col.title}
 									</div>
-									<span className="text-[0.7rem] text-muted border border-line rounded-full px-1.5 py-0.5 font-bold">{colItems.length}</span>
+									<span className="text-2xs text-muted border border-line rounded-full px-1.5 py-0.5 font-bold">{colItems.length}</span>
 								</div>
 								<div className="flex flex-col gap-2 p-2.5">
 									{colItems.length === 0 ? (
@@ -332,7 +332,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 								<div className="flex items-center gap-1.5 mb-1.5 text-xs font-extrabold uppercase tracking-wide text-muted">
 									<span className="w-2.5 h-2.5 rounded-full" style={{ background: col.color }} />
 									{col.title}
-									<span className="text-[0.7rem] text-muted-soft border border-line rounded-full px-1.5 py-0.5 font-bold">{colItems.length}</span>
+									<span className="text-2xs text-muted-soft border border-line rounded-full px-1.5 py-0.5 font-bold">{colItems.length}</span>
 								</div>
 								<div className="border border-line rounded-xl overflow-hidden divide-y divide-line">
 									{colItems.map((item) => <ListRow key={item.jobKey} {...itemProps(item)} />)}
@@ -373,7 +373,7 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 			onClick={(e) => { e.stopPropagation(); onAsk(); }}
 			title={label}
 			aria-label={label}
-			className={`text-[0.7rem] px-2 py-1 rounded border font-bold flex items-center gap-1 ${turns ? "border-accent/50 text-accent hover:bg-accent/10" : "border-line text-muted hover:border-accent hover:text-accent"} ${className}`}
+			className={`text-2xs px-2 py-1 rounded border font-bold flex items-center gap-1 ${turns ? "border-accent/50 text-accent hover:bg-accent/10" : "border-line text-muted hover:border-accent hover:text-accent"} ${className}`}
 		>
 			<MessageCircleQuestion size={12} aria-hidden="true" />
 			Ask{turns ? ` ${turns}` : ""}
@@ -414,15 +414,15 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 			)}
 			<button type="button" onClick={() => onOpen(item.latestTaskId)} disabled={!openable} className={`text-left w-full ${openable ? "cursor-pointer" : "cursor-default"}`}>
 				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{item.title}</h3>
-				{item.subtitle && <p className="text-[0.7rem] text-muted-soft mb-1 line-clamp-1">{item.subtitle}</p>}
+				{item.subtitle && <p className="text-2xs text-muted-soft mb-1 line-clamp-1">{item.subtitle}</p>}
 				{item.description && <p className="text-xs text-muted line-clamp-2 mb-2">{item.description}</p>}
 				{item.reasoning && (
-					<div className="text-[0.7rem] text-muted bg-panel/50 border-l-2 border-accent/50 rounded-r px-2 py-1 mb-2 line-clamp-4 whitespace-pre-wrap break-words">
+					<div className="text-2xs text-muted bg-panel/50 border-l-2 border-accent/50 rounded-r px-2 py-1 mb-2 line-clamp-4 whitespace-pre-wrap break-words">
 						<span className="text-accent font-semibold">Why: </span>
 						{item.reasoning}
 					</div>
 				)}
-				<div className="flex gap-1.5 flex-wrap items-center text-[0.7rem]">
+				<div className="flex gap-1.5 flex-wrap items-center text-2xs">
 					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(item.status)}`}>{item.status}</span>
 					{item.userStatus && <span className="text-muted-soft" title={`Automation: ${item.runStatus}`}>moved</span>}
 					{item.updatedAt && <span className="text-muted-soft">{formatTime(item.updatedAt)}</span>}
@@ -437,7 +437,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 					<button
 						type="button"
 						onClick={(e) => { e.stopPropagation(); onApprove(); }}
-						className="text-[0.7rem] px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold"
+						className="text-2xs px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold"
 						title="Approve this task to run"
 					>
 						Approve
@@ -448,7 +448,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 						type="button"
 						disabled={retrying}
 						onClick={(e) => { e.stopPropagation(); onRetry(); }}
-						className="text-[0.7rem] px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40"
+						className="text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40"
 						title="Re-run this application"
 					>
 						{retrying ? "↻ Retrying…" : "↻ Retry"}
@@ -459,7 +459,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 					value={selectValue}
 					onClick={(e) => e.stopPropagation()}
 					onChange={(e) => { const v = e.target.value; onMove(v === "__auto" ? "" : (cols.find((c) => c.id === v)?.statuses?.[0] ?? v)); }}
-					className="text-[0.7rem] bg-panel border border-line rounded px-1.5 py-1 text-muted max-w-[8rem]"
+					className="text-2xs bg-panel border border-line rounded px-1.5 py-1 text-muted max-w-[8rem]"
 					title="Move to column"
 				>
 					<option value="__auto">Auto (follow run)</option>
@@ -469,7 +469,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 					<button
 						type="button"
 						onClick={(e) => { e.stopPropagation(); onToggleAttempts(); }}
-						className="text-[0.7rem] px-1.5 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent font-medium ml-auto"
+						className="text-2xs px-1.5 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent font-medium ml-auto"
 						title="Show attempts"
 					>
 						×{item.attempts.length} runs {expanded ? "▲" : "▼"}
@@ -484,7 +484,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 							key={a.id}
 							type="button"
 							onClick={(e) => { e.stopPropagation(); onOpen(a.id); }}
-							className="flex items-center justify-between gap-2 text-[0.7rem] px-2 py-1 rounded bg-panel/60 border border-line hover:border-accent text-left"
+							className="flex items-center justify-between gap-2 text-2xs px-2 py-1 rounded bg-panel/60 border border-line hover:border-accent text-left"
 						>
 							<span className="text-ink">Attempt {item.attempts.length - i}{i === 0 ? " (latest)" : ""}</span>
 							<span className={`px-1 rounded ${statusClass(a.status)}`}>{a.status}</span>
@@ -521,31 +521,31 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 				<button type="button" onClick={() => onOpen(item.latestTaskId)} disabled={!openable} className={`flex-1 min-w-[9rem] text-left ${openable ? "cursor-pointer" : "cursor-default"}`}>
 					<div className="flex items-baseline gap-2 min-w-0">
 						<span className="text-sm font-bold truncate">{item.title}</span>
-						{item.subtitle && <span className="text-[0.7rem] text-muted-soft truncate hidden sm:inline">{item.subtitle}</span>}
+						{item.subtitle && <span className="text-2xs text-muted-soft truncate hidden sm:inline">{item.subtitle}</span>}
 					</div>
 					{item.description && <p className="text-xs text-muted line-clamp-1">{item.description}</p>}
 				</button>
-				<span className={`shrink-0 px-1.5 py-0.5 rounded text-[0.7rem] font-medium ${statusClass(item.status)}`}>{item.status}</span>
-				{item.userStatus && <span className="shrink-0 text-[0.7rem] text-muted-soft hidden sm:inline" title={`Automation: ${item.runStatus}`}>moved</span>}
-				{item.updatedAt && <span className="shrink-0 text-[0.7rem] text-muted-soft hidden md:inline">{formatTime(item.updatedAt)}</span>}
+				<span className={`shrink-0 px-1.5 py-0.5 rounded text-2xs font-medium ${statusClass(item.status)}`}>{item.status}</span>
+				{item.userStatus && <span className="shrink-0 text-2xs text-muted-soft hidden sm:inline" title={`Automation: ${item.runStatus}`}>moved</span>}
+				{item.updatedAt && <span className="shrink-0 text-2xs text-muted-soft hidden md:inline">{formatTime(item.updatedAt)}</span>}
 				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} className="shrink-0" />}
 				{onApprove && (
-					<button type="button" onClick={onApprove} className="shrink-0 text-[0.7rem] px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold" title="Approve this task to run">Approve</button>
+					<button type="button" onClick={onApprove} className="shrink-0 text-2xs px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold" title="Approve this task to run">Approve</button>
 				)}
 				{onRetry && (
-					<button type="button" disabled={retrying} onClick={onRetry} className="shrink-0 text-[0.7rem] px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40" title="Re-run this application">{retrying ? "↻…" : "↻ Retry"}</button>
+					<button type="button" disabled={retrying} onClick={onRetry} className="shrink-0 text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40" title="Re-run this application">{retrying ? "↻…" : "↻ Retry"}</button>
 				)}
 				<select
 					value={selectValue}
 					onChange={(e) => { const v = e.target.value; onMove(v === "__auto" ? "" : (cols.find((c) => c.id === v)?.statuses?.[0] ?? v)); }}
-					className="shrink-0 text-[0.7rem] bg-panel border border-line rounded px-1.5 py-1 text-muted max-w-[8rem]"
+					className="shrink-0 text-2xs bg-panel border border-line rounded px-1.5 py-1 text-muted max-w-[8rem]"
 					title="Move to column"
 				>
 					<option value="__auto">Auto</option>
 					{cols.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
 				</select>
 				{item.attempts.length > 1 && (
-					<button type="button" onClick={onToggleAttempts} className="shrink-0 text-[0.7rem] px-1.5 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent font-medium" title="Show attempts">×{item.attempts.length} {expanded ? "▲" : "▼"}</button>
+					<button type="button" onClick={onToggleAttempts} className="shrink-0 text-2xs px-1.5 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent font-medium" title="Show attempts">×{item.attempts.length} {expanded ? "▲" : "▼"}</button>
 				)}
 				{(isFinished || !openable) && (
 					<button type="button" title="Remove from board" onClick={onDelete} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-muted-soft hover:text-red hover:bg-red/10 text-base leading-none">✕</button>
@@ -554,7 +554,7 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 			{expanded && item.attempts.length > 1 && (
 				<div className="flex flex-col gap-1 px-3 pb-2">
 					{item.attempts.map((a, i) => (
-						<button key={a.id} type="button" onClick={() => onOpen(a.id)} className="flex items-center justify-between gap-2 text-[0.7rem] px-2 py-1 rounded bg-panel/60 border border-line hover:border-accent text-left">
+						<button key={a.id} type="button" onClick={() => onOpen(a.id)} className="flex items-center justify-between gap-2 text-2xs px-2 py-1 rounded bg-panel/60 border border-line hover:border-accent text-left">
 							<span className="text-ink">Attempt {item.attempts.length - i}{i === 0 ? " (latest)" : ""}</span>
 							<span className={`px-1 rounded ${statusClass(a.status)}`}>{a.status}</span>
 							{a.updatedAt && <span className="text-muted-soft shrink-0">{formatTime(a.updatedAt)}</span>}

@@ -325,7 +325,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 					})}
 				</div>
 				{/* Which target the Controls view is typing into, since its header belongs to Output. */}
-				<span className="font-mono text-[0.7rem] text-muted-soft truncate min-w-0">{selected || "no target selected"}</span>
+				<span className="font-mono text-2xs text-muted-soft truncate min-w-0">{selected || "no target selected"}</span>
 			</div>
 
 			<div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[17rem_minmax(0,1fr)]">
@@ -355,7 +355,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 									<span className="font-mono text-sm truncate">{s.name}</span>
 									<span className={`w-2 h-2 rounded-full shrink-0 ${s.attached ? "bg-green" : "bg-muted-soft"}`} title={s.attached ? "Attached" : "Detached"} />
 								</div>
-								<div className="mt-1 text-[0.7rem] text-muted-soft truncate">
+								<div className="mt-1 text-2xs text-muted-soft truncate">
 									{s.backend} {s.activeCommand ? `- ${s.activeCommand}` : ""} {s.activeWindow ? `- ${s.activeWindow}` : ""} {s.windows ? `- ${s.windows}w` : ""}
 								</div>
 							</button>
@@ -368,9 +368,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 						<div className="min-w-0">
 							<div className="flex items-center gap-2 min-w-0">
 								<span className="font-mono text-sm font-bold truncate">{selected || "No target selected"}</span>
-								{selectedInfo?.attached != null && <span className={`text-[0.65rem] px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-green/15 text-green" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
+								{selectedInfo?.attached != null && <span className={`text-2xs px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-green/15 text-green" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
 							</div>
-							<div className="text-[0.7rem] text-muted-soft truncate">
+							<div className="text-2xs text-muted-soft truncate">
 								{selectedInfo ? `${selectedInfo.backend}${selectedInfo.activeCommand ? ` - ${selectedInfo.activeCommand}` : ""}${selectedInfo.activeWindow ? ` - ${selectedInfo.activeWindow}` : ""}${createdLabel(selectedInfo.created) ? ` - ${createdLabel(selectedInfo.created)}` : ""}` : paneState.hint}
 							</div>
 						</div>
@@ -405,7 +405,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 					<div className={`${tmuxBlockClass(view, ["output"], "block")} flex-1 min-h-0 bg-paper`}>
 						{/* `whitespace-pre-wrap break-words` keeps a wide pane wrapping inside its own column
 						    instead of panning the page — the platform rule for wide monospace content. */}
-						<pre className="h-full overflow-auto chat-scroll p-3 text-[0.74rem] leading-relaxed font-mono whitespace-pre-wrap break-words">
+						<pre className="h-full overflow-auto chat-scroll p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap break-words">
 							<SafeHtmlView as="code" html={renderTerminal(pane || paneState.emptyPane)} />
 						</pre>
 					</div>

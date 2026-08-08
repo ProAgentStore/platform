@@ -227,12 +227,12 @@ function HistoryChart({ points }: { points: HistoryPoint[] }) {
 			<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="GitHub issue history" className="w-full h-56 border border-line rounded-lg bg-paper">
 				<line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="var(--color-line)" />
 				<line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="var(--color-line)" />
-				<text x={width - pad} y={16} textAnchor="end" className="fill-muted-soft text-[10px]">{fmtInt(max)}</text>
+				<text x={width - pad} y={16} textAnchor="end" className="fill-muted-soft text-2xs">{fmtInt(max)}</text>
 				<path d={line("openTotal")} fill="none" stroke="var(--color-yellow)" strokeWidth="2.5" />
 				<path d={line("opened")} fill="none" stroke="var(--color-accent)" strokeWidth="2" />
 				<path d={line("closed")} fill="none" stroke="var(--color-green)" strokeWidth="2" />
 				{points.map((p, i) => (i % Math.ceil(points.length / 8) === 0 || i === points.length - 1) ? (
-					<text key={p.date} x={x(i)} y={height - 8} textAnchor="middle" className="fill-muted-soft text-[10px]">{p.date.slice(5)}</text>
+					<text key={p.date} x={x(i)} y={height - 8} textAnchor="middle" className="fill-muted-soft text-2xs">{p.date.slice(5)}</text>
 				) : null)}
 			</svg>
 		</div>

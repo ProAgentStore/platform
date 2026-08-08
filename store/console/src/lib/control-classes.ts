@@ -29,8 +29,9 @@
  *
  *  - `rounded-lg` for controls, `rounded-xl` for cards, `rounded-full` for pills. Bare
  *    `rounded` on a control is older code, and the 23 sites that had it are folded in here.
- *  - Nothing a user reads is below `text-xs` (12px). The smallest step below is `text-[0.7rem]`
- *    = 11.2px, used 110 times, including for button labels and descriptive copy.
+ *  - Nothing a user reads is below `text-xs` (12px). The one step below it — `text-2xs`, 11px,
+ *    declared in `@theme` at #390 — is the floor of the scale and belongs to dense telemetry,
+ *    not to a control's label. No size below carries it.
  */
 
 import { INTENT_CLASS, type StatusIntent } from "./statusBadge";
@@ -54,17 +55,31 @@ export type ButtonSize = "sm" | "md" | "lg" | "icon";
 export const BUTTON_BASE = "inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50";
 
 /**
- * Padding + radius + type step. Four steps replace 47 shapes.
+ * Padding + radius + type step + a TARGET FLOOR. Four steps replace 47 shapes.
  *
  * `sm` and `md` differ by a real amount (a dense inline action beside a row of text, versus a
  * form's own buttons), unlike the 2px that separated `px-2.5 py-1.5` from `px-3 py-1.5`.
  * `icon` carries no type step because it holds an icon, not text.
+ *
+ * ── The `min-h-6 min-w-6` on every step (#389)
+ *
+ * 24×24 CSS px is WCAG 2.5.8 Target Size (Minimum), Level AA, and it is a FLOOR rather than a
+ * resize: every step already renders at or above it today (24 · 30 · 36, and `icon` at 24 with
+ * a 12px glyph), so this changes nothing on screen. What it changes is the next control —
+ * `icon` with a 10px glyph, or `sm` around a single character, would have gone under without
+ * it, and there is no build error for a target that is too small. Padding is the wrong place
+ * to express it: padding is a look, a floor is a promise.
+ *
+ * It is deliberately NOT 44. Every control in this console is 24–38px tall; a 44px box floor
+ * would re-lay-out every dense row in the app under cover of an accessibility fix. Where 44
+ * is genuinely wanted, `tap-target` in `index.css` gives the reach without the box, and its
+ * comment carries the arithmetic for why that expansion is vertical only.
  */
 export const BUTTON_SIZE: Record<ButtonSize, string> = {
-	sm: "text-xs px-2 py-1 rounded-lg",
-	md: "text-xs px-3 py-1.5 rounded-lg",
-	lg: "text-sm px-4 py-2 rounded-lg",
-	icon: "p-1.5 rounded-lg",
+	sm: "text-xs px-2 py-1 rounded-lg min-h-6 min-w-6",
+	md: "text-xs px-3 py-1.5 rounded-lg min-h-6 min-w-6",
+	lg: "text-sm px-4 py-2 rounded-lg min-h-6 min-w-6",
+	icon: "p-1.5 rounded-lg min-h-6 min-w-6",
 };
 
 /**

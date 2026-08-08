@@ -480,7 +480,7 @@ export default function TriggersSection({
 				<label className="flex flex-col gap-1 mb-3">
 					<span className="text-xs font-semibold">Pipeline name</span>
 					<input value={pipeline} onChange={(e) => setPipeline(e.target.value)} placeholder="a pipeline configured on this agent" className={inputClass} />
-					<span className="text-[0.7rem] text-muted">The trigger runs this declarative pipeline (from the agent's <code>config.pipelines</code>) on fire.</span>
+					<span className="text-2xs text-muted">The trigger runs this declarative pipeline (from the agent's <code>config.pipelines</code>) on fire.</span>
 				</label>
 			)}
 
@@ -488,7 +488,7 @@ export default function TriggersSection({
 				<label className="flex flex-col gap-1 mb-3">
 					<span className="text-xs font-semibold">Target collection</span>
 					<input value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="collection name" className={inputClass} />
-					<span className="text-[0.7rem] text-muted">Webhook/cron payload is inserted as a record into this collection (an explicit <code>record</code> field wins).</span>
+					<span className="text-2xs text-muted">Webhook/cron payload is inserted as a record into this collection (an explicit <code>record</code> field wins).</span>
 				</label>
 			)}
 
@@ -496,7 +496,7 @@ export default function TriggersSection({
 				<label className="flex flex-col gap-1 mb-3">
 					<span className="text-xs font-semibold">Start URL</span>
 					<input value={browseUrl} onChange={(e) => setBrowseUrl(e.target.value)} placeholder="https://www.facebook.com/friends/requests" className={inputClass} />
-					<span className="text-[0.7rem] text-muted">On schedule, drives the browser (via <code>pags up</code>) toward this agent's objective from this URL. Runner must be online at run time, or the run is skipped.</span>
+					<span className="text-2xs text-muted">On schedule, drives the browser (via <code>pags up</code>) toward this agent's objective from this URL. Runner must be online at run time, or the run is skipped.</span>
 				</label>
 			)}
 
@@ -509,7 +509,7 @@ export default function TriggersSection({
 					</button>
 					{showMapping && (
 						<div className="mt-2">
-							<p className="text-[0.7rem] text-muted mb-2">
+							<p className="text-2xs text-muted mb-2">
 								By default the payload's <code>title</code>, <code>description</code>, <code>content</code> or <code>text</code> are used.
 								Map a path instead when your source nests its data — e.g. <code>lead.name</code> or <code>items.0.title</code>.
 								A path this payload does not have simply falls back to the default.
@@ -611,25 +611,25 @@ export default function TriggersSection({
 												return (
 													<div key={event.id} className="min-w-0">
 														<div className="flex items-start gap-2 flex-wrap">
-															<span className={`text-[0.7rem] px-2 py-0.5 rounded-full border font-semibold shrink-0 ${TONE_CLASS[eventTone(event)]}`}>
+															<span className={`text-2xs px-2 py-0.5 rounded-full border font-semibold shrink-0 ${TONE_CLASS[eventTone(event)]}`}>
 																{statusLabel(event.status)}
 															</span>
-															<span className="text-[0.7rem] text-muted-soft shrink-0">{sourceLabel(event.type)}</span>
-															<span className="text-[0.7rem] text-muted-soft shrink-0">{new Date(event.created_at.includes("T") ? event.created_at : `${event.created_at.replace(" ", "T")}Z`).toLocaleString()}</span>
+															<span className="text-2xs text-muted-soft shrink-0">{sourceLabel(event.type)}</span>
+															<span className="text-2xs text-muted-soft shrink-0">{new Date(event.created_at.includes("T") ? event.created_at : `${event.created_at.replace(" ", "T")}Z`).toLocaleString()}</span>
 															<span className="text-xs text-muted min-w-0 break-words">{eventHeadline(event)}</span>
 															{event.payload && (
-																<button type="button" onClick={() => setOpenPayload(open ? null : event.id)} className="text-[0.7rem] text-muted hover:text-accent font-semibold shrink-0">
+																<button type="button" onClick={() => setOpenPayload(open ? null : event.id)} className="text-2xs text-muted hover:text-accent font-semibold shrink-0">
 																	{open ? "hide payload" : "payload"}
 																</button>
 															)}
 														</div>
 														{counts?.errors.length ? (
-															<ul className="text-[0.7rem] text-red mt-0.5 ml-2 flex flex-col gap-0.5">
+															<ul className="text-2xs text-red mt-0.5 ml-2 flex flex-col gap-0.5">
 																{counts.errors.slice(0, 5).map((err) => <li key={err} className="break-words">{err}</li>)}
 															</ul>
 														) : null}
 														{open && (
-															<pre className="mt-1 text-[0.7rem] bg-panel border border-line rounded p-2 overflow-x-auto max-h-56 overflow-y-auto">
+															<pre className="mt-1 text-2xs bg-panel border border-line rounded p-2 overflow-x-auto max-h-56 overflow-y-auto">
 																{truncatePayload(event.payload)}
 															</pre>
 														)}

@@ -142,7 +142,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 								</span>
 							)}
 						</div>
-						<div className="text-[0.7rem] text-muted mt-0.5">
+						<div className="text-2xs text-muted mt-0.5">
 							step {r.iteration}/{r.maxIterations} · started {when(r.startedAt)}
 							{ctl.statusLabel && <span className={PHASE_TONE[ctl.phase]}> · {ctl.statusLabel}</span>}
 						</div>

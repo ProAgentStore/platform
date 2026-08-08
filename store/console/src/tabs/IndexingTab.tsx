@@ -114,7 +114,7 @@ function statusClasses(status: "indexed" | "pending" | "failed" | "running") {
 
 function StatusPill({ status, label }: { status: "indexed" | "pending" | "failed" | "running"; label: string }) {
 	return (
-		<span className={`text-[0.7rem] px-2 py-0.5 rounded-full border font-semibold ${statusClasses(status)}`}>
+		<span className={`text-2xs px-2 py-0.5 rounded-full border font-semibold ${statusClasses(status)}`}>
 			{label}
 		</span>
 	);
@@ -125,7 +125,7 @@ function StatBox({ label, value, hint }: { label: string; value: string | number
 		<div className="bg-panel border border-line rounded-lg p-3 min-w-0">
 			<div className="text-xl font-bold leading-tight">{value}</div>
 			<div className="text-xs text-muted font-semibold mt-0.5">{label}</div>
-			{hint && <div className="text-[0.7rem] text-muted-soft mt-1 truncate">{hint}</div>}
+			{hint && <div className="text-2xs text-muted-soft mt-1 truncate">{hint}</div>}
 		</div>
 	);
 }
@@ -290,7 +290,7 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 												<span className="text-xs text-muted shrink-0">{item.kind}</span>
 											</div>
 											<div className="text-xs text-muted mt-1">{item.reason}</div>
-											{item.source && <div className="text-[0.7rem] text-muted-soft mt-1 truncate">{item.source}</div>}
+											{item.source && <div className="text-2xs text-muted-soft mt-1 truncate">{item.source}</div>}
 										</div>
 										<StatusPill status={item.status} label={item.status === "failed" ? "Needs attention" : "Pending"} />
 									</div>
@@ -319,7 +319,7 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 											</div>
 											<StatusPill status="indexed" label="Indexed" />
 										</div>
-										{source.lastIndexed && <div className="text-[0.7rem] text-muted-soft mt-2">Indexed {formatDateTime(source.lastIndexed)}</div>}
+										{source.lastIndexed && <div className="text-2xs text-muted-soft mt-2">Indexed {formatDateTime(source.lastIndexed)}</div>}
 										{source.preview && <p className="text-xs text-muted mt-2 line-clamp-2">{source.preview}</p>}
 									</div>
 								))}
@@ -363,15 +363,15 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 											<div className="grid grid-cols-3 gap-2 my-3 text-center">
 												<div className="border border-line rounded-md py-2">
 													<div className="text-sm font-bold">{fmtCount(payload.scanned || 0)}</div>
-													<div className="text-[0.65rem] text-muted">Scanned</div>
+													<div className="text-2xs text-muted">Scanned</div>
 												</div>
 												<div className="border border-line rounded-md py-2">
 													<div className="text-sm font-bold">{fmtCount(payload.imported || 0)}</div>
-													<div className="text-[0.65rem] text-muted">Imported</div>
+													<div className="text-2xs text-muted">Imported</div>
 												</div>
 												<div className="border border-line rounded-md py-2">
 													<div className="text-sm font-bold">{fmtCount(payload.skipped || 0)}</div>
-													<div className="text-[0.65rem] text-muted">Skipped</div>
+													<div className="text-2xs text-muted">Skipped</div>
 												</div>
 											</div>
 											{latest?.error || trigger.lastError ? (
@@ -382,7 +382,7 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 											{payload.errors?.length ? (
 												<div className="text-xs text-red mb-2">{payload.errors.slice(0, 2).join("; ")}</div>
 											) : null}
-											<div className="text-[0.7rem] text-muted-soft">
+											<div className="text-2xs text-muted-soft">
 												{latest ? `Latest event ${eventTime(latest)}` : "Waiting for first run"}
 												{trigger.nextRunAt ? ` · Next ${formatDateTime(trigger.nextRunAt)}` : ""}
 											</div>

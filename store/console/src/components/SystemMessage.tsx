@@ -55,7 +55,7 @@ export default function SystemMessage({ content, createdAt, prevCreatedAt }: {
 			{stamp && (
 				<span
 					title={stampTitle(createdAt, timeZone)}
-					className={`text-[0.65rem] opacity-70 whitespace-nowrap tabular-nums ${long ? "block text-right mt-1.5" : ""}`}
+					className={`text-2xs opacity-70 whitespace-nowrap tabular-nums ${long ? "block text-right mt-1.5" : ""}`}
 				>
 					{stamp}
 				</span>

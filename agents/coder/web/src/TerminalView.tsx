@@ -21,7 +21,7 @@ export default function TerminalView({
 	return (
 		<div className="flex flex-col flex-1 min-h-0 relative">
 			{stale && (
-				<div className="px-3 py-1.5 text-[0.7rem] text-amber-500 bg-amber-500/10 border-b border-line shrink-0">
+				<div className="px-3 py-1.5 text-2xs text-amber-500 bg-amber-500/10 border-b border-line shrink-0">
 					Showing the last saved terminal output — this session isn't live (it ended, or the runner isn't attached). It'll go live again when the session is running.
 				</div>
 			)}

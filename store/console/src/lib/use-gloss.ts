@@ -14,9 +14,9 @@ import type { Message, MessageGloss } from "./types";
  *  the only differentiator. "medium" word size EQUALS the bubble's base text
  *  (text-sm) so glossed and plain messages read as one typeface. */
 const SIZES: Record<string, { word: string; gloss: string }> = {
-	small: { word: "text-[0.8rem]", gloss: "text-[0.7rem]" },
-	medium: { word: "text-[0.875rem]", gloss: "text-[0.78rem]" },
-	large: { word: "text-[1.1rem]", gloss: "text-[0.95rem]" },
+	small: { word: "text-xs", gloss: "text-2xs" },
+	medium: { word: "text-sm", gloss: "text-xs" },
+	large: { word: "text-lg", gloss: "text-base" },
 };
 
 interface TranslationConfigWire {

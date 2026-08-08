@@ -771,7 +771,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									return (
 										<button key={r.id} type="button" onClick={() => switchToRepo(r)} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-panel-hover flex items-center justify-between gap-2 ${current ? "text-accent font-bold" : ""}`}>
 											<span className="truncate">{repoTitle(r)}</span>
-											{current ? <span className="text-accent text-xs shrink-0">●</span> : (isEngineBusy(st)) ? <span className="text-amber-500 text-[0.6rem] shrink-0">working</span> : null}
+											{current ? <span className="text-accent text-xs shrink-0">●</span> : (isEngineBusy(st)) ? <span className="text-amber-500 text-2xs shrink-0">working</span> : null}
 										</button>
 									);
 								})}
@@ -1024,12 +1024,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								<Cpu size={12} className={warn ? "text-yellow" : "text-muted"} />
 								<span>{badge.label}</span>
 							</div>
-							<p className="text-[0.65rem] text-muted mt-0.5">{badge.detail}</p>
+							<p className="text-2xs text-muted mt-0.5">{badge.detail}</p>
 							{/* The ordinary case, stated (#343). `warning` only fires on a mismatch, so
 							    the most common resolution — this machine's own login — showed nothing
 							    at all, which is precisely the configuration where the owner cannot
 							    tell which account is paying. */}
-							{badge.note && <p className="text-[0.65rem] text-muted-soft mt-1">{badge.note}</p>}
+							{badge.note && <p className="text-2xs text-muted-soft mt-1">{badge.note}</p>}
 							{engineAuth?.warning && <p className="text-xs text-yellow mt-1">{engineAuth.warning}</p>}
 						</div>
 					);
@@ -1042,7 +1042,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						<div className="text-sm font-semibold">This engine is waiting for you to sign in</div>
 						<p className="text-xs text-muted mt-0.5">{authPrompt.guidance}</p>
 						{authPrompt.evidence && (
-							<pre className="text-[0.65rem] text-muted mt-1 whitespace-pre-wrap break-all">{authPrompt.evidence}</pre>
+							<pre className="text-2xs text-muted mt-1 whitespace-pre-wrap break-all">{authPrompt.evidence}</pre>
 						)}
 						{authPrompt.kind === "oauth-url" && (
 							<button
@@ -1137,7 +1137,7 @@ function AgentStatusBadge({ state }: { state: RepoState }) {
 	const { label, tone } = sessionBadge(state);
 	const working = tone === "working";
 	const error = tone === "error";
-	const base = "inline-flex items-center gap-1 text-[0.6rem] font-bold px-1.5 py-0.5 rounded shrink-0";
+	const base = "inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0";
 	if (working) {
 		return (
 			<span className={`${base} bg-amber-500/15 text-amber-600`} title={label}>
@@ -1182,7 +1182,7 @@ function RepoHistory({ entries }: { entries: TimelineEntry[] | null }) {
 				<div key={`${section.sessionId}:${section.entries[0]?.seq ?? i}`}>
 					{/* The separator is the point of the inversion: a session is now a boundary in
 					    the history, not the way you ask for it. */}
-					<div className="sticky top-0 z-10 -mx-3 px-3 py-1 bg-panel/95 border-y border-line text-[11px] text-muted font-sans">
+					<div className="sticky top-0 z-10 -mx-3 px-3 py-1 bg-panel/95 border-y border-line text-2xs text-muted font-sans">
 						{sessionLabel(section, i)}
 					</div>
 					{section.entries.map((e) => (

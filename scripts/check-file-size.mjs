@@ -228,7 +228,12 @@ const PINS = {
 	// presence object handed to every surface through `SurfaceContext`. Not split: this is the
 	// page's existing runner poll gaining one field, and moving the poll out would put the header
 	// dot's own data source in another file. The decisions it feeds are in lib/tmuxView.ts.
-	"store/console/src/pages/InstanceDetail.tsx": 1396,
+	// +7 at #389: comments, not code. Three of the seven explain why the chat bubble's Copy button
+	// grows its HIT AREA rather than its box, and four explain the same for the 11×11 replay
+	// button in the message header — the arithmetic that says a wide overlay on the destructive
+	// Delete would swallow a third of Copy is exactly the kind of thing that gets "tidied" away
+	// and re-broken. The classes themselves are three words on lines that already existed.
+	"store/console/src/pages/InstanceDetail.tsx": 1403,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

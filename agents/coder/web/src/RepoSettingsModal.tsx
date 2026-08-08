@@ -121,7 +121,7 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 function Detail({ label, value }: { label: string; value: string }) {
 	return (
 		<div className="bg-paper border border-line rounded-lg p-2 min-w-0">
-			<div className="text-[0.6rem] uppercase tracking-wide text-muted-soft mb-0.5">{label}</div>
+			<div className="text-2xs uppercase tracking-wide text-muted-soft mb-0.5">{label}</div>
 			<div className="text-xs text-ink break-words font-mono">{value}</div>
 		</div>
 	);
