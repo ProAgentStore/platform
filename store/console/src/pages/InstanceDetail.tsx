@@ -33,6 +33,8 @@ import { loopCompletionNotice, loopStartFailureNotice, loopStartNotice } from ".
 import { loopStopControl, STOPPING_HINT, type LoopPhase } from "../lib/loopStopState";
 import { chatExportPayload } from "../lib/chatExport";
 import { composerPlaceholder, shouldShowComposer } from "../lib/composer";
+import { stampTitle } from "../lib/messageStamp";
+import { useAccountTimeZone } from "../lib/accountTimezone";
 
 /**
  * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
@@ -122,6 +124,8 @@ export default function InstanceDetail() {
 function InstancePage() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
+	// The owner's own zone when they set one (#345) — the hover text on every message stamp.
+	const timeZone = useAccountTimeZone();
 	const [instance, setInstance] = useState<Instance | null>(null);
 	const surfaces = instance?.capabilities?.surfaces || [];
 	// Tabs are gated on the whole DECLARED set, not just surfaces: some are about what the agent
@@ -1119,9 +1123,25 @@ function InstancePage() {
 										{/* The replay button held an 11px icon and nothing else, so it WAS 11×11 — the
 										    smallest control in the app, on the thread a hands-free user reaches for when
 										    voice has gone wrong. `min-w-6` + `tap-target` make it 24 wide by 44 tall
-										    without giving every message header a taller row (#389). */}
-										{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
+										    without giving every message header a taller row (#389).
+
+										    `pr-12 sm:pr-0` reserves the corner Copy and Delete sit in (#426). Below `sm`
+										    those two are PERMANENTLY visible — correctly, there is no hover on a touch
+										    screen — and covered 42px of a 110px stamp in WebKit. Delete's outer edge is
+										    56px from the bubble border (`right-8` + its 24px box) against a content box
+										    starting 12px in, so 44px must be reserved and `pr-12` is 48. Above `sm` they
+										    are hover-only, so nothing is reserved and that layout is unchanged.
+
+										    `title` is the full local time with the zone (#345) — wired only into
+										    `SystemMessage` until now, so the rows whose stamp is shortened could not
+										    show it.
+
+										    A stamp that still carries its year takes two lines on an assistant bubble at
+										    320px — 210px of content in a 200px box. That is the trade, not a bug: 44px
+										    must be reserved either way, and a wrapped date is readable where a covered
+										    one is not. `text-right` is so the second line reads as deliberate. */}
+										{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span data-msg-stamp title={stampTitle(m.createdAt, timeZone)} className="font-normal opacity-80 text-right">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span data-msg-stamp title={stampTitle(m.createdAt, timeZone)} className="font-normal text-muted text-right">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.fabricated && <FabricatedNotice />}
 										{m.role === "assistant" ? (
 											<GlossedMessage

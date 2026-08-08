@@ -317,7 +317,13 @@ const PINS = {
 	// saying why it is conditional (a 400/401 fails identically and bills the user's own OpenAI key
 	// to find that out). Ten lines for a whole recovery affordance, because everything that decides
 	// whether it appears is `voice.canRetryDictation`.
-	"store/console/src/pages/InstanceDetail.tsx": 1455,
+	// +20 for #426, and 16 of them are the comment. The code is four things: `pr-12 sm:pr-0` on the
+	// two message header rows, a `title`/`data-msg-stamp` on the two stamps, the `stampTitle` +
+	// `useAccountTimeZone` imports, and the one line that reads the zone. The prose is the part
+	// worth the pin: the padding is a bare number whose correctness comes from `right-8` + a 24px
+	// box + `px-3` in three other files, and a reader who cannot see that derivation will "tidy"
+	// it back to nothing. The measurement it replaces was 42px of overlap in WebKit.
+	"store/console/src/pages/InstanceDetail.tsx": 1475,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

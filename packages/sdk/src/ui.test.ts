@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMd, formatTime } from "./ui.js";
+import { renderMd, formatTime, formatDateTime } from "./ui.js";
 
 describe("formatTime (UTC parsing)", () => {
 	it("treats a SQLite 'YYYY-MM-DD HH:MM:SS' string as UTC, not local", () => {
@@ -21,6 +21,55 @@ describe("formatTime (UTC parsing)", () => {
 	it("is empty for blank or unparseable input (no NaN)", () => {
 		expect(formatTime("")).toBe("");
 		expect(formatTime("not a date")).toBe("");
+	});
+});
+
+/**
+ * The year is conditional (#426): dropped when it is the current year, kept when it is not.
+ *
+ * This is the guard that keeps the width saving from turning into an ambiguity. The obvious
+ * "fix" for the 30px is to delete `year: "numeric"` outright — which reads fine all year and
+ * silently strips the year off every historical row in `IndexingTab` and `SystemMessage`, the
+ * two callers outside the chat transcript. This test is what fails when someone does that.
+ *
+ * Dates are built in LOCAL time and mid-year on purpose: `getFullYear()` is local, so a
+ * timestamp pinned to a UTC year boundary would land in a different year for a runner east or
+ * west of Greenwich and make the assertion a coin toss.
+ */
+describe("formatDateTime (conditional year, #426)", () => {
+	const midYear = (year: number) => new Date(year, 6, 8, 21, 1).toISOString();
+
+	it("omits the year for a message from the current year", () => {
+		const year = new Date().getFullYear();
+		const out = formatDateTime(midYear(year));
+		expect(out).not.toContain(String(year));
+		// …and still says which day and what time — the point is the year, not the date.
+		expect(out).toMatch(/\d/);
+		expect(out.length).toBeGreaterThan(0);
+	});
+
+	it("keeps the year for a message from a previous year", () => {
+		const year = new Date().getFullYear() - 1;
+		expect(formatDateTime(midYear(year))).toContain(String(year));
+	});
+
+	it("keeps the year for a message dated after this one", () => {
+		// A clock-skewed row must not read as undated either — the rule is "this year", not
+		// "the past".
+		const year = new Date().getFullYear() + 1;
+		expect(formatDateTime(midYear(year))).toContain(String(year));
+	});
+
+	it("still normalizes a SQLite 'YYYY-MM-DD HH:MM:SS' string as UTC", () => {
+		// The year branch runs after the same normalization formatTime does; a regression here
+		// would shift every server-written stamp by the viewer's offset.
+		const utcNow = new Date().toISOString().slice(0, 19).replace("T", " ");
+		expect(formatDateTime(utcNow)).not.toContain(String(new Date().getFullYear()));
+	});
+
+	it("is empty for blank or unparseable input", () => {
+		expect(formatDateTime("")).toBe("");
+		expect(formatDateTime("not a date")).toBe("");
 	});
 });
 

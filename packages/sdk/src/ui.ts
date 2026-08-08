@@ -229,17 +229,40 @@ export function formatTime(iso: string): string {
 }
 
 /**
- * Absolute date + time for a message stamp — e.g. "Jul 8, 2026, 9:01 PM". Unlike
- * {@link formatTime} (relative "5m ago"), this always shows the full calendar date AND
- * clock time, for when you need to know exactly when each message happened. Same
- * SQLite-UTC normalization as formatTime.
+ * Absolute date + time for a message stamp — e.g. "Jul 8, 9:01 PM", or "Jul 8, 2025, 9:01 PM"
+ * once the year stops being obvious. Unlike {@link formatTime} (relative "5m ago"), this always
+ * shows the calendar date AND clock time, for when you need to know exactly when each message
+ * happened. Same SQLite-UTC normalization as formatTime.
+ *
+ * ── Why the year is conditional (#426)
+ *
+ * This stamp sits at the right-hand end of a chat message header, on a 320px screen, under two
+ * absolutely-positioned action buttons. Measured in WebKit at `700 10px system-ui`, the year
+ * costs 30px of a 116px stamp — real width in the row where width is scarcest (#333).
+ *
+ * It is dropped only when it is the CURRENT year, because that is the only case where it says
+ * nothing: "8 Aug" on a row from this year is unambiguous, and "8 Aug" on a row from last year
+ * is a lie of omission. That distinction is what makes this safe for the callers outside the
+ * transcript — `IndexingTab`'s "Indexed …" and `SystemMessage` — which is why the option is
+ * made conditional rather than deleted.
+ *
+ * Note this reads the clock, so a stamp rendered on 31 Dec and left on screen over midnight
+ * keeps its old rendering until the component re-renders. That is a stale pixel, not a wrong
+ * one: the year it omits is still the year the reader is in.
  */
 export function formatDateTime(iso: string): string {
 	if (!iso) return "";
 	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(iso) ? `${iso.replace(" ", "T")}Z` : iso;
 	const d = new Date(normalized);
 	if (Number.isNaN(d.getTime())) return "";
-	return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+	const sameYear = d.getFullYear() === new Date().getFullYear();
+	return d.toLocaleString(undefined, {
+		month: "short",
+		day: "numeric",
+		...(sameYear ? {} : { year: "numeric" }),
+		hour: "numeric",
+		minute: "2-digit",
+	});
 }
 
 // Terminal output colorizer — shared so the console and any agent UI render it identically.

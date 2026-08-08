@@ -3182,3 +3182,169 @@ test.describe("mobile — the Pulls panel (#401)", () => {
 		expect(Math.round(box?.height ?? 0), "the PR title ran tall — it is wrapping per character").toBeLessThan(80);
 	});
 });
+
+/**
+ * The chat message header on a phone: the two action buttons do not sit on the timestamp (#426).
+ *
+ * Three individually-correct decisions collided. `CopyButton` (`right-1.5`) and
+ * `DeleteTurnButton` (`right-8`) are absolutely positioned in the bubble's top-right corner and
+ * are PERMANENTLY visible below `sm` — correctly, because there is no hover on a touch screen
+ * (#389). The message header is `justify-between`, so the timestamp is pinned to that same right
+ * edge at that same vertical band. Nobody reserved the space, and 42px of a 110px stamp — the
+ * minutes included — rendered underneath the two buttons.
+ *
+ * ── Why this measures an intersection rather than an overflow
+ *
+ * Every geometry guard in this file so far asks whether something escaped its container. Nothing
+ * escaped here: both boxes are exactly where their CSS puts them, inside the bubble, and an
+ * overflow measurement over this bug reads zero. The defect is that they occupy the same pixels,
+ * so the only assertion that can see it is the bounding-box intersection of the two elements —
+ * which is also what the issue measured, so a green run here means the same thing the report did.
+ *
+ * ── Why the buttons' visibility is asserted first
+ *
+ * Zero overlap is trivially true when the buttons are invisible, which is exactly their desktop
+ * state. A future change that made them hover-only on mobile would delete a control a touch user
+ * cannot otherwise reach AND turn this guard green. So the run asserts opacity before it asserts
+ * clearance, and the desktop case is asserted the other way round, as its own test.
+ *
+ * ── Why the fixture carries a message from last year
+ *
+ * The year is now conditional (#426 fix 2, `formatDateTime`), so the everyday stamp is the short
+ * one. A guard built only from those would measure the easy case and pass over the widest stamp
+ * the transcript can still produce. Both are in the thread, and the rendered text of each is
+ * asserted, so the conditional is proved through the built bundle rather than only in the unit
+ * test that pins the pure function.
+ *
+ * `mobile — ` puts this block in the WebKit project (#384). The report was measured in WebKit at
+ * 320 and 390, and that is the engine every phone runs.
+ */
+test.describe("mobile — Copy and Delete clear the message timestamp (#426)", () => {
+	const THIS_YEAR = new Date().getFullYear();
+	const LAST_YEAR = THIS_YEAR - 1;
+	/** Mid-year and LOCAL, so the rendered year cannot flip under a runner east or west of UTC. */
+	const stamp = (year: number) => new Date(year, 6, 8, 14, 12).toISOString();
+
+	const MESSAGES = [
+		{ id: "m1", role: "user", content: "Deploy the api worker", createdAt: stamp(THIS_YEAR) },
+		{ id: "m2", role: "assistant", content: "Done — the worker is live.", createdAt: stamp(THIS_YEAR) },
+		{ id: "m3", role: "user", content: "What did we ship back then?", createdAt: stamp(LAST_YEAR) },
+		{ id: "m4", role: "assistant", content: "That turn is old enough to still carry its year.", createdAt: stamp(LAST_YEAR) },
+	];
+
+	async function openChat(page: Page) {
+		await mockSignedInConsole(page);
+		await page.route("**/v1/instances/inst-1/messages*", (route) =>
+			route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ messages: MESSAGES }) }),
+		);
+		await page.goto("/console/instances/inst-1");
+		// The fixture LANDED. An empty transcript cannot reproduce an overlap, and a green
+		// measurement over one is the hollow guard this file has shipped before.
+		await expect(page.locator("[data-chat-bubble]")).toHaveCount(MESSAGES.length);
+		await expect(page.locator("[data-msg-stamp]")).toHaveCount(MESSAGES.length);
+	}
+
+	/**
+	 * Per bubble, per action button: how many pixels of the timestamp that button covers, whether
+	 * the button is actually painted, and how tall the header row ended up.
+	 */
+	async function measureStamps(page: Page) {
+		return page.evaluate(() => {
+			const rows: { button: string; overlapPx: number; painted: boolean; text: string; headerH: number; leftGapPx: number }[] = [];
+			for (const bubble of Array.from(document.querySelectorAll("[data-chat-bubble]"))) {
+				const stampEl = bubble.querySelector("[data-msg-stamp]") as HTMLElement | null;
+				if (!stampEl) continue;
+				const header = stampEl.parentElement as HTMLElement;
+				const s = stampEl.getBoundingClientRect();
+				const label = header.firstElementChild?.getBoundingClientRect();
+				for (const sel of ['[aria-label="Copy message"]', '[aria-label="Delete this turn"]']) {
+					const btn = bubble.querySelector(sel) as HTMLElement | null;
+					if (!btn) continue;
+					const b = btn.getBoundingClientRect();
+					const w = Math.min(b.right, s.right) - Math.max(b.left, s.left);
+					const h = Math.min(b.bottom, s.bottom) - Math.max(b.top, s.top);
+					rows.push({
+						button: sel,
+						overlapPx: w > 0 && h > 0 ? Math.round(w) : 0,
+						painted: Number.parseFloat(getComputedStyle(btn).opacity) > 0.01,
+						text: (stampEl.textContent || "").trim(),
+						headerH: Math.round(header.getBoundingClientRect().height),
+						leftGapPx: label ? Math.round(s.left - label.right) : 999,
+					});
+				}
+			}
+			return rows;
+		});
+	}
+
+	for (const width of [320, 390]) {
+		test(`no pixel of the timestamp is under Copy or Delete at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await openChat(page);
+
+			const rows = await measureStamps(page);
+			// Four bubbles × two buttons. A short count means a control stopped rendering and the
+			// measurement below is about nothing.
+			expect(rows.length, "not every bubble rendered both action buttons").toBe(MESSAGES.length * 2);
+
+			// Visible FIRST: zero overlap on an invisible button is the desktop state, not a fix.
+			const hidden = rows.filter((r) => !r.painted).map((r) => r.button);
+			expect(hidden, `action buttons are not painted at ${width}px, so clearance proves nothing`).toEqual([]);
+
+			const covered = rows.filter((r) => r.overlapPx > 0);
+			expect(
+				covered.map((r) => `${r.button} covers ${r.overlapPx}px of "${r.text}"`),
+				`the timestamp is under an action button at ${width}px`,
+			).toEqual([]);
+
+			// The regression the reservation could cause: the 48px squeezing the "You" /
+			// "Assistant" group until the two collide.
+			const collided = rows.filter((r) => r.leftGapPx < 0);
+			expect(collided.map((r) => `${r.text} sits ${r.leftGapPx}px into the role label`), `the stamp ran into the role label at ${width}px`).toEqual([]);
+
+			// …and the one it DOES cause, stated precisely rather than asserted away.
+			//
+			// A year-bearing stamp is 117px intrinsic. On an assistant bubble at 320px the header's
+			// content box is 200px, the role group is 81px and the gap is 12 — so 210px of content
+			// in 200px, and it wraps to two lines. There is no padding that fixes that: 44px MUST be
+			// reserved or the buttons are back on the stamp, and 4px of it is all that is spare.
+			//
+			// So the assertion is the everyday row, which is exactly what the conditional year buys:
+			// a CURRENT-year stamp never wraps, at either width. A stamp still carrying its year may
+			// take a second line at 320px — readable, nothing hidden, nothing covered — and that is
+			// the trade this fix makes rather than an oversight. It must still not exceed two lines,
+			// which is what would say the row had actually collapsed.
+			const wrapped = rows.filter((r) => !/\d{4}/.test(r.text) && r.headerH > 24);
+			expect(wrapped.map((r) => `"${r.text}" header is ${r.headerH}px`), `an everyday (current-year) header wrapped at ${width}px`).toEqual([]);
+			const collapsed = rows.filter((r) => r.headerH > 40);
+			expect(collapsed.map((r) => `"${r.text}" header is ${r.headerH}px`), `a message header ran past two lines at ${width}px`).toEqual([]);
+		});
+	}
+
+	test("mobile — this year's stamp drops the year and last year's keeps it", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await openChat(page);
+
+		const texts = await page.locator("[data-msg-stamp]").allTextContents();
+		expect(texts.slice(0, 2).join(" | "), "a current-year stamp is still spending 30px on the year").not.toContain(String(THIS_YEAR));
+		for (const t of texts.slice(2)) {
+			expect(t, "a stamp from last year lost its year, which makes it ambiguous").toContain(String(LAST_YEAR));
+		}
+		// #345's hover text is the reason shortening is safe: the whole local time, zone named.
+		await expect(page.locator("[data-msg-stamp]").first()).toHaveAttribute("title", /\d/);
+	});
+
+	test("mobile — no space is reserved above the sm breakpoint", async ({ page }) => {
+		// The buttons are hover-revealed on a pointer device, so reserving the corner there would
+		// be 48px of dead space on every message for a defect that cannot occur.
+		await page.setViewportSize({ width: 1024, height: 800 });
+		await openChat(page);
+
+		const padding = await page.evaluate(() =>
+			Array.from(document.querySelectorAll("[data-msg-stamp]")).map((el) => getComputedStyle(el.parentElement as HTMLElement).paddingRight),
+		);
+		expect(padding, "the mobile corner reservation leaked into the desktop layout").toEqual(padding.map(() => "0px"));
+		const copy = page.getByRole("button", { name: "Copy message" }).first();
+		expect(await copy.evaluate((el) => getComputedStyle(el).opacity), "the desktop buttons stopped being hover-only").toBe("0");
+	});
+});
