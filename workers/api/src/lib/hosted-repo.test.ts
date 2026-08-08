@@ -21,7 +21,8 @@ const gl = vi.hoisted(() => ({
 vi.mock("./github-issues.js", () => gh);
 vi.mock("./gitlab-api.js", () => gl);
 
-import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedIssues } from "./hosted-repo.js";
+import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedBuilds, listHostedIssues } from "./hosted-repo.js";
+import { readGithubCache } from "./github-cache.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -120,5 +121,165 @@ describe("dispatch — the right client, and only the right client", () => {
 				expect(canReadHosted(repo, f), `${repo.provider}/${f}`).toBe(hostedReadRefusal(repo, f) === null);
 			}
 		}
+	});
+});
+
+/**
+ * `/deployments` — the platform's ONLY unauthenticated GitHub read, made conditional (#439).
+ *
+ * The budget it spends is ~60 requests/hour PER IP, shared by every unauthenticated caller on the
+ * same Cloudflare egress — not per user. It is the smallest budget the platform spends against
+ * and the only one it does not spend on the caller's behalf, and the Builds panel POLLS it. So
+ * the case that matters is the anonymous one, and that is the one these tests drive: with no
+ * GitHub App configured `resolveGithubRead` yields `token:null` and `authContext:"anon"` — a
+ * first-class cache identity, since only a `null` context means "do not cache".
+ *
+ * Everything runs through `listHostedBuilds` itself rather than through the cache module:
+ * re-testing the cache would only re-prove the cache. What was missing here was the WIRING.
+ */
+describe("listHostedBuilds — the unauthenticated /deployments read is conditional (#439)", () => {
+	/** An in-memory `OAUTH_KV`, and deliberately NO GitHub App — this is the anonymous path. */
+	function kvEnv() {
+		const store = new Map<string, string>();
+		return {
+			OAUTH_KV: {
+				get: async (k: string) => store.get(k) ?? null,
+				put: async (k: string, v: string) => {
+					store.set(k, v);
+				},
+				delete: async (k: string) => {
+					store.delete(k);
+				},
+			},
+		} as unknown as Env;
+	}
+
+	/** A Response double with real headers, so the ETag round trip is actually exercised. */
+	function ghResponse(status: number, body: unknown, etag?: string) {
+		return {
+			ok: status >= 200 && status < 300,
+			status,
+			headers: { get: (h: string) => (h.toLowerCase() === "etag" && etag ? etag : null) },
+			json: async () => body,
+		} as unknown as Response;
+	}
+
+	const ANON = { userId: "u1", authContext: "anon" };
+	const REPO = { provider: "github", githubRepo: "acme/public", repoSlug: "acme/public" };
+	const runsBody = (n: number) => ({
+		workflow_runs: [
+			{ id: n, run_number: n, status: "completed", conclusion: "success", name: "deploy", html_url: "u", head_branch: "main", head_sha: "abcdef1234", updated_at: "t" },
+		],
+	});
+	const realFetch = globalThis.fetch;
+
+	/** Replace `fetch` with a double that records what was actually sent upstream. */
+	function spy(...responses: Array<Response | Error>) {
+		const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+		let i = 0;
+		globalThis.fetch = vi.fn(async (url: unknown, init?: { headers?: Record<string, string> }) => {
+			calls.push({ url: String(url), headers: init?.headers ?? {} });
+			const r = responses[Math.min(i++, responses.length - 1)];
+			if (r instanceof Error) throw r;
+			return r;
+		}) as unknown as typeof fetch;
+		return calls;
+	}
+
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+	});
+
+	it("asks GitHub with NO credential and stores the ETag — the fallback is unchanged, it is now cacheable", async () => {
+		const env = kvEnv();
+		const calls = spy(ghResponse(200, runsBody(7), 'W/"b1"'));
+		const runs = await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+		expect(runs).toEqual([{ status: "completed", conclusion: "success", name: "deploy", runNumber: 7, url: "u", branch: "main", sha: "abcdef1", updatedAt: "t" }]);
+		// The unauthenticated fallback IS this route (CODER-010, #121): no Authorization header,
+		// and no `If-None-Match` on the first read because there is nothing stored yet.
+		expect(calls[0].headers.Authorization).toBeUndefined();
+		expect(calls[0].headers["If-None-Match"]).toBeUndefined();
+		expect(await readGithubCache(env, ANON, "acme/public", "runs")).not.toBeNull();
+	});
+
+	it("a second poll of an unchanged repo costs a 304 and no rate-limit unit, and returns the SAME payload", async () => {
+		const env = kvEnv();
+		spy(ghResponse(200, runsBody(7), 'W/"b1"'));
+		const first = await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+		const calls = spy(ghResponse(304, null));
+		const second = await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+		expect(calls[0].headers["If-None-Match"]).toBe('W/"b1"');
+		// Page 1 merges the live runs into the durable KV history and persists it
+		// (`mergeRuns`/`persistBuildHistory`, in the route). So a cached hit must hand the route
+		// exactly what the plain fetch handed it — asserted here rather than assumed, at this
+		// boundary because the route itself is not this change's to touch.
+		expect(second).toEqual(first);
+	});
+
+	it("keeps deeper pages apart from page 1 — the query string IS the cache variant", async () => {
+		const env = kvEnv();
+		spy(ghResponse(200, runsBody(7), 'W/"b1"'));
+		await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+		// Page 2 is a different read of the same resource. Sending page 1's ETag would let GitHub
+		// answer 304 and the cache serve page 1's runs as page 2's history.
+		let calls = spy(ghResponse(200, runsBody(2), 'W/"b2"'));
+		const page2 = await listHostedBuilds(env, "u1", REPO, { page: 2, perPage: 20 });
+		expect(calls[0].url).toContain("page=2");
+		expect(calls[0].headers["If-None-Match"]).toBeUndefined();
+		expect(page2?.[0].runNumber).toBe(2);
+		// Both variants live in the one entry, and each replays its own.
+		calls = spy(ghResponse(304, null));
+		expect(await listHostedBuilds(env, "u1", REPO, { page: 2, perPage: 20 })).toEqual(page2);
+		expect(calls[0].headers["If-None-Match"]).toBe('W/"b2"');
+		calls = spy(ghResponse(304, null));
+		expect((await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 }))?.[0].runNumber).toBe(7);
+		expect(calls[0].headers["If-None-Match"]).toBe('W/"b1"');
+	});
+
+	it("still answers `null` — 'could not ask' — on every GitHub failure, and never throws", async () => {
+		// The route's `{available:false}` rests entirely on this, and a throw would reach it as a
+		// 500 instead. A 304 with nothing stored is a failure too, not an invented empty history.
+		for (const r of [ghResponse(404, null), ghResponse(500, null), new Error("network down"), ghResponse(304, null)]) {
+			const env = kvEnv();
+			spy(r);
+			expect(await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 })).toBeNull();
+		}
+	});
+
+	it("keeps the 403-invalidates / 5xx-serves-stale asymmetry — a tenancy control, not an optimisation", async () => {
+		const env = kvEnv();
+		spy(ghResponse(200, runsBody(7), 'W/"b1"'));
+		const seeded = await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+
+		// Unreachable says nothing about permission, so the stored copy is served.
+		spy(ghResponse(502, null));
+		expect(await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 })).toEqual(seeded);
+		spy(new Error("boom"));
+		expect(await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 })).toEqual(seeded);
+		expect(await readGithubCache(env, ANON, "acme/public", "runs")).not.toBeNull();
+
+		// A 403 means access CHANGED — the stored copy was fetched under an authority the caller
+		// may no longer have, so it is dropped rather than served.
+		spy(ghResponse(403, null));
+		expect(await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 })).toBeNull();
+		expect(await readGithubCache(env, ANON, "acme/public", "runs")).toBeNull();
+	});
+
+	it("with no KV at all the cache is simply OFF — the caller behaves exactly as before it existed", async () => {
+		const calls = spy(ghResponse(200, runsBody(7), 'W/"b1"'));
+		const env = {} as Env;
+		await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+		await listHostedBuilds(env, "u1", REPO, { page: 1, perPage: 20 });
+		expect(calls).toHaveLength(2);
+		expect(calls[1].headers["If-None-Match"]).toBeUndefined();
+	});
+
+	it("the aggregate /builds fan-out STILL refuses to spend the anonymous budget", async () => {
+		// The asymmetry #121 established, which this change must not erase: `/deployments` falls
+		// back to an unauthenticated read, `latestHostedBuild` does not — one repo's drill-down can
+		// afford a shared ~60/hr budget; N repos per poll cannot.
+		const calls = spy(ghResponse(200, runsBody(7), 'W/"b1"'));
+		expect(await latestHostedBuild(kvEnv(), "u1", REPO)).toEqual({ available: false, run: null });
+		expect(calls).toHaveLength(0);
 	});
 });

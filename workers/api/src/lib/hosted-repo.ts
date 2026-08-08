@@ -34,7 +34,7 @@
  * repo's Actions runs, the same `{available:false}` degradation. GitHub is the only provider in
  * production use, and this is a re-route, not a rewrite.
  */
-import { githubAppConfigured, installationTokenForOwner } from "./github-app.js";
+import { githubAppConfigured } from "./github-app.js";
 import { resolveGithubRead } from "./github-cache.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { listIssues, readIssue, type IssueDetail, type IssueSummary, type ListIssuesOpts } from "./github-issues.js";
@@ -169,9 +169,29 @@ export async function listHostedBuilds(env: Env, userId: string, repo: HostedRep
 			// repo's Actions runs are readable without the App installed, which is the difference
 			// between this per-repo route and the `/builds` fan-out that must not burn the shared
 			// anonymous budget.
+			//
+			// And BECAUSE that budget is ~60 requests/hour per IP — shared by every unauthenticated
+			// caller on the same Cloudflare egress, not per user — this is the read that most needs to
+			// be conditional (#439). It is the platform's ONLY unauthenticated GitHub read, the only
+			// one it does not spend on the caller's behalf, and the Builds panel polls it. An
+			// unauthenticated read is a first-class cache identity: `githubAuthContext` names it
+			// `"anon"`, and only a `null` context means "do not cache". So an unchanged repo costs a
+			// 304, which is exempt from the primary rate limit with or without a token.
+			//
+			// `resolveGithubRead` yields the token AND the context it was minted under from ONE
+			// resolution (#418) — an identity picked up from elsewhere in the request is exactly the
+			// cross-tenant read the cache is written to prevent. It also SUBSUMES the old
+			// `githubAppConfigured(...) ? … : null` guard: with the App unconfigured,
+			// `installationTokenForOwner` short-circuits inside `resolveGithubAccess` before any
+			// network call, so the fallback behaves exactly as before — with `authContext:"anon"`.
 			const owner = slug.split("/")[0] ?? "";
-			const token = githubAppConfigured(env) ? await installationTokenForOwner(env, userId, owner).catch(() => null) : null;
-			const res = await fetchWorkflowRuns(slug, token ?? undefined, { perPage: opts.perPage, page: opts.page });
+			const { token, authContext } = await resolveGithubRead(env, userId, owner);
+			const res = await fetchWorkflowRuns(
+				slug,
+				token ?? undefined,
+				{ perPage: opts.perPage, page: opts.page },
+				{ env, identity: { userId, authContext } },
+			);
 			if ("status" in res) return null;
 			return res.runs.map(mapWorkflowRun);
 		}
