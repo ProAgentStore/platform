@@ -308,6 +308,48 @@ describe("0101 — the Coders can read pull requests (#415)", () => {
 	});
 });
 
+describe("0107 — the Lead can actually hand you over (#279)", () => {
+	// The same trap as 0101, sprung again three days later by the commit that BUILT the tool.
+	// `697f605` shipped `transfer_conversation` end to end — registry tool, response field, console
+	// consumer, "go back", tests — and declared it nowhere, so `toolNamesFor` (which REPLACES the
+	// per-surface default with the declared list) gave it to nobody. Nothing errored; the Lead just
+	// answered conversationally, which for THIS feature is the worst available outcome, because a
+	// reply that sounds like a transfer happened leaves a hands-free user talking into the wrong
+	// agent. These assertions are what keep the two halves joined.
+	it("the Lead declares it, and toolNamesFor therefore hands it over", async () => {
+		const { toolNamesFor } = await import("../agent-do-tools.js");
+		const { tools } = effectiveDeclared("coder-lead");
+		expect(tools).toContain("transfer_conversation");
+		// The declaration is necessary but not sufficient: a name outside CREATOR_SELECTABLE_TOOLS
+		// is declared and still invisible, which is the failure this line would catch.
+		expect(toolNamesFor({ surfaces: [], runtime: null, workflow: null, tools } as never).has("transfer_conversation")).toBe(true);
+	});
+
+	it("keeps everything the Lead could already do — 0107 restates the whole object", () => {
+		const { tools } = effectiveDeclared("coder-lead");
+		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation", "github_list_pulls"]) {
+			expect(tools, n).toContain(n);
+		}
+	});
+
+	it("grants it to nobody else — every other seeded agent has no subordinates to resolve", () => {
+		// The tool refuses any destination outside the caller's supervision graph, so declaring it
+		// on an agent without one is a capability that cannot resolve a single target. It would also
+		// be the first agent able to move the person, granted by a migration nobody read.
+		for (const slug of ["coder", "coder-repo", "repo-chat"]) {
+			expect(effectiveDeclared(slug).tools, slug).not.toContain("transfer_conversation");
+		}
+	});
+
+	it("passes the validator the create/update routes apply, like every seeded object", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0107_coder_lead_transfer_conversation.sql"), "utf8");
+		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
+		expect(objs.length, "0107 no longer re-sets a whole capabilities object").toBe(1);
+		const caps = JSON.parse(objs[0][1]) as Record<string, unknown>;
+		expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+	});
+});
+
 describe("declared board vocabularies are fully claimed by the canonical bucketer", () => {
 	it("every status a seeded agent declares resolves to one of its own columns", async () => {
 		// The drift guard. `columnForStatus` falls back to catchAll and then null, so a future
