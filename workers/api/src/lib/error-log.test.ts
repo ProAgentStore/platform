@@ -1,6 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listErrors, logError } from "./error-log.js";
 import type { Env } from "../types.js";
+
+/**
+ * The subject takes TWO probabilistic branches — `logError`'s 2% `DELETE FROM error_log` and,
+ * through the trace mirror, `logEvent`'s 1% `DELETE FROM agent_events`. Pin the draw for the whole
+ * file so no assertion in it rides on a coin toss (#446); the tests that deliberately exercise a
+ * prune branch override this with their own `mockReturnValue(0)`, as they already did.
+ *
+ * Belt and braces, not the fix. The fix is that `collapsingDb` counts the INSERT rather than the
+ * table name, so this file is deterministic at ANY value of `Math.random` — which is what the test
+ * "does not count the opportunistic retention DELETE as a trace mirror" holds, by forcing 0.
+ */
+beforeEach(() => {
+	vi.spyOn(Math, "random").mockReturnValue(0.5);
+});
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 function mockDb(rows: unknown[] = []) {
 	const inserts: { sql: string; args: unknown[] }[] = [];
@@ -83,8 +100,10 @@ function collapsingDb() {
 	interface Row { source: string; message: string; level: string; status: unknown; userId: unknown; repeats: number }
 	const rows: Row[] = [];
 	const mirrors: unknown[][] = [];
+	const statements: string[] = [];
 	const db = {
 		prepare(sql: string) {
+			statements.push(sql);
 			const exec = (args: unknown[]) => {
 				if (sql.startsWith("UPDATE error_log")) {
 					const [source, message, level, status, userId] = args;
@@ -99,13 +118,20 @@ function collapsingDb() {
 					const [, userId, source, status, message, , level] = args;
 					rows.push({ source: source as string, message: message as string, level: level as string, status, userId, repeats: 1 });
 				}
-				if (sql.includes("agent_events")) mirrors.push(args);
+				// Deliberately the INSERT, not the table name (#446). `logEvent` also fires an
+				// opportunistic `DELETE FROM agent_events` on ~1% of writes, and a predicate of
+				// `sql.includes("agent_events")` counted that DELETE as a mirror — a 1-in-100
+				// failure of the collapse test below, which read exactly like the CPU-starvation
+				// flake `vitest.config.ts` warns about and is not it. The question this counter
+				// asks is "did a trace row get WRITTEN", and the write is the INSERT. If a second
+				// writer to this table ever appears, widen this on purpose, not by accident.
+				if (sql.includes("INSERT INTO agent_events")) mirrors.push(args);
 				return { meta: { changes: 1 } };
 			};
 			return { run: async () => exec([]), bind: (...args: unknown[]) => ({ run: async () => exec(args), all: async () => ({ results: [] }), first: async () => null }) };
 		},
 	};
-	return { env: { DB: db } as unknown as Env, rows, mirrors };
+	return { env: { DB: db } as unknown as Env, rows, mirrors, statements };
 }
 
 describe("logError — an identical repeat is counted, not re-inserted (#424)", () => {
@@ -126,6 +152,22 @@ describe("logError — an identical repeat is counted, not re-inserted (#424)", 
 		// error_log. Collapsing one and not the other would leave the trace unreadable.
 		const { env, mirrors } = collapsingDb();
 		for (let i = 0; i < 10; i++) await logError(env, same);
+		expect(mirrors).toHaveLength(1);
+	});
+
+	it("does not count the opportunistic retention DELETE as a trace mirror", async () => {
+		// #446, made deterministic. `logEvent` prunes `agent_events` on 1% of writes; the fixture
+		// used to count that DELETE, so the assertion above read 2 on a 1-in-100 run. One Bernoulli
+		// draw per full-suite run gives "fails once in a long run, green in isolation, green on
+		// re-run" — the signature of CPU starvation, and not that at all.
+		//
+		// Forcing the draw is the whole point: at 0 BOTH retention branches fire, so this fails the
+		// moment the predicate is widened back to the bare table name. Verified by doing exactly
+		// that: "expected length 2 to be 1".
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		const { env, mirrors, statements } = collapsingDb();
+		for (let i = 0; i < 10; i++) await logError(env, same);
+		expect(statements.some((s) => s.startsWith("DELETE FROM agent_events"))).toBe(true);
 		expect(mirrors).toHaveLength(1);
 	});
 

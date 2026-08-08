@@ -67,6 +67,10 @@ export async function logEvent(env: Env, e: EventInput): Promise<void> {
 			.run();
 		// Opportunistic retention: no cron, so ~1% of writes prune rows older than
 		// 14 days (indexed on created_at). The trace is a debugging aid, not an archive.
+		//
+		// This statement is RANDOM: a test fixture that counts statements against this table must
+		// match the INSERT above, not the table name, or it counts this one on 1% of runs and
+		// flakes (#446, which cost an afternoon being read as CPU starvation).
 		if (Math.random() < 0.01) {
 			await env.DB.prepare("DELETE FROM agent_events WHERE created_at < datetime('now', '-14 days')")
 				.run()
