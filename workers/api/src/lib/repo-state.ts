@@ -19,19 +19,15 @@
 // (`/coding/git`, whitelisted argv, no shell) — the same one the repo-local connector uses. Nothing
 // here can write.
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
+// The observed shape and the two clauses this sentence is made of moved down to a leaf module when
+// standing policies arrived (#322), so that one definition of each serves both the supervisor note
+// below and a policy that claims a single invariant. Re-exported here because this is where every
+// existing reader imports `RepoWorkingState` from.
+import { dirtyClause, offTrunkClause, type RepoWorkingState } from "./repo-observation.js";
+export type { RepoWorkingState } from "./repo-observation.js";
 import { getActiveSessionForRepo, listRepos } from "./coding-store.js";
 import type { CodingRepo } from "./coding-types.js";
 import type { Env } from "../types.js";
-
-/** Branches treated as the trunk when a repo has no configured branch of its own. */
-const IMPLICIT_TRUNK = ["main", "master"];
-
-export interface RepoWorkingState {
-	/** The branch the checkout is on. NULL means unknown — an older runner, or not a git repo. */
-	branch: string | null;
-	dirty: boolean;
-	changedFiles: number;
-}
 
 export interface RepoStateReport extends RepoWorkingState {
 	repoId: string;
@@ -111,23 +107,7 @@ function parseBranchHeader(header: string): string | null {
  * running `git checkout .`.
  */
 export function describeRepoState(state: RepoWorkingState, opts: { configuredBranch?: string | null } = {}): string | null {
-	const parts: string[] = [];
-	const configured = (opts.configuredBranch || "").trim() || null;
-	const offTrunk = state.branch
-		? configured
-			? state.branch !== configured
-			: !IMPLICIT_TRUNK.includes(state.branch)
-		: false;
-	if (offTrunk) {
-		parts.push(
-			`on branch \`${state.branch}\`${configured ? ` rather than its configured \`${configured}\`` : " rather than the trunk"} — a new goal will run on that branch unless you say otherwise`,
-		);
-	}
-	if (state.dirty) {
-		parts.push(
-			`${state.changedFiles} uncommitted file${state.changedFiles === 1 ? "" : "s"} left in the working tree by earlier work — it will NOT be discarded, and it may be a change somebody still wants`,
-		);
-	}
+	const parts = [offTrunkClause(state, opts.configuredBranch), dirtyClause(state)].filter((p): p is string => Boolean(p));
 	if (!parts.length) return null;
 	return `This checkout is ${parts.join("; ")}.`;
 }

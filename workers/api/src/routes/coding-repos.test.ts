@@ -545,4 +545,53 @@ describe("PUT /coding/repos/:id — the folder is editable, and checked when it 
 		expect(ctx.issued.some((s) => /FROM coding_sessions/.test(s.sql))).toBe(false);
 		expect(callRunner).not.toHaveBeenCalled();
 	});
+
+	// #322 — the repo DECLARES which standing invariants it claims. The declaration is the whole
+	// safety property of the feature, so it is validated at the boundary rather than at the reader.
+	describe("standing policies", () => {
+		/** The bind index of the policies JSON, and of the flag that says it was supplied at all. */
+		const POLICIES = 8;
+		const HAS_POLICIES = 9;
+		const updateBinds = (ctx: ReturnType<typeof movableEnv>) =>
+			ctx.issued.find((s) => s.sql.startsWith("UPDATE coding_repos SET name"))?.binds;
+
+		it("stores a declaration", async () => {
+			const ctx = movableEnv(repoRow());
+			const { status } = await put({ policies: { "repo.on_default_branch": "observe" } }, ctx);
+			expect(status).toBe(200);
+			const binds = updateBinds(ctx);
+			expect(binds?.[POLICIES]).toBe('{"repo.on_default_branch":"observe"}');
+			expect(binds?.[HAS_POLICIES]).toBe(1);
+		});
+
+		it("refuses an unknown policy, and writes nothing", async () => {
+			const ctx = movableEnv(repoRow());
+			const { status, body } = await put({ policies: { "repo.fix_everything": "observe" } }, ctx);
+			expect(status).toBe(400);
+			expect(body.error).toContain("unknown policy");
+			expect(ctx.issued.some((s) => s.sql.startsWith("UPDATE coding_repos"))).toBe(false);
+		});
+
+		it("refuses `act` — there is no actuator, so accepting the word would be a promise", async () => {
+			const ctx = movableEnv(repoRow());
+			const { status, body } = await put({ policies: { "repo.tree_clean": "act" } }, ctx);
+			expect(status).toBe(400);
+			expect(body.error).toContain("off, observe");
+		});
+
+		it("clearing every claim stores NULL, not `{}` — one spelling of declared-nothing", async () => {
+			const ctx = movableEnv(repoRow());
+			const { status } = await put({ policies: {} }, ctx);
+			expect(status).toBe(200);
+			const binds = updateBinds(ctx);
+			expect(binds?.[POLICIES]).toBeNull();
+			expect(binds?.[HAS_POLICIES]).toBe(1);
+		});
+
+		it("a request that does not mention policies leaves the column alone", async () => {
+			const ctx = movableEnv(repoRow());
+			await put({ name: "renamed" }, ctx);
+			expect(updateBinds(ctx)?.[HAS_POLICIES]).toBe(0);
+		});
+	});
 });

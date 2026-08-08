@@ -8,6 +8,7 @@
  */
 
 import type { GitProviderId } from "./git-providers.js";
+import type { DeclaredRepoPolicies } from "./repo-policies.js";
 
 export type CodingClientType = "claude" | "gemini" | "codex" | "grok";
 
@@ -57,6 +58,12 @@ export interface CodingRepo {
 	 * typed there rather than here so this module keeps no policy vocabulary of its own.
 	 */
 	mergePolicy?: string;
+	/**
+	 * Standing policies — which invariants this repo CLAIMS (#322, migration 0106). Undefined =
+	 * declared nothing, resolved per policy by `lib/repo-policies.ts`. Typed there, like
+	 * `mergePolicy`, so this module keeps no policy vocabulary of its own.
+	 */
+	policies?: DeclaredRepoPolicies;
 	createdAt: string;
 	updatedAt: string;
 }

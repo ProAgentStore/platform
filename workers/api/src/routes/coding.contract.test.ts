@@ -671,6 +671,9 @@ describe("merge authority is set through this route, and only with a value it kn
 		const { status, body } = await putRepo({});
 		expect(status).toBe(400);
 		// `workdir` joined the list in #410 — the folder is editable through this same route now.
-		expect(body.error).toBe("name, urls, mergePolicy or workdir is required");
+		// `policies` joined it in #322, which is why the message is pinned: every field this route
+		// can change has to be NAMED here, or a caller sending the one that was forgotten is told
+		// their request was empty.
+		expect(body.error).toBe("name, urls, mergePolicy, workdir or policies is required");
 	});
 });

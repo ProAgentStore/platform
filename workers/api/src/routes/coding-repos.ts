@@ -23,6 +23,7 @@ import { logError } from "../lib/error-log.js";
 import { asClient } from "../lib/coding-engines.js";
 import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
+import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
 import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
@@ -535,17 +536,27 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			urls?: { dev?: string; staging?: string; prod?: string };
 			mergePolicy?: string;
 			workdir?: string;
+			policies?: unknown;
 		};
 		const name = typeof body.name === "string" ? body.name.trim() : undefined;
 		const hasUrls = body.urls !== undefined && typeof body.urls === "object";
 		const policy = mergePolicyPatch(body.mergePolicy); // #314 — merge authority for THIS repo
 		if (!policy.ok) return c.json({ error: policy.error }, 400);
+		// #322 — which standing invariants this repo claims. Refused rather than silently dropped
+		// when unrecognised: a policy that quietly never applies is indistinguishable from one that
+		// is holding, which is the failure mode the whole feature exists to remove.
+		let policies: DeclaredRepoPolicies | undefined;
+		if (body.policies !== undefined) {
+			const parsed = sanitizeRepoPolicies(body.policies);
+			if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+			policies = parsed.value;
+		}
 		const workdirIn = typeof body.workdir === "string" ? body.workdir.trim() : undefined;
 		// Blanking is refused rather than stored: every tool addresses this repo BY its workdir, so
 		// an empty one is not a state anyone wants — it is a delete, and delete has its own route.
 		if (workdirIn === "") return c.json({ error: "A folder is required. To remove this repo, delete it." }, 400);
-		if (!name && !hasUrls && policy.value === undefined && workdirIn === undefined) {
-			return c.json({ error: "name, urls, mergePolicy or workdir is required" }, 400);
+		if (!name && !hasUrls && policy.value === undefined && workdirIn === undefined && policies === undefined) {
+			return c.json({ error: "name, urls, mergePolicy, workdir or policies is required" }, 400);
 		}
 
 		// Only a MOVE needs the extra read and the session check. A save that resends the same path
@@ -579,6 +590,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			urls: hasUrls ? body.urls : undefined,
 			mergePolicy: policy.value,
 			workdir: moving ? workdirIn : undefined,
+			policies,
 		});
 		if (!ok) throw new HttpError(404, "Repo not found");
 		if (!moving) return c.json({ ok: true });

@@ -1,0 +1,12 @@
+-- Standing policies: the invariants a repo CLAIMS (#322).
+--
+-- JSON, `{"repo.tree_clean":"observe"}`, validated by `sanitizeRepoPolicies` before it is written —
+-- a whitelist over both key and value, so the column can never hold a policy the code does not
+-- implement. NULL is the only default and means "declared nothing": every policy then falls back to
+-- its own table default in `lib/repo-policies.ts`, which is what keeps this migration behaviour-
+-- preserving for every existing row.
+--
+-- Not a set of columns. The registry is expected to grow (`repo.builds`, `repo.no_stale_pr`), and a
+-- column per policy would make every addition a migration on a table that is read on the chat
+-- latency path.
+ALTER TABLE coding_repos ADD COLUMN policies TEXT;

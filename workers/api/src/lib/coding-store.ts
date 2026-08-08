@@ -1,6 +1,7 @@
 import { closeCodingSessionCards, upsertCodingSessionCard } from "./coding-board.js";
 import { parseMergePolicy } from "./coding-authority.js";
 import { gitProviderFor, type GitProviderId } from "./git-providers.js";
+import { parseRepoPolicies, type DeclaredRepoPolicies } from "./repo-policies.js";
 import type { Env } from "../types.js";
 import type {
 	CloneStatus,
@@ -42,6 +43,7 @@ interface RepoRow {
 	urls: string | null;
 	instructions: string | null;
 	merge_policy: string | null;
+	policies: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -82,6 +84,9 @@ function toRepo(r: RepoRow): CodingRepo {
 		// '' means "inherit" — resolved by `resolveMergePolicy`, never defaulted here, so there is
 		// exactly one place that decides what an unset policy means (#314).
 		mergePolicy: parseMergePolicy(r.merge_policy) ?? undefined,
+		// Same treatment as `mergePolicy`: undefined means "declared nothing", and what that
+		// resolves to is decided in one place (`resolveRepoPolicyMode`), never defaulted here.
+		policies: parseRepoPolicies(r.policies),
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 	};
@@ -195,6 +200,12 @@ export async function updateRepo(
 		 * repo every tool addresses BY it is not an intent anyone has — deleting the repo is.
 		 */
 		workdir?: string;
+		/**
+		 * #322 — which standing invariants this repo claims. Whole-object replace, not a patch:
+		 * the set of policies a repo claims is one declaration, and a per-key merge would make
+		 * "turn this one off" indistinguishable from "leave it alone" over the wire.
+		 */
+		policies?: DeclaredRepoPolicies;
 	},
 ): Promise<boolean> {
 	const urlsJson =
@@ -211,6 +222,7 @@ export async function updateRepo(
 		     urls = CASE WHEN ?6 = 1 THEN ?5 ELSE urls END,
 		     merge_policy = COALESCE(?7, merge_policy),
 		     workdir = COALESCE(?8, workdir),
+		     policies = CASE WHEN ?10 = 1 THEN ?9 ELSE policies END,
 		     updated_at = datetime('now')
 		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
@@ -223,6 +235,12 @@ export async function updateRepo(
 			patch.urls === undefined ? 0 : 1,
 			patch.mergePolicy === undefined ? null : patch.mergePolicy,
 			patch.workdir === undefined ? null : patch.workdir.slice(0, 400),
+			// `{}` stores as NULL, not as "{}": clearing every claim is the same state as never
+			// having declared one, and two spellings of it would make the column's own default
+			// unreachable once anyone had touched it. The `?10` flag is what keeps an omitted
+			// `policies` from clearing the column — COALESCE cannot express "write NULL on purpose".
+			patch.policies === undefined || !Object.keys(patch.policies).length ? null : JSON.stringify(patch.policies),
+			patch.policies === undefined ? 0 : 1,
 		)
 		.run();
 	return (res.meta.changes ?? 0) > 0;

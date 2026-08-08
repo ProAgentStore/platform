@@ -16,6 +16,7 @@ import { isRunnerGone, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, t
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
+import { evaluateRepoPolicies } from "../lib/repo-policies.js";
 import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
@@ -654,41 +655,46 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const message = e instanceof Error ? e.message : String(e);
 			result = { outcome: "failed", detail: isRunnerGone(e) ? message : `run error: ${message}`, steps: result.steps, transcript: result.transcript };
 		} finally {
-			// Uncommitted work is a PENDING HUMAN DECISION, so it goes on the board (#276).
+			// The repo's STANDING POLICIES are evaluated here (#322), because this is where its
+			// state is already read — the moment it actually changed, and the only moment a live
+			// runner is guaranteed. No scheduler was added: a policy that misses this evaluation
+			// re-observes at the next run end and never replays a stale one.
 			//
-			// Before this, a run told "leave the change in the working tree" left it there and
-			// nothing recorded it; every later `git status` rediscovered the same diff as a novelty,
-			// 50 hours on. A stable card id per repo makes this idempotent — one card that updates,
-			// and closes itself the moment a later run finds the tree clean, rather than a pile.
+			// Uncommitted work is a PENDING HUMAN DECISION, so it goes on the board (#276). Before
+			// that, a run told "leave the change in the working tree" left it there and nothing
+			// recorded it; every later `git status` rediscovered the same diff as a novelty, 50
+			// hours on. What #322 adds is that the invariant is DECLARED by the repo rather than
+			// assumed by this function, and that the card says which policy raised it — the stable
+			// card ids are unchanged, so cards already open in production still close.
 			//
 			// Read BEFORE the session is closed below, so the runner can resolve the workdir from
 			// the live session (the only way to see a managed clone dir).
 			await step.do("repo-state-end", async () => {
 				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
 				if (!repo) return null;
+				// Unknown ≠ clean. A null state still evaluates, because a policy the repo has
+				// STOPPED claiming must have its card closed whether or not the machine answered.
 				const state = await readRepoWorkingState(conn, { repo, sessionId }).catch(() => null);
-				if (!state) return null; // Unknown ≠ clean: leave whatever card exists alone.
-				const cardId = `repo-dirty-${repoId}`;
-				if (!state.dirty) {
-					await closeWorkCards(env, instanceId, userId, [cardId], "completed");
-					return null;
-				}
-				const now = new Date().toISOString();
-				await upsertWorkCard(env, {
-					instanceId,
-					userId,
-					id: cardId,
-					task: {
-						id: cardId,
-						type: "coding.uncommitted",
-						status: "needs_human",
-						title: `Uncommitted work in ${goal.repo}`.slice(0, 200),
-						subtitle: state.branch ? `on ${state.branch}` : undefined,
-						description: (describeRepoState(state, { configuredBranch: branch ?? null }) ?? "").slice(0, 300),
-						createdAt: now,
-						updatedAt: now,
-					},
+				const findings = evaluateRepoPolicies({
+					repoId,
+					repoLabel: goal.repo,
+					declared: repo.policies,
+					state,
+					configuredBranch: branch ?? null,
 				});
+				const now = new Date().toISOString();
+				for (const f of findings) {
+					if (f.status === "violated" && f.card) {
+						await upsertWorkCard(env, {
+							instanceId,
+							userId,
+							id: f.cardId,
+							task: { id: f.cardId, ...f.card, status: "needs_human", policy: f.policy, createdAt: now, updatedAt: now },
+						});
+					} else if (f.status === "held" || f.status === "unclaimed") {
+						await closeWorkCards(env, instanceId, userId, [f.cardId], "completed");
+					}
+				}
 				return null;
 			});
 			// The CLOSING drain (#294), before anything can tear the session down.
