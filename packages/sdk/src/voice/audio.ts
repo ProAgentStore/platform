@@ -69,13 +69,34 @@ export function isTooShortToTranscribe(byteLength: number, durationMs: number): 
  * Deliberately NARROW so genuine short commands survive: "yes", "no", "go", "stop",
  * "do it", "next" are NOT in the set and pass through. Whole-utterance match only
  * (punctuation stripped, lower-cased) — a real sentence that merely contains "you" is fine.
+ * That whole-utterance rule is also what makes a WIDER list cheap: adding a sign-off cannot
+ * eat a sentence that merely contains it, so the cost of another entry is close to zero.
+ *
+ * EVERY ENTRY MUST ALREADY BE IN NORMALISED FORM, because the lookup is
+ * `SILENCE_HALLUCINATIONS.has(normalizeSpeech(text))` — the raw transcript is normalised, the
+ * entry is not. An entry carrying anything `normalizeSpeech` removes can therefore never match,
+ * and looks exactly like an entry that works. `"thanks for watching!"` sat here doing nothing
+ * (#400): punctuation is stripped before the lookup, so the `!` copy was unreachable while the
+ * copy without it did all the work. An apostrophe is the same trap in reverse — elision marks are
+ * DELETED, so the spoken "don't forget to subscribe" arrives as `dont forget to subscribe`.
+ *
+ * `silence-hallucinations.test.ts` asserts `normalizeSpeech(entry) === entry` for every entry, so
+ * a dead one fails the suite instead of quietly widening nothing.
  */
 const SILENCE_HALLUCINATIONS = new Set([
 	"you",
 	"thank you",
 	"thanks for watching",
-	"thanks for watching!",
+	// The `thank you` half of the same corpus artefact. #400: Whisper emitted "Thank you for
+	// watching!" on near-silence, it normalised to a phrase this set did not carry, and the agent
+	// answered a turn the owner never took — earnestly, in their transcript, indistinguishable
+	// from something they said.
+	"thank you for watching",
+	"thank you so much for watching",
 	"please subscribe",
+	"subscribe to my channel",
+	"dont forget to subscribe",
+	"see you in the next video",
 	"bye",
 	"so",
 	"uh",
@@ -85,6 +106,14 @@ const SILENCE_HALLUCINATIONS = new Set([
 	"谢谢观看",
 	"请订阅",
 ]);
+
+/**
+ * The phrase set, for the guard that keeps it matchable. Exported for tests only — callers judge
+ * a transcript with `isNoiseTranscript`, which is the function that knows about normalisation,
+ * bias echo and glyph counting. Handing the bare set to a caller would invite a second, wrong
+ * lookup against un-normalised text, which is the defect this export exists to prevent.
+ */
+export const SILENCE_HALLUCINATION_PHRASES: ReadonlySet<string> = SILENCE_HALLUCINATIONS;
 export function isNoiseTranscript(text: string, biasPrompt?: string): boolean {
 	if (!text) return true;
 	// Strip punctuation + collapse whitespace, then judge. The normaliser is SHARED with the
