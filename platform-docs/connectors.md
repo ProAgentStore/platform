@@ -53,6 +53,14 @@ user's machine over the WebSocket relay — machine ownership is already enforce
 handshake). The generic Terminal connector targets `tmux:<session>`, `kitty:<window-id>`, or
 `iterm2:<window>:<tab>:<session>`.
 
+**A `terminal`/`tmux` drive is unmetered, by construction.** A pane carries rendered text, not the
+structured `result` event a Coder engine reports its own tokens and cost from, so a coding CLI
+driven through a pane produces no cost row and no `$` figure on the Usage page — it is recorded as
+*unmetered*, which is a name and never a number. A `$0` next to a terminal-operator agent means
+*not measured*, not *free*. This is the deliberate trade for a real attachable terminal; see
+[ADR 0003](https://github.com/ProAgentStore/platform/blob/main/docs/adr/0003-a-coder-engine-reports-its-own-turns.md)
+and [Browser Runtime](browser-runtime.md#coder-agents).
+
 **Write-consent gating (#90).** Every `scope:"write"` connector tool is refused unless the
 instance has explicit write-consent for that connector (`instance_connector_consent`, migration
 0051). `runRegistryTool` checks consent *before* dispatch, fail-closed; read-only connectors

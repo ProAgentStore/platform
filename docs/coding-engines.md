@@ -3,6 +3,41 @@
 An **Engine** is the actual CLI a coding session drives (Claude Code, Codex, Gemini CLI, Grok, a
 local model). Which one a session launches, and how, is one string: the **preset command**.
 
+## Two ways to drive a CLI
+
+*"Can I use tmux for coding?"* has two true answers, because there are two products.
+
+- **A Coder engine** — the subject of the rest of this page. The runner launches the CLI as a
+  **child process** and speaks to it directly. It is not a tmux pane, and the terminal view is not
+  a scraped TUI.
+- **A terminal-operator agent** — the tmux / kitty / iTerm2 Operators, built on the `terminal` and
+  `tmux` connectors. Those drive a **real pane on your machine**, and nothing stops you pointing
+  one at a pane that is running `claude` or `codex`. It is a supported path, and people use it.
+
+|  | Coder engine (child process) | Terminal connector (tmux / kitty / iTerm2) |
+|---|---|---|
+| How it runs | child process, `stream-json` | a real pane on your machine |
+| Turn boundary | a `result` event, or process exit — a fact | inferred from rendered text |
+| Cost recorded | yes, from the CLI's own `total_cost_usd` (#267) | **no — unmetered by design** (#348) |
+| Consequential-act record | yes, from `tool_use`/`tool_result` (#294) | no |
+| Merge authority enforced | yes (migration 0091) | no — a rule in the agent's instructions instead |
+| `tmux attach` from your own shell | no session to attach to | yes |
+| Keystrokes (Escape, arrows, `y`) | no — takeover sends text only | yes |
+| Which agents | Coder | tmux / kitty / iTerm2 Operators |
+
+**The split is settled, not provisional.** #249 asked whether tmux should come back as a
+selectable Coder engine backend; the answer was **no**, recorded as
+[ADR 0003 — A Coder engine reports its own turns](adr/0003-a-coder-engine-reports-its-own-turns.md).
+The short version: the strongest argument for it (turns being cut off mid-work) was a timer bug,
+fixed in #391 without a terminal; a PTY is not tmux, and only tmux gives up measurement; and the
+three subsystems built on structured output — usage, the acts audit, merge authority — cannot be
+recovered from a screen buffer. If a real PTY is ever needed, ADR 0003 says it goes inside
+`HeadlessSession` (node-pty), not into a pane.
+
+So pick by what you need. Attach and keystrokes are on the operator path, and you accept that its
+work produces no cost row. Measurement, an act record and an enforced merge policy are on the
+Coder path, and you accept that there is no pane to attach to.
+
 ## The preset command is a prefix — every param reaches the CLI
 
 Claude is the one *persistent* engine: the runner keeps it alive and speaks structured
@@ -45,6 +80,13 @@ Claude is the exception, and its continuity is **not** in the preset either: the
 stream-json process alive, and across runner restarts re-spawns it with `--resume <session id>`
 against `~/.claude` — which is exactly why `--resume` is one of the structural flags a preset may
 not set. `resumedConversation` is false for a raw engine under every circumstance.
+
+**The fix is the prefix contract, used on purpose.** Where the vendor ships a resume subcommand,
+putting it in the preset gives that engine multi-turn memory with no platform change: **multi-turn
+memory for a raw engine is a preset string, not a backend property**
+([ADR 0003](adr/0003-a-coder-engine-reports-its-own-turns.md)). Verified against the
+installed binaries on 2026-08-08, and **none of these is a
+shipped default** — each is something you add yourself, knowing the caveats below:
 
 The **⚙ CLI engines** editor states this per preset, derived from the command's binary rather than
 listed per engine (`engine-continuity.ts`, mirroring `deriveClientType`), so it stays right for
@@ -230,3 +272,26 @@ Dollar limits (the per-tree delegation pool and the account circuit breaker) sum
 only**. Subscription and unknown engine work is bounded by a token ceiling instead, in the unit it
 actually consumes — a subscription's own allowance is a rolling 5h + weekly token window, so there
 is no dollar figure on the other side for a dollar ceiling to compare against.
+
+### What the Usage total does not include
+
+**A coding CLI driven through a pane is unmetered, and the total on the Usage page silently
+excludes it.** A pane holds rendered text, not the `result` event the child-process engine reports
+its own tokens and cost from, so there is nothing to read — and a dollar amount scraped out of
+pane output would be a guess dressed as a measurement, which is worse than a gap. The cloud
+records such a drive as **unmetered**: a name, never a number (#348).
+
+So "compare my tmux spend against my Coder spend" has no answer, and a `$0` next to an operator
+agent means *not measured*, not *free*. The engine really did run and really did spend; only this
+platform cannot say how much. Your provider's own dashboard can.
+
+The exposure is real but has been small. Measured across the whole account on **2026-08-08**:
+`{ drives: 2, aiCliDrives: 0, instances: 1, windowDays: 14 }` — two pane drives on one instance in
+a fortnight. That is a reading from one day, not a standing property; take a fresh one before
+using it to decide anything.
+
+This is a property of the path, not a bug awaiting a fix — see the table in
+[Two ways to drive a CLI](#two-ways-to-drive-a-cli) and
+[ADR 0003](adr/0003-a-coder-engine-reports-its-own-turns.md), which makes reporting your own turns
+the admission requirement for a Coder engine precisely so this stays confined to the operator
+family.
