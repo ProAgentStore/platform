@@ -6,9 +6,8 @@ import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledToo
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
-import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
-import { resolveConnectorPolicy } from "../lib/instance-connector-policy.js";
-import { toolNamesFor } from "../agent-do-tools.js";
+import { getConnector } from "../lib/connectors/registry.js";
+import { instanceConnectorPolicy } from "../lib/instance-connector-access.js";
 import { connectorClient } from "../lib/connectors/client.js";
 import { probeMcpEndpoint, probeMcpSurface } from "../lib/connectors/mcp.js";
 import { discoverAuthServer } from "../lib/connectors/discovery.js";
@@ -362,18 +361,15 @@ toolRoutes.delete("/:id/connections/:cid", async (c) => {
  * entirely — which is why connecting Drive once, at account level, put its folder-grant panel back
  * on every instance the owner has, terminal Operators included.
  *
- * The rule is pure and lives in lib/instance-connector-policy.ts; what only this handler can do is
- * resolve the tool names. It builds the SAME set the chat runtime does (`toolNamesFor`) minus the
- * owner's own off-switches, so a connector is never offered on the strength of a tool this
- * instance would refuse to run.
+ * The rule is pure and lives in lib/instance-connector-policy.ts; resolving its inputs is
+ * `instanceConnectorPolicy`, shared with the grant routes that now REFUSE on the same verdict.
+ * Sharing it is the point: this endpoint deciding not to offer a connector while a grant route
+ * happily creates one is the exact drift a second copy of the resolution would reintroduce.
  */
 toolRoutes.get("/:id/connectors", async (c) => {
 	const session = await requireUser(c);
 	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
-	const capabilities = await capabilitiesForInstance(c.env, instance.id, session.uid);
-	const allowed = toolNamesFor(capabilities ?? undefined);
-	for (const name of readDisabledTools(instance.config)) allowed.delete(name);
-	return c.json({ connectors: resolveConnectorPolicy(CONNECTORS, allowed) });
+	return c.json({ connectors: await instanceConnectorPolicy(c.env, instance.id, session.uid, instance.config) });
 });
 
 /** GET /v1/instances/:id/connectors/consent — write-consents granted on this instance. */

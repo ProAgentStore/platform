@@ -69,7 +69,7 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 
 	server.tool(
 		"grant_instance_connector_folder",
-		"Grant one of your instances access to a folder on a file connector, by share URL or resource id. Returns the created grant including its `id` — the value a `sync_connector` trigger needs. Folders only: a file grant is refused server-side. WRITE: this widens what the agent can read.",
+		"Grant one of your instances access to a folder on a file connector, by share URL or resource id. Returns the created grant including its `id` — the value a `sync_connector` trigger needs. Folders only: a file grant is refused server-side. An instance whose agent cannot read a knowledge base is also refused (403), because that is the only place an imported document ever lands — check `list_instance_tools` before assuming the folder is the problem. WRITE: this widens what the agent can read.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),

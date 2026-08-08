@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { toolNamesFor } from "../agent-do-tools.js";
 import { CONNECTORS, getConnector } from "./connectors/registry.js";
-import { connectorPolicyOf, resolveConnectorPolicy } from "./instance-connector-policy.js";
+import { connectorPolicyOf, connectorRefusal, resolveConnectorPolicy } from "./instance-connector-policy.js";
 import type { Connector } from "./connectors/types.js";
 
 const drive = getConnector("google_drive") as Connector;
@@ -70,5 +70,35 @@ describe("instance connector policy (#352)", () => {
 		};
 		expect(connectorPolicyOf(invented, declaring("tmux_send_keys")).allowed).toBe(false);
 		expect(connectorPolicyOf(invented, declaring("read_knowledge")).allowed).toBe(true);
+	});
+});
+
+describe("connectorRefusal — the sentence a 403 says", () => {
+	const operator = declaring("tmux_capture_pane", "tmux_send_keys");
+
+	it("says nothing when the connector is allowed, so a caller can append it unconditionally", () => {
+		expect(connectorRefusal(connectorPolicyOf(drive, declaring("search_knowledge")))).toBeNull();
+		expect(connectorRefusal(connectorPolicyOf(github, declaring("github_list_issues")))).toBeNull();
+	});
+
+	// The fix is a capability edit and the owner has to know WHICH field, so the tools are named.
+	// "Declare a knowledge tool" is advice; "declare search_knowledge" is an instruction.
+	it("names the tools that would fix it, not the concept", () => {
+		const msg = connectorRefusal(connectorPolicyOf(drive, operator));
+		expect(msg).toContain("Google Drive");
+		expect(msg).toContain("search_knowledge");
+		expect(msg).toMatch(/knowledge base/);
+	});
+
+	it("explains a tool-bearing connector by its own tools", () => {
+		const msg = connectorRefusal(connectorPolicyOf(github, declaring("search_knowledge")));
+		expect(msg).toContain("GitHub");
+		expect(msg).toContain("github_list_issues");
+	});
+
+	// Gmail's reach is the owner's permissions.email flag, which this rule deliberately does not
+	// evaluate — so it must never produce a refusal that implies it did.
+	it("never refuses a permission-gated connector", () => {
+		expect(connectorRefusal(connectorPolicyOf(gmail, operator))).toBeNull();
 	});
 });

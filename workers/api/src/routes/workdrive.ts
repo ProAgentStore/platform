@@ -22,6 +22,7 @@ import {
 	signConnectorState,
 	verifyConnectorState,
 } from "../lib/connector-oauth.js";
+import { connectorRefusalFor } from "../lib/instance-connector-access.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import {
 	exportWorkDriveFile,
@@ -178,7 +179,11 @@ workdriveRoutes.get("/instances/:instanceId/grants", async (c) => {
 workdriveRoutes.post("/instances/:instanceId/grants", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
-	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
+	// #352, same gate as Drive and for the same reason — keyed on the connector's declared
+	// `grantModel`, so it is one rule applied twice rather than two providers hardcoded twice.
+	const refusal = await connectorRefusalFor(c.env, PROVIDER, instanceId, session.uid, instance.config);
+	if (refusal) throw new HttpError(403, refusal);
 	const body = (await c.req.json().catch(() => ({}))) as { resourceId?: string; url?: string; name?: string };
 	const ref = body.resourceId || body.url;
 	if (!ref) throw new HttpError(400, "resourceId or url required");
