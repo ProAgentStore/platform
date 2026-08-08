@@ -1,5 +1,5 @@
 {
-  "name": "lead-finder",
+  "name": "lead_finder",
   "params": {
     "city": { "type": "string", "description": "City to sweep, e.g. \"Sydney, NSW\" — geocoded to the search centre." },
     "type": { "type": "string", "description": "Google Places includedType, e.g. \"cafe\" / \"restaurant\"." },
