@@ -181,14 +181,52 @@ export function drainSseData(buffer: string): { data: string[]; rest: string } {
 }
 
 /**
- * Pull a human reason out of an upstream (OpenAI) error body. It's usually JSON
- * `{ error: { message } }`; fall back to the raw text when it isn't. Never throws.
+ * Pull a human reason out of an error body from either side of the proxy. Never throws.
+ *
+ * TWO envelopes reach this, and until #421 it only knew one. OpenAI returns
+ * `{ error: { message } }`; **PAGS's own API returns `{ error: "…" }`, where `error` is a STRING** —
+ * so `?.error?.message` was `undefined` and it fell through to `|| rawBody`. During a deploy the
+ * platform's deliberately reassuring 503 ("The service is updating — please try again in a moment.",
+ * `workers/api/src/index.ts`) therefore reached the user as raw JSON.
  */
 export function parseUpstreamErrorDetail(rawBody: string): string {
 	if (!rawBody) return "";
 	try {
-		return (JSON.parse(rawBody) as { error?: { message?: string } })?.error?.message || rawBody;
+		const err = (JSON.parse(rawBody) as { error?: unknown })?.error;
+		if (typeof err === "string") return err || rawBody;
+		const message = (err as { message?: unknown } | undefined)?.message;
+		return typeof message === "string" && message ? message : rawBody;
 	} catch {
 		return rawBody;
 	}
+}
+
+/** Did this error body come from PAGS itself rather than from OpenAI? See above — the string-vs-
+ *  object shape of `error` is the discriminator, and it is the only one available at the boundary. */
+export function isPlatformErrorBody(rawBody: string): boolean {
+	if (!rawBody) return false;
+	try {
+		return typeof (JSON.parse(rawBody) as { error?: unknown })?.error === "string";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The message a user sees when a transcription request comes back not-OK (#421).
+ *
+ * Two things it must not do, both of which it did. It must not print raw JSON — the one message the
+ * platform writes specifically to be calming was delivered in the least calming form available. And
+ * it must not say **"Whisper"** about a failure that never reached OpenAI: a PAGS redeploy blamed on
+ * the user's AI vendor sends them to look at the wrong thing, and a 503 from our own proxy is
+ * distinguishable right here.
+ */
+export function describeTranscribeHttpError(status: number, rawBody: string): string {
+	const detail = parseUpstreamErrorDetail(rawBody);
+	if (isPlatformErrorBody(rawBody)) {
+		// 503 is the deploy window specifically; anything else from us keeps its own wording, which
+		// is already written for a person.
+		return status === 503 ? "ProAgentStore is updating — try that again in a moment." : detail;
+	}
+	return `Whisper error ${status}${detail ? `: ${detail.slice(0, 300)}` : ""}`;
 }

@@ -301,8 +301,8 @@ describe("M4 — unmute is symmetric", () => {
 describe("M5 — mute never costs the user their words", () => {
 	/** The reported turn, at the moment the button is pressed: finished speaking, clip mid-upload,
 	 *  so the speech exists and its final text does not. */
-	const TRANSCRIBING: Dictation = { text: "file the issue about masters games", status: "transcribing", startedAt: NOW - 4000, heard: "file the issue about masters games" };
-	const DICTATING: Dictation = { text: "half a sentence", status: "dictating", startedAt: NOW - 1000, heard: "" };
+	const TRANSCRIBING: Dictation = { text: "file the issue about masters games", status: "transcribing", startedAt: NOW - 4000, heard: "file the issue about masters games", transcribingAt: NOW - 2000 };
+	const DICTATING: Dictation = { text: "half a sentence", status: "dictating", startedAt: NOW - 1000, heard: "", transcribingAt: 0 };
 
 	/**
 	 * The rule, applied to mute implementations rather than to echo guards — the same shape as M3's

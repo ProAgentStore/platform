@@ -176,7 +176,16 @@ const PINS = {
 	// and a reader tidying them into consistency would delete the fix that made "run the tests, mute"
 	// still run the tests. Same for the conditional echo-tail stamp, which looks like a line someone
 	// forgot to make unconditional and is the whole of leg 1.
-	"packages/sdk/src/voice/use-voice.ts": 1812,
+	// +59 for #421 — a watchdog effect, a `retryDictation` callback, and the reasoning for both.
+	// Neither could be moved out: a deadline needs a timer and a timer needs the hook. What DID move
+	// out is every judgement they make — `transcribingAt` and the `retry` event are in machine.ts,
+	// `isRetryableVoiceError` is in convo.ts, and both network deadlines are in stt.ts, so what is
+	// left here is scheduling. The prose that stayed is the part a reader would otherwise undo: why
+	// the watchdog is set LONGER than the network deadlines (so the specific message wins the race),
+	// and why a transcription timeout is exempted from the `isConnectivityError` skip — that helper
+	// matches /timed? ?out/, so the one failure this ticket exists to count would have been filtered
+	// out by the thing that hides network noise.
+	"packages/sdk/src/voice/use-voice.ts": 1871,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -197,7 +206,13 @@ const PINS = {
 	// speech, including the whole-utterance rule applied to a partial. That reasoning has to live
 	// beside the table it constrains, because the failure it prevents is a reader "fixing" the
 	// inconsistency between this command and its neighbour.
-	"packages/sdk/src/voice/convo.ts": 909,
+	// +23 for #421's `isRetryableVoiceError`, which belongs beside `classifyVoiceError` because it
+	// is the same question asked one level further on: that one decides whether to REPORT a failure,
+	// this one whether the user should be offered another attempt at it. Splitting them would put
+	// two readings of the same error string in two files. Most of the addition is why the refusal
+	// check runs FIRST — every one of these strings contains the word "error", so a 4xx would
+	// otherwise be read as retryable and charge the user to discover it was not.
+	"packages/sdk/src/voice/convo.ts": 932,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -277,7 +292,11 @@ const PINS = {
 	// components/FabricatedNotice.tsx, because a message that says "nothing in this reply was
 	// fetched" is the kind of sentence that gets softened by whoever edits the file next, and it is
 	// easier to see what it says when it is not one line inside a bubble's class expression.
-	"store/console/src/pages/InstanceDetail.tsx": 1445,
+	// +10 for #421: a Retry button beside Dismiss on the failed dictation bubble, and the two lines
+	// saying why it is conditional (a 400/401 fails identically and bills the user's own OpenAI key
+	// to find that out). Ten lines for a whole recovery affordance, because everything that decides
+	// whether it appears is `voice.canRetryDictation`.
+	"store/console/src/pages/InstanceDetail.tsx": 1455,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

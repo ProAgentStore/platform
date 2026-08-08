@@ -1162,7 +1162,17 @@ function InstancePage() {
 											{voice.dictation.status === "failed" && <span>Not transcribed</span>}
 										</span>
 										{voice.dictation.status === "failed" && (
-											<button type="button" onClick={voice.clearDictation} className="font-semibold underline opacity-80 hover:opacity-100">Dismiss</button>
+											<span className="flex items-center gap-2">
+												{/* The clip is still in hand, so a timeout / 5xx / deploy answers with a
+												    button rather than "say that again" (#421) — which matters most for
+												    the failure this exists for, where the user has already waited. Absent
+												    for a 400/401: that fails identically and bills their own key to find
+												    out. */}
+												{voice.canRetryDictation && (
+													<button type="button" onClick={voice.retryDictation} className="font-semibold underline opacity-80 hover:opacity-100">Retry</button>
+												)}
+												<button type="button" onClick={voice.clearDictation} className="font-semibold underline opacity-80 hover:opacity-100">Dismiss</button>
+											</span>
 										)}
 									</div>
 									<span className="whitespace-pre-wrap break-words italic">

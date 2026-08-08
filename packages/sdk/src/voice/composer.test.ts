@@ -5,9 +5,9 @@ import { matchLines, stripCommentsAndLiterals } from "../../../../workers/api/sr
 import { resolveComposer } from "./composer.js";
 import type { Dictation } from "./machine.js";
 
-const dictating = (text: string): Dictation => ({ text, status: "dictating", startedAt: 1, heard: "" });
-const transcribing = (text: string): Dictation => ({ text, status: "transcribing", startedAt: 1, heard: text });
-const failed = (text: string): Dictation => ({ text, status: "failed", startedAt: 1, heard: text, note: "Whisper failed" });
+const dictating = (text: string): Dictation => ({ text, status: "dictating", startedAt: 1, heard: "", transcribingAt: 0 });
+const transcribing = (text: string): Dictation => ({ text, status: "transcribing", startedAt: 1, heard: text, transcribingAt: 2 });
+const failed = (text: string): Dictation => ({ text, status: "failed", startedAt: 1, heard: text, transcribingAt: 0, note: "Whisper failed" });
 
 describe("the composer never displays what voice produced (#364)", () => {
 	it("shows the typed draft while the user is speaking — the words belong to the thread bubble", () => {
@@ -29,17 +29,44 @@ describe("the composer never displays what voice produced (#364)", () => {
 		expect(resolveComposer({ draft: "", notice: "⚠ Microphone unavailable", dictation: null }).readOnly).toBe(false);
 	});
 
-	it("locks the box while an utterance is in flight, through transcription", () => {
-		// Voice owns the turn from first word to final transcript; a typed send in the middle
-		// would race the one the transcript is about to make.
+	it("locks the box only while words are landing live", () => {
+		// The mic is open and the bubble is filling; a typed send here would race the one the
+		// transcript is about to make.
 		expect(resolveComposer({ draft: "", notice: "", dictation: dictating("hello") }).readOnly).toBe(true);
-		expect(resolveComposer({ draft: "", notice: "", dictation: transcribing("hello") }).readOnly).toBe(true);
+	});
+
+	/**
+	 * #421, and this is the assertion that changed rather than one that was added.
+	 *
+	 * `readOnly` used to hold through `transcribing` on the reading that voice owns a turn "from
+	 * first word to final transcript". By then the mic is CLOSED and the only thing still happening
+	 * is a network call — so the rule was locking the user out of the product for the duration of
+	 * someone else's latency, and when a transcription stalled it locked them out permanently: no
+	 * Dismiss on a `transcribing` bubble, no timeout, reload the only escape.
+	 *
+	 * The race it was guarding against is real but visible and deliberate on the user's part, and a
+	 * transcript that lands after they typed goes to the composer rather than auto-sending
+	 * (`classifyResult`), so the worst case is two visible drafts rather than a silent double-send.
+	 */
+	it("does NOT hold the box on a turn that is only waiting on the network (#421)", () => {
+		expect(resolveComposer({ draft: "", notice: "", dictation: transcribing("hello") }).readOnly).toBe(false);
 	});
 
 	it("releases the box on a FAILED utterance", () => {
 		// The words are on screen in the failed bubble and nothing else is coming — typing them
 		// out is the recovery, so this is the one status that must not hold the input.
 		expect(resolveComposer({ draft: "", notice: "", dictation: failed("hello") }).readOnly).toBe(false);
+	});
+
+	it("never leaves the composer unreachable — no status holds it that the user cannot end", () => {
+		// The property, not the table: a status that holds the box must be one the user can leave
+		// on their own. `dictating` ends when they stop talking; every other status is either the
+		// network's problem or already resolved, so none of them may hold it. This is the shape of
+		// the #421 lockout stated so it fails for a status nobody has added yet.
+		const held = (["dictating", "transcribing", "failed"] as const).filter(
+			(status) => resolveComposer({ draft: "", notice: "", dictation: { text: "x", status, startedAt: 1, heard: "x", transcribingAt: 2 } }).readOnly,
+		);
+		expect(held, "a status other than `dictating` holds the composer. Only the user closing their own mouth may release the input (#421).").toEqual(["dictating"]);
 	});
 });
 

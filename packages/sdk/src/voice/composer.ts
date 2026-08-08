@@ -17,9 +17,12 @@
  * front-end trees so no consumer can quietly re-bind speech or a notice into an input value):
  *
  *   - `value` is the user's TYPED draft. Never speech, never a notice.
- *   - `readOnly` means **voice owns this turn** — an utterance is in flight. A notice is not
- *     ownership: a mic error must not lock someone out of typing the message themselves. Nor is a
- *     FAILED utterance, which is precisely when they are most likely to want to.
+ *   - `readOnly` means **voice owns this turn** — words are landing live into the bubble. A notice
+ *     is not ownership: a mic error must not lock someone out of typing the message themselves. Nor
+ *     is a FAILED utterance, which is precisely when they are most likely to want to. Nor, since
+ *     #421, is a `transcribing` one: the mic is closed by then and the only thing still happening is
+ *     a network call, so there is no reason a user cannot type instead of waiting on it — and while
+ *     a stalled transcription held the box, the reload button was the only way out of the product.
  *   - `notice` is handed BACK to be rendered as its own small banner next to the controls.
  */
 import type { Dictation } from "./machine.js";
@@ -27,7 +30,7 @@ import type { Dictation } from "./machine.js";
 export interface ComposerBinding {
 	/** What the textarea shows: the typed draft, and nothing the voice stack produced. */
 	value: string;
-	/** An utterance is in flight — hold the box and the send action until the turn resolves. */
+	/** Words are landing live into the bubble — hold the box until the mic closes. */
 	readOnly: boolean;
 	/** The transient notice (mic error / wrong-language nudge). Render it BESIDE the composer,
 	 *  never as its value. Empty string when there is nothing to say. */
@@ -44,7 +47,7 @@ export function resolveComposer(s: {
 }): ComposerBinding {
 	return {
 		value: s.draft,
-		readOnly: !!s.dictation && s.dictation.status !== "failed",
+		readOnly: s.dictation?.status === "dictating",
 		notice: s.notice,
 	};
 }

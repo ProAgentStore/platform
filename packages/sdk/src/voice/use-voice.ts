@@ -51,12 +51,12 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, commandStateFor, decideRestart, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
 import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
-import { VoiceStt } from "./stt.js";
+import { TRANSCRIBE_STREAM_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
 // ── Tunables (named, not scattered literals) ─────────────────────────────────
@@ -64,6 +64,10 @@ import type { VoiceTts } from "./tts.js";
 const LEVEL_THROTTLE_MS = 66;
 /** Pause before reopening the mic between conversation turns. */
 const RESTART_DELAY_MS = 350;
+/** How long a turn may sit on "Transcribing…" before the UI gives up on it (#421). Deliberately
+ *  LONGER than `stt.ts`'s two network deadlines, so the specific message wins the race and this
+ *  only fires for a stall the network layer could not see. */
+const TRANSCRIBE_WATCHDOG_MS = TRANSCRIBE_STREAM_MS + 5_000;
 // ECHO_GUARD_MS + all input guards now live in ./machine.ts (the pure, tested interaction
 // model) so the decisions are made ONE way instead of re-derived inline at every call site.
 
@@ -1313,7 +1317,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// visible server-side — EXCEPT transient connectivity ("Whisper failed:
 					// Load failed"), which floods the log on every mobile network blip and is
 					// not a platform bug (same class api() already skips).
-					if (!isConnectivityError(String(err))) {
+					//
+					// A transcription DEADLINE is exempted from that skip (#421). `isConnectivityError`
+					// matches /timed? ?out|aborted/, so the one failure this ticket exists to make
+					// countable would have been filtered out by the helper that hides network noise —
+					// and a stall is not a blip: it is the thing we need rows for before the 20s
+					// first-byte deadline can safely be tightened.
+					if (!isConnectivityError(String(err)) || String(err) === TRANSCRIBE_TIMEOUT_MESSAGE) {
 						reportClientError("voice", String(err), { sttWhisper: sttIsWhisperRef.current });
 					}
 					// Surface real errors (Whisper 401/400, mic denied) as a notice —
@@ -1642,6 +1652,51 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return () => document.removeEventListener("keydown", onKey);
 	}, [cancelSpeak]);
 
+	/**
+	 * The WATCHDOG (#421) — belt-and-braces behind `stt.ts`'s two deadlines.
+	 *
+	 * Those cover the network. This covers everything else that can leave a turn stuck on
+	 * "Transcribing…": a response that resolves but dispatches nothing, a handler that throws
+	 * before it reports, a browser that never settles the promise at all. `transcribingAt` exists
+	 * for exactly this and, before #421, `Dictation` carried a timestamp that NOTHING in the
+	 * codebase ever compared to now — the field that makes a deadline trivial was already there and
+	 * unused.
+	 *
+	 * Longer than both network deadlines on purpose, so the specific message wins the race and this
+	 * only fires when the specific one did not happen. The outcome is the ordinary `failed` bubble:
+	 * the words the live gate heard survive, the recording survives, Dismiss and Retry appear.
+	 */
+	useEffect(() => {
+		if (dictation?.status !== "transcribing" || !dictation.transcribingAt) return;
+		const timer = setTimeout(() => {
+			if (dictationRef.current?.status !== "transcribing") return;
+			reportClientError("voice", `${TRANSCRIBE_TIMEOUT_MESSAGE} (watchdog)`, { sttWhisper: sttIsWhisperRef.current });
+			flushSync(() => dictate({ type: "failed", note: TRANSCRIBE_TIMEOUT_MESSAGE, at: Date.now() }));
+			setPaused(false);
+			if (!convoOnRef.current) setMicOn(false);
+		}, Math.max(0, TRANSCRIBE_WATCHDOG_MS - (Date.now() - dictation.transcribingAt)));
+		return () => clearTimeout(timer);
+	}, [dictation, dictate, setPaused]);
+
+	/**
+	 * Re-send the SAME clip (#421). The audio is still in hand after any failure, so the answer to
+	 * a timeout is a button rather than "say that again" — which matters most for the failure this
+	 * was written for, where the user has already waited twenty seconds.
+	 *
+	 * Deliberately manual: an automatic retry doubles the wait before the user learns anything, and
+	 * transcription is billed to their own OpenAI key.
+	 */
+	const retryDictation = useCallback(() => {
+		const stt = sttRef.current;
+		if (!stt?.canRetryTranscription()) return;
+		setNotice("");
+		flushSync(() => dictate({ type: "retry", at: Date.now() })); // re-arms the watchdog too
+		void stt.retryTranscription();
+	}, [dictate]);
+	/** Is Retry worth offering on the failed bubble? Only for a failure a second attempt could
+	 *  actually change — see `isRetryableVoiceError` for why a 400/401 gets no button. */
+	const canRetryDictation = dictation?.status === "failed" && isRetryableVoiceError(dictation.note) && !!sttRef.current?.canRetryTranscription();
+
 	// Returning to the app after a background trip: the browser auto-releases the wake
 	// lock when hidden, and iOS suspends the page + revokes the mic. So on becoming
 	// visible again during hands-free, re-acquire the lock and restart listening — the
@@ -1787,6 +1842,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 		starting,
 		/** Dismiss a failed utterance the user has finished reading. */
 		clearDictation: clearVoiceText,
+		/** Re-send the same clip after a failure that a second attempt could change (#421). Render
+		 *  the button only when `canRetryDictation` — a 400/401 will fail identically and the
+		 *  attempt costs the user's own credit. */
+		retryDictation, canRetryDictation,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,
 		/** True while the agent is talking aloud (TTS) — drives the "Speaking…" status. */

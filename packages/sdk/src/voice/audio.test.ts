@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeRmsLevel, drainSseData, isNoiseTranscript, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+import { computeRmsLevel, describeTranscribeHttpError, drainSseData, isNoiseTranscript, isPlatformErrorBody, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
 
 describe("isNoiseTranscript", () => {
 	it("drops the exact Whisper silence hallucinations seen in the wild", () => {
@@ -179,5 +179,50 @@ describe("parseUpstreamErrorDetail", () => {
 	});
 	it("is empty for an empty body (no throw)", () => {
 		expect(parseUpstreamErrorDetail("")).toBe("");
+	});
+
+	/**
+	 * #421. TWO envelopes reach this parser and it only knew one. OpenAI wraps the reason in an
+	 * OBJECT (`{error:{message}}`); PAGS's own API returns a STRING (`{error:"…"}`,
+	 * `workers/api/src/index.ts`), so `?.error?.message` was undefined and it fell through to the
+	 * raw body. The one message the platform writes to be reassuring during a deploy therefore
+	 * reached the user as literal JSON.
+	 */
+	it("pulls the message out of the PLATFORM's own error body, whose error is a string", () => {
+		expect(parseUpstreamErrorDetail('{"error":"The service is updating — please try again in a moment."}')).toBe("The service is updating — please try again in a moment.");
+	});
+	it("tells the two envelopes apart, which is the only signal available at the boundary", () => {
+		expect(isPlatformErrorBody('{"error":"The service is updating — please try again in a moment."}')).toBe(true);
+		expect(isPlatformErrorBody('{"error":{"message":"audio file is too short"}}')).toBe(false);
+		expect(isPlatformErrorBody("Bad Gateway")).toBe(false);
+		expect(isPlatformErrorBody("")).toBe(false);
+	});
+});
+
+describe("describeTranscribeHttpError (#421 — say whose failure it is)", () => {
+	const DEPLOY = '{"error":"The service is updating — please try again in a moment."}';
+
+	/**
+	 * The observed message, verbatim:
+	 *
+	 *     ⚠ Whisper error 503: {"error":"The service is updating — please try again in a moment."}
+	 *
+	 * Raw JSON, and a PAGS redeploy attributed to the user's AI vendor — which sends them to check
+	 * their OpenAI key and their billing for something neither of those caused.
+	 */
+	it("does not blame OpenAI for a PAGS deploy, and does not print JSON at anyone", () => {
+		const msg = describeTranscribeHttpError(503, DEPLOY);
+		expect(msg).not.toMatch(/Whisper/);
+		expect(msg).not.toMatch(/[{}"]/);
+		expect(msg).toMatch(/ProAgentStore is updating/);
+	});
+	it("keeps the platform's own wording for its other statuses — it is already written for a person", () => {
+		expect(describeTranscribeHttpError(429, '{"error":"Too many requests — slow down."}')).toBe("Too many requests — slow down.");
+	});
+	it("still surfaces OpenAI's real reason rather than a bare status", () => {
+		expect(describeTranscribeHttpError(400, '{"error":{"message":"audio file is too short"}}')).toBe("Whisper error 400: audio file is too short");
+	});
+	it("survives a body that is neither (an edge 502 page, say)", () => {
+		expect(describeTranscribeHttpError(502, "<html>Bad Gateway</html>")).toMatch(/Whisper error 502/);
 	});
 });

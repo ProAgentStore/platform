@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VoiceStt } from "./stt.js";
+import { TRANSCRIBE_FIRST_BYTE_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt } from "./stt.js";
 
 /** Drive the private Whisper upload directly — start() needs a real mic + recorder. */
 const transcribe = (stt: VoiceStt, blob: Blob) =>
@@ -48,6 +48,81 @@ describe("Whisper transcription request", () => {
 		// Chinese speech toward English, so it must be omitted.
 		await transcribe(new VoiceStt("openai", { language: "zh-CN", transcribePrompt: prompt }), new Blob(["x"], { type: "audio/webm" }));
 		expect(bodies[1].get("prompt")).toBeNull();
+	});
+});
+
+/**
+ * #421 — "when it was transcribing it was taking forever".
+ *
+ * The request had no `signal` and no deadline, on the client or on the server proxy, so a stall
+ * produced neither a `catch` nor a `!res.ok`. Every failure path in `use-voice.ts` hangs off
+ * `onError` and all of them are reached from one of those two, so a promise that never settled
+ * reached NONE of them: the bubble sat on "Transcribing…" indefinitely and — until this change —
+ * held the composer with it, leaving reload as the only way out of the product.
+ *
+ * Driven with real timers against a promise that genuinely never resolves, because the assertion is
+ * that the request is abandoned by something OTHER than the response arriving. The deadline is
+ * shortened via the module constant so this costs milliseconds rather than twenty seconds.
+ */
+describe("a transcription that never comes back (#421)", () => {
+	function stubStalledFetch(): { aborted: () => boolean } {
+		let aborted = false;
+		vi.stubGlobal("localStorage", { getItem: () => "test-token" });
+		vi.stubGlobal("fetch", vi.fn((_url: string, init: { signal?: AbortSignal }) => {
+			// The shape of the real failure: the server accepted the request and then said nothing.
+			// It settles ONLY when the signal fires, so a version with no deadline hangs this test
+			// rather than passing it.
+			return new Promise((_resolve, reject) => {
+				init.signal?.addEventListener("abort", () => {
+					aborted = true;
+					reject(new DOMException("The operation was aborted.", "AbortError"));
+				});
+			});
+		}));
+		return { aborted: () => aborted };
+	}
+
+	/** Run a transcription that will stall, and let the wall clock reach the deadline. */
+	async function transcribeAndWait(stt: VoiceStt) {
+		vi.useFakeTimers();
+		try {
+			const done = transcribe(stt, new Blob(["x"], { type: "audio/webm" }));
+			// If nothing schedules a deadline, this advances a clock nobody is watching and the
+			// await below never returns — the hang, reproduced.
+			await vi.advanceTimersByTimeAsync(TRANSCRIBE_FIRST_BYTE_MS + 1_000);
+			await done;
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+
+	it("gives up, aborts the request, and says so in words that are not the user's fault", async () => {
+		const stalled = stubStalledFetch();
+		const errors: string[] = [];
+		const stt = new VoiceStt("openai", { onError: (e) => errors.push(e) });
+
+		await transcribeAndWait(stt);
+
+		expect(stalled.aborted(), "the request was left running — nothing cancels a stalled upload").toBe(true);
+		expect(errors, "a stall produced no error at all, which is the hang verbatim").toHaveLength(1);
+		// NOT "Whisper failed: AbortError". We caused the abort; naming it would report our own
+		// symptom, blame the user's AI vendor, and hide that a Retry is worth offering.
+		expect(errors[0]).toBe(TRANSCRIBE_TIMEOUT_MESSAGE);
+		expect(errors[0]).not.toMatch(/abort/i);
+	});
+
+	it("keeps the clip, so the answer to a timeout is a button and not 'say that again'", async () => {
+		stubStalledFetch();
+		const stt = new VoiceStt("openai", {});
+		expect(stt.canRetryTranscription(), "nothing to retry before a clip has been sent").toBe(false);
+
+		await transcribeAndWait(stt);
+
+		expect(stt.canRetryTranscription(), "the audio was thrown away, so the only recovery left is to repeat yourself").toBe(true);
+	});
+
+	it("browser dictation has no clip to retry — the button must never appear there", () => {
+		expect(new VoiceStt("browser", {}).canRetryTranscription()).toBe(false);
 	});
 });
 

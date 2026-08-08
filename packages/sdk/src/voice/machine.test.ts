@@ -145,26 +145,26 @@ describe("isMutedTurn / classifyResult (#420 — a turn interrupted by mute)", (
 describe("pendingUtterance (#420 — the words a clear would destroy)", () => {
 	const at = NOW;
 	it("takes what the gate HEARD for a transcribing turn — its final text does not exist yet", () => {
-		expect(pendingUtterance({ text: "streaming so far", status: "transcribing", startedAt: at, heard: "file the issue" })).toBe("file the issue");
+		expect(pendingUtterance({ text: "streaming so far", status: "transcribing", startedAt: at, heard: "file the issue", transcribingAt: at })).toBe("file the issue");
 	});
 	it("falls back to the live text when nothing was heard (iOS: no gate)", () => {
-		expect(pendingUtterance({ text: "streaming so far", status: "transcribing", startedAt: at, heard: "" })).toBe("streaming so far");
+		expect(pendingUtterance({ text: "streaming so far", status: "transcribing", startedAt: at, heard: "", transcribingAt: at })).toBe("streaming so far");
 	});
 	it("is the live words while dictating, and nothing at all with no turn", () => {
-		expect(pendingUtterance({ text: "  half a sentence  ", status: "dictating", startedAt: at, heard: "" })).toBe("half a sentence");
+		expect(pendingUtterance({ text: "  half a sentence  ", status: "dictating", startedAt: at, heard: "", transcribingAt: 0 })).toBe("half a sentence");
 		expect(pendingUtterance(null)).toBe("");
 		expect(pendingUtterance(undefined)).toBe("");
 	});
 	it("agrees with prepareConversationSwitch — the derivation these two share is now one function", () => {
-		const d: Dictation = { text: "live", status: "transcribing", startedAt: at, heard: "heard it" };
+		const d: Dictation = { text: "live", status: "transcribing", startedAt: at, heard: "heard it", transcribingAt: at };
 		expect(prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: false, dictation: d }).recoverText).toBe(pendingUtterance(d));
 	});
 });
 
 describe("planMuteTeardown (#420 — mute resolves the turn, it does not delete it)", () => {
-	const transcribing: Dictation = { text: "file the issue about masters games", status: "transcribing", startedAt: NOW, heard: "file the issue about masters games" };
-	const dictating: Dictation = { text: "half a sentence", status: "dictating", startedAt: NOW, heard: "" };
-	const failed: Dictation = { text: "what I said", status: "failed", startedAt: NOW, heard: "what I said", note: "Whisper error 500" };
+	const transcribing: Dictation = { text: "file the issue about masters games", status: "transcribing", startedAt: NOW, heard: "file the issue about masters games", transcribingAt: NOW };
+	const dictating: Dictation = { text: "half a sentence", status: "dictating", startedAt: NOW, heard: "", transcribingAt: 0 };
+	const failed: Dictation = { text: "what I said", status: "failed", startedAt: NOW, heard: "what I said", transcribingAt: 0, note: "Whisper error 500" };
 
 	/**
 	 * The echo tail was added by #153 for a CANCELLED TTS tail, which is real. Mute also closes the
@@ -312,7 +312,7 @@ describe("resolveToggleAction (#284)", () => {
 
 describe("reduceDictation (#281 — the words must survive the status change)", () => {
 	const AT = 5_000;
-	const live: Dictation = { text: "verify the application is built", status: "dictating", startedAt: AT, heard: "" };
+	const live: Dictation = { text: "verify the application is built", status: "dictating", startedAt: AT, heard: "", transcribingAt: 0 };
 
 	// THE BUG, exactly: end-of-turn used to assign "Transcribing…" OVER the words, so for the
 	// whole upload round trip the user's speech existed nowhere on screen.
@@ -360,9 +360,44 @@ describe("reduceDictation (#281 — the words must survive the status change)", 
 	// The single invariant this reducer exists to hold: only an explicit clear removes words.
 	it("ONLY clear removes the utterance", () => {
 		expect(reduceDictation(live, { type: "clear" })).toBeNull();
-		for (const ev of [{ type: "endOfTurn" as const, at: AT }, { type: "failed" as const, note: "x", at: AT }]) {
+		for (const ev of [{ type: "endOfTurn" as const, at: AT }, { type: "failed" as const, note: "x", at: AT }, { type: "retry" as const, at: AT }]) {
 			expect(reduceDictation(live, ev)?.text).toBe(live.text);
 		}
+	});
+
+	/**
+	 * #421's clock. `startedAt` is the UTTERANCE's, so a watchdog hung off it fires on any turn
+	 * longer than its own timeout — and the mic may legitimately stay open for `maxDictationMs`.
+	 * This is the moment after which nothing further is expected from the user, which is the only
+	 * interval over which a network deadline can be stated.
+	 */
+	it("stamps when the CLIP was handed over, not when the user started talking", () => {
+		const long = reduceDictation(null, { type: "speech", text: "a very long thought", at: AT })!;
+		const t = reduceDictation(long, { type: "endOfTurn", at: AT + 90_000 })!;
+		expect(t.startedAt).toBe(AT);
+		expect(t.transcribingAt).toBe(AT + 90_000);
+		expect(long.transcribingAt, "a turn still being spoken is not waiting on anything").toBe(0);
+	});
+
+	it("stops the clock when the turn resolves — a failed turn cannot time out again", () => {
+		const t = reduceDictation(live, { type: "endOfTurn", at: AT + 100 })!;
+		expect(reduceDictation(t, { type: "failed", note: "boom", at: AT + 200 })?.transcribingAt).toBe(0);
+	});
+
+	it("retry re-opens the same turn with a fresh deadline and no stale reason", () => {
+		const t = reduceDictation(live, { type: "endOfTurn", at: AT + 100 })!;
+		const f = reduceDictation(t, { type: "failed", note: "Transcription timed out", at: AT + 200 })!;
+		const r = reduceDictation(f, { type: "retry", at: AT + 5_000 })!;
+		expect(r).toMatchObject({ text: live.text, status: "transcribing", transcribingAt: AT + 5_000 });
+		expect(r.note, "the previous failure is still on the bubble while it retries").toBeUndefined();
+		expect(r.heard, "retry must not disturb what the live gate heard — it is the only other record").toBe(t.heard);
+	});
+
+	it("retry is a no-op on anything that has not failed — there is no clip to re-send", () => {
+		expect(reduceDictation(null, { type: "retry", at: AT })).toBeNull();
+		expect(reduceDictation(live, { type: "retry", at: AT })).toBe(live);
+		const t = reduceDictation(live, { type: "endOfTurn", at: AT + 100 })!;
+		expect(reduceDictation(t, { type: "retry", at: AT + 999 }), "a live transcription was handed a deadline it has not earned").toBe(t);
 	});
 });
 
@@ -412,7 +447,7 @@ describe("dictationDiverged (#371 — a short utterance is judged by OVERLAP, no
 });
 
 describe("prepareConversationSwitch (#277/#279 — one guard for changing who you talk to)", () => {
-	const dict = (over: Partial<Dictation> = {}): Dictation => ({ text: "", status: "dictating", startedAt: NOW, heard: "", ...over });
+	const dict = (over: Partial<Dictation> = {}): Dictation => ({ text: "", status: "dictating", startedAt: NOW, heard: "", transcribingAt: 0, ...over });
 
 	// The whole reason hands-free breaks today: switching agent has to keep the mic ON the other
 	// side, or "next" would drop the user into a silent screen they then have to touch.

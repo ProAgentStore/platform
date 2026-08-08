@@ -867,6 +867,29 @@ export function classifyVoiceError(err: string | null | undefined): VoiceErrorKi
 	if (MIC_UNAVAILABLE.has(err)) return "mic-unavailable";
 	return "error";
 }
+/**
+ * Should a failed turn offer **Retry** (#421)?
+ *
+ * The user's ask was "see the message and know what to do — retry now or later", and the two cases
+ * need different answers because the right action differs. A timeout, a 5xx, a platform deploy or a
+ * dropped stream will very likely succeed on a second attempt with the SAME clip, which is still in
+ * hand. A 400 or 401 will fail again identically — the key is wrong, or the audio is unusable — so
+ * a Retry button there is a dead affordance that costs the user's own OpenAI credit to discover.
+ *
+ * Judged on the message rather than a code because the message is what the bubble carries, and it
+ * is the only thing that survives into the durable log. Conservative in the safe direction: an
+ * unrecognised failure gets no Retry, so a new error shape cannot silently start charging people
+ * for a retry that was never going to work.
+ */
+export function isRetryableVoiceError(err: string | null | undefined): boolean {
+	if (!err) return false;
+	const e = err.toLowerCase();
+	// A permission/validation refusal is deterministic — the same clip and key produce the same
+	// answer. Checked FIRST: "Whisper error 400: …" also contains the word "error".
+	if (/\b4\d\d\b|too short|invalid|unsupported|not-allowed|audio-capture|audio-busy/.test(e)) return false;
+	return /timed out|timeout|\b5\d\d\b|updating|stream failed|whisper failed|network|load failed|failed to fetch/.test(e);
+}
+
 /** Human hint for a mic-unavailable error code. */
 export function micUnavailableMessage(err: string): string {
 	if (err === "audio-capture") return "No microphone found — check your device.";

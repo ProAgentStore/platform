@@ -428,7 +428,14 @@ export default function CopilotView({
 								{voice.dictation.status === "failed" && <span>Not transcribed</span>}
 							</span>
 							{voice.dictation.status === "failed" && (
-								<button type="button" onClick={voice.clearDictation} className="font-semibold underline opacity-80 hover:opacity-100">Dismiss</button>
+								<span className="flex items-center gap-2">
+									{/* Re-send the same clip — see InstanceDetail for why this is offered on a
+									    timeout/5xx and withheld on a 400/401 (#421). */}
+									{voice.canRetryDictation && (
+										<button type="button" onClick={voice.retryDictation} className="font-semibold underline opacity-80 hover:opacity-100">Retry</button>
+									)}
+									<button type="button" onClick={voice.clearDictation} className="font-semibold underline opacity-80 hover:opacity-100">Dismiss</button>
+								</span>
 							)}
 						</div>
 						<span className="whitespace-pre-wrap break-words italic">

@@ -348,6 +348,16 @@ export interface Dictation {
 	status: DictationStatus;
 	/** Epoch ms the utterance began — stable across the turn, so it works as a render key. */
 	startedAt: number;
+	/**
+	 * Epoch ms the clip was handed to transcription; 0 while the words are still landing (#421).
+	 *
+	 * A SECOND clock, because `startedAt` is the utterance's and a watchdog hung off it would fire
+	 * on any turn longer than its own timeout — the mic can legitimately stay open for
+	 * `maxDictationMs`. This is the moment after which nothing further is expected from the user
+	 * and everything is expected from the network, which is the only interval a deadline can be
+	 * stated over. Re-stamped by `retry`, so a second attempt gets a full deadline of its own.
+	 */
+	transcribingAt: number;
 	/** The live transcript AT end-of-turn, kept to compare against the final one
 	 *  ({@link dictationDiverged}). Empty when nothing was heard live (iOS: no gate). */
 	heard: string;
@@ -363,6 +373,8 @@ export type DictationEvent =
 	| { type: "endOfTurn"; at: number }
 	/** Transcription failed / the mic died — keep the words and say so. */
 	| { type: "failed"; note: string; at: number }
+	/** The user asked to send the same clip again (#421) — back to `transcribing`, note cleared. */
+	| { type: "retry"; at: number }
 	/** The turn is over (sent, abandoned, recovered, or discarded as noise). */
 	| { type: "clear" };
 
@@ -379,7 +391,7 @@ export function reduceDictation(cur: Dictation | null, ev: DictationEvent): Dict
 			// between phrases, and treating one as "nothing was said" is how the words flicker.
 			if (!ev.text.trim()) return cur;
 			// A failed turn is finished; new words start a new one rather than reviving it.
-			if (!cur || cur.status === "failed") return { text: ev.text, status: "dictating", startedAt: ev.at, heard: "" };
+			if (!cur || cur.status === "failed") return { text: ev.text, status: "dictating", startedAt: ev.at, heard: "", transcribingAt: 0 };
 			// Streaming transcripts (gpt-4o-transcribe) keep arriving AFTER end-of-turn. They are
 			// the transcription landing, not new speech, so the status must hold at `transcribing`
 			// until the final result clears the turn — otherwise the bubble flips back to
@@ -389,11 +401,18 @@ export function reduceDictation(cur: Dictation | null, ev: DictationEvent): Dict
 		case "endOfTurn":
 			// THE #281 FIX: status moves, text does NOT. The old code assigned "Transcribing…"
 			// over the words here.
-			if (!cur) return { text: "", status: "transcribing", startedAt: ev.at, heard: "" };
-			return { ...cur, status: "transcribing", heard: cur.text };
+			if (!cur) return { text: "", status: "transcribing", startedAt: ev.at, heard: "", transcribingAt: ev.at };
+			return { ...cur, status: "transcribing", heard: cur.text, transcribingAt: ev.at };
 		case "failed":
-			if (!cur) return { text: "", status: "failed", startedAt: ev.at, heard: "", note: ev.note };
-			return { ...cur, status: "failed", note: ev.note };
+			if (!cur) return { text: "", status: "failed", startedAt: ev.at, heard: "", transcribingAt: 0, note: ev.note };
+			// The deadline is over either way — a failed turn is waiting on nobody, so leaving the
+			// clock running would let the watchdog fire again on a turn that has already resolved.
+			return { ...cur, status: "failed", transcribingAt: 0, note: ev.note };
+		case "retry":
+			// Only a turn that FAILED can be retried — there is no clip to re-send otherwise, and
+			// re-stamping a live one would hand it a deadline it has not earned.
+			if (cur?.status !== "failed") return cur;
+			return { ...cur, status: "transcribing", transcribingAt: ev.at, note: undefined };
 		case "clear":
 			return null;
 	}

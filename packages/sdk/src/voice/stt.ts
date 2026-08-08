@@ -1,13 +1,34 @@
 /** Speech-to-Text abstraction — browser Web Speech API or OpenAI Whisper */
 
 import { API, getToken } from "../client.js";
-import { drainSseData, isTooShortToTranscribe, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { describeTranscribeHttpError, drainSseData, isTooShortToTranscribe, pickRecorderMimeType, whisperFilename } from "./audio.js";
 import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
 import { hadSpeech } from "./vad.js";
 
 /** OpenAI's real-time transcription model — replaces the legacy batch `whisper-1`.
  *  Same upload endpoint, far better accuracy/latency, no verbose_json (we use json). */
 export const DEFAULT_STT_MODEL = "gpt-4o-transcribe";
+
+/**
+ * Deadlines on a transcription request (#421).
+ *
+ * There were none — no `signal`, no `AbortController` anywhere in `voice/`, and none on the server
+ * proxy either — so a request that stalled produced neither a `catch` nor a `!res.ok`, and the
+ * whole failure apparatus in `use-voice.ts` hangs off `onError`. A promise that never settles
+ * reaches none of it: the bubble sat on "Transcribing…" indefinitely and, until this change, held
+ * the composer with it. Reload was the only escape.
+ *
+ * Two deadlines because there are two ways to stall. `FIRST_BYTE` covers a request that never
+ * answers; `STREAM` covers one that answers and then stops mid-SSE, which the first cannot see.
+ * Both start generous on purpose — a slow mobile network that is genuinely working must not be
+ * failed, and a retry spends the user's own OpenAI credit. Tighten only against timeout rows in the
+ * durable log.
+ */
+export const TRANSCRIBE_FIRST_BYTE_MS = 20_000;
+export const TRANSCRIBE_STREAM_MS = 45_000;
+/** The note a deadline puts on the bubble. A distinct wording, because "Whisper failed" reads as
+ *  the user's key or their audio being wrong, and neither is the case here. */
+export const TRANSCRIBE_TIMEOUT_MESSAGE = "Transcription timed out — the audio never came back.";
 
 // Minimal typings for the (non-standard) Web Speech API — enough for our use, so we
 // avoid `any`. The DOM lib doesn't ship these.
@@ -84,6 +105,9 @@ export class VoiceStt {
 	private _recStartedAt = 0;
 	/** Loudest mic level seen during the current recording, fed by noteLevel(). */
 	private _peakLevel = 0;
+	/** The last clip handed to transcription, kept so a failed attempt can be RETRIED with the same
+	 *  audio (#421) instead of asking the user to say it again. Cleared on a fresh recording. */
+	private _lastBlob: Blob | null = null;
 
 	/** The recorder's mic stream (Whisper mode) so the audio meter can reuse it
 	 *  instead of opening a SECOND getUserMedia — a second capture mutes the recorder
@@ -258,9 +282,26 @@ export class VoiceStt {
 		}
 	}
 
+	/**
+	 * Is there a clip a failed transcription could be retried with (#421)? The blob is still in
+	 * hand after any failure, so Retry is a re-POST rather than "say that again" — which matters
+	 * most for the failure this was written for, a timeout, where the user has already waited.
+	 */
+	canRetryTranscription(): boolean {
+		return this.provider !== "browser" && !!this._lastBlob;
+	}
+
+	/** Re-send the last clip. The caller owns the UI state; this only redoes the request. */
+	async retryTranscription(): Promise<void> {
+		const blob = this._lastBlob;
+		if (!blob) return;
+		await this._transcribeWhisper(blob);
+	}
+
 	private async _startRecording() {
 		this._discard = false;
 		this._peakLevel = 0;
+		this._lastBlob = null; // a new turn — the previous clip is no longer what Retry means
 		try {
 			this._stream = await navigator.mediaDevices.getUserMedia({
 				// noiseSuppression keeps the silence floor low (so the VAD can detect a
@@ -316,6 +357,7 @@ export class VoiceStt {
 	}
 
 	private async _transcribeWhisper(blob: Blob) {
+		this._lastBlob = blob;
 		// No apiKey check — the request goes through the platform proxy, which injects
 		// the key server-side; the browser never holds it. (provider==="openai" is only
 		// chosen when the key is confirmed present via /status.)
@@ -336,6 +378,14 @@ export class VoiceStt {
 		// gpt-4o-transcribe models get it; everything else takes the plain json path.
 		const streaming = this.model !== "whisper-1";
 		if (streaming) form.append("stream", "true");
+		// The deadline. An AbortController rather than `AbortSignal.timeout` because the second
+		// deadline has to REPLACE the first once headers arrive — a stream is allowed to take
+		// longer than a first byte — and because `timedOut` has to be readable from the catch, so a
+		// deliberate abort is not reported as "Whisper failed: aborted".
+		const ctrl = new AbortController();
+		let timedOut = false;
+		const arm = (ms: number) => setTimeout(() => { timedOut = true; try { ctrl.abort(); } catch { /* already settled */ } }, ms);
+		let deadline = arm(TRANSCRIBE_FIRST_BYTE_MS);
 		try {
 			// Route via the platform proxy — it injects the user's key server-side.
 			// Calling api.openai.com directly from the browser is blocked by CORS (the
@@ -347,17 +397,22 @@ export class VoiceStt {
 					method: "POST",
 					headers: { Authorization: `Bearer ${getToken() ?? ""}` },
 					body: form,
+					signal: ctrl.signal,
 				},
 			);
 			if (!res.ok) {
-				// Surface OpenAI's actual reason (e.g. "audio file is too short") — never
-				// throw it away behind a bare status.
-				const detail = parseUpstreamErrorDetail(await res.text().catch(() => ""));
-				this.onError(`Whisper error ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
+				// Surface the actual reason — OpenAI's ("audio file is too short") or the
+				// platform's own ("ProAgentStore is updating…"), which are different envelopes and
+				// used to be run through one parser that only understood the first (#421).
+				this.onError(describeTranscribeHttpError(res.status, await res.text().catch(() => "")));
 				return;
 			}
 			if (streaming && res.body) {
-				await this._readTranscriptionStream(res.body, blob);
+				// Headers are in; the first-byte deadline has done its job. Aborting the controller
+				// after this point still terminates the body stream, so the read below is covered.
+				clearTimeout(deadline);
+				deadline = arm(TRANSCRIBE_STREAM_MS);
+				await this._readTranscriptionStream(res.body, blob, () => timedOut);
 				return;
 			}
 			const data = await res.json();
@@ -373,10 +428,9 @@ export class VoiceStt {
 				this.onError("no-speech");
 			}
 		} catch (e) {
-			this.onError(
-				"Whisper failed: " +
-					(e instanceof Error ? e.message : String(e)),
-			);
+			this.onError(timedOut ? TRANSCRIBE_TIMEOUT_MESSAGE : "Whisper failed: " + (e instanceof Error ? e.message : String(e)));
+		} finally {
+			clearTimeout(deadline);
 		}
 	}
 
@@ -386,7 +440,7 @@ export class VoiceStt {
 	 * end. If the stream breaks after some text, we still emit what we have rather than
 	 * losing the turn.
 	 */
-	private async _readTranscriptionStream(body: ReadableStream<Uint8Array>, blob: Blob) {
+	private async _readTranscriptionStream(body: ReadableStream<Uint8Array>, blob: Blob, timedOut: () => boolean = () => false) {
 		const reader = body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = "";
@@ -428,7 +482,10 @@ export class VoiceStt {
 				this.onAudio(blob);
 				this.onResult(partial, true);
 			} else {
-				this.onError("Transcription stream failed: " + (e instanceof Error ? e.message : String(e)));
+				// A stream that answered and then stalled reaches here via the deadline's abort.
+				// Reporting that as "stream failed: aborted" would name the symptom we caused
+				// rather than the stall we caught, and would not tell the user Retry is worth it.
+				this.onError(timedOut() ? TRANSCRIBE_TIMEOUT_MESSAGE : "Transcription stream failed: " + (e instanceof Error ? e.message : String(e)));
 			}
 		}
 	}

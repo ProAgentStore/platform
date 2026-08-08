@@ -269,7 +269,39 @@ describe("resolveVoiceStatus", () => {
 	});
 });
 
-import { classifyVoiceError, micUnavailableMessage, normalizeMediaError } from "./convo.js";
+import { classifyVoiceError, isRetryableVoiceError, micUnavailableMessage, normalizeMediaError } from "./convo.js";
+import { TRANSCRIBE_TIMEOUT_MESSAGE } from "./stt.js";
+
+/**
+ * #421 — "users need to see the message and know what to do, retry now or later".
+ *
+ * The clip is still in hand after any failure, so Retry is a re-POST rather than "say that again".
+ * Which failures deserve the button is the whole question: a timeout will very likely succeed on a
+ * second attempt, a 401 will fail identically and the attempt bills the user's own OpenAI key to
+ * discover that.
+ */
+describe("isRetryableVoiceError", () => {
+	it("offers a retry for the failures a second attempt could change", () => {
+		for (const err of [TRANSCRIBE_TIMEOUT_MESSAGE, "Whisper error 500: upstream", "Whisper error 503: busy", "ProAgentStore is updating — try that again in a moment.", "Transcription stream failed: network error", "Whisper failed: Load failed"]) {
+			expect(isRetryableVoiceError(err), `${err} should offer Retry`).toBe(true);
+		}
+	});
+	it("withholds it for a refusal that is deterministic — the same clip and key answer the same", () => {
+		for (const err of ["Whisper error 400: audio file is too short", "Whisper error 401: invalid api key", "Whisper error 403: forbidden", "not-allowed", "audio-capture"]) {
+			expect(isRetryableVoiceError(err), `${err} must NOT offer Retry`).toBe(false);
+		}
+	});
+	it("is conservative about what it has never seen — a dead button costs real money to discover", () => {
+		expect(isRetryableVoiceError("something nobody has classified")).toBe(false);
+		expect(isRetryableVoiceError(null)).toBe(false);
+		expect(isRetryableVoiceError(undefined)).toBe(false);
+	});
+	it("reads a 4xx as final even though the word 'error' is in every one of these strings", () => {
+		// The ordering trap: "Whisper error 400: …" matches nothing in the retryable list today,
+		// but "Whisper failed" does — so the refusal check has to come first and stay first.
+		expect(isRetryableVoiceError("Whisper failed: 400 invalid request")).toBe(false);
+	});
+});
 
 describe("classifyVoiceError", () => {
 	it("treats no-speech / empty as soft (recycle, no report)", () => {
