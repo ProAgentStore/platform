@@ -242,8 +242,8 @@ export function mayAttachCloneCredential(provider: GitProvider, cloneUrl?: strin
  * PURE and centralised so "not supported yet" is never phrased as "not connected to GitHub" —
  * the message a GitLab repo used to get, which reads as a setup mistake the owner could fix.
  */
-export function hostedFeatureUnavailable(provider: GitProvider, feature: "issues" | "builds"): string {
-	const what = feature === "issues" ? "Issues" : "Build status";
+export function hostedFeatureUnavailable(provider: GitProvider, feature: "issues" | "builds" | "pull requests"): string {
+	const what = feature === "issues" ? "Issues" : feature === "pull requests" ? "Pull requests" : "Build status";
 	if (provider.id === "local") {
 		return `${what} needs a hosted repo — this one is a local checkout. Add it by owner/repo or a GitHub URL to use ${feature}.`;
 	}

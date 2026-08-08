@@ -4,6 +4,7 @@ import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
 import type { CodingRepo, CodingSession } from "./types";
 import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
 import RepoIssues from "./RepoIssues";
+import PullsPanel from "./PullsPanel";
 import { repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
 
@@ -151,6 +152,9 @@ export default function ReposList({
 					</div>
 				)}
 				{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
+				{/* Pulls sits with Issues, collapsed (#401): nested in a repo card it is one of several
+				    things, and an expanded PR list per repo would poll GitHub for every row on the page. */}
+				{r.githubRepo && <PullsPanel instanceId={instanceId} repo={r} />}
 			</div>
 		);
 	};

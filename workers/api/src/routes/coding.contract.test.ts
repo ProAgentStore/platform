@@ -54,6 +54,7 @@ import type { Env } from "../types.js";
 import { codingRoutes } from "./coding.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
+import { registerPullRoutes } from "./coding-pulls.js";
 import { registerRepoRoutes } from "./coding-repos.js";
 
 const SECRET = "coding-contract-secret";
@@ -199,6 +200,8 @@ const ROUTES = [
 	"PUT /:instanceId/coding/work-mode",
 	"GET /:instanceId/coding/repos/:repoId/next-issue",
 	"PUT /:instanceId/coding/repos/:repoId",
+	"GET /:instanceId/coding/repos/:repoId/pulls",
+	"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	"GET /:instanceId/coding/sessions",
 	"GET /:instanceId/coding/engines",
 	"PUT /:instanceId/coding/engines",
@@ -258,6 +261,7 @@ function routesOf(register: (app: Hono<{ Bindings: Env }>) => void): string[] {
 
 const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"coding-repos.ts": registerRepoRoutes,
+	"coding-pulls.ts": registerPullRoutes,
 	"coding-brains.ts": registerCopilotRoutes,
 	"coding-diagnostics.ts": registerDiagnosticsRoutes,
 };
@@ -280,6 +284,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"PUT /:instanceId/coding/work-mode",
 		"GET /:instanceId/coding/repos/:repoId/next-issue",
 		"PUT /:instanceId/coding/repos/:repoId",
+	],
+	// The PR surface (#401) — the two routes that read pull requests and attribute them to agent
+	// runs. Its own module for the same reason the others are: one answerable question per file.
+	"coding-pulls.ts": [
+		"GET /:instanceId/coding/repos/:repoId/pulls",
+		"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	],
 	// The three routes that call a MODEL, and the only ones on this surface that can invent an
 	// action rather than execute one. Keeping them nameable as a set is the point of the module.

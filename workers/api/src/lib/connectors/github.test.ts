@@ -7,11 +7,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // serialise) without re-testing github-issues.ts. github_workflow_runs + github_create_issue
 // fetch api.github.com directly, so those go through the stubbed globalThis.fetch.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { listIssues, readIssue } = vi.hoisted(() => ({
+const { listIssues, readIssue, invalidateIssuesCache, listPulls, readPull } = vi.hoisted(() => ({
 	listIssues: vi.fn(),
 	readIssue: vi.fn(),
+	// The cache drop `github_create_issue` performs after a successful POST (#401) — mocked at the
+	// same seam, and ASSERTED below: an agent that opens an issue and then lists issues must not
+	// read back its own pre-write copy.
+	invalidateIssuesCache: vi.fn(async () => undefined),
+	listPulls: vi.fn(),
+	readPull: vi.fn(),
 }));
-vi.mock("../github-issues.js", () => ({ listIssues, readIssue }));
+vi.mock("../github-issues.js", () => ({ listIssues, readIssue, invalidateIssuesCache }));
+vi.mock("../github-prs.js", () => ({ listPulls, readPull }));
 
 import { GITHUB_TOOLS } from "./github.js";
 import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
@@ -53,29 +60,47 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	listIssues.mockReset();
 	readIssue.mockReset();
+	listPulls.mockReset();
+	readPull.mockReset();
+	invalidateIssuesCache.mockReset();
+	invalidateIssuesCache.mockResolvedValue(undefined);
 	fetchMock = vi.fn();
 	vi.stubGlobal("fetch", fetchMock);
 });
 
 describe("github connector — registration", () => {
-	it("registers all 4 tools with correct scopes (workflow_runs/list_issues/read_issue read; create_issue write)", () => {
+	it("registers all 6 tools with correct scopes (everything read except create_issue)", () => {
 		const names = registryToolNameSet();
-		for (const n of ["github_workflow_runs", "github_list_issues", "github_read_issue", "github_create_issue"]) {
+		for (const n of ["github_workflow_runs", "github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull", "github_create_issue"]) {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("github_workflow_runs")?.scope).toBe("read");
 		expect(getRegistryTool("github_list_issues")?.scope).toBe("read");
 		expect(getRegistryTool("github_read_issue")?.scope).toBe("read");
+		expect(getRegistryTool("github_list_pulls")?.scope).toBe("read");
+		expect(getRegistryTool("github_read_pull")?.scope).toBe("read");
 		expect(getRegistryTool("github_create_issue")?.scope).toBe("write");
 	});
 
-	it("groups the 4 tools under the github connector for the catalog", () => {
+	it("groups the 6 tools under the github connector for the catalog", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "github");
 		expect(grp).toBeDefined();
 		expect(grp?.tools).toEqual(
-			expect.arrayContaining(["github_workflow_runs", "github_list_issues", "github_read_issue", "github_create_issue"]),
+			expect.arrayContaining(["github_workflow_runs", "github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull", "github_create_issue"]),
 		);
-		expect(grp?.tools).toHaveLength(4);
+		expect(grp?.tools).toHaveLength(6);
+	});
+
+	/**
+	 * #401 proposes PR READS and deliberately does NOT propose `github_merge_pull`: merging is what
+	 * the per-repo merge policy (#314) governs, and a tool that bypassed it would hand the agent
+	 * the authority that ticket exists to withhold. Asserted rather than commented, because the
+	 * obvious next contribution to this connector is the one that must not land here.
+	 */
+	it("exposes NO pull-request WRITE tool — merging is the merge policy's authority, not a tool's", () => {
+		const grp = registryConnectorGroups().find((g) => g.connector === "github");
+		const prWrites = (grp?.tools ?? []).filter((t) => t.includes("pull") && getRegistryTool(t)?.scope === "write");
+		expect(prWrites).toEqual([]);
 	});
 });
 
@@ -310,6 +335,61 @@ describe("github connector — github_create_issue dispatch", () => {
 		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "x" });
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/GitHub returned 422 creating the issue in acme\/widgets/);
+	});
+
+	/**
+	 * #401 point 3. The conditional-request cache makes `github_list_issues` cheap; it also makes
+	 * it possible for an agent to open an issue and then be shown the list from BEFORE it did — the
+	 * `get_tasks`-after-`create_task` failure `agent-think.ts` documents, one layer out. The fix is
+	 * one line at the write site, and this is what keeps it there.
+	 */
+	it("drops this user's cached issue list after opening one, so the next list is not pre-write", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ number: 7, html_url: "u7" }));
+		await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "fresh" });
+		expect(invalidateIssuesCache).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets");
+	});
+
+	it("does NOT drop the cache when the create failed — nothing changed to invalidate", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({}, false, 422));
+		await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "x" });
+		expect(invalidateIssuesCache).not.toHaveBeenCalled();
+	});
+});
+
+describe("github connector — pull request reads (#401)", () => {
+	it("github_list_pulls delegates with the state it was given and serialises the result", async () => {
+		listPulls.mockResolvedValue([{ number: 3, title: "Fix the thing", draft: false }]);
+		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", state: "all" });
+		expect(r.success).toBe(true);
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "all", limit: 30 });
+		expect(JSON.parse(r.content)[0]).toMatchObject({ number: 3, title: "Fix the thing" });
+	});
+
+	it("github_list_pulls falls back to open for a state it does not know", async () => {
+		listPulls.mockResolvedValue([]);
+		await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", state: "merged-ish" });
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30 });
+	});
+
+	it("github_read_pull requires a number and never delegates without one", async () => {
+		const r = await tool("github_read_pull").handler(ctx(), { repo: "acme/widgets" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/number.*required/i);
+		expect(readPull).not.toHaveBeenCalled();
+	});
+
+	it("github_read_pull reports a missing PR as a failure, not as empty content", async () => {
+		readPull.mockResolvedValue(null);
+		const r = await tool("github_read_pull").handler(ctx(), { repo: "acme/widgets", number: 99 });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/#99 not found/);
+	});
+
+	it("a PR read is gated by the same repo validation as everything else here", async () => {
+		const r = await tool("github_list_pulls").handler(ctx(), { repo: "owner/name?per_page=100" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/invalid repo/i);
+		expect(listPulls).not.toHaveBeenCalled();
 	});
 });
 

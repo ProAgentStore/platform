@@ -2911,3 +2911,147 @@ test.describe("mobile — a repo whose path is unusable says so (#405)", () => {
 		await expect(page.getByText("Ready", { exact: true })).toBeVisible();
 	});
 });
+
+/**
+ * The Pulls panel on a phone, in WebKit (#401).
+ *
+ * A PR row carries FOUR badges — agent attribution, mergeability, review state, checks — plus a
+ * branch pair, an author and a timestamp, next to a title that is routinely 70 characters. That is
+ * more per row than Issues has ever had, and it is exactly the shape #333/#384 found panning
+ * `<main>` in Safari and nowhere else. The `mobile — ` prefix puts this block in the WebKit
+ * project; without it a new geometry block silently runs in one engine again.
+ *
+ * The fixture is DELIBERATELY at its worst: a long title, a long branch name, scoped labels, and
+ * the conflicted / changes-requested / checks-failed combination that renders every badge at once.
+ * This file has twice shipped a geometry guard that was green because the page it measured was
+ * empty, so the row is asserted present before anything is measured.
+ */
+test.describe("mobile — the Pulls panel (#401)", () => {
+	const LONG_TITLE = "fix(coding): the engine's stdout latch no longer ends a turn on a slow first token";
+
+	const codingInstance = [
+		{
+			id: "inst-1",
+			name: "Coder",
+			slug: "coder",
+			category: "code",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+		},
+	];
+
+	const PULLS = [
+		{
+			number: 4021,
+			title: LONG_TITLE,
+			state: "open",
+			draft: false,
+			merged: false,
+			author: "proagentstore-coder",
+			branch: "coder/401-conditional-requests-and-pulls-panel",
+			baseBranch: "main",
+			labels: ["needs-review", "area/coding"],
+			comments: 4,
+			createdAt: "2026-08-07T00:00:00Z",
+			updatedAt: "2026-08-08T00:00:00Z",
+			url: "https://github.com/ProAgentStore/platform/pull/4021",
+			reviewersRequested: 2,
+			mergeable: false,
+			mergeableState: "dirty",
+			review: "changes_requested",
+			checks: { status: "completed", conclusion: "failure", url: "u", name: "ci" },
+			agentAct: { traceId: "run-7f3a", act: "pr.open", at: "2026-08-07T00:00:00Z", sessionId: "sess-1" },
+		},
+		{
+			number: 7,
+			title: "chore: bump the CLI",
+			state: "open",
+			draft: true,
+			merged: false,
+			author: "a-human",
+			branch: "chore/bump",
+			baseBranch: "main",
+			labels: [],
+			comments: 0,
+			createdAt: "2026-08-06T00:00:00Z",
+			updatedAt: "2026-08-06T00:00:00Z",
+			url: "https://github.com/ProAgentStore/platform/pull/7",
+			reviewersRequested: 0,
+			mergeable: null,
+			mergeableState: "unknown",
+			review: "none",
+			checks: null,
+			agentAct: null,
+		},
+	];
+
+	async function mockCodingWithPulls(page: Page) {
+		await mockSignedInConsole(page, { instances: codingInstance });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/pulls")) return json({ repo: "ProAgentStore/platform", pulls: PULLS });
+			if (url.includes("/issues")) return json({ repo: "ProAgentStore/platform", issues: [] });
+			if (url.includes("/repos")) return json({ repos: [{ id: "repo-1", name: "platform", githubRepo: "ProAgentStore/platform", provider: "github", cloneStatus: "ready" }] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/builds")) return json({ builds: [] });
+			return json({});
+		});
+	}
+
+	async function openPulls(page: Page) {
+		// Deep link rather than clicking the instance tab: below `sm` the tab bar is ICON-ONLY, so
+		// `getByRole("button", { name: "Coding" })` has nothing to match — which is the whole reason
+		// this block exists at phone widths.
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await page.getByRole("button", { name: /^Pulls/ }).first().click();
+		await page.waitForTimeout(400);
+	}
+
+	for (const width of [320, 390]) {
+		test(`does not pan the page with a fully-badged row at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockCodingWithPulls(page);
+			await openPulls(page);
+
+			// The fixture LANDED. An empty panel cannot reproduce a row that is too wide, and a
+			// green measurement over one is the hollow guard this file has shipped before.
+			await expect(page.getByText("#4021")).toBeVisible();
+			await expect(page.getByText("Conflicts")).toBeVisible();
+			await expect(page.getByText("Changes requested")).toBeVisible();
+			await expect(page.getByText("Checks failed")).toBeVisible();
+			await expect(page.getByText("Opened by your agent")).toBeVisible();
+
+			const { mainOv, docOv, navOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	/**
+	 * The squeeze, which no horizontal assertion can see: four `shrink-0` badges sharing the
+	 * title's row would leave that column unable to overflow AND unable to wrap, so the whole
+	 * deficit lands on the title and it renders as a vertical ribbon of single characters. That is
+	 * exactly the #384 finding on Preferences, one panel over. The badges sit on their own wrapping
+	 * row for this reason, and this is what keeps them there.
+	 */
+	test("mobile — the PR title keeps its width instead of collapsing under the badges", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		await mockCodingWithPulls(page);
+		await openPulls(page);
+
+		const title = page.getByTitle(LONG_TITLE).first();
+		await expect(title).toBeVisible();
+		const box = await title.boundingBox();
+		expect(box, "the PR title did not render").toBeTruthy();
+		// A share floor, not a pin: the bug gives the title a sliver and hundreds of pixels of
+		// height; any sane layout gives it most of the row. Pinning the width would fail on a
+		// deliberate change and teach nothing.
+		expect(Math.round(box?.width ?? 0), "the PR title was squeezed by the badges").toBeGreaterThan(150);
+		expect(Math.round(box?.height ?? 0), "the PR title ran tall — it is wrapping per character").toBeLessThan(80);
+	});
+});

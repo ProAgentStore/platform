@@ -56,6 +56,15 @@ export function repoIssuesUnavailable(repo: RepoIdentity): string {
 	return "This repo isn't connected to GitHub, so it has no issues to show.";
 }
 
+/** The same sentence for the Pulls panel (#401) — same rule, its own noun. */
+export function repoPullsUnavailable(repo: RepoIdentity): string {
+	const provider = (repo.provider || "").trim();
+	if (provider && provider !== "local" && provider !== "github") {
+		return `Pull requests aren't supported for ${repoProviderLabel(provider)} repos yet — PAGS drives GitHub only.`;
+	}
+	return "This repo isn't connected to GitHub, so it has no pull requests to show.";
+}
+
 /** The host's display name. Mirrors `GIT_PROVIDERS` in the API's lib/git-providers.ts. */
 export function repoProviderLabel(provider?: string | null): string {
 	switch ((provider || "").trim()) {

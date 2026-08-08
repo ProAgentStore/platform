@@ -48,14 +48,16 @@ describe("single-repo agents hide the multi-repo affordances", () => {
 	});
 });
 
-describe("a one-repo agent gets Terminal / Issues / Builds, not a repo list", () => {
+describe("a one-repo agent gets Terminal / Issues / Pulls / Builds, not a repo list", () => {
 	// A one-repo Coder had `Repos | Builds` where "Repos" was one repo, Issues were nested inside
 	// that repo's card, and opening the terminal took over the whole header — so every other view
-	// went behind a back arrow. Those three ARE the agent's surface, so they are the navigation.
+	// went behind a back arrow. Those views ARE the agent's surface, so they are the navigation.
+	// Pulls joined them in #401: under the safest merge policy (#314) a pull request IS the agent's
+	// output, and it was the one artefact this surface could not show.
 	const tab = src("CodingTab.tsx");
 
-	it("routes a single-repo agent to its own three-view surface", () => {
-		expect(tab).toContain('const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">');
+	it("routes a single-repo agent to its own four-view surface", () => {
+		expect(tab).toContain('const [soloView, setSoloView] = useState<"terminal" | "issues" | "pulls" | "builds">');
 		expect(tab).toContain("if (singleRepo && repos.length <= 1) {");
 	});
 
@@ -70,6 +72,7 @@ describe("a one-repo agent gets Terminal / Issues / Builds, not a repo list", ()
 		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
 		expect(solo).toContain('tab("terminal", "Terminal"');
 		expect(solo).toContain('tab("issues", "Issues"');
+		expect(solo).toContain('tab("pulls", "Pulls"');
 		expect(solo).toContain('tab("builds", "Builds"');
 		expect(solo).not.toContain("onHeaderOverride");
 	});

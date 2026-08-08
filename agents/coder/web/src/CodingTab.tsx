@@ -6,7 +6,7 @@ import { entryText, groupRepoHistory, sessionLabel } from "./repo-history";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
-import { repoIssuesUnavailable, repoTitle } from "./repo-title";
+import { repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-title";
 import { resolveRunnerOnline } from "./runner-online";
 import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
@@ -20,8 +20,9 @@ import RepoIssues from "./RepoIssues";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
+import PullsPanel from "./PullsPanel";
 import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
-import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, Cpu, RotateCw } from "lucide-react";
+import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -167,10 +168,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 *
 	 * A one-repo Coder had `Repos | Builds` where "Repos" was one repo, Issues were nested inside
 	 * that repo's card, and the terminal took over the whole header — so opening it hid every
-	 * other view behind a back arrow. Terminal / Issues / Builds are the three things this agent
-	 * actually has, so they are the navigation.
+	 * other view behind a back arrow. Terminal / Issues / Pulls / Builds are the four things this
+	 * agent actually has, so they are the navigation. Pulls joined them in #401: the safest merge
+	 * policy (#314) makes a pull request the agent's whole OUTPUT, and it was the one artefact this
+	 * surface could not show.
 	 */
-	const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">(initialBuildsRepoId ? "builds" : "terminal");
+	const [soloView, setSoloView] = useState<"terminal" | "issues" | "pulls" | "builds">(initialBuildsRepoId ? "builds" : "terminal");
 	/**
 	 * Loop presets (#234). These were five literals right here, handed to the Co-pilot view alone —
 	 * so an agent with `copilot:false` had no presets at all, and nobody could edit or extend them.
@@ -896,6 +899,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<div className="inline-flex border border-line rounded-lg overflow-hidden shrink-0">
 						{tab("terminal", "Terminal", SquareTerminal)}
 						{tab("issues", "Issues", CircleDot)}
+						{tab("pulls", "Pulls", GitPullRequest)}
 						{tab("builds", "Builds", Hammer)}
 					</div>
 					{solo && <span className="text-xs text-muted truncate min-w-0">{repoTitle(solo)} · {repoLabel(solo)}</span>}
@@ -971,6 +975,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							</div>
 						) : (
 							<p className="text-center py-6 text-muted-soft text-sm">{repoIssuesUnavailable(solo ?? { name: "" })}</p>
+						)}
+					</div>
+				)}
+				{soloView === "pulls" && (
+					<div className="flex-1 min-h-0 overflow-auto px-2 py-2 sm:px-4 sm:py-3">
+						{solo?.githubRepo ? (
+							<div className="bg-panel border border-line rounded-xl p-3">
+								<PullsPanel instanceId={instanceId} repo={solo} startOpen />
+							</div>
+						) : (
+							<p className="text-center py-6 text-muted-soft text-sm">{repoPullsUnavailable(solo ?? { name: "" })}</p>
 						)}
 					</div>
 				)}

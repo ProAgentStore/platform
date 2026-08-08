@@ -1,4 +1,5 @@
 import { installationTokenForOwner } from "./github-app.js";
+import { githubAuthContext, githubConditionalJson, invalidateGithubCache } from "./github-cache.js";
 import type { Env } from "../types.js";
 
 /**
@@ -10,6 +11,13 @@ import type { Env } from "../types.js";
  * token for private repos (installationTokenForOwner → non-null), or unauthenticated
  * for public repos (60 req/hr). Never throws — a GitHub/network error degrades to an
  * empty list / null so callers can render "couldn't load issues" instead of crashing.
+ *
+ * Both reads go through `lib/github-cache.ts` (#401), which stores GitHub's own ETag and
+ * re-sends it as `If-None-Match`. That matters here more than anywhere else on this surface:
+ * issues-mode calls `listIssues` on EVERY Loop iteration via `nextIssue()`, which until now was an
+ * unconditional GitHub round-trip per iteration per repo. The interval is unchanged — a 304 is
+ * cheaper, not a licence to poll harder — and with no KV binding the cache is off and these
+ * functions behave exactly as they did before.
  */
 
 export interface IssueSummary {
@@ -86,6 +94,23 @@ function toSummary(raw: RawIssue): IssueSummary {
 
 const BODY_CAP = 8 * 1024;
 
+/** The cache resources this module owns — named once so the write path can drop the right one. */
+export const ISSUES_RESOURCE = "issues";
+export const ISSUE_RESOURCE = "issue";
+
+/**
+ * Forget this user's cached issue LIST for a repo.
+ *
+ * Called after the platform itself opens an issue (`github_create_issue`). Without it an agent
+ * that opens an issue and then lists issues reads its own pre-write copy back and concludes the
+ * write did not happen — the `get_tasks`-after-`create_task` failure `agent-think.ts` already
+ * documents for the dedup guard, one layer out. A dropped entry costs one ordinary conditional
+ * request; a TTL short enough to hide the problem would cost every poll.
+ */
+export async function invalidateIssuesCache(env: Env, userId: string, githubRepo: string): Promise<void> {
+	await invalidateGithubCache(env, userId, githubRepo, ISSUES_RESOURCE);
+}
+
 /**
  * List a repo's issues (PRs filtered out). Public repos work unauthenticated;
  * private repos need the GitHub App installed for the owner. Returns [] on any
@@ -100,9 +125,20 @@ export async function listIssues(env: Env, userId: string, githubRepo: string, o
 		const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
 		const params = new URLSearchParams({ state, per_page: String(perPage), sort: "updated", direction: "desc" });
 		if (opts.labels) params.set("labels", opts.labels);
-		const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues?${params.toString()}`, { headers: GH_HEADERS(token) });
+		const qs = params.toString();
+		const res = await githubConditionalJson<RawIssue[]>(env, {
+			identity: { userId, authContext: await githubAuthContext(env, userId, parsed.owner, token) },
+			repo: `${parsed.owner}/${parsed.name}`,
+			resource: ISSUES_RESOURCE,
+			// The query string IS the variant: "open issues" and "closed issues" are different
+			// answers to different questions, and one overwriting the other in a single slot would
+			// serve a closed backlog to a caller that asked for the open one.
+			variant: qs,
+			url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues?${qs}`,
+			headers: GH_HEADERS(token),
+		});
 		if (!res.ok) return [];
-		const data = (await res.json()) as RawIssue[];
+		const data = res.data;
 		if (!Array.isArray(data)) return [];
 		return data.filter((i) => !i.pull_request).map(toSummary);
 	} catch {
@@ -116,9 +152,17 @@ export async function readIssue(env: Env, userId: string, githubRepo: string, nu
 	if (!parsed || !Number.isFinite(number)) return null;
 	try {
 		const token = await installationTokenForOwner(env, userId, parsed.owner);
-		const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues/${Number(number)}`, { headers: GH_HEADERS(token) });
+		const res = await githubConditionalJson<RawIssue>(env, {
+			identity: { userId, authContext: await githubAuthContext(env, userId, parsed.owner, token) },
+			repo: `${parsed.owner}/${parsed.name}`,
+			resource: ISSUE_RESOURCE,
+			variant: String(Number(number)),
+			url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues/${Number(number)}`,
+			headers: GH_HEADERS(token),
+		});
 		if (!res.ok) return null;
-		const raw = (await res.json()) as RawIssue;
+		const raw = res.data;
+		if (!raw || typeof raw !== "object") return null;
 		if (raw.pull_request) return null; // it's a PR, not an issue
 		const body = (raw.body ?? "").slice(0, BODY_CAP);
 		return { ...toSummary(raw), body };

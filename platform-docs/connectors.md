@@ -34,7 +34,7 @@ resolved before the run and is refused at dispatch instead.
 
 | Connector | Auth | Scopes | Tools (examples) |
 |---|---|---|---|
-| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_create_issue` (write), `github_workflow_runs` |
+| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_list_pulls`, `github_read_pull`, `github_create_issue` (write), `github_workflow_runs` |
 | `http` | vault API key | read + write | `http_request` (call any REST API as configuration) |
 | `web-search` | vault API key | read | `web_search` (Google Custom Search) |
 | `meta` | platform token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
@@ -59,6 +59,17 @@ instance has explicit write-consent for that connector (`instance_connector_cons
 reject write-scoped calls outright. So `github_create_issue`, Meta messaging, and `browser_*`
 can only write where the instance owner has granted that connector's write scope. Reads
 (`github_list_issues`, `browser_snapshot`, …) need only the connector granted / the runner online.
+
+**Pull requests are READ-ONLY here, deliberately (#401).** `github_list_pulls` and
+`github_read_pull` answer "is my PR green, did anyone review it, does it conflict" without a
+browser. There is no `github_merge_pull` and there will not be one at this layer: merging is what
+the per-repo **merge policy** (#314) governs, and a tool that bypassed it would hand the agent
+exactly the authority that setting exists to withhold. Both reads — and the issue reads beside them
+— go through `lib/github-cache.ts`, which stores GitHub's `ETag` and re-sends it as
+`If-None-Match`, keyed by **(user, repo, resource)** with the auth context (`anon` /
+`installation:<id>`) recorded in the entry and re-checked on every read. A mismatch is a miss, so a
+cache can never become the way one tenant reads another's private repo. A 304 is exempt from
+GitHub's *primary* rate limit only, so the panels' poll intervals are unchanged.
 
 **Outbound MCP is the exception to connector-level consent (#262).** Every other connector IS the
 remote system, so granting `github` write names GitHub. An MCP endpoint is *configuration supplied

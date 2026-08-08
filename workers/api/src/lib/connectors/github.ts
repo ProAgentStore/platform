@@ -7,7 +7,8 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
-import { listIssues, readIssue } from "../github-issues.js";
+import { invalidateIssuesCache, listIssues, readIssue } from "../github-issues.js";
+import { listPulls, readPull } from "../github-prs.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "../github-actions.js";
 
 const GH = (token: string) => ({
@@ -108,6 +109,25 @@ const readIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 	return issue ? { content: JSON.stringify(issue, null, 2), success: true } : { content: `Issue #${num} not found in ${repo}.`, success: false };
 };
 
+const listPullsHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
+	const pulls = await listPulls(ctx.env, ctx.userId ?? "", repo, { state, limit: 30 });
+	return { content: JSON.stringify(pulls, null, 2), success: true };
+};
+
+const readPullHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const num = Number(input.number);
+	if (!num) return { content: "A pull request `number` is required.", success: false };
+	const pull = await readPull(ctx.env, ctx.userId ?? "", repo, num);
+	return pull ? { content: JSON.stringify(pull, null, 2), success: true } : { content: `Pull request #${num} not found in ${repo}.`, success: false };
+};
+
 const createIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 	const repo = String(input.repo || "");
 	const title = String(input.title || "").trim();
@@ -122,6 +142,12 @@ const createIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 	});
 	if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}`, success: false };
 	const data = (await res.json()) as { number?: number; html_url?: string };
+	// The platform just changed this list, so this user's cached copy of it is wrong (#401). An
+	// agent that opens an issue and then calls github_list_issues would otherwise read its own
+	// pre-write copy and conclude the write did not happen — the get_tasks-after-create_task
+	// failure `agent-think.ts` documents for the dedup guard, one layer out. One line here beats a
+	// TTL short enough to hide it. Best-effort: a failed invalidation must not fail a real write.
+	await invalidateIssuesCache(ctx.env, ctx.userId ?? "", repo).catch(() => undefined);
 	return { content: `Opened issue #${data.number} — ${data.html_url}`, success: true };
 };
 
@@ -162,6 +188,26 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			},
 		},
 		{
+			name: "github_list_pulls",
+			scope: "read",
+			description: "List a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Read-only; there is deliberately no merge tool (the repo's merge policy governs that).",
+			handler: "github_list_pulls",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
+				state: { type: "string", description: '"open" | "closed" | "all" (default open).' },
+			},
+		},
+		{
+			name: "github_read_pull",
+			scope: "read",
+			description: "Read one pull request by number — body, diff size, mergeability, review state and whether its checks are green.",
+			handler: "github_read_pull",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
+				number: { type: "number", required: true, description: "The pull request number." },
+			},
+		},
+		{
 			name: "github_create_issue",
 			scope: "write",
 			description: "Open a new GitHub issue in a repo. WRITE — requires the GitHub connector's write consent for this instance.",
@@ -180,6 +226,8 @@ const compiled = compileConnector(GITHUB_MANIFEST, {
 	github_workflow_runs: workflowRunsHandler,
 	github_list_issues: listIssuesHandler,
 	github_read_issue: readIssueHandler,
+	github_list_pulls: listPullsHandler,
+	github_read_pull: readPullHandler,
 	github_create_issue: createIssueHandler,
 });
 /** Tool defs (kept for direct-import tests). */

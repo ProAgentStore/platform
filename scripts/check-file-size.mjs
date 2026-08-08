@@ -277,7 +277,12 @@ const PINS = {
 	// decides when it outranks `active` is already extracted into repo-status.ts (with tests),
 	// and what is left here is the JSX that displays it. A split would have moved the seven
 	// lines and left the seam in the same place.
-	"agents/coder/web/src/CodingTab.tsx": 1203,
+	// +15 at #401: the Pulls panel joins the solo tab row (Terminal · Issues · Pulls · Builds) and
+	// each repo card. Raised rather than split — what lands here is the tab wiring and the panel's
+	// mount; the panel itself is PullsPanel.tsx and every decision it renders (badge set, ordering,
+	// attribution) is pure in pulls-view.ts, with tests. A split would have extracted the fifteen
+	// lines that are least worth extracting.
+	"agents/coder/web/src/CodingTab.tsx": 1218,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs

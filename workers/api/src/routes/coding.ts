@@ -39,6 +39,7 @@ import type { Env } from "../types.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
+import { registerPullRoutes } from "./coding-pulls.js";
 import { registerRepoRoutes } from "./coding-repos.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 
@@ -72,6 +73,11 @@ export const codingRoutes = new Hono<{ Bindings: Env }>();
 
 // ── Repos ────────────────────────────────────────────────────────────────
 registerRepoRoutes(codingRoutes);
+
+// ── Pull requests (#401) ─────────────────────────────────────────────────
+// Registered here, directly after the repo block, because that is where the surface it belongs to
+// ends — Hono matches in registration ORDER and `coding.contract.test.ts` pins it.
+registerPullRoutes(codingRoutes);
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 
