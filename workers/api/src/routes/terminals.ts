@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
-import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { adoptableIdByName, identityHint, machineNamesFor, normalizeMachineId } from "../lib/machine-identity.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -85,6 +86,16 @@ export interface TerminalNode {
 	 * user recognises "my laptop, under the name it used last week" instead of an unknown machine.
 	 */
 	aka: string[];
+	/**
+	 * Why this machine has NO stable identity, in a sentence the user can act on — null when it
+	 * has one (#393).
+	 *
+	 * Without it, a runner too old to mint an id is indistinguishable on screen from one that has
+	 * the feature and found nothing to merge: the machine simply keeps showing up under its old
+	 * names and the fix looks like it did nothing. `runner_version` is already on the row, so this
+	 * is a read, not new plumbing.
+	 */
+	identityHint: string | null;
 	placement: string;
 	runnerVersion: string;
 	lastSeenAt: string | null;
@@ -156,22 +167,20 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	// them is the exact failure the fold exists to avoid, in mirror image. When a name carries more
 	// than one id, the identified rows keep their own and the unidentified ones stay on the name,
 	// which is the honest answer: we know those two are separate and we do not know about the rest.
-	const idsForName = new Map<string, Set<string>>();
-	for (const r of nodeRows) {
-		const id = (r.machine_id ?? "").trim();
-		if (!r.runner_node || !id) continue;
-		const set = idsForName.get(r.runner_node) ?? new Set<string>();
-		set.add(id);
-		idsForName.set(r.runner_node, set);
-	}
-	const adoptableId = (name: string): string => {
-		const ids = idsForName.get(name);
-		return ids && ids.size === 1 ? [...ids][0] : "";
-	};
+	//
+	// The rule lives in `lib/machine-identity.ts` because "forget this machine" (#393) has to answer
+	// exactly the same name→machine question, and two copies of this rule drifting apart is the
+	// defect class this whole file is about.
+	const idByName = adoptableIdByName(nodeRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id ?? null })));
+	const adoptableId = (name: string): string => idByName.get(name) ?? "";
 
 	for (const r of nodeRows) {
 		if (!r.runner_node) continue;
-		const machineId = (r.machine_id ?? "").trim() || adoptableId(r.runner_node);
+		// Validated with the SHARED rule, not a bare `.trim()`. Registration stores an id only
+		// through `normalizeMachineId` (instances.ts), and `aliasNodesFor`/`foldNodesByMachine`
+		// read it back through the same gate — so a value they would reject must not fold here
+		// either, or this page and the routing beside it disagree again, which is #393 itself.
+		const machineId = normalizeMachineId(r.machine_id) || adoptableId(r.runner_node);
 		const key = machineId || `node:${r.runner_node}`;
 		let n = byKey.get(key);
 		if (!n) {
@@ -179,6 +188,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 				node: r.runner_node,
 				machineId: machineId || null,
 				aka: [],
+				identityHint: null,
 				placement: r.placement,
 				runnerVersion: r.runner_version,
 				lastSeenAt: r.last_seen_at,
@@ -243,10 +253,72 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		if (!n) continue; // a session whose machine no longer has a registration row
 		n.sessions.push({ sessionId: s.id, instanceId: s.instance_id, repoId: s.repo_id, repoName: s.repo_name, engine: s.client_type, status: s.status, issueNumber: s.issue_number ?? undefined, issueTitle: s.issue_title ?? undefined, updatedAt: s.updated_at });
 	}
+	// Why an unidentified machine has no id, said out loud (#393). Computed against the group's
+	// FRESHEST registration, which is the version actually running there — an old row left behind
+	// by a CLI the machine has since upgraded past must not keep prescribing an upgrade.
+	for (const n of byKey.values()) n.identityHint = identityHint(n.machineId, n.runnerVersion);
+
 	// Drop machines that ended up with no runner-using agents AND no sessions — i.e. a node
 	// that (via an older, over-eager `pags up`) only registered chat/RAG agents that don't
 	// need a runner. Nothing runner-related lives there, so it's noise on a "Terminals" view.
 	return [...byKey.values()].filter((n) => n.instances.length > 0 || n.sessions.length > 0);
+}
+
+// ── Forget this machine (#393) ───────────────────────────────────────────────────────────────
+//
+// A node row is created on register and never removed — not on disconnect, not ever. So a laptop
+// that was renamed by DHCP leaves its old names on the account permanently, listed as offline
+// machines their owner recognises as their own, and the only remedy on offer was to edit D1 by
+// hand.
+//
+// Deliberately a USER action with a confirmation, never a cron and never a delete-on-stale sweep:
+// a laptop that is merely closed must not lose its registrations, and the timer that decides
+// "stale" cannot tell those two apart.
+
+/** Something that still points at a machine, so a forget would take working state with it. */
+export interface ForgetBlocker {
+	kind: "pin" | "session";
+	/** The instance (pin) or session id. */
+	id: string;
+	/** What to call it on screen. */
+	label: string;
+	/** Which of the machine's names it points at — the string the user has to repoint. */
+	node: string;
+}
+
+export type ForgetVerdict = { ok: true } | { ok: false; reason: "connected" | "pinned" | "sessions"; message: string };
+
+/**
+ * May this machine be forgotten? Pure, because every arm of it is a refusal a user will read.
+ *
+ * Deleting a node row does not delete what REFERENCES it. The pins live in
+ * `agent_instances.config.runnerNode` and the sessions in `coding_sessions.runner_node`, so
+ * removing the row orphans them: the agent is still pinned to a name, still unroutable, and now
+ * with less evidence on screen than before. Worse, the row is the proof — `aliasNodesFor` reads
+ * `machine_id` off exactly these rows to route a stranded pin onto the name the machine wears now,
+ * so deleting them can BREAK an agent that #379 had already healed. Refusing while a pin remains
+ * is not caution, it is the invariant.
+ *
+ * Ended sessions do not block. They are history, they cannot be resumed onto a machine, and
+ * `groupTerminalNodes` already tolerates a session whose machine has no registration row. Blocking
+ * on them would mean a laptop with a long history could never be forgotten at all — which is the
+ * state this ticket is about.
+ *
+ * A CONNECTED machine is refused before anything else: it is registering right now and would
+ * reappear within the heartbeat, so the button would look broken rather than refused.
+ */
+export function diagnoseForget(connected: boolean, blockers: readonly ForgetBlocker[]): ForgetVerdict {
+	if (connected) return { ok: false, reason: "connected", message: "This machine is connected right now — stop `pags up` on it first, or it will re-register immediately." };
+	const pins = blockers.filter((b) => b.kind === "pin");
+	if (pins.length) {
+		const names = pins.map((p) => `${p.label} (pinned to ${p.node})`).join(", ");
+		return { ok: false, reason: "pinned", message: `${pins.length} agent${pins.length === 1 ? " is" : "s are"} pinned to run on this machine: ${names}. Repoint ${pins.length === 1 ? "it" : "them"} on the agent's Settings tab first — forgetting the machine now would leave ${pins.length === 1 ? "it" : "them"} pinned to a name nothing can resolve.` };
+	}
+	const sessions = blockers.filter((b) => b.kind === "session");
+	if (sessions.length) {
+		return { ok: false, reason: "sessions", message: `${sessions.length} coding session${sessions.length === 1 ? " is" : "s are"} still open on this machine (${sessions.map((s) => s.label).join(", ")}). End ${sessions.length === 1 ? "it" : "them"} first.` };
+	}
+	return { ok: true };
 }
 
 /** All the user's CLIs (machines), across every agent — connected or not. */
@@ -292,4 +364,79 @@ terminalRoutes.get("/nodes", async (c) => {
 	for (const n of nodes) for (const s of n.sessions) s.terminalTail = tails.get(s.sessionId) ?? null;
 
 	return c.json({ nodes });
+});
+
+/**
+ * Forget a machine: drop its registrations, under every name it has answered to.
+ *
+ * Addressed by ONE of its names and resolved to the machine, so a folded laptop is forgotten whole
+ * — forgetting a single name of it would leave the tile on screen minus some of its rows, which is
+ * a worse state than the one being cleaned up.
+ *
+ * Only `instance_runtime_nodes` is touched. `instance_runtimes` (the one legacy default row per
+ * instance) is left alone: it is overwritten by the next `pags up` and deleting it would strip an
+ * instance of its runtime registration outright, which is a much larger claim than "this laptop is
+ * gone". Ended `coding_sessions` keep their `runner_node` string as history.
+ */
+terminalRoutes.delete("/nodes/:node", async (c) => {
+	const session = await requireUser(c);
+	const uid = session.uid;
+	const target = normalizeRunnerNode(c.req.param("node"));
+
+	const rows = (await c.env.DB.prepare(
+		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1",
+	).bind(uid).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+
+	const resolved = machineNamesFor(target, rows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at })));
+	if (!resolved.ok) {
+		return resolved.reason === "unknown"
+			? c.json({ error: "No machine is registered under that name." }, 404)
+			: c.json({ error: `More than one machine has registered as "${target}", so this name does not identify one. Rename one of them, or leave them.`, reason: "ambiguous" }, 409);
+	}
+	const names = new Set(resolved.names);
+
+	// What still points here. Both reads are user-scoped and small (an account's instances and its
+	// OPEN sessions), so they are filtered in JS — a pin lives inside a config JSON blob, which is
+	// not something to match on in SQL.
+	const blockers: ForgetBlocker[] = [];
+
+	const instances = (await c.env.DB.prepare(
+		`SELECT i.id, i.config, a.name AS agent_name, a.slug AS agent_slug
+		 FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id
+		 WHERE i.user_id = ?1`,
+	).bind(uid).all<{ id: string; config: string | null; agent_name: string | null; agent_slug: string | null }>()).results ?? [];
+	for (const i of instances) {
+		const pin = parseBoundRunnerNode(i.config);
+		if (pin && names.has(pin)) blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin });
+	}
+
+	const openSessions = (await c.env.DB.prepare(
+		`SELECT s.id, s.runner_node, s.status, r.name AS repo_name
+		 FROM coding_sessions s LEFT JOIN coding_repos r ON r.id = s.repo_id
+		 WHERE s.user_id = ?1 AND s.status IN ('active', 'suspended') AND s.runner_node IS NOT NULL`,
+	).bind(uid).all<{ id: string; runner_node: string | null; status: string; repo_name: string | null }>()).results ?? [];
+	for (const s of openSessions) {
+		const node = normalizeRunnerNode(s.runner_node);
+		if (node && names.has(node)) blockers.push({ kind: "session", id: s.id, label: s.repo_name || s.id, node });
+	}
+
+	// Live, not the DB `status` column — which is never cleared on disconnect and would refuse to
+	// forget a machine that has been off for weeks.
+	const probeIds = [...new Set(rows.filter((r) => names.has(normalizeRunnerNode(r.runner_node))).map((r) => r.instance_id))].slice(0, 25);
+	const probes = await Promise.all(probeIds.map(async (id) => {
+		for (const name of names) if (await relayConnected(c.env, id, name).catch(() => false)) return true;
+		return false;
+	}));
+
+	const verdict = diagnoseForget(probes.some(Boolean), blockers);
+	if (!verdict.ok) return c.json({ error: verdict.message, reason: verdict.reason, blockers }, 409);
+
+	// One statement per name rather than a built IN list: the names are user data and this keeps
+	// every value a bound parameter.
+	let removed = 0;
+	for (const name of names) {
+		const res = await c.env.DB.prepare("DELETE FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2").bind(uid, name).run();
+		removed += res.meta?.changes ?? 0;
+	}
+	return c.json({ forgotten: [...names], registrationsRemoved: removed });
 });

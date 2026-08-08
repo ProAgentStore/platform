@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aliasNodesFor, foldNodesByMachine, MAX_MACHINE_NAMES, normalizeMachineId, sanitizeMachineNames, type NodeRegistration } from "./machine-identity.js";
+import { adoptableIdByName, aliasNodesFor, compareCliVersions, foldNodesByMachine, identityHint, MACHINE_ID_MIN_CLI, machineNamesFor, MAX_MACHINE_NAMES, normalizeMachineId, sanitizeMachineNames, type NodeRegistration } from "./machine-identity.js";
 
 const row = (node: string, machineId: string | null, extra: Partial<NodeRegistration> = {}): NodeRegistration => ({
 	node,
@@ -90,5 +90,104 @@ describe("foldNodesByMachine", () => {
 	it("leaves un-identified rows alone — without the proof they ARE separate machines", () => {
 		const folded = foldNodesByMachine([row("a", null), row("b", null)]);
 		expect(folded.map((f) => f.node)).toEqual(["a", "b"]);
+	});
+});
+
+describe("adoptableIdByName (#393 — one rule, shared with the Terminals fold)", () => {
+	it("gives a name the id its rows agree on, including the rows that carry none", () => {
+		// One row per (instance, hostname), and a `pags up` stamps the id only on what it attached
+		// this session — so the SAME hostname legitimately holds identified and NULL rows at once.
+		const map = adoptableIdByName([
+			row("Mac", "machine-aaaa1111", { instanceId: "i1" }),
+			row("Mac", null, { instanceId: "i2" }),
+		]);
+		expect(map.get("Mac")).toBe("machine-aaaa1111");
+	});
+
+	it("gives a name NOTHING when two machines answer to it", () => {
+		// The mirror-image failure: two laptops both called `Mac` must never be merged by their name.
+		const map = adoptableIdByName([row("Mac", "machine-aaaa1111"), row("Mac", "machine-bbbb2222")]);
+		expect(map.has("Mac")).toBe(false);
+	});
+});
+
+describe("machineNamesFor (#393 — what 'forget this machine' operates on)", () => {
+	const fleet = [
+		row("RLs-MacBook-Air", "machine-aaaa1111"),
+		row("RLs-MacBook-Air.local", "machine-aaaa1111"),
+		row("Mac", "machine-aaaa1111"),
+		row("Sergeys-Mac-mini.local", "machine-bbbb2222"),
+	];
+
+	it("resolves any one name of a laptop to ALL of its names", () => {
+		// The reported account, exactly: three names, one machine. Forgetting by the name the user
+		// clicked must take the other two with it, or the tile comes back minus some of its rows.
+		const got = machineNamesFor("RLs-MacBook-Air.local", fleet);
+		expect(got.ok).toBe(true);
+		if (!got.ok) return;
+		expect([...got.names].sort()).toEqual(["Mac", "RLs-MacBook-Air", "RLs-MacBook-Air.local"]);
+		expect(got.machineId).toBe("machine-aaaa1111");
+	});
+
+	it("never reaches across machines", () => {
+		const got = machineNamesFor("Sergeys-Mac-mini.local", fleet);
+		expect(got.ok && got.names).toEqual(["Sergeys-Mac-mini.local"]);
+	});
+
+	it("an unidentified name is a machine of exactly one name", () => {
+		// No proof of a rename means no second name to sweep up — the same fail-closed reading the
+		// fold applies, and here it is also the safe one.
+		const got = machineNamesFor("orphan", [row("orphan", null), row("other", null)]);
+		expect(got.ok && got.names).toEqual(["orphan"]);
+		expect(got.ok && got.machineId).toBe(null);
+	});
+
+	it("refuses a name two machines share rather than picking one", () => {
+		expect(machineNamesFor("Mac", [row("Mac", "machine-aaaa1111"), row("Mac", "machine-bbbb2222")])).toEqual({ ok: false, reason: "ambiguous" });
+	});
+
+	it("refuses a name nothing has registered under", () => {
+		expect(machineNamesFor("ghost", fleet)).toEqual({ ok: false, reason: "unknown" });
+		expect(machineNamesFor("", fleet)).toEqual({ ok: false, reason: "unknown" });
+	});
+});
+
+describe("compareCliVersions", () => {
+	it("orders by numeric part, not by string", () => {
+		// The whole point: "0.4.9" > "0.4.40" as strings, and that would tell a current CLI to upgrade.
+		expect(compareCliVersions("0.4.35", "0.4.40")).toBe(-1);
+		expect(compareCliVersions("0.4.9", "0.4.40")).toBe(-1);
+		expect(compareCliVersions("0.4.43", "0.4.40")).toBe(1);
+		expect(compareCliVersions("0.4.40", "0.4.40")).toBe(0);
+		expect(compareCliVersions("v0.5.0", "0.4.40")).toBe(1);
+	});
+
+	it("says it cannot tell rather than guessing", () => {
+		for (const bad of ["", "?", "unknown", "0", "abc"]) expect(compareCliVersions(bad, MACHINE_ID_MIN_CLI)).toBe(null);
+	});
+});
+
+describe("identityHint (#393 — why nothing merged)", () => {
+	it("says nothing about a machine that HAS an identity", () => {
+		expect(identityHint("machine-aaaa1111", "0.4.35")).toBe(null);
+	});
+
+	it("names the version and the remedy for a CLI too old to mint one", () => {
+		const hint = identityHint(null, "0.4.35");
+		expect(hint).toContain("0.4.35");
+		expect(hint).toContain(MACHINE_ID_MIN_CLI);
+	});
+
+	it("does NOT tell a current CLI to upgrade — that is the #379 failure repeated", () => {
+		// "The one remedy the platform offers is the one thing the user has already done." A current
+		// CLI with no id could not write its id file; upgrading cannot fix that.
+		const hint = identityHint(null, "0.4.43");
+		expect(hint).toContain("~/.config/proagentstore/");
+		expect(hint).not.toContain("upgrade");
+	});
+
+	it("stays silent when the version cannot be read", () => {
+		expect(identityHint(null, "?")).toBe(null);
+		expect(identityHint(null, null)).toBe(null);
 	});
 });

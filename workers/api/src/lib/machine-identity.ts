@@ -158,3 +158,126 @@ export function foldNodesByMachine<T extends NodeRegistration>(rows: readonly T[
 	}
 	return out;
 }
+
+// ── Which id a NAME resolves to, and the names one machine answers to (#393) ────────────────
+
+/**
+ * hostname → the machine id every row under that name carries, when they agree.
+ *
+ * There is one row per (instance, hostname), and a `pags up` stamps the id only on the instances
+ * it registers this session — an instance it did not attach keeps NULL under the very same
+ * hostname. So identity has to be resolved across a name's rows before anything is grouped, or a
+ * machine splits in two whenever the identified row is read first and folds nothing when the NULL
+ * one is.
+ *
+ * Only when the name is UNAMBIGUOUS. A hostname is not an identity and must never transfer one:
+ * two laptops both called `Mac`, each serving different instances, are two machines, and merging
+ * them is the failure the fold exists to prevent, in mirror image. A name carrying more than one
+ * id gets NO entry — the honest answer, not a guess.
+ */
+export function adoptableIdByName(rows: readonly NodeRegistration[]): Map<string, string> {
+	const idsForName = new Map<string, Set<string>>();
+	for (const row of rows) {
+		const node = normalizeRunnerNode(row.node);
+		const id = normalizeMachineId(row.machineId);
+		if (!node || !id) continue;
+		const set = idsForName.get(node) ?? new Set<string>();
+		set.add(id);
+		idsForName.set(node, set);
+	}
+	const out = new Map<string, string>();
+	for (const [node, ids] of idsForName) if (ids.size === 1) out.set(node, [...ids][0]);
+	return out;
+}
+
+/** Every hostname a machine answers to, or why the question cannot be answered about it. */
+export type MachineNameSet =
+	| { ok: true; names: string[]; machineId: string | null }
+	| { ok: false; reason: "unknown" | "ambiguous" };
+
+/**
+ * The full set of hostnames that are provably the SAME machine as `target` (including `target`).
+ *
+ * This is what "forget this machine" has to operate on. Forgetting one name of a folded machine
+ * would be a PARTIAL forget — the tile stays on screen under its other names, minus some of its
+ * registrations — which is worse than not offering the button, so the unit is the machine.
+ *
+ * Two refusals rather than a guess, both for the same reason the fold has them:
+ *   `unknown`   — no registration under that name; there is nothing to forget.
+ *   `ambiguous` — the name carries two different ids, i.e. two laptops are called this. Acting on
+ *                 it would delete rows belonging to a machine the user did not point at.
+ *
+ * A name with no id at all is a machine of exactly one name — that is the fail-closed reading the
+ * whole of #379 applies, and here it is also the correct one: without proof of a rename there is
+ * no second name to sweep up.
+ */
+export function machineNamesFor(target: string, rows: readonly NodeRegistration[]): MachineNameSet {
+	const name = normalizeRunnerNode(target);
+	if (!name) return { ok: false, reason: "unknown" };
+
+	const known = new Set(rows.map((r) => normalizeRunnerNode(r.node)).filter(Boolean));
+	if (!known.has(name)) return { ok: false, reason: "unknown" };
+
+	const explicit = new Set<string>();
+	for (const row of rows) {
+		if (normalizeRunnerNode(row.node) !== name) continue;
+		const id = normalizeMachineId(row.machineId);
+		if (id) explicit.add(id);
+	}
+	if (explicit.size > 1) return { ok: false, reason: "ambiguous" };
+	const machineId = explicit.size === 1 ? [...explicit][0] : "";
+	if (!machineId) return { ok: true, names: [name], machineId: null };
+
+	const byName = adoptableIdByName(rows);
+	const names: string[] = [];
+	for (const candidate of known) if (byName.get(candidate) === machineId && !names.includes(candidate)) names.push(candidate);
+	if (!names.includes(name)) names.push(name);
+	return { ok: true, names, machineId };
+}
+
+// ── "Why has nothing merged?" — an old CLI cannot be identified (#393) ──────────────────────
+
+/**
+ * The first CLI that mints a machine id and sends it (#379 bumped 0.4.39 → 0.4.40).
+ *
+ * A runner older than this registers with no id at all, so its rows can never be folded and never
+ * be claimed. From the console that is indistinguishable from a runner that HAS the feature and
+ * found nothing to merge — the fix looks like it did nothing. Naming the version turns an
+ * invisible no-op into an instruction.
+ */
+export const MACHINE_ID_MIN_CLI = "0.4.40";
+
+/** Numeric-part compare, -1/0/1. Unparseable → null, so a caller must decide what to say. */
+export function compareCliVersions(a: string, b: string): number | null {
+	const parse = (v: string): number[] | null => {
+		const parts = String(v ?? "").trim().replace(/^v/, "").split(".");
+		if (parts.length < 2) return null;
+		const nums = parts.slice(0, 3).map((p) => Number.parseInt(p, 10));
+		return nums.every((n) => Number.isInteger(n) && n >= 0) ? nums : null;
+	};
+	const left = parse(a);
+	const right = parse(b);
+	if (!left || !right) return null;
+	for (let i = 0; i < 3; i++) {
+		const d = (left[i] ?? 0) - (right[i] ?? 0);
+		if (d !== 0) return d < 0 ? -1 : 1;
+	}
+	return 0;
+}
+
+/**
+ * Why this machine has no identity — or null when it has one, or when we cannot honestly say.
+ *
+ * Three cases, and the distinction between the last two is the point. Telling a user on a CURRENT
+ * CLI to upgrade would send them to do the one thing that cannot help, which is the exact failure
+ * #379 was reported as ("the one remedy the platform offers is the one thing the user has already
+ * done"). An unparseable version says nothing at all rather than guessing.
+ */
+export function identityHint(machineId: string | null, runnerVersion: string | null): string | null {
+	if (normalizeMachineId(machineId)) return null;
+	const version = String(runnerVersion ?? "").trim();
+	const cmp = compareCliVersions(version, MACHINE_ID_MIN_CLI);
+	if (cmp === null) return null;
+	if (cmp < 0) return `This machine's CLI is ${version} — upgrade to ${MACHINE_ID_MIN_CLI} or newer and restart \`pags up\` so it can be merged with its other names.`;
+	return `This machine's CLI (${version}) can identify itself but did not — \`pags up\` could not save its id file. Check that \`~/.config/proagentstore/\` is writable, then restart it.`;
+}

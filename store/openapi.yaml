@@ -7872,7 +7872,10 @@ paths:
                     items:
                       type: object
                       properties:
-                        node: { type: string, description: The machine name (hostname). }
+                        node: { type: string, description: The machine's CURRENT name — the hostname of its freshest registration. }
+                        machineId: { type: string, nullable: true, description: "The stable identity that folded this machine's names together; null when it has none." }
+                        aka: { type: array, items: { type: string }, description: "Names this machine has ALSO answered to, freshest first. Pins and relay names are still keyed by hostname, so these are what a stranded pin literally says." }
+                        identityHint: { type: string, nullable: true, description: "Why this machine has no stable identity, in a sentence the user can act on — null when it has one, or when the runner version cannot be read." }
                         placement: { type: string }
                         runnerVersion: { type: string }
                         lastSeenAt: { type: string, nullable: true }
@@ -7905,6 +7908,64 @@ paths:
                               updatedAt: { type: string }
                               terminalTail: { type: string, nullable: true, description: "Last terminal snapshot tail, from the stored timeline — no runner call." }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/terminals/nodes/{node}:
+    delete:
+      summary: Forget a machine
+      description: |
+        Remove a machine's runner registrations. A node row is written on register and never
+        removed — not on disconnect — so a laptop whose hostname changed (see the machine-identity
+        notes on `GET /v1/terminals/nodes`) leaves its old names on the account permanently, listed
+        as offline machines its owner recognises as their own.
+
+        Addressed by ONE of its names and resolved to the whole machine: every name it has answered
+        to is forgotten together, because forgetting a single name of a folded machine would leave
+        it on screen minus some of its registrations.
+
+        Nothing on the machine itself changes — running `pags up` there registers it again. Only
+        `instance_runtime_nodes` is touched; ended coding sessions keep their history.
+
+        Refused (409) while anything still points at the machine, because deleting the row does not
+        delete what references it: the pins live in the instance config and the node row is also the
+        proof that resolves a stranded pin onto the machine's current name. The refusal names what
+        to repoint or close first.
+      operationId: forgetTerminalNode
+      tags: [Terminals]
+      parameters:
+        - { name: node, in: path, required: true, description: Any one of the machine's names., schema: { type: string } }
+      responses:
+        "200":
+          description: Forgotten
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  forgotten: { type: array, items: { type: string }, description: Every name that was removed. }
+                  registrationsRemoved: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No machine is registered under that name }
+        "409":
+          description: |
+            Still in use, or the name does not identify one machine. `reason` is `connected`
+            (it would re-register immediately), `pinned`, `sessions`, or `ambiguous` (two machines
+            have registered under this name).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  reason: { type: string, enum: [connected, pinned, sessions, ambiguous] }
+                  blockers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string, enum: [pin, session] }
+                        id: { type: string }
+                        label: { type: string }
+                        node: { type: string, description: Which of the machine's names it points at. }
 
   # ── Usage ─────────────────────────────────────────────────────────────────
 

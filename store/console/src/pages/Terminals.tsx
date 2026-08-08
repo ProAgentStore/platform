@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import Page from "../components/Page";
+import Button from "../components/Button";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
@@ -10,7 +11,7 @@ import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
+interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -30,6 +31,9 @@ export default function Terminals() {
 	const navigate = useNavigate();
 	const [nodes, setNodes] = useState<TerminalNode[]>([]);
 	const [loading, setLoading] = useState(true);
+	/** node name → why the last forget was refused, rendered on that machine's card. */
+	const [forgetError, setForgetError] = useState<Record<string, string>>({});
+	const [forgetting, setForgetting] = useState("");
 
 	const load = useCallback(async () => {
 		try {
@@ -38,6 +42,28 @@ export default function Terminals() {
 		} catch { /* keep last good */ }
 		setLoading(false);
 	}, []);
+
+	// Forget a machine (#393). A node row is written on register and never removed, so a laptop
+	// renamed by DHCP leaves its old names on the account forever, listed as offline machines the
+	// owner recognises as their own. Deliberately a confirmed USER action and never a stale-sweep:
+	// a laptop that is merely closed must not lose its registrations.
+	//
+	// The server refuses while an agent is pinned here or a session is open, and the refusal is the
+	// useful half — it names what to repoint. So it is shown on the card rather than thrown away.
+	const forget = useCallback(async (n: TerminalNode) => {
+		const names = [n.node, ...(n.aka || [])];
+		const also = names.length > 1 ? `\n\nThis machine has also been known as: ${names.slice(1).join(", ")}. All of its registrations are removed.` : "";
+		if (!confirm(`Forget "${n.node}"?${also}\n\nIt disappears from this page. Nothing on the machine changes — running \`pags up\` there registers it again.`)) return;
+		setForgetting(n.node);
+		setForgetError((e) => ({ ...e, [n.node]: "" }));
+		try {
+			await api(`/v1/terminals/nodes/${encodeURIComponent(n.node)}`, { method: "DELETE" });
+			await load();
+		} catch (err) {
+			setForgetError((e) => ({ ...e, [n.node]: err instanceof Error ? err.message : String(err) }));
+		}
+		setForgetting("");
+	}, [load]);
 
 	// The poll hook only fires on the interval (its catch-up fetch is for tier CHANGES, and first
 	// mount is deliberately not one), so without a mount fetch the page showed "Loading…"
@@ -87,14 +113,42 @@ export default function Terminals() {
 										<span className="truncate">{n.node}</span>
 										{/* Last week's name for the same machine (#393) — the string a stranded pin
 										    still carries, so it is what makes the fold recognisable rather than magic. */}
-										{!!n.aka?.length && <span className="text-2xs text-muted-soft truncate shrink-0">also {n.aka.join(" · ")}</span>}
+										{/* `min-w-0`, NOT `shrink-0`: a flex item that refuses to shrink gives `truncate`
+									    no width to clamp to, so at 320px a machine with two old names drew its
+									    "also …" line straight out of the card and under the Forget button. Measured
+									    in WebKit; the horizontal-overflow guards cannot see it, because the text
+									    escapes its own box without widening the document. */}
+									{!!n.aka?.length && <span className="text-2xs text-muted-soft truncate min-w-0">also {n.aka.join(" · ")}</span>}
 										<span className={`text-2xs font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-green/15 text-green" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
 									</div>
 									<div className="text-xs text-muted-soft mt-0.5">
 										{n.placement === "managed" ? "cloud" : "local"} · v{n.runnerVersion || "?"} · seen {ago(n.lastSeenAt)}
 									</div>
 								</div>
+								{/* Forgetting a CONNECTED machine is refused by the server anyway (it would
+								    re-register within a heartbeat), so the button is not offered for one —
+								    a control whose only outcome is a refusal reads as broken. */}
+								{!n.connected && (
+									<Button variant="danger" size="sm" onClick={() => void forget(n)} disabled={forgetting === n.node}
+										title="Remove this machine's registrations. Nothing on the machine changes."
+										className="shrink-0">
+										{forgetting === n.node ? "Forgetting…" : "Forget"}
+									</Button>
+								)}
 							</div>
+
+							{/* Why this machine has no stable identity, and what to do about it (#393). Without
+							    it, a runner too old to mint an id looks exactly like one that had nothing to
+							    merge — the machine keeps appearing under its old names and the fix looks like
+							    it did nothing. */}
+							{n.identityHint && (
+								<div className="px-4 py-2 text-xs text-yellow border-b border-line/60">{n.identityHint}</div>
+							)}
+
+							{/* The refusal is the useful half — it names the pins or sessions to clear first. */}
+							{forgetError[n.node] && (
+								<div className="px-4 py-2 text-xs text-red border-b border-line/60">{forgetError[n.node]}</div>
+							)}
 
 							{/* Agents served by this machine. A 📌 marks agents PINNED to run here. */}
 							<div className="px-4 py-2.5 flex flex-wrap gap-1.5 border-b border-line/60">
