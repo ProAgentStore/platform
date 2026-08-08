@@ -51,7 +51,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceCommand, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceCommand, type VoiceCommandWords, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
 import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
@@ -353,7 +353,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 							// let's move on". commandStateFor drops the destructive flag (#342).
 							const cmd = matchVoiceCommand(
 								phrase,
-								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current, disabled: disabledCommandsRef.current },
+								voiceWordsRef.current,
 								voiceLangRef.current,
 								commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current, canBack: canBackRef.current }),
 							);
@@ -616,17 +616,28 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const handledUtteranceRef = useRef(false);
 	// Settings → Voice toggle: hold a screen wake lock during hands-free (default on).
 	const keepAwakeRef = useRef(true);
-	// Settings → Voice: custom hands-free command keywords (empty ⇒ built-in defaults;
-	// stopWords off unless set). Read live so a settings change applies mid-session.
-	const repeatWordsRef = useRef<string[]>([]);
-	const muteWordsRef = useRef<string[]>([]);
-	const unmuteWordsRef = useRef<string[]>([]);
-	const exitWordsRef = useRef<string[]>([]);
-	const nextWordsRef = useRef<string[]>([]);
-	const scrapWordsRef = useRef<string[]>([]);
-	// Commands the user switched OFF (#443). Threaded onto every `words` literal below rather than
-	// filtered at the call sites, so `commandPhrases` is the ONE place it takes effect.
-	const disabledCommandsRef = useRef<VoiceCommand[]>([]);
+	/**
+	 * Settings → Voice: the user's own command phrasings, the stop-speech keyword and the commands
+	 * they switched OFF (#443) — ONE object, built in one place ({@link applyConfig}). Read live so
+	 * a settings change applies mid-session; empty lists mean "use the built-ins", resolved at match
+	 * time against the current language by `commandPhrases`.
+	 *
+	 * IT IS ONE OBJECT BECAUSE FIVE COPIES OF IT DIVERGED (#469). There were five hand-written
+	 * literals of these seven fields, and the control listener's — the one that runs while the agent
+	 * is speaking or thinking, i.e. the only listener live in that phase — omitted `repeat`.
+	 *
+	 * The cost was not the missing dispatch (that listener has no `repeat` branch). It was the
+	 * missing RESERVATION: `commandPhrases` strips from every command's built-ins any phrase the
+	 * user bound elsewhere (`boundByUser` iterates ALL_COMMANDS and reads `words[other]`), so with
+	 * `repeat` absent, a user who set their repeat phrase to "stop" — a built-in ENGLISH EXIT phrase
+	 * — had it stripped from `exit` everywhere except here, where it tore hands-free down. One
+	 * phrase, two meanings, chosen by which phase the session happened to be in: verbatim the
+	 * failure #385 was filed as.
+	 *
+	 * A ref, not state: it is read inside long-lived recognizer callbacks, so a snapshot captured in
+	 * a dependency array would be the stale-settings bug this file already avoids everywhere else.
+	 */
+	const voiceWordsRef = useRef<VoiceCommandWords>({});
 	/**
 	 * A command the GATE fired part-way through this turn (#457 step 3).
 	 *
@@ -671,13 +682,19 @@ export function useVoice(instanceId: string | undefined, opts: {
 		vadSensitivityRef.current = c.sensitivity;
 		commandsEnabledRef.current = c.commandsEnabled;
 		keepAwakeRef.current = c.keepAwake;
-		repeatWordsRef.current = c.repeatWords;
-		muteWordsRef.current = c.muteWords;
-		unmuteWordsRef.current = c.unmuteWords;
-		exitWordsRef.current = c.exitWords;
-		nextWordsRef.current = c.nextWords;
-		scrapWordsRef.current = c.scrapWords;
-		disabledCommandsRef.current = c.disabledCommands;
+		// THE one place the matcher's word set is assembled (#469). Every field of
+		// `VoiceCommandWords` is named here exactly once, so a field added to that interface is
+		// added here or nowhere — it cannot be added to four of five call sites.
+		voiceWordsRef.current = {
+			repeat: c.repeatWords,
+			mute: c.muteWords,
+			unmute: c.unmuteWords,
+			exit: c.exitWords,
+			next: c.nextWords,
+			scrap: c.scrapWords,
+			stopSpeech: c.stopSpeechKeyword,
+			disabled: c.disabledCommands,
+		};
 		stopWordsRef.current = c.stopWords;
 		stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 		confirmLanguageRef.current = c.confirmLanguage;
@@ -957,7 +974,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// on a path that cannot act on it (and would let it mask a command below it in the order).
 		const cmd = matchVoiceCommand(
 			text,
-			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current, disabled: disabledCommandsRef.current },
+			voiceWordsRef.current,
 			voiceLangRef.current,
 			commandStateFor(isFinal ? "final" : "partial", {
 				muted: mutedRef.current,
@@ -1125,7 +1142,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const cmd = combined
 				? matchVoiceCommand(
 						combined,
-						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current, disabled: disabledCommandsRef.current },
+						voiceWordsRef.current,
 						voiceLangRef.current,
 						commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current, canBack: canBackRef.current }),
 					)
@@ -1170,7 +1187,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					canSwitch: canSwitchRef.current,
 					canBack: canBackRef.current,
 					muted: mutedRef.current,
-					words: { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current, disabled: disabledCommandsRef.current },
+					words: voiceWordsRef.current,
 					lang: voiceLangRef.current,
 					stopWords: stopWordsRef.current,
 					firedDuringCapture: firedCommandRef.current,
@@ -1298,7 +1315,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (commandsEnabledRef.current) {
 				const cmd = matchVoiceCommand(
 					text.trim(),
-					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current, disabled: disabledCommandsRef.current },
+					voiceWordsRef.current,
 					voiceLangRef.current,
 					// "final" — one of only two sites where a destructive command may be judged
 					// (#342). Tap-to-talk is also where the auto-VAD is off, so this really is the

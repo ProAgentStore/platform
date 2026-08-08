@@ -1199,3 +1199,82 @@ describe("a command can be switched off, without freezing its words (#443)", () 
 		expect(commandPhrases("exit", { disabled: ["exit"] }, "de")).toEqual([]);
 	});
 });
+
+/**
+ * #469 — every listener must see the SAME word set, or one phrase gets two meanings.
+ *
+ * `use-voice.ts` built this object five times by hand, and the control listener's copy — the one
+ * running while the agent speaks or thinks, i.e. the only speech path live in that phase — omitted
+ * `repeat`. The missing dispatch was harmless (that listener has no repeat branch). The missing
+ * RESERVATION was not: `commandPhrases` strips from a command's built-ins every phrase the user
+ * bound elsewhere, and it can only see the fields it is given.
+ *
+ * These are unit tests over the matcher because the divergence has to be caught where it does
+ * damage — the shape of a literal in a hook is not the claim. The structural half (one object, one
+ * construction site) lives in `use-voice-words.test.ts`.
+ */
+describe("a partial word set silently un-reserves a user's phrase (#469)", () => {
+	// The worked example from the issue: Repeat bound to "stop", Exit left blank. "stop" is a
+	// built-in ENGLISH exit phrase, so the two readings differ by exactly one field.
+	const FULL = { repeat: ["stop"] };
+	/** The control listener's set as it was — every field except the one the user actually used. */
+	const CONTROL_LISTENER_AS_WAS = { mute: [], unmute: [], exit: [], next: [], scrap: [], stopSpeech: "", disabled: [] };
+
+	it("reads the same transcript the same way with the full set and the control listener's", () => {
+		// THE assertion. Not "the object has seven fields" — that passes while the two disagree.
+		for (const said of ["stop", "mute", "unmute", "exit voice", "repeat", "say that again"]) {
+			for (const muted of [false, true]) {
+				expect(
+					matchVoiceCommand(said, FULL, "en", { muted, canSwitch: true }),
+					`"${said}" (muted=${muted}) means different things on different listeners`,
+				).toBe(matchVoiceCommand(said, { ...CONTROL_LISTENER_AS_WAS, repeat: ["stop"] }, "en", { muted, canSwitch: true }));
+			}
+		}
+	});
+
+	it("does not tear hands-free down on a phrase the user bound to repeat", () => {
+		// The damage, stated as the user experiences it. With `repeat` present the built-in exit
+		// list gives "stop" up (#385 rule 2); without it, "stop" exits — while the agent is
+		// speaking, which is exactly when you say "say that again".
+		expect(commandPhrases("exit", FULL, "en")).not.toContain("stop");
+		expect(matchVoiceCommand("stop", FULL, "en", { muted: false })).toBe("repeat");
+		// The old control-listener set, for the record: the same word, the destructive reading.
+		expect(matchVoiceCommand("stop", CONTROL_LISTENER_AS_WAS, "en", { muted: false })).toBe("exit");
+	});
+
+	it("carries it into the repetition fold, which must not reopen the collision", () => {
+		// #456's fold is a FALLBACK reading and may never outrank a binding. "stop stop" bound to
+		// repeat folds to "stop" — a built-in exit phrase — the moment `repeat` is invisible.
+		const bound = { repeat: ["stop stop"] };
+		expect(matchVoiceCommand("stop stop", bound, "en", { muted: false })).toBe("repeat");
+		expect(splitTrailingCommand("stop stop", bound, "en", { muted: false, canSwitch: false }).command).not.toBe("exit");
+	});
+
+	it("changes nothing for an account with no custom repeat words — which is every account today", () => {
+		for (const said of ["stop", "stop stop", "mute", "exit voice", "repeat", "pardon"]) {
+			for (const muted of [false, true]) {
+				expect(matchVoiceCommand(said, { repeat: [] }, "en", { muted, canSwitch: true }), said).toBe(
+					matchVoiceCommand(said, CONTROL_LISTENER_AS_WAS, "en", { muted, canSwitch: true }),
+				);
+			}
+		}
+	});
+
+	it("still returns nothing when the user switched repeat OFF (#443 keeps working through this)", () => {
+		// "Off" was already honoured on this listener (`disabled` was passed); "rebound" was not.
+		// Widening the set must not resurrect a command the user switched off.
+		expect(matchVoiceCommand("stop", { repeat: ["stop"], disabled: ["repeat"] }, "en", { muted: false })).toBeNull();
+		expect(commandPhrases("repeat", { repeat: ["stop"], disabled: ["repeat"] }, "en")).toEqual([]);
+		// …and its reservation survives, so "stop" does not become exit instead (#443's own rule).
+		expect(commandPhrases("exit", { repeat: ["stop"], disabled: ["repeat"] }, "en")).not.toContain("stop");
+	});
+
+	it("leaves mute reachable while the agent speaks, whatever the user bound repeat to (ADR 0001 M3)", () => {
+		// The one thing widening this set could have cost: `matchVoiceCommand` checks repeat BEFORE
+		// mute, so a repeat binding must never swallow a mute phrase. It cannot — an explicit
+		// binding only ever REMOVES built-ins from other commands, and "mute" is not in it.
+		expect(matchVoiceCommand("mute", FULL, "en", { muted: false })).toBe("mute");
+		expect(matchVoiceCommand("mute mute", FULL, "en", { muted: false })).toBe("mute");
+		expect(matchVoiceCommand("unmute", FULL, "en", { muted: true })).toBe("unmute");
+	});
+});

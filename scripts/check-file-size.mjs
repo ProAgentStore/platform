@@ -223,7 +223,13 @@ const PINS = {
 	// decision is pure and lives in convo.ts/turn.ts; the wiring is asserted structurally in
 	// send-handoff.test.ts, because dropping any one of the three statements leaves the pure tests
 	// green and puts the word back in the message.
-	"packages/sdk/src/voice/use-voice.ts": 1948,
+	// +17 for #469, and the file got SIMPLER: five hand-written copies of the matcher's word set
+	// became one assembly in `applyConfig` (net -6 lines of code), plus a paragraph explaining that
+	// the copy which omitted `repeat` did not merely lose a command — it un-RESERVED a phrase the
+	// user had bound, so "stop" meant repeat everywhere and tore hands-free down on the one listener
+	// that runs while the agent speaks. Raised rather than split: the prose is the deliverable, and
+	// `use-voice-words.test.ts` now fails if a sixth field is added to only some of the call sites.
+	"packages/sdk/src/voice/use-voice.ts": 1965,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -771,7 +777,8 @@ const PINS = {
 	// commits raising this one number independently is the clearest evidence yet that the PINS map
 	// wants to be its own data module — see the paragraph above for the split when it is worth it.
 	// +5 for #468: the two pins above, and the note saying why they moved.
-	"scripts/check-file-size.mjs": 855,
+	// +7 for #469 (the pin above and its note).
+	"scripts/check-file-size.mjs": 862,
 };
 
 /**
