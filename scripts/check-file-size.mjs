@@ -292,7 +292,17 @@ const PINS = {
 	// workers/mcp/src/index.ts above — a default introduced in the API would otherwise have made
 	// this button hand back the exact state the user pressed it to escape, silently, and the note
 	// is what stops the flag being tidied away as redundant.
-	"agents/coder/web/src/CodingTab.tsx": 1221,
+	// +68 at #408's second half, and ~50 of it is prose. The `active ? openTerminal : startSession`
+	// fork disappeared from four call sites into ONE `openRepoSession`, which also holds the
+	// opening state (a spawn takes seconds; silence reads as a hang, #378) and an inline error
+	// where an `alert` used to swallow the server's runner diagnosis; and the one-repo surface now
+	// opens its own session. Raised rather than split BECAUSE of the paragraphs: what this change
+	// removes is a two-verb affordance that three separate earlier tickets (#241, #257, #411)
+	// deliberately put there, so a reader who finds the single "Open" button without finding why
+	// it is single — a session is a cache, not a thing to manage — will restore the fork as a
+	// courtesy. Both DECISIONS are pure and tested in repo-open.ts (which label, and whether the
+	// solo surface may auto-open), which is where a split would have put them anyway.
+	"agents/coder/web/src/CodingTab.tsx": 1289,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs

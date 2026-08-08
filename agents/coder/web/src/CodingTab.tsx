@@ -12,6 +12,7 @@ import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
 import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
+import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
 import { chatMessagesFrom, lastTerminalSnapshot, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
@@ -85,6 +86,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
+	/**
+	 * The repo whose engine is being started right now, and why the last attempt failed (#408).
+	 *
+	 * Opening a repo is not instant — a clone check, a spawn and possibly a `--resume` — and with
+	 * no visible state a click looked like nothing happened, which is #378's lesson from the
+	 * Terminal tab. The error is held rather than `alert`ed because it is the server's runner
+	 * diagnosis, which is worth reading twice and copying.
+	 */
+	const [openingRepoId, setOpeningRepoId] = useState<string | null>(null);
+	const [openError, setOpenError] = useState<string | null>(null);
 	// With no Co-pilot there is only one view, and it is the terminal.
 	const [view, setView] = useState<"summary" | "terminal">(copilot ? "summary" : "terminal");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
@@ -599,7 +610,23 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		loadCoding();
 	};
 
-	const startSession = async (repoId: string) => {
+	/**
+	 * Open a repo — ensuring a session if it has no live one (#408).
+	 *
+	 * ONE entry point, replacing the `active ? openTerminal : startSession` fork that was written
+	 * out at four call sites. A session is a cache the platform reaps after six idle hours and
+	 * re-opens on demand, so "does this repo have one right now" is not a question the user should
+	 * be answering — and the server route already reuses a live session rather than opening a
+	 * second, which is what makes one verb correct rather than merely tidier.
+	 *
+	 * `openingRepoId` is the whole reason this is not fire-and-forget: a clone check, a spawn and a
+	 * `--resume` take seconds, and silence there reads as a hang (#378).
+	 */
+	const openRepoSession = async (repoId: string) => {
+		const active = activeSessionFor(sessionsRef.current, repoId);
+		if (active) return openTerminal(active);
+		setOpenError(null);
+		setOpeningRepoId(repoId);
 		try {
 			const d = await api<{ session: CodingSession }>(`/v1/instances/${instanceId}/coding/sessions`, {
 				method: "POST",
@@ -610,9 +637,43 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				openTerminal(d.session);
 			}
 		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
+			// Inline, not `alert`: an alert is modal, unselectable and gone the moment it is
+			// dismissed, and this message is the runner diagnosis the server worked to phrase.
+			setOpenError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setOpeningRepoId(null);
 		}
 	};
+
+	/**
+	 * The one-repo surface opens its own session (#408).
+	 *
+	 * Only here. For a Repo Coder the terminal IS the tab, so landing on a button that says "start
+	 * the thing this whole screen is about" is the question #408 opens with. A multi-repo agent gets
+	 * no auto-open: which repo you meant is a real question, and spawning an engine per repo on a
+	 * tab visit is not an answer to it.
+	 *
+	 * Latched twice. `soloAutoOpenRef` stops a failed open being retried on every render (an engine
+	 * that cannot start would otherwise be retried forever, on someone's laptop). `autoOpenedRef`
+	 * is the user's own decision — closing the terminal sets it, so the tab must not reopen what
+	 * they just closed. The runner gate is `=== true`, never `!== false`; see ./repo-open.
+	 */
+	const soloAutoOpenRef = useRef(false);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `openRepoSession` is re-created every render and is latched by the refs above; listing it would re-run this effect continuously.
+	useEffect(() => {
+		const only = singleRepo && repos.length === 1 ? repos[0] : null;
+		if (!only || openSession) return;
+		const go = shouldAutoOpenSoloSession({
+			hasRepo: true,
+			hasActiveSession: !!activeSessionFor(sessions, only.id),
+			runnerOnline,
+			alreadyTried: soloAutoOpenRef.current || autoOpenedRef.current,
+			opening: openingRepoId !== null,
+		});
+		if (!go) return;
+		soloAutoOpenRef.current = true;
+		openRepoSession(only.id);
+	}, [singleRepo, repos, sessions, openSession, runnerOnline, openingRepoId]);
 
 	const endSession = async () => {
 		if (!openSession) return;
@@ -677,9 +738,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			body = d.issue?.body ? `\n\n${d.issue.body}` : "";
 		} catch {}
 		const objective = `Fix issue #${issue.number}: ${issue.title}${body}`;
-		const active = getActiveSession(repo.id);
-		if (active) await openTerminal(active);
-		else await startSession(repo.id);
+		await openRepoSession(repo.id);
 
 		// Hand the issue to the LOOP, which dispatches to the Pilot and actually drives the engine
 		// (#210) — and whose instructions now appear in the Assistant thread, so the work is
@@ -723,9 +782,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const switchToRepo = (r: CodingRepo) => {
 		setRepoMenuOpen(false);
 		setSessionMenuOpen(false);
-		const active = getActiveSession(r.id);
-		if (active) openTerminal(active);
-		else startSession(r.id);
+		openRepoSession(r.id);
 	};
 
 	// Push session header override to parent when session is open. The repo is looked up by the
@@ -947,12 +1004,22 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								<>
 									{/* Actions and warnings sit in a strip ABOVE the transcript, never in place
 									    of it (#257, same shape as #241). History is what the user came for;
-									    "Start a session" is one more thing they can do, not the whole screen. */}
+									    this row is one more thing they can do, not the whole screen.
+
+									    The action no longer says "Start a session" (#408). A session is a cache
+									    the platform reaps and re-opens by itself, and this surface auto-opens
+									    one when the runner is up — so the button is the RECOVERY path (offline
+									    machine, a failed open), not the way in. */}
 									<div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line">
-										<button type="button" onClick={() => startSession(solo.id)} className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold">
-											Start a session
-										</button>
-										<span className="text-xs text-muted">No session running.</span>
+										{(() => {
+											const a = repoOpenAction({ hasActiveSession: false, opening: openingRepoId === solo.id, runnerOnline });
+											return (
+												<button type="button" onClick={() => openRepoSession(solo.id)} disabled={a.disabled} title={a.title}
+													className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-60">
+													{a.label}
+												</button>
+											);
+										})()}
 										{/* The runner warning goes BESIDE the action, never instead of it (#241).
 										    Replacing the button made the state unrecoverable: connectivity was
 										    only ever learned from a live session's capture, so with no session
@@ -963,6 +1030,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 												Your machine doesn't look connected — run <code className="bg-panel border border-line rounded px-1 py-0.5">pags up</code>.
 											</span>
 										)}
+										{openError && <span className="text-xs text-red">{openError}</span>}
 									</div>
 									<RepoHistory entries={repoHistory} />
 								</>
@@ -1127,8 +1195,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					addRepoInput={addRepoInput}
 					setAddRepoInput={setAddRepoInput}
 					addRepo={addRepo}
-					openTerminal={openTerminal}
-					startSession={startSession}
+					openRepo={openRepoSession}
+					openingRepoId={openingRepoId}
 					setSettingsRepoId={setSettingsRepoId}
 					repoLabel={repoLabel}
 					getActiveSession={getActiveSession}

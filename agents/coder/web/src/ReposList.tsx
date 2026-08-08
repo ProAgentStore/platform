@@ -8,6 +8,7 @@ import RepoIssues from "./RepoIssues";
 import PullsPanel from "./PullsPanel";
 import { repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
+import { repoOpenAction } from "./repo-open";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
@@ -23,7 +24,7 @@ export default function ReposList({
 	instanceId,
 	repos, sessions, repoStatuses, runnerOnline,
 	singleRepo = false, showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
-	openTerminal, startSession, setSettingsRepoId,
+	openRepo, openingRepoId, setSettingsRepoId,
 	repoLabel, getActiveSession, onWorkOnIssue, onOpenEngines,
 }: {
 	instanceId: string;
@@ -38,8 +39,14 @@ export default function ReposList({
 	addRepoInput: string;
 	setAddRepoInput: (v: string) => void;
 	addRepo: () => void;
-	openTerminal: (s: CodingSession) => void;
-	startSession: (repoId: string) => void;
+	/**
+	 * Open this repo — ensuring a session if there isn't a live one (#408). ONE action, because
+	 * "does this repo currently have a session" is a cache question the platform answers better
+	 * than the user does; see ./repo-open.
+	 */
+	openRepo: (repoId: string) => void;
+	/** The repo whose engine is being started right now, so the row can say so instead of hanging. */
+	openingRepoId: string | null;
 	setSettingsRepoId: (id: string) => void;
 	repoLabel: (r: CodingRepo) => string;
 	getActiveSession: (repoId: string) => CodingSession | undefined;
@@ -122,11 +129,18 @@ export default function ReposList({
 						</div>
 					</div>
 					<div className="flex gap-1.5 shrink-0 items-center">
-						{active ? (
-							<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
-						) : (
-							<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
-						)}
+						{(() => {
+							const a = repoOpenAction({ hasActiveSession: !!active, opening: openingRepoId === r.id, runnerOnline });
+							return (
+								// No aria-label: the visible word IS the accessible name, and overriding it with
+								// "Open <repo>" would make the control unaddressable by the name a user (or a
+								// test) reads off the screen — the row already announces which repo it is.
+								<button type="button" onClick={() => openRepo(r.id)} disabled={a.disabled} title={a.title}
+									className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold disabled:opacity-60">
+									{a.label}
+								</button>
+							);
+						})()}
 						<button
 							type="button"
 							onClick={() => togglePlay(r)}
@@ -173,7 +187,6 @@ export default function ReposList({
 		</button>
 	);
 
-	const activeCount = sessions.filter((s) => s.status === "active").length;
 	/**
 	 * A one-repo agent hides add-repo at ONE repo and must show it at ZERO (#411).
 	 *
@@ -197,12 +210,6 @@ export default function ReposList({
 						)}
 					</div>
 				</div>
-
-				{activeCount > 0 && (
-					<div className="text-xs text-muted mt-1.5">
-						{activeCount} active session{activeCount !== 1 ? "s" : ""}
-					</div>
-				)}
 
 				{/* Open by default when there is no repo: with nothing else on the panel, a form the
 				    user must first reveal with a button that is not there is not an affordance. */}

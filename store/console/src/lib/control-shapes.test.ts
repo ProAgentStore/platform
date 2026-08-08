@@ -57,8 +57,12 @@ function sweep(root: string) {
  * they named no padding and no radius, which is precisely the shape this guard excludes, and
  * one of them was the 16px *Remove* that deletes an indexed repository. The ratchet moving by
  * one while the actual defect moved by four is the honest measure of what it covers.
+ *
+ * 48 → 47 at #408: the repo row's `Open` / `Start` pair collapsed into ONE action, because a
+ * coding session is a cache the platform reaps and re-opens by itself and the user was being asked
+ * to read its state off a button. One fewer hand-authored box, recorded rather than banked.
  */
-const PINNED = { "store/console": 124, "store/admin": 15, "agents/coder/web": 48 };
+const PINNED = { "store/console": 124, "store/admin": 15, "agents/coder/web": 47 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],
