@@ -146,6 +146,71 @@ function prRef(segment: string): string | null {
 	return num ? `#${num[1]}` : null;
 }
 
+/** A pull request URL anywhere in a command's own output. Anchored on a literal `http` prefix. */
+const PR_URL = /https?:\/\/\S*?\/pull\/(\d+)/;
+
+/**
+ * Flatten a `tool_result` block's content to text — the RAW result, not the display line.
+ *
+ * `headless.ts`'s `toolResult()` collapses whitespace and truncates to 240 characters for the
+ * transcript, which is right for a human-readable pane and wrong here: `gh pr create` prints its
+ * URL after whatever else the compound command wrote, so the one token that matters is exactly what
+ * a 240-character cap would drop.
+ */
+export function resultText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text ?? "") : ""))
+			.join("\n");
+	}
+	return "";
+}
+
+/** An act that names a pull request but does not yet say WHICH one. */
+function wantsPrNumber(act: EngineActRecord): boolean {
+	return (act.kind === "pr.open" || act.kind === "pr.merge") && act.target === null;
+}
+
+/**
+ * Fill in the PR number from the command's OWN output, for the acts that lack one (#417).
+ *
+ * `gh pr create --fill` is the common form and carries no number on the command line, so
+ * {@link prRef} returns null and `pull-attribution.ts` leaves the row unbadged. That file states the
+ * rule — **ATTRIBUTION IS EXACT OR ABSENT** — and rejects the tempting repair of pairing an
+ * unnumbered `pr.open` with whichever PR appeared around the same time, because a badge that is
+ * right most of the time is worse than no badge.
+ *
+ * This is not that repair. `gh pr create` prints the new PR's URL on stdout, and that output comes
+ * back as the `tool_result` for the SAME `tool_use_id` as the command that was classified. It is the
+ * command's own answer, in the same class of fact as the `ok` flag already taken from that block —
+ * not a temporal guess about what appeared nearby. When the output names no PR the target stays
+ * null, so absent stays absent.
+ *
+ * Deliberately narrow, because the one failure this module exists to avoid is a confident wrong
+ * number: only `pr.open`/`pr.merge` are eligible, only when their target is still null, and only
+ * against the result correlated to them by `tool_use_id`. A PR URL quoted incidentally in some other
+ * command's output reaches no act.
+ *
+ * **The "already exists" case is decided, not overlooked.** `gh pr create` on a branch that already
+ * has a PR fails with "a pull request for branch X already exists:" and that PR's URL, and this
+ * attributes the act to it. That is a judgement: it IS the pull request for this branch and the
+ * agent did just act on it, and dropping a real signal to avoid a case where the answer is still
+ * true costs more than it saves. The act still carries `ok: false`, so the record remains honest
+ * that the command failed.
+ *
+ * Only reachable from the structured stream-json path. A Codex/Grok raw spawn has no
+ * `tool_use`/`tool_result` framing at all, so its PRs stay unattributed — regexing its transcript
+ * instead would reintroduce exactly the temporal guess this design refuses.
+ */
+export function fillTargetFromResult(acts: EngineActRecord[], content: unknown): EngineActRecord[] {
+	if (!acts.some(wantsPrNumber)) return acts;
+	const m = resultText(content).match(PR_URL);
+	if (!m) return acts;
+	const target = `#${m[1]}`;
+	return acts.map((a) => (wantsPrNumber(a) ? { ...a, target } : a));
+}
+
 function pushTarget(segment: string): string | null {
 	// `git push [flags] <remote> <refspec>` — take the first two non-flag words after `push`.
 	const after = segment.split(/\bgit\s+push\b/)[1] ?? "";

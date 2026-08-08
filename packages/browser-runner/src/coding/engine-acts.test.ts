@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { classifyCommand, classifySegment, commandFromToolInput, redactCommand, splitSegments } from "./engine-acts.js";
+import {
+	classifyCommand,
+	classifySegment,
+	commandFromToolInput,
+	type EngineActRecord,
+	fillTargetFromResult,
+	redactCommand,
+	resultText,
+	splitSegments,
+} from "./engine-acts.js";
 
 describe("classifySegment — the acts a supervisor must not miss", () => {
 	it("names a PR merge, which is the act that opened #294", () => {
@@ -143,6 +152,100 @@ describe("redactCommand — this record travels into D1 and a model prompt", () 
 
 	it("caps the stored command so a heredoc cannot turn one act into a log dump", () => {
 		expect(redactCommand(`git commit -m "${"x".repeat(2000)}"`).length).toBeLessThanOrEqual(400);
+	});
+});
+
+describe("fillTargetFromResult — the number is in the command's OWN answer (#417)", () => {
+	const at = "2026-08-08T00:00:00.000Z";
+	const act = (kind: EngineActRecord["kind"], target: string | null, command = "gh pr create --fill"): EngineActRecord => ({
+		id: "tu_1:0",
+		kind,
+		command,
+		target,
+		irreversible: kind === "pr.merge",
+		ok: null,
+		at,
+	});
+
+	it("takes the PR number out of the tool_result for `gh pr create --fill`", () => {
+		// The whole ticket: the common form of the command names no number, so the Pulls panel (#401)
+		// rendered an agent-opened PR unattributed. The URL is in that same tool_use_id's result.
+		const [filled] = fillTargetFromResult([act("pr.open", null)], "https://github.com/o/r/pull/123\n");
+		expect(filled.target).toBe("#123");
+	});
+
+	it("leaves the target NULL when the output names no pull request", () => {
+		// Exact-or-absent is preserved, not weakened: nothing here invents a number, it only reads one
+		// the command itself printed.
+		const [same] = fillTargetFromResult([act("pr.open", null)], "creating pull request for fix into main…\n");
+		expect(same.target).toBeNull();
+	});
+
+	it("never overwrites a target the COMMAND LINE already stated", () => {
+		// `gh pr merge 42` is the exact signal; a URL further down the output (a linked PR, a log line)
+		// must not be able to displace it.
+		const [same] = fillTargetFromResult(
+			[act("pr.merge", "#42", "gh pr merge 42 --squash")],
+			"merging…\nsee also https://github.com/o/r/pull/999\n",
+		);
+		expect(same.target).toBe("#42");
+	});
+
+	it("attributes the 'already exists' failure to the PR it names — a decision, not an oversight", () => {
+		// `gh pr create` on a branch that already has a PR fails with that PR's URL. Attributing to it
+		// is a JUDGEMENT and it was taken deliberately: it IS the pull request for this branch and the
+		// agent did just act on it, and dropping a real signal to avoid a case where the answer is
+		// still true costs more than it saves. The act keeps `ok: false`, so the record stays honest
+		// that the command failed — the badge says who acted, not that the command succeeded.
+		const [filled] = fillTargetFromResult(
+			[{ ...act("pr.open", null), ok: false }],
+			"a pull request for branch fix/417 into branch main already exists:\nhttps://github.com/o/r/pull/77",
+		);
+		expect(filled).toMatchObject({ kind: "pr.open", target: "#77", ok: false });
+	});
+
+	it("touches NO other act kind, however loudly the output mentions a PR", () => {
+		// The scan is restricted to acts already classified `pr.open`/`pr.merge`. A push whose output
+		// helpfully prints "create a pull request: …/pull/5" must record the push, not the PR — a
+		// confident wrong number is the one failure this module exists to avoid.
+		const acts = [act("push", null, "git push -u origin fix"), act("deploy", null, "wrangler deploy")];
+		const out = fillTargetFromResult(acts, "remote: Create a pull request: https://github.com/o/r/pull/5");
+		expect(out.map((a) => a.target)).toEqual([null, null]);
+		expect(out).toEqual(acts); // untouched, not merely equal-looking
+	});
+
+	it("fills every unnumbered PR act on the same compound command, and only those", () => {
+		const acts = classifyCommand("tu_9", "git push -u origin fix && gh pr create --fill");
+		const out = fillTargetFromResult(acts, "branch fix set up\nhttps://github.com/o/r/pull/8");
+		expect(out.map((a) => [a.kind, a.target])).toEqual([
+			["push", "origin fix"],
+			["pr.open", "#8"],
+		]);
+	});
+
+	it("takes the FIRST pull URL when the output names several", () => {
+		const [filled] = fillTargetFromResult(
+			[act("pr.open", null)],
+			"https://github.com/o/r/pull/11\nrelated: https://github.com/o/r/pull/12",
+		);
+		expect(filled.target).toBe("#11");
+	});
+});
+
+describe("resultText — the RAW result, because the display line is truncated", () => {
+	it("reads a URL that sits past the 240 characters the transcript keeps", () => {
+		// `toolResult()` caps the display line at 240 chars for the pane. Scanning that instead would
+		// lose the URL on any verbose result, which is most real `git push && gh pr create` lines.
+		const noisy = `${"warning: something\n".repeat(40)}https://github.com/o/r/pull/321`;
+		expect(noisy.length).toBeGreaterThan(240);
+		expect(fillTargetFromResult([{ id: "a", kind: "pr.open", command: "gh pr create --fill", target: null, irreversible: false, ok: null, at: "t" }], noisy)[0].target).toBe("#321");
+	});
+
+	it("flattens the array-of-blocks shape stream-json also uses", () => {
+		expect(resultText([{ type: "text", text: "a" }, { type: "text", text: "b" }])).toBe("a\nb");
+		expect(resultText("plain")).toBe("plain");
+		expect(resultText(undefined)).toBe("");
+		expect(resultText([{ type: "image" }])).toBe("");
 	});
 });
 

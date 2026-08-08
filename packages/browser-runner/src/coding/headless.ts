@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { classifyCommand, commandFromToolInput, type EngineActRecord } from "./engine-acts.js";
+import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 
 /**
@@ -657,14 +657,26 @@ export class HeadlessSession {
 		this.awaitingResult.set(toolUseId, acts);
 	}
 
-	/** The matching `tool_result` arrived — stamp the outcome and publish. */
+	/**
+	 * The matching `tool_result` arrived — stamp the outcome and publish.
+	 *
+	 * The result carries more than the outcome: `gh pr create --fill` states its PR number nowhere
+	 * but its own stdout, so an unnumbered `pr.open`/`pr.merge` takes it from here (#417). It is read
+	 * from the RAW `block.content`, never from `toolResult()`'s display line — that truncates to 240
+	 * characters for the transcript and would cut the URL off a verbose result.
+	 *
+	 * This path (and `noteAct`) is reachable ONLY from the structured stream-json handling above
+	 * (`assistant` → `tool_use`, `user` → `tool_result`). A Codex/Grok session is a raw spawn with no
+	 * such framing, so its PRs stay unattributed by construction; scraping its transcript instead
+	 * would be the temporal guess `pull-attribution.ts` refuses.
+	 */
 	private settleAct(block: Record<string, unknown>): void {
 		const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
 		const acts = this.awaitingResult.get(id);
 		if (!acts) return;
 		this.awaitingResult.delete(id);
 		const ok = block.is_error !== true;
-		for (const a of acts) this.publishAct({ ...a, ok });
+		for (const a of fillTargetFromResult(acts, block.content)) this.publishAct({ ...a, ok });
 	}
 
 	/** Publish everything still waiting, with an unknown outcome. */

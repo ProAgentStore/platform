@@ -632,6 +632,79 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 	}, 20_000);
 });
 
+/**
+ * A stand-in that opens a PR the way engines actually do — `gh pr create --fill`, whose number
+ * exists nowhere but the command's own stdout (#417).
+ *
+ * `$WRONG_ID=1` addresses the result to a DIFFERENT `tool_use_id`, which is how the correlation
+ * requirement is exercised: an unrelated command's output must not lend its PR number to this act.
+ */
+const FAKE_OPENER = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-open" }) + "\\n");
+const wrongId = process.env.WRONG_ID === "1";
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [
+    { type: "tool_use", id: "toolu_pr", name: "Bash", input: { command: "gh pr create --fill" } },
+  ] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "user", message: { content: [
+    { type: "tool_result", tool_use_id: wrongId ? "toolu_other" : "toolu_pr", content:
+      "warning: 3 uncommitted changes\\nhttps://github.com/o/r/pull/123\\n" },
+  ] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", uuid: "t2" }) + "\\n");
+});
+`;
+
+describe("HeadlessSession — a `--fill` PR names its number in its own result (#417)", () => {
+	let dir: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-acts-pr-"));
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	function opener(id: string, env?: Record<string, string>): HeadlessSession {
+		const bin = join(dir, `fake-opener-${id}.js`);
+		writeFileSync(bin, FAKE_OPENER);
+		chmodSync(bin, 0o755);
+		return new HeadlessSession({ id, workDir: dir, clientType: "claude", bin, env, statePath: defaultStatePath(dir) });
+	}
+
+	it("publishes the number the tool_result printed, so the Pulls panel can badge the row", async () => {
+		// Before this, `gh pr create --fill` published `target: null` and #401 rendered an
+		// agent-opened PR unattributed — the number was in the runner's hands the whole time.
+		const s = opener("pr1");
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("open a PR");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("pull/123"));
+
+		const acts = s.takeActs();
+		expect(acts).toHaveLength(1);
+		expect(acts[0]).toMatchObject({ kind: "pr.open", target: "#123", ok: true });
+		s.stop();
+	}, 20_000);
+
+	it("ignores a PR URL from ANOTHER tool_use_id — attribution is correlated, not nearby", async () => {
+		// The one failure this module exists to avoid is a confident wrong number. The result is only
+		// evidence for the act when it is that command's OWN answer; a URL in some other tool's output
+		// leaves the act exactly as unattributed as it is today.
+		const s = opener("pr2", { WRONG_ID: "1" });
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("open a PR");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("pull/123"));
+
+		const acts = s.takeActs();
+		expect(acts).toHaveLength(1);
+		// Flushed at end-of-turn with an UNKNOWN outcome: no result was ever addressed to it.
+		expect(acts[0]).toMatchObject({ kind: "pr.open", target: null, ok: null });
+		s.stop();
+	}, 20_000);
+});
+
 describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
 	it("keeps an EVEN number of apostrophes as literals in their own tokens", () => {
 		// The first fix looked ahead for a closing quote anywhere in the command, so two ordinary
