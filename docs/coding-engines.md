@@ -28,6 +28,61 @@ The one exception is Claude's structural flags (`-p`, `--input-format`, `--outpu
 `--verbose`, `--resume`): those carry the wire protocol, so a preset cannot override them.
 `buildClaudeArgs` strips them and their values; every other token you write is kept.
 
+### What one-shot costs: a raw engine forgets every previous turn
+
+The prefix contract above has a consequence it is easy to read past. `spawn(bin, [...presetArgs,
+turnText])` is a **brand new process every turn**, so the Pilot's step 7 —
+
+```
+codex exec --sandbox danger-full-access "now do the same for the other two files"
+```
+
+— runs in a process that has never seen steps 1–6. **The working tree carries state; the
+conversation does not.** The engine is not amnesiac about the repo (its edits are still there, and
+it can read them), only about everything it said, decided, or was told.
+
+Claude is the exception, and its continuity is **not** in the preset either: the runner keeps one
+stream-json process alive, and across runner restarts re-spawns it with `--resume <session id>`
+against `~/.claude` — which is exactly why `--resume` is one of the structural flags a preset may
+not set. `resumedConversation` is false for a raw engine under every circumstance.
+
+The **⚙ CLI engines** editor states this per preset, derived from the command's binary rather than
+listed per engine (`engine-continuity.ts`, mirroring `deriveClientType`), so it stays right for
+`npx claude` and for a custom wrapper.
+
+#### Why no shipped preset resumes, though three CLIs offer it
+
+A resume subcommand looks like the fix — multi-turn memory by editing one text field, no platform
+change. Checked against the installed binaries on 2026-08-09, and **not shipped as a default**,
+because every vendor's resume selects *the most recent session in this directory* rather than the
+session the runner intends:
+
+| CLI | Version | Resume | What it selects |
+|---|---|---|---|
+| Codex | `codex-cli 0.146.0` | `codex exec resume --last [PROMPT]` | newest recorded session in the cwd (`--all` disables the cwd filter) |
+| Grok | `grok 0.2.118` | `-c, --continue` | "the most recent session for the current working directory" |
+| Gemini CLI | `0.53.1` | `-r, --resume latest\|<index>` | latest, or an **index** into the project's session list — which shifts as sessions are added |
+
+Measured, not inferred. `codex exec resume --last` does work: two turns in one directory, turn 2
+asked what word turn 1 had said and answered correctly, on the same session id. Then a second,
+unrelated `codex exec` ran in the same directory — and the next `resume --last` followed *that* one
+instead, answering from the wrong conversation. That is the failure the platform must not ship by
+default: **resuming into the wrong prior conversation is worse than starting clean**, because it is
+confidently wrong rather than obviously blank.
+
+It cannot be pinned from a preset, either. The contract is prefix + turn text, so there is no slot
+for `resume <SESSION_ID>` — the turn text would take the session-id positional. And a coding repo
+added by **local path is the user's real checkout**, so "the newest session in this directory" may
+well be a conversation the human had themselves.
+
+Two smaller findings from the same check, if you do go and edit the field: `codex exec resume`
+accepts `--dangerously-bypass-approvals-and-sandbox` but **not** `--sandbox <mode>`, so the shipped
+write flag does not carry over unchanged; and Grok's `-p/--single` is explicitly single-turn, so it
+does not combine with `-c`.
+
+You own the command field, and on a repo only ever driven by the agent this trade may be worth
+making. The platform declines to make it *for* you.
+
 ## The shipped defaults
 
 `DEFAULT_ENGINES` (`workers/api/src/lib/coding-engines.ts`) — what an instance that has saved

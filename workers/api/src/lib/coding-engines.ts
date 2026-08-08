@@ -251,7 +251,20 @@ export function engineAuthReport(mode: EngineAuth, resolved: EngineAuthResolved 
  * config change, not a code change. See `docs/coding-engines.md`.
  */
 export const DEFAULT_ENGINES: CodingEngine[] = [
-	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn).
+	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn). Every other preset
+	// here is respawned per turn and therefore starts each turn with no memory of the previous one
+	// — see `docs/coding-engines.md` § "What one-shot costs", and the per-preset line the engines
+	// panel now shows (#449).
+	//
+	// NO PRESET RESUMES, deliberately, though three of these CLIs offer it. Checked against the
+	// installed binaries 2026-08-09: `codex exec resume --last` (codex-cli 0.146.0), grok's
+	// `-c/--continue` (0.2.118) and gemini's `-r/--resume latest` (0.53.1) all select the most
+	// recent session in the CWD, not the session the runner intends. Measured: two turns resumed
+	// correctly, then an unrelated `codex exec` in the same directory made the next `resume --last`
+	// answer from THAT conversation. A repo added by local path is the user's real checkout, so the
+	// hijacked session can be one the human had themselves — and resuming into the wrong prior
+	// conversation is worse than starting clean, because it is confidently wrong instead of blank.
+	// The prefix contract also has no slot for a session id: the turn text takes that positional.
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
 	{ id: "codex", label: "Codex", command: "codex exec --sandbox danger-full-access" },
 	// `--skip-trust` is not optional alongside yolo: without it Gemini prints

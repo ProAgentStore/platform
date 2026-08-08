@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
-import { Cpu, Trash2 } from "lucide-react";
+import { engineContinuityNote } from "./engine-continuity";
+import { Cpu, History, Trash2 } from "lucide-react";
 
 /** The engine's vault-key name shown in the api-key option label. */
 function apiKeyName(command: string): string {
@@ -73,6 +74,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 						const isClaude = isClaudeEngine(e.command);
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
+						const continuity = engineContinuityNote(e.command);
 						return (
 							<div key={e.id} className="bg-paper border border-line rounded-lg p-2.5">
 								<div className="flex gap-1.5 items-center flex-wrap">
@@ -118,6 +120,20 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										Default
 									</label>
 								</div>
+								{continuity && (
+									// Stated for BOTH answers, in muted text rather than warning text (#449).
+									// One-shot is the design, not a defect — a non-interactive binary has nothing
+									// to keep alive — so it must not shout next to the read-only warning below,
+									// which IS a misconfiguration the user should fix. Saying nothing for the
+									// persistent case would leave the reader to infer the difference from
+									// silence, which is the gap this closes.
+									<div className="text-xs text-muted mt-1.5 flex items-start gap-1.5">
+										<History size={12} className="mt-0.5 shrink-0" aria-hidden />
+										<span>
+											<b>{continuity.label}.</b> {continuity.detail}
+										</span>
+									</div>
+								)}
 								{needsWrite && (
 									<div className="text-xs text-warning mt-1.5 flex items-start gap-1.5">
 										<span aria-hidden>⚠</span>
