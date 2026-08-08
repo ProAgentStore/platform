@@ -86,6 +86,29 @@ export interface SubordinateRow {
 	direction: AgentDirection | null;
 }
 
+/** A name ending in a space and digits — the exact shape `POST /:agentId/subscribe` generates. */
+const AUTO_NUMBERED = /^(.*\S)\s+\d+$/;
+
+/**
+ * Roster names the PLATFORM generated rather than anyone chose — `Repo Coder 2`, from subscribing
+ * to one agent twice (#450).
+ *
+ * They cannot be reached by voice, and no matching rule fixes that. A transcriber writes "repo
+ * coder two"; `normalizeSpeech` does not convert number words and must not, since it is asserted
+ * byte-identical with the SDK's voice matcher and a digit↔word table is per-language. So the
+ * refusal points at the fix instead — the name is the problem, and renaming is thirty seconds.
+ *
+ * Reported as the whole FAMILY ("Repo Coder" AND "Repo Coder 2"), because the un-suffixed one is
+ * WHY the suffix exists: renaming only the numbered one leaves the pair exactly as confusable.
+ */
+export function autoNumberedNames(rows: readonly { name: string }[]): string[] {
+	const base = (n: string) => normalizeSpeech(AUTO_NUMBERED.exec(n.trim())?.[1] ?? n);
+	// An empty base is dropped: a name that normalises to nothing (pure punctuation) would
+	// otherwise collect every other name that does the same, and advise renaming all of them.
+	const families = new Set(rows.map((r) => r.name).filter((n) => AUTO_NUMBERED.test(n.trim())).map(base).filter(Boolean));
+	return families.size ? rows.filter((r) => families.has(base(r.name))).map((r) => r.name) : [];
+}
+
 /**
  * Resolve however the model named a subordinate against the roster (#320).
  *
@@ -114,7 +137,11 @@ export function resolveSubordinate(
 ): { ok: true; row: SubordinateRow } | { ok: false; message: string } {
 	const q = query.trim();
 	const roster = rows.map((r) => `${r.name} (${r.instanceId})`).join(", ");
-	const nope = (why: string) => ({ ok: false as const, message: `${why} You supervise: ${roster || "nobody"}.` });
+	const numbered = autoNumberedNames(rows);
+	const rename = numbered.length
+		? ` ${numbered.map((n) => `"${n}"`).join(" and ")} ${numbered.length > 1 ? "are" : "is"} still auto-named from subscribing more than once — rename them (their Settings tab) and they will be easier to ask for.`
+		: "";
+	const nope = (why: string) => ({ ok: false as const, message: `${why} You supervise: ${roster || "nobody"}.${rename}` });
 	if (!q) return nope("No agent was named.");
 	// The SHARED speech rule, not a local `trim().toLowerCase()` (#392). This used to be its own
 	// normaliser, which was harmless only while every caller was a model writing a clean name into

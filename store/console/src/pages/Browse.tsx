@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Instance } from "../lib/types";
 import Card from "../components/Card";
+import Button from "../components/Button";
 
 /** Published-catalog agent (shape from GET /v1/agents). */
 interface CatalogAgent {
@@ -28,6 +29,8 @@ export default function Browse() {
 	const [instances, setInstances] = useState<Instance[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [busy, setBusy] = useState<string | null>(null);
+	// The name form for a SECOND instance of an agent you already have: `{agentId, value}`.
+	const [naming, setNaming] = useState<{ id: string; value: string } | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -46,15 +49,23 @@ export default function Browse() {
 
 	const instanceFor = (agentId: string) => instances.find((i) => i.agent_id === agentId);
 
-	const subscribe = async (a: CatalogAgent, { fresh = false }: { fresh?: boolean } = {}) => {
-		// Multiple instances of one agent are supported — "Open" goes to the existing
-		// one; "+ New" (fresh) subscribes again (auto-named "Agent 2", renameable in
-		// its Settings).
-		const existing = instanceFor(a.id);
-		if (existing && !fresh) { navigate(`/instances/${existing.id}`); return; }
+	/**
+	 * Subscribe, optionally under a name the user chose.
+	 *
+	 * "Open" goes to the existing instance; "+ New" asks for a NAME first (#450). It used to
+	 * subscribe straight away and let the server call the result "Agent 2" — which is a uniqueness
+	 * suffix, not something anyone says. Nobody can then ask to be transferred to it by voice:
+	 * a transcriber writes "agent two", the roster holds "Agent 2", and nothing bridges them.
+	 * The prompt is the fix, and it is one form rather than a smarter matcher.
+	 */
+	const subscribe = async (a: CatalogAgent, displayName?: string) => {
 		setBusy(a.id);
 		try {
-			const r = await api<{ instanceId: string }>(`/v1/instances/${a.id}/subscribe`, { method: "POST" });
+			const r = await api<{ instanceId: string }>(`/v1/instances/${a.id}/subscribe`, {
+				method: "POST",
+				body: JSON.stringify(displayName ? { displayName } : {}),
+			});
+			setNaming(null);
 			navigate(`/instances/${r.instanceId}`);
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
@@ -62,6 +73,13 @@ export default function Browse() {
 		} finally {
 			setBusy(null);
 		}
+	};
+
+	/** The primary button: open what you already have, or subscribe for the first time. */
+	const openOrSubscribe = (a: CatalogAgent) => {
+		const existing = instanceFor(a.id);
+		if (existing) { navigate(`/instances/${existing.id}`); return; }
+		void subscribe(a);
 	};
 
 	return (
@@ -87,27 +105,56 @@ export default function Browse() {
 									{a.creator_login && <span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted">@{a.creator_login}</span>}
 									{typeof a.subscriber_count === "number" && <span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted">{a.subscriber_count} subscriber{a.subscriber_count === 1 ? "" : "s"}</span>}
 								</div>
-								<div className="flex gap-2">
-									<button
-										type="button"
-										onClick={() => subscribe(a)}
-										disabled={busy === a.id}
-										className={`flex-1 text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent-soft" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
+								{naming?.id === a.id ? (
+									<form
+										onSubmit={(e) => { e.preventDefault(); if (naming.value.trim()) void subscribe(a, naming.value.trim()); }}
+										className="flex flex-col gap-2"
 									>
-										{busy === a.id ? "Subscribing…" : sub ? "Open →" : "Subscribe"}
-									</button>
-									{sub && (
+										{/* Why a name is being asked for, in the terms it matters in: you can already
+										    have several of these, and the one thing you cannot do with "Agent 2" is
+										    say it. */}
+										<label className="text-xs text-muted" htmlFor={`name-${a.id}`}>
+											You already have one. Name this one something you would say out loud — an agent can transfer you by name.
+										</label>
+										<input
+											id={`name-${a.id}`}
+											value={naming.value}
+											onChange={(e) => setNaming({ id: a.id, value: e.target.value })}
+											placeholder="e.g. Ops repo"
+											maxLength={60}
+										/>
+										<div className="flex gap-2">
+											<Button type="submit" variant="primary" size="lg" className="flex-1" disabled={busy === a.id || !naming.value.trim()}>
+												{busy === a.id ? "Subscribing…" : "Create"}
+											</Button>
+											<Button variant="secondary" size="lg" onClick={() => setNaming(null)}>
+												Cancel
+											</Button>
+										</div>
+									</form>
+								) : (
+									<div className="flex gap-2">
 										<button
 											type="button"
-											onClick={() => subscribe(a, { fresh: true })}
+											onClick={() => openOrSubscribe(a)}
 											disabled={busy === a.id}
-											title="Create another instance of this agent (own documents, settings, memory)"
-											className="text-sm px-3 py-1.5 rounded-xl font-semibold border border-line text-muted hover:border-accent hover:text-accent transition-all disabled:opacity-50"
+											className={`flex-1 text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent-soft" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
 										>
-											+ New
+											{busy === a.id ? "Subscribing…" : sub ? "Open →" : "Subscribe"}
 										</button>
-									)}
-								</div>
+										{sub && (
+											<button
+												type="button"
+												onClick={() => setNaming({ id: a.id, value: "" })}
+												disabled={busy === a.id}
+												title="Create another instance of this agent (own documents, settings, memory)"
+												className="text-sm px-3 py-1.5 rounded-xl font-semibold border border-line text-muted hover:border-accent hover:text-accent transition-all disabled:opacity-50"
+											>
+												+ New
+											</button>
+										)}
+									</div>
+								)}
 							</Card>
 						);
 					})}

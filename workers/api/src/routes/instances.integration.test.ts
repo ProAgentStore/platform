@@ -229,6 +229,32 @@ describe("POST /v1/instances/:agentId/subscribe (integration)", () => {
 		expect((kbPost!.body as { title: string }).title).toBe("Doc A");
 	});
 
+	it("stores the display name the subscriber chose, instead of numbering it (#450)", async () => {
+		// The console asks for a name on the second subscription precisely so the auto-numbered one
+		// is never created: "Site Monitor 2" cannot be reached by saying it out loud.
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }],
+			sameAgentCount: 1,
+		});
+		const res = await post(app, env, "/v1/instances/a1/subscribe", { displayName: "  Shop site  " }, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		const cfg = JSON.parse(writes.find((w) => w.sql.includes("INSERT INTO agent_instances"))!.args[3] as string);
+		expect(cfg.displayName).toBe("Shop site");
+	});
+
+	it("names a FIRST instance too when one was chosen, and leaves it unnamed otherwise", async () => {
+		const build = () => buildApp({ agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }] });
+		const named = build();
+		await post(named.app, named.env, "/v1/instances/a1/subscribe", { displayName: "Shop site" }, await tokenFor("u1"));
+		const namedCfg = JSON.parse(named.writes.find((w) => w.sql.includes("INSERT INTO agent_instances"))!.args[3] as string);
+		expect(namedCfg.displayName).toBe("Shop site");
+		// No name and no sibling: the agent's own name is already sayable, so nothing is stored.
+		const plain = build();
+		await post(plain.app, plain.env, "/v1/instances/a1/subscribe", {}, await tokenFor("u1"));
+		const plainCfg = JSON.parse(plain.writes.find((w) => w.sql.includes("INSERT INTO agent_instances"))!.args[3] as string);
+		expect(plainCfg.displayName).toBeUndefined();
+	});
+
 	it("auto-numbers the display name for a 2nd instance of the same agent", async () => {
 		const { app, env, writes } = buildApp({
 			agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }],

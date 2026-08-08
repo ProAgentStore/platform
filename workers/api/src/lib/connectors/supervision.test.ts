@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS, resolveSubordinate, type SubordinateRow } from "./supervision.js";
+import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS, autoNumberedNames, resolveSubordinate, type SubordinateRow } from "./supervision.js";
 import { stripCommentsAndLiterals } from "../source-guard.js";
 import type { Env } from "../../types.js";
 
@@ -300,6 +300,58 @@ describe("resolveSubordinate — a name is what the model actually holds (#320)"
 		// literal-id arm, both arrived in the exact set together and the escape hatch refused too.
 		const clash = [row({ instanceId: "id-2", name: "FWS platform" }), row({ instanceId: "x", name: "id 2" })];
 		expect(resolveSubordinate(clash, "id-2")).toMatchObject({ ok: true, row: { name: "FWS platform" } });
+	});
+
+	// ── Auto-numbered names (#450) ───────────────────────────────────────────────────────────────
+
+	it("points a refusal at the auto-numbered names that caused it", () => {
+		// The measured case: the roster is "Repo Coder" + "Repo Coder 2", the user says "repo coder
+		// two", and NOTHING can match it — `normalizeSpeech` does not convert number words and must
+		// not. So the refusal names the real problem instead of leaving a dead end.
+		const numbered = [row({ instanceId: "a", name: "Repo Coder" }), row({ instanceId: "b", name: "Repo Coder 2" })];
+		const r = resolveSubordinate(numbered, "repo coder two");
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.message).toContain('"Repo Coder" and "Repo Coder 2" are still auto-named');
+		expect(!r.ok && r.message).toMatch(/rename them/);
+	});
+
+	it("says nothing about renaming when every name was chosen", () => {
+		// The clause has to be absent for an ordinary roster, or it becomes noise on every refusal
+		// and the one case it is about stops standing out.
+		const r = resolveSubordinate(roster, "PAS");
+		expect(!r.ok && r.message).not.toMatch(/auto-named/);
+	});
+
+	it("still resolves the queries that worked, auto-numbered roster or not", () => {
+		// Acceptance: the advice is appended to REFUSALS and changes no decision. "Repo Coder 2"
+		// and "coder 2" resolved before and must still resolve.
+		const numbered = [row({ instanceId: "a", name: "Repo Coder" }), row({ instanceId: "b", name: "Repo Coder 2" })];
+		expect(resolveSubordinate(numbered, "Repo Coder 2")).toMatchObject({ ok: true, row: { instanceId: "b" } });
+		expect(resolveSubordinate(numbered, "coder 2")).toMatchObject({ ok: true, row: { instanceId: "b" } });
+		expect(resolveSubordinate(numbered, "Repo Coder")).toMatchObject({ ok: true, row: { instanceId: "a" } });
+		for (const spoken of ["coder two", "Repo coder number two", "the second repo coder"]) {
+			expect(resolveSubordinate(numbered, spoken).ok, spoken).toBe(false);
+		}
+	});
+
+	it("names the whole family, singular when there is only one member", () => {
+		// The un-suffixed sibling is WHY the suffix exists, so renaming only the numbered one
+		// leaves the pair as confusable as before. With no sibling left, the grammar follows.
+		expect(autoNumberedNames([{ name: "Repo Coder 2" }])).toEqual(["Repo Coder 2"]);
+		expect(autoNumberedNames([{ name: "Repo Coder" }, { name: "Repo Coder 2" }, { name: "Site Monitor" }])).toEqual([
+			"Repo Coder",
+			"Repo Coder 2",
+		]);
+		const lone = resolveSubordinate([row({ instanceId: "b", name: "Repo Coder 2" })], "nobody");
+		expect(!lone.ok && lone.message).toContain('"Repo Coder 2" is still auto-named');
+	});
+
+	it("does not read every roster as auto-numbered", () => {
+		// A name with no trailing number is not a generated one, and a family only forms around a
+		// name that has one. "Claude 3" typed on purpose is a false positive we accept — the cost
+		// is one sentence of advice on a refusal, never a different destination.
+		expect(autoNumberedNames([{ name: "FAS platform" }, { name: "FWS platform" }])).toEqual([]);
+		expect(autoNumberedNames([{ name: "2" }, { name: "FWS platform" }])).toEqual([]);
 	});
 
 	it("matches a name with an apostrophe however it was typed", () => {

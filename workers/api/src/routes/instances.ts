@@ -87,10 +87,22 @@ export function defaultPipelinesFor(agentConfig: string | null): Record<string, 
 	return out;
 }
 
-/** Subscribe to an agent — creates a personal instance with its own DO. */
+/**
+ * A per-instance display name as it is stored — trimmed, capped at 60. ONE expression, shared by
+ * subscribe and `PUT /:instanceId/name`: both now write that key for the same reason, and a second
+ * copy of "what a name is" would drift.
+ */
+function displayNameFrom(raw: unknown): string {
+	return typeof raw === "string" ? raw.trim().slice(0, 60) : "";
+}
+
+/** Subscribe to an agent — creates a personal instance with its own DO.
+ *  Optional body `{ displayName }`: the name the subscriber CHOSE for this one (#450). */
 instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	const session = await requireUser(c);
 	const agentId = c.req.param("agentId");
+	const body = (await c.req.json().catch(() => ({}))) as { displayName?: unknown };
+	const chosenName = displayNameFrom(body.displayName);
 
 	// Verify agent exists and is published
 	const agent = await c.env.DB.prepare(
@@ -101,7 +113,7 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	if (!agent) throw new HttpError(404, "Agent not found or not published");
 
 	// Multiple instances of the same agent are allowed (e.g. two Doc Chat libraries
-	// with different documents). Later ones get a numbered display name so they're
+	// with different documents). Later ones fall back to a numbered display name so they're
 	// distinguishable on the dashboard; rename via PUT /:instanceId/name.
 	const sameAgent = await c.env.DB.prepare(
 		"SELECT COUNT(*) AS n FROM agent_instances WHERE agent_id = ?1 AND user_id = ?2",
@@ -129,8 +141,17 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 
 	const instanceId = crypto.randomUUID();
 
-	// Create instance row. Second+ instances of the same agent get a numbered
-	// display name (stored in config.displayName; user-renameable).
+	// Create instance row. A name the subscriber CHOSE wins; second+ instances of the same agent
+	// otherwise fall back to a numbered display name (config.displayName; user-renameable).
+	//
+	// `<Agent> 2` is a uniqueness suffix, not a name anybody would say out loud, and that is a
+	// functional defect rather than an aesthetic one (#450): a transcriber writes "repo coder
+	// two", the roster says "Repo Coder 2", and nothing bridges them — `normalizeSpeech` does not
+	// convert number words and deliberately must not, since that table is per-language and shared
+	// with every voice command in the SDK. So a spoken transfer to an auto-numbered agent resolves
+	// to nothing. The console now ASKS for a name when you subscribe to an agent you already have;
+	// the fallback stays for API/MCP callers, which have nobody to ask, and `resolveSubordinate`'s
+	// refusal names what it produced so the dead end points at the fix.
 	//
 	// An agent may also DECLARE default pipelines (agents.config.pipelines). For an agent
 	// whose whole behaviour IS its pipelines, those have to arrive with the subscription —
@@ -139,7 +160,8 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	// referenced) so the subscriber owns their copy and can edit it, which is the same
 	// template→instance rule the KB and identity already follow. Invalid defs are dropped
 	// rather than poisoning the instance config.
-	const initial: Record<string, unknown> = nth > 1 ? { displayName: `${agent.name} ${nth}` } : {};
+	const displayName = chosenName || (nth > 1 ? `${agent.name} ${nth}` : "");
+	const initial: Record<string, unknown> = displayName ? { displayName } : {};
 	const declaredPipelines = defaultPipelinesFor(agent.config);
 	if (Object.keys(declaredPipelines).length) initial.pipelines = declaredPipelines;
 	const initialConfig = JSON.stringify(initial);
@@ -671,7 +693,7 @@ instanceRoutes.put("/:instanceId/name", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
-	const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
+	const name = displayNameFrom(body.name);
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	if (name) await patchInstanceConfig(c.env, instanceId, session.uid, "displayName", name);
 	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "displayName");
