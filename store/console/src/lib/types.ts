@@ -130,6 +130,12 @@ export interface Message {
 	/** Cached gloss attached server-side (renders in the same paint as the message —
 	 *  only uncached messages translate client-side). */
 	gloss?: MessageGloss;
+	/** The API stamped this assistant message as claiming a tool result no tool produced (#406).
+	 *  Computed server-side on every read, so it appears on rows written before the guard that
+	 *  catches this at generation time (#395) existed. The text is still shown — the user acted on
+	 *  it and deleting it would rewrite the record — but it must not read as a real answer, and the
+	 *  agent no longer reads it at all. */
+	fabricated?: boolean;
 }
 
 export interface RuntimeTask {

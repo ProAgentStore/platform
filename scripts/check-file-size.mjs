@@ -261,7 +261,13 @@ const PINS = {
 	// lib/transfer.test.ts: the destination must be read in exactly ONE place and that place must
 	// be the send path, because a second reader would silently remove the property the whole design
 	// rests on. Every decision it makes is pure and lives in lib/transfer.ts with its tests.
-	"store/console/src/pages/InstanceDetail.tsx": 1441,
+	// +4 at #406: a retracted answer must not render identically to a real one. Three of the four
+	// lines are the ternary arm that gives a stamped bubble a red edge and the `{m.fabricated && …}`
+	// that puts the label above its text; the fourth is the import. The words themselves live in
+	// components/FabricatedNotice.tsx, because a message that says "nothing in this reply was
+	// fetched" is the kind of sentence that gets softened by whoever edits the file next, and it is
+	// easier to see what it says when it is not one line inside a bubble's class expression.
+	"store/console/src/pages/InstanceDetail.tsx": 1445,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -357,7 +363,13 @@ const PINS = {
 	// spread onto the existing `json(...)`. The comment is the load-bearing part: it says the field
 	// is attached HERE and on no broadcast, no system message and no poll, which is the property
 	// that makes a move nobody asked for impossible rather than merely discouraged.
-	"workers/api/src/agent-do.ts": 1140,
+	// +6 for #406, five of them comment. `/messages` now STAMPS an assistant message that wrote its
+	// own tool results instead of serving it as an ordinary answer. The prose is the part worth the
+	// lines: it says the stamp is computed on every read and never persisted, which is the whole
+	// reason it reaches rows written before #395's guard existed — including in a DO that has been
+	// asleep since — and it says this route marks rather than redacts, because the user acted on
+	// that text and the record of what they acted on is the one thing that must not be edited.
+	"workers/api/src/agent-do.ts": 1146,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -453,7 +465,14 @@ const PINS = {
 	// decisions that can be pure all are (the table, the diagnosis budget, the truncation of a
 	// runner-supplied error string) with their tests, so this file got smaller in logic and longer by
 	// one import.
-	"workers/api/src/agent-think.ts": 1054,
+	// +7 at #406, one of code and one an import. Stored history passes through
+	// `redactFabricatedHistory` before it becomes the prompt, because #395's guard protects the turn
+	// it is on and a fabrication written before it shipped was still being read back — one turn on
+	// the reporting instance restated an invented ticket list as "as I just fetched" fifteen hours
+	// later, having run no tools at all. The five comment lines say what is withheld (the model's
+	// reading) and what is not (the stored row, which the console still gets), since a future reader
+	// finding a redactor on the context path will otherwise assume the transcript was edited.
+	"workers/api/src/agent-think.ts": 1061,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

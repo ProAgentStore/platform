@@ -15,6 +15,12 @@ export interface AgentMessage {
 	 *  the message is also what gives it the transcript's retention for free: clearing the chat
 	 *  deletes the record, and the dictation with it. Absent for typed turns. */
 	dictation?: string;
+	/** Stamped by `/messages` on an assistant message that claims a tool result the platform never
+	 *  wrote (#406). NEVER persisted — it is computed from the message's own text on every read, so
+	 *  it reaches rows written before the guard that catches this at generation time (#395) existed,
+	 *  in a DO that has been asleep since. The console renders a stamped message as what it is; the
+	 *  model does not read its content at all. See lib/fabricated-history.ts. */
+	fabricated?: true;
 	createdAt: string;
 }
 

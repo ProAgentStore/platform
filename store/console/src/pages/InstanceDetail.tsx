@@ -24,6 +24,7 @@ import GlossedMessage from "../components/GlossedMessage";
 import SpokenMessage from "../components/SpokenMessage";
 import SystemMessage from "../components/SystemMessage";
 import DeleteTurnButton from "../components/DeleteTurnButton";
+import FabricatedNotice from "../components/FabricatedNotice";
 import McpInputRequests from "../components/McpInputRequests";
 import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
@@ -1106,7 +1107,9 @@ function InstancePage() {
 										// blocked copying the text. Replay lives on the always-visible speaker button.
 										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
-												: "bg-panel border border-line self-start rounded-bl-sm"
+												// A retracted answer must not carry the same edge as a real one (#406).
+												: m.fabricated ? "bg-panel border border-red/40 self-start rounded-bl-sm"
+													: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
 										<CopyButton text={m.content} />
@@ -1119,6 +1122,7 @@ function InstancePage() {
 										    without giving every message header a taller row (#389). */}
 										{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.fabricated && <FabricatedNotice />}
 										{m.role === "assistant" ? (
 											<GlossedMessage
 												message={m}

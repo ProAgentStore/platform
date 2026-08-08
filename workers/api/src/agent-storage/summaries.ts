@@ -5,6 +5,7 @@
 import type { ActivityEvent, ConversationSummary, ExtractedFact, VectorMeta } from "../agent-storage-types.js";
 import type { AgentMessage, MemoryEntry } from "../agent-types.js";
 import { approxTokens } from "../lib/ai-pricing.js";
+import { redactFabricatedHistory } from "../lib/fabricated-history.js";
 import { recordPlatformUsage } from "../lib/usage.js";
 import { type AgentStorageBaseCtor, SUMMARY_CF_MODEL, SUMMARY_THRESHOLD } from "./base.js";
 
@@ -83,7 +84,12 @@ export function withSummaries<TBase extends AgentStorageBaseCtor & GConstructorW
 		): Promise<ConversationSummary | null> {
 			if (!this.ai || messages.length === 0) return null;
 
-			const transcript = messages
+			// Redacted first (#406). This is the reader where a stored fabrication does the most
+			// damage and it is the least obvious one: the chat window ages an invented turn out after
+			// ten messages, whereas a summary distils it into `fact:*` memory entries that are
+			// injected into EVERY future prompt and outlive the conversation that produced them. A
+			// fabrication that reaches this function stops being a message and becomes a belief.
+			const transcript = redactFabricatedHistory(messages)
 				.map((m) => `[${m.role}]: ${m.content}`)
 				.join("\n")
 				.slice(0, 8_000);

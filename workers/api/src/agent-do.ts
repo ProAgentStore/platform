@@ -77,6 +77,7 @@ import {
 import { MAX_TASKS, taskListPayload } from "./lib/agent-tasks.js";
 import { turnSpanFor } from "./lib/chat-turns.js";
 import { json } from "./lib/do-json.js";
+import { isFabricatedRecord } from "./lib/fabricated-history.js";
 import { logError } from "./lib/error-log.js";
 import { platformAiBinding } from "./lib/platform-settings.js";
 import { isTransientInfraError } from "./lib/on-error.js";
@@ -768,7 +769,12 @@ export class AgentDO extends DurableObject<Env> {
 		// chat loads pass a small limit (50) and are unaffected.
 		const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 2000);
 		const messages = await this.getRecentMessages(limit);
-		return json({ messages });
+		// Mark, don't delete (#406). The user ACTED on these answers — an invented ticket list was
+		// the basis of a decision — so the row stays exactly as written and is stamped instead, and
+		// the console renders a stamped message differently from a real one. The stamp is computed
+		// here rather than stored, which is the whole reason it reaches rows written before #395's
+		// guard existed. What the model sees is handled at the other end, in agent-think.ts.
+		return json({ messages: messages.map((m) => (isFabricatedRecord(m) ? { ...m, fabricated: true as const } : m)) });
 	}
 
 	private async handleClearMessages(): Promise<Response> {

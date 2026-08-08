@@ -24,6 +24,7 @@ import { resolveStatsCards, statsPromptBlock } from "./lib/stats-schema.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
+import { redactFabricatedHistory } from "./lib/fabricated-history.js";
 import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
 import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
@@ -658,9 +659,15 @@ export async function runAgentThink(opts: {
 	// `content` is `unknown`, not `string`, because a tool round appends the provider's own content
 	// BLOCKS (#398) — the assistant turn with its `tool_use`, then a user turn of `tool_result`s.
 	// Everything read out of history is still a string, which is why the note below type-guards.
+	//
+	// History passes through `redactFabricatedHistory` FIRST (#406). #395's guard protects the turn
+	// it is on; a fabrication written before it shipped is still in the transcript, and a later turn
+	// on this instance read one back out of history and restated it as "three open tickets as I just
+	// fetched" — with no tool execution at all. The stored row is untouched and still served to the
+	// console; what is withheld is the model's reading of it. See lib/fabricated-history.ts.
 	const aiMessages: { role: string; content: unknown }[] = [
 		{ role: "system", content: systemPrompt },
-		...messages.map((m) => ({ role: m.role, content: m.content as unknown })),
+		...redactFabricatedHistory(messages).map((m) => ({ role: m.role, content: m.content as unknown })),
 	];
 
 	// Strongest position of all: a note ON the last user message (request-only — never
