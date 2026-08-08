@@ -61,62 +61,68 @@ export default function Ops() {
 
 			<Panel title="Stuck / failed coding sessions">
 				{!ops.stuckSessions.length ? <Empty label="No stuck sessions. 🎉" /> : (
-					<table className="w-full text-sm">
-						<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
-							<th className="py-1.5">Status</th><th>Owner</th><th>Engine</th><th>Instance</th><th>Updated</th>
-						</tr></thead>
-						<tbody>
-							{ops.stuckSessions.map((s) => (
-								<tr key={s.id} className="border-b border-line/50 align-top">
-									<td className={`py-1.5 font-semibold whitespace-nowrap ${statusColor(s.status)}`}>{s.status}</td>
-									<td className="whitespace-nowrap">{s.owner_login || s.user_id}</td>
-									<td className="text-muted whitespace-nowrap">{s.client_type}</td>
-									<td className="text-muted-soft truncate max-w-[180px]">{s.instance_id}</td>
-									<td className="text-muted whitespace-nowrap">{s.updated_at?.slice(5, 16)}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
+								<th className="py-1.5">Status</th><th>Owner</th><th>Engine</th><th>Instance</th><th>Updated</th>
+							</tr></thead>
+							<tbody>
+								{ops.stuckSessions.map((s) => (
+									<tr key={s.id} className="border-b border-line/50 align-top">
+										<td className={`py-1.5 font-semibold whitespace-nowrap ${statusColor(s.status)}`}>{s.status}</td>
+										<td className="whitespace-nowrap">{s.owner_login || s.user_id}</td>
+										<td className="text-muted whitespace-nowrap">{s.client_type}</td>
+										<td className="text-muted-soft truncate max-w-[180px]">{s.instance_id}</td>
+										<td className="text-muted whitespace-nowrap">{s.updated_at?.slice(5, 16)}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
 				)}
 			</Panel>
 
 			<Panel title="Runner nodes — stale (possibly offline)">
 				{!ops.staleRunners.length ? <Empty label="All registered runners are fresh." /> : (
-					<table className="w-full text-sm">
-						<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
-							<th className="py-1.5">Node</th><th>Owner</th><th>Version</th><th>Instance</th><th>Last seen</th>
-						</tr></thead>
-						<tbody>
-							{ops.staleRunners.map((n) => (
-								<tr key={`${n.instance_id}:${n.runner_node}`} className="border-b border-line/50 align-top">
-									<td className="py-1.5 whitespace-nowrap">{n.runner_node}</td>
-									<td className="whitespace-nowrap">{n.owner_login || n.user_id}</td>
-									<td className="text-muted whitespace-nowrap">{n.runner_version || "—"}</td>
-									<td className="text-muted-soft truncate max-w-[180px]">{n.instance_id}</td>
-									<td className="text-muted whitespace-nowrap">{n.last_seen_at ? n.last_seen_at.slice(5, 16) : "never"}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
+								<th className="py-1.5">Node</th><th>Owner</th><th>Version</th><th>Instance</th><th>Last seen</th>
+							</tr></thead>
+							<tbody>
+								{ops.staleRunners.map((n) => (
+									<tr key={`${n.instance_id}:${n.runner_node}`} className="border-b border-line/50 align-top">
+										<td className="py-1.5 whitespace-nowrap">{n.runner_node}</td>
+										<td className="whitespace-nowrap">{n.owner_login || n.user_id}</td>
+										<td className="text-muted whitespace-nowrap">{n.runner_version || "—"}</td>
+										<td className="text-muted-soft truncate max-w-[180px]">{n.instance_id}</td>
+										<td className="text-muted whitespace-nowrap">{n.last_seen_at ? n.last_seen_at.slice(5, 16) : "never"}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
 				)}
 			</Panel>
 
 			<Panel title="Users with active instances but no API key">
 				{!ops.noKeyUsers.length ? <Empty label="Every active subscriber has a key on file." /> : (
-					<table className="w-full text-sm">
-						<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
-							<th className="py-1.5">User</th><th>Name</th><th>Active instances</th>
-						</tr></thead>
-						<tbody>
-							{ops.noKeyUsers.map((u) => (
-								<tr key={u.id} className="border-b border-line/50 align-top">
-									<td className="py-1.5 whitespace-nowrap">{u.github_login}</td>
-									<td className="text-muted">{u.github_name || "—"}</td>
-									<td className="font-semibold">{u.active_instances}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
+								<th className="py-1.5">User</th><th>Name</th><th>Active instances</th>
+							</tr></thead>
+							<tbody>
+								{ops.noKeyUsers.map((u) => (
+									<tr key={u.id} className="border-b border-line/50 align-top">
+										<td className="py-1.5 whitespace-nowrap">{u.github_login}</td>
+										<td className="text-muted">{u.github_name || "—"}</td>
+										<td className="font-semibold">{u.active_instances}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
 				)}
 			</Panel>
 		</div>

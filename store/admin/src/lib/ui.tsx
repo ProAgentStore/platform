@@ -5,8 +5,23 @@ export function Panel({ title, children, right }: { title?: string; children: Re
 	return (
 		<div className="bg-panel border border-line rounded-xl p-4 mb-4">
 			{(title || right) && (
-				<div className="flex items-center justify-between mb-3">
-					{title && <h2 className="font-display text-lg font-bold">{title}</h2>}
+				/**
+				 * `flex-wrap`, because this row set the minimum width of the whole page (#435).
+				 *
+				 * A non-wrapping flex row's min-content is the SUM of its items', and a Panel title
+				 * is often a repo slug or an id: `ProAgentStore/platform history` beside a
+				 * `2026-08-08T00:00` stamp came to 280px of min-content, so the Panel could not be
+				 * narrower than 312px, so `<main>` panned 8px at 320px on /admin/github-issues.
+				 * Wrapping makes the min-content the MAX of the items instead of the sum, and the
+				 * stamp drops to its own line only when it has to.
+				 *
+				 * Worth recording because it was twice attributed elsewhere — #435 to the table (it
+				 * is already in a scroller) and #414 to "a Stat card in the grid-cols-2 header".
+				 * Measured: neither. The two offenders were both `Panel`, and nothing inside either
+				 * of them overflowed.
+				 */
+				<div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+					{title && <h2 className="font-display text-lg font-bold break-words">{title}</h2>}
 					{right}
 				</div>
 			)}

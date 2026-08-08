@@ -33,7 +33,14 @@ export default function Terminals() {
 			<p className="text-sm text-muted mb-3">{nodes.length} machine(s) — {nodes.filter((n) => n.connected).length} live. Auto-refreshes every 10s.</p>
 			{nodes.map((n) => (
 				<Panel key={`${n.ownerLogin}:${n.node}`}>
-					<div className="flex items-center gap-2 mb-2">
+					{/* `flex-wrap`, because this row is the one route in #435 with no table to put in a
+					    scroller. A non-wrapping row of hostname + owner + version + a `last seen
+					    2026-08-08 00:21:19` stamp measured 85px past `<main>` at 320px, on three
+					    rows — the whole page pans to read a timestamp. Wrapping keeps every field
+					    (they are all short, and hiding the stamp below `sm` would delete the one
+					    thing the row is for), and `ml-auto` still right-aligns the stamp on the
+					    line it lands on. */}
+					<div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2">
 						{dot(n.connected)}
 						<span className="font-semibold font-mono">{n.node}</span>
 						<span className="text-xs text-muted">{n.ownerLogin || "?"}</span>

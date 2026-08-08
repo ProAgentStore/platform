@@ -70,23 +70,25 @@ export default function Spending() {
 function BucketTable({ rows, nameHead }: { rows: Bucket[]; nameHead: string }) {
 	if (!rows.length) return <div className="text-muted-soft text-sm">None yet.</div>;
 	return (
-		<table className="w-full text-sm">
-			<thead>
-				<tr className="text-muted text-xs uppercase text-left border-b border-line">
-					<th className="py-1.5">{nameHead}</th>
-					<th className="text-right">Calls</th>
-					<th className="text-right">Value</th>
-				</tr>
-			</thead>
-			<tbody>
-				{rows.map((b) => (
-					<tr key={b.key} className="border-b border-line/50">
-						<td className="py-1.5 truncate max-w-[180px]">{b.label || b.key}</td>
-						<td className="text-right">{fmtInt(b.calls)}</td>
-						<td className="text-right">{fmtUsd(b.costMicros)}</td>
+		<div className="overflow-x-auto">
+			<table className="w-full text-sm">
+				<thead>
+					<tr className="text-muted text-xs uppercase text-left border-b border-line">
+						<th className="py-1.5">{nameHead}</th>
+						<th className="text-right">Calls</th>
+						<th className="text-right">Value</th>
 					</tr>
-				))}
-			</tbody>
-		</table>
+				</thead>
+				<tbody>
+					{rows.map((b) => (
+						<tr key={b.key} className="border-b border-line/50">
+							<td className="py-1.5 truncate max-w-[180px]">{b.label || b.key}</td>
+							<td className="text-right">{fmtInt(b.calls)}</td>
+							<td className="text-right">{fmtUsd(b.costMicros)}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
 	);
 }

@@ -333,7 +333,22 @@ async function mockAdminSurfaces(page: Page) {
 
 		if (path === "/v1/admin/me") return json({ admin: true });
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "operator" });
-		if (path === "/v1/admin/users") return json({ users: [{ id: "user-1", github_login: "operator", roles: ["admin"] }], total: 1 });
+		/**
+		 * A COMPLETE `AdminUser`. The three-field version this replaced crashed the page it was
+		 * meant to paint: `Users.tsx` calls `u.key_providers.join()` and `fmtUsd(u.value30dMicros)`
+		 * unguarded, so React unmounted the whole tree and `<main>` never appeared. It went
+		 * unnoticed because /admin/users renders no `<select>` and so was outside #414's route
+		 * list — the same gap #435 is about, one layer down in the fixture.
+		 */
+		if (path === "/v1/admin/users") {
+			return json({
+				total: 2,
+				users: [
+					{ id: "user-1", github_login: "operator", github_name: "Operator", roles: ["admin", "user"], agents_owned: 2, active_instances: 3, key_providers: ["anthropic", "openai"], value30dMicros: 5_000_000, charged30dMicros: 5_000_000, suspended: 0, suspended_reason: null },
+					{ id: "user-2", github_login: "a-long-github-login-name", github_name: "A Contributor With A Long Name", roles: ["creator", "user"], agents_owned: 1, active_instances: 1, key_providers: [], value30dMicros: 12_000, charged30dMicros: 0, suspended: 1, suspended_reason: "abuse" },
+				],
+			});
+		}
 		if (path === "/v1/admin/agents") return json({ agents, total: agents.length });
 		if (path === "/v1/admin/instances") return json({ instances, total: instances.length });
 
@@ -433,6 +448,77 @@ async function mockAdminSurfaces(page: Page) {
 				issues: [
 					{ number: 414, title: "The operator portal's <select> rules have no paint containment", state: "open", labels: ["deferred: no demand"], severity: "medium", createdAt: "2026-08-08", closedAt: null, updatedAt: "2026-08-08", url: "https://example.invalid/414", comments: 0 },
 				],
+			});
+		}
+
+		/**
+		 * The routes below paint no `<select>`, so #414's block never needed them — but #435
+		 * measures `<main>` on EVERY operator route, and a page stuck on `<Loading />` measures
+		 * zero overflow and passes. Same non-vacuity rule as above, same reason.
+		 *
+		 * The strings are long on purpose. #435's numbers are data-independent by construction
+		 * (a `max-w-[420px]` cell cannot fit a 320px phone whatever it holds), but the rows that
+		 * overflow because of a `whitespace-nowrap` hostname or an ISO timestamp are NOT — a
+		 * fixture of short invented names would make this block vacuous, which is the hollow-fixture
+		 * failure this file has already shipped twice.
+		 */
+		if (path === "/v1/admin/overview") {
+			return json({
+				users: 12, agents: 9, agentsPublished: 4, instancesActive: 7,
+				errors24h: 3, aiCalls24h: 812, value30dMicros: 5_000_000, platformSpend30dMicros: 90_000,
+			});
+		}
+		if (path === "/v1/admin/ops") {
+			return json({
+				errors24h: 3,
+				stuckSessions: [
+					{ id: "cs_01J9ZQ8F3K2M7NPRSTVWXY", instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXY", user_id: "user-2", owner_login: "creator-two", client_type: "claude", status: "needs_human", updated_at: "2026-08-08T00:21:19Z" },
+					{ id: "cs_01J9ZQ8F3K2M7NPRSTVWXZ", instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXZ", user_id: "user-3", owner_login: "sergey-ivochkin", client_type: "codex", status: "blocked", updated_at: "2026-08-07T23:04:02Z" },
+				],
+				staleRunners: [
+					{ instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXY", runner_node: "Sergeys-MacBook-Air.local", user_id: "user-2", owner_login: "creator-two", runner_version: "0.4.16", status: "connected", last_seen_at: "2026-08-08T00:21:19Z" },
+				],
+				noKeyUsers: [{ id: "user-4", github_login: "a-long-github-login-name", github_name: "A Contributor With A Long Name", active_instances: 2 }],
+			});
+		}
+		if (path === "/v1/admin/triggers") {
+			return json({
+				count: 2,
+				triggers: [
+					{ id: "trg-1", agentName: "Small Business Website Lead Finder", ownerLogin: "sergey-ivochkin", name: "nightly sweep", type: "cron", action: "run_pipeline", enabled: true, hasSecret: false, schedule: "0 17 * * *", createdAt: "2026-08-01T00:00:00Z" },
+					{ id: "trg-2", agentName: "Lead Outreach", ownerLogin: "creator-two", name: "inbound lead webhook", type: "webhook", action: "run_pipeline", enabled: false, hasSecret: true, schedule: null, createdAt: "2026-07-28T00:00:00Z" },
+				],
+			});
+		}
+		if (path === "/v1/admin/terminals") {
+			return json({
+				nodes: [
+					{
+						node: "Sergeys-MacBook-Air.local", ownerLogin: "sergey-ivochkin", runnerVersion: "0.4.16",
+						lastSeenAt: "2026-08-08 00:21:19", connected: false,
+						instances: [{ instanceId: "inst-1", name: "Repo Coder", agentSlug: "coder", status: "active", connected: false, bound: true, runtime: "coding" }],
+						sessions: [{ sessionId: "cs-1", repoName: "ProAgentStore/platform", engine: "claude", status: "active", updatedAt: "2026-08-08T00:21:19Z", terminalTail: "» running pnpm vitest run\n" }],
+					},
+					{ node: "RLs-MacBook-Pro-16.local", ownerLogin: "creator-two", runnerVersion: "0.4.15", lastSeenAt: "2026-08-07 22:10:04", connected: true, instances: [], sessions: [] },
+				],
+			});
+		}
+		if (path === "/v1/admin/connectors") {
+			return json({
+				connectors: [
+					{ connector: "github", tools: [{ name: "github_list_issues", scope: "read" }, { name: "github_create_issue", scope: "write" }], hasWrite: true },
+					{ connector: "web-search", tools: [{ name: "web_search", scope: "read" }], hasWrite: false },
+				],
+				consents: [{ instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXY", user_id: "user-2", connector: "github", scope: "write", created_at: "2026-08-01T00:00:00Z", owner_login: "creator-two" }],
+			});
+		}
+		if (path === "/v1/admin/mcp-audit") {
+			return json({
+				events: ERROR_SOURCES.map((source, i) => ({
+					time: "2026-08-08T00:21:19Z", subject: `user:sergey-ivochkin`, tool: "coding_session_capture",
+					action: i === 0 ? "denied" : "allowed", reason: i === 0 ? "scope not granted" : undefined,
+					requiredScope: "runtime", scopes: ["read", "write", "runtime"], result: { source },
+				})),
 			});
 		}
 
@@ -588,5 +674,142 @@ test.describe("mobile — no select widens the operator portal (#414)", () => {
 			{ ...withContainment, contain: "-" },
 			`the focus indicator changed when paint containment was removed — containment is eating it. with: ${JSON.stringify(withContainment)} / without: ${JSON.stringify(withoutContainment)}`,
 		).toEqual({ ...withoutContainment, contain: "-" });
+	});
+});
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * mobile — no operator route pans sideways (#435)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * Eight of the fourteen operator routes were horizontally pannable on a phone. `/admin/errors`
+ * dragged a 782px page through a 320px window to read an error message: `main.scrollWidth −
+ * main.clientWidth` measured 462px at 320 and 392 at 390, with the table laying out at 749px.
+ * Engine-independent — Chromium and WebKit gave byte-identical numbers at both widths.
+ *
+ * ── Why this is a guard and not just nine wrappers
+ *
+ * The remedy was already in this repo: `<div className="overflow-x-auto">` around the table, on
+ * six pages. The measurements split exactly along that line — `/admin/agents` carries a **904px**
+ * table and measured **0**, `/admin/errors` carries a 749px one and measured 462. So this was
+ * never a design problem, it was a wrapper that nine call sites never got, and nine misses out of
+ * fifteen means the tenth table would have missed it too. The assertion is the deliverable; the
+ * wrappers are just what makes it green today.
+ *
+ * ── Why `<main>` is asserted HERE and not in the #414 block above
+ *
+ * The `mobile — no select widens the operator portal` block deliberately does NOT assert `<main>`,
+ * and its comment explains why: running it found real page-level overflow on `/admin/errors` with
+ * ZERO select offenders, so asserting it there would have made #414's guard permanently red on
+ * somebody else's defect. That defect is this one. It now has its own block, its own name and its
+ * own fix — which is the correct end state for that scope decision, not a contradiction of it.
+ *
+ * ── `mobile — `, load-bearing
+ *
+ * `playwright.config.ts` scopes the WebKit project with `grep: /mobile — /`. Without the prefix
+ * this silently runs in one engine, which is the #333 shape and is exactly what left the operator
+ * portal unmeasured until #414.
+ */
+
+/**
+ * Every route in `store/admin/src/App.tsx` that a `<Layout>` renders, with a string that proves
+ * the page PAINTED. The non-vacuity check is not optional here: every one of these pages
+ * early-returns `<Loading />` or `<Empty />` before its table, and both measure zero overflow.
+ * A fixture gap would not fail this block — it would make it pass by measuring nothing.
+ *
+ * The strings are chosen to come from ROW DATA and from nothing else. `agent.unpublish` was the
+ * first attempt for /admin/audit and is wrong for an instructive reason: it is also an `<option>`
+ * in that page's action filter, options inside a closed `<select>` are not visible, and `.first()`
+ * picks the option. A non-vacuity check that can be satisfied by a filter control is not one.
+ */
+const PORTAL_ROUTES: Array<{ route: string; painted: string }> = [
+	{ route: "/admin/", painted: "Users" },
+	{ route: "/admin/errors", painted: "TypeError: cannot read properties of undefined" },
+	{ route: "/admin/users", painted: "a-long-github-login-name" },
+	{ route: "/admin/agents", painted: "Agent 0" },
+	{ route: "/admin/instances", painted: "creator-two" },
+	{ route: "/admin/terminals", painted: "Sergeys-MacBook-Air.local" },
+	{ route: "/admin/connectors", painted: "github_create_issue" },
+	{ route: "/admin/ops", painted: "needs_human" },
+	{ route: "/admin/github-issues", painted: "The operator portal's <select> rules have no paint containment" },
+	{ route: "/admin/triggers", painted: "Small Business Website Lead Finder" },
+	{ route: "/admin/mcp-audit", painted: "coding_session_capture" },
+	{ route: "/admin/usage", painted: "claude-sonnet-4-6" },
+	{ route: "/admin/spending", painted: "claude-sonnet-4-6" },
+	{ route: "/admin/audit", painted: "agent:agent-1" },
+];
+
+test.describe("mobile — no operator route pans sideways (#435)", () => {
+	for (const width of [320, 390]) {
+		for (const { route, painted } of PORTAL_ROUTES) {
+			test(`${route} does not pan at ${width}px`, async ({ page }) => {
+				await page.setViewportSize({ width, height: 812 });
+				await mockAdminSurfaces(page);
+				await page.goto(route);
+				await page.waitForLoadState("networkidle");
+				await page.locator("main").waitFor();
+				await page.waitForTimeout(300);
+
+				// NON-VACUITY FIRST — see the note on PORTAL_ROUTES.
+				await expect(page.locator("main").getByText(painted).first(), `${route} never painted its content — fixture gap, not a pass`).toBeVisible();
+
+				const { mainOv, docOv, offenders } = await page.evaluate(() => {
+					const m = document.querySelector("main");
+					const offenders: string[] = [];
+					// ATTRIBUTION, because "the page is 462px too wide" names nobody and is the
+					// reason #414 asked for offenders by class on the console's equivalent. A table
+					// wider than the box it sits in, whose ancestors do not scroll, IS the defect.
+					for (const el of Array.from(m?.querySelectorAll("table") ?? [])) {
+						let scrolled = false;
+						for (let p = el.parentElement; p && p !== m; p = p.parentElement) {
+							const ox = getComputedStyle(p).overflowX;
+							if (ox === "auto" || ox === "scroll") { scrolled = true; break; }
+						}
+						const w = Math.round(el.getBoundingClientRect().width);
+						if (!scrolled && m && w > m.clientWidth + 1) offenders.push(`a ${w}px table in no scroller`);
+					}
+					return { mainOv: m ? m.scrollWidth - m.clientWidth : 0, docOv: document.documentElement.scrollWidth - window.innerWidth, offenders };
+				});
+
+				expect(offenders, `${route} @${width}w: ${offenders.join(", ")}`).toEqual([]);
+				expect(mainOv, `<main> pans by ${mainOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
+				expect(docOv, `page overflows by ${docOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
+			});
+		}
+	}
+
+	/**
+	 * The scroller keeps every column REACHABLE — the alternative this fix was chosen over
+	 * (`table-layout: fixed` + truncated cells) makes the page fit and stop being useful, which is
+	 * the whole job of a portal whose content is long error signatures and MCP tool names.
+	 *
+	 * So the table is asserted to still be WIDER than its scroller and to actually scroll. Without
+	 * this, `overflow-x-auto` on a table that had been squashed to fit would pass every assertion
+	 * above while having silently thrown the data away.
+	 */
+	test("mobile — the errors table scrolls inside its panel instead of hiding columns", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		await mockAdminSurfaces(page);
+		await page.goto("/admin/errors");
+		await page.waitForLoadState("networkidle");
+		await page.locator("main table").waitFor();
+		await page.waitForTimeout(300);
+
+		const m = await page.evaluate(() => {
+			const table = document.querySelector("main table") as HTMLElement;
+			const box = table.parentElement as HTMLElement;
+			return {
+				overflowX: getComputedStyle(box).overflowX,
+				tableWidth: Math.round(table.getBoundingClientRect().width),
+				boxWidth: box.clientWidth,
+				scrollable: box.scrollWidth - box.clientWidth,
+			};
+		});
+
+		expect(m.overflowX, `the table's box is ${m.overflowX}, not a scroller: ${JSON.stringify(m)}`).toBe("auto");
+		// The columns are still their natural width — this is the check that the fix did not
+		// become "make it fit by ellipsising the operator's data".
+		expect(m.tableWidth, `the table was squashed to ${m.tableWidth}px — the columns were hidden, not scrolled: ${JSON.stringify(m)}`).toBeGreaterThan(m.boxWidth);
+		expect(m.scrollable, `the box does not actually scroll: ${JSON.stringify(m)}`).toBeGreaterThan(1);
 	});
 });

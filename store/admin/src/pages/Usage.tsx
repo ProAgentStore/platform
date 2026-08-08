@@ -171,31 +171,33 @@ function ExternalSplit({ ext, days, agentLabels }: { ext: ExternalResp; days: nu
 			{ext.byAgent.length === 0 ? (
 				<div className="text-muted-soft text-sm">No external usage on any agent in this window.</div>
 			) : (
-				<table className="w-full text-sm">
-					<thead>
-						<tr className="text-muted text-xs uppercase text-left border-b border-line">
-							<th className="py-1.5">Agent</th>
-							<th className="text-right">External users</th>
-							<th className="text-right">Calls</th>
-							<th className="text-right">Value</th>
-							<th className="text-right">Charged</th>
-						</tr>
-					</thead>
-					<tbody>
-						{/* Order is the endpoint's: external users desc, then calls — the #68 ranking. */}
-						{ext.byAgent.map((a) => (
-							<tr key={a.agentId} className="border-b border-line/50">
-								<td className="py-1.5 truncate max-w-[180px]">
-									{a.agentId === UNATTRIBUTED ? <span className="text-muted-soft">Unattributed</span> : agentLabels.get(a.agentId) || a.agentId}
-								</td>
-								<td className="text-right tabular-nums">{fmtInt(a.externalUsers)}</td>
-								<td className="text-right tabular-nums">{fmtInt(a.calls)}</td>
-								<td className="text-right tabular-nums">{fmtUsd(a.valueMicros)}</td>
-								<td className="text-right tabular-nums">{fmtUsd(a.chargedMicros)}</td>
+				<div className="overflow-x-auto">
+					<table className="w-full text-sm">
+						<thead>
+							<tr className="text-muted text-xs uppercase text-left border-b border-line">
+								<th className="py-1.5">Agent</th>
+								<th className="text-right">External users</th>
+								<th className="text-right">Calls</th>
+								<th className="text-right">Value</th>
+								<th className="text-right">Charged</th>
 							</tr>
-						))}
-					</tbody>
-				</table>
+						</thead>
+						<tbody>
+							{/* Order is the endpoint's: external users desc, then calls — the #68 ranking. */}
+							{ext.byAgent.map((a) => (
+								<tr key={a.agentId} className="border-b border-line/50">
+									<td className="py-1.5 truncate max-w-[180px]">
+										{a.agentId === UNATTRIBUTED ? <span className="text-muted-soft">Unattributed</span> : agentLabels.get(a.agentId) || a.agentId}
+									</td>
+									<td className="text-right tabular-nums">{fmtInt(a.externalUsers)}</td>
+									<td className="text-right tabular-nums">{fmtInt(a.calls)}</td>
+									<td className="text-right tabular-nums">{fmtUsd(a.valueMicros)}</td>
+									<td className="text-right tabular-nums">{fmtUsd(a.chargedMicros)}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
 			)}
 		</div>
 	);
@@ -219,23 +221,25 @@ function Side({ label, users, totals, accent }: { label: string; users: number; 
 function BucketTable({ rows, head, operatorIds }: { rows: Bucket[]; head: string; operatorIds?: Set<string> | null }) {
 	if (!rows?.length) return <div className="text-muted-soft text-sm">None.</div>;
 	return (
-		<table className="w-full text-sm">
-			<thead><tr className="text-muted text-xs uppercase text-left border-b border-line"><th className="py-1.5">{head}</th><th className="text-right">Calls</th><th className="text-right">Tokens</th><th className="text-right">Cost</th></tr></thead>
-			<tbody>
-				{rows.map((b) => (
-					<tr key={b.key} className="border-b border-line/50">
-						<td className="py-1.5 truncate max-w-[180px]">
-							{b.label || b.key}
-							{operatorIds?.has(b.key) && (
-								<span className="ml-1.5 text-2xs uppercase tracking-wide text-accent border border-accent/40 rounded px-1 py-px align-middle">operator</span>
-							)}
-						</td>
-						<td className="text-right">{fmtInt(b.calls)}</td>
-						<td className="text-right">{fmtInt(b.inputTokens + b.outputTokens)}</td>
-						<td className="text-right">{fmtUsd(b.costMicros)}</td>
-					</tr>
-				))}
-			</tbody>
-		</table>
+		<div className="overflow-x-auto">
+			<table className="w-full text-sm">
+				<thead><tr className="text-muted text-xs uppercase text-left border-b border-line"><th className="py-1.5">{head}</th><th className="text-right">Calls</th><th className="text-right">Tokens</th><th className="text-right">Cost</th></tr></thead>
+				<tbody>
+					{rows.map((b) => (
+						<tr key={b.key} className="border-b border-line/50">
+							<td className="py-1.5 truncate max-w-[180px]">
+								{b.label || b.key}
+								{operatorIds?.has(b.key) && (
+									<span className="ml-1.5 text-2xs uppercase tracking-wide text-accent border border-accent/40 rounded px-1 py-px align-middle">operator</span>
+								)}
+							</td>
+							<td className="text-right">{fmtInt(b.calls)}</td>
+							<td className="text-right">{fmtInt(b.inputTokens + b.outputTokens)}</td>
+							<td className="text-right">{fmtUsd(b.costMicros)}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
 	);
 }

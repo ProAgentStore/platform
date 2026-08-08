@@ -78,31 +78,33 @@ export default function Errors() {
 			{err ? <ErrorBox message={err} /> : view === "grouped" ? (
 				!sigs ? <Loading /> : !sigs.length ? <Empty label="No errors in this window. 🎉" /> : (
 					<Panel>
-						<table className="w-full text-sm">
-							<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
-								<th className="py-1.5">Count</th><th>Source</th><th>Signature</th><th>Users</th><th>Last seen</th>
-							</tr></thead>
-							<tbody>
-								{/* The signature cell is the control, not the row (#324). A <tr onClick> is
-								    reachable by mouse and by nothing else — no tab stop, no Enter, and a
-								    screen reader announces a row with no action in it. Moving the click onto
-								    the text you read to decide keeps the same target for the mouse. */}
-								{sigs.map((s) => (
-									<tr key={s.key} className="border-b border-line/50 hover:bg-panel-hover align-top">
-										<td className="py-1.5 font-semibold">{s.count}×</td>
-										<td className="text-accent whitespace-nowrap">{s.source}</td>
-										<td className="max-w-[420px]">
-											<button type="button" className="w-full text-left cursor-pointer" onClick={() => navigate(`/errors/${encodeURIComponent(s.key)}`)}>
-												<div className="truncate">{s.sample}</div>
-												<div className="text-xs text-muted-soft truncate">{s.pattern}</div>
-											</button>
-										</td>
-										<td>{s.users}</td>
-										<td className="text-muted whitespace-nowrap">{s.lastSeen?.slice(5, 16)}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+						<div className="overflow-x-auto">
+							<table className="w-full text-sm">
+								<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
+									<th className="py-1.5">Count</th><th>Source</th><th>Signature</th><th>Users</th><th>Last seen</th>
+								</tr></thead>
+								<tbody>
+									{/* The signature cell is the control, not the row (#324). A <tr onClick> is
+									    reachable by mouse and by nothing else — no tab stop, no Enter, and a
+									    screen reader announces a row with no action in it. Moving the click onto
+									    the text you read to decide keeps the same target for the mouse. */}
+									{sigs.map((s) => (
+										<tr key={s.key} className="border-b border-line/50 hover:bg-panel-hover align-top">
+											<td className="py-1.5 font-semibold">{s.count}×</td>
+											<td className="text-accent whitespace-nowrap">{s.source}</td>
+											<td className="max-w-[420px]">
+												<button type="button" className="w-full text-left cursor-pointer" onClick={() => navigate(`/errors/${encodeURIComponent(s.key)}`)}>
+													<div className="truncate">{s.sample}</div>
+													<div className="text-xs text-muted-soft truncate">{s.pattern}</div>
+												</button>
+											</td>
+											<td>{s.users}</td>
+											<td className="text-muted whitespace-nowrap">{s.lastSeen?.slice(5, 16)}</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
 					</Panel>
 				)
 			) : (

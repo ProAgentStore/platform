@@ -61,21 +61,23 @@ export default function ConnectorDetail() {
 
 			<Panel title={`Write access granted (${grants.length})`}>
 				{!grants.length ? <Empty label="No user has granted this connector write access yet." /> : (
-					<table className="w-full text-sm">
-						<thead><tr className="text-muted text-xs uppercase text-left"><th>User</th><th>Scope</th><th>Instance</th><th>Granted</th></tr></thead>
-						<tbody>
-							{grants.map((r) => (
-								<tr key={`${r.instance_id}:${r.scope}`} className="border-t border-line/30">
-									<td className="py-1">
-										<Link to={`/users/${encodeURIComponent(r.user_id)}`} className="hover:text-ink">{r.owner_login || r.user_id}</Link>
-									</td>
-									<td className="text-yellow">{r.scope}</td>
-									<td className="text-muted-soft font-mono text-xs truncate max-w-[180px]">{r.instance_id}</td>
-									<td className="text-muted">{r.created_at?.slice(0, 16)}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead><tr className="text-muted text-xs uppercase text-left"><th>User</th><th>Scope</th><th>Instance</th><th>Granted</th></tr></thead>
+							<tbody>
+								{grants.map((r) => (
+									<tr key={`${r.instance_id}:${r.scope}`} className="border-t border-line/30">
+										<td className="py-1">
+											<Link to={`/users/${encodeURIComponent(r.user_id)}`} className="hover:text-ink">{r.owner_login || r.user_id}</Link>
+										</td>
+										<td className="text-yellow">{r.scope}</td>
+										<td className="text-muted-soft font-mono text-xs truncate max-w-[180px]">{r.instance_id}</td>
+										<td className="text-muted">{r.created_at?.slice(0, 16)}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
 				)}
 			</Panel>
 		</div>

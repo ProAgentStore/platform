@@ -92,29 +92,31 @@ export default function McpAudit() {
 					{!events.length ? (
 						<Empty label="No MCP tool calls yet." />
 					) : (
-						<table className="w-full text-sm">
-							<thead>
-								<tr className="text-muted text-xs uppercase text-left border-b border-line">
-									<th className="py-1.5">When</th>
-									<th>User</th>
-									<th>Tool</th>
-									<th>Scope</th>
-									<th>Result</th>
-								</tr>
-							</thead>
-							<tbody>
-								{events.map((e, i) => (
-									// biome-ignore lint/suspicious/noArrayIndexKey: append-only audit feed with no unique id; distinct events can share the same timestamp/tool/subject, so the row index is the only stable disambiguator
-									<tr key={`${e.time ?? ""}-${e.tool ?? ""}-${e.subject ?? ""}-${i}`} className="border-b border-line/50">
-										<td className="py-1.5 text-muted whitespace-nowrap">{e.time?.slice(0, 16) ?? "—"}</td>
-										<td className="truncate max-w-[160px]">{e.subject ?? "—"}</td>
-										<td className="text-accent">{e.tool ?? "—"}</td>
-										<td className="text-muted whitespace-nowrap">{scopeText(e)}</td>
-										<td className={isDenied(e.action) ? "text-red-400" : "text-muted"}>{resultText(e)}</td>
+						<div className="overflow-x-auto">
+							<table className="w-full text-sm">
+								<thead>
+									<tr className="text-muted text-xs uppercase text-left border-b border-line">
+										<th className="py-1.5">When</th>
+										<th>User</th>
+										<th>Tool</th>
+										<th>Scope</th>
+										<th>Result</th>
 									</tr>
-								))}
-							</tbody>
-						</table>
+								</thead>
+								<tbody>
+									{events.map((e, i) => (
+										// biome-ignore lint/suspicious/noArrayIndexKey: append-only audit feed with no unique id; distinct events can share the same timestamp/tool/subject, so the row index is the only stable disambiguator
+										<tr key={`${e.time ?? ""}-${e.tool ?? ""}-${e.subject ?? ""}-${i}`} className="border-b border-line/50">
+											<td className="py-1.5 text-muted whitespace-nowrap">{e.time?.slice(0, 16) ?? "—"}</td>
+											<td className="truncate max-w-[160px]">{e.subject ?? "—"}</td>
+											<td className="text-accent">{e.tool ?? "—"}</td>
+											<td className="text-muted whitespace-nowrap">{scopeText(e)}</td>
+											<td className={isDenied(e.action) ? "text-red-400" : "text-muted"}>{resultText(e)}</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
 					)}
 				</Panel>
 			)}

@@ -30,27 +30,29 @@ export default function Users() {
 			{err ? <ErrorBox message={err} /> : !data ? <Loading /> : (
 				<Panel title={`Users (${data.total})`}>
 					{!data.users.length ? <Empty label="No users match." /> : (
-						<table className="w-full text-sm">
-							<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
-								<th className="py-1.5">Login</th><th>Roles</th><th className="text-right">Agents</th><th className="text-right">Instances</th><th>Keys</th><th className="text-right" title="List-price value of AI consumed. Not a bill — see Charged.">Value 30d</th><th className="text-right" title="The part someone is actually charged for (own API key, or paid by us).">Charged 30d</th>
-							</tr></thead>
-							<tbody>
-								{data.users.map((u) => (
-									<tr key={u.id} className="border-b border-line/50 hover:bg-panel-hover">
-										<td className="py-1.5">
-											<Link to={`/users/${encodeURIComponent(u.id)}`} className="text-accent hover:underline">{u.github_login}</Link>
-											{u.suspended ? <span className="text-red text-xs ml-1.5" title={u.suspended_reason || "Suspended"}>suspended</span> : null}
-										</td>
-										<td>{u.roles.filter((r) => r !== "user").join(", ") || "—"}</td>
-										<td className="text-right">{u.agents_owned}</td>
-										<td className="text-right">{u.active_instances}</td>
-										<td>{u.key_providers.join(", ") || "—"}</td>
-										<td className="text-right">{fmtUsd(u.value30dMicros)}</td>
-										<td className="text-right">{fmtUsd(u.charged30dMicros)}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+						<div className="overflow-x-auto">
+							<table className="w-full text-sm">
+								<thead><tr className="text-muted text-xs uppercase text-left border-b border-line">
+									<th className="py-1.5">Login</th><th>Roles</th><th className="text-right">Agents</th><th className="text-right">Instances</th><th>Keys</th><th className="text-right" title="List-price value of AI consumed. Not a bill — see Charged.">Value 30d</th><th className="text-right" title="The part someone is actually charged for (own API key, or paid by us).">Charged 30d</th>
+								</tr></thead>
+								<tbody>
+									{data.users.map((u) => (
+										<tr key={u.id} className="border-b border-line/50 hover:bg-panel-hover">
+											<td className="py-1.5">
+												<Link to={`/users/${encodeURIComponent(u.id)}`} className="text-accent hover:underline">{u.github_login}</Link>
+												{u.suspended ? <span className="text-red text-xs ml-1.5" title={u.suspended_reason || "Suspended"}>suspended</span> : null}
+											</td>
+											<td>{u.roles.filter((r) => r !== "user").join(", ") || "—"}</td>
+											<td className="text-right">{u.agents_owned}</td>
+											<td className="text-right">{u.active_instances}</td>
+											<td>{u.key_providers.join(", ") || "—"}</td>
+											<td className="text-right">{fmtUsd(u.value30dMicros)}</td>
+											<td className="text-right">{fmtUsd(u.charged30dMicros)}</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
 					)}
 				</Panel>
 			)}

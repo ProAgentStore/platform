@@ -64,19 +64,21 @@ export default function Connectors() {
 						{byUser.map(([uid, g]) => (
 							<div key={uid} className="border-b border-line/50 pb-2">
 								<div className="text-sm font-semibold">{g.login || uid}</div>
-								<table className="w-full text-sm mt-1">
-									<thead><tr className="text-muted text-xs uppercase text-left"><th>Connector</th><th>Scope</th><th>Instance</th><th>Granted</th></tr></thead>
-									<tbody>
-										{g.rows.map((r) => (
-											<tr key={`${r.instance_id}:${r.connector}:${r.scope}`} className="border-t border-line/30">
-												<td className="py-1">{r.connector}</td>
-												<td className="text-yellow">{r.scope}</td>
-												<td className="text-muted-soft font-mono text-xs truncate max-w-[180px]">{r.instance_id}</td>
-												<td className="text-muted">{r.created_at?.slice(0, 16)}</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
+								<div className="overflow-x-auto">
+									<table className="w-full text-sm mt-1">
+										<thead><tr className="text-muted text-xs uppercase text-left"><th>Connector</th><th>Scope</th><th>Instance</th><th>Granted</th></tr></thead>
+										<tbody>
+											{g.rows.map((r) => (
+												<tr key={`${r.instance_id}:${r.connector}:${r.scope}`} className="border-t border-line/30">
+													<td className="py-1">{r.connector}</td>
+													<td className="text-yellow">{r.scope}</td>
+													<td className="text-muted-soft font-mono text-xs truncate max-w-[180px]">{r.instance_id}</td>
+													<td className="text-muted">{r.created_at?.slice(0, 16)}</td>
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
 							</div>
 						))}
 					</div>
