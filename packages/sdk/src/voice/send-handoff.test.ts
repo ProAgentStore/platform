@@ -275,3 +275,38 @@ describe("every hands-free entry point goes through the one handoff", () => {
 		expect(USE_VOICE).toContain("finalizeRef.current = finalize");
 	});
 });
+
+/**
+ * #457 step 3 — the wiring that carries "a command already fired" from the gate to `finalize`.
+ *
+ * The DECISION is pure and tested in turn.test.ts (`planFinalizedTurn` with `firedDuringCapture`).
+ * What cannot be tested there is that the fact ever arrives: three statements in three different
+ * callbacks, none of which reads as load-bearing on its own. Drop any one and the pure test stays
+ * green while "run the tests, mute" ships the word to the agent again — which is exactly how the
+ * defect existed for so long behind a comment that claimed it did not.
+ */
+describe("the fired-command fact reaches finalize (#457 step 3)", () => {
+	const GATE = slice("onInterim: (text, phrase) => {", "// Ignore the agent's own voice (echo tail)");
+
+	it("records WHAT fired at the gate's own dispatch, where the knowledge is", () => {
+		expect(GATE, "the gate fires mute without recording it — finalize will send the word too").toMatch(
+			/cmd === "mute"\)\s*\{\s*firedCommandRef\.current = cmd;/,
+		);
+		expect(GATE).toMatch(/cmd === "unmute"\)\s*\{\s*firedCommandRef\.current = cmd;/);
+	});
+
+	it("hands it to the turn plan, which is the only thing that can act on it", () => {
+		expect(FINALIZE, "finalize no longer tells planFinalizedTurn what fired").toMatch(/firedDuringCapture: firedCommandRef\.current/);
+	});
+
+	/**
+	 * Per TURN, not per session. Without the reset the flag outlives the turn that set it and the
+	 * NEXT utterance ending in "mute" is silently truncated — a stray word turned into a lost
+	 * clause, which is the strictly worse direction (#457's own asymmetry argument).
+	 */
+	it("is cleared at the start of every turn, beside the gate's own reset", () => {
+		const START = slice("const startAudioMonitor = useCallback(async () => {", "const biasPrompt = useCallback(");
+		expect(START.indexOf("firedCommandRef.current = null"), "the fired flag is never cleared — it will leak into the next turn").toBeGreaterThan(-1);
+		expect(START.indexOf("firedCommandRef.current = null")).toBeLessThan(START.indexOf("gateRef.current?.start()"));
+	});
+});

@@ -376,3 +376,66 @@ describe("command matcher call sites", () => {
 		expect(sources["use-voice.ts"].match(/isNoiseTranscript\(/g)?.length ?? 0).toBe(0);
 	});
 });
+
+/**
+ * #457 step 3 — a command that ALREADY FIRED during capture must not also reach the agent as text.
+ *
+ * The gate scans the live transcript so "mute" said mid-recording works at all (#228), and the clip
+ * deliberately keeps recording so the request wrapped around the command is not thrown away. The
+ * gate's own call site claimed the word was "stripped by finalize (splitTrailingCommand)" — for the
+ * exact example it names, "run the tests, mute", it was not: that function refuses to strip a
+ * single trailing bare word, precisely so "don't forget to mute" stays a message.
+ *
+ * This is not a fifth matcher rule. It is the one signal that is KNOWN rather than inferred: if the
+ * app muted because of a word, that word was a command by construction.
+ */
+describe("a command that fired during capture never reaches the agent (#457 step 3)", () => {
+	const base = { commandsEnabled: true, canScrap: false, canSwitch: false, muted: false, lang: "en" };
+
+	it("strips the bare trailing word the gate acted on, and keeps the request", () => {
+		expect(planFinalizedTurn("run the tests, mute", { ...base, firedDuringCapture: "mute" })).toEqual({
+			action: "send",
+			text: "run the tests",
+			// null, not "mute": firing already happened, and reporting it again would run it twice.
+			command: null,
+			switchAfter: false,
+		});
+	});
+
+	// THE DEFECT, stated as the same call without the flag. Unchanged behaviour — the precision
+	// rule that protects "don't forget to mute" is exactly what makes this case need evidence.
+	it("still sends the word when nothing fired, because from the string alone it may be prose", () => {
+		expect(planFinalizedTurn("run the tests, mute", base)).toEqual({
+			action: "send",
+			text: "run the tests, mute",
+			command: null,
+			switchAfter: false,
+		});
+		expect(planFinalizedTurn("don't forget to mute", base)).toMatchObject({ action: "send", text: "don't forget to mute" });
+	});
+
+	it("relaxes the rule for the command that fired and for nothing else", () => {
+		// `unmute` fired; a trailing "mute" is still ordinary prose and survives.
+		expect(planFinalizedTurn("stop the alarm, mute", { ...base, muted: true, firedDuringCapture: "unmute" })).toMatchObject({
+			text: "stop the alarm, mute",
+		});
+	});
+
+	it("leaves a turn that IS the command exactly as it was — nothing to send either way", () => {
+		expect(planFinalizedTurn("mute", { ...base, firedDuringCapture: "mute" })).toEqual({ action: "none", command: "mute", switchAfter: false });
+	});
+
+	// A mid-sentence false positive (a partial momentarily reading "mute" on the way to "mute the
+	// alarm") must not license cutting a word out of the middle of the message.
+	it("only ever strips from the END", () => {
+		expect(planFinalizedTurn("mute the alarm and run the tests", { ...base, firedDuringCapture: "mute" })).toMatchObject({
+			text: "mute the alarm and run the tests",
+		});
+	});
+
+	it("changes nothing at all when no command fired, which is every ordinary turn", () => {
+		for (const msg of ["run the tests", "what is the status of the deploy", "push everything"]) {
+			expect(planFinalizedTurn(msg, { ...base, firedDuringCapture: null }), msg).toEqual(planFinalizedTurn(msg, base));
+		}
+	});
+});

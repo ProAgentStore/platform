@@ -212,7 +212,14 @@ const PINS = {
 	// reach the path that runs while the mic is closed. Left exactly as found: it predates this
 	// change and fixing it silently inside an unrelated one is how a behaviour change ships with
 	// nothing pointing at it.
-	"packages/sdk/src/voice/use-voice.ts": 1930,
+	// +18 for #457 step 3: one ref, one assignment at the gate's dispatch, one reset, one field on
+	// the turn plan — and eleven lines saying that the call site's OWN comment claimed the word was
+	// "stripped by finalize" and was wrong for the exact example it names. The fact has nowhere
+	// else to live: only this file knows the gate fired, and only `finalize` can act on it. The
+	// decision is pure and lives in convo.ts/turn.ts; the wiring is asserted structurally in
+	// send-handoff.test.ts, because dropping any one of the three statements leaves the pure tests
+	// green and puts the word back in the message.
+	"packages/sdk/src/voice/use-voice.ts": 1948,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -265,7 +272,13 @@ const PINS = {
 	// leaving that in place would send the next reader down a path measured to be unrepairable —
 	// built-ins are resolved here, at match time, against the caller's language, so writing them
 	// into a user's config freezes ten languages' worth of data into one.
-	"packages/sdk/src/voice/convo.ts": 1073,
+	// +18 for #457 step 3 — the one signal in this whole area that is KNOWN rather than inferred.
+	// If the app muted because of a word, that word WAS a command, so the single-word trailing rule
+	// may be relaxed for THAT command and nothing else. The prose is the deliverable: the pass
+	// returns `command: null` on purpose, because firing has already happened, and that asymmetry
+	// (fire cheaply, strip only on certainty) is the structural point #457 makes — a reader tidying
+	// it into "return the command like every other branch" would fire mute twice per turn.
+	"packages/sdk/src/voice/convo.ts": 1091,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -753,7 +766,7 @@ const PINS = {
 	// +N again at #456/#443, from the same cause and by a different lane on the same day. Two
 	// commits raising this one number independently is the clearest evidence yet that the PINS map
 	// wants to be its own data module — see the paragraph above for the split when it is worth it.
-	"scripts/check-file-size.mjs": 837,
+	"scripts/check-file-size.mjs": 850,
 };
 
 /**

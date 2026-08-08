@@ -90,6 +90,13 @@ export function planFinalizedTurn(
 		words?: VoiceCommandWords;
 		lang?: string;
 		stopWords?: string[];
+		/**
+		 * A command that already FIRED during capture (#457 step 3), from the gate's own scan of
+		 * the live transcript. The app has acted on it, so its word must not reach the agent as
+		 * text as well — the case #456's acceptance list names and `splitTrailingCommand` cannot
+		 * infer from a string.
+		 */
+		firedDuringCapture?: VoiceCommand | null;
 	},
 ): FinalizedTurn {
 	if (
@@ -110,7 +117,7 @@ export function planFinalizedTurn(
 	let command: ImmediateCommand | null = null;
 	let switchAfter = false;
 	if (cfg.commandsEnabled) {
-		const split = splitTrailingCommand(msg, cfg.words, cfg.lang, { muted: cfg.muted, canSwitch: cfg.canSwitch });
+		const split = splitTrailingCommand(msg, cfg.words, cfg.lang, { muted: cfg.muted, canSwitch: cfg.canSwitch, fired: cfg.firedDuringCapture });
 		body = split.text;
 		if (split.command === "repeat") return { action: "repeat" };
 		if (split.command === "mute" || split.command === "unmute" || split.command === "exit") command = split.command;

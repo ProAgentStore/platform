@@ -886,7 +886,7 @@ export function splitTrailingCommand(
 	text: string,
 	words?: VoiceCommandWords,
 	lang?: string,
-	state?: { muted?: boolean; canSwitch?: boolean },
+	state?: { muted?: boolean; canSwitch?: boolean; fired?: VoiceCommand | null },
 ): { command: VoiceCommand | null; text: string } {
 	// Same candidate set and ordering as matchVoiceCommand, so the two can never disagree
 	// about what a word means.
@@ -932,6 +932,24 @@ export function splitTrailingCommand(
 			const stripped = stripRepeatedTail(text, w, words);
 			if (stripped?.trim()) return { command: cmd, text: stripped };
 		}
+	}
+	// A command that ALREADY FIRED during capture (#457 step 3). Not a heuristic and not a fifth
+	// matcher rule: if the app muted because of a word, that word WAS a command — known, not
+	// inferred — and it must not also be delivered as text.
+	//
+	// This is the one place the two decisions are allowed to disagree, and the return says so:
+	// `command: null`, because firing has already happened and re-reporting it would run it twice.
+	// Which is the point #457 makes about the shape — firing and stripping have wildly asymmetric
+	// costs (an unwanted mute is one tap to undo; a truncated sentence is lost), so one verdict for
+	// both forces the expensive rule onto the cheap action. Here the expensive decision has
+	// EVIDENCE rather than a threshold, so it is safe to relax the single-word rule for exactly
+	// this command and nothing else.
+	//
+	// It runs last, so an ordinary match is preferred and this only catches the bare trailing word
+	// the rule above deliberately declines to strip on its own.
+	if (state?.fired) {
+		const stripped = stripStopWord(text, commandPhrases(state.fired, words, lang));
+		if (stripped.ended) return { command: null, text: stripped.text };
 	}
 	return { command: null, text };
 }

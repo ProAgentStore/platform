@@ -370,8 +370,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 								// "send" is what keeps that true: this is mute arriving mid-request,
 								// so the arriving transcript must reach the agent rather than the
 								// composer (#420's carve-out for #228).
-								if (cmd === "mute") muteFromCommandRef.current("send");
-								else if (cmd === "unmute") unmuteFromCommandRef.current();
+								// Remember WHAT fired, so `finalize` can keep it out of the message the
+								// clip is still going to deliver (#457 step 3). `exit` is absent
+								// deliberately: it tears the session down, so there is no turn left
+								// for a strip to matter to.
+								if (cmd === "mute") { firedCommandRef.current = cmd; muteFromCommandRef.current("send"); }
+								else if (cmd === "unmute") { firedCommandRef.current = cmd; unmuteFromCommandRef.current(); }
 								else if (cmd === "exit") exitFromCommandRef.current();
 								// "next" LEAVES this agent, so — unlike mute — the clip still recording
 								// must not go on to be transcribed and sent here. Latch the utterance and
@@ -393,6 +397,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					},
 				});
 			}
+			firedCommandRef.current = null; // a new turn — nothing has fired in it yet (#457)
 			gateRef.current?.reset();
 			gateRef.current?.start();
 		}
@@ -622,6 +627,18 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Commands the user switched OFF (#443). Threaded onto every `words` literal below rather than
 	// filtered at the call sites, so `commandPhrases` is the ONE place it takes effect.
 	const disabledCommandsRef = useRef<VoiceCommand[]>([]);
+	/**
+	 * A command the GATE fired part-way through this turn (#457 step 3).
+	 *
+	 * The gate scans the live transcript so "mute" said mid-recording works at all (#228) — but the
+	 * clip keeps recording and is still transcribed and sent, deliberately, so the request the user
+	 * wrapped around the command is not thrown away. The comment at that call site already claimed
+	 * the word was "stripped by finalize (splitTrailingCommand)". It was not: that function refuses
+	 * to strip a single trailing bare word, precisely so "don't forget to mute" stays a message —
+	 * so the exact example the comment names, "run the tests, mute", muted AND shipped the word to
+	 * the agent. This ref is the missing fact. Cleared per turn beside the gate's own reset.
+	 */
+	const firedCommandRef = useRef<VoiceCommand | null>(null);
 	const stopWordsRef = useRef<string[]>([]);
 	// Say this (normalized) word/phrase while the agent is speaking to halt playback. Empty ⇒
 	// off; when set, the recognizer is kept alive through TTS so it can hear it.
@@ -1156,6 +1173,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					words: { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current, disabled: disabledCommandsRef.current },
 					lang: voiceLangRef.current,
 					stopWords: stopWordsRef.current,
+					firedDuringCapture: firedCommandRef.current,
 				});
 				// `onScrap` only STAGES a delete for the consumer to confirm; nothing is removed on
 				// the strength of one transcript.
