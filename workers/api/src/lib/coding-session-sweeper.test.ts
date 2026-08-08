@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { IDLE_SESSION_MS, ORPHAN_QUIET_MS, sweepCodingSessions, trackedSessionIds } from "./coding-session-sweeper.js";
+import {
+	IDLE_REAP_PREFIX,
+	IDLE_SESSION_MS,
+	ORPHAN_QUIET_MS,
+	idleReapNotice,
+	lastIdleReapForRepo,
+	sweepCodingSessions,
+	trackedSessionIds,
+} from "./coding-session-sweeper.js";
 import type { Env } from "../types.js";
 
 describe("trackedSessionIds (#275)", () => {
@@ -179,5 +187,66 @@ describe("sweepCodingSessions — orphan reconcile (#275)", () => {
 		});
 		await sweepCodingSessions(env, Date.now());
 		expect(calls.some((c) => c.sql.includes("updated_at < datetime('now', '-3 minutes')"))).toBe(true);
+	});
+});
+
+describe("the reap, read back from somewhere else (#407)", () => {
+	it("keeps the six-hour window exactly where #275 put it", () => {
+		// #407 changes who may OPEN a session, not how long an idle one lives — it says so in as
+		// many words. The two are easy to conflate ("chat can reopen it, so reap sooner"), and the
+		// cost of reaping early is a live CLI context that cannot be recovered.
+		expect(IDLE_SESSION_MS).toBe(6 * 60 * 60_000);
+	});
+
+	it("stamps both outcomes with the marker another surface matches on", () => {
+		// The reap's only durable trace is a timeline sentence, and `lastIdleReapForRepo` finds it
+		// with a LIKE on this prefix. Rewording either sentence away from the constant would leave
+		// the query matching nothing — silently, and with the chat surface going quiet again.
+		expect(idleReapNotice(6, true).startsWith(IDLE_REAP_PREFIX)).toBe(true);
+		expect(idleReapNotice(6, false).startsWith(IDLE_REAP_PREFIX)).toBe(true);
+		expect(idleReapNotice(6, true)).toMatch(/process was released/);
+		expect(idleReapNotice(6, false)).toMatch(/may still be running/);
+	});
+
+	it("asks whether the repo's MOST RECENT finished session was reaped, not whether any was", async () => {
+		// "The newest finished session — was it reaped?" and "the newest reaped session" are the
+		// same query with opposite meanings. The second would attach a week-old reap notice to a
+		// repo that has had three ordinary sessions since.
+		let seen: { sql: string; args: unknown[] } | null = null;
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind(...args: unknown[]) {
+							return {
+								async first() {
+									seen = { sql, args };
+									return { session_id: "csess_old", ended_at: "2026-08-08 01:00:00", reaped: 0 };
+								},
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		expect(await lastIdleReapForRepo(env, "inst", "u", "repo_1")).toBeNull();
+		const q = seen as unknown as { sql: string; args: unknown[] };
+		expect(q.sql).toMatch(/ORDER BY s\.ended_at DESC/);
+		expect(q.sql).toMatch(/status IN \('ended', 'error'\)/);
+		expect(q.args).toContain(`${IDLE_REAP_PREFIX}%`);
+	});
+
+	it("reports the reap when the newest finished session carries the marker", async () => {
+		const env = {
+			DB: {
+				prepare: () => ({
+					bind: () => ({ first: async () => ({ session_id: "csess_reaped", ended_at: "2026-08-08 01:00:00", reaped: 1 }) }),
+				}),
+			},
+		} as unknown as Env;
+		expect(await lastIdleReapForRepo(env, "inst", "u", "repo_1")).toEqual({
+			sessionId: "csess_reaped",
+			endedAt: "2026-08-08 01:00:00",
+		});
 	});
 });

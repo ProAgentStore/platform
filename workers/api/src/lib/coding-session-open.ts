@@ -10,6 +10,10 @@ import { callRunner, getBoundRunnerConn, getRunnerConn, relayConnected, type Run
 import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { createSession, endSession, getActiveSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
+import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
+import { noSessionMessage } from "./coding-session-lifecycle.js";
+import { runtimeConnectivity } from "./instance-connectivity.js";
+import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { CodingRepo, CodingSessionRecord } from "./coding-types.js";
 import type { Env } from "../types.js";
@@ -86,7 +90,14 @@ export async function startSessionOnRunner(
 
 export type EnsureSessionResult =
 	| { ok: true; session: CodingSessionRecord; opened: boolean }
-	| { ok: false; startError: string | null };
+	/**
+	 * `session` is the one that EXISTS but could not be revived — set only on the re-attach path,
+	 * never on a fresh open (that row is ended before we return, so handing it back would name a
+	 * session that is gone). A caller with a degraded read to offer — the chat's `read_terminal`
+	 * falls back to the last saved snapshot — needs its id; without it the failure is total where
+	 * it used to be partial.
+	 */
+	| { ok: false; startError: string | null; session?: CodingSessionRecord | null };
 
 /**
  * The repo's live session, opening one if there isn't one.
@@ -117,7 +128,7 @@ export async function ensureActiveSession(
 	const reattach = async (s: CodingSessionRecord): Promise<EnsureSessionResult> => {
 		if (await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null)) return { ok: true, session: s, opened: false };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
-		return { ok: false, startError: fresh?.cloneError ?? null };
+		return { ok: false, startError: fresh?.cloneError ?? null, session: s };
 	};
 
 	const existing = await getActiveSessionForRepo(env, instanceId, userId, repo.id);
@@ -154,4 +165,113 @@ export async function ensureActiveSession(
 		return { ok: false, startError: fresh?.cloneError ?? null };
 	}
 	return { ok: true, session, opened: true };
+}
+
+/**
+ * What the agent says when IT opened the session (#407).
+ *
+ * Pure, and the sentence is a deliverable rather than a detail. A coding session is a `claude
+ * --dangerously-skip-permissions` child process on somebody's laptop; the chat tools now start one
+ * on their own initiative, so the reply that follows must name it. The closing instruction is
+ * addressed to the model reading the tool result, which is the only place this module can reach —
+ * the alternative (a line in the system prompt) is a different file and a different lane.
+ *
+ * It also carries the reap, because this is the exact moment the missing sentence was missing:
+ * the user's previous session had been taken away six hours after they stopped touching it, the
+ * timeline said so in the Co-pilot view they were not looking at, and from chat the session had
+ * simply stopped existing.
+ */
+export function sessionOpenedNotice(input: {
+	repoName: string;
+	sessionId: string;
+	engine: string;
+	node?: string | null;
+	reapedPrevious?: boolean;
+	idleHours?: number;
+}): string {
+	const where = input.node ? ` on ${input.node}` : "";
+	const previous = input.reapedPrevious
+		? ` The previous session for this repo had been closed automatically after ${input.idleHours ?? Math.round(IDLE_SESSION_MS / 3_600_000)} hours with no activity, which is why there was none to read.`
+		: "";
+	return (
+		`Started a coding session for ${input.repoName}${where} — the ${input.engine} Engine is running there now (session ${input.sessionId}).${previous}` +
+		" Say in your reply that you started it: a process just appeared on the user's machine and they did not ask for one."
+	);
+}
+
+export type ChatSessionResult =
+	| { ok: true; session: CodingSessionRecord; opened: boolean; notice: string | null }
+	| { ok: false; session: CodingSessionRecord | null; message: string };
+
+/**
+ * A live session for a chat tool that needs one — the missing half of #271.
+ *
+ * `ensureActiveSession` had exactly one caller, `loop-drivers.ts`, so the same agent in the same
+ * conversation about the same repo could be told "go fix it" and silently spawn an engine, but
+ * asking "what is the terminal showing?" got "No active session" and a instruction to go and press
+ * a button. The path with the LARGER consequence was the one that self-served.
+ *
+ * Two things this adds over calling `ensureActiveSession` directly, and both are the reason it is a
+ * function rather than a line at each call site:
+ *
+ *  1. CONNECTIVITY FIRST, from the same resolver delegation uses. Not politeness — correctness.
+ *     With no runner, `ensureActiveSession` still INSERTS a `coding_sessions` row before it
+ *     discovers there is nothing to launch on, then ends it. Harmless for a Loop that reports a
+ *     409 either way; not harmless for a read tool a user may call repeatedly at an airport, and
+ *     the refusal has to be the runner diagnosis, not a session failure. `noSessionMessage` is the
+ *     shared wording so a chat refusal and the `subordinate_status` a supervisor reads cannot
+ *     contradict each other — the failure mode that produced it in the first place.
+ *  2. The notice. See `sessionOpenedNotice`.
+ */
+export async function ensureSessionForChat(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	repo: CodingRepo,
+): Promise<ChatSessionResult> {
+	const facts = await runtimeConnectivity(env, instanceId, userId).catch(() => null);
+	const connectivity = classifySubordinateConnectivity({
+		// These tools only exist on an agent whose work runs on a local machine, so a runner is
+		// required unconditionally — same reasoning as the coding driver.
+		requiresRunner: true,
+		hasRuntimeRow: facts?.hasRuntimeRow ?? false,
+		relayConnected: facts?.relayConnected ?? false,
+		node: facts?.node,
+		runnerVersion: facts?.runnerVersion,
+		lastSeenAt: facts?.lastSeenAt,
+	});
+	if (!connectivity.canWork) {
+		// No row is created on this path — that is the point of checking here. The existing session
+		// is still looked up, because a caller with a saved snapshot to show should show it rather
+		// than nothing.
+		const existing = await getActiveSessionForRepo(env, instanceId, userId, repo.id).catch(() => null);
+		return { ok: false, session: existing, message: noSessionMessage({ repoName: repo.name, connectivity }) };
+	}
+
+	const ensured = await ensureActiveSession(env, instanceId, userId, repo);
+	if (!ensured.ok) {
+		return {
+			ok: false,
+			session: ensured.session ?? null,
+			message: noSessionMessage({ repoName: repo.name, connectivity, startError: ensured.startError }),
+		};
+	}
+	if (!ensured.opened) return { ok: true, session: ensured.session, opened: false, notice: null };
+
+	// Only on the open path: reusing a session answers "what happened to the last one" by not
+	// raising the question, and this is an extra query.
+	const reaped = await lastIdleReapForRepo(env, instanceId, userId, repo.id).catch(() => null);
+	return {
+		ok: true,
+		session: ensured.session,
+		opened: true,
+		notice: sessionOpenedNotice({
+			repoName: repo.name,
+			sessionId: ensured.session.id,
+			engine: ensured.session.clientType || "claude",
+			node: connectivity.node,
+			reapedPrevious: Boolean(reaped),
+			idleHours: Math.round(IDLE_SESSION_MS / 3_600_000),
+		}),
+	};
 }

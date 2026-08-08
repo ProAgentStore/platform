@@ -5,7 +5,8 @@
 import { AgentStorageEngine } from "../agent-storage.js";
 import type { CollectionField } from "../agent-storage-types.js";
 import type { ToolCallResult, ToolDef } from "./tools.js";
-import { listRepos, listSessions, getActiveSessionForRepo } from "./coding-store.js";
+import { listRepos, listSessions } from "./coding-store.js";
+import { ensureSessionForChat } from "./coding-session-open.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import { lastTerminal } from "./coding-timeline.js";
 import { accountTimeZone } from "./account-timezone.js";
@@ -220,14 +221,16 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "read_terminal",
-		description: "Read the current terminal output from an active coding session. Shows what the Engine (Claude Code / Codex / etc.) is doing right now.",
+		description:
+			"Read the current terminal output for a repo. Shows what the Engine (Claude Code / Codex / etc.) is doing right now. If no session is open it starts one — so call it directly; never ask the user to open a session first.",
 		parameters: {
 			repo_name: { type: "string", description: "Repository name (from list_coding_repos)", required: true },
 		},
 	},
 	{
 		name: "send_to_cli",
-		description: "Send an instruction to the coding Engine (the CLI running on your machine) for a specific repo. The Engine will execute it.",
+		description:
+			"Send an instruction to the coding Engine (the CLI running on your machine) for a specific repo. The Engine will execute it. If no session is open it starts one first.",
 		parameters: {
 			repo_name: { type: "string", description: "Repository name", required: true },
 			message: { type: "string", description: "Instruction to send to the CLI", required: true },
@@ -634,8 +637,24 @@ export async function executeStorageTool(
 				const allRepos = await listRepos(ctx.env as Env, ctx.agentId, ctx.userId);
 				const repo = allRepos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
 				if (!repo) return fail(call.name, `Repo "${repoName}" not found. Use list_coding_repos.`);
-				const session = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, repo.id);
-				if (!session) return fail(call.name, `No active session for "${repoName}".`);
+				// Open one if there isn't one (#407). Reading a pane is the HARMLESS half of what this
+				// agent already does from chat — `start_work` spawns an engine without asking — so
+				// refusing to look at a terminal because nobody had pressed a button was the split
+				// backwards. `ensureSessionForChat` also re-attaches a session whose engine died with
+				// the laptop, which is the case the user actually reported.
+				const ensured = await ensureSessionForChat(ctx.env as Env, ctx.agentId, ctx.userId, repo);
+				if (!ensured.ok) {
+					// The runner is unreachable or refused to start. The last saved snapshot is still a
+					// truthful answer to "what was it doing" — labelled with the real diagnosis, never
+					// presented as live.
+					const stale = ensured.session ? await lastTerminal(ctx.env as Env, ensured.session.id).catch(() => null) : null;
+					if (stale) return ok(call.name, `[last snapshot — not live. ${ensured.message}]\n${stale.slice(-3000)}`);
+					return fail(call.name, ensured.message);
+				}
+				const session = ensured.session;
+				// Prefixed onto whatever we return below, including the failure paths: a session this
+				// call started is news whether or not the capture that followed it worked.
+				const opening = ensured.notice ? `${ensured.notice}\n\n` : "";
 				// Resolve the LIVE runner on the session's node (config.runnerNode-aware), the SAME
 				// path the chat brain uses. The old code addressed a node-less RelayDO by agentId,
 				// which never matched the runner's node-scoped relay — so capture returned an empty
@@ -661,13 +680,13 @@ export async function executeStorageTool(
 						oneShot && state === "idle"
 							? " — one-shot engine: the turn has FINISHED (it exits after each turn); this is not a hang"
 							: "";
-					return ok(call.name, `[live · ${state}${note}]\n${(snap.pane || "(empty)").slice(-3000)}`);
+					return ok(call.name, `${opening}[live · ${state}${note}]\n${(snap.pane || "(empty)").slice(-3000)}`);
 				}
 				// Runner offline / capture miss: fall back to the last saved snapshot, clearly labelled
 				// so the orchestrator never presents stale scrollback as live activity.
 				const tail = await lastTerminal(ctx.env as Env, session.id).catch(() => null);
-				if (tail) return ok(call.name, `[last snapshot — runner offline]\n${tail.slice(-3000)}`);
-				return fail(call.name, "Runner offline — no live terminal and no saved snapshot. Start it with `pags up`.");
+				if (tail) return ok(call.name, `${opening}[last snapshot — runner offline]\n${tail.slice(-3000)}`);
+				return fail(call.name, `${opening}Runner offline — no live terminal and no saved snapshot. Start it with \`pags up\`.`);
 			}
 
 			case "send_to_cli": {
@@ -679,8 +698,12 @@ export async function executeStorageTool(
 				const rRepos = await listRepos(ctx.env as Env, ctx.agentId, ctx.userId);
 				const rRepo = rRepos.find((r) => r.name.toLowerCase() === rName.toLowerCase());
 				if (!rRepo) return fail(call.name, `Repo "${rName}" not found.`);
-				const rSession = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, rRepo.id);
-				if (!rSession) return fail(call.name, `No active session for "${rName}".`);
+				// Same on-demand open as read_terminal (#407) — this is the WRITE half, and it was
+				// already the half with the larger consequence, so it cannot be the stricter one.
+				const rEnsured = await ensureSessionForChat(ctx.env as Env, ctx.agentId, ctx.userId, rRepo);
+				if (!rEnsured.ok) return fail(call.name, rEnsured.message);
+				const rSession = rEnsured.session;
+				const rOpening = rEnsured.notice ? `${rEnsured.notice}\n\n` : "";
 				// Route to the LIVE runner node (same helper as read_terminal / the chat brain) instead
 				// of a node-less relay lookup, so the instruction actually reaches the Engine. (CODER-008)
 				const rConn = await getBoundRunnerConn(ctx.env as Env, ctx.agentId, ctx.userId).catch(() => null);
@@ -700,9 +723,9 @@ export async function executeStorageTool(
 					const expect = rOneShot
 						? " The engine runs this turn then exits, so it will show as idle when finished — read the terminal for its output, and treat idle as DONE."
 						: " Read the terminal in a moment to see the result.";
-					return ok(call.name, `Sent to ${rName}: "${msg.slice(0, 100)}".${expect}`);
+					return ok(call.name, `${rOpening}Sent to ${rName}: "${msg.slice(0, 100)}".${expect}`);
 				} catch {
-					return fail(call.name, "Runner offline — cannot send");
+					return fail(call.name, `${rOpening}Runner offline — cannot send`);
 				}
 			}
 

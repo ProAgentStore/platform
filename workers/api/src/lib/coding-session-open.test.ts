@@ -27,10 +27,17 @@ vi.mock("./coding-engines.js", () => ({
 }));
 vi.mock("./github-app.js", () => ({ installationTokenForOwner: vi.fn(async () => null) }));
 vi.mock("./runtime-nodes.js", () => ({ normalizeRunnerNode: (v: unknown) => (typeof v === "string" ? v.trim() : "") }));
+vi.mock("./instance-connectivity.js", () => ({ runtimeConnectivity: vi.fn() }));
+vi.mock("./coding-session-sweeper.js", () => ({
+	IDLE_SESSION_MS: 6 * 60 * 60_000,
+	lastIdleReapForRepo: vi.fn(async () => null),
+}));
 
 const store = await import("./coding-store.js");
 const runner = await import("./runner-client.js");
-const { ensureActiveSession } = await import("./coding-session-open.js");
+const connectivity = await import("./instance-connectivity.js");
+const sweeper = await import("./coding-session-sweeper.js");
+const { ensureActiveSession, ensureSessionForChat, sessionOpenedNotice } = await import("./coding-session-open.js");
 
 const env = {} as Env;
 const repo: CodingRepo = {
@@ -65,6 +72,14 @@ beforeEach(() => {
 	vi.mocked(runner.relayConnected).mockResolvedValue(true);
 	vi.mocked(runner.callRunner).mockResolvedValue({ ok: true } as never);
 	vi.mocked(store.endSession).mockResolvedValue(true);
+	vi.mocked(connectivity.runtimeConnectivity).mockResolvedValue({
+		hasRuntimeRow: true,
+		relayConnected: true,
+		node: "mac",
+		runnerVersion: "0.4.35",
+		lastSeenAt: null,
+	});
+	vi.mocked(sweeper.lastIdleReapForRepo).mockResolvedValue(null);
 });
 
 describe("ensureActiveSession — who owns the session (#271, #275)", () => {
@@ -158,5 +173,92 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		vi.mocked(runner.getBoundRunnerConn).mockResolvedValue({ ...conn, runnerNode: "laptop" } as never);
 		await ensureActiveSession(env, "inst", "u", repo);
 		expect(store.reassignSessionNode).toHaveBeenCalledWith(env, "inst", "u", "csess_moved", "laptop");
+	});
+});
+
+describe("ensureSessionForChat — the chat surface may open one too (#407)", () => {
+	const offline = { hasRuntimeRow: true, relayConnected: false, node: "mac", runnerVersion: "0.4.35", lastSeenAt: null };
+
+	it("creates NO session row when the runner is offline, and gives the runner diagnosis", async () => {
+		// The criterion most likely to be skipped, and the reason the connectivity check sits ahead
+		// of `ensureActiveSession` rather than inside it: `ensureActiveSession` INSERTS the row
+		// first and only then discovers there is nothing to launch on. Harmless for a Loop that
+		// 409s either way; not harmless for a read tool a user may call over and over on a train,
+		// each call writing and ending a row. The refusal also has to blame the runner — the whole
+		// point of #271's wording work is that a diagnosis names the ACTUAL blocker.
+		vi.mocked(connectivity.runtimeConnectivity).mockResolvedValue(offline);
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res.ok).toBe(false);
+		expect(store.createSession).not.toHaveBeenCalled();
+		expect(runner.callRunner).not.toHaveBeenCalled();
+		expect(!res.ok && res.message).toMatch(/pags up/);
+		expect(!res.ok && res.message).toContain("fws/platform");
+	});
+
+	it("hands back the existing session even when it refuses, so a caller can degrade", async () => {
+		// `read_terminal` answers an offline runner with the last saved snapshot, which needs the
+		// session id. Returning a bare failure turns a partial answer into no answer.
+		vi.mocked(connectivity.runtimeConnectivity).mockResolvedValue(offline);
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_known"));
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res.ok).toBe(false);
+		expect(!res.ok && res.session?.id).toBe("csess_known");
+	});
+
+	it("opens one when the runner is live and there is none, and NAMES it", async () => {
+		// A coding session is a child process on somebody's laptop. The chat already spawns one
+		// via `start_work` without asking; what it never did was say so.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: true, opened: true });
+		expect(res.ok && res.notice).toContain("csess_new");
+		expect(res.ok && res.notice).toContain("fws/platform");
+		expect(res.ok && res.notice).toContain("mac");
+	});
+
+	it("says nothing when it merely reused a session somebody else opened", async () => {
+		// The notice is news. Announcing a session on every read_terminal would train the model to
+		// tell the user their engine restarted when nothing happened.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: true, opened: false });
+		expect(res.ok && res.notice).toBeNull();
+		expect(sweeper.lastIdleReapForRepo).not.toHaveBeenCalled();
+	});
+
+	it("explains the six-hour reap when that is why there was no session", async () => {
+		// The sweeper writes this to the coding timeline, which lives in the Co-pilot view — the
+		// one place a chat user never looks. From chat the session simply stopped existing and the
+		// next question failed for a reason nothing stated.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		vi.mocked(sweeper.lastIdleReapForRepo).mockResolvedValue({ sessionId: "csess_old", endedAt: "2026-08-08 01:00:00" });
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res.ok && res.notice).toMatch(/closed automatically after 6 hours/);
+	});
+
+	it("blames the start failure, not the runner, when the runner is up", async () => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_dead"));
+		vi.mocked(runner.callRunner).mockRejectedValue(new Error("fatal: repository not found"));
+		vi.mocked(store.getRepo).mockResolvedValue({ ...repo, cloneError: "fatal: repository not found" });
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res.ok).toBe(false);
+		expect(!res.ok && res.message).toMatch(/not a `pags up` problem/);
+		expect(!res.ok && res.message).toContain("fatal: repository not found");
+	});
+});
+
+describe("sessionOpenedNotice", () => {
+	it("tells the model to relay it — the string is the only lever this module has", () => {
+		// The prompt builder is a different file. If the tool result does not ask for the sentence,
+		// nothing else will, and the process appears on the user's laptop in silence.
+		const n = sessionOpenedNotice({ repoName: "chess-academy", sessionId: "csess_1", engine: "claude", node: "mac" });
+		expect(n).toMatch(/Say in your reply/);
+		expect(n).toContain("chess-academy");
+		expect(n).toContain("csess_1");
+		expect(n).not.toMatch(/closed automatically/);
 	});
 });
