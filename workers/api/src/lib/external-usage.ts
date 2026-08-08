@@ -23,6 +23,15 @@ import { CHARGED_SQL } from "./usage-payer.js";
  *
  * `users.roles` is the live source (the same one `isAdmin` consults), plus `ADMIN_ALLOWLIST`,
  * so promoting or demoting someone is reflected immediately rather than at token expiry.
+ *
+ * The read selects `id, roles, github_login` and NOT an email. `users` has no email column and
+ * never has: identity here is a GitHub or Google login, and the profile fields migration 0016
+ * added went to `user_profile`. This function shipped selecting one anyway (#438) — D1 answered
+ * `no such column: email` on every call, the `catch` below swallowed it, and the whole
+ * roles-and-allowlist branch never ran once. What was left was the caller, which is exactly the
+ * "identified NOBODY" symptom the comment below attributes to the token-only case, so the number
+ * the focus bet turns on was measured through a query that always threw. `isAdmin` matches on
+ * `id` and `github_login` for the same reason; an email in ADMIN_ALLOWLIST matches neither.
  */
 export async function operatorUserIds(env: Env, callerUid?: string): Promise<Set<string>> {
 	const ids = new Set<string>();
@@ -38,11 +47,10 @@ export async function operatorUserIds(env: Env, callerUid?: string): Promise<Set
 		.map((s) => s.trim().toLowerCase())
 		.filter(Boolean);
 	try {
-		const { results } = await env.DB.prepare("SELECT id, roles, github_login, email FROM users").all<{
+		const { results } = await env.DB.prepare("SELECT id, roles, github_login FROM users").all<{
 			id: string;
 			roles: string | null;
 			github_login: string | null;
-			email: string | null;
 		}>();
 		for (const u of results ?? []) {
 			let isAdminRole = false;
@@ -52,9 +60,7 @@ export async function operatorUserIds(env: Env, callerUid?: string): Promise<Set
 				/* malformed roles → not admin */
 			}
 			const listed =
-				allow.includes(u.id.toLowerCase()) ||
-				(!!u.github_login && allow.includes(u.github_login.toLowerCase())) ||
-				(!!u.email && allow.includes(u.email.toLowerCase()));
+				allow.includes(u.id.toLowerCase()) || (!!u.github_login && allow.includes(u.github_login.toLowerCase()));
 			if (isAdminRole || listed) ids.add(u.id);
 		}
 	} catch {
