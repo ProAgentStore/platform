@@ -24,10 +24,46 @@
 	--color-accent-soft: rgba(124, 58, 237, 0.15);
 	--color-line: #303030;
 	--color-line-strong: #404040;
-	--color-green: #22c55e;
-	--color-red: #ef4444;
-	--color-yellow: #eab308;
-	--color-blue: #3b82f6;
+	/*
+	 * Status colours, named for INTENT rather than pigment (#367), each with the two
+	 * pairings its call sites were otherwise guessing at.
+	 *
+	 * The old names said what a colour IS, which meant one of them carried four unrelated
+	 * ideas at once — an error message, a destructive action, a scope label and an offline
+	 * state all wore the same word, so a later decision to move any ONE of them was a hunt
+	 * through 181 call sites to work out which was which. An intent name is a decision with
+	 * a place to live: `lib/statusBadge.ts` already mapped status → intent → colour in code
+	 * because the CSS could not, and this is that layer arriving underneath it.
+	 *
+	 * The pairings are the other half. `@theme` declared a soft background for the accent and
+	 * for nothing else, so every tinted status surface was an opacity modifier picked at the
+	 * call site — and the tree held three different alphas for a red tint, three for a green
+	 * one and five for a yellow border. That is not variety, it is 138 sites each making a
+	 * decision nobody recorded. Two are declared here and the guard gates the modifier form
+	 * at zero, so the alpha is chosen once:
+	 *
+	 *   -soft (0.15) — a tinted background behind status text. Matches --color-accent-soft,
+	 *                  which is the one pairing that already existed and got this right.
+	 *   -line (0.4)  — a tinted border around such a surface. 0.4 was the mode of the border
+	 *                  alphas actually in use; a 1px line at 0.15 is nearly invisible on
+	 *                  #0a0a0a, which is why the border sites had drifted upward on their own.
+	 *
+	 * Written as rgba() rather than a colour-mix or a relative colour so the value is legible
+	 * to a reader and to the equality test that holds this block and the operator portal's copy
+	 * identical.
+	 */
+	--color-success: #22c55e;
+	--color-success-soft: rgba(34, 197, 94, 0.15);
+	--color-success-line: rgba(34, 197, 94, 0.4);
+	--color-danger: #ef4444;
+	--color-danger-soft: rgba(239, 68, 68, 0.15);
+	--color-danger-line: rgba(239, 68, 68, 0.4);
+	--color-warning: #eab308;
+	--color-warning-soft: rgba(234, 179, 8, 0.15);
+	--color-warning-line: rgba(234, 179, 8, 0.4);
+	--color-info: #3b82f6;
+	--color-info-soft: rgba(59, 130, 246, 0.15);
+	--color-info-line: rgba(59, 130, 246, 0.4);
 	--font-body: "Manrope", system-ui, sans-serif;
 	--font-display: "Fraunces", Georgia, serif;
 	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;

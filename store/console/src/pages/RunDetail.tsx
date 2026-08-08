@@ -43,9 +43,9 @@ function linkify(text: string): ReactNode {
 }
 
 function levelClass(type: string): string {
-	if (type === "job.confirmation_email") return "text-green";
-	if (/failed|error|stuck/.test(type)) return "text-red";
-	if (/completed|resumed|dryrun/.test(type)) return "text-green";
+	if (type === "job.confirmation_email") return "text-success";
+	if (/failed|error|stuck/.test(type)) return "text-danger";
+	if (/completed|resumed|dryrun/.test(type)) return "text-success";
 	if (/needs_input|handoff|captcha/.test(type)) return "text-amber-500";
 	if (type === "job.email") return "text-accent";
 	return "text-muted";
@@ -119,7 +119,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 				</div>
 			)}
 			{asking && <div className="text-xs text-muted mb-2">Thinking…</div>}
-			{err && <div className="text-xs px-3 py-2 mb-2 rounded-lg bg-red/10 border border-red/30 text-red">{err}</div>}
+			{err && <div className="text-xs px-3 py-2 mb-2 rounded-lg bg-danger-soft border border-danger-line text-danger">{err}</div>}
 			<div className="flex gap-2">
 				<input
 					ref={inputRef}
@@ -255,8 +255,8 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 				<span className="font-bold text-ink text-sm">{kind === "captcha" ? "🔐 Live remote control — solve the verification" : "🖥 Live remote control"}</span>
 				<span className="text-xs text-muted-soft hidden md:inline">Click &amp; type here — sent live to the agent's browser (~2 fps).</span>
 				<div className="ml-auto flex items-center gap-2">
-					<button type="button" onClick={onResume} className="px-4 py-1.5 rounded-lg bg-green/20 text-green font-bold text-sm">Resume — done</button>
-					<button type="button" onClick={endTakeover} className="px-3 py-1.5 rounded-lg bg-red/15 text-red text-sm font-semibold">End</button>
+					<button type="button" onClick={onResume} className="px-4 py-1.5 rounded-lg bg-success-soft text-success font-bold text-sm">Resume — done</button>
+					<button type="button" onClick={endTakeover} className="px-3 py-1.5 rounded-lg bg-danger-soft text-danger text-sm font-semibold">End</button>
 					<button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">Close ✕</button>
 				</div>
 			</div>
@@ -278,7 +278,7 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 					<div className="text-sm text-white/70 max-w-lg text-center px-4">
 						{connErr ? (
 							<>
-								<div className="font-semibold text-red mb-1">Live view error</div>
+								<div className="font-semibold text-danger mb-1">Live view error</div>
 								<div className="text-xs text-white/60 break-words font-mono">{connErr}</div>
 							</>
 						) : "Connecting to the live browser…"}
@@ -443,7 +443,7 @@ export default function RunDetail() {
 				<button type="button" onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent">
 					<ArrowLeft size={15} /> Back
 				</button>
-				<button type="button" onClick={remove} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-red/15 text-red font-semibold hover:bg-red/25">
+				<button type="button" onClick={remove} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-danger-soft text-danger font-semibold hover:bg-danger-soft">
 					<Trash2 size={14} /> Delete
 				</button>
 			</div>
@@ -485,7 +485,7 @@ export default function RunDetail() {
 							<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-2">Tap your answer</div>
 							<div className="flex flex-wrap gap-2">
 								{options.map((opt) => (
-									<button key={opt} type="button" onClick={() => sendValue(opt)} className="px-3.5 py-2 rounded-lg bg-panel border border-line hover:border-accent hover:bg-accent/10 text-sm text-ink font-medium">{opt}</button>
+									<button key={opt} type="button" onClick={() => sendValue(opt)} className="px-3.5 py-2 rounded-lg bg-panel border border-line hover:border-accent hover:bg-accent-soft text-sm text-ink font-medium">{opt}</button>
 								))}
 							</div>
 							<div className="text-xs text-muted-soft mt-3 mb-1.5">…or type a different answer</div>
@@ -508,7 +508,7 @@ export default function RunDetail() {
 					<div className="text-sm text-muted mt-0.5 mb-3">The agent runs on your remote machine — take control of its browser here, {kind === "captcha" ? "solve the verification" : "do the blocked step"}, then press Resume.</div>
 					<div className="flex flex-wrap gap-2">
 						<button type="button" onClick={() => setTakeoverOpen(true)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base">🖥 Take over (live)</button>
-						<button type="button" onClick={resume} className="px-5 py-2.5 rounded-lg bg-green/15 text-green font-bold text-base">Resume — I’ve done it</button>
+						<button type="button" onClick={resume} className="px-5 py-2.5 rounded-lg bg-success-soft text-success font-bold text-base">Resume — I’ve done it</button>
 					</div>
 				</div>
 			)}

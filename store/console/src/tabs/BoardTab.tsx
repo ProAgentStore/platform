@@ -272,7 +272,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 						<button
 							type="button"
 							onClick={handleClearFinished}
-							className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-semibold"
+							className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-danger hover:text-danger font-semibold"
 						>
 							Clear finished ({finishedCount})
 						</button>
@@ -288,12 +288,12 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 			</div>
 
 			{error && (
-				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-red/10 border border-red/30 text-red">
+				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-danger-soft border border-danger-line text-danger">
 					Couldn't refresh the board: {error}
 				</div>
 			)}
 			{truncated && (
-				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-yellow/10 border border-yellow/30 text-yellow">
+				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-warning-soft border border-warning-line text-warning">
 					Showing your most recent jobs — some older jobs are hidden.
 				</div>
 			)}
@@ -373,7 +373,7 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 			onClick={(e) => { e.stopPropagation(); onAsk(); }}
 			title={label}
 			aria-label={label}
-			className={`text-2xs px-2 py-1 rounded border font-bold flex items-center gap-1 ${turns ? "border-accent/50 text-accent hover:bg-accent/10" : "border-line text-muted hover:border-accent hover:text-accent"} ${className}`}
+			className={`text-2xs px-2 py-1 rounded border font-bold flex items-center gap-1 ${turns ? "border-accent/50 text-accent hover:bg-accent-soft" : "border-line text-muted hover:border-accent hover:text-accent"} ${className}`}
 		>
 			<MessageCircleQuestion size={12} aria-hidden="true" />
 			Ask{turns ? ` ${turns}` : ""}
@@ -407,7 +407,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 					type="button"
 					title="Remove from board"
 					onClick={(e) => { e.stopPropagation(); onDelete(); }}
-					className="absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-md text-muted-soft hover:text-red hover:bg-red/10 text-base leading-none"
+					className="absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-md text-muted-soft hover:text-danger hover:bg-danger-soft text-base leading-none"
 				>
 					✕
 				</button>
@@ -437,7 +437,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 					<button
 						type="button"
 						onClick={(e) => { e.stopPropagation(); onApprove(); }}
-						className="text-2xs px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold"
+						className="text-2xs px-2 py-1 rounded border border-success-line text-success hover:bg-success-soft font-bold"
 						title="Approve this task to run"
 					>
 						Approve
@@ -448,7 +448,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 						type="button"
 						disabled={retrying}
 						onClick={(e) => { e.stopPropagation(); onRetry(); }}
-						className="text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40"
+						className="text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent-soft font-bold disabled:opacity-40"
 						title="Re-run this application"
 					>
 						{retrying ? "↻ Retrying…" : "↻ Retry"}
@@ -530,10 +530,10 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 				{item.updatedAt && <span className="shrink-0 text-2xs text-muted-soft hidden md:inline">{formatTime(item.updatedAt)}</span>}
 				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} className="shrink-0" />}
 				{onApprove && (
-					<button type="button" onClick={onApprove} className="shrink-0 text-2xs px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold" title="Approve this task to run">Approve</button>
+					<button type="button" onClick={onApprove} className="shrink-0 text-2xs px-2 py-1 rounded border border-success-line text-success hover:bg-success-soft font-bold" title="Approve this task to run">Approve</button>
 				)}
 				{onRetry && (
-					<button type="button" disabled={retrying} onClick={onRetry} className="shrink-0 text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40" title="Re-run this application">{retrying ? "↻…" : "↻ Retry"}</button>
+					<button type="button" disabled={retrying} onClick={onRetry} className="shrink-0 text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent-soft font-bold disabled:opacity-40" title="Re-run this application">{retrying ? "↻…" : "↻ Retry"}</button>
 				)}
 				<select
 					value={selectValue}
@@ -548,7 +548,7 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 					<button type="button" onClick={onToggleAttempts} className="shrink-0 text-2xs px-1.5 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent font-medium" title="Show attempts">×{item.attempts.length} {expanded ? "▲" : "▼"}</button>
 				)}
 				{(isFinished || !openable) && (
-					<button type="button" title="Remove from board" onClick={onDelete} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-muted-soft hover:text-red hover:bg-red/10 text-base leading-none">✕</button>
+					<button type="button" title="Remove from board" onClick={onDelete} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-muted-soft hover:text-danger hover:bg-danger-soft text-base leading-none">✕</button>
 				)}
 			</div>
 			{expanded && item.attempts.length > 1 && (
@@ -669,7 +669,7 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 								<div className="flex items-center gap-0.5 shrink-0">
 									<button type="button" onClick={() => swap(i, -1)} disabled={i === 0} className="w-7 h-7 flex items-center justify-center rounded border border-line text-muted hover:text-accent disabled:opacity-30" title="Move up"><ArrowUp size={13} /></button>
 									<button type="button" onClick={() => swap(i, 1)} disabled={i === draft.length - 1} className="w-7 h-7 flex items-center justify-center rounded border border-line text-muted hover:text-accent disabled:opacity-30" title="Move down"><ArrowDown size={13} /></button>
-									<button type="button" onClick={() => remove(i)} className="w-7 h-7 flex items-center justify-center rounded border border-line text-muted hover:text-red hover:border-red" title="Remove column"><Trash2 size={13} /></button>
+									<button type="button" onClick={() => remove(i)} className="w-7 h-7 flex items-center justify-center rounded border border-line text-muted hover:text-danger hover:border-danger" title="Remove column"><Trash2 size={13} /></button>
 								</div>
 							</div>
 							<div className="flex items-center gap-2 flex-wrap">
@@ -684,10 +684,10 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 
 				<button type="button" onClick={addCol} className="mt-2 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-line text-muted hover:border-accent hover:text-accent font-semibold"><Plus size={13} /> Add column</button>
 
-				{err && <div className="mt-3 text-xs px-3 py-2 rounded-lg bg-red/10 border border-red/30 text-red">{err}</div>}
+				{err && <div className="mt-3 text-xs px-3 py-2 rounded-lg bg-danger-soft border border-danger-line text-danger">{err}</div>}
 
 				<div className="flex items-center justify-between gap-2 mt-4">
-					<button type="button" onClick={reset} disabled={saving} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted hover:border-red hover:text-red font-semibold disabled:opacity-50">Reset to default</button>
+					<button type="button" onClick={reset} disabled={saving} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted hover:border-danger hover:text-danger font-semibold disabled:opacity-50">Reset to default</button>
 					<div className="flex gap-2">
 						<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
 						<button type="button" onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save columns"}</button>

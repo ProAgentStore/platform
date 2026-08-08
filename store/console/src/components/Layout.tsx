@@ -144,7 +144,7 @@ export default function Layout() {
 						<NavLink to="/notifications" className="relative no-underline text-muted" title="Notifications">
 							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (
-								<span className="absolute -top-1 -right-1.5 bg-red text-white text-2xs w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
+								<span className="absolute -top-1 -right-1.5 bg-danger text-white text-2xs w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
 									{unreadCount > 9 ? "9+" : unreadCount}
 								</span>
 							)}
@@ -222,7 +222,7 @@ function PushPrompt() {
 	const onDismiss = () => { setDismissed(true); localStorage.setItem("pags:push-dismissed", "1"); };
 
 	return (
-		<div className="shrink-0 bg-accent/10 border-b border-accent/25 px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+		<div className="shrink-0 bg-accent-soft border-b border-accent/25 px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
 			<BellRing size={18} className="text-accent shrink-0" />
 			<div className="text-sm text-ink flex-1 min-w-[8rem]">
 				<b>Turn on alerts</b> so your agent can reach you the moment it needs an answer — even when this tab is closed.

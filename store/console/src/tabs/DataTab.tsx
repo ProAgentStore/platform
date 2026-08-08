@@ -400,7 +400,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 										<td className="px-2 py-1 text-right">{r.seen}</td>
 										<td className="px-2 py-1 text-right">{r.added}</td>
 										<td className="px-2 py-1 text-right">{r.skipped}</td>
-										<td className={`px-2 py-1 text-right ${r.errors ? "text-red font-medium" : ""}`}>{r.errors}</td>
+										<td className={`px-2 py-1 text-right ${r.errors ? "text-danger font-medium" : ""}`}>{r.errors}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{r.trigger}</td>
 									</tr>
 								))}

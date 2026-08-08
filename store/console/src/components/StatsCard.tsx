@@ -58,7 +58,7 @@ export default function StatsCard({ card, sourceLabel, onRemove, busy }: StatsCa
 						type="button"
 						onClick={onRemove}
 						disabled={busy}
-						className="text-muted-soft hover:text-red shrink-0 disabled:opacity-40"
+						className="text-muted-soft hover:text-danger shrink-0 disabled:opacity-40"
 						// Removing an INHERITED card hides it rather than deleting it — a subscriber
 						// cannot edit the agent every other subscriber gets. Stated here because the
 						// two outcomes are indistinguishable from the button.
@@ -82,7 +82,7 @@ export default function StatsCard({ card, sourceLabel, onRemove, busy }: StatsCa
 /** A failed card says WHAT failed. Never an empty chart — an empty chart is a claim. */
 function CardError({ reason }: { reason: string }) {
 	return (
-		<div className="flex items-start gap-2 text-xs text-red py-2">
+		<div className="flex items-start gap-2 text-xs text-danger py-2">
 			<AlertTriangle size={14} className="shrink-0 mt-0.5" />
 			<div className="min-w-0">
 				<div className="font-semibold">Couldn’t be read</div>
@@ -193,7 +193,7 @@ function TrendChart({ card, points, unit }: { card: StatsCardValue; points: Arra
 				{last && <span className="text-muted tabular-nums">last {formatValue(last.value, unit)}</span>}
 				<span>{dayLabel(points[points.length - 1].day)}</span>
 			</div>
-			{note && <p className="text-2xs text-yellow/90 mt-1">{note}</p>}
+			{note && <p className="text-2xs text-warning mt-1">{note}</p>}
 		</div>
 	);
 }
@@ -227,7 +227,7 @@ function Groups({ data, bars }: { data: Extract<StatsData, { type: "groups" }>; 
 					</div>
 				))}
 			</div>
-			{partial && <p className="text-2xs text-yellow/90 mt-2">{partial}</p>}
+			{partial && <p className="text-2xs text-warning mt-2">{partial}</p>}
 		</div>
 	);
 }

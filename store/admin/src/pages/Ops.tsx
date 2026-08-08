@@ -34,7 +34,7 @@ interface Ops {
 }
 
 const statusColor = (s: string) =>
-	s === "failed" || s === "blocked" ? "text-red" : s === "needs_human" ? "text-yellow" : "text-muted";
+	s === "failed" || s === "blocked" ? "text-danger" : s === "needs_human" ? "text-warning" : "text-muted";
 
 export default function Ops() {
 	const [ops, setOps] = useState<Ops | null>(null);

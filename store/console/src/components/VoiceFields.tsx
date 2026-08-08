@@ -121,9 +121,9 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 			</select>
 			{sttMode === "openai" && hasOpenAiKey !== null && (
 				hasOpenAiKey ? (
-					<p className="text-xs text-green mb-2">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
+					<p className="text-xs text-success mb-2">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
 				) : (
-					<p className="text-xs text-red mb-2">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
+					<p className="text-xs text-danger mb-2">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
 				)
 			)}
 			{/* The model was already read by resolveVoiceConfig but had no way in: the save route
@@ -160,7 +160,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 				<option value="openai-realtime">Natural (OpenAI) — human-sounding</option>
 			</select>
 			{ttsProvider.includes("openai") && hasOpenAiKey === false && (
-				<p className="text-xs text-red mb-2">⚠ No OpenAI key — using the browser voice. Add your key in <b>Knowledge → Credentials</b>.</p>
+				<p className="text-xs text-danger mb-2">⚠ No OpenAI key — using the browser voice. Add your key in <b>Knowledge → Credentials</b>.</p>
 			)}
 			{ttsProvider.includes("openai") && (
 				<div className="mb-2">

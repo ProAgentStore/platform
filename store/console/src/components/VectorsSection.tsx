@@ -161,7 +161,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 							{searching ? "Searching…" : "Search"}
 						</Button>
 					</div>
-					{searchError && <div className="text-xs text-red mt-2">{searchError}</div>}
+					{searchError && <div className="text-xs text-danger mt-2">{searchError}</div>}
 					{hits && (
 						<div className="flex flex-col gap-2 mt-3 lg:max-h-[60vh] lg:overflow-y-auto">
 							{hits.length === 0 && <p className="text-xs text-muted-soft">No matches — this content may not be indexed.</p>}

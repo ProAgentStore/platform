@@ -107,7 +107,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 							/>
 							<span className="min-w-0">
 								<span className="font-mono text-xs font-semibold">{t.name}</span>
-								<span className={`ml-1.5 text-2xs uppercase tracking-wide ${t.scope === "write" ? "text-red" : "text-muted"}`}>{t.scope}</span>
+								<span className={`ml-1.5 text-2xs uppercase tracking-wide ${t.scope === "write" ? "text-danger" : "text-muted"}`}>{t.scope}</span>
 								{t.connector && <span className="ml-1.5 text-2xs text-muted-soft">{t.connector}</span>}
 								{t.disabled && <span className="ml-1.5 text-2xs text-muted">— off</span>}
 								{consentChip(t) && <span className="ml-1.5 text-2xs text-amber-500">— {consentChip(t)}</span>}
@@ -116,7 +116,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 						</label>
 					))}
 					{listed.length === 0 && <p className="text-xs text-muted">This agent declares no tools — it can only talk.</p>}
-					{toolMsg && <p className="text-xs text-green mt-1">{toolMsg}</p>}
+					{toolMsg && <p className="text-xs text-success mt-1">{toolMsg}</p>}
 				</div>
 			)}
 
@@ -139,7 +139,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 							<span className="text-muted">write access</span>
 						</label>
 					))}
-					{consentMsg && <p className="text-xs text-green mt-1">{consentMsg}</p>}
+					{consentMsg && <p className="text-xs text-success mt-1">{consentMsg}</p>}
 					{connectors.includes("mcp") && (
 						<p className="text-2xs text-muted-soft mt-1.5">
 							MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.

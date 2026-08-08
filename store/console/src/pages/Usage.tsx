@@ -208,7 +208,7 @@ export default function Usage() {
 			<div className="flex gap-1 mb-4">
 				{RANGES.map((r) => (
 					<button key={r.id} type="button" onClick={() => setRange(r.id)}
-						className={`text-xs px-3 py-1.5 rounded-lg border font-semibold transition-colors ${range === r.id ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:text-ink"}`}>
+						className={`text-xs px-3 py-1.5 rounded-lg border font-semibold transition-colors ${range === r.id ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}>
 						{r.label}
 					</button>
 				))}

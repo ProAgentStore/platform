@@ -159,7 +159,7 @@ export default function Profile() {
 						{user.roles && (
 							<div className="flex flex-wrap gap-1.5 mt-1.5">
 								{user.roles.map(r => (
-									<span key={r} className={`text-2xs px-2 py-0.5 rounded-full font-semibold ${r === "admin" ? "bg-red/15 text-red" : r === "creator" ? "bg-accent/15 text-purple-400" : "bg-blue/15 text-blue"}`}>{r}</span>
+									<span key={r} className={`text-2xs px-2 py-0.5 rounded-full font-semibold ${r === "admin" ? "bg-danger-soft text-danger" : r === "creator" ? "bg-accent-soft text-purple-400" : "bg-info-soft text-info"}`}>{r}</span>
 								))}
 							</div>
 						)}
@@ -289,7 +289,7 @@ export default function Profile() {
 									{/* A provider name is the only elastic part of this row; everything else is
 									    a fixed control. Let it truncate instead of widening the card. */}
 									<span className="text-sm font-medium flex-1 min-w-0 truncate">{p.name}</span>
-									<span className={`text-xs ${p.hasKey ? "text-green" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>
+									<span className={`text-xs ${p.hasKey ? "text-success" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>
 									{p.hasKey ? (
 										<button type="button" onClick={() => removeKey(p.id, p.name)} className="text-xs px-2 py-1 rounded border border-line text-muted">Remove</button>
 									) : (
@@ -303,7 +303,7 @@ export default function Profile() {
 
 				{/* Sign out */}
 				<div className="mt-4">
-					<button type="button" onClick={() => { signOut(); navigate("/"); }} className="bg-red text-white text-sm px-4 py-2 rounded-xl font-semibold hover:opacity-90">Sign Out</button>
+					<button type="button" onClick={() => { signOut(); navigate("/"); }} className="bg-danger text-white text-sm px-4 py-2 rounded-xl font-semibold hover:opacity-90">Sign Out</button>
 				</div>
 			</div>
 		</Page>

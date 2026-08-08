@@ -18,19 +18,21 @@
  * for, and a later decision to (say) make warnings orange is one edit here rather
  * than a hunt through every table.
  *
- * The tint is an opacity modifier because this repo's `@theme` declares no `-soft`
- * background pairing for the status colours — #367's to fix properly; this uses
- * what exists, matching the `/15` BoardTab already established.
+ * #367 moved that idea one layer down: the tokens themselves are now named for
+ * intent, and each declares its own tinted background, so this map spells a
+ * decision instead of computing one. The old note here — that the tint was an
+ * opacity modifier "because `@theme` declares no `-soft` pairing" — was the
+ * clearest statement of what was missing, and it is what got fixed.
  */
 
 export type StatusIntent = "success" | "danger" | "warning" | "info" | "neutral";
 
 /** Tinted background + solid foreground, both from `index.css` `@theme` tokens. */
 export const INTENT_CLASS: Record<StatusIntent, string> = {
-	success: "bg-green/15 text-green",
-	danger: "bg-red/15 text-red",
-	warning: "bg-yellow/15 text-yellow",
-	info: "bg-blue/15 text-blue",
+	success: "bg-success-soft text-success",
+	danger: "bg-danger-soft text-danger",
+	warning: "bg-warning-soft text-warning",
+	info: "bg-info-soft text-info",
 	neutral: "bg-muted/15 text-muted",
 };
 

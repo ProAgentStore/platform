@@ -327,7 +327,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 	};
 
 	const badge = report ? statusBadge(report.status) : null;
-	const toneClass = badge?.tone === "green" ? "text-green" : badge?.tone === "amber" ? "text-yellow" : "text-red";
+	const toneClass = badge?.tone === "green" ? "text-success" : badge?.tone === "amber" ? "text-warning" : "text-danger";
 
 	return (
 		<div className="mb-3 pb-3 border-b border-line">
@@ -340,7 +340,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 			{/* The unbound legacy token. Shown until it is bound or discarded, because the alternative
 			    is a user whose agent silently stopped working reading the change as data loss. */}
 			{creds.legacy.present && (
-				<p className="text-2xs text-yellow mb-2 leading-snug">
+				<p className="text-2xs text-warning mb-2 leading-snug">
 					You have an older account-wide MCP token. It isn’t bound to a server, so it is no longer sent automatically — one token reaching every server you name was the reason. Add a
 					token per server below (“Use my existing token” binds this one without retyping it), or{" "}
 					<button type="button" className="underline" disabled={busyTool === "cred::legacy"} onClick={() => discardLegacy()}>
@@ -360,7 +360,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 								<span className="text-muted-soft">{c.wildcard ? "all tools" : `${c.grants.length} tool${c.grants.length === 1 ? "" : "s"}`}</span>
 								{(() => {
 									const note = credentialNote(creds.credentials, c.endpoint);
-									return <span className={note.tone === "amber" ? "text-yellow" : "text-muted-soft"}>· {note.label}</span>;
+									return <span className={note.tone === "amber" ? "text-warning" : "text-muted-soft"}>· {note.label}</span>;
 								})()}
 								{/* An OAuth server gets Reauthorize, not "replace token": there is no token to
 								    replace, and offering one sends the user hunting for something that
@@ -380,14 +380,14 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									</button>
 								)}
 								{creds.credentials.some((k) => k.endpoint === c.endpoint) && (
-									<button type="button" className="text-muted-soft hover:text-red" disabled={busyTool === `cred::${c.endpoint}`} onClick={() => removeCredential(c.endpoint)}>
+									<button type="button" className="text-muted-soft hover:text-danger" disabled={busyTool === `cred::${c.endpoint}`} onClick={() => removeCredential(c.endpoint)}>
 										Remove token
 									</button>
 								)}
 								<button type="button" className="ml-auto text-accent hover:underline" onClick={() => { setUrl(c.endpoint); runTest(c.endpoint, openAuth ? "none" : "vault"); }}>
 									Test
 								</button>
-								<button type="button" className="text-muted-soft hover:text-red" disabled={busyTool === c.endpoint} onClick={() => disconnect(c.endpoint, c.grants.map((g) => g.tool))}>
+								<button type="button" className="text-muted-soft hover:text-danger" disabled={busyTool === c.endpoint} onClick={() => disconnect(c.endpoint, c.grants.map((g) => g.tool))}>
 									Disconnect
 								</button>
 							</div>
@@ -395,8 +395,8 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 								{c.grants.map((g) => (
 									<span key={g.tool} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-2xs">
 										{g.tool === "*" ? "*" : g.tool}
-										{g.destructive && <span className="text-red ml-1">!</span>}
-										<button type="button" className="ml-1 text-muted-soft hover:text-red" onClick={() => setGrant(c.endpoint, g.tool, false)} aria-label={`Revoke ${g.tool}`}>
+										{g.destructive && <span className="text-danger ml-1">!</span>}
+										<button type="button" className="ml-1 text-muted-soft hover:text-danger" onClick={() => setGrant(c.endpoint, g.tool, false)} aria-label={`Revoke ${g.tool}`}>
 											×
 										</button>
 									</span>
@@ -449,7 +449,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 				<input type="checkbox" checked={openAuth} onChange={(e) => setOpenAuth(e.target.checked)} />
 				Open server — don’t send this server’s stored token
 			</label>
-			{msg && <p className="text-xs text-green mt-1">{msg}</p>}
+			{msg && <p className="text-xs text-success mt-1">{msg}</p>}
 
 			{/* The report. Everything here is the result of the test just run — never cached. */}
 			{report && (
@@ -515,7 +515,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 											Allow <code className="font-mono">{preset.smokeTool}</code> below to run a live check against this server.
 										</span>
 									)}
-									{smoke?.endpoint === report.endpoint && <p className={`text-2xs mt-0.5 ${smoke.ok ? "text-green" : "text-yellow"}`}>{smoke.text}</p>}
+									{smoke?.endpoint === report.endpoint && <p className={`text-2xs mt-0.5 ${smoke.ok ? "text-success" : "text-warning"}`}>{smoke.text}</p>}
 								</div>
 							);
 						})()}
@@ -523,10 +523,10 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					{/* The gates. Shown even on success, because "connected" with a closed gate is
 					    the exact state that looks fine and does nothing. */}
 					{report.status === "connected" && !report.gates.callToolEnabled && (
-						<p className="text-2xs text-yellow mt-1">This agent can’t run <code className="font-mono">mcp_call_tool</code>, so nothing here is callable yet — enable it under Tools.</p>
+						<p className="text-2xs text-warning mt-1">This agent can’t run <code className="font-mono">mcp_call_tool</code>, so nothing here is callable yet — enable it under Tools.</p>
 					)}
 					{report.status === "connected" && report.gates.callToolEnabled && !report.gates.writeConsent && (
-						<p className="text-2xs text-yellow mt-1">MCP write access is off. Granting a tool below turns it on.</p>
+						<p className="text-2xs text-warning mt-1">MCP write access is off. Granting a tool below turns it on.</p>
 					)}
 
 					{/* Resources and prompts (#263). A server is more than its tools, and the panel used
@@ -547,7 +547,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 								return (
 									<div key={label} className="flex items-baseline gap-2 text-2xs mb-0.5">
 										<span className="w-16 shrink-0 text-muted">{label}</span>
-										<span className={line.tone === "amber" ? "text-yellow" : "text-muted-soft"}>{line.label}</span>
+										<span className={line.tone === "amber" ? "text-warning" : "text-muted-soft"}>{line.label}</span>
 									</div>
 								);
 							})}
@@ -556,7 +556,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 							{[report.resources, report.prompts]
 								.filter((s): s is McpSurfaceReport => !!s && s.state === "available" && s.count > 0 && (!s.listEnabled || !s.readEnabled))
 								.map((s) => (
-									<p key={s.detail} className="text-2xs text-yellow leading-snug mt-0.5">
+									<p key={s.detail} className="text-2xs text-warning leading-snug mt-0.5">
 										{s.detail}
 									</p>
 								))}
@@ -587,9 +587,9 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									/>
 									<span className="min-w-0">
 										<span className="font-mono text-xs font-semibold">{t.name}</span>
-										{t.destructive && <span className="ml-1.5 text-2xs uppercase tracking-wide text-red">destructive</span>}
+										{t.destructive && <span className="ml-1.5 text-2xs uppercase tracking-wide text-danger">destructive</span>}
 										{t.description && <span className="block text-2xs text-muted-soft leading-snug">{t.description}</span>}
-										{!t.callable && t.blockedBy && <span className="block text-2xs text-yellow leading-snug">{blockerHint(t.blockedBy)}</span>}
+										{!t.callable && t.blockedBy && <span className="block text-2xs text-warning leading-snug">{blockerHint(t.blockedBy)}</span>}
 									</span>
 								</label>
 							))}

@@ -122,7 +122,7 @@ export default function GithubIssues() {
 					<div className="grid xl:grid-cols-[minmax(0,1fr)_20rem] gap-4">
 						<Panel
 							title={`${data.repo} history`}
-							right={!data.complete ? <span className="text-xs text-yellow">first {fmtInt(data.fetched)} issues</span> : <span className="text-xs text-muted-soft">{data.generatedAt.slice(0, 16)}</span>}
+							right={!data.complete ? <span className="text-xs text-warning">first {fmtInt(data.fetched)} issues</span> : <span className="text-xs text-muted-soft">{data.generatedAt.slice(0, 16)}</span>}
 						>
 							<HistoryChart points={history} />
 						</Panel>
@@ -190,7 +190,7 @@ function IssueTable({ issues }: { issues: IssueRow[] }) {
 								<span>{issue.title}</span>
 								<div className="text-xs text-muted-soft">filed {issue.createdAt.slice(0, 10)}{issue.closedAt ? ` · closed ${issue.closedAt.slice(0, 10)}` : ""}</div>
 							</td>
-							<td><span className={issue.state === "open" ? "text-yellow" : "text-green"}>{issue.state}</span></td>
+							<td><span className={issue.state === "open" ? "text-warning" : "text-success"}>{issue.state}</span></td>
 							<td><span className={severityClass(issue.severity)}>{issue.severity}</span></td>
 							<td className="max-w-[22rem]">
 								<div className="flex flex-wrap gap-1">
@@ -220,17 +220,17 @@ function HistoryChart({ points }: { points: HistoryPoint[] }) {
 		<div>
 			<div className="flex flex-wrap items-center gap-3 text-xs text-muted mb-2">
 				<span><span className="text-accent">■</span> filed</span>
-				<span><span className="text-green">■</span> closed</span>
-				<span><span className="text-yellow">■</span> open total</span>
+				<span><span className="text-success">■</span> closed</span>
+				<span><span className="text-warning">■</span> open total</span>
 				<span className="ml-auto text-muted-soft">now {fmtInt(last.openTotal)} open · {fmtInt(last.totalFiled)} filed · {fmtInt(last.totalClosed)} closed</span>
 			</div>
 			<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="GitHub issue history" className="w-full h-56 border border-line rounded-lg bg-paper">
 				<line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="var(--color-line)" />
 				<line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="var(--color-line)" />
 				<text x={width - pad} y={16} textAnchor="end" className="fill-muted-soft text-2xs">{fmtInt(max)}</text>
-				<path d={line("openTotal")} fill="none" stroke="var(--color-yellow)" strokeWidth="2.5" />
+				<path d={line("openTotal")} fill="none" stroke="var(--color-warning)" strokeWidth="2.5" />
 				<path d={line("opened")} fill="none" stroke="var(--color-accent)" strokeWidth="2" />
-				<path d={line("closed")} fill="none" stroke="var(--color-green)" strokeWidth="2" />
+				<path d={line("closed")} fill="none" stroke="var(--color-success)" strokeWidth="2" />
 				{points.map((p, i) => (i % Math.ceil(points.length / 8) === 0 || i === points.length - 1) ? (
 					<text key={p.date} x={x(i)} y={height - 8} textAnchor="middle" className="fill-muted-soft text-2xs">{p.date.slice(5)}</text>
 				) : null)}
@@ -267,10 +267,10 @@ function severityCounts(issues: IssueRow[], severity: Severity) {
 }
 
 function severityClass(severity: Severity): string {
-	if (severity === "critical") return "text-red";
-	if (severity === "high") return "text-yellow";
-	if (severity === "medium") return "text-blue";
-	if (severity === "low") return "text-green";
+	if (severity === "critical") return "text-danger";
+	if (severity === "high") return "text-warning";
+	if (severity === "medium") return "text-info";
+	if (severity === "low") return "text-success";
 	return "text-muted";
 }
 

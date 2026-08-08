@@ -131,10 +131,10 @@ export default function Dashboard() {
 											{/* Real capabilities instead of a constant "subscribed" that every card showed
 											    and which therefore distinguished nothing. */}
 											{badges.length === 0 ? (
-												<span className="px-1.5 py-0.5 rounded font-medium bg-green/15 text-green">active</span>
+												<span className="px-1.5 py-0.5 rounded font-medium bg-success-soft text-success">active</span>
 											) : (
 												badges.map((b) => (
-													<span key={b} className="px-1.5 py-0.5 rounded font-medium bg-accent/12 text-accent">{b}</span>
+													<span key={b} className="px-1.5 py-0.5 rounded font-medium bg-accent-soft text-accent">{b}</span>
 												))
 											)}
 										</div>
@@ -208,10 +208,10 @@ export default function Dashboard() {
 
 function tagClass(value: string): string {
 	switch (value) {
-		case "draft": return "bg-yellow/15 text-yellow";
-		case "unlisted": return "bg-blue/15 text-blue";
-		case "published": case "active": return "bg-green/15 text-green";
-		case "error": return "bg-red/15 text-red";
+		case "draft": return "bg-warning-soft text-warning";
+		case "unlisted": return "bg-info-soft text-info";
+		case "published": case "active": return "bg-success-soft text-success";
+		case "error": return "bg-danger-soft text-danger";
 		default: return "bg-muted/15 text-muted";
 	}
 }

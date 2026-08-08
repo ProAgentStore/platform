@@ -7,7 +7,7 @@ interface TInstance { instanceId: string; name: string; agentSlug: string | null
 interface TSession { sessionId: string; repoName: string | null; engine: string; status: string; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
 interface TNode { node: string; ownerLogin: string | null; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TInstance[]; sessions: TSession[] }
 
-const dot = (on: boolean) => <span className={on ? "text-green" : "text-muted-soft"}>●</span>;
+const dot = (on: boolean) => <span className={on ? "text-success" : "text-muted-soft"}>●</span>;
 
 export default function Terminals() {
 	const [nodes, setNodes] = useState<TNode[] | null>(null);

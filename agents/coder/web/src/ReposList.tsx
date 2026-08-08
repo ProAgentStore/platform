@@ -150,7 +150,7 @@ export default function ReposList({
 							{isEngineBusy(status) ? (
 								<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
 							) : (
-								<span className={`w-2 h-2 rounded-full ${unusable ? "bg-red" : active && status !== "offline" ? "bg-green" : "bg-muted"}`} />
+								<span className={`w-2 h-2 rounded-full ${unusable ? "bg-danger" : active && status !== "offline" ? "bg-success" : "bg-muted"}`} />
 							)}
 							{repoLabel(r)}
 							{r.instructions && <span className="text-2xs px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
@@ -183,7 +183,7 @@ export default function ReposList({
 					</div>
 				</div>
 				{unusable && (
-					<div data-testid={`repo-unusable-${r.id}`} className="mt-2 bg-red/10 border border-red/40 text-red rounded-lg p-2 text-xs">
+					<div data-testid={`repo-unusable-${r.id}`} className="mt-2 bg-danger-soft border border-danger-line text-danger rounded-lg p-2 text-xs">
 						{/* The server's own sentence — it names the path and the condition, and it is the
 						    same one the agent is given to relay, so the console and the chat cannot say
 						    two different things about one directory. `break-words` because a checkout
@@ -235,7 +235,7 @@ export default function ReposList({
 	const staleNotice = staleListNotice(recheck, repos.filter((r) => r.workdir).length);
 
 	const offlineCta = runnerOnline === false && (
-		<div className="bg-yellow/10 border border-yellow/40 text-yellow rounded-lg p-2.5 mt-3 text-sm">
+		<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 mt-3 text-sm">
 			<b>Your machine isn't connected.</b> Start the runner:
 			<code className="block mt-1.5 bg-paper border border-line text-ink rounded-md p-1.5 text-sm">pags up</code>
 		</div>

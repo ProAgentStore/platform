@@ -93,7 +93,7 @@ export default function Usage() {
 				right={<span className="text-xs text-muted-soft">last {days} days{range === "all" ? " (max)" : ""}</span>}
 			>
 				{extErr ? (
-					<div className="text-red text-sm">Couldn’t measure the split: {extErr}</div>
+					<div className="text-danger text-sm">Couldn’t measure the split: {extErr}</div>
 				) : !ext ? (
 					<Loading label="Measuring…" />
 				) : (
@@ -133,8 +133,8 @@ export default function Usage() {
 function ExternalSplit({ ext, days, agentLabels }: { ext: ExternalResp; days: number; agentLabels: Map<string, string> }) {
 	if (ext.operatorUnknown) {
 		return (
-			<div className="border border-yellow/40 bg-yellow/5 rounded-lg p-3">
-				<div className="text-yellow font-bold text-sm">Cannot determine</div>
+			<div className="border border-warning-line bg-warning-soft rounded-lg p-3">
+				<div className="text-warning font-bold text-sm">Cannot determine</div>
 				<p className="text-sm text-muted mt-1">
 					No operator account could be identified, so every row in the ledger looks external and the
 					count would be meaningless — not zero, and not encouraging. No number is shown on purpose.

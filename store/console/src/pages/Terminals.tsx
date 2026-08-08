@@ -25,7 +25,7 @@ function ago(iso: string | null): string {
 }
 
 const sessionTone = (status: string) =>
-	status === "active" ? "text-green" : status === "suspended" ? "text-amber-400" : "text-muted-soft";
+	status === "active" ? "text-success" : status === "suspended" ? "text-amber-400" : "text-muted-soft";
 
 export default function Terminals() {
 	const navigate = useNavigate();
@@ -106,7 +106,7 @@ export default function Terminals() {
 						<div key={n.node} className="bg-panel border border-line rounded-xl overflow-hidden">
 							{/* Machine header */}
 							<div className="flex items-center gap-2.5 px-4 py-3 border-b border-line">
-								<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${n.connected ? "bg-green" : "bg-muted-soft"}`} title={n.connected ? "Connected" : "Disconnected"} />
+								<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${n.connected ? "bg-success" : "bg-muted-soft"}`} title={n.connected ? "Connected" : "Disconnected"} />
 								<div className="min-w-0 flex-1">
 									<div className="font-semibold text-sm flex items-center gap-2 flex-wrap">
 										<Terminal size={14} className="text-muted shrink-0" />
@@ -119,7 +119,7 @@ export default function Terminals() {
 									    in WebKit; the horizontal-overflow guards cannot see it, because the text
 									    escapes its own box without widening the document. */}
 									{!!n.aka?.length && <span className="text-2xs text-muted-soft truncate min-w-0">also {n.aka.join(" · ")}</span>}
-										<span className={`text-2xs font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-green/15 text-green" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
+										<span className={`text-2xs font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-success-soft text-success" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
 									</div>
 									<div className="text-xs text-muted-soft mt-0.5">
 										{n.placement === "managed" ? "cloud" : "local"} · v{n.runnerVersion || "?"} · seen {ago(n.lastSeenAt)}
@@ -142,20 +142,20 @@ export default function Terminals() {
 							    merge — the machine keeps appearing under its old names and the fix looks like
 							    it did nothing. */}
 							{n.identityHint && (
-								<div className="px-4 py-2 text-xs text-yellow border-b border-line/60">{n.identityHint}</div>
+								<div className="px-4 py-2 text-xs text-warning border-b border-line/60">{n.identityHint}</div>
 							)}
 
 							{/* The refusal is the useful half — it names the pins or sessions to clear first. */}
 							{forgetError[n.node] && (
-								<div className="px-4 py-2 text-xs text-red border-b border-line/60">{forgetError[n.node]}</div>
+								<div className="px-4 py-2 text-xs text-danger border-b border-line/60">{forgetError[n.node]}</div>
 							)}
 
 							{/* Agents served by this machine. A 📌 marks agents PINNED to run here. */}
 							<div className="px-4 py-2.5 flex flex-wrap gap-1.5 border-b border-line/60">
 								<span className="text-2xs uppercase tracking-wide text-muted-soft self-center mr-1">Agents</span>
 								{n.instances.map((i) => (
-									<Link key={i.instanceId} to={`/instances/${i.instanceId}`} title={i.bound ? "Pinned to run on this machine" : "Served by this machine"} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border no-underline transition-colors ${i.bound ? "border-accent/50 bg-accent/10 text-ink" : "border-line text-ink hover:border-accent"}`}>
-										<Circle size={7} className={i.connected ? "fill-green text-green" : "fill-muted-soft text-muted-soft"} />
+									<Link key={i.instanceId} to={`/instances/${i.instanceId}`} title={i.bound ? "Pinned to run on this machine" : "Served by this machine"} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border no-underline transition-colors ${i.bound ? "border-accent/50 bg-accent-soft text-ink" : "border-line text-ink hover:border-accent"}`}>
+										<Circle size={7} className={i.connected ? "fill-success text-success" : "fill-muted-soft text-muted-soft"} />
 										<Bot size={12} className="text-muted" />{i.name}
 										{i.bound && <Pin size={10} className="text-accent" />}
 									</Link>

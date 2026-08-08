@@ -19,7 +19,7 @@ interface TraceEvent {
 
 const LIMITS = ["100", "200", "500", "1000"];
 const levelColor = (l: string) =>
-	l === "error" ? "text-red" : l === "warn" ? "text-yellow" : "text-muted";
+	l === "error" ? "text-danger" : l === "warn" ? "text-warning" : "text-muted";
 
 export default function TraceView() {
 	const { instanceId } = useParams<{ instanceId: string }>();

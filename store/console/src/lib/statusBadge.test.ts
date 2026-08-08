@@ -39,8 +39,8 @@ describe("statusBadgeClass", () => {
 	});
 
 	it("pairs a tinted background with a solid foreground of the same token", () => {
-		expect(statusBadgeClass("won")).toBe("bg-green/15 text-green");
-		expect(statusBadgeClass("failed")).toBe("bg-red/15 text-red");
+		expect(statusBadgeClass("won")).toBe("bg-success-soft text-success");
+		expect(statusBadgeClass("failed")).toBe("bg-danger-soft text-danger");
 		expect(statusBadgeClass("dead")).toBe("bg-muted/15 text-muted");
 	});
 

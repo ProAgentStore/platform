@@ -61,7 +61,7 @@ function CopyButton({ text }: { text: string }) {
 			// the expansion is not horizontal.
 			className="tap-target absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
 		>
-			{copied ? <Check size={16} className="text-green" /> : <Copy size={16} />}
+			{copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
 		</button>
 	);
 }
@@ -75,10 +75,10 @@ type Tab = string;
  * renders (the button becomes the Loop starter there) but the record must be total.
  */
 const LOOP_BUTTON_CLASS: Record<LoopPhase, string> = {
-	running: "border-green bg-green/15 text-green",
+	running: "border-success bg-success-soft text-success",
 	// Yellow, not orange: `index.css` `@theme` declares no `--color-orange`, so an orange utility
 	// compiles to nothing and the chip renders unstyled (the class #368 fixed elsewhere).
-	stopping: "border-yellow bg-yellow/15 text-yellow",
+	stopping: "border-warning bg-warning-soft text-warning",
 	ended: "border-line text-muted",
 };
 
@@ -87,8 +87,8 @@ const LOOP_BUTTON_CLASS: Record<LoopPhase, string> = {
  * button is the two-statements-about-one-fact problem `lib/runnerPanel.ts` was written to end.
  */
 const LOOP_BADGE_CLASS: Record<LoopPhase, string> = {
-	running: "bg-green text-white",
-	stopping: "bg-yellow text-paper",
+	running: "bg-success text-white",
+	stopping: "bg-warning text-paper",
 	ended: "bg-muted text-white",
 };
 
@@ -1030,7 +1030,7 @@ function InstancePage() {
 			{hasRuntime && (
 				<span
 					className="text-2xs font-bold px-1.5 py-0.5 rounded-full shrink-0"
-					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
+					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-success)" : "var(--color-muted)" }}
 					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
 				>
 					{runnerOnline ? "●" : "○"}
@@ -1085,7 +1085,7 @@ function InstancePage() {
 							<div
 								ref={chatRef}
 								onScroll={(e) => setAtBottom(isPinnedToBottom(e.currentTarget))}
-								className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : ""}`}
+								className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-success" : ""}`}
 						>
 							{/* Both, not just `hasMore`: without a server cursor the request could only ask for
 							    the newest page again, which is the whole of #428. A button that cannot work is
@@ -1133,7 +1133,7 @@ function InstancePage() {
 										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 												// A retracted answer must not carry the same edge as a real one (#406).
-												: m.fabricated ? "bg-panel border border-red/40 self-start rounded-bl-sm"
+												: m.fabricated ? "bg-panel border border-danger-line self-start rounded-bl-sm"
 													: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
@@ -1192,7 +1192,7 @@ function InstancePage() {
 								<div
 									aria-live="polite"
 									className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text self-end rounded-br-sm border border-dashed ${
-										voice.dictation.status === "failed" ? "bg-red/10 border-red/50 text-red" : "bg-accent/60 border-white/40 text-white"
+										voice.dictation.status === "failed" ? "bg-danger-soft border-danger-line text-danger" : "bg-accent/60 border-white/40 text-white"
 									}`}
 								>
 									<div className="text-2xs opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
@@ -1248,7 +1248,7 @@ function InstancePage() {
 							if (!s) return null;
 							const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
 								: s.tone === "speak" ? "bg-accent text-white ring-4 ring-accent/25"
-								: s.tone === "live" ? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
+								: s.tone === "live" ? "bg-success text-white ring-4 ring-success-line animate-pulse scale-105"
 								: "bg-panel border border-line text-muted hover:text-accent hover:border-accent";
 							const StatusIcon = s.icon === "spin" ? Loader2 : s.icon === "speak" ? Volume2 : Mic;
 							return (
@@ -1289,13 +1289,13 @@ function InstancePage() {
 								{([
 									{ id: "text", label: "Chat", icon: <MessageSquare size={15} />, title: "Chat: type and read replies — no voice", on: "border-accent bg-accent text-white" },
 									{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
-									{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-green bg-green text-white" },
+									{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-success bg-success text-white" },
 								] as const).map((m) => (
 									<label
 										key={m.id}
 										aria-busy={voice.starting && m.id === "handsfree"}
 										title={m.title}
-										className={`flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+										className={`flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-success-soft text-success" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
 									>
 										<input
 											type="radio"
@@ -1315,7 +1315,7 @@ function InstancePage() {
 								))}
 							</div>
 							{/* Mute — reachable in EVERY phase, never disabled, never behind a disclosure: on a browser with no Web Speech API this is the ONLY way to mute. Read docs/adr/0001-mute-is-always-available.md (M1) before adding a condition here. */}
-							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
+							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-danger bg-danger text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
 								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-2xs rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button>
 							) : (
@@ -1350,7 +1350,7 @@ function InstancePage() {
 											<button
 												type="button"
 												onClick={() => { setShowChatMenu(false); clearChat(); }}
-												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"
+												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-danger hover:bg-danger-soft transition-colors"
 											>
 												<Trash2 size={13} /> Clear messages
 											</button>
@@ -1403,7 +1403,7 @@ function InstancePage() {
 						    input styled as the live-speech surface it had stopped being (#364). Its own
 						    line, directly above the box, so the box can go on holding what you typed. */}
 						{composer.notice && (
-							<output aria-live="polite" className="mx-2 mb-1 block rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-1.5 text-xs text-yellow whitespace-pre-wrap break-words">
+							<output aria-live="polite" className="mx-2 mb-1 block rounded-lg border border-warning-line bg-warning-soft px-3 py-1.5 text-xs text-warning whitespace-pre-wrap break-words">
 								{composer.notice}
 							</output>
 						)}
@@ -1436,7 +1436,7 @@ function InstancePage() {
 									// Green while the mic is open; accent while voice owns the turn. The old
 									// accent-italic "you are speaking" state keyed off the notice string, so
 									// after #281 it fired on a mic ERROR and never on speech (#364).
-									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${composer.readOnly ? "border-accent" : voice.micOn ? "border-green" : "border-line"}`}
+									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${composer.readOnly ? "border-accent" : voice.micOn ? "border-success" : "border-line"}`}
 								/>
 							</div>
 							<button type="button" onClick={sendMessage} disabled={voiceBusy} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">

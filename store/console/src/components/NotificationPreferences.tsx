@@ -108,7 +108,7 @@ export default function NotificationPreferences({
 				);
 			})}
 
-			{msg && <p className="text-xs text-red mt-2">{msg}</p>}
+			{msg && <p className="text-xs text-danger mt-2">{msg}</p>}
 		</Card>
 	);
 }

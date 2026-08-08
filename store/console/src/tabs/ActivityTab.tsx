@@ -89,7 +89,7 @@ export default function ActivityTab({ instanceId }: { instanceId: string }) {
 			</div>
 
 			{error && (
-				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-red/10 border border-red/30 text-red">
+				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-danger-soft border border-danger-line text-danger">
 					Couldn't refresh activity: {error}
 				</div>
 			)}

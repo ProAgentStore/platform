@@ -15,7 +15,7 @@ interface Trigger {
 	createdAt: string;
 }
 
-const enabledBadge = (v: boolean) => <span className={v ? "text-green" : "text-muted"}>{v ? "enabled" : "off"}</span>;
+const enabledBadge = (v: boolean) => <span className={v ? "text-success" : "text-muted"}>{v ? "enabled" : "off"}</span>;
 
 export default function Triggers() {
 	const [data, setData] = useState<{ triggers: Trigger[]; count: number } | null>(null);

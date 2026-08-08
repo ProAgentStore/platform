@@ -122,7 +122,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 			<div className="text-sm text-muted leading-relaxed">
 				{runtimeInfo ? (
 					<>
-						Status: <span className={reading.online ? "text-green" : ""}>{reading.online ? "Online" : "Offline"}</span>
+						Status: <span className={reading.online ? "text-success" : ""}>{reading.online ? "Online" : "Offline"}</span>
 						{/* Agent's own socket down while the machine is up for OTHER agents. */}
 						{!reading.online && reading.pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
 						{reading.node && <> · Node: {reading.node}</>}
@@ -167,14 +167,14 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 									onClick={() => save(t.node)}
 									aria-pressed={t.pinned}
 									title={t.pinned ? "This agent is bound to this machine" : "Bind this agent to this machine"}
-									className={`text-left rounded-xl border p-3 transition-colors ${t.pinned ? "border-accent bg-accent/10" : "border-line bg-paper hover:border-accent/60"}`}
+									className={`text-left rounded-xl border p-3 transition-colors ${t.pinned ? "border-accent bg-accent-soft" : "border-line bg-paper hover:border-accent/60"}`}
 								>
 									<div className="flex items-center gap-2 min-w-0">
-										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-green" : t.tone === "online" ? "bg-amber-500" : "bg-muted-soft"}`} />
+										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-success" : t.tone === "online" ? "bg-amber-500" : "bg-muted-soft"}`} />
 										<span className="font-semibold text-sm truncate">{t.node}</span>
 										{t.pinned && <span className="ml-auto shrink-0 text-2xs font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
 									</div>
-									<div className={`text-2xs mt-1 ${t.tone === "attached" ? "text-green" : t.tone === "online" ? "text-amber-500" : "text-muted-soft"}`}>{t.statusText}</div>
+									<div className={`text-2xs mt-1 ${t.tone === "attached" ? "text-success" : t.tone === "online" ? "text-amber-500" : "text-muted-soft"}`}>{t.statusText}</div>
 									<div className="text-2xs text-muted-soft mt-0.5">{t.meta}</div>
 									{/* The names this machine used to answer to (#393). Shown rather than swallowed:
 									    pins, relay names and session rows are all still keyed by hostname, so this

@@ -118,7 +118,7 @@ export default function FilePreview({ instanceId, file, onClose }: {
 					</div>
 				<div className="flex-1 min-h-0 overflow-auto bg-paper">
 					{loading && <p className="text-center py-10 text-muted text-sm">Loading preview…</p>}
-					{error && <p className="text-center py-10 text-red text-sm">{error}</p>}
+					{error && <p className="text-center py-10 text-danger text-sm">{error}</p>}
 					{!loading && !error && (kind === "none" || tooBig) && (
 						<p className="text-center py-10 text-muted text-sm">
 							{tooBig ? "Too large to preview — use Download." : "No preview for this format — use Download."}

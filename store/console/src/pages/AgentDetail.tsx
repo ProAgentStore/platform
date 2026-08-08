@@ -335,7 +335,7 @@ export default function AgentDetail() {
 				<div className="flex flex-col" style={{ height: "calc(100dvh - 320px)", minHeight: 300 }}>
 					<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
 						{messages.map((m) => (
-							<div key={m.id || `${m.role}:${m.createdAt || ""}:${m.content.slice(0, 80)}`} className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15" : "bg-panel border border-line self-start rounded-bl-sm"}`}>
+							<div key={m.id || `${m.role}:${m.createdAt || ""}:${m.content.slice(0, 80)}`} className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : m.role === "system" ? "bg-warning-soft text-warning self-center rounded-full px-4 py-1.5 text-xs border border-warning-line" : "bg-panel border border-line self-start rounded-bl-sm"}`}>
 								{m.role === "assistant" ? (
 									<SafeHtmlView className="msg-md" html={renderMd(m.content)} />
 								) : <span className="whitespace-pre-wrap">{m.content}</span>}
@@ -359,7 +359,7 @@ export default function AgentDetail() {
 							{docs.map(d => (
 								<div key={d.id} className="bg-panel border border-line rounded-lg p-3 flex justify-between items-start gap-3">
 									<div><div className="font-semibold text-sm">{d.title}</div>{d.source && <div className="text-xs text-muted">{d.source}</div>}</div>
-									<button type="button" onClick={async () => { if (confirm("Delete?")) { await api(`/v1/agents/${id}/knowledge/${d.id}`, { method: "DELETE" }); loadKnowledge(); }}} className="text-xs text-red shrink-0">Delete</button>
+									<button type="button" onClick={async () => { if (confirm("Delete?")) { await api(`/v1/agents/${id}/knowledge/${d.id}`, { method: "DELETE" }); loadKnowledge(); }}} className="text-xs text-danger shrink-0">Delete</button>
 								</div>
 							))}
 						</div>
@@ -394,7 +394,7 @@ export default function AgentDetail() {
 							{tasks.map(t => (
 								<div key={t.id} className="bg-panel border border-line rounded-lg p-3">
 									<span className="font-semibold text-sm">{t.title}</span>
-									<span className={`text-xs ml-2 px-1.5 py-0.5 rounded font-medium ${t.status === "complete" ? "bg-green/15 text-green" : t.status === "in_progress" ? "bg-blue/15 text-blue" : "bg-yellow/15 text-yellow"}`}>{t.status.replace("_", " ")}</span>
+									<span className={`text-xs ml-2 px-1.5 py-0.5 rounded font-medium ${t.status === "complete" ? "bg-success-soft text-success" : t.status === "in_progress" ? "bg-info-soft text-info" : "bg-warning-soft text-warning"}`}>{t.status.replace("_", " ")}</span>
 									{t.description && <div className="text-sm text-muted mt-1">{t.description}</div>}
 								</div>
 							))}
@@ -476,7 +476,7 @@ export default function AgentDetail() {
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
 						<h3 className="text-base font-semibold mb-1">Custom surfaces</h3>
 						{!surfacesEnabled && (
-							<p className="text-xs text-yellow bg-yellow/10 border border-yellow/30 rounded-lg px-2.5 py-2 mb-3">
+							<p className="text-xs text-warning bg-warning-soft border border-warning-line rounded-lg px-2.5 py-2 mb-3">
 								<strong>Disabled on this platform.</strong> A surface bundle runs as code in the console origin with your subscribers' session, and the isolation model isn't finished — so declaring one is refused and none are rendered. Tracked in issue #186.
 							</p>
 						)}
@@ -493,7 +493,7 @@ export default function AgentDetail() {
 										<input aria-label={`Surface ${i + 1} — id`} value={s.id} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. notes)" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
 										<input aria-label={`Surface ${i + 1} — label`} value={s.label} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
 										<input aria-label={`Surface ${i + 1} — icon`} value={s.icon || ""} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, icon: e.target.value } : x))} placeholder="🧩" className="w-12 bg-paper border border-line rounded px-2 py-1 text-sm text-center" />
-										<button type="button" onClick={() => setSurfaces(cs => cs.filter((_, j) => j !== i))} className="text-red text-xs px-1.5">Remove</button>
+										<button type="button" onClick={() => setSurfaces(cs => cs.filter((_, j) => j !== i))} className="text-danger text-xs px-1.5">Remove</button>
 									</div>
 									<input aria-label={`Surface ${i + 1} — bundle URL`} value={s.bundleUrl} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, bundleUrl: e.target.value } : x))} placeholder="https://…/surface.js" className="bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
 								</div>
@@ -524,7 +524,7 @@ export default function AgentDetail() {
 											<option value="number">number</option>
 											<option value="toggle">toggle</option>
 										</select>
-										<button type="button" onClick={() => setSFields(fs => fs.filter((_, j) => j !== i))} className="text-red text-xs px-1.5">Remove</button>
+										<button type="button" onClick={() => setSFields(fs => fs.filter((_, j) => j !== i))} className="text-danger text-xs px-1.5">Remove</button>
 									</div>
 									<input aria-label={`Field ${i + 1} description`} value={f.description} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} placeholder="Description shown under the label (optional)" className="bg-paper border border-line rounded px-2 py-1 text-sm" />
 									<div className="flex gap-2 flex-wrap items-start">
@@ -553,7 +553,7 @@ export default function AgentDetail() {
 						<button type="button" onClick={saveSettings} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover">Save All Settings</button>
 						<button type="button" onClick={exportAgent} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Export JSON</button>
 						<button type="button" onClick={saveVersion} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Save Version</button>
-						<button type="button" onClick={deleteAgent} className="text-sm px-3 py-2 rounded-xl bg-red text-white font-semibold hover:opacity-90">Delete Agent</button>
+						<button type="button" onClick={deleteAgent} className="text-sm px-3 py-2 rounded-xl bg-danger text-white font-semibold hover:opacity-90">Delete Agent</button>
 					</div>
 
 					{/* Versions */}
@@ -707,7 +707,7 @@ function CreateAgent() {
 					<button type="button" onClick={buildPlan} disabled={planning} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover disabled:opacity-60">{planning ? "Planning..." : "Plan Agent"}</button>
 					<button type="button" onClick={() => navigate("/agents")} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Cancel</button>
 				</div>
-				{error && <div className="text-red text-sm mt-2">{error}</div>}
+				{error && <div className="text-danger text-sm mt-2">{error}</div>}
 			</div>
 
 			{plan && (
@@ -750,8 +750,8 @@ function CreateAgent() {
 					</div>
 
 					{plan.connectors.length > 0 && (
-						<div className="mt-4 border border-yellow/30 bg-yellow/10 rounded-lg p-3">
-							<div className="text-sm font-bold text-yellow mb-1">Connector grants needed after creation</div>
+						<div className="mt-4 border border-warning-line bg-warning-soft rounded-lg p-3">
+							<div className="text-sm font-bold text-warning mb-1">Connector grants needed after creation</div>
 							<ul className="text-sm text-muted list-disc pl-5">
 								{plan.connectors.map(c => <li key={`${c.provider}-${c.requiredGrant}`}>{c.provider}: grant a {c.requiredGrant}. {c.reason}</li>)}
 							</ul>

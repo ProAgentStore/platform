@@ -65,7 +65,7 @@ export default function McpAudit() {
 					onKeyDown={(e) => e.key === "Enter" && load()}
 					aria-label="Filter MCP calls by tool"
 					placeholder="Filter by tool"
-					className="bg-surface border border-line rounded px-2 py-1 text-sm"
+					className="border border-line rounded px-2 py-1 text-sm"
 				/>
 				<input
 					value={user}
@@ -73,12 +73,12 @@ export default function McpAudit() {
 					onKeyDown={(e) => e.key === "Enter" && load()}
 					aria-label="Filter MCP calls by user id"
 					placeholder="Filter by user id"
-					className="bg-surface border border-line rounded px-2 py-1 text-sm"
+					className="border border-line rounded px-2 py-1 text-sm"
 				/>
 				<button
 					type="button"
 					onClick={load}
-					className="bg-accent/10 text-accent border border-accent/30 rounded px-3 py-1 text-sm font-medium"
+					className="bg-accent-soft text-accent border border-accent/30 rounded px-3 py-1 text-sm font-medium"
 				>
 					Apply
 				</button>

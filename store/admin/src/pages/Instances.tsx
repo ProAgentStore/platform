@@ -23,7 +23,7 @@ interface Instance {
 
 const PAGE = LIST_PAGE;
 const STATUSES = ["active", "paused", "canceled"];
-const badge = (v: string) => <span className={v === "active" ? "text-green" : v === "canceled" ? "text-muted-soft" : "text-muted"}>{v}</span>;
+const badge = (v: string) => <span className={v === "active" ? "text-success" : v === "canceled" ? "text-muted-soft" : "text-muted"}>{v}</span>;
 
 /**
  * Every subscription across every tenant (issue #38). Filterable by agent, owner and
@@ -71,7 +71,7 @@ export default function Instances() {
 		<div>
 			<h1 className="font-display text-xl font-bold mb-1">Instances</h1>
 			<p className="text-sm text-muted mb-4">
-				Every subscription across all tenants. Runtime is the live relay socket — <span className="text-yellow">unknown</span> means unchecked, not offline.
+				Every subscription across all tenants. Runtime is the live relay socket — <span className="text-warning">unknown</span> means unchecked, not offline.
 			</p>
 
 			<div className="flex flex-wrap items-center gap-2 mb-4">

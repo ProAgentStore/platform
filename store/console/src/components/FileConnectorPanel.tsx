@@ -46,7 +46,7 @@ export function FileConnectorPanel({
 		<div className="mb-4">
 			<div className="text-sm mb-2">
 				<span className="font-semibold">{label}</span>{" "}
-				<span className="text-green">· connected{account ? ` (${account})` : ""}</span>
+				<span className="text-success">· connected{account ? ` (${account})` : ""}</span>
 				<p className="text-2xs text-muted-soft mt-0.5">Folders this agent may read. Other agents get their own.</p>
 			</div>
 			<div className="pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
@@ -69,7 +69,7 @@ export function FileConnectorPanel({
 					) : grants.map((grant) => (
 						<div key={grant.id} className="flex items-center justify-between gap-2 text-xs bg-paper border border-line rounded-lg px-2.5 py-2">
 							<span className="min-w-0 truncate">{grant.resourceName}</span>
-							<button type="button" onClick={() => onRemoveGrant(grant)} className="shrink-0 text-muted hover:text-red">Remove</button>
+							<button type="button" onClick={() => onRemoveGrant(grant)} className="shrink-0 text-muted hover:text-danger">Remove</button>
 						</div>
 					))}
 				</div>

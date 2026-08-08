@@ -23,7 +23,7 @@ export default function Layout() {
 		<div className="min-h-dvh md:flex">
 			<aside className="md:w-52 md:h-dvh md:sticky md:top-0 border-b md:border-b-0 md:border-r border-line bg-panel md:flex md:flex-col">
 				<div className="px-4 h-12 flex items-center gap-2 border-b border-line">
-					<span className="text-red font-display font-bold">⚡ Admin</span>
+					<span className="text-danger font-display font-bold">⚡ Admin</span>
 				</div>
 				<nav className="flex md:flex-col gap-0.5 p-2 overflow-x-auto">
 					{NAV.map((n) => {

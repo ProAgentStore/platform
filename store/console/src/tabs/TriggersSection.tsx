@@ -353,7 +353,7 @@ export default function TriggersSection({
 			{/* The reason, verbatim from the server, if a saved trigger's action is selected on an
 			    agent that cannot run it (reachable by editing an older row). */}
 			{selectedOffer && !selectedOffer.available && (
-				<p className="text-xs text-red mb-3">{selectedOffer.reason}</p>
+				<p className="text-xs text-danger mb-3">{selectedOffer.reason}</p>
 			)}
 
 			{/* Schedule editor (#18) — presets, so the common cases never require cron. */}
@@ -429,9 +429,9 @@ export default function TriggersSection({
 					{/* Next runs — from the server, computed by the same code the sweep runs (#18). */}
 					<div className="mt-3 text-xs">
 						{localError ? (
-							<div className="text-red">{localError}</div>
+							<div className="text-danger">{localError}</div>
 						) : preview?.error ? (
-							<div className="text-red">{preview.error}</div>
+							<div className="text-danger">{preview.error}</div>
 						) : preview?.runs.length ? (
 							<div>
 								<div className="text-muted font-semibold mb-1">
@@ -534,7 +534,7 @@ export default function TriggersSection({
 
 			{/* Anything that would be stored and then ignored, said before the save (#16). */}
 			{preview?.issues.length ? (
-				<ul className="text-xs text-yellow bg-yellow/10 border border-yellow/25 rounded-lg px-3 py-2 mb-3 flex flex-col gap-1">
+				<ul className="text-xs text-warning bg-warning-soft border border-warning-line rounded-lg px-3 py-2 mb-3 flex flex-col gap-1">
 					{preview.issues.map((issue) => <li key={issue}>{issue}</li>)}
 				</ul>
 			) : null}
@@ -568,19 +568,19 @@ export default function TriggersSection({
 									    the user — that is theirs — but it stops looking healthy, which
 									    is what let it fail silently on a schedule for months. */}
 									{trigger.unavailable && (
-										<div className="text-xs text-red mt-1">
+										<div className="text-xs text-danger mt-1">
 											<span className="font-semibold">This trigger can never run. </span>{trigger.unavailable}
 										</div>
 									)}
-									{health && <div className={`text-xs mt-1 ${health.tone === "bad" ? "text-red" : health.tone === "warn" ? "text-yellow" : "text-muted"}`}>{health.text}</div>}
-									{!health && trigger.lastError && <div className="text-xs text-red mt-1">{trigger.lastError}</div>}
+									{health && <div className={`text-xs mt-1 ${health.tone === "bad" ? "text-danger" : health.tone === "warn" ? "text-warning" : "text-muted"}`}>{health.text}</div>}
+									{!health && trigger.lastError && <div className="text-xs text-danger mt-1">{trigger.lastError}</div>}
 								</div>
 								<div className="flex gap-2 shrink-0 flex-wrap justify-end">
 									<button type="button" onClick={() => toggleHistory(trigger.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">
 										{openHistory === trigger.id ? "Hide history" : "History"}
 									</button>
 									<button type="button" onClick={() => runTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Run now</button>
-									<button type="button" onClick={() => deleteTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-red hover:border-red font-semibold">Delete</button>
+									<button type="button" onClick={() => deleteTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-danger hover:border-danger font-semibold">Delete</button>
 								</div>
 							</div>
 
@@ -624,7 +624,7 @@ export default function TriggersSection({
 															)}
 														</div>
 														{counts?.errors.length ? (
-															<ul className="text-2xs text-red mt-0.5 ml-2 flex flex-col gap-0.5">
+															<ul className="text-2xs text-danger mt-0.5 ml-2 flex flex-col gap-0.5">
 																{counts.errors.slice(0, 5).map((err) => <li key={err} className="break-words">{err}</li>)}
 															</ul>
 														) : null}

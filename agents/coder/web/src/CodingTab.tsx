@@ -905,7 +905,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										<button
 											type="button"
 											onClick={() => { setSessionMenuOpen(false); endSession(); }}
-											className="w-full text-left px-3 py-2 text-sm text-red hover:bg-red/10 flex items-center gap-2"
+											className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-danger-soft flex items-center gap-2"
 										>
 											<Square size={14} /> Stop session
 										</button>
@@ -916,7 +916,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Copy size={12} /><span>Copy</span></button>
 					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>
 					<button type="button" onClick={restartSession} title="Restart CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Restart</button>
-					<button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold hidden sm:block"><Square size={13} /></button>
+					<button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-danger text-danger font-semibold hidden sm:block"><Square size={13} /></button>
 				</div>
 			</div>
 		);
@@ -994,12 +994,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						    view could start a session and never stop it. */}
 						{openSession && <button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" aria-label="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Copy size={13} /></button>}
 						{openSession && <button type="button" onClick={restartSession} title="Restart the CLI" aria-label="Restart the CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><RotateCw size={13} /></button>}
-						{openSession && <button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold"><Square size={13} /></button>}
+						{openSession && <button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-danger text-danger font-semibold"><Square size={13} /></button>}
 					</div>
 				</div>
 
 				{claudeSignedOut && soloView === "terminal" && (
-					<div className="bg-yellow/10 border border-yellow/40 text-yellow rounded-lg p-2.5 m-2 text-sm">
+					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
 						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
 						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
 						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
@@ -1053,7 +1053,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 												Your machine doesn't look connected — run <code className="bg-panel border border-line rounded px-1 py-0.5">pags up</code>.
 											</span>
 										)}
-										{openError && <span className="text-xs text-red">{openError}</span>}
+										{openError && <span className="text-xs text-danger">{openError}</span>}
 									</div>
 									<RepoHistory entries={repoHistory} />
 								</>
@@ -1103,7 +1103,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		return (
 			<div className="flex flex-col h-full">
 				{claudeSignedOut && (
-					<div className="bg-yellow/10 border border-yellow/40 text-yellow rounded-lg p-2.5 m-2 text-sm">
+					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
 						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
 						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
 						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
@@ -1135,9 +1135,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					if (!badge) return null;
 					const warn = badge.tone === "warn";
 					return (
-						<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-yellow/40 bg-yellow/10" : "border-line"}`}>
+						<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-warning-line bg-warning-soft" : "border-line"}`}>
 							<div className="flex items-center gap-1.5 text-xs font-bold">
-								<Cpu size={12} className={warn ? "text-yellow" : "text-muted"} />
+								<Cpu size={12} className={warn ? "text-warning" : "text-muted"} />
 								<span>{badge.label}</span>
 							</div>
 							<p className="text-2xs text-muted mt-0.5">{badge.detail}</p>
@@ -1146,7 +1146,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							    at all, which is precisely the configuration where the owner cannot
 							    tell which account is paying. */}
 							{badge.note && <p className="text-2xs text-muted-soft mt-1">{badge.note}</p>}
-							{engineAuth?.warning && <p className="text-xs text-yellow mt-1">{engineAuth.warning}</p>}
+							{engineAuth?.warning && <p className="text-xs text-warning mt-1">{engineAuth.warning}</p>}
 						</div>
 					);
 				})()}
@@ -1154,7 +1154,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				    dead session, and the owner is as likely to be on the co-pilot view as the
 				    terminal when they notice nothing is happening. */}
 				{authPrompt && (
-					<div className="mb-2 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2">
+					<div className="mb-2 rounded-lg border border-warning-line bg-warning-soft px-3 py-2">
 						<div className="text-sm font-semibold">This engine is waiting for you to sign in</div>
 						<p className="text-xs text-muted mt-0.5">{authPrompt.guidance}</p>
 						{authPrompt.evidence && (
@@ -1265,8 +1265,8 @@ function AgentStatusBadge({ state }: { state: RepoState }) {
 		);
 	}
 	return (
-		<span className={`${base} ${error ? "bg-red/15 text-red" : "bg-green/15 text-green"}`} title={label}>
-			<span className={`w-2 h-2 rounded-full ${error ? "bg-red" : "bg-green"}`} />
+		<span className={`${base} ${error ? "bg-danger-soft text-danger" : "bg-success-soft text-success"}`} title={label}>
+			<span className={`w-2 h-2 rounded-full ${error ? "bg-danger" : "bg-success"}`} />
 			<span className="hidden sm:inline">{label}</span>
 		</span>
 	);

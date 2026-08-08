@@ -352,7 +352,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					<Button variant="primary" size="lg" className="whitespace-nowrap" disabled={busy || !subordinate} onClick={addSupervision}>Add agent</Button>
 				</div>
 				) : (
-					<div className="text-xs text-yellow mt-2">This agent can’t delegate — its tools include none of the supervision tools, so these links do nothing. Remove them, or supervise from an agent that can.</div>
+					<div className="text-xs text-warning mt-2">This agent can’t delegate — its tools include none of the supervision tools, so these links do nothing. Remove them, or supervise from an agent that can.</div>
 				)}
 			</div>
 			)}
@@ -378,7 +378,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 								    pipeline the target does not have. Surfaced, not removed — "Remove" is right
 								    there, and a connection the user wrote is theirs to delete. */}
 								{(cn.warnings ?? []).map((w) => (
-									<div key={w} className="text-2xs text-yellow break-words">{w}</div>
+									<div key={w} className="text-2xs text-warning break-words">{w}</div>
 								))}
 							</div>
 							<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeConnection(cn.id)}>Remove</Button>
@@ -505,7 +505,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 												{state.text}
 												{d.createdAt ? ` · ${formatTime(d.createdAt)}` : ""}
 											</div>
-											{d.lastError && <div className="text-2xs text-red break-words">{d.lastError}</div>}
+											{d.lastError && <div className="text-2xs text-danger break-words">{d.lastError}</div>}
 										</div>
 										<div className="flex flex-col gap-1 shrink-0">
 											{/* Retries wait out someone else's outage; when it is over, replay is the fix. */}
@@ -525,7 +525,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 											{trace === null && <div className="text-2xs text-muted">Loading…</div>}
 											{trace?.length === 0 && <div className="text-2xs text-muted">No events recorded for this run.</div>}
 											{trace?.map((e, i) => (
-												<div key={e.id || `${e.ts}-${i}`} className={`text-2xs ${e.level === "error" ? "text-red" : "text-muted"} break-words`}>
+												<div key={e.id || `${e.ts}-${i}`} className={`text-2xs ${e.level === "error" ? "text-danger" : "text-muted"} break-words`}>
 													<code>{e.event}</code> {e.message}
 												</div>
 											))}
@@ -538,7 +538,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				)}
 			</div>
 
-			{msg && <div className="text-xs text-red mt-3">{msg}</div>}
+			{msg && <div className="text-xs text-danger mt-3">{msg}</div>}
 		</Card>
 	);
 }

@@ -137,7 +137,7 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 				{folderNote ? (
 					<p
 						data-testid="repo-settings-folder-note"
-						className={`text-xs mb-3 break-words ${folderNote.kind === "error" ? "text-red" : "text-yellow"}`}
+						className={`text-xs mb-3 break-words ${folderNote.kind === "error" ? "text-danger" : "text-warning"}`}
 					>
 						{folderNote.text}
 					</p>
@@ -175,7 +175,7 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 				<input id="repo-settings-production-url" value={prod} onChange={(e) => setProd(e.target.value)} placeholder="Production URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs" />
 
 				<div className="flex gap-2 justify-between items-center mt-4">
-					<button type="button" onClick={del} disabled={deleting || saving} className="text-xs px-3 py-1.5 rounded-md text-red font-semibold hover:bg-red/10 disabled:opacity-50 flex items-center gap-1"><Trash2 size={13} />{deleting ? "Deleting…" : "Delete"}</button>
+					<button type="button" onClick={del} disabled={deleting || saving} className="text-xs px-3 py-1.5 rounded-md text-danger font-semibold hover:bg-danger-soft disabled:opacity-50 flex items-center gap-1"><Trash2 size={13} />{deleting ? "Deleting…" : "Delete"}</button>
 					<div className="flex gap-2">
 						<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
 						<button type="button" onClick={save} disabled={saving || deleting} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>

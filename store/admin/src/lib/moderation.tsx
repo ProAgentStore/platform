@@ -114,12 +114,12 @@ export function DangerAction({
 					type="button"
 					onClick={() => dispatch({ type: "open" })}
 					className={`text-sm px-3 py-1.5 rounded-lg border ${
-						danger ? "border-red/40 text-red hover:bg-red/10" : "border-line text-ink hover:bg-panel-hover"
+						danger ? "border-danger-line text-danger hover:bg-danger-soft" : "border-line text-ink hover:bg-panel-hover"
 					}`}
 				>
 					{label}
 				</button>
-				{ok ? <span className="text-green text-xs ml-2">{ok}</span> : null}
+				{ok ? <span className="text-success text-xs ml-2">{ok}</span> : null}
 			</div>
 		);
 	}
@@ -127,7 +127,7 @@ export function DangerAction({
 	const blockedN = blocked ? blockedCount(blocked) : null;
 
 	return (
-		<div className={`rounded-lg border p-3 ${danger ? "border-red/40" : "border-line"}`}>
+		<div className={`rounded-lg border p-3 ${danger ? "border-danger-line" : "border-line"}`}>
 			<div className="text-sm font-semibold mb-1">{label}</div>
 			<p className="text-xs text-muted mb-2">{description}</p>
 
@@ -155,14 +155,14 @@ export function DangerAction({
 			) : null}
 
 			{blocked ? (
-				<div className="text-xs text-yellow border border-yellow/40 rounded-lg p-2 mb-2">
+				<div className="text-xs text-warning border border-warning-line rounded-lg p-2 mb-2">
 					{blockedN != null
 						? `${blockedN} live subscriber instance(s) are still attached. Forcing cancels them as part of the delete.`
 						: blocked}
 					<div className="text-muted-soft mt-1">{blocked}</div>
 				</div>
 			) : null}
-			{err ? <div className="text-xs text-red mb-2">{err}</div> : null}
+			{err ? <div className="text-xs text-danger mb-2">{err}</div> : null}
 
 			<div className="flex items-center gap-2">
 				{/* One button, two labels. Which one is showing is `confirmAction(state)`,
@@ -174,8 +174,8 @@ export function DangerAction({
 					onClick={go}
 					className={
 						action === "force"
-							? "text-sm px-3 py-1.5 rounded-lg bg-red text-white disabled:opacity-40"
-							: `text-sm px-3 py-1.5 rounded-lg text-white disabled:opacity-40 ${danger ? "bg-red" : "bg-accent hover:bg-accent-hover"}`
+							? "text-sm px-3 py-1.5 rounded-lg bg-danger text-white disabled:opacity-40"
+							: `text-sm px-3 py-1.5 rounded-lg text-white disabled:opacity-40 ${danger ? "bg-danger" : "bg-accent hover:bg-accent-hover"}`
 					}
 				>
 					{busy ? "Working…" : action === "force" ? (forceLabel ?? "Force") : "Confirm"}
@@ -225,7 +225,7 @@ export function AuditTrail({ targetId, refresh = 0, limit = 20 }: { targetId: st
 		return () => { live = false; };
 	}, [targetId, refresh, limit]);
 
-	if (err) return <div className="text-red text-sm">{err}</div>;
+	if (err) return <div className="text-danger text-sm">{err}</div>;
 	if (!rows) return <div className="text-muted text-sm">Loading…</div>;
 	if (!rows.length) return <Empty label="No operator actions recorded against this target." />;
 

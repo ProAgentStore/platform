@@ -43,12 +43,12 @@ export default function Connectors() {
 							<div key={c.connector} className="border-b border-line/50 pb-2">
 								<div className="flex items-center gap-2">
 									<Link to={`/connectors/${encodeURIComponent(c.connector)}`} className="font-semibold text-accent hover:underline">{c.connector}</Link>
-									{c.hasWrite && <span className="text-xs text-yellow">write</span>}
+									{c.hasWrite && <span className="text-xs text-warning">write</span>}
 								</div>
 								<div className="flex flex-wrap gap-1.5 mt-1">
 									{c.tools.map((t) => (
 										<span key={t.name} className="text-xs bg-paper border border-line rounded px-1.5 py-0.5 font-mono">
-											{t.name}<span className={t.scope === "write" ? "text-yellow" : "text-muted-soft"}> ·{t.scope}</span>
+											{t.name}<span className={t.scope === "write" ? "text-warning" : "text-muted-soft"}> ·{t.scope}</span>
 										</span>
 									))}
 								</div>
@@ -71,7 +71,7 @@ export default function Connectors() {
 											{g.rows.map((r) => (
 												<tr key={`${r.instance_id}:${r.connector}:${r.scope}`} className="border-t border-line/30">
 													<td className="py-1">{r.connector}</td>
-													<td className="text-yellow">{r.scope}</td>
+													<td className="text-warning">{r.scope}</td>
 													<td className="text-muted-soft font-mono text-xs truncate max-w-[180px]">{r.instance_id}</td>
 													<td className="text-muted">{r.created_at?.slice(0, 16)}</td>
 												</tr>

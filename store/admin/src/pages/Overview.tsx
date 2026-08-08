@@ -59,7 +59,7 @@ export default function OverviewPage() {
 				</Panel>
 			</div>
 			<p className="text-sm text-muted">
-				Platform-paid AI is <strong className={s.platformAiEnabled ? "text-green" : "text-muted"}>{s.platformAiEnabled ? "ON" : "OFF"}</strong>.
+				Platform-paid AI is <strong className={s.platformAiEnabled ? "text-success" : "text-muted"}>{s.platformAiEnabled ? "ON" : "OFF"}</strong>.
 				See <em>Errors</em> to learn from recurring failures, <em>Spending</em>/<em>Usage</em> for cost, <em>Terminals</em> for connected CLIs, and <em>Audit</em> for the admin action log.
 			</p>
 		</div>

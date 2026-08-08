@@ -49,7 +49,7 @@ export default function App() {
 			</div>
 		</Centered>
 	);
-	if (gate === "denied") return <Centered><span className="text-red">Admin access required.</span></Centered>;
+	if (gate === "denied") return <Centered><span className="text-danger">Admin access required.</span></Centered>;
 
 	return (
 		<BrowserRouter basename="/admin">

@@ -624,14 +624,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 			{/* Danger zone */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
-				<h3 className="text-base font-bold mb-1 text-red">Danger zone</h3>
+				<h3 className="text-base font-bold mb-1 text-danger">Danger zone</h3>
 				<p className="text-sm text-muted mb-3">
 					Stop using this agent. Your data stays unless you clear it above.
 				</p>
 				<button
 					type="button"
 					onClick={unsubscribe}
-					className="text-xs px-3 py-1.5 rounded-lg border border-red text-red font-bold hover:bg-red/10"
+					className="text-xs px-3 py-1.5 rounded-lg border border-danger text-danger font-bold hover:bg-danger-soft"
 				>
 					Unsubscribe from this agent
 				</button>

@@ -30,9 +30,9 @@ function StatusBadge({ state }: { state: BuildState }) {
 	const base = "inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0";
 	switch (state) {
 		case "success":
-			return <span className={`${base} bg-green/15 text-green`}><CheckCircle2 size={12} /> Success</span>;
+			return <span className={`${base} bg-success-soft text-success`}><CheckCircle2 size={12} /> Success</span>;
 		case "failed":
-			return <span className={`${base} bg-red/15 text-red`}><XCircle size={12} /> Failed</span>;
+			return <span className={`${base} bg-danger-soft text-danger`}><XCircle size={12} /> Failed</span>;
 		case "running":
 			return <span className={`${base} bg-amber-500/15 text-amber-600`}><Loader2 size={12} className="animate-spin" /> Running</span>;
 		case "pending":

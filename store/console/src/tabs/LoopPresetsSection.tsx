@@ -133,7 +133,7 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 										onClick={() => setList((l) => removePreset(l, p.id))}
 										title="Remove"
 										aria-label={`Remove ${p.label || "preset"}`}
-										className="p-1.5 rounded-lg border border-line text-red hover:bg-red/10"
+										className="p-1.5 rounded-lg border border-line text-danger hover:bg-danger-soft"
 									>
 										<Trash2 size={13} />
 									</button>
@@ -180,7 +180,7 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 							</button>
 						)}
 						{incomplete > 0 && (
-							<span className="text-xs text-yellow">
+							<span className="text-xs text-warning">
 								{incomplete === 1 ? "One preset needs" : `${incomplete} presets need`} both a label and an objective — otherwise it won't be saved.
 							</span>
 						)}

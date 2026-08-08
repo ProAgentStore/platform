@@ -37,7 +37,7 @@ export default function ConnectorDetail() {
 			<Link to="/connectors" className="text-sm text-muted hover:text-ink">← Connectors</Link>
 			<h1 className="font-display text-xl font-bold mt-1 mb-1 flex items-center gap-2">
 				{connector}
-				{detail?.hasWrite && <span className="text-xs text-yellow">write</span>}
+				{detail?.hasWrite && <span className="text-xs text-warning">write</span>}
 			</h1>
 			<p className="text-sm text-muted mb-4">External system agents can use, and which users have granted it write access.</p>
 
@@ -51,7 +51,7 @@ export default function ConnectorDetail() {
 						<div className="flex flex-wrap gap-1.5">
 							{detail.tools.map((t) => (
 								<span key={t.name} className="text-xs bg-paper border border-line rounded px-1.5 py-0.5 font-mono">
-									{t.name}<span className={t.scope === "write" ? "text-yellow" : "text-muted-soft"}> ·{t.scope}</span>
+									{t.name}<span className={t.scope === "write" ? "text-warning" : "text-muted-soft"}> ·{t.scope}</span>
 								</span>
 							))}
 						</div>
@@ -70,7 +70,7 @@ export default function ConnectorDetail() {
 										<td className="py-1">
 											<Link to={`/users/${encodeURIComponent(r.user_id)}`} className="hover:text-ink">{r.owner_login || r.user_id}</Link>
 										</td>
-										<td className="text-yellow">{r.scope}</td>
+										<td className="text-warning">{r.scope}</td>
 										<td className="text-muted-soft font-mono text-xs truncate max-w-[180px]">{r.instance_id}</td>
 										<td className="text-muted">{r.created_at?.slice(0, 16)}</td>
 									</tr>

@@ -99,11 +99,11 @@ export default function FilesSection({ instanceId, active, refreshKey, jobs, onU
 							</div>
 							<div className="h-1.5 bg-line rounded-full overflow-hidden">
 								<div
-									className={`h-full rounded-full transition-all ${j.status === "error" ? "bg-red" : j.status === "paused" ? "bg-muted" : "bg-accent"}`}
+									className={`h-full rounded-full transition-all ${j.status === "error" ? "bg-danger" : j.status === "paused" ? "bg-muted" : "bg-accent"}`}
 									style={{ width: `${Math.min(100, Math.round((j.uploaded / Math.max(1, j.size)) * 100))}%` }}
 								/>
 							</div>
-							{j.error && <div className="text-xs text-red mt-1">{j.error}</div>}
+							{j.error && <div className="text-xs text-danger mt-1">{j.error}</div>}
 						</Card>
 					))}
 				</div>
@@ -126,7 +126,7 @@ export default function FilesSection({ instanceId, active, refreshKey, jobs, onU
 							<div className="flex items-center gap-2 shrink-0">
 								{typeof f.size === "number" && f.size > 0 && <span className="text-xs text-muted-soft">{fmtBytes(f.size)}</span>}
 								<Button size="sm" onClick={() => setPreview(f)}>Preview</Button>
-								<button type="button" onClick={() => deleteFile(f.id)} className="text-xs text-red">Delete</button>
+								<button type="button" onClick={() => deleteFile(f.id)} className="text-xs text-danger">Delete</button>
 							</div>
 						</Card>
 					))}

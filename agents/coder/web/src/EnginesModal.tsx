@@ -95,7 +95,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										onClick={() => setEngines((prev) => prev.filter((_, j) => j !== i))}
 										disabled={engines.length <= 1}
 										title="Remove engine"
-										className="text-muted hover:text-red disabled:opacity-30"
+										className="text-muted hover:text-danger disabled:opacity-30"
 									>
 										<Trash2 size={14} />
 									</button>
@@ -119,7 +119,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 									</label>
 								</div>
 								{needsWrite && (
-									<div className="text-xs text-yellow mt-1.5 flex items-start gap-1.5">
+									<div className="text-xs text-warning mt-1.5 flex items-start gap-1.5">
 										<span aria-hidden>⚠</span>
 										<span>
 											Read-only — this engine can explore the repo but <b>cannot edit files</b> (headless has no

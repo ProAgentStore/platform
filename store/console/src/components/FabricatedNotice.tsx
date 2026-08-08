@@ -17,7 +17,7 @@
  */
 export default function FabricatedNotice() {
 	return (
-		<div className="text-2xs text-red font-bold mb-1 flex items-start gap-1">
+		<div className="text-2xs text-danger font-bold mb-1 flex items-start gap-1">
 			<span aria-hidden="true">⚠️</span>
 			<span>
 				Not fetched. This reply wrote its own tool results — nothing in it was read from a tool. It is kept as a record

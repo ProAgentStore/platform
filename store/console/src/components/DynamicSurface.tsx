@@ -146,7 +146,7 @@ export default function DynamicSurface({ bundleUrl, instanceId, sessionId, onHea
 	}, [bundleUrl, instanceId, sessionId]);
 
 	if (error) {
-		return <div className="text-sm text-red p-4">Couldn't load this agent's surface — {error}</div>;
+		return <div className="text-sm text-danger p-4">Couldn't load this agent's surface — {error}</div>;
 	}
 	return (
 		<div className="h-full min-h-0">

@@ -40,7 +40,7 @@ export default function Users() {
 										<tr key={u.id} className="border-b border-line/50 hover:bg-panel-hover">
 											<td className="py-1.5">
 												<Link to={`/users/${encodeURIComponent(u.id)}`} className="text-accent hover:underline">{u.github_login}</Link>
-												{u.suspended ? <span className="text-red text-xs ml-1.5" title={u.suspended_reason || "Suspended"}>suspended</span> : null}
+												{u.suspended ? <span className="text-danger text-xs ml-1.5" title={u.suspended_reason || "Suspended"}>suspended</span> : null}
 											</td>
 											<td>{u.roles.filter((r) => r !== "user").join(", ") || "—"}</td>
 											<td className="text-right">{u.agents_owned}</td>

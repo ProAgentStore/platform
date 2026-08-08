@@ -44,7 +44,7 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
 }
 
 export function ErrorBox({ message }: { message: string }) {
-	return <div className="text-red text-sm py-6">{message}</div>;
+	return <div className="text-danger text-sm py-6">{message}</div>;
 }
 
 export function Empty({ label }: { label: string }) {
@@ -80,11 +80,11 @@ export function SplitBar({ platform, byok }: { platform: number; byok: number })
 		<div>
 			<div className="flex h-3 rounded-full overflow-hidden bg-line">
 				<div className="bg-accent" style={{ width: `${pPct}%` }} title={`Platform-paid ${pPct}%`} />
-				<div className="bg-blue" style={{ width: `${100 - pPct}%` }} title={`BYOK ${100 - pPct}%`} />
+				<div className="bg-info" style={{ width: `${100 - pPct}%` }} title={`BYOK ${100 - pPct}%`} />
 			</div>
 			<div className="flex justify-between text-xs text-muted mt-1.5">
 				<span><span className="text-accent">■</span> Platform-paid {pPct}%</span>
-				<span><span className="text-blue">■</span> BYOK {100 - pPct}%</span>
+				<span><span className="text-info">■</span> BYOK {100 - pPct}%</span>
 			</div>
 		</div>
 	);

@@ -40,9 +40,9 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 const TONE: Record<string, string> = {
-	completed: "text-green",
-	needs_human: "text-yellow",
-	failed: "text-red",
+	completed: "text-success",
+	needs_human: "text-warning",
+	failed: "text-danger",
 	cancelled: "text-muted",
 	running: "text-accent",
 };
@@ -57,7 +57,7 @@ const TONE: Record<string, string> = {
  */
 const PHASE_TONE: Record<LoopPhase, string> = {
 	running: "text-accent",
-	stopping: "text-yellow",
+	stopping: "text-warning",
 	ended: "text-muted",
 };
 

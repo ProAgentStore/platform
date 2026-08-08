@@ -28,9 +28,9 @@ export interface TriggerEvent {
 export type Tone = "ok" | "warn" | "bad" | "idle";
 
 export const TONE_CLASS: Record<Tone, string> = {
-	ok: "border-green/30 bg-green/10 text-green",
-	warn: "border-yellow/30 bg-yellow/10 text-yellow",
-	bad: "border-red/30 bg-red/10 text-red",
+	ok: "border-success-line bg-success-soft text-success",
+	warn: "border-warning-line bg-warning-soft text-warning",
+	bad: "border-danger-line bg-danger-soft text-danger",
 	idle: "border-line bg-panel text-muted",
 };
 

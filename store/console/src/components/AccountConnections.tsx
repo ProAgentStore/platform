@@ -147,7 +147,7 @@ export default function AccountConnections() {
 				<div className="text-sm min-w-0 [overflow-wrap:anywhere]">
 					<span className="font-semibold">GitHub</span>{" "}
 					{githubLinked
-						? <span className="text-green">· connected as {githubLinked}</span>
+						? <span className="text-success">· connected as {githubLinked}</span>
 						: <span className="text-muted">· not connected</span>}
 					<p className="text-2xs text-muted-soft mt-0.5">
 						Links your GitHub username so the Coder can show build status and reach your repos.
@@ -161,7 +161,7 @@ export default function AccountConnections() {
 					{githubLinked ? "Reconnect" : "Connect GitHub"}
 				</button>
 			</div>
-			{githubMsg && <p className="text-xs text-green mb-3 -mt-1">{githubMsg}</p>}
+			{githubMsg && <p className="text-xs text-success mb-3 -mt-1">{githubMsg}</p>}
 
 			{entries === null
 				? <p className="text-xs text-muted">Loading…</p>
@@ -176,7 +176,7 @@ export default function AccountConnections() {
 							    Google/Zoho email. */}
 							<div className="text-sm min-w-0 [overflow-wrap:anywhere]">
 								<span className="font-semibold">{entry.label}</span>{" "}
-								<span className={entry.connected ? "text-green" : "text-muted"}>· {connectionSummary(entry)}</span>
+								<span className={entry.connected ? "text-success" : "text-muted"}>· {connectionSummary(entry)}</span>
 								{/* Standing, not only in the confirm dialog: what a disconnect destroys should be
 								    readable by someone who has NOT decided to click it yet. */}
 								{entry.connected && entry.reach && entry.reach.grants > 0 && (
@@ -192,7 +192,7 @@ export default function AccountConnections() {
 									<button type="button" onClick={() => connect(entry)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
 										Reconnect
 									</button>
-									<button type="button" onClick={() => disconnect(entry)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+									<button type="button" onClick={() => disconnect(entry)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-danger hover:text-danger font-bold">
 										Disconnect
 									</button>
 								</div>

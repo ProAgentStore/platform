@@ -94,7 +94,7 @@ export default function RepoIssues({
 					{loading && issues === null ? (
 						<p className="text-xs text-muted-soft py-1">Loading issues…</p>
 					) : error ? (
-						<p className="text-xs text-red py-1">{error}</p>
+						<p className="text-xs text-danger py-1">{error}</p>
 					) : issues && issues.length === 0 ? (
 						<p className="text-xs text-muted-soft py-1">No open issues.</p>
 					) : (

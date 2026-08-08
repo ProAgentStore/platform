@@ -54,7 +54,7 @@ export default function UserDetail() {
 			<Link to="/users" className="text-sm text-muted hover:text-ink">← Users</Link>
 			<h1 className="font-display text-xl font-bold mt-1 mb-1">
 				{u.github_login}
-				{u.suspended ? <span className="text-red text-base font-normal ml-2">suspended</span> : null}
+				{u.suspended ? <span className="text-danger text-base font-normal ml-2">suspended</span> : null}
 				{isSelf ? <span className="text-muted-soft text-base font-normal ml-2">(you)</span> : null}
 			</h1>
 			<p className="text-sm text-muted mb-4">
@@ -62,8 +62,8 @@ export default function UserDetail() {
 			</p>
 
 			{u.suspended ? (
-				<div className="border border-red/40 text-sm rounded-xl p-3 mb-4">
-					<span className="text-red font-semibold">Account suspended</span>
+				<div className="border border-danger-line text-sm rounded-xl p-3 mb-4">
+					<span className="text-danger font-semibold">Account suspended</span>
 					{u.suspended_at ? <span className="text-muted"> since {u.suspended_at.slice(0, 16)}</span> : null}
 					{u.suspended_reason ? <div className="text-muted mt-1">Reason: {u.suspended_reason}</div> : null}
 					<div className="text-muted-soft text-xs mt-1">Enforced at every authenticated request, not just at sign-in.</div>

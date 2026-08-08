@@ -90,7 +90,7 @@ export default function McpInputRequests({ instanceId }: { instanceId: string })
 		}
 	};
 
-	if (!requests.length) return note || error ? <p className={`text-xs px-3 py-2 ${error ? "text-red" : "text-muted"}`}>{error || note}</p> : null;
+	if (!requests.length) return note || error ? <p className={`text-xs px-3 py-2 ${error ? "text-danger" : "text-muted"}`}>{error || note}</p> : null;
 
 	return (
 		<div className="flex flex-col gap-2 px-2 pt-2">
@@ -99,9 +99,9 @@ export default function McpInputRequests({ instanceId }: { instanceId: string })
 				const missing = missingRequired(req.fields, draft);
 				const left = timeLeft(req.expiresAt);
 				return (
-					<div key={req.id} className="border border-yellow/60 bg-panel rounded-xl p-3 text-sm">
+					<div key={req.id} className="border border-warning-line bg-panel rounded-xl p-3 text-sm">
 						<div className="flex items-start gap-2 mb-2">
-							<AlertCircle size={15} className="text-yellow shrink-0 mt-0.5" />
+							<AlertCircle size={15} className="text-warning shrink-0 mt-0.5" />
 							<div className="min-w-0">
 								<p className="font-semibold">{req.tool} needs something from you</p>
 								<p className="text-2xs text-muted break-all">
@@ -133,8 +133,8 @@ export default function McpInputRequests({ instanceId }: { instanceId: string })
 						<p className="text-2xs text-muted mt-3">
 							Answering re-sends the whole call to that server with your answer added. Cancelling sends nothing.
 						</p>
-						{missing.length > 0 && <p className="text-2xs text-yellow mt-1">Still needed: {missing.join(", ")}</p>}
-						{error && <p className="text-2xs text-red mt-1">{error}</p>}
+						{missing.length > 0 && <p className="text-2xs text-warning mt-1">Still needed: {missing.join(", ")}</p>}
+						{error && <p className="text-2xs text-danger mt-1">{error}</p>}
 						<div className="flex gap-2 mt-2">
 							<Button variant="primary" disabled={busy === req.id || missing.length > 0} onClick={() => void respond(req, "submit")}>
 								{busy === req.id && <Loader2 size={12} className="animate-spin" />}
@@ -160,7 +160,7 @@ function Field({ id, field, value, onChange }: { id: string; field: McpInputFiel
 		<div className="flex flex-col gap-1">
 			<label htmlFor={id} className="text-2xs font-semibold text-muted">
 				{labelFor(field)}
-				{field.required && <span className="text-yellow"> *</span>}
+				{field.required && <span className="text-warning"> *</span>}
 			</label>
 			{field.description && <span className="text-2xs text-muted">{field.description}</span>}
 			{control === "checkbox" ? (

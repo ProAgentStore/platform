@@ -42,11 +42,11 @@ function ChecksBadge({ pull }: { pull: PullRow }) {
 	const base = "inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0";
 	switch (state) {
 		case "success":
-			return <span className={`${base} bg-green/15 text-green`}><CheckCircle2 size={11} /> Checks pass</span>;
+			return <span className={`${base} bg-success-soft text-success`}><CheckCircle2 size={11} /> Checks pass</span>;
 		case "failed":
-			return <span className={`${base} bg-red/15 text-red`}><XCircle size={11} /> Checks failed</span>;
+			return <span className={`${base} bg-danger-soft text-danger`}><XCircle size={11} /> Checks failed</span>;
 		case "running":
-			return <span className={`${base} bg-yellow/15 text-yellow`}><Loader2 size={11} className="animate-spin" /> Checks running</span>;
+			return <span className={`${base} bg-warning-soft text-warning`}><Loader2 size={11} className="animate-spin" /> Checks running</span>;
 		case "pending":
 			return <span className={`${base} bg-line/60 text-muted`}><Clock size={11} /> Checks queued</span>;
 		default:
@@ -61,14 +61,14 @@ function MergeBadge({ pull }: { pull: PullRow }) {
 	if (!m) return null;
 	const base = "inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0";
 	const tone =
-		m.tone === "conflict" ? "bg-red/15 text-red" : m.tone === "blocked" ? "bg-yellow/15 text-yellow" : m.tone === "clean" ? "bg-green/15 text-green" : "bg-line/60 text-muted";
+		m.tone === "conflict" ? "bg-danger-soft text-danger" : m.tone === "blocked" ? "bg-warning-soft text-warning" : m.tone === "clean" ? "bg-success-soft text-success" : "bg-line/60 text-muted";
 	return <span className={`${base} ${tone}`}>{m.label}</span>;
 }
 
 function ReviewBadge({ pull }: { pull: PullRow }) {
 	const label = reviewLabel(pull.review);
 	if (!label) return null;
-	const tone = pull.review === "changes_requested" ? "bg-red/15 text-red" : pull.review === "approved" ? "bg-green/15 text-green" : "bg-line/60 text-muted";
+	const tone = pull.review === "changes_requested" ? "bg-danger-soft text-danger" : pull.review === "approved" ? "bg-success-soft text-success" : "bg-line/60 text-muted";
 	return <span className={`inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0 ${tone}`}>{label}</span>;
 }
 
@@ -176,7 +176,7 @@ export default function PullsPanel({
 					{loading && pulls === null ? (
 						<p className="text-xs text-muted-soft py-1">Loading pull requests…</p>
 					) : error ? (
-						<p className="text-xs text-red py-1">{error}</p>
+						<p className="text-xs text-danger py-1">{error}</p>
 					) : pulls && pulls.length === 0 ? (
 						<p className="text-xs text-muted-soft py-1">No open pull requests.</p>
 					) : (

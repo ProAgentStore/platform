@@ -9,10 +9,11 @@ not proposed, and where the console contradicts itself that is written down as a
 rather than quietly resolved in prose — a design system that describes an app nobody built is the
 failure mode this document exists to avoid (#367).
 
-The two exceptions are the **type scale** (§2) and the **24px touch-target floor** (§3), both added
-2026-08-08. §6 asked whether this document may become prescriptive and about what; the answer is
-*only where the rule is enforced*. Both of those are, in CI and in the suite (§5) — a prescriptive
-sentence nothing checks is the same fiction as a description nobody wrote.
+The exceptions are the **type scale** (§2), the **24px touch-target floor** (§3) and the **status
+token vocabulary** (§1), all added 2026-08-08. §6 asked whether this document may become
+prescriptive and about what; the answer is *only where the rule is enforced*. All three are, in CI
+and in the suite (§5) — a prescriptive sentence nothing checks is the same fiction as a description
+nobody wrote.
 
 ## 0. What PAGS deliberately does not take from the shared system
 
@@ -86,24 +87,44 @@ Declared as Tailwind v4 `@theme` custom properties, consumed as ordinary utiliti
 | `--color-accent-soft` | `rgba(124,58,237,0.15)` | Focus ring, tinted accent background |
 | `--color-line` | `#303030` | Borders, dividers |
 | `--color-line-strong` | `#404040` | Emphasised borders |
-| `--color-green` | `#22c55e` | Success / online |
-| `--color-red` | `#ef4444` | Error / destructive / offline |
-| `--color-yellow` | `#eab308` | Warning / waiting |
-| `--color-blue` | `#3b82f6` | Informational / in-progress |
+| `--color-success` | `#22c55e` | Success / online / complete |
+| `--color-danger` | `#ef4444` | Error / destructive / offline |
+| `--color-warning` | `#eab308` | Warning / waiting / needs a human |
+| `--color-info` | `#3b82f6` | Informational / in-progress |
+
+Each status token also declares two pairings — `--color-{intent}-soft` at `0.15` for a tinted
+background and `--color-{intent}-line` at `0.4` for a tinted border. `--color-accent-soft` is the
+same idea and predates them.
 
 Fonts: `--font-body` Manrope, `--font-display` Fraunces, `--font-mono` SF Mono — identical to the
 shared system, loaded from Google Fonts in each app's HTML entry.
 
-### The tokens are named for pigment; meaning is applied one layer up
+### The tokens are named for intent, and were not always (#367)
 
-`--color-green` says what it *is*, not what it *means*, and `text-red` alone carries at least four
-unrelated meanings across the tree (an error message, a destructive action, a `write` scope label, an
-offline state). The shared system's answer is to name the token for intent (`--danger`).
+Until 2026-08-08 they were named for pigment. A token said what it *was*, not what it *meant*, and
+the consequence was that one word carried four unrelated ideas at once: the red one appeared on an
+error message, on a destructive action, on a `write`-scope label and on an offline state, across
+181 call sites. Nothing was wrong on screen. What was wrong is that a decision to move any ONE of
+those four — make the scope label neutral, say — was not a token edit but a hunt through the tree
+working out which use was which, and no amount of care makes that reliable.
 
-PAGS's answer today is an intent layer in **code** rather than CSS: `store/console/src/lib/statusBadge.ts`
-maps a status → an intent (`success` · `danger` · `warning` · `info` · `neutral`) → a token pair. Any
-surface showing a status chip must go through it. Renaming the CSS tokens to intent remains open;
-the code layer is what makes the rename a one-file change when someone does it.
+`store/console/src/lib/statusBadge.ts` had already added the missing layer in **code**, mapping a
+status → an intent → a token pair, because the CSS could not carry it. The rename put the same idea
+underneath: 416 utilities moved to `success` / `danger` / `warning` / `info`, the pigment names were
+**deleted** rather than aliased, and that map now spells its answer (`bg-success-soft text-success`)
+instead of computing one.
+
+Deleting rather than aliasing is the whole reason it is safe. An alias leaves two names for one idea
+and no way to tell which a file is using — the failure #368 refused when it declined to invent a
+third status vocabulary. Deleted, the old names are undeclared, so the dead-token rule reports every
+one with the replacement beside it (`text-red → text-danger`), which is what makes the rename
+survivable on a repo with several branches open at once.
+
+**One naming collision, left alone deliberately:** the neutral chip is still an opacity modifier,
+because `--color-muted-soft` is already a *text* colour (tertiary copy, placeholders) and a
+`bg-muted-soft` would be a solid grey rather than a tint. Renaming that one to free the pairing is a
+bigger change than it looks, and the guard is scoped to the four status intents so it does not
+pretend otherwise.
 
 ### A token that does not exist is silent
 
@@ -124,13 +145,30 @@ which `@theme` compiles which tree — `agents/coder/web` has no stylesheet of i
 `@source`s it, so its classes are judged against the console's tokens and a dead one there is invisible
 from inside its own package.
 
-### The missing `-soft` pairings
+### The pairings, and why an alpha per call site is not a style (#367)
 
-`@theme` declares a soft background for the accent (`--color-accent-soft`) and for nothing else. Every
-tinted status background is therefore an opacity modifier: `bg-red/10` (16 uses), `bg-green/15` (9),
-`bg-yellow/10` (8), `bg-accent/10` (11). It works, and it is a hack — the alpha is picked per call
-site, which is why both `/10` and `/15` are in use for the same idea. Declaring
-`--color-{green,red,yellow,blue}-soft` would collapse those into one decision.
+`@theme` used to declare a soft background for the accent and for nothing else, so every tinted
+status surface was an opacity modifier chosen where it was typed. Measured before the fix: **three
+different alphas for one red tint** (79 background sites in total), **five for one yellow border**
+(41 border sites), and 15 accent tints reaching past `--color-accent-soft`, which had existed all
+along and got this right. Nobody chose that spread — each author picked a number without a way to
+see what the others had picked, and no reason to think it mattered.
+
+Two pairings per intent, declared once:
+
+| | Alpha | For |
+|---|---|---|
+| `-soft` | `0.15` | A tinted background behind status text. Matches `--color-accent-soft`. |
+| `-line` | `0.4` | A tinted border around such a surface. |
+
+`0.4` is the mode of the border alphas that were in use, not a round number: a 1px line at `0.15` is
+nearly invisible on `#0a0a0a`, which is why the border sites had drifted upward on their own while
+the background sites drifted down. Two roles, two answers — collapsing both onto one alpha would
+have been tidier and wrong.
+
+`check-design-tokens.mjs` rule 3 now gates the modifier form at zero (§5), which it can only do
+because the pairings were declared first. That ordering is the same one #390 argued for and the same
+one #366 needed: a lint with nowhere for the decision to go is not a lint, it is a blocked edit.
 
 ## 2. Type — the one prescriptive rule in this document (#390)
 
@@ -282,14 +320,17 @@ front page.
 Four guards, each holding only what a machine can honestly hold.
 
 **`scripts/check-design-tokens.mjs`** — a CI step (`ci.yml`, alongside the other `check-*.mjs` guards),
-because it covers three trees rather than belonging to one package. Two rules over the same source,
-against the same `@theme`, because they are two halves of one idea — *a class name must name a
+because it covers three trees rather than belonging to one package. Three rules over the same source,
+against the same `@theme`, because they are halves of one idea — *a class name must name a
 decision, not a value*:
 
-1. **No colour utility may name a token nothing declares** (§1). A gate at zero for `store/console`
-   and `agents/coder/web`; `store/admin` is pinned at 2, since fixing those needed a tree that had
-   uncommitted maintainer work when this landed — pinned rather than excluded, so the debt is
-   visible and may only go down.
+1. **No colour utility may name a token nothing declares** (§1). **A gate at zero in all three
+   trees** as of #367: `store/admin`'s pin of 2 was two inputs wearing a background token from
+   somebody else's design system, and both were dead — the base layer had been painting them all
+   along, so removing the class changed nothing on screen and the pin went to zero. A retired
+   pigment name is reported with its replacement beside it, which is a message-quality problem
+   rather than a detection one: the readers of that failure are mostly people whose code was valid
+   last week.
 2. **No font size may be written as a bracketed value** (§2), added at #390. A **gate at zero in all
    three trees**, which it can be because that ticket collapsed all 224 of them onto steps first.
    It matches length-valued brackets only — `text-[#fafafa]` and `text-[color:var(…)]` are a colour
@@ -297,11 +338,29 @@ decision, not a value*:
    asserts that any declared `--text-*` step has its `--line-height` companion: a step without one
    emits a `line-height` naming a variable that resolves to nothing, which is rule 1's failure mode
    one property over.
+3. **No status colour may be written as an opacity modifier** (§1), added at #367. A gate at zero in
+   all three trees, for the same reason rule 2 could be one: the `-soft` and `-line` tokens were
+   declared before anything started failing, so all 123 modifier sites had a destination. It names
+   the pairing that replaces each hit, by role — a background wants `-soft`, an edge wants `-line`,
+   and a translucent *foreground* wants neither, because 90% of a colour is the colour. It also
+   asserts, from the declaration end, that all four intents and both pairings exist.
 
 The mechanism is a pure module (`scripts/lib/design-tokens.mjs`) with its own tests, which is also
 the first test coverage any guard under `scripts/` has had.
 
-Two things about it are load-bearing:
+**The hole that assertion closes, and the fix that was rejected.** `text-` is excluded from the
+custom-token half of rule 1 because it collides with the font-size scale, so a dead `text-<token>`
+is caught only when the token happens to be named after a Tailwind hue — which the status tokens
+were, *by accident*, until #367 renamed them. Widening rule 1 to cover `text-` was measured across
+all three trees and rejected: it fires on `text-like` inside an English sentence in a string literal,
+and on an element id whose tail reads as a utility. Two false positives on the day it lands is how a
+guard gets suppressed rather than fixed — #454's lesson, that a scanner cannot see the intent of a
+class it did not write. So the hole is closed from the other end, by asserting the twelve status
+properties are declared. If the token cannot disappear, `text-danger` cannot go silent, and 415 call
+sites need no scanning. The trade is stated rather than hidden: a *misspelled* `text-` token is still
+invisible to every guard here.
+
+Three things about it are load-bearing:
 
 - **It scans SOURCE, not the built stylesheet.** Tailwind v4's source scan reads comments and strings,
   so an output-scanning guard is defeated by a doc comment — quoting the broken class names while
@@ -310,6 +369,10 @@ Two things about it are load-bearing:
 - **Comments are blanked before scanning.** This tree's prose is full of hyphenated phrases that a
   class-name regex reads as utilities (a lazy fill-in fallback, a jump-to-bottom button, tap-to-talk).
   Every one would be a false positive, and a guard that cries wolf gets suppressed rather than fixed.
+- **Every rule here is anchored on a closed vocabulary.** Tailwind's hue list, the four status
+  intents, a bracketed length. That is what keeps the false-positive rate at zero, and it is why the
+  rules stop where they do: the moment a rule needs an allowlist of English words to stay quiet, it
+  has stopped being exact and is on its way to being ignored.
 
 **`store/console/src/lib/designTokens.test.ts`** — in the normal unit suite. Three things, each mechanical
 and each matching a defect that actually shipped:
@@ -365,13 +428,16 @@ wrong unit to scan, per the paragraph above).
 
 ## 6. Open
 
-- **Rename the pigment tokens to intent, and add the `-soft` pairings** (§1). Still the right change and
-  deliberately not taken in #367's sweep, for two reasons worth recording. It cannot be done in the
-  console alone: the `@theme` blocks are held equal by test (§5.3) and the second copy lives in
-  `store/admin`, so the rename is one commit across both trees or it is a broken guard. And adding
-  `--color-danger` as an *alias* beside `--color-red` without migrating ~200 call sites would leave two
-  names for one idea — the failure #368 explicitly refused when it declined to invent a third status
-  vocabulary. The intent layer in `lib/statusBadge.ts` is what keeps the eventual rename cheap.
+- ~~Rename the pigment tokens to intent, and add the `-soft` pairings~~ — **done** (#367, §1). It was
+  one commit across all three trees, as this entry predicted it had to be: the `@theme` blocks are
+  held equal by test and the console `@source`s the Coder UI, so a rename in one tree is a dead
+  utility in the others. 416 utilities, 76 files, and the old names deleted rather than aliased.
+  What made that affordable was the guard, not the care: the pigment names being undeclared is what
+  turns every missed one into a build failure naming the file, the line and the replacement.
+- **The `store/admin` palette is still a copy, and the marketing pages still disagree** (§4). The
+  rename made the two SPA copies diverge for a few minutes and the equality test caught it, which is
+  the argument for that test rather than for a shared file — but a shared file is still the right
+  end state, and nothing holds the marketing `:root` blocks to either.
 - **Finish the button migration.** #366 took 57 of 182 sites — the shared component family, the
   Knowledge tab and TeamworkSection's `chip`; #389 took `RepoTab`'s four. Still hand-written:
   `AgentDetail`, `RunDetail`, `InstanceDetail`, `Profile`, `BoardTab`, `SettingsTab`, `StatsTab`,
@@ -394,4 +460,11 @@ wrong unit to scan, per the paragraph above).
   by rule (the base-layer checkbox size, the type sweep) and neither is *held* by anything. A
   fixture for them is the cheapest next increment on both tickets.
 - Decide whether the marketing pages adopt the SPA palette or keep their own (§4).
-- Clear `store/admin`'s two pinned dead utilities (§5) and drop its pin to zero.
+- ~~Clear `store/admin`'s two pinned dead utilities and drop its pin to zero~~ — **done** (#367).
+  Both were an `input` naming a background token from another design system; the base layer had been
+  painting those inputs the whole time, so the fix was to delete the class, and every surface is now
+  a gate at zero on every rule.
+- **A misspelled `text-` token is invisible to every guard here** (§5). Closing it needs either a
+  parser that knows a class attribute from a sentence, or a `text-` allowlist that would fire on
+  ordinary English on day one. Neither is worth doing for the defect rate; recorded so the next
+  person to notice the gap finds the measurement rather than repeating it.

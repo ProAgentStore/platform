@@ -66,8 +66,8 @@ const CREATE_GRID_ONE_BACKEND = "grid grid-cols-1 sm:grid-cols-[11rem_minmax(0,1
 
 /** Notice tone → colour. The DECISION of which tone applies is `tmuxPaneState`'s; this is paint. */
 const NOTICE_TONE: Record<"error" | "status" | "hint", string> = {
-	error: "text-red",
-	status: "text-green",
+	error: "text-danger",
+	status: "text-success",
 	hint: "text-muted",
 };
 
@@ -367,7 +367,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 							>
 								<div className="flex items-center justify-between gap-2 min-w-0">
 									<span className="font-mono text-sm truncate">{s.name}</span>
-									<span className={`w-2 h-2 rounded-full shrink-0 ${s.attached ? "bg-green" : "bg-muted-soft"}`} title={s.attached ? "Attached" : "Detached"} />
+									<span className={`w-2 h-2 rounded-full shrink-0 ${s.attached ? "bg-success" : "bg-muted-soft"}`} title={s.attached ? "Attached" : "Detached"} />
 								</div>
 								<div className="mt-1 text-2xs text-muted-soft truncate">
 									{s.backend} {s.activeCommand ? `- ${s.activeCommand}` : ""} {s.activeWindow ? `- ${s.activeWindow}` : ""} {s.windows ? `- ${s.windows}w` : ""}
@@ -382,7 +382,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 						<div className="min-w-0">
 							<div className="flex items-center gap-2 min-w-0">
 								<span className="font-mono text-sm font-bold truncate">{selected || `No ${noun} selected`}</span>
-								{selectedInfo?.attached != null && <span className={`text-2xs px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-green/15 text-green" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
+								{selectedInfo?.attached != null && <span className={`text-2xs px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-success-soft text-success" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
 							</div>
 							<div className="text-2xs text-muted-soft truncate">
 								{selectedInfo ? `${selectedInfo.backend}${selectedInfo.activeCommand ? ` - ${selectedInfo.activeCommand}` : ""}${selectedInfo.activeWindow ? ` - ${selectedInfo.activeWindow}` : ""}${createdLabel(selectedInfo.created) ? ` - ${createdLabel(selectedInfo.created)}` : ""}` : paneState.hint}
@@ -395,7 +395,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 							<button type="button" onClick={copyPane} disabled={!pane} title="Copy pane output" aria-label="Copy pane output" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 								<Clipboard size={14} />
 							</button>
-								<button type="button" onClick={killSession} disabled={!selected || !writes.kill} title={writes.kill ? `Kill ${noun}` : `Grant ${family?.connector ?? "terminal"} kill access in Settings`} aria-label={`Kill ${noun}`} className="p-1.5 rounded-lg border border-line text-muted hover:text-red hover:border-red disabled:opacity-40">
+								<button type="button" onClick={killSession} disabled={!selected || !writes.kill} title={writes.kill ? `Kill ${noun}` : `Grant ${family?.connector ?? "terminal"} kill access in Settings`} aria-label={`Kill ${noun}`} className="p-1.5 rounded-lg border border-line text-muted hover:text-danger hover:border-danger disabled:opacity-40">
 								<Trash2 size={14} />
 							</button>
 						</div>

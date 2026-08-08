@@ -155,7 +155,7 @@ export default function StatsTab({ instanceId }: { instanceId: string }) {
 						type="button"
 						onClick={() => setWindowDays(w)}
 						className={`text-xs px-3 py-1.5 rounded-lg border font-semibold transition-colors ${
-							windowDays === w ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:text-ink"
+							windowDays === w ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"
 						}`}
 					>
 						{windowLabel(w)}
@@ -170,14 +170,14 @@ export default function StatsTab({ instanceId }: { instanceId: string }) {
 			{data && hasTrend && (
 				<div className="text-xs text-muted-soft space-y-1">
 					<p>{throughDayNote(data.throughDay)}</p>
-					{history && <p className="text-yellow/90">{history}</p>}
+					{history && <p className="text-warning">{history}</p>}
 				</div>
 			)}
 
-			{error && <div className="text-sm text-red">{error}</div>}
+			{error && <div className="text-sm text-danger">{error}</div>}
 
 			{rejected.length > 0 && (
-				<div className="text-xs text-red border border-red/40 rounded-lg p-2">
+				<div className="text-xs text-danger border border-danger-line rounded-lg p-2">
 					<div className="font-semibold">Not saved:</div>
 					<ul>
 						{rejected.map((r) => (
@@ -393,7 +393,7 @@ function AddCard({
 							params: Object.fromEntries(Object.entries(params).filter(([, v]) => v.trim() !== "")),
 						})
 					}
-					className="text-xs px-3 py-1.5 rounded-lg border border-accent bg-accent/10 text-accent font-semibold disabled:opacity-40"
+					className="text-xs px-3 py-1.5 rounded-lg border border-accent bg-accent-soft text-accent font-semibold disabled:opacity-40"
 				>
 					Add card
 				</button>

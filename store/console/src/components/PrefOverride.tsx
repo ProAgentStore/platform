@@ -75,7 +75,7 @@ export default function PrefOverride({ label, hasOverride, summary, loaded = tru
 					</span>
 				</span>
 			</label>
-			{error && <p className="text-xs text-red mt-1">{error}</p>}
+			{error && <p className="text-xs text-danger mt-1">{error}</p>}
 		</div>
 	);
 }

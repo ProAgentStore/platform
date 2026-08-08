@@ -14,10 +14,23 @@
 	--color-accent-soft: rgba(124, 58, 237, 0.15);
 	--color-line: #303030;
 	--color-line-strong: #404040;
-	--color-green: #22c55e;
-	--color-red: #ef4444;
-	--color-yellow: #eab308;
-	--color-blue: #3b82f6;
+	/*
+	 * Status colours by intent, with their -soft (0.15) and -line (0.4) pairings (#367).
+	 * Byte-identical to the console's copy and held that way by `designTokens.test.ts`; the
+	 * reasoning for the names and for the two alphas lives in `store/console/src/index.css`.
+	 */
+	--color-success: #22c55e;
+	--color-success-soft: rgba(34, 197, 94, 0.15);
+	--color-success-line: rgba(34, 197, 94, 0.4);
+	--color-danger: #ef4444;
+	--color-danger-soft: rgba(239, 68, 68, 0.15);
+	--color-danger-line: rgba(239, 68, 68, 0.4);
+	--color-warning: #eab308;
+	--color-warning-soft: rgba(234, 179, 8, 0.15);
+	--color-warning-line: rgba(234, 179, 8, 0.4);
+	--color-info: #3b82f6;
+	--color-info-soft: rgba(59, 130, 246, 0.15);
+	--color-info-line: rgba(59, 130, 246, 0.4);
 	--font-body: "Manrope", system-ui, sans-serif;
 	--font-display: "Fraunces", Georgia, serif;
 	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;

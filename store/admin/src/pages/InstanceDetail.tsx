@@ -92,7 +92,7 @@ export default function InstanceDetail() {
 											<tr key={n.runner_node} className="border-b border-line/50">
 												<td className="py-1.5 font-mono text-xs">{n.runner_node}</td>
 												<td><LiveDot connected={n.connected} /></td>
-												<td className={n.status === "online" && !n.connected ? "text-yellow text-xs" : "text-muted text-xs"}>{n.status}</td>
+												<td className={n.status === "online" && !n.connected ? "text-warning text-xs" : "text-muted text-xs"}>{n.status}</td>
 												<td className="text-muted">{n.runner_version || "—"}</td>
 												<td className="text-muted">{n.last_seen_at?.slice(5, 16) || "—"}</td>
 											</tr>
@@ -103,8 +103,8 @@ export default function InstanceDetail() {
 							{/* The DB column is not cleared on an unclean disconnect, so a machine that
 							    died days ago still reads "online". Live is the relay socket; say so. */}
 							<p className="text-xs text-muted-soft mt-2">
-								<span className="text-yellow">Reported</span> is the DB column, which is not cleared when a machine drops —
-								trust <span className="text-green">Live</span> (the relay socket).
+								<span className="text-warning">Reported</span> is the DB column, which is not cleared when a machine drops —
+								trust <span className="text-success">Live</span> (the relay socket).
 							</p>
 						</>
 					)}
@@ -127,7 +127,7 @@ export default function InstanceDetail() {
 								<div key={b.job_key} className="text-sm border-b border-line/50 py-1">
 									{b.title || b.job_key}
 									{b.subtitle ? <span className="text-muted-soft text-xs"> · {b.subtitle}</span> : null}
-									{b.user_status ? <span className="text-xs text-yellow ml-2">{b.user_status}</span> : null}
+									{b.user_status ? <span className="text-xs text-warning ml-2">{b.user_status}</span> : null}
 								</div>
 							))}
 						</div>
@@ -138,7 +138,7 @@ export default function InstanceDetail() {
 					{!d.consents.length ? <Empty label="No write consents granted." /> : (
 						<div className="flex flex-wrap gap-1.5">
 							{d.consents.map((c) => (
-								<span key={`${c.connector}:${c.scope}`} className="text-xs text-yellow bg-paper border border-line rounded px-1.5 py-0.5">
+								<span key={`${c.connector}:${c.scope}`} className="text-xs text-warning bg-paper border border-line rounded px-1.5 py-0.5">
 									{c.connector}·{c.scope}
 								</span>
 							))}

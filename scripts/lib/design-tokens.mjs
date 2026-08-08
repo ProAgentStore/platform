@@ -200,6 +200,112 @@ export function findDeadColorUtilities(source, declared) {
 }
 
 /**
+ * ── The retired pigment names (#367) ──
+ *
+ * The status tokens were renamed from pigment to intent, so the old names are now undeclared
+ * and rule 1 above already catches every use of one. What it cannot do is say what to write
+ * instead: its message is "names a token nothing declares", which is true and unhelpful for a
+ * name that was valid last week and is spelled out in a hundred places on other branches.
+ *
+ * This map is consulted only when formatting a failure. It is not a rule of its own — a second
+ * rule matching the same strings would report each one twice — and it exists because a rename
+ * on a repo where several branches are open is a message-quality problem before it is a
+ * detection problem. The keys are bare token names as rule 1 reports them.
+ */
+export const RETIRED_COLOR_TOKENS = {
+	red: "danger",
+	green: "success",
+	yellow: "warning",
+	blue: "info",
+};
+
+/**
+ * The intent that replaces a retired pigment name in `utility`, or null.
+ *
+ * Takes the whole utility so the suggestion is a whole utility too: a reader should be able to
+ * paste the answer rather than assemble it.
+ */
+export function retiredTokenAdvice(utility) {
+	const value = utility.slice(utility.indexOf("-") + 1);
+	const intent = RETIRED_COLOR_TOKENS[value];
+	if (!intent) return null;
+	const prefix = utility.slice(0, utility.indexOf("-"));
+	return `${prefix}-${intent}`;
+}
+
+/**
+ * Every status token the app is entitled to name, with the two pairings each must declare.
+ *
+ * This is a closed list checked against `@theme` — the opposite direction from every other rule
+ * here, and deliberately so. `text-` is excluded from rule 2 (it collides with the font-size
+ * scale), so a dead `text-<token>` is invisible unless the token is named after a Tailwind hue.
+ * Before #367 the status tokens were, by accident; naming them for intent gave that accident up.
+ *
+ * Widening rule 2 to cover `text-` was measured and rejected: across all three trees it fires on
+ * `text-like` inside an English sentence in a string literal, and on an element id whose tail
+ * reads as a utility. A guard with two false positives on the day it lands teaches suppression
+ * (#454). So the hole is closed at the declaration instead: if `--color-danger` and its pairings
+ * are guaranteed to exist, `text-danger` cannot go silent, and 415 call sites need no scanning.
+ */
+export const REQUIRED_STATUS_TOKENS = ["success", "danger", "warning", "info"];
+const REQUIRED_PAIRINGS = ["soft", "line"];
+
+/** Every status token or pairing a `@theme` block is missing. Empty means the palette is whole. */
+export function findMissingStatusTokens(css) {
+	const declared = parseThemeColorTokens(css);
+	const missing = [];
+	for (const intent of REQUIRED_STATUS_TOKENS) {
+		if (!declared.has(intent)) missing.push(intent);
+		for (const pairing of REQUIRED_PAIRINGS) {
+			if (!declared.has(`${intent}-${pairing}`)) missing.push(`${intent}-${pairing}`);
+		}
+	}
+	return missing;
+}
+
+/**
+ * ── The pairings (#367) ──
+ *
+ * Every status token declares a tinted background (`-soft`) and a tinted border (`-line`), so
+ * an opacity modifier on one is a call site choosing an alpha the design system already chose.
+ * That is how the tree came to hold three different alphas for one red tint and five for one
+ * yellow border: the modifier form works, so nothing ever objected.
+ *
+ * Scoped deliberately to the four status intents. The accent's heavier alphas are solid
+ * surfaces rather than tints and are a different decision, and `--color-muted-soft` is already
+ * taken by a *text* colour, so a neutral chip's tint has no pairing to point at — widening this
+ * to every token would fire on both and teach people to ignore it (#454's lesson: a scanner
+ * cannot see the intent of a class it did not write).
+ */
+const STATUS_INTENTS = "success|danger|warning|info";
+const STATUS_OPACITY = new RegExp(`\\b(bg|border|ring|divide|outline|text|fill|stroke)-(?:${STATUS_INTENTS})\\/\\d+\\b`, "g");
+
+/** The pairing token a modifier should have named: a background wants -soft, an edge wants -line. */
+export function pairingFor(utility) {
+	const prefix = utility.slice(0, utility.indexOf("-"));
+	const token = utility.slice(utility.indexOf("-") + 1).replace(/\/\d+$/, "");
+	if (prefix === "bg") return `bg-${token}-soft`;
+	if (prefix === "border" || prefix === "ring" || prefix === "divide" || prefix === "outline") return `${prefix}-${token}-line`;
+	return `${prefix}-${token}`; // a translucent foreground is an alpha on TEXT — drop it
+}
+
+/** Every status colour written with an opacity modifier instead of its pairing token. */
+export function findStatusOpacityModifiers(source) {
+	const found = [];
+	stripComments(source)
+		.split("\n")
+		.forEach((text, i) => {
+			const seen = new Set();
+			for (const m of text.matchAll(STATUS_OPACITY)) {
+				if (seen.has(m[0])) continue;
+				seen.add(m[0]);
+				found.push({ utility: m[0], line: i + 1 });
+			}
+		});
+	return found;
+}
+
+/**
  * ── The type scale (#390) ──
  *
  * The same defect class as above with the opposite symptom: an arbitrary font size does not

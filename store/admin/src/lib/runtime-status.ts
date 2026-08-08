@@ -61,15 +61,15 @@ export const RUNTIME_LABELS: Record<RuntimeStatus, RuntimeStatusLabel> = {
 		mark: "◌",
 		text: "unknown",
 		title: "Not checked — the live-check budget for this page was spent. This is not 'offline'.",
-		markClass: "text-yellow",
+		markClass: "text-warning",
 		textClass: "text-muted-soft",
 	},
 	live: {
 		mark: "●",
 		text: "live",
 		title: "A runner WebSocket is connected right now (RelayDO)",
-		markClass: "text-green",
-		textClass: "text-green",
+		markClass: "text-success",
+		textClass: "text-success",
 	},
 	offline: {
 		mark: "○",

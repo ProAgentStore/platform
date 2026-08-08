@@ -6,7 +6,7 @@ import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null }
 interface Signature { key: string; source: string; sample: string; pattern: string; count: number; users: number; firstSeen: string; lastSeen: string; lastStatus: number | null; lastId: string }
 
-const statusColor = (s: number | null) => (s == null ? "text-muted" : s >= 500 ? "text-red" : s >= 400 ? "text-yellow" : "text-muted");
+const statusColor = (s: number | null) => (s == null ? "text-muted" : s >= 500 ? "text-danger" : s >= 400 ? "text-warning" : "text-muted");
 
 /**
  * Mirror of the server's normalizeMessage (lib/admin-errors.ts) so we can filter the

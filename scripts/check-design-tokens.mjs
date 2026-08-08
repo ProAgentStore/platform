@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * check-design-tokens.mjs — two rules over the same three trees:
+ * check-design-tokens.mjs — three rules over the same three trees:
  *
  *   1. no colour utility may name a token nothing declares (#367);
- *   2. no font size may be written as a bracketed value instead of a scale step (#390).
+ *   2. no font size may be written as a bracketed value instead of a scale step (#390);
+ *   3. no status colour may be written as an opacity modifier instead of its pairing (#367).
  *
  * They live together because they scan the same source, against the same `@theme`, and
- * because they are two halves of one idea: a class name must name a DECISION, not a value.
+ * because they are three halves of one idea: a class name must name a DECISION, not a value.
+ * Rule 3 is the newest and the most literal reading of that — `-soft` is a decision about how
+ * dark a tinted status background should be, made once; a slash and a number is the same
+ * decision made again by whoever is typing, which is why the tree held three of them for red.
  *
  * PAGS runs its own design system (`DESIGN-SYSTEM.md`; it is deliberately out of scope of
  * the shared six-store spec as of 2026-08-07 — dark-only, own tokens). Owning it is a
@@ -27,10 +31,11 @@
  * could not have landed with #367.
  *
  * Gate where the tree is clean, ratchet where it is not — the same rule ci.yml's lint step
- * follows. `store/admin` carries two hits in a tree with uncommitted maintainer work this
- * batch, so it is pinned rather than excluded: excluding it would hide the debt, and a
- * ceiling (`<=`) would bank the ground as headroom, which is numerically how the last
- * ratchet in this repo got spent.
+ * follows. Every surface is at zero on every rule as of #367; `store/admin`'s pin of 2 was
+ * two inputs wearing a background token from somebody else's design system, and the pin is a
+ * `pinned: 0` rather than a deleted field so the next tree that needs one has the mechanism.
+ * A pin is always exact, never a `<=` ceiling, which would bank the ground as headroom —
+ * numerically how the last ratchet in this repo got spent.
  *
  * Run: `node scripts/check-design-tokens.mjs`
  */
@@ -38,7 +43,16 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findArbitraryFontSizes, findDeadColorUtilities, parseThemeColorTokens, parseThemeTypeSteps } from "./lib/design-tokens.mjs";
+import {
+	findArbitraryFontSizes,
+	findDeadColorUtilities,
+	findMissingStatusTokens,
+	findStatusOpacityModifiers,
+	pairingFor,
+	parseThemeColorTokens,
+	parseThemeTypeSteps,
+	retiredTokenAdvice,
+} from "./lib/design-tokens.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -52,7 +66,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  */
 const SURFACES = [
 	{ name: "store/console", src: "store/console/src", theme: "store/console/src/index.css", pinned: 0 },
-	{ name: "store/admin", src: "store/admin/src", theme: "store/admin/src/index.css", pinned: 2 },
+	{ name: "store/admin", src: "store/admin/src", theme: "store/admin/src/index.css", pinned: 0 },
 	{ name: "agents/coder/web", src: "agents/coder/web/src", theme: "store/console/src/index.css", pinned: 0 },
 ];
 
@@ -114,7 +128,18 @@ function checkColours(surface) {
 			(surface.pinned ? ` (pinned at ${surface.pinned})` : "") +
 			":\n",
 	);
-	for (const o of offenders) console.error(`  ${o.rel}:${o.line}  ${o.utility}`);
+	for (const o of offenders) {
+		const advice = retiredTokenAdvice(o.utility);
+		console.error(`  ${o.rel}:${o.line}  ${o.utility}${advice ? `   → ${advice}` : ""}`);
+	}
+	if (offenders.some((o) => retiredTokenAdvice(o.utility))) {
+		console.error(
+			"\n  The arrowed ones are the pigment names #367 retired: the status tokens are named for\n" +
+				"  INTENT now, so one word no longer means an error, a destructive action and an offline\n" +
+				"  state at once. Write the name on the right. If you want a tinted background or border,\n" +
+				"  the pairings are -soft and -line — see DESIGN-SYSTEM.md §1.",
+		);
+	}
 	console.error(
 		`\n  These compile to NOTHING — the element keeps whatever colour it inherited, and a\n` +
 			`  bordered one gets v4's currentColor default (a near-white line on a black page).\n` +
@@ -167,10 +192,55 @@ function checkTypeScale(surface) {
 	return false;
 }
 
+/**
+ * Rule 3 (#367): a status colour names its pairing token, never an opacity modifier.
+ *
+ * A gate at zero in all three trees, and it can be one for the same reason rule 2 could: the
+ * ticket declared `-soft` and `-line` first, so all 123 modifier sites had somewhere to go
+ * before anything started failing. Before that they were spread over three alphas for one red
+ * tint and five for one yellow border — each written by someone who had no way to know what
+ * the others had picked, and no reason to think it mattered.
+ */
+function checkStatusPairings(surface) {
+	const missing = findMissingStatusTokens(readFileSync(resolve(ROOT, surface.theme), "utf8"));
+	if (missing.length) {
+		console.error(
+			`\n✗ ${surface.theme} is missing status token(s): ${missing.map((m) => `--color-${m}`).join(", ")}.\n` +
+				"  Each status intent declares a base colour, a -soft background and a -line border.\n" +
+				"  This is checked from the DECLARATION end on purpose: `text-` is excluded from the\n" +
+				"  dead-token rule because it collides with the font-size scale, so deleting one of\n" +
+				"  these would leave every `text-<intent>` in the app silently uncoloured with nothing\n" +
+				"  able to see it. See lib/design-tokens.mjs for why widening that rule was rejected.",
+		);
+		return false;
+	}
+
+	const offenders = [];
+	for (const { rel, source } of surfaceSources(surface)) {
+		for (const hit of findStatusOpacityModifiers(source)) offenders.push({ ...hit, rel });
+	}
+
+	if (offenders.length === 0) {
+		console.log(`✓ ${surface.name}: every status tint names its pairing token.`);
+		return true;
+	}
+
+	console.error(`\n✗ ${surface.name}: ${offenders.length} status colour(s) written with an opacity modifier:\n`);
+	for (const o of offenders) console.error(`  ${o.rel}:${o.line}  ${o.utility}   → ${pairingFor(o.utility)}`);
+	console.error(
+		"\n  The alpha is already decided: -soft (0.15) for a tinted background, -line (0.4) for a\n" +
+			"  tinted border, declared in BOTH @theme blocks. Picking one per call site is what left\n" +
+			"  the same idea wearing three different tints (DESIGN-SYSTEM.md §1).\n" +
+			"  A genuinely different value is a new token, not a modifier.",
+	);
+	return false;
+}
+
 let failed = false;
 for (const surface of SURFACES) {
 	if (!checkColours(surface)) failed = true;
 	if (!checkTypeScale(surface)) failed = true;
+	if (!checkStatusPairings(surface)) failed = true;
 }
 
 process.exit(failed ? 1 : 0);

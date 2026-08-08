@@ -286,7 +286,7 @@ export function deliveryHeadline(counts: DeliveryCounts): { tone: Tone; text: st
 
 /** Tailwind text colour per tone, so the same rule paints every chip in the card. */
 export function toneClass(tone: Tone): string {
-	return tone === "bad" ? "text-red" : tone === "warn" ? "text-yellow" : tone === "ok" ? "text-green" : "text-muted-soft";
+	return tone === "bad" ? "text-danger" : tone === "warn" ? "text-warning" : tone === "ok" ? "text-success" : "text-muted-soft";
 }
 
 /** One row of `GET /v1/instances/:id/tools` — only the fields this rule needs. */

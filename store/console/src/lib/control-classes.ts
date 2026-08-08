@@ -95,7 +95,7 @@ export const BUTTON_VARIANT: Record<ButtonVariant, string> = {
 	primary: "bg-accent text-white font-bold hover:bg-accent-hover",
 	secondary: "border border-line text-muted font-semibold hover:border-accent hover:text-accent",
 	ghost: "text-muted font-semibold hover:text-ink hover:bg-panel-hover",
-	danger: "border border-line text-red font-semibold hover:bg-red/10",
+	danger: "border border-line text-danger font-semibold hover:bg-danger-soft",
 };
 
 export function buttonClass(variant: ButtonVariant = "secondary", size: ButtonSize = "md", extra = ""): string {

@@ -96,7 +96,7 @@ export default function Notifications() {
 										    about one that finished — the same distinction a `needs_human` board card
 										    draws, and the one a per-type mute is never allowed to hide (#360). */}
 										{n.kind === "alert" && (
-											<span className="mr-1.5 align-middle text-2xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/15 text-accent">
+											<span className="mr-1.5 align-middle text-2xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent-soft text-accent">
 												Needs you
 											</span>
 										)}
@@ -155,7 +155,7 @@ function AlertsCard() {
 				{/* The failure REPLACES the status line rather than sitting under it: "On — you'll get
 				    a notification" beside "couldn't finish turning alerts on" is the same claim the
 				    swallow was making, only slower. */}
-				<div className={`text-sm mt-0.5 ${failed ? "text-red" : "text-muted"}`}>
+				<div className={`text-sm mt-0.5 ${failed ? "text-danger" : "text-muted"}`}>
 					{failed ? failed
 						: perm === "granted" ? "On — you'll get a notification (even with this tab closed) when an agent needs you."
 						: perm === "denied" ? "Blocked. Turn on notifications for proagentstore.online in your browser's site settings, then reload."

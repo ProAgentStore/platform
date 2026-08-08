@@ -43,7 +43,7 @@ export default function SystemMessage({ content, createdAt, prevCreatedAt }: {
 
 	return (
 		<div
-			className={`bg-yellow/10 text-yellow self-center text-xs border border-yellow/15 max-w-[90%] ${
+			className={`bg-warning-soft text-warning self-center text-xs border border-warning-line max-w-[90%] ${
 				long
 					? "rounded-xl px-4 py-2.5 w-full"
 					: "rounded-full px-4 py-1.5 flex flex-wrap items-baseline justify-center gap-x-2"

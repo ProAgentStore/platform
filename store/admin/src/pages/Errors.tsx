@@ -7,7 +7,7 @@ interface RawErr { id: string; created_at: string; user_id: string | null; sourc
 interface Signature { key: string; source: string; sample: string; pattern: string; count: number; users: number; firstSeen: string; lastSeen: string; lastStatus: number | null; lastId: string }
 
 const RANGES = [{ v: "1", l: "24h" }, { v: "7", l: "7d" }, { v: "30", l: "30d" }, { v: "", l: "All" }];
-const statusColor = (s: number | null) => (s == null ? "text-muted" : s >= 500 ? "text-red" : s >= 400 ? "text-yellow" : "text-muted");
+const statusColor = (s: number | null) => (s == null ? "text-muted" : s >= 500 ? "text-danger" : s >= 400 ? "text-warning" : "text-muted");
 
 export default function Errors() {
 	const [view, setView] = useState<"grouped" | "feed">("grouped");

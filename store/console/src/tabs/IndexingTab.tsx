@@ -106,10 +106,10 @@ const payloadObject = (payload: unknown): SyncPayload => {
 const eventTime = (event?: TriggerEvent) => event?.created_at ? formatDateTime(event.created_at) : "";
 
 function statusClasses(status: "indexed" | "pending" | "failed" | "running") {
-	if (status === "indexed") return "border-green/30 bg-green/10 text-green";
-	if (status === "failed") return "border-red/30 bg-red/10 text-red";
-	if (status === "running") return "border-blue/30 bg-blue/10 text-blue";
-	return "border-yellow/30 bg-yellow/10 text-yellow";
+	if (status === "indexed") return "border-success-line bg-success-soft text-success";
+	if (status === "failed") return "border-danger-line bg-danger-soft text-danger";
+	if (status === "running") return "border-info-line bg-info-soft text-info";
+	return "border-warning-line bg-warning-soft text-warning";
 }
 
 function StatusPill({ status, label }: { status: "indexed" | "pending" | "failed" | "running"; label: string }) {
@@ -259,7 +259,7 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 				</button>
 			</div>
 
-			{msg && <div className="mb-4 text-xs text-yellow bg-yellow/10 border border-yellow/25 rounded-lg px-3 py-2">{msg}</div>}
+			{msg && <div className="mb-4 text-xs text-warning bg-warning-soft border border-warning-line rounded-lg px-3 py-2">{msg}</div>}
 
 			<div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
 				<StatBox label="Indexed sources" value={fmtCount(summary.indexedCount)} hint={`${fmtCount(vectors?.totalChunks || 0)} chunks`} />
@@ -375,12 +375,12 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 												</div>
 											</div>
 											{latest?.error || trigger.lastError ? (
-												<div className="text-xs text-red mb-2">{latest?.error || trigger.lastError}</div>
+												<div className="text-xs text-danger mb-2">{latest?.error || trigger.lastError}</div>
 											) : latest?.message ? (
 												<div className="text-xs text-muted mb-2">{latest.message}</div>
 											) : null}
 											{payload.errors?.length ? (
-												<div className="text-xs text-red mb-2">{payload.errors.slice(0, 2).join("; ")}</div>
+												<div className="text-xs text-danger mb-2">{payload.errors.slice(0, 2).join("; ")}</div>
 											) : null}
 											<div className="text-2xs text-muted-soft">
 												{latest ? `Latest event ${eventTime(latest)}` : "Waiting for first run"}

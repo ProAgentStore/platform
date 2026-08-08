@@ -14,7 +14,7 @@ interface Detail {
 	recentActivity: Array<{ id: string; ts: number; instance_id: string | null; source: string; level: string; event: string; message: string | null }>;
 }
 
-const levelColor = (l: string) => (l === "error" ? "text-red" : l === "warn" ? "text-yellow" : "text-muted");
+const levelColor = (l: string) => (l === "error" ? "text-danger" : l === "warn" ? "text-warning" : "text-muted");
 
 export default function AgentDetail() {
 	const { id } = useParams();
@@ -97,7 +97,7 @@ export default function AgentDetail() {
 									<div className="flex flex-wrap gap-1.5 mt-1">
 										{c.tools.map((t) => (
 											<span key={t.name} className="text-xs bg-paper border border-line rounded px-1.5 py-0.5 font-mono">
-												{t.name}<span className={t.scope === "write" ? "text-yellow" : "text-muted-soft"}> ·{t.scope}</span>
+												{t.name}<span className={t.scope === "write" ? "text-warning" : "text-muted-soft"}> ·{t.scope}</span>
 											</span>
 										))}
 									</div>
@@ -137,7 +137,7 @@ export default function AgentDetail() {
 										<td className="text-muted">{i.created_at?.slice(0, 10)}</td>
 										<td>
 											{i.consents.length
-												? i.consents.map((c) => <span key={`${c.connector}:${c.scope}`} className="text-xs text-yellow mr-2">{c.connector}·{c.scope}</span>)
+												? i.consents.map((c) => <span key={`${c.connector}:${c.scope}`} className="text-xs text-warning mr-2">{c.connector}·{c.scope}</span>)
 												: <span className="text-muted-soft">none</span>}
 										</td>
 										<td className="text-right"><Link to={`/instances/${i.id}`} className="text-xs text-accent hover:underline">detail →</Link></td>

@@ -72,7 +72,7 @@ export default function DeleteTurnButton({
 			// the message text (#389). Horizontal expansion is deliberately not available: Copy is
 			// 2px to the right and later-painted overlays win the hit test, so a wide one here —
 			// on the DESTRUCTIVE control — would swallow a third of it.
-			className="tap-target absolute top-1 right-8 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-red transition-opacity"
+			className="tap-target absolute top-1 right-8 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-danger transition-opacity"
 		>
 			{busy ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
 		</button>

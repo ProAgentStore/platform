@@ -91,7 +91,7 @@ export default function Browse() {
 										type="button"
 										onClick={() => subscribe(a)}
 										disabled={busy === a.id}
-										className={`flex-1 text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent/10" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
+										className={`flex-1 text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent-soft" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
 									>
 										{busy === a.id ? "Subscribing…" : sub ? "Open →" : "Subscribe"}
 									</button>

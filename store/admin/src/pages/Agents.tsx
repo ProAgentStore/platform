@@ -23,7 +23,7 @@ const VISIBILITIES = ["published", "draft", "unlisted"];
 const STATUSES = ["active", "inactive", "error"];
 
 const badge = (v: string) => (
-	<span className={v === "published" || v === "active" ? "text-green" : v === "error" ? "text-red" : "text-muted"}>{v}</span>
+	<span className={v === "published" || v === "active" ? "text-success" : v === "error" ? "text-danger" : "text-muted"}>{v}</span>
 );
 
 /**

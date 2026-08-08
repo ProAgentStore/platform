@@ -121,7 +121,7 @@ export default function RepoTab({ instanceId }: Props) {
 						{busy ? "…" : "Index"}
 					</Button>
 				</div>
-				{err && <p className="text-xs text-red mt-2">{err}</p>}
+				{err && <p className="text-xs text-danger mt-2">{err}</p>}
 				<p className="text-xs text-muted-soft mt-2">Public repos work as-is. Private repos need GitHub connected. Up to 20 repos, 300 files each.</p>
 			</div>
 
@@ -138,7 +138,7 @@ export default function RepoTab({ instanceId }: Props) {
 							<div className="flex items-center justify-between gap-2">
 								<div className="min-w-0">
 									<div className="font-bold text-sm truncate">{r.key}</div>
-									<div className={`text-xs mt-0.5 ${r.status === "error" ? "text-red" : "text-muted"}`}>
+									<div className={`text-xs mt-0.5 ${r.status === "error" ? "text-danger" : "text-muted"}`}>
 										{PHASE_LABEL[r.status]}
 										{r.status === "done" && <> · {r.total} files{r.language ? ` · ${r.language}` : ""}{r.skipped ? ` · ${r.skipped} skipped` : ""}{r.failed ? ` · ${r.failed} failed` : ""}</>}
 										{r.status === "indexing" && <> · {r.done || 0}/{r.total || 0}</>}
@@ -157,7 +157,7 @@ export default function RepoTab({ instanceId }: Props) {
 								</div>
 							)}
 							{r.status === "done" && r.description && <p className="text-sm text-muted mt-2">{r.description}</p>}
-							{r.status === "error" && <p className="text-sm text-red mt-2">{r.error || "Indexing failed."}</p>}
+							{r.status === "error" && <p className="text-sm text-danger mt-2">{r.error || "Indexing failed."}</p>}
 
 							{/* These three were bare text with no padding at all, so they rendered 16px tall
 							    — and the 16px one on the right DELETES an indexed repository, sitting

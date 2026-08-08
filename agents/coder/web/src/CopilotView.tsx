@@ -58,7 +58,7 @@ function CopyButton({ text }: { text: string }) {
 			// what the #445 overlap is measured against — is unchanged.
 			className="tap-target absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
 		>
-			{copied ? <Check size={16} className="text-green" /> : <Copy size={16} />}
+			{copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
 		</button>
 	);
 }
@@ -172,11 +172,11 @@ export default function CopilotView({
 						// Green while the mic is open; accent while voice owns the turn. The old
 						// accent "you are speaking" state keyed off the notice string, so after #281
 						// it fired on a mic ERROR and never on speech (#364).
-						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${composer.readOnly ? "border-accent" : voice.micOn ? "border-green" : "border-line"}`}
+						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${composer.readOnly ? "border-accent" : voice.micOn ? "border-success" : "border-line"}`}
 					/>
 					{voice.micOn && (
 						<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
-							<div className="h-full bg-green rounded-full transition-all" style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }} />
+							<div className="h-full bg-success rounded-full transition-all" style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }} />
 						</div>
 					)}
 				</div>
@@ -195,7 +195,7 @@ export default function CopilotView({
 			    draft and made the box read-only for the seconds it was up (#364). The live
 			    transcript is NOT here: it is the pending bubble at the end of the thread below. */}
 			{composer.notice && (
-				<output aria-live="polite" className="mx-2 mb-1 block rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-1.5 text-xs text-yellow whitespace-pre-wrap break-words">
+				<output aria-live="polite" className="mx-2 mb-1 block rounded-lg border border-warning-line bg-warning-soft px-3 py-1.5 text-xs text-warning whitespace-pre-wrap break-words">
 					{composer.notice}
 				</output>
 			)}
@@ -207,7 +207,7 @@ export default function CopilotView({
 					{([
 						{ id: "text", label: "Chat", icon: <MessageSquare size={15} />, title: "Chat: type and read replies — no voice", on: "border-accent bg-accent text-white" },
 						{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
-						{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-green bg-green text-white" },
+						{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-success bg-success text-white" },
 					] as const).map((m) => (
 						<button
 							key={m.id}
@@ -216,7 +216,7 @@ export default function CopilotView({
 							aria-busy={voice.starting && m.id === "handsfree"}
 							title={m.title}
 							onClick={() => voice.setVoiceMode(m.id)}
-							className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+							className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-success-soft text-success" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
 						>
 							{/* #284: the mic takes a config read + getUserMedia to open, and until this spinner
 							    the control looked untouched for that whole window. It clears when listening
@@ -234,7 +234,7 @@ export default function CopilotView({
 				    adding a condition here; the guard is checked by
 				    store/console/src/pages/mute-touch-invariant.test.ts. */}
 				{voice.mode === "handsfree" && (
-					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-danger bg-danger text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
 						<MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span>
 					</button>
 				)}
@@ -253,9 +253,9 @@ export default function CopilotView({
 					))}
 				</div>
 				{loop.loopOn ? (
-					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative">
+					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-success bg-success-soft text-success rounded-lg relative">
 						<Square size={13} />
-						<span className="absolute -top-1 -right-1 text-2xs bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
+						<span className="absolute -top-1 -right-1 text-2xs bg-success text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 					</button>
 				) : (
 					<button type="button" onClick={() => { const next = !loop.showLoopForm; loop.setShowLoopForm(next); if (next && workMode === "issues" && !loop.proposedIssue) loop.proposeNextIssue(); }} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
@@ -282,7 +282,7 @@ export default function CopilotView({
 									<button
 										type="button"
 										onClick={() => { setShowChatMenu(false); onClearChat(); }}
-										className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"
+										className="w-full flex items-center gap-2 px-3 py-2 text-xs text-danger hover:bg-danger-soft transition-colors"
 									>
 										<Trash2 size={13} /> Clear messages
 									</button>
@@ -364,7 +364,7 @@ export default function CopilotView({
 				onClick={(e) => handleThreadTap(e.target)}
 				onKeyDown={activateOnKeyboard(() => handleThreadTap(document.activeElement))}
 				onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
-				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
+				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-success" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 			>
 				{summaryHistory.map((m, i) => {
 					// Shared classification (SDK) — this heuristic was duplicated here and in the
@@ -383,7 +383,7 @@ export default function CopilotView({
 					}
 					if (classifyMessage(m) === "system") {
 						return (
-							<div key={messageKey(m)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
+							<div key={messageKey(m)} className="bg-warning-soft text-warning self-center rounded-full px-4 py-1.5 text-xs border border-warning-line max-w-[90%]">
 								<span className="whitespace-pre-wrap break-words">{m.content}</span>
 							</div>
 						);
@@ -421,7 +421,7 @@ export default function CopilotView({
 					<div
 						aria-live="polite"
 						className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text self-end rounded-br-sm border border-dashed ${
-							voice.dictation.status === "failed" ? "bg-red/10 border-red/50 text-red" : "bg-accent/60 border-white/40 text-white"
+							voice.dictation.status === "failed" ? "bg-danger-soft border-danger-line text-danger" : "bg-accent/60 border-white/40 text-white"
 						}`}
 					>
 						<div className="text-2xs opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
@@ -470,7 +470,7 @@ export default function CopilotView({
 				if (!s) return null;
 				const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
 					: s.tone === "speak" ? "bg-accent text-white ring-4 ring-accent/25"
-					: s.tone === "live" ? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
+					: s.tone === "live" ? "bg-success text-white ring-4 ring-success-line animate-pulse scale-105"
 					: "bg-panel border border-line text-muted hover:text-accent hover:border-accent";
 				const StatusIcon = s.icon === "spin" ? Loader2 : s.icon === "speak" ? Volume2 : Mic;
 				return (
