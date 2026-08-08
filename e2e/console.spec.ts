@@ -3275,6 +3275,71 @@ test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)",
 		});
 	}
 
+	/**
+	 * A microphone that is silent, synthetic, and NOT the developer's (#462).
+	 *
+	 * Entering hands-free opens a real capture device: the Whisper recorder calls
+	 * `getUserMedia` (`packages/sdk/src/voice/stt.ts`) and the level monitor reuses that stream
+	 * (`use-voice.ts`). Unstubbed, this block took over the machine's microphone mid-work and
+	 * asked macOS for permission — the one Web API here still wired to hardware, while
+	 * `speechSynthesis` and `SpeechRecognition` above are stubbed. It also made the toggle a
+	 * race against a hardware open, which is what the removed 25s retry was absorbing.
+	 *
+	 * Stubbed in the page rather than granted as a permission or faked with a launch flag:
+	 * Playwright's WebKit rejects the `microphone` permission, and `--use-fake-*-for-media-stream`
+	 * is Chromium-only — either one in top-level `use` would apply to both projects. An init
+	 * script is engine-agnostic and needs no config change.
+	 *
+	 * The stream carries a real `MediaStreamAudioDestinationNode` track, not a bare
+	 * `new MediaStream()`: teardown does `stream.getTracks()[0].stop()` and `MediaRecorder`
+	 * will not record a track-less stream. A FRESH destination per call, because the recorder
+	 * and the monitor may each hold one and either may stop its own.
+	 *
+	 * The second init script is the LATCH, and it is what keeps this fixed. The stub shadows
+	 * `navigator.mediaDevices` with a plain object, so a stubbed call never reaches
+	 * `MediaDevices.prototype` — which leaves the prototype free to stand in for the real
+	 * device and refuse. Measured both ways on 2026-08-09: with the stub the counter reads 0 in
+	 * chromium AND webkit; with it removed it reads 1 per test in both. Rejecting rather than
+	 * counting-and-delegating is the point — a regression must not open the device even once —
+	 * and `expectNoRealMicrophone` is asserted straight after the toggle so the failure names
+	 * the microphone rather than surfacing as a pill that never said "Listening".
+	 */
+	async function silenceTheMicrophone(page: Page) {
+		await page.addInitScript(() => {
+			let ctx: AudioContext | null = null;
+			const silentStream = () => {
+				ctx ??= new AudioContext();
+				return ctx.createMediaStreamDestination().stream;
+			};
+			Object.defineProperty(navigator, "mediaDevices", {
+				configurable: true,
+				value: {
+					getUserMedia: async () => silentStream(),
+					enumerateDevices: async () => [
+						{ kind: "audioinput", deviceId: "fake", label: "Fake mic", groupId: "" },
+					],
+					// `MediaDevices` members live on the prototype, so a spread of the real object
+					// would copy nothing — the listener pair is written out instead of implied.
+					addEventListener: () => {},
+					removeEventListener: () => {},
+				},
+			});
+		});
+		await page.addInitScript(() => {
+			(window as unknown as { __realMicCalls: number }).__realMicCalls = 0;
+			MediaDevices.prototype.getUserMedia = function () {
+				(window as unknown as { __realMicCalls: number }).__realMicCalls++;
+				return Promise.reject(new DOMException("e2e must not open the real microphone (#462)", "NotAllowedError"));
+			} as typeof MediaDevices.prototype.getUserMedia;
+		});
+	}
+
+	/** The latch, read back: nothing in this page ever asked the machine for its microphone. */
+	async function expectNoRealMicrophone(page: Page) {
+		const calls = await page.evaluate(() => (window as unknown as { __realMicCalls: number }).__realMicCalls);
+		expect(calls, "something reached the REAL getUserMedia — the mic stub is gone or bypassed (#462), and a local run would take over the developer's microphone").toBe(0);
+	}
+
 	/** The ADR's known hole, made real: a browser where the control listener cannot exist. */
 	async function removeWebSpeech(page: Page) {
 		await page.addInitScript(() => {
@@ -3295,6 +3360,7 @@ test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)",
 	for (const webSpeech of [true, false]) {
 		test(`mobile — reachable while listening, working, speaking and muted${webSpeech ? "" : ", with no Web Speech API"}`, async ({ page }) => {
 			await holdTheAgentTalking(page);
+			await silenceTheMicrophone(page);
 			if (!webSpeech) await removeWebSpeech(page);
 			await mockSignedInConsole(page);
 
@@ -3322,17 +3388,16 @@ test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)",
 			const pill = page.locator("[aria-live='polite']").filter({ hasText: /Hands-free|Listening|Working|Speaking|Muted/ }).first();
 
 			// ── listening ────────────────────────────────────────────────────────────────────
-			// Entering hands-free is SETUP, not the claim, and it is the one step here that depends
-			// on a hardware device: `toggleConvo` awaits a config read and `getUserMedia`, and on a
-			// loaded machine that can lose the race with the click. Retried rather than given a
-			// longer single timeout, because the failure mode is a start that did not take, not a
-			// start that was slow. A repeat press cannot double-open the mic — `setVoiceMode`
-			// returns early once the mode matches, and `resolveToggleAction` answers "ignore" while
-			// a start is still in flight (#284). Everything after this point is asserted once.
-			await expect(async () => {
-				await page.getByTitle(/^Hands-free:/).click();
-				await expect(pill).toHaveText(/Listening|Hands-free/, { timeout: 5_000 });
-			}).toPass({ timeout: 25_000 });
+			// Entering hands-free is SETUP, not the claim. `toggleConvo` awaits a config read and
+			// `getUserMedia`; both are now answered in-process (the route mock and
+			// `silenceTheMicrophone`), so the press has nothing hardware-shaped to lose a race
+			// against. The `toPass({ timeout: 25_000 })` that used to wrap this is deliberately
+			// GONE (#462): it existed only to re-press through a device open that did not take,
+			// and a retry that wide over a deterministic step hides regressions instead of
+			// absorbing noise. If this ever needs re-pressing again, that is a defect to report.
+			await page.getByTitle(/^Hands-free:/).click();
+			await expect(pill).toHaveText(/Listening|Hands-free/, { timeout: 10_000 });
+			await expectNoRealMicrophone(page);
 			await expectMuteReachable(page, "listening");
 
 			// ── speaking (the agent is talking) ──────────────────────────────────────────────
