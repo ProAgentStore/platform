@@ -219,15 +219,20 @@ describe("terminal persistence (#coding-transcript)", () => {
 		expect(routeSrc()).toContain('type: "terminal"');
 	});
 
-	it("writes only at the END of a turn, not on every poll", () => {
-		// /capture runs every 3s per open session; a read+write per poll would be a lot of D1
-		// for a pane that is not moving.
-		expect(routeSrc()).toContain('runState === "idle"');
+	it("delegates WHEN to write to the tested rule, rather than re-deciding it here", () => {
+		// The gate was `runState === "idle"` inline. That optimised the case where nothing is
+		// happening and failed the case where everything is: a session busy since it started never
+		// reached it, so a 40-step Loop run persisted nothing at all (#432). The replacement is
+		// changed + (idle OR throttled) and lives in lib/terminal-snapshot.ts, where the interval
+		// and the UTC-without-a-zone timestamp parse are both tested.
+		expect(routeSrc()).toContain("shouldPersistSnapshot");
+		expect(routeSrc()).not.toContain('runState === "idle"');
 	});
 
-	it("dedupes against the last saved snapshot", () => {
-		// An idle session polls forever; without this it would append an identical row each time.
-		expect(routeSrc()).toContain("lastTerminal");
+	it("dedupes against the last saved snapshot, and dates it", () => {
+		// An idle session polls forever; without the dedup it would append an identical row each
+		// time. The timestamp is what the throttle measures against.
+		expect(routeSrc()).toContain("lastTerminalRow");
 	});
 
 	it("caps what it stores", () => {

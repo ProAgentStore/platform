@@ -13,7 +13,8 @@ import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type
 import { parseRepoInput } from "./repo-input";
 import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
-import { chatMessagesFrom, lastTerminalSnapshot, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
+import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
+import { useTerminalScrollback } from "./use-terminal-scrollback";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
@@ -101,13 +102,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [openError, setOpenError] = useState<string | null>(null);
 	// With no Co-pilot there is only one view, and it is the terminal.
 	const [view, setView] = useState<"summary" | "terminal">(copilot ? "summary" : "terminal");
-	const [terminalText, setTerminalText] = useState("(waiting...)");
-	// Last persisted tmux snapshot (coding_timeline, DB) — shown in the Terminal view when
-	// the session has no LIVE pane (ended, or the runner isn't attached), so the terminal
-	// history you saw before doesn't vanish to a blank screen. `terminalLive` tracks whether
-	// what's on screen is the live pane vs this saved fallback.
-	const [savedTerminal, setSavedTerminal] = useState("");
-	const [terminalLive, setTerminalLive] = useState(false);
 	// The REPO's history, across every session it has ever had (#257).
 	//
 	// "Why do I always see 'Start a session'? I should see history forever — from the DB, not
@@ -199,6 +193,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<HTMLPreElement>(null);
+	// The Terminal view's scrollback (#432): the persisted snapshots, paged by `seq` and stitched
+	// into one continuous pane, plus the live capture folded on top. Lives in its own hook — see
+	// ./use-terminal-scrollback for why it is not inlined here.
+	const term = useTerminalScrollback(instanceId, termRef);
+	const terminalText = term.text;
 
 	// Voice: wire to Co-pilot sendInstruction (meta.audioKey = saved recording for replay)
 	const sendInstructionRef = useRef<(text: string, audioKey?: string) => void>(() => {});
@@ -339,14 +338,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	}, [instanceId, openSession]);
 
-	const termTextRef = useRef(terminalText);
-	termTextRef.current = terminalText;
-	const savedTerminalRef = useRef(savedTerminal);
-	savedTerminalRef.current = savedTerminal;
+	const applyCapture = term.applyCapture;
+	const openTerm = term.open;
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ pane?: string; runState?: string; authPrompt?: AuthPrompt; runnerConnected?: boolean; auth?: EngineAuthReport }>(
+			const d = await api<{ pane?: string; runState?: string; alive?: boolean; authPrompt?: AuthPrompt; runnerConnected?: boolean; auth?: EngineAuthReport }>(
 				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`,
 			);
 			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
@@ -362,18 +359,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// unchanged-text early return below, or a stable pane re-freezes the badge.
 			setRepoStatuses((s) => (s[openSession.repoId] === (d.runState || "idle") ? s : { ...s, [openSession.repoId]: d.runState || "idle" }));
 			if (typeof d.runnerConnected === "boolean") setCaptureOnline(d.runnerConnected);
-			const live = (d.pane || "").trim() ? (d.pane as string) : "";
-			// No live tmux (ended session / detached runner) → fall back to the last saved
-			// snapshot from the DB instead of blanking the terminal.
-			const newText = live || savedTerminalRef.current || "(waiting for output...)";
-			setTerminalLive(!!live);
-			// Skip update if text unchanged or user is selecting text
-			if (newText === termTextRef.current) return;
-			const sel = window.getSelection();
-			if (sel && sel.toString().length > 0 && termRef.current?.contains(sel.anchorNode)) return;
-			setTerminalText(newText);
+			// Fold the live pane into the stored scrollback (#432). It is not a REPLACEMENT for
+			// the history — it is the same growing transcript — so it is stitched on, and when
+			// there is neither the empty state says WHICH of the four causes applies.
+			applyCapture(d);
 		} catch {}
-	}, [instanceId, openSession]);
+	}, [instanceId, openSession, applyCapture]);
 
 	// State of the currently-open session — the terminal poll's busy signal AND the header badge
 	// (CODER-005). Reconciled once, in ./repo-status, so the badge and the repo row cannot answer
@@ -429,26 +420,22 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		setView(copilot ? "summary" : "terminal");
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding/${session.id}`, { replace: true });
-		setTerminalText("(waiting...)");
-		setSavedTerminal("");
-		setTerminalLive(false);
 		// Ensure session is live
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
 		} catch {}
-		// Load history — ?full=1 so we get BOTH the chat AND the persisted terminal snapshots.
+		// Two reads, not one `?full=1` (#432). That read shipped the session's ENTIRE typed
+		// timeline — every 8000-char terminal snapshot — so the client could keep the last one and
+		// discard the rest. The chat is unpaged (it always was); the terminal takes the newest
+		// PAGE of snapshots and can walk backwards from there.
+		openTerm(session.id);
 		try {
-			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline?full=1`);
+			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
 			setSummaryHistory(chatMessagesFrom(d));
-			// Last persisted terminal snapshot → the Terminal view's DB fallback. Show it right
-			// away so the terminal isn't blank before the first live capture; a live pane
-			// (if the session is running) overwrites it on the next poll.
-			const saved = lastTerminalSnapshot(d);
-			if (saved) { setSavedTerminal(saved); setTerminalText(saved); }
 		} catch (e) {
 			console.error("[coding] timeline load failed:", e);
 		}
-	}, [instanceId, navigate, copilot]);
+	}, [instanceId, navigate, copilot, openTerm]);
 
 	// Auto-open a session on mount ONLY for a deep link (URL session id), a one-repo agent's live
 	// session, or the repo the user was last working on (persisted). With none of those, land on
@@ -691,7 +678,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		if (!openSession) return;
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/restart`, { method: "POST" });
-			setTerminalText("(restarting CLI...)");
+			term.setText("(restarting CLI...)");
 			setSummaryHistory([]);
 		} catch (e) {
 			alert("Restart failed: " + (e instanceof Error ? e.message : String(e)));
@@ -1016,7 +1003,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							termRef={termRef}
 							termAutoScroll={termAutoScroll}
 							setTermAutoScroll={setTermAutoScroll}
-							stale={!terminalLive && !!savedTerminal}
+							stale={!term.live && !!term.saved}
+							hasOlder={term.hasOlder}
+							loadingOlder={term.loadingOlder}
+							onLoadOlder={() => { if (openSession) term.loadOlder(openSession.id); }}
 						/>
 					) : (
 						<div className="flex-1 min-h-0 flex flex-col">
@@ -1181,7 +1171,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						termRef={termRef}
 						termAutoScroll={termAutoScroll}
 						setTermAutoScroll={setTermAutoScroll}
-						stale={!terminalLive && !!savedTerminal}
+						stale={!term.live && !!term.saved}
+						hasOlder={term.hasOlder}
+						loadingOlder={term.loadingOlder}
+						onLoadOlder={() => { if (openSession) term.loadOlder(openSession.id); }}
 					/>
 				)}
 				{settingsModal}

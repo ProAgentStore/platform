@@ -135,14 +135,57 @@ export async function loadRepoTimeline(
 	return (results ?? []).map(toEntry).reverse();
 }
 
+/**
+ * A page of a session's terminal snapshots, newest page first (#432).
+ *
+ * The terminal had no scrollback: `?full=1` shipped every `terminal` row of the session and the
+ * client kept the LAST one and dropped the rest. So the payload was already the size of the whole
+ * history while the UI could only ever show one pane of it.
+ *
+ * The cursor is a keyset on `seq`: `before` is EXCLUSIVE, rows come back oldest→newest (render
+ * order), and `hasMore` says whether anything older exists. `seq` is the table's AUTOINCREMENT
+ * primary key, so it is stable, gapless-enough and already indexed by `(session_id, type, seq)` —
+ * no offset scan, and a row appended mid-scroll cannot shift a page. Deliberately the same
+ * `before`/`limit`/`hasMore` shape the chat thread needs (#428), so one convention covers both.
+ */
+export async function loadTerminalSnapshots(
+	env: Env,
+	args: { sessionId: string; before?: number; limit?: number },
+): Promise<{ entries: TimelineEntry[]; hasMore: boolean; oldestSeq: number | null }> {
+	const limit = Math.max(1, Math.min(50, args.limit ?? 5));
+	const before = Number.isFinite(args.before) && (args.before as number) > 0 ? (args.before as number) : Number.MAX_SAFE_INTEGER;
+	// One row over the limit, purely to answer `hasMore` without a second COUNT query.
+	const { results } = await env.DB.prepare(
+		"SELECT seq, type, content, created_at, audio_key FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
+	)
+		.bind(args.sessionId, before, limit + 1)
+		.all<Row>();
+	const rows = results ?? [];
+	const hasMore = rows.length > limit;
+	const page = (hasMore ? rows.slice(0, limit) : rows).map(toEntry).reverse();
+	return { entries: page, hasMore, oldestSeq: page.length ? page[0].seq : null };
+}
+
 /** The most recent stored terminal snapshot (used to dedupe before storing a new one). */
 export async function lastTerminal(env: Env, sessionId: string): Promise<string | null> {
+	return (await lastTerminalRow(env, sessionId))?.content ?? null;
+}
+
+/**
+ * The most recent terminal snapshot AND when it was written.
+ *
+ * `lastTerminal` above keeps its exact signature — eight call sites want the text and nothing
+ * else. The write gate in `/capture` needs the timestamp too, because it now throttles instead of
+ * waiting for idle (#432, `lib/terminal-snapshot.ts`), and `created_at` is UTC without a zone
+ * suffix, which is why the parsing is done there rather than assumed here.
+ */
+export async function lastTerminalRow(env: Env, sessionId: string): Promise<{ content: string; createdAt: string } | null> {
 	const row = await env.DB.prepare(
-		"SELECT content FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' ORDER BY seq DESC LIMIT 1",
+		"SELECT content, created_at FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' ORDER BY seq DESC LIMIT 1",
 	)
 		.bind(sessionId)
-		.first<{ content: string }>();
-	return row?.content ?? null;
+		.first<{ content: string; created_at: string }>();
+	return row ? { content: row.content, createdAt: row.created_at } : null;
 }
 
 /**

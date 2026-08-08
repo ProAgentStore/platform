@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatMessagesFrom, lastTerminalSnapshot, timelineExcerpt } from "./timeline-chat";
+import { chatMessagesFrom, timelineExcerpt } from "./timeline-chat";
 import type { TimelineEntry } from "./types";
 
 const e = (type: string, over: Partial<TimelineEntry> = {}): TimelineEntry => ({ type, content: type, ...over });
@@ -67,23 +67,14 @@ describe("which half of the payload is read", () => {
 		expect(chatMessagesFrom({ timeline: FULL })).toHaveLength(5);
 	});
 
-	it("`?full=1` buys the terminal snapshot, NOT a richer transcript", () => {
+	it("reads the typed `timeline` only when there is no `chat` — which is most of what `?full=1` buys", () => {
 		// Worth stating plainly, because the route's own comment says full=1 exists "so the whole
 		// session can be copied as JSON": `chat` is non-empty whenever there is any conversation
-		// at all, so the typed `timeline` half is unreachable through these readers except here.
-		expect(lastTerminalSnapshot({ chat: FULL })).toBe("");
-		expect(lastTerminalSnapshot({ timeline: FULL })).toBe("all green");
-	});
-
-	it("takes the LAST terminal row, trimmed", () => {
-		expect(lastTerminalSnapshot({ timeline: FULL })).toBe("all green");
-	});
-
-	it("answers empty string — not null — when there is no snapshot", () => {
-		// The caller only tests it for truthiness, and `if (saved)` on a null would still be
-		// right; the type is what stops the next caller from rendering "null" into a <pre>.
-		expect(lastTerminalSnapshot({})).toBe("");
-		expect(lastTerminalSnapshot({ timeline: [e("terminal", { content: "   " })] })).toBe("");
+		// at all, so the typed `timeline` half is unreachable through these readers. The terminal
+		// snapshots it carries are read by ./terminal-history now, from a PAGED route (#432) — the
+		// deleted `lastTerminalSnapshot` fetched every one of them and kept only the last.
+		expect(chatMessagesFrom({ chat: [e("chat_user", { content: "x" })], timeline: FULL })).toHaveLength(1);
+		expect(chatMessagesFrom({ timeline: FULL })).toHaveLength(5);
 	});
 });
 

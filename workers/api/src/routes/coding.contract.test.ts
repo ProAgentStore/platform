@@ -758,3 +758,102 @@ describe("POST …/message and the keystroke that was never delivered (#448)", (
 		expect(sent[0].body.action).toEqual({ kind: "message", text: "run the tests" });
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. The terminal has a scrollback, and it is paged (#432)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("GET …/timeline?terminal=1 — a page of snapshots, not the whole session", () => {
+	/** A D1 that owns everything and answers the terminal query with `rows`, recording the SQL. */
+	function pagedEnv(rows: Array<{ seq: number; content: string }>) {
+		const issued: Statement[] = [];
+		const DB = {
+			prepare(sql: string) {
+				const flat = sql.replace(/\s+/g, " ").trim();
+				const stmt = {
+					_binds: [] as unknown[],
+					bind(...binds: unknown[]) {
+						stmt._binds = binds;
+						issued.push({ sql: flat, binds });
+						return stmt;
+					},
+					first: async () =>
+						/SELECT id FROM agent_instances/.test(flat)
+							? { id: "inst-1" }
+							: /FROM coding_sessions/.test(flat)
+								? { id: "csess-1", instance_id: "inst-1", repo_id: "repo-1", user_id: "owner-uid", status: "active" }
+								: null,
+					all: async () =>
+						/type = 'terminal'/.test(flat)
+							? { results: rows.map((r) => ({ seq: r.seq, type: "terminal", content: r.content, created_at: "2026-08-09 07:00:00", audio_key: null })) }
+							: { results: [] },
+					run: async () => ({ meta: { changes: 1 } }),
+				};
+				return stmt;
+			},
+		};
+		return { DB, issued };
+	}
+
+	async function read(query: string, rows: Array<{ seq: number; content: string }>) {
+		const { DB, issued } = pagedEnv(rows);
+		const env = { SESSION_SIGNING_KEY: SECRET, DB } as unknown as Env;
+		const token = await signSession("owner-uid", SECRET, { roles: ["user"] });
+		const res = await ownerApp().request(
+			`/v1/instances/inst-1/coding/sessions/csess-1/timeline${query}`,
+			{ headers: { Authorization: `Bearer ${token}` } },
+			env,
+		);
+		return { status: res.status, body: (await res.json()) as { terminal?: Array<{ seq: number }>; hasMore?: boolean; oldestSeq?: number | null }, issued };
+	}
+
+	it("returns the newest page oldest→newest, with the cursor for the next one back", async () => {
+		// The rows come back `seq DESC` (the cap has to keep the LATEST) and are reversed for
+		// render order. `oldestSeq` is what "Load older" passes as `before`.
+		const { status, body } = await read("?terminal=1", [
+			{ seq: 30, content: "c" },
+			{ seq: 20, content: "b" },
+			{ seq: 10, content: "a" },
+		]);
+		expect(status).toBe(200);
+		expect(body.terminal?.map((e) => e.seq)).toEqual([10, 20, 30]);
+		expect(body.oldestSeq).toBe(10);
+	});
+
+	it("asks for one row more than the page, and reports `hasMore` without a second query", async () => {
+		// A COUNT would double the query cost of the hottest read on the surface.
+		const rows = Array.from({ length: 6 }, (_, i) => ({ seq: 60 - i * 10, content: `s${i}` }));
+		const { body, issued } = await read("?terminal=1&limit=5", rows);
+		const q = issued.find((s) => /type = 'terminal'/.test(s.sql));
+		expect(q?.binds).toContain(6);
+		expect(body.terminal).toHaveLength(5);
+		expect(body.hasMore).toBe(true);
+	});
+
+	it("says `hasMore:false` when the page is not full, so the control disappears", async () => {
+		const { body } = await read("?terminal=1&limit=5", [{ seq: 10, content: "a" }]);
+		expect(body.hasMore).toBe(false);
+	});
+
+	it("binds `before` as an EXCLUSIVE seq cursor — a keyset, not an offset", async () => {
+		// An OFFSET page shifts under an append, and `/capture` appends to this exact table while
+		// the user is scrolling. A `seq <` cursor cannot.
+		const { issued } = await read("?terminal=1&before=20", [{ seq: 10, content: "a" }]);
+		const q = issued.find((s) => /type = 'terminal'/.test(s.sql));
+		expect(q?.sql).toContain("seq < ?2");
+		expect(q?.binds[1]).toBe(20);
+	});
+
+	it("ignores a junk cursor rather than answering an empty page", async () => {
+		const { status, body } = await read("?terminal=1&before=nonsense", [{ seq: 10, content: "a" }]);
+		expect(status).toBe(200);
+		expect(body.terminal).toHaveLength(1);
+	});
+
+	it("caps `limit`, so a caller cannot ask for the whole session back", async () => {
+		// The payload problem is the reason the route was paged at all: 8000 chars a snapshot.
+		const { issued } = await read("?terminal=1&limit=9999", []);
+		const q = issued.find((s) => /type = 'terminal'/.test(s.sql));
+		expect(q?.binds[2]).toBe(51); // 50 (the cap) + the has-more probe row
+	});
+});

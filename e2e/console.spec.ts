@@ -1718,6 +1718,81 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.locator('span[style*="color:#4ade80"]')).toBeVisible();
 	});
 
+	/**
+	 * The Terminal has a scrollback, and an empty one says WHY it is empty (#432).
+	 *
+	 * Two defects behind one placeholder. `?full=1` fetched every persisted snapshot and the
+	 * client kept the last, so the view was one pane forever — "load older" had nothing to load
+	 * because nothing was ever kept. And `(waiting for output...)` was shown for four causes:
+	 * runner offline, history not loaded, engine busy with nothing persisted, and genuinely no
+	 * output. The first is the only one with a command attached, and it was never named.
+	 */
+	const codingRoutes = (page: import("@playwright/test").Page, opts: { capture: unknown; pages: Record<string, unknown> }) =>
+		page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [{ id: "repo-1", name: "test-repo", workdir: "~/test", cloneStatus: "ready" }] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/capture")) return json(opts.capture);
+			if (url.includes("/start")) return json({ ok: true });
+			if (url.includes("terminal=1")) {
+				const before = new URL(url).searchParams.get("before") ?? "";
+				return json(opts.pages[before] ?? { terminal: [], hasMore: false, oldestSeq: null });
+			}
+			if (url.includes("/timeline")) return json({ chat: [] });
+			if (url.includes("/sessions")) return json({ sessions: [{ id: "sess-1", repoId: "repo-1", status: "active" }] });
+			return json({});
+		});
+
+	const openTerminalTab = async (page: import("@playwright/test").Page) => {
+		await mockSignedInConsole(page, {
+			instances: [{ id: "inst-1", name: "Coder", slug: "coder", category: "code", capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }],
+		});
+	};
+
+	test("terminal scrolls back through earlier snapshots, loading older on demand (#432)", async ({ page }) => {
+		await openTerminalTab(page);
+		await codingRoutes(page, {
+			// No live pane: this is the reopened-session case, which is where the history matters.
+			capture: { pane: "", runState: "idle", alive: true, runnerConnected: true },
+			pages: {
+				// Newest page. `oldestSeq` is the cursor "Load earlier output" pages back with.
+				"": { terminal: [{ seq: 20, type: "terminal", content: "step-two-output" }], hasMore: true, oldestSeq: 20 },
+				"20": { terminal: [{ seq: 10, type: "terminal", content: "step-one-output" }], hasMore: false, oldestSeq: 10 },
+			},
+		});
+		await page.goto("/console/instances/inst-1");
+		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Open", exact: true }).click();
+		await page.getByRole("button", { name: "Terminal", exact: true }).click();
+
+		// The newest page is on screen, and the older one is NOT — that is the point of paging.
+		await expect(page.locator("pre").getByText("step-two-output")).toBeVisible();
+		await expect(page.locator("pre").getByText("step-one-output")).toBeHidden();
+
+		await page.locator("#term-load-older").click();
+		await expect(page.locator("pre").getByText("step-one-output")).toBeVisible();
+		// Both, in order: the older page is PREPENDED, not substituted.
+		await expect(page.locator("pre").getByText("step-two-output")).toBeVisible();
+		// Nothing older left → the control goes away rather than paging forever into nothing.
+		await expect(page.locator("#term-load-older")).toBeHidden();
+	});
+
+	test("an empty terminal names which of the four causes applies (#432)", async ({ page }) => {
+		await openTerminalTab(page);
+		await codingRoutes(page, {
+			capture: { pane: "", runState: "idle", alive: false, runnerConnected: false },
+			pages: { "": { terminal: [], hasMore: false, oldestSeq: null } },
+		});
+		await page.goto("/console/instances/inst-1");
+		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Open", exact: true }).click();
+		await page.getByRole("button", { name: "Terminal", exact: true }).click();
+		// The one cause with a command attached, and it outranks the rest.
+		await expect(page.locator("pre").getByText(/pags up/)).toBeVisible();
+		await expect(page.locator("pre").getByText("(waiting for output...)")).toBeHidden();
+	});
+
 	test("instance chat shows error message on API failure", async ({
 		page,
 	}) => {

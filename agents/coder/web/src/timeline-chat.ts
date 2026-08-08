@@ -59,18 +59,11 @@ export function chatMessagesFrom(payload: TimelinePayload): ChatMessage[] {
 	return out;
 }
 
-/**
- * The last persisted terminal snapshot — the Terminal view's fallback when there is no live pane
- * (ended session, detached runner), so finishing a run does not blank the screen.
- *
- * Reads `timeline` ONLY: terminal rows are not part of `chat`, so this is empty unless the caller
- * asked for `?full=1`. Empty string, not null — the caller only ever tests it for truthiness.
- */
-export function lastTerminalSnapshot(payload: TimelinePayload): string {
-	const terminals = (payload.timeline || []).filter((e) => e.type === "terminal");
-	const last = terminals[terminals.length - 1];
-	return (last?.content || last?.text || "").trim();
-}
+// `lastTerminalSnapshot` lived here and is gone (#432). It took a `?full=1` payload — the whole
+// session's typed timeline, every 8000-char terminal row of it — filtered to the `terminal` rows
+// and returned the LAST one, discarding the rest in the client after they had crossed the network.
+// That was the entire scrollback model: one pane, most recent, or nothing. The rows are paged by
+// `seq` now (`?terminal=1&before=…`) and joined by `stitchSnapshots` in ./terminal-history.
 
 /**
  * What the ⧉ button puts on the clipboard: the tail of the conversation, flattened.

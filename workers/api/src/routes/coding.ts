@@ -13,7 +13,8 @@ import {
 	type EngineAuth,
 	type EngineAuthResolved,
 } from "../lib/coding-engines.js";
-import { appendTimeline, clearChat, lastTerminal, loadChat, loadRepoTimeline, loadTimeline } from "../lib/coding-timeline.js";
+import { appendTimeline, clearChat, lastTerminalRow, loadChat, loadRepoTimeline, loadTerminalSnapshots, loadTimeline } from "../lib/coding-timeline.js";
+import { shouldPersistSnapshot } from "../lib/terminal-snapshot.js";
 import { logError } from "../lib/error-log.js";
 import {
 	claimSessionDriver,
@@ -249,18 +250,21 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// instead of the owner watching a dead terminal and concluding the platform is broken.
 	const authPrompt = detectAuthPrompt(String((snap as { pane?: unknown }).pane ?? ""));
 
-	// Persist the transcript at the END of a turn. Until now the ONLY writer was /explain (the
-	// Co-pilot), so anyone working in the Terminal view had nothing saved at all: the pane lived
-	// in the runner's memory and died with `pags up`. Worse, the stale snapshot from a previous
-	// session kept rendering, which is how a fixed error message went on being displayed.
+	// Persist the transcript. Until #275 the ONLY writer was /explain (the Co-pilot), so anyone
+	// working in the Terminal view had nothing saved at all: the pane lived in the runner's memory
+	// and died with `pags up`.
 	//
-	// Gated on idle + changed rather than written on every poll: /capture runs every 3s per open
-	// session, and a read+write on each would be a lot of D1 for a pane that is not moving.
+	// The gate was an inline "idle AND changed" test, which optimised the case where nothing is
+	// happening and failed the case where everything is — a session busy since it started never
+	// reached it, so a 40-step Loop run persisted NOTHING and reopening the tab showed the empty
+	// placeholder over an hour of real work (#432). It is now changed + (idle OR throttled), which
+	// leaves idle behaviour identical and adds coverage during a run. The arithmetic and the
+	// SQLite-timestamp parsing are in `lib/terminal-snapshot.ts`, tested.
 	const pane = String((snap as { pane?: unknown }).pane ?? "");
 	const runState = String((snap as { runState?: unknown }).runState ?? "");
-	if (pane.trim() && runState === "idle") {
-		const last = await lastTerminal(c.env, sessionId);
-		if (pane.trim() !== (last ?? "").trim()) {
+	if (pane.trim()) {
+		const last = await lastTerminalRow(c.env, sessionId);
+		if (shouldPersistSnapshot({ pane, lastContent: last?.content ?? null, lastAt: last?.createdAt ?? null, runState, now: Date.now() })) {
 			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: pane.slice(-8000) }).catch(() => undefined);
 		}
 	}
@@ -415,8 +419,28 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) =
 	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
 	if (!session) throw new HttpError(404, "Session not found");
 	await touchSessionActivity(c.env, instanceId, uid, session.id);
-	// ?full=1 → include the full typed timeline (chat + terminal snapshots + brain
-	// decisions + commands + outcomes) so the whole session can be copied as JSON.
+	// ?terminal=1 → a PAGE of terminal snapshots, for the Terminal view's scrollback (#432).
+	//
+	// This is the read the console makes when a session opens, and it exists because `?full=1`
+	// was being used for it: the whole typed timeline crossed the network so the client could
+	// keep the last `terminal` row and throw the rest away. A long run at 8000 chars a snapshot
+	// is a large payload for one visible pane, and there was no way to ask for the older ones.
+	// `before` is an exclusive `seq` cursor, `limit` is bounded in the store, and `hasMore` says
+	// whether "Load older" has anything to load.
+	if (c.req.query("terminal") === "1") {
+		const before = Number.parseInt(c.req.query("before") ?? "", 10);
+		const limit = Number.parseInt(c.req.query("limit") ?? "", 10);
+		const page = await loadTerminalSnapshots(c.env, {
+			sessionId: session.id,
+			before: Number.isFinite(before) ? before : undefined,
+			limit: Number.isFinite(limit) ? limit : undefined,
+		});
+		return c.json({ terminal: page.entries, hasMore: page.hasMore, oldestSeq: page.oldestSeq });
+	}
+	// ?full=1 → the full typed timeline (chat + terminal snapshots + brain decisions + commands
+	// + outcomes). Kept unpaged on purpose: its one caller is the ⧉ "copy this session as JSON"
+	// button, an explicit one-shot action where the whole thing IS what was asked for. The
+	// console's session-open path no longer uses it.
 	if (c.req.query("full") === "1") {
 		return c.json({ chat: await loadChat(c.env, session.id), timeline: await loadTimeline(c.env, session.id) });
 	}

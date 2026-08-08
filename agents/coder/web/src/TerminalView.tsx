@@ -7,6 +7,7 @@ import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 export default function TerminalView({
 	termInput, setTermInput, sendTerminalMessage,
 	terminalText, termRef, termAutoScroll, setTermAutoScroll, stale,
+	hasOlder, loadingOlder, onLoadOlder,
 }: {
 	termInput: string;
 	setTermInput: (v: string) => void;
@@ -17,6 +18,10 @@ export default function TerminalView({
 	setTermAutoScroll: (v: boolean) => void;
 	/** True when the pane shown is the last SAVED snapshot (from the DB), not a live tmux. */
 	stale?: boolean;
+	/** Are there terminal snapshots older than the ones on screen? (#432) */
+	hasOlder?: boolean;
+	loadingOlder?: boolean;
+	onLoadOlder?: () => void;
 }) {
 	return (
 		<div className="flex flex-col flex-1 min-h-0 relative">
@@ -38,6 +43,20 @@ export default function TerminalView({
 					<Send size={14} />
 				</button>
 			</div>
+			{hasOlder && (
+				// The scrollback control (#432). Every snapshot but the last used to be fetched and
+				// thrown away in the client, so there was nothing to page back through; now the
+				// rows arrive one page at a time and this walks the `seq` cursor backwards.
+				<button
+					type="button"
+					id="term-load-older"
+					onClick={onLoadOlder}
+					disabled={loadingOlder}
+					className="shrink-0 text-2xs text-muted hover:text-fg py-1.5 border-b border-line disabled:opacity-50"
+				>
+					{loadingOlder ? "Loading earlier output…" : "↑ Load earlier output"}
+				</button>
+			)}
 			<SafeHtmlView<HTMLPreElement>
 				as="pre"
 				ref={termRef}
