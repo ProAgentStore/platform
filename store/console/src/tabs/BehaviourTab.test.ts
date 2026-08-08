@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { bandFor, fieldState, isSet, sameValue } from "./BehaviourTab";
+import { bandFor, fieldState, isApplied, isSet, sameValue, STATE_CHIP } from "./BehaviourTab";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 
 const FIELD = {
@@ -81,6 +81,55 @@ describe("fieldState — whose value is this? (#232)", () => {
 		expect(sameValue(["a", "b"], ["b", "a"])).toBe(false);
 		expect(sameValue(["a"], "a")).toBe(false);
 		expect(sameValue(undefined, undefined)).toBe(true);
+	});
+});
+
+describe("the tab does not show a value that is not applied (#430)", () => {
+	// The support question this came from: an instance with only `technicality` set showed
+	// verbosity as *Balanced*, because `value ?? field.default` renders the schema's resting
+	// position as the effective setting. The agent's prompt carried no length rule at all, so the
+	// screen and the behaviour disagreed and the screen was the more believable of the two.
+	const template = { technicality: 80 };
+
+	it("treats an unset field as showing nothing, and both kinds of set field as showing a value", () => {
+		expect(isApplied(fieldState({}, template, "verbosity"))).toBe(false);
+		// The distinction that must NOT regress (#232): a creator default IS applied — the
+		// subscriber has not overridden it, but the agent was told it. Only "nobody set it" is unset.
+		expect(isApplied(fieldState({ technicality: 80 }, template, "technicality"))).toBe(true);
+		expect(isApplied(fieldState({ verbosity: "brief" }, template, "verbosity"))).toBe(true);
+		// And an explicit value equal to the schema default is still SET — the whole point of the
+		// ticket is that "unset" and "set to the same value" must look different.
+		expect(isApplied(fieldState({ verbosity: "balanced" }, {}, "verbosity"))).toBe(true);
+	});
+
+	it("labels the unset state as unset rather than as the platform default", () => {
+		// "default" reads as "this is the platform default" (true) rather than "this value is not
+		// applied" (also true, and the half the user needed).
+		expect(STATE_CHIP.default?.label).toBe("not set");
+		expect(STATE_CHIP.template?.label).toBe("agent default");
+		// An override has a reset button instead; a chip beside it would say the same thing twice.
+		expect(STATE_CHIP.override).toBeNull();
+	});
+
+	it("does not store the schema default onto the instance to make the screen true", () => {
+		// Explicitly rejected in #430: it would destroy the "unset is a first-class state" design
+		// that lets the creator default and the platform heuristic work at all. The fix is labelling.
+		const CODE = readFileSync(join(__dirname, "BehaviourTab.tsx"), "utf8")
+			.replace(/\{?\/\*[\s\S]*?\*\/\}?/g, "")
+			.replace(/^\s*\/\/.*$/gm, "");
+		expect(CODE).not.toMatch(/save\(\s*\{\s*\[f?\.?id\]?:\s*.*field\.default/);
+		expect(CODE).not.toMatch(/onChange\(field\.default\)/);
+	});
+
+	it("shows no choice as chosen, and no toggle as ticked, while the field is unset", () => {
+		const CODE = readFileSync(join(__dirname, "BehaviourTab.tsx"), "utf8")
+			.replace(/\{?\/\*[\s\S]*?\*\/\}?/g, "")
+			.replace(/^\s*\/\/.*$/gm, "");
+		// Asserted over the source because these are one-line props on uncontrolled-ish inputs and
+		// the console has no React renderer in its unit suite; the pure half is `isApplied` above.
+		expect(CODE).toContain("checked={applied && effective === o.value}");
+		expect(CODE).toContain("checked={applied && !!effective}");
+		expect(CODE).not.toMatch(/checked=\{effective === o\.value\}/);
 	});
 });
 

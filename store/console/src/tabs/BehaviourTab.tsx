@@ -101,6 +101,42 @@ export function sameValue(a: Value | undefined, b: Value | undefined): boolean {
 	return a === b;
 }
 
+/**
+ * Is this row showing a value the agent was actually TOLD? (#430)
+ *
+ * `default` is not a value — it is the absence of one, and the field's `default` is documented in
+ * `agent-behaviour.ts` as "where the UI parks a control". The tab presented it as the effective
+ * setting anyway: an unset `verbosity` rendered with the *Balanced* radio selected, next to a small
+ * grey `default` label, on an agent whose prompt carried no length instruction at all. A user
+ * checking why replies were long read "Balanced" and reasonably concluded the agent had been told
+ * to be balanced.
+ *
+ * So the resting position stays — a slider needs one, and deleting the schema default was rejected
+ * for that reason — but nothing that reads as a CHOICE is shown as made. `template` and `override`
+ * are both real values and both display normally, which is what keeps a creator default visibly
+ * different from an unset field rather than folding the two together.
+ */
+export function isApplied(state: FieldState): boolean {
+	return state !== "default";
+}
+
+/**
+ * The chip beside a field's label, per state.
+ *
+ * `default` said exactly "default", which reads as "this is the platform default" (true) rather
+ * than "this value is not applied" (also true, and the half that matters). The wording is here
+ * rather than inline so the distinction is assertable without rendering React.
+ */
+export const STATE_CHIP: Record<FieldState, { label: string; title: string } | null> = {
+	default: {
+		label: "not set",
+		title: "Nothing is sent to the agent for this field. The platform's own default applies, and it is not necessarily what the control shows.",
+	},
+	template: { label: "agent default", title: "Set by the agent's creator" },
+	// Rendered as the reset button instead — the only state with something to clear.
+	override: null,
+};
+
 export function fieldState(
 	behaviour: Record<string, Value>,
 	templateDefault: Record<string, Value>,
@@ -275,7 +311,12 @@ function FieldRow({
 	// A slider must move while dragging, so it keeps local state and commits on release. Every
 	// other control commits immediately.
 	const [dragging, setDragging] = useState<number | null>(null);
+	// The control's RESTING position when nothing is set — not the effective setting. `applied` is
+	// what separates the two on screen, and every control below asks it before it shows a choice as
+	// made (#430).
 	const effective = value ?? field.default;
+	const applied = isApplied(state);
+	const chip = STATE_CHIP[state];
 	/**
 	 * Remount key for the uncontrolled inputs below.
 	 *
@@ -308,10 +349,9 @@ function FieldRow({
 				<label className="text-sm font-medium" htmlFor={field.type === "toggle" ? undefined : controlId}>{field.label}</label>
 				<div className="flex items-center gap-2 text-xs">
 					{busy && <span className="text-muted-soft">saving…</span>}
-					{state === "default" && <span className="text-muted-soft">default</span>}
-					{/* The creator set it, not you. There is no override to clear, so no control that
-					    would appear to do something and then not. */}
-					{state === "template" && <span className="text-muted-soft" title="Set by the agent's creator">agent default</span>}
+					{/* `template` says the creator set it — there is no override to clear, so no control
+					    that would appear to do something and then not. `default` says nobody did. */}
+					{chip && <span className="text-muted-soft" title={chip.title}>{chip.label}</span>}
 					{state === "override" && (
 						<button type="button" className="underline text-muted" onClick={() => onChange(null)}>
 							reset
@@ -320,6 +360,9 @@ function FieldRow({
 				</div>
 			</div>
 			{field.help && <p className="text-xs text-muted-soft mt-0.5">{field.help}</p>}
+			{/* Said in the row, not only in the chip beside the label. A small grey word is what the
+			    old "default" label was, and it is what a user reading "Balanced" walked straight past. */}
+			{!applied && <p className="text-xs text-muted-soft mt-0.5">Not set — the platform default applies; the control below is only parked.</p>}
 
 			{field.type === "scale" && (
 				<div className="mt-2">
@@ -347,6 +390,9 @@ function FieldRow({
 					  point at one of these bands.
 					*/}
 					<p className="text-xs text-muted mt-1">
+						{/* The band under an unset slider is what WOULD be sent, not what is. Same words,
+						    stated as a consequence rather than as the current instruction. */}
+						{!applied && dragging === null && <span className="text-muted-soft">Set it here and the agent is told: </span>}
 						<span className="font-semibold">{bandFor(field, dragging ?? (effective as number))?.label}</span>
 						{" — "}
 						{bandFor(field, dragging ?? (effective as number))?.prompt}
@@ -362,7 +408,10 @@ function FieldRow({
 								type="radio"
 								name={`beh-${field.id}`}
 								className="mt-1"
-								checked={effective === o.value}
+								// No radio selected while the field is unset. This is the reported symptom:
+								// `verbosity` showed *Balanced* checked on an agent whose prompt carried no
+								// length rule, so the screen answered the user's question wrongly.
+								checked={applied && effective === o.value}
 								onChange={() => onChange(o.value)}
 							/>
 							<span className="min-w-0">
@@ -376,9 +425,13 @@ function FieldRow({
 
 			{field.type === "toggle" && (
 				<label className="flex items-start gap-2 text-sm cursor-pointer mt-2">
-					<input type="checkbox" className="mt-1" checked={!!effective} onChange={(e) => onChange(e.target.checked)} />
+					{/* An unset toggle is not "off": `showWorking` unset and `showWorking: false` reach the
+					    prompt by different routes, and `emoji` unset sends nothing at all. */}
+					<input type="checkbox" className="mt-1" checked={applied && !!effective} onChange={(e) => onChange(e.target.checked)} />
 					<span className="text-xs text-muted-soft">
-						{(effective ? field.onPrompt : field.offPrompt) || (effective ? "On" : "Off")}
+						{applied
+							? (effective ? field.onPrompt : field.offPrompt) || (effective ? "On" : "Off")
+							: `Tick it and the agent is told: ${field.onPrompt || "On"}`}
 					</span>
 				</label>
 			)}
