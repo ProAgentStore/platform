@@ -943,6 +943,75 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(Object.keys((mock.savedPreferences as Record<string, unknown> | null) ?? {})).not.toContain("translation");
 	});
 
+	/**
+	 * #443 — "exit cannot be turned off at all." A per-command switch, and the panel is the whole
+	 * user-visible half of it: the flag is worth nothing if it cannot be reached.
+	 */
+	test("a voice command has an off switch, and it saves (#443)", async ({ page }) => {
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/console/preferences");
+		await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
+
+		const exit = page.locator("#voice-cmd-exit");
+		const exitSwitch = page.getByLabel("Exit-voice keywords enabled");
+		await expect(exit).toBeEnabled();
+		await expect(exitSwitch).toBeChecked();
+
+		await exitSwitch.uncheck();
+		await expect
+			.poll(() => ((mock.savedPreferences as { voice?: { disabledCommands?: string[] } } | null)?.voice?.disabledCommands))
+			.toEqual(["exit"]);
+		// The box goes inert and says so, rather than looking editable and doing nothing.
+		await expect(exit).toBeDisabled();
+		await expect(exit).toHaveAttribute("placeholder", "Turned off");
+
+		// And back on — the switch is reversible, which is the difference between a setting and a
+		// migration. Nothing about the user's typed words was touched either way.
+		await exitSwitch.check();
+		await expect
+			.poll(() => ((mock.savedPreferences as { voice?: { disabledCommands?: string[] } } | null)?.voice?.disabledCommands))
+			.toEqual([]);
+		await expect(exit).toBeEnabled();
+	});
+
+	test("'Use suggested' fills a command with OUR phrasings, on the user's click only (#443)", async ({ page }) => {
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/console/preferences");
+		await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
+
+		const mute = page.locator("#voice-cmd-mute");
+		await expect(mute).toHaveValue(""); // blank = ours, and nothing was written on our behalf
+		expect((mock.savedPreferences as { voice?: { muteWords?: string[] } } | null)?.voice?.muteWords).toBeUndefined();
+
+		// Named per command, not `.first()`: six rows each carry one of these, and picking the wrong
+		// row is a test that passes while the button under test does nothing.
+		await page.getByRole("button", { name: "Use suggested Mute keywords" }).click();
+		// The built-ins for the CURRENTLY configured language, which is what makes this a starting
+		// point for editing rather than a migration — a backfill is what #443 exists to refuse.
+		await expect(mute).toHaveValue(/mute/);
+	});
+
+	test("the command rows fit a phone in WebKit, at 320px and at 390px (#443)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/preferences");
+		await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
+		for (const width of [320, 390]) {
+			await page.setViewportSize({ width, height: 800 });
+			// The switch is what the ticket adds, so the switch is what must survive the narrowest
+			// phone — a control pushed off-screen is the same as one that does not exist.
+			for (const name of ["Exit-voice keywords enabled", "Scrap-turn keywords enabled"]) {
+				const box = await page.getByLabel(name).boundingBox();
+				expect(box, `${name} did not render at ${width}px`).not.toBeNull();
+				expect(box!.x, `${name} is off the left edge at ${width}px`).toBeGreaterThanOrEqual(0);
+				expect(box!.x + box!.width, `${name} overflows the viewport at ${width}px`).toBeLessThanOrEqual(width);
+			}
+			expect(
+				await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+				`the page scrolls sideways at ${width}px`,
+			).toBe(true);
+		}
+	});
+
 	test.describe("timezone (#345)", () => {
 		// PINNED, not inherited. CI runners are UTC, and a browser resolving to UTC is deliberately
 		// treated as a non-answer (see `timezoneSeed`) — so a test reading the runner's own zone

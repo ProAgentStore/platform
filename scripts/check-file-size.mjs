@@ -206,7 +206,13 @@ const PINS = {
 	// accumulator deletes mute-during-capture (#228, ADR 0001 M1). The accumulation itself is a
 	// pure reducer in machine.ts (`reduceHeard`) with the gate as its adapter, so what landed here
 	// is the wiring and the reason a later tidy-up must not collapse the two arguments into one.
-	"packages/sdk/src/voice/use-voice.ts": 1926,
+	// +4 for #443: one ref, one assignment, and its paragraph. The five `words` literals gained a
+	// field rather than a line each. They are still five literals and that is worth naming — one
+	// of them (the control listener's) omits `repeat`, so a user's custom repeat phrasings do not
+	// reach the path that runs while the mic is closed. Left exactly as found: it predates this
+	// change and fixing it silently inside an unrelated one is how a behaviour change ships with
+	// nothing pointing at it.
+	"packages/sdk/src/voice/use-voice.ts": 1930,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -250,7 +256,16 @@ const PINS = {
 	// back through the door the fold just opened), and #385's own tests caught it. `boundByUser` is
 	// also what `reservedElsewhere` now delegates to, so the two readings of "the user bound this"
 	// cannot drift apart — the consolidation this file's entry keeps being about.
-	"packages/sdk/src/voice/convo.ts": 1035,
+	// +38 for #443, of which the code is TWO lines: an optional `disabled` list on
+	// `VoiceCommandWords` and one early return in `commandPhrases`. That is the entire feature,
+	// because every path — the matcher, and all three of the splitter's branches — asks that one
+	// function for its phrases, so a single empty answer switches a command off everywhere and the
+	// two sides cannot disagree about whether a command EXISTS. The rest is the negative: this
+	// file's docstring previously RECOMMENDED the blank-means-off backfill that #443 rejects, and
+	// leaving that in place would send the next reader down a path measured to be unrepairable —
+	// built-ins are resolved here, at match time, against the caller's language, so writing them
+	// into a user's config freezes ten languages' worth of data into one.
+	"packages/sdk/src/voice/convo.ts": 1073,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -735,7 +750,10 @@ const PINS = {
 	// module — the ~50 lines of enforcement above and below are stable and are not what is growing.
 	// +4 at #442, which is three pin raises' worth of reasons (agent-think, agent-do, and this) —
 	// exactly the "can only get longer by adding reasons" growth the paragraph above predicts.
-	"scripts/check-file-size.mjs": 819,
+	// +N again at #456/#443, from the same cause and by a different lane on the same day. Two
+	// commits raising this one number independently is the clearest evidence yet that the PINS map
+	// wants to be its own data module — see the paragraph above for the split when it is worth it.
+	"scripts/check-file-size.mjs": 837,
 };
 
 /**

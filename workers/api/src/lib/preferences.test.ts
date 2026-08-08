@@ -14,8 +14,13 @@ import {
 	sanitizeTranslationSettings,
 	sanitizeVoiceSettings,
 	STT_MODELS,
+	unknownVoiceField,
+	VOICE_COMMANDS,
 	VOICE_PROVIDERS,
 } from "./preferences.js";
+// The SDK's own list, imported rather than restated: this file asserts the two are equal, and a
+// second hand-kept copy is exactly what that assertion exists to prevent.
+import { ALL_VOICE_COMMANDS } from "../../../../packages/sdk/src/voice/convo.js";
 
 describe("resolveVoice — the precedence chain (#211)", () => {
 	it("walks platform → account → instance override → declared language", () => {
@@ -261,5 +266,47 @@ describe("vocabulary UNIONs across scopes instead of overriding", () => {
 	});
 	it("accepts the comma-separated string the console sends", () => {
 		expect(parseVocabularyTerms("tmux, HeartFull ,, Vectorize")).toEqual(["tmux", "HeartFull", "Vectorize"]);
+	});
+});
+
+/**
+ * #443 — the per-command off switch, at the storage boundary.
+ *
+ * Lenient on READ, strict on WRITE, exactly like `provider`: a stored row may contain anything and
+ * must resolve to something safe, but a caller explicitly asking to disable "mute-mic" and being
+ * quietly given nothing has no way to find out.
+ */
+describe("disabledCommands (#443)", () => {
+	it("defaults to nothing disabled — an account that never opened the panel is unchanged", () => {
+		expect(defaultVoiceSettings().disabledCommands).toEqual([]);
+		expect(sanitizeVoiceSettings({}).disabledCommands).toEqual([]);
+	});
+
+	it("keeps what the user switched off, and inherits it when a field is unspecified", () => {
+		expect(sanitizeVoiceSettings({ disabledCommands: ["exit"] }).disabledCommands).toEqual(["exit"]);
+		const base = sanitizeVoiceSettings({ disabledCommands: ["exit", "scrap"] });
+		expect(sanitizeVoiceSettings({ speed: 120 }, base).disabledCommands).toEqual(["exit", "scrap"]);
+	});
+
+	it("drops an unknown name on READ rather than disabling something by accident", () => {
+		expect(sanitizeVoiceSettings({ disabledCommands: ["exit", "nonsense", 7, "exit"] }).disabledCommands).toEqual(["exit"]);
+		expect(sanitizeVoiceSettings({ disabledCommands: "exit" }).disabledCommands).toEqual([]);
+	});
+
+	it("REJECTS an unknown name on write, so a save that does nothing says so", () => {
+		expect(unknownVoiceField({ disabledCommands: ["exit"] })).toBeNull();
+		expect(unknownVoiceField({ disabledCommands: [] })).toBeNull();
+		expect(unknownVoiceField({})).toBeNull();
+		expect(unknownVoiceField({ disabledCommands: ["mute-mic"] })).toMatch(/disabledCommands/);
+		expect(unknownVoiceField({ disabledCommands: "exit" })).toMatch(/disabledCommands/);
+	});
+
+	/**
+	 * The two vocabularies must be the same set. This one gates a WRITE; the SDK's gates the MATCH.
+	 * A name in only one of them is either a switch with nothing behind it, or a command nobody can
+	 * reach the switch for.
+	 */
+	it("names exactly the commands the matcher knows", () => {
+		expect([...VOICE_COMMANDS].sort()).toEqual([...ALL_VOICE_COMMANDS].sort());
 	});
 });

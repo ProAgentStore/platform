@@ -16,6 +16,11 @@ export type { PollTier, PollCadence, PollSignals } from "./poll-cadence.js";
 export { useVoice, type VoiceMode } from "./voice/use-voice.js";
 export { buildTranscribePrompt } from "./voice/prompt.js";
 export { resolveVoiceStatus, type VoiceStatus } from "./voice/convo.js";
+// The command vocabulary and the phrases in force for one command (#443). Exported so the
+// settings panel's "Use suggested" fills a field with EXACTLY what the matcher would have used
+// for the currently configured language — a hand-kept copy in the console would be a second
+// source of truth for the one thing that must not have two.
+export { ALL_VOICE_COMMANDS, commandPhrases, type VoiceCommand } from "./voice/convo.js";
 // How the composer binds to a running voice turn (#364). One tested rule for both chat UIs:
 // speech is the thread's pending bubble, a notice is its own banner, and the input box only ever
 // holds what the user TYPED.

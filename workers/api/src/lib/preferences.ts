@@ -37,6 +37,10 @@ import { type NotificationPreferences, sanitizeNotificationPreferences } from ".
 export const VOICE_PROVIDERS = ["browser", "openai-realtime", "gemini-live"] as const;
 /** Whisper transcription models. `sttModel` was read by the SDK but never persisted (#211/T3). */
 export const STT_MODELS = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"] as const;
+/** Every voice command that can be switched off (#443). Mirrors the SDK's `ALL_VOICE_COMMANDS`;
+ *  the two are asserted equal in preferences.test.ts, because this list gates a WRITE and the
+ *  other one gates the match — a name in only one of them is a switch with nothing behind it. */
+export const VOICE_COMMANDS = ["repeat", "mute", "unmute", "exit", "next", "back", "scrap"] as const;
 
 /** Reject an explicitly-supplied value the platform doesn't know. Absent is always fine. */
 export function unknownVoiceField(body: Record<string, unknown>): string | null {
@@ -48,6 +52,14 @@ export function unknownVoiceField(body: Record<string, unknown>): string | null 
 	}
 	if (body.sttMode !== undefined && body.sttMode !== "browser" && body.sttMode !== "openai") {
 		return "sttMode must be browser or openai";
+	}
+	// Strict on write for the same reason `provider` is: a caller switching off "mute-mic" and
+	// silently getting nothing switched off has no way to tell. The sanitizer below stays lenient,
+	// because it also parses rows written by older code.
+	if (body.disabledCommands !== undefined) {
+		if (!Array.isArray(body.disabledCommands)) return `disabledCommands must be an array of ${VOICE_COMMANDS.join(", ")}`;
+		const bad = body.disabledCommands.find((x) => !VOICE_COMMANDS.includes(x as never));
+		if (bad !== undefined) return `disabledCommands must contain only ${VOICE_COMMANDS.join(", ")}`;
 	}
 	return null;
 }
@@ -81,6 +93,16 @@ export interface VoiceSettings {
 	/** Phrases that scrap the last turn (#342). Whole-utterance only — a destructive command
 	 *  must not be reachable from the middle of a sentence. */
 	scrapWords: string[];
+	/**
+	 * Voice commands the user switched OFF (#443). Empty = everything on, which is what an account
+	 * that has never touched the panel stores, so its behaviour is byte-for-byte unchanged.
+	 *
+	 * A SWITCH rather than a blank words field. The built-in phrasings are language-derived and
+	 * resolved at MATCH time in the SDK, so encoding "off" as "blank" would have needed a backfill
+	 * that freezes today's English list into every account — permanently, since a populated field
+	 * is never resolved again. Two independent facts, two fields.
+	 */
+	disabledCommands: string[];
 	stopWords: string[];
 	/**
 	 * Words the USER says that a recogniser gets wrong — `tmux`, `HeartFull`, a product name
@@ -221,6 +243,7 @@ export function defaultVoiceSettings(): VoiceSettings {
 		exitWords: [],
 		nextWords: [],
 		scrapWords: [],
+		disabledCommands: [],
 		stopWords: [],
 		vocabulary: [],
 		stopSpeechKeyword: "",
@@ -267,6 +290,13 @@ export function sanitizeVoiceSettings(raw: unknown, base: VoiceSettings = defaul
 		exitWords: has("exitWords") ? parseVoiceWords(o.exitWords) : base.exitWords,
 		nextWords: has("nextWords") ? parseVoiceWords(o.nextWords) : base.nextWords,
 		scrapWords: has("scrapWords") ? parseVoiceWords(o.scrapWords) : base.scrapWords,
+		// Filtered against the vocabulary, not passed through: the safe failure for "is this command
+		// on" is ON, so an unrecognised name is dropped rather than allowed to disable something.
+		disabledCommands: has("disabledCommands")
+			? (Array.isArray(o.disabledCommands) ? o.disabledCommands : []).filter(
+					(x, i, a): x is string => typeof x === "string" && VOICE_COMMANDS.includes(x as never) && a.indexOf(x) === i,
+				)
+			: base.disabledCommands,
 		stopWords: has("stopWords") ? parseVoiceWords(o.stopWords) : base.stopWords,
 		// Patch semantics like every other field — an unspecified vocabulary keeps what this SCOPE
 		// already had. What differs is the base a caller hands in: `overrideVoiceBase` below seeds

@@ -1,4 +1,5 @@
 import { api, reportClientError } from "../client.js";
+import { ALL_VOICE_COMMANDS, type VoiceCommand } from "./convo.js";
 import { DEFAULT_STT_MODEL, VoiceStt, type SttOptions } from "./stt.js";
 import { DEFAULT_TTS_MAX_CHARS, MAX_TTS_MAX_CHARS, MIN_TTS_MAX_CHARS, VoiceTts } from "./tts.js";
 
@@ -43,6 +44,14 @@ export interface VoiceConfig {
 	/** Phrases that scrap the last turn (#342). Whole-utterance only, and inert on a surface
 	 *  that cannot delete — see `useVoice`'s `onScrap`. */
 	scrapWords: string[];
+	/**
+	 * Commands the user switched OFF (#443). Default empty: everything on.
+	 *
+	 * The answer to "exit cannot be turned off at all". A SWITCH rather than a blank field, so the
+	 * built-ins stay language-derived — see {@link VoiceCommandWords.disabled} for why the
+	 * blank-means-off spelling was measured to be unrepairable.
+	 */
+	disabledCommands: VoiceCommand[];
 	stopWords: string[];
 	/**
 	 * Words the user says that a recogniser gets wrong (#373) — the account list UNIONed with this
@@ -71,6 +80,24 @@ export interface VoiceConfig {
 function parseWords(v: unknown): string[] {
 	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
 	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean).slice(0, 20);
+}
+
+/**
+ * Parse the switched-OFF command list (#443).
+ *
+ * Validated against the command vocabulary rather than passed through, so a stored blob written by
+ * a future version — or a typo — can never disable something by accident. An unknown name is
+ * DROPPED rather than rejected, because this also parses rows stored by older code and the safe
+ * failure for "is this command on" is ON.
+ */
+function parseDisabledCommands(v: unknown): VoiceCommand[] {
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
+	const out: VoiceCommand[] = [];
+	for (const raw of list) {
+		const name = typeof raw === "string" ? raw.trim() : "";
+		if (ALL_VOICE_COMMANDS.includes(name as VoiceCommand) && !out.includes(name as VoiceCommand)) out.push(name as VoiceCommand);
+	}
+	return out;
 }
 
 /** Parse a vocabulary list (array or delimited string). Deduped case-insensitively, first
@@ -141,6 +168,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		exitWords: parseWords(vs.exitWords),
 		nextWords: parseWords(vs.nextWords),
 		scrapWords: parseWords(vs.scrapWords),
+		disabledCommands: parseDisabledCommands(vs.disabledCommands),
 		stopWords: parseWords(vs.stopWords),
 		// The user's own words first (deliberate, and the ones they will notice going wrong), then
 		// what the platform derived (#372). Order matters downstream: the prompt builder truncates

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandPhrases, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, planRestartBail, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
+import { ALL_VOICE_COMMANDS, commandPhrases, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, planRestartBail, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceCommand } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -1110,5 +1110,92 @@ describe("a repeated command word is a command, not a message (#456)", () => {
 		expect(collapseRepeatedRuns("停停")).toBe("停");
 		expect(collapseRepeatedRuns("mute")).toBe("mute");
 		expect(collapseRepeatedRuns("")).toBe("");
+	});
+});
+
+/**
+ * #443 — "exit cannot be turned off at all." The replacement for #385's fix (1), which proposed
+ * making a blank field mean OFF, backfilled with today's built-ins. That was measured to be the
+ * wrong primitive: built-ins are resolved at MATCH time against the caller's language, so a
+ * backfill freezes language-derived data into user config permanently and unrepairably.
+ *
+ * Two independent facts — "do I have custom words" and "is this command on" — so two fields.
+ */
+describe("a command can be switched off, without freezing its words (#443)", () => {
+	const notMuted = { muted: false, canSwitch: false };
+	const off = (...cmds: VoiceCommand[]) => ({ disabled: cmds });
+
+	// The account that started #385, verbatim: an explicit stop-speech keyword and, now, exit off.
+	it("disabling exit means 'stop' and 'stop stop' no longer tear hands-free down", () => {
+		for (const said of ["stop", "stop stop", "exit voice", "back to text"]) {
+			expect(matchVoiceCommand(said, off("exit"), "en", { muted: false }), said).not.toBe("exit");
+			expect(splitTrailingCommand(said, off("exit"), "en", notMuted).command, said).not.toBe("exit");
+		}
+	});
+
+	/**
+	 * BOTH, not one. They already share `commandPhrases` so they cannot disagree about what a word
+	 * MEANS; a disagreement about whether a command EXISTS is not a no-op either — the splitter
+	 * would amputate the phrase off the end of a real message that the matcher had just declined
+	 * to act on.
+	 */
+	it("a disabled command's phrase reaches the agent as ordinary speech instead of being amputated", () => {
+		expect(splitTrailingCommand("run the tests, mute mic", off("mute"), "en", notMuted)).toEqual({
+			command: null,
+			text: "run the tests, mute mic",
+		});
+		// …and the same utterance with mute ON is still split, so the assertion is about the flag.
+		expect(splitTrailingCommand("run the tests, mute mic", undefined, "en", notMuted)).toEqual({
+			command: "mute",
+			text: "run the tests",
+		});
+	});
+
+	it("takes the repetition path with it, so no branch keeps a disabled command alive", () => {
+		expect(matchVoiceCommand("mute mute mute", off("mute"), "en", { muted: false })).toBeNull();
+		expect(splitTrailingCommand("push everything, mute mute", off("mute"), "en", notMuted)).toEqual({
+			command: null,
+			text: "push everything, mute mute",
+		});
+	});
+
+	it("switches off exactly what it names and nothing else", () => {
+		const w = off("exit");
+		expect(matchVoiceCommand("mute", w, "en", { muted: false })).toBe("mute");
+		expect(matchVoiceCommand("repeat", w, "en", { muted: false })).toBe("repeat");
+		expect(matchVoiceCommand("unmute", w, "en", { muted: true })).toBe("unmute");
+	});
+
+	// The property the backfill would have destroyed, asserted directly.
+	it("blank still means 'use ours', and ours still follow the configured language", () => {
+		expect(commandPhrases("mute", undefined, "en")).toContain("mute");
+		expect(commandPhrases("mute", undefined, "es")).toContain("silencio");
+		expect(commandPhrases("mute", undefined, "zh")).toContain("静音");
+		expect(matchVoiceCommand("silencio", undefined, "es", { muted: false })).toBe("mute");
+		expect(matchVoiceCommand("静音", undefined, "zh", { muted: false })).toBe("mute");
+	});
+
+	it("an account that has configured nothing resolves exactly the phrases it always did", () => {
+		for (const lang of ["en", "es", "fr", "de", "it", "pt", "zh", "ja", "ko", "hi"]) {
+			for (const command of ALL_VOICE_COMMANDS) {
+				expect(commandPhrases(command, { disabled: [] }, lang), `${lang}/${command}`).toEqual(
+					commandPhrases(command, undefined, lang),
+				);
+			}
+		}
+	});
+
+	// Turning a feature OFF must not hand your words to a different action: `exitWords: ["pardon"]`
+	// stays inert rather than becoming the built-in `repeat` phrase it collides with.
+	it("a disabled command keeps its reservations, so its words go quiet rather than change meaning", () => {
+		expect(matchVoiceCommand("pardon", { exit: ["pardon"] }, "en", { muted: false })).toBe("exit");
+		expect(matchVoiceCommand("pardon", { exit: ["pardon"], disabled: ["exit"] }, "en", { muted: false })).toBeNull();
+	});
+
+	// "Use suggested" fills a field from this function, so the panel and the matcher cannot show
+	// different words. Disabled returns nothing, which is also what the panel greys out.
+	it("offers the phrases the matcher would actually have used, for the current language", () => {
+		expect(commandPhrases("exit", undefined, "de")).toContain("textmodus");
+		expect(commandPhrases("exit", { disabled: ["exit"] }, "de")).toEqual([]);
 	});
 });

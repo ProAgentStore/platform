@@ -183,6 +183,28 @@ export interface VoiceCommandWords {
 	 * that happens to contain the same phrase (#385).
 	 */
 	stopSpeech?: string;
+	/**
+	 * Commands the user has switched OFF (#443). Default: none — an account that has configured
+	 * nothing behaves byte-for-byte as before.
+	 *
+	 * IT RIDES HERE, ON THE SAME OBJECT THE PHRASE LISTS DO, and that is the whole design. A blank
+	 * words field means "use the built-ins", and the built-ins are resolved AT MATCH TIME against
+	 * the caller's current language ({@link commandPhrases}) — so `mute` becomes `silencio` becomes
+	 * `静音` the moment you change your voice language, with no settings edit. Encoding "off" as
+	 * "blank" (#385's fix 1) would have required a backfill writing today's built-ins into every
+	 * empty field, which destroys that property permanently and unrepairably: a populated field is
+	 * never resolved, so every non-English account silently loses its own words and nothing can
+	 * afterwards distinguish a deliberate English binding from a backfilled one.
+	 *
+	 * Off is a SWITCH; blank stays an absence. The two facts — "do I have custom words" and "is
+	 * this command on" — are independent, and the bug was asking one field to carry both.
+	 *
+	 * Placed on `VoiceCommandWords` rather than passed alongside it so that {@link commandPhrases}
+	 * is the single place it takes effect. `matchVoiceCommand` and `splitTrailingCommand` both
+	 * derive their phrases from there, so they CANNOT disagree about whether a command exists — and
+	 * a disagreement there is not a no-op, it amputates the phrase off the end of a real message.
+	 */
+	disabled?: VoiceCommand[];
 }
 
 /** "Unmute" phrasings per language. The mirror of MUTE_BY_LANG — matched ONLY while muted
@@ -740,6 +762,9 @@ const TABLES: Record<VoiceCommand, Record<string, string[]>> = {
 	scrap: SCRAP_BY_LANG,
 };
 const ALL_COMMANDS = Object.keys(TABLES) as VoiceCommand[];
+/** Every command the matcher knows, derived from the phrase tables so a new one cannot be
+ *  forgotten by a validator. Exported for the settings sanitizers (#443). */
+export const ALL_VOICE_COMMANDS: readonly VoiceCommand[] = ALL_COMMANDS;
 
 /**
  * Is `phrase` one the user has explicitly bound to something OTHER than `command`? (#385)
@@ -805,18 +830,31 @@ function foldedReading(norm: string, words?: VoiceCommandWords): string {
  * torn down. The destructive reading was the one they never chose, and there was no way to say so —
  * the only lever was to bind `exitWords` to some other phrase, i.e. keep the feature and move it.
  *
- * What this deliberately does NOT change: a BLANK field still means "use ours". Flipping blank to
- * mean "off" is the other half of #385 and it is not a code change — it silently removes working
- * `repeat`/`mute`/`exit` from every user who never opened the panel, so it needs a backfill that
- * writes the built-ins into their settings first. The built-ins are also language-derived data
- * (they follow `lang`), so freezing today's English list into a user's config would break the
- * property that changing your voice language changes your command words. That trade belongs in its
- * own change, with a migration. This one resolves the collision, which is the destructive part, and
- * changes behaviour for nobody who has not explicitly bound a colliding phrase.
+ * ── AND THE THIRD RULE: A DISABLED COMMAND HAS NO PHRASES AT ALL (#443)
+ *
+ * `words.disabled` is checked FIRST and returns `[]`, which is what switches the command off
+ * everywhere at once. Every caller — the matcher, the whole-utterance branch of the splitter, its
+ * multi-word branch and its repeated-run branch — asks this function for a list, so one empty
+ * answer is the whole feature and the two sides cannot disagree about whether a command exists.
+ *
+ * BLANK STILL MEANS "USE OURS", and it must. An earlier reading of #385 proposed making blank mean
+ * OFF, backfilled with today's built-ins. That was measured to be the wrong primitive and is not
+ * implemented: built-ins are resolved HERE, at match time, against the caller's current `lang`, so
+ * a backfill would freeze language-derived data into user config permanently — `custom?.length`
+ * short-circuits, so a populated field is never resolved again. Every non-English account would
+ * silently lose its own words, every later language switch would get English ones, and afterwards
+ * nothing could distinguish a deliberate binding from a backfilled one. "Do I have custom words"
+ * and "is this command on" are two independent facts; blank carries the first, `disabled` the
+ * second. See {@link VoiceCommandWords.disabled}.
+ *
+ * A disabled command KEEPS its reservations, deliberately. Switching `exit` off does not unbind
+ * `exitWords`, so a phrase the user typed there stays inert rather than silently becoming some
+ * other command — turning a feature off must not hand your words to a different action.
  *
  * Exported so callers can strip a spoken command out of a message without re-deriving any of it.
  */
 export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords, lang?: string): string[] {
+	if (words?.disabled?.includes(command)) return [];
 	const custom = words?.[command];
 	if (custom?.length) return custom;
 	const table = TABLES[command];

@@ -234,3 +234,30 @@ describe("unmute/exit words (#152/#165) follow the same precedence as mute", () 
 		expect(c.exitWords).toEqual([]);
 	});
 })
+
+/**
+ * #443 — the switch has to survive the trip from storage into the matcher, and an older stored
+ * blob (which has no such field) must resolve to "everything on".
+ */
+describe("disabledCommands (#443)", () => {
+	it("defaults to nothing disabled, so a blob written before this field behaves as before", () => {
+		expect(resolveVoiceConfig({}, false).disabledCommands).toEqual([]);
+		expect(resolveVoiceConfig({ language: "es-ES" }, false).disabledCommands).toEqual([]);
+	});
+
+	it("carries the commands the user switched off", () => {
+		expect(resolveVoiceConfig({ disabledCommands: ["exit", "scrap"] }, false).disabledCommands).toEqual(["exit", "scrap"]);
+	});
+
+	// The safe failure for "is this command on" is ON: a name nobody recognises must never be the
+	// reason mute stops working.
+	it("drops anything that is not a command, and de-duplicates", () => {
+		expect(resolveVoiceConfig({ disabledCommands: ["exit", "nonsense", "", 7, "exit"] }, false).disabledCommands).toEqual(["exit"]);
+		expect(resolveVoiceConfig({ disabledCommands: "not-an-array" }, false).disabledCommands).toEqual([]);
+		expect(resolveVoiceConfig({ disabledCommands: null }, false).disabledCommands).toEqual([]);
+	});
+
+	it("accepts the delimited-string shape the settings API also tolerates", () => {
+		expect(resolveVoiceConfig({ disabledCommands: "exit, mute" }, false).disabledCommands).toEqual(["exit", "mute"]);
+	});
+});
