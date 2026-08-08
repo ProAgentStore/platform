@@ -341,6 +341,16 @@ describe("GET /v1/agents/:id/messages + memory + tasks (owner-scoped DO proxy)",
 		expect(doCalls[0].path).toContain("/messages?limit=5");
 	});
 
+	it("forwards the `before` cursor too — the creator side dropped it identically (#428)", async () => {
+		const { app, env, doCalls, setDoResponse } = buildApp([{ id: "a1", owner_id: "u1" }]);
+		setDoResponse(() => Response.json({ messages: [], nextCursor: null, hasMore: false }));
+		const cursor = "msg:2026-08-08T06:46:33.000Z:ffb4c8f8";
+		await get(app, env, `/v1/agents/a1/messages?limit=5&before=${encodeURIComponent(cursor)}`, await tokenFor("u1"));
+		const search = new URLSearchParams(doCalls[0].path.split("?")[1]);
+		expect(search.get("before")).toBe(cursor);
+		expect(search.get("limit")).toBe("5");
+	});
+
 	it("PUT memory forwards the body to the DO for the owner", async () => {
 		const { app, env, doCalls, setDoResponse } = buildApp([{ id: "a1", owner_id: "u1" }]);
 		setDoResponse(() => Response.json({ saved: true }));

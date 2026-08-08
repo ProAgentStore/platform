@@ -77,6 +77,13 @@ import {
 import { MAX_TASKS, taskListPayload } from "./lib/agent-tasks.js";
 import { turnSpanFor } from "./lib/chat-turns.js";
 import { json } from "./lib/do-json.js";
+import {
+	assembleMessagePage,
+	MESSAGE_KEY_PREFIX,
+	messageListOptions,
+	messageStorageKey,
+	resolveCursor,
+} from "./lib/message-page.js";
 import { isFabricatedRecord } from "./lib/fabricated-history.js";
 import { logError } from "./lib/error-log.js";
 import { platformAiBinding } from "./lib/platform-settings.js";
@@ -750,13 +757,12 @@ export class AgentDO extends DurableObject<Env> {
 	// ── Messages ───────────────────────────────────────────────────────────────
 
 	private async appendMessage(msg: AgentMessage): Promise<void> {
-		const key = `msg:${msg.createdAt}:${msg.id}`;
-		await this.ctx.storage.put(key, msg);
+		await this.ctx.storage.put(messageStorageKey(msg), msg);
 	}
 
 	private async getRecentMessages(limit: number): Promise<AgentMessage[]> {
 		const all = await this.ctx.storage.list<AgentMessage>({
-			prefix: "msg:",
+			prefix: MESSAGE_KEY_PREFIX,
 			reverse: true,
 			limit,
 		});
@@ -768,17 +774,30 @@ export class AgentDO extends DurableObject<Env> {
 		// Cap at 2000 so "copy the full conversation" can export everything; normal
 		// chat loads pass a small limit (50) and are unaffected.
 		const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 2000);
-		const messages = await this.getRecentMessages(limit);
+		// #428: "Load older messages" returned the newest page forever, because this handler read
+		// only `limit`. The seek lives in lib/message-page.ts — one definition of the key format,
+		// an exclusive `end` bound for "strictly older than", and a `limit + 1` probe so `hasMore`
+		// is measured here rather than guessed from a page length in the console.
+		const cursor = resolveCursor(url.searchParams.get("before"));
+		if (cursor.kind === "invalid") return json({ error: cursor.reason }, 400);
+		const all = await this.ctx.storage.list<AgentMessage>(messageListOptions(cursor, limit));
+		const page = assembleMessagePage([...all.entries()], limit);
 		// Mark, don't delete (#406). The user ACTED on these answers — an invented ticket list was
 		// the basis of a decision — so the row stays exactly as written and is stamped instead, and
 		// the console renders a stamped message differently from a real one. The stamp is computed
 		// here rather than stored, which is the whole reason it reaches rows written before #395's
-		// guard existed. What the model sees is handled at the other end, in agent-think.ts.
-		return json({ messages: messages.map((m) => (isFabricatedRecord(m) ? { ...m, fabricated: true as const } : m)) });
+		// guard existed. It is decided per message, so it applies to EVERY page — an older page is
+		// stamped exactly like the newest one, and paging cannot quietly hand back unmarked rows.
+		// What the model sees is handled at the other end, in agent-think.ts.
+		return json({
+			messages: page.messages.map((m) => (isFabricatedRecord(m) ? { ...m, fabricated: true as const } : m)),
+			nextCursor: page.nextCursor,
+			hasMore: page.hasMore,
+		});
 	}
 
 	private async handleClearMessages(): Promise<Response> {
-		const all = await this.ctx.storage.list<AgentMessage>({ prefix: "msg:" });
+		const all = await this.ctx.storage.list<AgentMessage>({ prefix: MESSAGE_KEY_PREFIX });
 		const keys = [...all.keys()];
 		// The audio ids of the messages being cleared, returned so the route deletes EXACTLY those
 		// R2 objects. A prefix delete would take the Coder Co-pilot's recordings with them —
@@ -821,7 +840,7 @@ export class AgentDO extends DurableObject<Env> {
 	 */
 	private async handleDeleteTurn(messageId: string): Promise<Response> {
 		if (!messageId) return json({ error: "message id required" }, 400);
-		const all = await this.ctx.storage.list<AgentMessage>({ prefix: "msg:" });
+		const all = await this.ctx.storage.list<AgentMessage>({ prefix: MESSAGE_KEY_PREFIX });
 		// `list` returns keys in lexicographic order and the key is `msg:{ISO createdAt}:{id}`,
 		// so this is already log order — the ordering `turnSpanFor` assumes.
 		const entries = [...all.entries()].map(([key, msg]) => ({ key, ...msg }));

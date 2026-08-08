@@ -18,7 +18,7 @@ import type { Env } from "../types.js";
 const SECRET = "instances-integration-secret";
 
 interface Write { sql: string; args: unknown[] }
-interface DoCall { name: string; path: string; method: string; body?: unknown }
+interface DoCall { name: string; path: string; search: string; method: string; body?: unknown }
 
 type Agent = { id: string; slug?: string; name?: string; model?: string; owner_id?: string; visibility?: string; config?: string | null; category?: string };
 
@@ -125,7 +125,7 @@ function buildApp(opts: Opts = {}) {
 						if (req.method === "POST" || req.method === "PUT") {
 							body = await req.clone().json().catch(() => undefined);
 						}
-						doCalls.push({ name: id.name, path: url.pathname, method: req.method, body });
+						doCalls.push({ name: id.name, path: url.pathname, search: url.search, method: req.method, body });
 						return (opts.doResponse ?? defaultDoResponse)(url.pathname, req.method);
 					},
 				};
@@ -486,6 +486,43 @@ describe("GET /v1/instances/:id/messages (integration)", () => {
 		expect(call).toBeTruthy();
 		// limit clamped to the 2000 ceiling — the DO never gets 999999.
 		expect(call!.name).toBe("inst-1");
+		expect(call!.search).toBe("?limit=2000");
+	});
+
+	it("forwards the `before` cursor to the DO — it used to be dropped, so paging re-served page 1 (#428)", async () => {
+		const { app, env, doCalls } = buildApp({
+			owns: [["inst-1", "u1"]],
+			doResponse: (p) => p === "/messages" ? Response.json({ messages: [], nextCursor: null, hasMore: false }) : Response.json({ ok: true }),
+		});
+		const cursor = "msg:2026-08-08T06:46:33.000Z:ffb4c8f8-4247-4da1-8f5f-d20c20e4acda";
+		const res = await get(app, env, `/v1/instances/inst-1/messages?limit=10&before=${encodeURIComponent(cursor)}`, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const call = doCalls.find((d) => d.path === "/messages");
+		expect(new URLSearchParams(call!.search).get("before")).toBe(cursor);
+		expect(new URLSearchParams(call!.search).get("limit")).toBe("10");
+	});
+
+	it("returns the DO's paging fields, so the console stops guessing hasMore from a page length (#428)", async () => {
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			doResponse: (p) => p === "/messages"
+				? Response.json({ messages: [{ role: "user", content: "hi" }], nextCursor: "msg:2026-08-08T06:00:00.000Z:m1", hasMore: true })
+				: Response.json({ ok: true }),
+		});
+		const body = await (await get(app, env, "/v1/instances/inst-1/messages", await tokenFor("u1"))).json() as { nextCursor?: string; hasMore?: boolean };
+		expect(body.nextCursor).toBe("msg:2026-08-08T06:00:00.000Z:m1");
+		expect(body.hasMore).toBe(true);
+	});
+
+	it("a cursor the DO refuses stays a 4xx — swallowing it into an empty 200 is how #428 hid", async () => {
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			doResponse: (p) => p === "/messages"
+				? Response.json({ error: "Unrecognised `before` cursor." }, { status: 400 })
+				: Response.json({ ok: true }),
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/messages?before=not-a-cursor", await tokenFor("u1"));
+		expect(res.status).toBe(400);
 	});
 });
 

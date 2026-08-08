@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message, RunnerPresence } from "../lib/types";
 import { identityFor } from "../lib/identity";
+import { mergeOlderMessages, nextOlderCursor, resolveHasMore, type MessagePageResponse } from "../lib/messagePaging";
 import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
@@ -161,6 +162,10 @@ function InstancePage() {
 	}, [id, navigate]);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [hasMore, setHasMore] = useState(false);
+	// The server's opaque cursor for the next OLDER page (#428). Never derived from a message
+	// field here — the previous cursor was `oldest.id`, a UUID, which the DO's `msg:{createdAt}:
+	// {id}` ordering could never seek with, so every "load older" re-served the newest page.
+	const [olderCursor, setOlderCursor] = useState<string | null>(null);
 	const [loadingMore, setLoadingMore] = useState(false);
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);
@@ -453,10 +458,11 @@ function InstancePage() {
 	const loadMessages = useCallback(async (opts?: { initial?: boolean }) => {
 		if (!id) return;
 		try {
-			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=${PAGE}`);
+			const data = await api<MessagePageResponse<Message>>(`/v1/instances/${id}/messages?limit=${PAGE}`);
 			const msgs = data.messages || [];
 			setMessages(msgs);
-			setHasMore(msgs.length >= PAGE);
+			setHasMore(resolveHasMore(data, PAGE));
+			setOlderCursor(nextOlderCursor(data));
 			const initial = opts?.initial === true;
 			if (!shouldScrollAfterLoad({ initial, pinned: atBottomRef.current })) return;
 			requestAnimationFrame(() => {
@@ -472,18 +478,22 @@ function InstancePage() {
 	const messagesRef = useRef(messages);
 	messagesRef.current = messages;
 	const loadMore = useCallback(async () => {
-		if (!id || loadingMore || !hasMore) return;
+		// No cursor means the server said this IS the start of the conversation — asking again
+		// would ask for the newest page, which is the bug (#428), not a harmless no-op.
+		if (!id || loadingMore || !hasMore || !olderCursor) return;
 		setLoadingMore(true);
 		try {
-			const oldest = messagesRef.current[0];
-			const before = oldest?.id || oldest?.createdAt || "";
-			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=${PAGE}&before=${encodeURIComponent(before)}`);
+			const data = await api<MessagePageResponse<Message>>(`/v1/instances/${id}/messages?limit=${PAGE}&before=${encodeURIComponent(olderCursor)}`);
 			const older = data.messages || [];
-			setHasMore(older.length >= PAGE);
+			setHasMore(resolveHasMore(data, PAGE));
+			setOlderCursor(nextOlderCursor(data));
 			if (older.length > 0) {
 				const el = chatRef.current;
 				const prevHeight = el?.scrollHeight || 0;
-				setMessages((prev) => [...older, ...prev]);
+				// Dedup on prepend (lib/messagePaging.ts). Cheap insurance that also makes a
+				// repeated page LOUD — nothing visibly happens — instead of quietly filling the top
+				// of the thread with the tail it already shows, under colliding React keys.
+				setMessages((prev) => mergeOlderMessages(older, prev));
 				// Restore scroll position AND clear loadingMore in the SAME frame — if we
 				// cleared it synchronously here, React would batch it with the prepend so
 				// the bottom-scroll effect sees loadingMore=false and yanks to the newest
@@ -494,9 +504,17 @@ function InstancePage() {
 				});
 				return;
 			}
-		} catch {}
+		} catch (e) {
+			// #424: this catch was bare, so a failing page load looked exactly like a conversation
+			// with nothing older behind it. Say so in the thread — the user clicked a button.
+			console.error("[chat] loadMore failed:", e);
+			setMessages((prev) => [
+				...prev,
+				{ role: "system", content: `Could not load older messages: ${e instanceof Error ? e.message : String(e)}`, createdAt: new Date().toISOString() },
+			]);
+		}
 		setLoadingMore(false);
-	}, [id, loadingMore, hasMore]);
+	}, [id, loadingMore, hasMore, olderCursor]);
 
 	// Mount, and every instance switch — the one case that lands on the newest message
 	// regardless of where the reader was left in the PREVIOUS conversation.
@@ -1069,7 +1087,10 @@ function InstancePage() {
 								onScroll={(e) => setAtBottom(isPinnedToBottom(e.currentTarget))}
 								className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : ""}`}
 						>
-							{hasMore && (
+							{/* Both, not just `hasMore`: without a server cursor the request could only ask for
+							    the newest page again, which is the whole of #428. A button that cannot work is
+							    not shown. */}
+							{hasMore && olderCursor && (
 								<button type="button" onClick={loadMore} disabled={loadingMore} className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2">
 									{loadingMore ? "Loading..." : "Load earlier messages"}
 								</button>

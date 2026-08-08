@@ -1526,27 +1526,85 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("button", { name: "Clear messages" })).toBeVisible();
 	});
 
+	/** A page of the transcript, in the shape the API returns since #428. */
+	function messagePage(from: number, count: number) {
+		return Array.from({ length: count }, (_, i) => ({
+			id: `msg-${from + i}`,
+			role: (from + i) % 2 === 0 ? "user" : "assistant",
+			content: `Message ${from + i}`,
+			createdAt: new Date(Date.now() - (40 - (from + i)) * 60000).toISOString(),
+		}));
+	}
+
 	test("instance chat load more button appears with many messages", async ({
 		page,
 	}) => {
-		// Mock 20 messages (the page size) so "Load earlier" button appears
-		const messages = Array.from({ length: 20 }, (_, i) => ({
-			id: `msg-${i}`,
-			role: i % 2 === 0 ? "user" : "assistant",
-			content: `Message ${i}`,
-			createdAt: new Date(Date.now() - (20 - i) * 60000).toISOString(),
-		}));
+		// A full page AND a server cursor: the button is shown only when it can actually work
+		// (#428). Before this the console minted its own cursor from `oldest.id` — a UUID the DO's
+		// `msg:{createdAt}:{id}` ordering could never seek with — so the button was always present
+		// and always re-served the newest page.
 		await mockSignedInConsole(page);
 		await page.route("**/v1/instances/inst-1/messages*", (route) =>
 			route.fulfill({
 				status: 200,
 				contentType: "application/json",
-				body: JSON.stringify({ messages }),
+				body: JSON.stringify({ messages: messagePage(20, 20), nextCursor: "msg:cursor:20", hasMore: true }),
 			}),
 		);
 		await page.goto("/console/instances/inst-1");
 
 		await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeVisible();
+	});
+
+	test("instance chat hides load more at the start of the conversation", async ({
+		page,
+	}) => {
+		// `hasMore` is the server's MEASUREMENT, not `older.length >= PAGE`. An exactly-full page
+		// with nothing behind it used to leave the button up forever, and every click added twenty
+		// duplicates of the tail to the top of the thread (#428).
+		await mockSignedInConsole(page);
+		await page.route("**/v1/instances/inst-1/messages*", (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({ messages: messagePage(0, 20), nextCursor: null, hasMore: false }),
+			}),
+		);
+		await page.goto("/console/instances/inst-1");
+
+		await expect(page.getByText("Message 19")).toBeVisible();
+		await expect(page.getByRole("button", { name: "Load earlier messages" })).toHaveCount(0);
+	});
+
+	test("instance chat loads GENUINELY older messages, once, and then stops", async ({
+		page,
+	}) => {
+		// The end-to-end shape of #428: the cursor goes back to the server, the page that comes
+		// back is older rather than the newest one again, nothing is duplicated, and the button
+		// disappears when the conversation starts.
+		const cursors: Array<string | null> = [];
+		await mockSignedInConsole(page);
+		await page.route("**/v1/instances/inst-1/messages*", (route) => {
+			const before = new URL(route.request().url()).searchParams.get("before");
+			cursors.push(before);
+			const body = before
+				? { messages: messagePage(0, 20), nextCursor: null, hasMore: false }
+				: { messages: messagePage(20, 20), nextCursor: "msg:cursor:20", hasMore: true };
+			return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+		});
+		await page.goto("/console/instances/inst-1");
+
+		await expect(page.getByText("Message 39")).toBeVisible();
+		await page.getByRole("button", { name: "Load earlier messages" }).click();
+
+		// Older content is on screen…
+		await expect(page.getByText("Message 0")).toBeVisible();
+		// …the server got the cursor it handed out, not a message id…
+		expect(cursors).toContain("msg:cursor:20");
+		// …no row appears twice (the duplicate-key corruption the old prepend caused)…
+		await expect(page.getByText("Message 20", { exact: true })).toHaveCount(1);
+		// …and the button is gone, because the server said there is nothing older.
+		await expect(page.getByRole("button", { name: "Load earlier messages" })).toHaveCount(0);
 	});
 
 	test("instance chat sends 'message' field to /chat API", async ({ page }) => {

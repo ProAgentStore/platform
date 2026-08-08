@@ -323,7 +323,13 @@ const PINS = {
 	// worth the pin: the padding is a bare number whose correctness comes from `right-8` + a 24px
 	// box + `px-3` in three other files, and a reader who cannot see that derivation will "tidy"
 	// it back to nothing. The measurement it replaces was 42px of overlap in WebKit.
-	"store/console/src/pages/InstanceDetail.tsx": 1475,
+	// +21 for #428: the "Load older messages" cursor. The state (`olderCursor`), the echo of the
+	// server's cursor instead of a self-minted one, the dedup on prepend, and the catch that now
+	// SAYS a page failed rather than looking identical to "there is nothing older" — which is how a
+	// feature that returned the newest page every time went unnoticed. The rule itself is in
+	// lib/messagePaging.ts with its tests; what is here is the three lines of wiring plus the
+	// comments naming the UUID cursor that could never have worked.
+	"store/console/src/pages/InstanceDetail.tsx": 1496,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -449,7 +455,12 @@ const PINS = {
 	// reason it reaches rows written before #395's guard existed — including in a DO that has been
 	// asleep since — and it says this route marks rather than redacts, because the user acted on
 	// that text and the record of what they acted on is the one thing that must not be edited.
-	"workers/api/src/agent-do.ts": 1146,
+	// +19 for #428, and almost all of it prose. `/messages` now seeks with an exclusive cursor and
+	// reports a MEASURED `hasMore`. The rule — the key format and the cursor vocabulary — lives in
+	// lib/message-page.ts with its tests, precisely so this file keeps only the wiring; the lines
+	// that stayed here are the ones that say WHY, namely that the fabrication stamp (#406) is
+	// decided per message and therefore applies to every page, not only the newest one.
+	"workers/api/src/agent-do.ts": 1165,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.

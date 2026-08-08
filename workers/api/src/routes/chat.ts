@@ -155,12 +155,14 @@ chatRoutes.get("/:id/messages", async (c) => {
 	const doId = c.env.AGENT.idFromName(agent.id);
 	const stub = c.env.AGENT.get(doId);
 
-	const limit = c.req.query("limit") || "50";
-	const doRes = await stub.fetch(
-		new Request(`https://agent/messages?limit=${limit}`),
-	);
+	// #428: `before` was dropped here too — the query string was rebuilt with only `limit`, so a
+	// creator paging back through a template's transcript got the newest page every time.
+	const params = new URLSearchParams({ limit: c.req.query("limit") || "50" });
+	const before = c.req.query("before");
+	if (before) params.set("before", before);
+	const doRes = await stub.fetch(new Request(`https://agent/messages?${params}`));
 	const data = await doRes.json();
-	return c.json(data);
+	return c.json(data as Record<string, unknown>, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
 });
 
 /** Get/set agent memory. */

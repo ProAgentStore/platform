@@ -194,10 +194,17 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 		const rawLimit = Number(c.req.query("limit") || "50");
 		const limit = Math.max(1, Math.min(2000, Number.isFinite(rawLimit) ? rawLimit : 50));
 		const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
-		const doRes = await stub.fetch(
-			new Request(`https://agent/messages?limit=${limit}`),
-		);
-		const payload = (await doRes.json()) as { messages?: Array<Record<string, unknown>> };
+		// #428: this used to rebuild the DO query string from scratch with only `limit`, so
+		// `before` never reached the object and "Load older messages" re-served the newest page.
+		// Build it from parts rather than adding a second literal to keep in step.
+		const params = new URLSearchParams({ limit: String(limit) });
+		const before = c.req.query("before");
+		if (before) params.set("before", before);
+		const doRes = await stub.fetch(new Request(`https://agent/messages?${params}`));
+		const payload = (await doRes.json()) as { messages?: Array<Record<string, unknown>>; error?: string };
+		// A cursor the DO refuses is the caller's mistake and must stay visible as one — passing
+		// it through as an empty 200 is how the original defect hid for as long as it did.
+		if (!doRes.ok) return c.json(payload, doRes.status as ContentfulStatusCode);
 		// Cached glosses ride along so translated history renders in the same paint —
 		// see instances-translation.ts.
 		await attachGlossesToMessages(c.env, instanceId, session.uid, payload.messages || []);
