@@ -3957,3 +3957,154 @@ test.describe("mobile — a repo row dates its verdict and can re-take it (#440)
 		await expect(page.getByText(/checked just now/i).first()).toBeVisible();
 	});
 });
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * mobile — the Co-pilot's Copy button clears the timestamp (#445)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * #426 fixed this on the Assistant. The **Coder Co-pilot** renders its own bubble, in a different
+ * package, with the same three decisions and none of the fix: an absolutely-positioned Copy button
+ * at `top-1 right-1.5`, always visible below `sm` (correctly — there is no hover on a touch
+ * screen), over a header row with no reserved padding. Measured in WebKit at 320 and 390:
+ * **18×16px of the timestamp underneath the button**, `padding-right: 0px`, identical at both
+ * widths because the button is absolutely positioned and does not scale. 18 of an 89px stamp is
+ * 20% of it, including the minutes.
+ *
+ * ── Why the console's guard did not catch it, and why this block had to exist
+ *
+ * `mobile — Copy and Delete clear the message timestamp (#426)` measures the Assistant tab, mocks
+ * `**\/v1/instances/inst-1/messages*` and asserts over `[data-chat-bubble]` / `[data-msg-stamp]`.
+ * The Co-pilot renders at a different route, inside a coding session, from
+ * `@proagentstore/coder-web`, and carried neither attribute. Two correct decisions — the guard was
+ * scoped to the surface the bug was reported on, and the Co-pilot was split into its own package
+ * deliberately — which compose into a blind spot.
+ *
+ * #445 offered "extend the guard, or accept a known blind spot IN WRITING". This is the extension,
+ * because the blind spot is the whole reason the defect shipped twice. It costs a fixture that no
+ * spec had: a MULTI-repo coding instance (`CodingTab` returns the solo surface before it ever
+ * reaches `CopilotView`, so `repos.length > 1` is load-bearing), a session in the URL — which is
+ * what `pickAutoOpenSession` opens on — and a `/timeline` answer whose row types map to chat roles
+ * through `chatMessagesFrom`'s table (`chat_user`, `chat_assistant`).
+ *
+ * ── What is asserted
+ *
+ * Bounding-box INTERSECTION, not padding. `pr-12` is the fix, but asserting the class or the
+ * computed padding would pass on a button that later moves or grows. The pixels the user cannot
+ * read are the thing. `sm` is asserted separately to stay byte-identical: above the breakpoint the
+ * button is hover-only, so reserving space there would be a desktop regression for no reason.
+ */
+test.describe("mobile — the Co-pilot Copy button clears the timestamp (#445)", () => {
+	const multiRepoCoder = [
+		{
+			id: "inst-1",
+			name: "Coder",
+			slug: "coder",
+			category: "code",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+		},
+	];
+
+	/** TWO repos: with one, `CodingTab` renders the solo surface and never mounts `CopilotView`. */
+	const REPOS = [
+		{ id: "repo-1", name: "platform", githubRepo: "ProAgentStore/platform", provider: "github", cloneStatus: "ready" },
+		{ id: "repo-2", name: "landing", githubRepo: "OpenFrontierOne/landing", provider: "github", cloneStatus: "ready" },
+	];
+	const SESSION = { id: "cs-1", repoId: "repo-1", status: "active", clientType: "claude", createdAt: "2026-08-08T02:12:00Z" };
+
+	async function openCopilot(page: Page, width: number) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, { instances: multiRepoCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/timeline")) {
+				// The row types `chatMessagesFrom` maps to roles. Real-shaped stamps: an
+				// everyday one (89px) and one carrying a year (114px), which is the pair #426
+				// established matters — the overlap is 18px regardless, and asserting only the
+				// short one would hide a regression that only bites the long one.
+				return json({
+					chat: [
+						{ type: "chat_user", content: "run the tests", createdAt: "2026-08-08T02:12:00Z" },
+						{ type: "chat_assistant", content: "All 6,768 passed.", createdAt: "2025-07-08T02:12:00Z" },
+					],
+				});
+			}
+			if (url.includes("/repos")) return json({ repos: REPOS });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [SESSION] });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			return json({});
+		});
+		// The session id in the URL is what `pickAutoOpenSession` opens on — no click needed, and
+		// no dependence on a repo row's markup.
+		await page.goto("/console/instances/inst-1/coding/cs-1");
+		await page.waitForLoadState("networkidle");
+		await page.locator("[data-msg-stamp]").first().waitFor();
+		await page.waitForTimeout(300);
+	}
+
+	/** Every stamp, against every Copy button, as rectangles. */
+	async function measureOverlap(page: Page) {
+		return page.evaluate(() => {
+			const copies = Array.from(document.querySelectorAll('button[aria-label="Copy message"]')) as HTMLElement[];
+			const stamps = Array.from(document.querySelectorAll("[data-msg-stamp]")) as HTMLElement[];
+			const hits: string[] = [];
+			for (const s of stamps) {
+				const sr = s.getBoundingClientRect();
+				for (const c of copies) {
+					const cr = c.getBoundingClientRect();
+					const w = Math.round(Math.min(sr.right, cr.right) - Math.max(sr.left, cr.left));
+					const h = Math.round(Math.min(sr.bottom, cr.bottom) - Math.max(sr.top, cr.top));
+					if (w > 0 && h > 0) hits.push(`"${s.textContent}" (${Math.round(sr.width)}px) is covered ${w}x${h} by Copy`);
+				}
+			}
+			return {
+				hits,
+				stamps: stamps.length,
+				copies: copies.length,
+				// The button must still be PAINTED on a phone — reserving space for an invisible
+				// button would "fix" the overlap by hiding the control (#389).
+				painted: copies.map((c) => getComputedStyle(c).opacity),
+				headerPadding: stamps.map((s) => getComputedStyle(s.parentElement as HTMLElement).paddingRight),
+				// #389's floor. `tap-target` adds vertical reach with an ::after, so this reads the
+				// pseudo-element rather than the button box, which is deliberately unchanged.
+				reach: copies.map((c) => Math.round(Number.parseFloat(getComputedStyle(c, "::after").minHeight) || c.getBoundingClientRect().height)),
+			};
+		});
+	}
+
+	for (const width of [320, 390]) {
+		test(`no pixel of the timestamp is under Copy at ${width}px`, async ({ page }) => {
+			await openCopilot(page, width);
+			const m = await measureOverlap(page);
+			const detail = JSON.stringify(m);
+
+			// NON-VACUITY. A Co-pilot that rendered no bubbles would report no overlap and pass —
+			// and this is the surface that got here precisely by never being rendered in a test.
+			expect(m.stamps, `the Co-pilot rendered no timestamps — fixture gap, not a pass: ${detail}`).toBe(2);
+			expect(m.copies, `the Co-pilot rendered no Copy buttons: ${detail}`).toBe(2);
+			for (const o of m.painted) {
+				expect(Number(o), `Copy is not visible on a phone — there is no hover here (#389): ${detail}`).toBe(1);
+			}
+
+			expect(m.hits, `${m.hits.join("; ")} — ${detail}`).toEqual([]);
+
+			// #389's 40px floor, closed on this package in the same edit. The neighbouring play
+			// button already had `tap-target`; this one was a 24×24 target.
+			for (const r of m.reach) {
+				expect(r, `the Copy button's touch reach is ${r}px, under #389's floor: ${detail}`).toBeGreaterThanOrEqual(40);
+			}
+		});
+	}
+
+	test("mobile — no space is reserved above the sm breakpoint", async ({ page }) => {
+		await openCopilot(page, 900);
+		const m = await measureOverlap(page);
+		// `sm:pr-0` — the desktop layout is byte-identical, because there the button is
+		// hover-revealed and covers nothing to begin with.
+		for (const p of m.headerPadding) {
+			expect(p, `space is reserved at desktop width, where Copy is hover-only: ${JSON.stringify(m)}`).toBe("0px");
+		}
+	});
+});

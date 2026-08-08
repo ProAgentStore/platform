@@ -52,7 +52,11 @@ function CopyButton({ text }: { text: string }) {
 			onDoubleClick={(e) => e.stopPropagation()}
 			title={copied ? "Copied" : "Copy"}
 			aria-label="Copy message"
-			className="absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
+			// `tap-target` closes a live #389 omission: this was a 24×24 box on the surface #389
+			// swept everywhere BUT this package, and the play button in the same header already has
+			// it. It adds 44px of vertical reach via an ::after, so the button's own box — which is
+			// what the #445 overlap is measured against — is unchanged.
+			className="tap-target absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
 		>
 			{copied ? <Check size={16} className="text-green" /> : <Copy size={16} />}
 		</button>
@@ -400,8 +404,8 @@ export default function CopilotView({
 							}`}
 						>
 							<CopyButton text={m.content} />
-							{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
-							{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span data-msg-stamp className="font-normal opacity-80 text-right">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span data-msg-stamp className="font-normal text-muted text-right">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
 								<SafeHtmlView className="msg-md" html={renderMd(m.content)} />
 							) : (
