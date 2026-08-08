@@ -4,6 +4,8 @@
 // github_workflow_runs handler). #88: de-hardwire Coder's build-status fetch onto a shared client
 // so the github connector and the console routes read builds through the same code path.
 import type { BuildRun } from "./build-history.js";
+import { githubConditionalJson, type GithubCacheIdentity } from "./github-cache.js";
+import type { Env } from "../types.js";
 
 /** GitHub REST headers for the Actions API. `token` optional — a public repo's runs are
  *  readable unauthenticated (used by the /deployments public-repo fallback). */
@@ -21,14 +23,36 @@ function actionsHeaders(token?: string): Record<string, string> {
 export type WorkflowRunsResult = { runs: Array<Record<string, unknown>> } | { status: number | null };
 
 /**
+ * Who is asking, and under what authority — the argument that turns a read into a CONDITIONAL
+ * read (#418). Optional: a caller with no identity to hand keeps the plain fetch it always had.
+ *
+ * Both halves are required together because the cache key is a tenancy boundary. `env` alone
+ * cannot say whose entry this is, and an identity must come from the SAME resolution that
+ * produced `token` — a `userId` picked up from elsewhere in the request is exactly the
+ * cross-tenant read `lib/github-cache.ts` is written to prevent.
+ */
+export interface WorkflowRunsCache {
+	env: Env;
+	identity: GithubCacheIdentity;
+}
+
+/**
  * Fetch a page of GitHub Actions runs for `owner/repo`. Never throws — a non-OK response or
  * network error resolves to `{ status }` so every caller can degrade gracefully. `perPage`
  * defaults to 1 (the latest run).
+ *
+ * Runs are the highest-frequency GitHub read the platform makes: the repos page polls deploy
+ * status every ~25s and `/builds` fans out one Actions request PER REPO per poll. With `cache`
+ * supplied each of those spends nothing when nothing changed — a 304 is exempt from the REST
+ * primary rate limit — and stays exactly as fresh, which is why this is a conditional request and
+ * not a TTL. The Builds panel's whole job is being current; a stale "✓ ready" over a failed build
+ * is the defect, not the cost.
  */
 export async function fetchWorkflowRuns(
 	repo: string,
 	token: string | undefined,
 	opts: { perPage?: number; page?: number; branch?: string; event?: string; status?: string } = {},
+	cache?: WorkflowRunsCache,
 ): Promise<WorkflowRunsResult> {
 	const perPage = opts.perPage ?? 1;
 	const page = opts.page ?? 1;
@@ -45,12 +69,36 @@ export async function fetchWorkflowRuns(
 	]
 		.filter(Boolean)
 		.join("&");
+	const url = `https://api.github.com/repos/${repo}/actions/runs?${qs}`;
 	try {
-		const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs?${qs}`, { headers: actionsHeaders(token) });
+		if (cache) {
+			// `qs` IS the variant: two reads of this resource differ only by their query, and the
+			// answer to one is not the answer to the other (a `event=pull_request` page is not the
+			// Builds panel's page). The cache's own failure asymmetry is passed through unchanged —
+			// a 403/404 invalidated the entry and arrives here as a failure; a 5xx/network error
+			// served the stored copy and arrives as a success flagged stale. `fromCache`/`stale` are
+			// deliberately NOT surfaced on WorkflowRunsResult: no caller has a use for them today,
+			// and widening this union is how the "never throws, always `{ status }` on failure"
+			// contract every caller relies on starts to drift.
+			const res = await githubConditionalJson<{ workflow_runs?: Array<Record<string, unknown>> }>(cache.env, {
+				identity: cache.identity,
+				repo,
+				resource: "runs",
+				variant: qs,
+				url,
+				headers: actionsHeaders(token),
+			});
+			if (!res.ok) return { status: res.status };
+			return { runs: res.data?.workflow_runs ?? [] };
+		}
+		const res = await fetch(url, { headers: actionsHeaders(token) });
 		if (!res.ok) return { status: res.status };
 		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
 		return { runs: data.workflow_runs ?? [] };
 	} catch {
+		// The try/catch spans the cached branch too. `githubConditionalJson` is written not to
+		// throw, but "never throws" here is a contract five call sites depend on for their
+		// degradation, and it must not become conditional on another module keeping a promise.
 		return { status: null };
 	}
 }

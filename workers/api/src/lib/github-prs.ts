@@ -295,10 +295,14 @@ export async function listPulls(env: Env, userId: string, githubRepo: string, op
 
 		// One extra request for every PR's CI (see attachChecks). `event: pull_request` keeps this
 		// off the push/schedule runs that the Builds panel shows and a PR's checks are not.
-		const runs = await fetchWorkflowRuns(`${parsed.owner}/${parsed.name}`, token ?? undefined, {
-			perPage: 50,
-			event: "pull_request",
-		});
+		const runs = await fetchWorkflowRuns(
+			`${parsed.owner}/${parsed.name}`,
+			token ?? undefined,
+			{ perPage: 50, event: "pull_request" },
+			// Same `authContext` the pulls read above was made under, from the same
+			// `resolveGithubRead` that minted this token (#418).
+			{ env, identity: { userId, authContext } },
+		);
 		if (!("status" in runs)) pulls = attachChecks(pulls, runs.runs);
 
 		if (opts.enrich === false) return pulls;
@@ -338,7 +342,12 @@ export async function readPull(env: Env, userId: string, githubRepo: string, num
 		const raw = await fetchPullRaw(ctx, Number(number));
 		if (!raw) return null;
 		const review = await fetchReviewState(ctx, Number(number));
-		const runs = await fetchWorkflowRuns(`${parsed.owner}/${parsed.name}`, token ?? undefined, { perPage: 50, event: "pull_request" });
+		const runs = await fetchWorkflowRuns(
+			`${parsed.owner}/${parsed.name}`,
+			token ?? undefined,
+			{ perPage: 50, event: "pull_request" },
+			{ env, identity: { userId, authContext } },
+		);
 		const summary = toPullSummary(raw);
 		const withChecks = "status" in runs ? [summary] : attachChecks([summary], runs.runs);
 		return {

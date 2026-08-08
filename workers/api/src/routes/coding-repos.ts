@@ -15,6 +15,7 @@ import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
+import { resolveGithubRead } from "../lib/github-cache.js";
 import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "../lib/github-actions.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
@@ -69,12 +70,20 @@ async function nextOpenIssue(env: Env, userId: string, githubRepo: string, opts:
  * `{ available:false }` (never throws) for a non-GitHub repo, a missing/failed installation
  * token, or a GitHub error — so the aggregate below can degrade per-repo. Shared by /builds
  * and by /deployment, which used to repeat this body verbatim (#304).
+ *
+ * The single highest-frequency GitHub read on the platform: /builds fans this out once per repo,
+ * and the repos page polls every ~25s. `resolveGithubRead` replaces the bare
+ * `installationTokenForOwner` so the conditional cache (#401) gets its identity from the SAME
+ * resolution that produced the token — the tenancy rule #418 names, and the reason this is not a
+ * `uid` handed in from the surrounding request. An unnameable installation resolves to
+ * `authContext: null`, which means "do not cache", so the read falls back to exactly the plain
+ * fetch it did before rather than to someone else's entry.
  */
 async function latestRunFor(env: Env, uid: string, full: string | undefined): Promise<{ available: boolean; run: BuildRun | null }> {
 	if (!full?.includes("/") || !githubAppConfigured(env)) return { available: false, run: null };
-	const token = await installationTokenForOwner(env, uid, ownerOf(full)).catch(() => null);
+	const { token, authContext } = await resolveGithubRead(env, uid, ownerOf(full));
 	if (!token) return { available: false, run: null };
-	const res = await fetchWorkflowRuns(full, token, { perPage: 1 });
+	const res = await fetchWorkflowRuns(full, token, { perPage: 1 }, { env, identity: { userId: uid, authContext } });
 	if ("status" in res) return { available: false, run: null };
 	return { available: true, run: res.runs[0] ? mapWorkflowRun(res.runs[0]) : null };
 }

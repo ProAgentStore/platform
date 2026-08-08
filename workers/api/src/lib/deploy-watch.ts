@@ -1,6 +1,6 @@
 import { codingBuildsLink } from "./console-links.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
-import { installationTokenForOwner } from "./github-app.js";
+import { resolveGithubRead } from "./github-cache.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -233,16 +233,25 @@ export async function runDeployWatch(env: Env): Promise<void> {
 			const owner = repo.github_repo.split("/")[0] ?? "";
 			// Private repos need the installation token; public ones work unauthenticated but
 			// burn the shared 60/hr cap, so use the token whenever there is one.
-			const token = (await installationTokenForOwner(env, repo.user_id, owner).catch(() => null)) ?? undefined;
+			//
+			// `resolveGithubRead` (#418) yields the token AND the auth context it was minted under
+			// in one call, so the conditional cache's identity comes from the same resolution as
+			// the credential — never a `user_id` read off the row separately. This is a per-minute
+			// cron over every watched repo, so it is a per-repo-per-minute Actions request; on an
+			// unchanged repo it now costs a 304 and no primary rate limit. `listUserInstallations`
+			// is a D1 read, so establishing the context spends no GitHub budget of its own.
+			const { token: tok, authContext } = await resolveGithubRead(env, repo.user_id, owner);
+			const token = tok ?? undefined;
 			// `event=push` + `status=completed` at the API, deploy-vs-CI in `decideDeployNotification`.
 			// Filtering here rather than only in the decision keeps the page useful: an unfiltered
 			// page of 20 on a busy repo can be entirely PR runs and in-progress churn, leaving the
 			// decision nothing to look at.
-			const res = await fetchWorkflowRuns(repo.github_repo, token, {
-				perPage: DEPLOY_WATCH_RUNS_PER_REPO,
-				event: "push",
-				status: "completed",
-			});
+			const res = await fetchWorkflowRuns(
+				repo.github_repo,
+				token,
+				{ perPage: DEPLOY_WATCH_RUNS_PER_REPO, event: "push", status: "completed" },
+				{ env, identity: { userId: repo.user_id, authContext } },
+			);
 			const runs: WatchedRun[] = ("runs" in res ? res.runs : []).map((raw) => {
 				const mapped = mapWorkflowRun(raw);
 				return {
