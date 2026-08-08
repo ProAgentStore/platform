@@ -1,6 +1,7 @@
 import { ALL_INSPECT_TOOL_NAMES, buildInspectTools, executeInspectTool } from "./coding-inspect.js";
 import { scrubOneShotReply } from "./invented-results.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.js";
+import { canReadHosted, type HostedRepoRef } from "./hosted-repo.js";
 import type { RunnerConn } from "./runner-client.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { Env } from "../types.js";
@@ -39,8 +40,9 @@ export interface CopilotArgs {
 	conn?: RunnerConn;
 	sessionId?: string;
 	workDir?: string;
-	/** "owner/repo" — enables the read-only GitHub issue tools (cloud-side, no runner needed). */
-	githubRepo?: string;
+	/** The repo — enables the read-only issue tools (cloud-side, no runner needed) when its host
+	 *  can be asked. Provider-neutral since #221: GitHub and GitLab both answer here. */
+	repo?: HostedRepoRef;
 	/** For the usage ledger — attributes these calls to the instance. */
 	instanceId?: string;
 }
@@ -66,9 +68,9 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	];
 
 	// Cheap single-shot path: auto status/finished summary, or nothing to read from (no runner
-	// AND no GitHub repo). Latency + cost of the common "one-line status" refresh is unchanged.
+	// AND no readable issue tracker). Latency + cost of the "one-line status" refresh is unchanged.
 	const canReadCode = !!args.conn;
-	const canReadIssues = !!args.githubRepo;
+	const canReadIssues = !!args.repo && canReadHosted(args.repo, "issues");
 	if (!question || (!canReadCode && !canReadIssues)) {
 		const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 			messages,
@@ -81,7 +83,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	// grounded in reality. Code tools need the runner; issue tools are cloud-side (any runner).
 	// Reads only (never drives the CLI); ≤3 rounds; dedupe repeats.
 	const tools = buildInspectTools({ code: canReadCode, issues: canReadIssues });
-	const target = { conn: args.conn as RunnerConn, sessionId: args.sessionId, workDir: args.workDir, env, userId, githubRepo: args.githubRepo };
+	const target = { conn: args.conn as RunnerConn, sessionId: args.sessionId, workDir: args.workDir, env, userId, repo: args.repo };
 	const executed = new Set<string>();
 	for (let round = 0; round < 3; round++) {
 		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as Record<string, unknown>;

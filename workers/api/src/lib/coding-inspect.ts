@@ -1,5 +1,5 @@
 import { callRunner, type RunnerConn } from "./runner-client.js";
-import { listIssues, readIssue } from "./github-issues.js";
+import { canReadHosted, hostedCoordinate, listHostedIssues, readHostedIssue, type HostedRepoRef } from "./hosted-repo.js";
 import type { Env } from "../types.js";
 
 /**
@@ -19,17 +19,21 @@ export interface InspectTarget {
 	sessionId?: string;
 	/** D1 `repo.workdir` fallback when the runner's session map is empty (post-restart). */
 	workDir?: string;
-	/** Present → the issue tools can answer from GitHub (cloud-side, no runner call). */
+	/** Present → the issue tools can answer from the repo's host (cloud-side, no runner call). */
 	env?: Env;
 	userId?: string;
-	/** "owner/repo" — enables the issue tools when set. */
-	githubRepo?: string;
+	/**
+	 * The repo, not its GitHub coordinate (#221). Which host to ask is the repo's business, and
+	 * passing `owner/repo` down here is what made the Co-pilot tell a working GitLab repo it had
+	 * no issues to read while the console's Issues panel was listing them.
+	 */
+	repo?: HostedRepoRef;
 }
 
 /**
  * Tool defs in the same `{type:"function", function:{...}}` shape as buildAgentToolDefinitions.
- * Pass `{ issues: true }` to also offer the read-only GitHub issue tools (only do so when the
- * repo is connected to GitHub — a local-only repo has no issues).
+ * Pass `{ issues: true }` to also offer the read-only issue tools (only do so when the repo's
+ * host can actually be asked — `canReadHosted(repo, "issues")`; a local-only repo has none).
  */
 export function buildInspectTools(opts: { code?: boolean; issues?: boolean } = {}) {
 	const { code = true, issues = false } = opts;
@@ -54,11 +58,11 @@ export function buildInspectTools(opts: { code?: boolean; issues?: boolean } = {
 	}
 	if (issues) {
 		tools.push(
-			fn("list_issues", "List the repo's open GitHub issues (number + title) so you know the backlog before answering 'what's next / what's open'.", {
+			fn("list_issues", "List the repo's open issues (number + title) so you know the backlog before answering 'what's next / what's open'.", {
 				state: { type: "string", description: "open (default), closed, or all." },
 				labels: { type: "string", description: "Comma-separated label filter (optional), e.g. bug,ui." },
 			}),
-			fn("read_issue", "Read one GitHub issue's title + description, to explain what it asks for.", {
+			fn("read_issue", "Read one issue's title + description, to explain what it asks for.", {
 				number: { type: "number", description: "The issue number, e.g. 42." },
 			}, ["number"]),
 		);
@@ -75,25 +79,29 @@ export const ALL_INSPECT_TOOL_NAMES = new Set([...INSPECT_TOOL_NAMES, ...ISSUE_T
 const CAPS = { read_file: 8 * 1024, git_diff: 12 * 1024, list_files: 6 * 1024, git_status: 4 * 1024, issues: 4 * 1024, issue: 8 * 1024 };
 
 /**
- * Execute a GitHub-issue read tool (cloud-side, NO runner call — works on any runner).
- * Returns a compact text result the brain translates to plain language. Never throws.
+ * Execute an issue read tool (cloud-side, NO runner call — works on any runner version, against
+ * whichever host the repo lives on). Returns a compact text result the brain translates to plain
+ * language. Never throws.
  */
 async function executeIssueTool(target: InspectTarget, call: { name: string; arguments: Record<string, unknown> }): Promise<string> {
-	const { env, userId, githubRepo } = target;
-	if (!env || !githubRepo) return "Issue access needs a repo connected to GitHub — this one isn't, so you can't read its issues.";
+	const { env, userId, repo } = target;
+	if (!env || !repo || !canReadHosted(repo, "issues")) {
+		return "Issue access needs a repo on a host PAGS can read (GitHub or GitLab) — this one isn't, so you can't read its issues.";
+	}
+	const githubRepo = hostedCoordinate(repo);
 	if (call.name === "list_issues") {
 		const state = typeof call.arguments?.state === "string" && ["open", "closed", "all"].includes(call.arguments.state) ? (call.arguments.state as "open" | "closed" | "all") : "open";
 		const labels = typeof call.arguments?.labels === "string" ? call.arguments.labels : undefined;
-		const issues = await listIssues(env, userId ?? "", githubRepo, { state, labels });
-		if (!issues.length) return `No ${state} issues found on ${githubRepo} (or the repo is private and the GitHub App isn't installed).`;
+		const issues = await listHostedIssues(env, userId ?? "", repo, { state, labels });
+		if (!issues.length) return `No ${state} issues found on ${githubRepo} (or it is private and PAGS has no credential for it).`;
 		const lines = issues.map((i) => `#${i.number}: ${i.title}${i.labels.length ? ` [${i.labels.join(", ")}]` : ""}`).join("\n");
 		return clip(`${state} issues on ${githubRepo}:\n${lines}`, CAPS.issues);
 	}
 	if (call.name === "read_issue") {
 		const number = typeof call.arguments?.number === "number" ? call.arguments.number : Number.parseInt(String(call.arguments?.number ?? ""), 10);
 		if (!Number.isFinite(number)) return "read_issue needs a `number`.";
-		const issue = await readIssue(env, userId ?? "", githubRepo, number);
-		if (!issue) return `Issue #${number} wasn't found on ${githubRepo} (it may be a pull request, or the repo is private without the GitHub App installed).`;
+		const issue = await readHostedIssue(env, userId ?? "", repo, number);
+		if (!issue) return `Issue #${number} wasn't found on ${githubRepo} (it may be a pull request, or the repo is private and PAGS has no credential for it).`;
 		return clip(`Issue #${issue.number}: ${issue.title}${issue.labels.length ? `\nLabels: ${issue.labels.join(", ")}` : ""}\n\n${issue.body || "(no description)"}`, CAPS.issue);
 	}
 	return `Unknown issue tool: ${call.name}`;

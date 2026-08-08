@@ -281,7 +281,7 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			conn: conn ?? undefined,
 			sessionId,
 			workDir: repo?.workdir ?? undefined,
-			githubRepo: repo?.githubRepo ?? undefined,
+			repo: repo ?? undefined,
 			instanceId,
 		})) || "(no response)";
 		// Don't persist a transient "runner offline / session hasn't started" auto-summary

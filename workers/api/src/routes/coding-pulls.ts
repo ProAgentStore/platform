@@ -20,7 +20,7 @@
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { getRepo } from "../lib/coding-store.js";
-import { gitProviderFor, hostedFeatureUnavailable } from "../lib/git-providers.js";
+import { hostedCoordinate, hostedReadRefusal } from "../lib/hosted-repo.js";
 import { listPulls, readPull, type PullSummary } from "../lib/github-prs.js";
 import { pullActsFor, type PullAttribution } from "../lib/pull-attribution.js";
 import { requireOwned } from "./coding-shared.js";
@@ -59,23 +59,27 @@ export function registerPullRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	 * Open pull requests for a repo. `?state=open|closed|all` (default open), `?enrich=0` to skip
 	 * the per-PR mergeable/review lookups.
 	 *
-	 * 400 for a repo with no GitHub coordinate, phrased by provider — the same honest failure the
-	 * Issues route gives a GitLab repo rather than "isn't connected to GitHub".
+	 * 400 for a repo whose host has no pull-request client, phrased by provider — GitHub is still
+	 * the only one (`supports.pulls`), and a GitLab repo is told merge requests are unsupported
+	 * rather than that it "isn't connected to GitHub". GitLab issues and pipelines DO work (#221);
+	 * these three flags move independently for exactly that reason.
 	 */
 	codingRoutes.get("/:instanceId/coding/repos/:repoId/pulls", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
 		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 		if (!repo) throw new HttpError(404, "Repo not found");
-		if (!repo.githubRepo?.includes("/")) {
-			return c.json({ error: hostedFeatureUnavailable(gitProviderFor(repo.provider), "pull requests") }, 400);
-		}
+		const refusal = hostedReadRefusal(repo, "pulls");
+		if (refusal) return c.json({ error: refusal }, 400);
+		// The refusal above already established there IS a coordinate; reading it back through
+		// `hostedCoordinate` rather than `githubRepo!` keeps one rule for what a repo is called.
+		const slug = hostedCoordinate(repo);
 		const state = c.req.query("state");
-		const pulls = await listPulls(c.env, uid, repo.githubRepo, {
+		const pulls = await listPulls(c.env, uid, slug, {
 			state: state === "closed" || state === "all" ? state : "open",
 			enrich: c.req.query("enrich") !== "0",
 		});
 		const rows = withAttribution(pulls, await pullActsFor(c.env, instanceId, uid));
-		const payload = { repo: repo.githubRepo, pulls: rows };
+		const payload = { repo: slug, pulls: rows };
 		const body = JSON.stringify(payload);
 		const etag = pullsETag(body);
 		if (c.req.header("If-None-Match") === etag) return c.body(null, 304, { ETag: etag });
@@ -87,12 +91,11 @@ export function registerPullRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const { uid, instanceId } = await requireOwned(c);
 		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 		if (!repo) throw new HttpError(404, "Repo not found");
-		if (!repo.githubRepo?.includes("/")) {
-			return c.json({ error: hostedFeatureUnavailable(gitProviderFor(repo.provider), "pull requests") }, 400);
-		}
+		const refusal = hostedReadRefusal(repo, "pulls");
+		if (refusal) return c.json({ error: refusal }, 400);
 		const number = Number.parseInt(c.req.param("number"), 10);
 		if (!Number.isFinite(number)) return c.json({ error: "Invalid pull request number" }, 400);
-		const pull = await readPull(c.env, uid, repo.githubRepo, number);
+		const pull = await readPull(c.env, uid, hostedCoordinate(repo), number);
 		if (!pull) throw new HttpError(404, "Pull request not found");
 		const acts = await pullActsFor(c.env, instanceId, uid);
 		return c.json({ pull: { ...pull, agentAct: acts.get(pull.number) ?? null } });

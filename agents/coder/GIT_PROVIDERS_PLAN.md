@@ -2,26 +2,54 @@
 
 ## Status (2026-08-08)
 
-Phase 1 has landed, plus GitLab's **clone credential** out of Phase 3. Phases 3–5 are otherwise
-still open.
+Phases 1 and 2 have landed, and Phase 3 is landed for **reads** — GitLab issues and pipelines.
+Phase 3's write half (creating a GitLab issue), Phase 4 (Bitbucket) and Phase 5 are still open.
 
-**Shipped.** `workers/api/src/lib/git-providers.ts` is the provider registry — declared data
-(hosts, git username, credential model, capability flags), not a chain of `if (provider ===
-"gitlab")`. `lib/git-credentials.ts` is the single token-minting seam that all three clone call
-sites now use. Migration `0097` adds `provider` / `repo_slug` / `web_url` to `coding_repos` and
-backfills; `github_repo` stays populated for GitHub so every existing reader is untouched. The
-add-repo route, `detect-github`, the repo badge/title and the runner's clone URL are all
-provider-aware. A GitLab personal access token is stored in the existing encrypted vault
-(`user_api_keys` provider `gitlab`) and used as the password half of an https clone.
+**Shipped — identity and credential.** `workers/api/src/lib/git-providers.ts` is the provider
+registry — declared data (hosts, git username, credential model, capability flags), not a chain
+of `if (provider === "gitlab")`. `lib/git-credentials.ts` is the single token-minting seam that
+all three clone call sites use. Migration `0097` adds `provider` / `repo_slug` / `web_url` to
+`coding_repos` and backfills; `github_repo` stays populated for GitHub so every existing reader
+is untouched. The add-repo route, `detect-github`, the repo badge/title and the runner's clone
+URL are all provider-aware. A GitLab personal access token is stored in the existing encrypted
+vault (`user_api_keys` provider `gitlab`) and used as the password half of an https clone.
 
-**Deliberately deferred, and failing cleanly rather than silently.** GitLab and Bitbucket
-**issues** and **pipelines**: `GitProvider.supports` declares `{issues:false, builds:false}` for
-them, the issues routes answer 400 with "not supported for GitLab yet" (never "isn't connected to
-GitHub"), and the builds routes answer `{available:false}` — no GitLab API client exists, and one
-built without an account to test against would be guesswork. Bitbucket's **credential**: an app
-password is a username + secret and the vault holds one opaque value per provider, so wiring it
-would 401 on every private clone while looking configured. Self-managed GitLab / Bitbucket Server
-resolve as provider `other` — they clone fine, and claim nothing.
+**Shipped — hosted reads.** `lib/hosted-repo.ts` is the dispatcher every hosted read resolves
+through: issues (list/read/next), builds (latest/history), pull requests. `lib/gitlab-api.ts` is
+the GitLab REST v4 read client — issues by `iid`, pipelines widened into the `(status,
+conclusion)` pair the console and `build-history.ts` already read — over the same vault PAT the
+clone uses, with public projects readable unauthenticated. The GitHub path is a re-route, not a
+rewrite: same `resolveGithubRead` identity for the conditional cache (#401/#418), same
+unauthenticated fallback for a public repo's Actions runs, same `{available:false}` degradation.
+
+The guard that used to front all five surfaces — `!repo.githubRepo?.includes("/")` — is gone.
+That one expression carried three separate claims (hosted at all / coordinate known / host
+drivable), which is why a correctly-added GitLab repo was told it "isn't connected to GitHub"
+when the only false claim was the third. `hostedReadRefusal` answers them separately and returns
+the sentence that is actually true. The Co-pilot's `list_issues` / `read_issue` go through the
+same dispatcher, so the brain and the Issues panel cannot disagree about the same repo.
+
+**Deliberately deferred, and failing cleanly rather than silently.**
+
+- **GitLab merge requests.** `supports.pulls:false`. `lib/github-prs.ts` is a substantial client
+  (checks, review state, mergeability, PR-to-run correlation) and GitLab's MR API differs enough
+  that claiming it from an untested mapping is the failure this flag exists to prevent. The three
+  `supports` flags move independently for exactly this reason.
+- **Writes on GitLab** (creating an issue). The read path is the honest half to ship without an
+  account to verify against; a write that silently no-ops is worse than one that isn't offered.
+  The registry connector's tools stay `github_*` — they are explicitly GitHub-named tools taking
+  an `owner/repo` argument, not repo-row surfaces, so they are not a half-migration of this seam.
+- **Bitbucket** — issues, pipelines, and the **credential**: an app password is a username +
+  secret and the vault holds one opaque value per provider, so wiring it would 401 on every
+  private clone while looking configured.
+- **Self-managed GitLab / Bitbucket Server** resolve as provider `other` — they clone fine, and
+  claim nothing. `gitlab-api.ts` therefore hardcodes `gitlab.com`, which is what keeps its URL a
+  constant: no request field on this path can move where an authenticated read is sent.
+
+**Not verified against a live GitLab account.** Every mapping above is covered by unit tests
+against recorded response shapes, and the dispatch is pinned by a test asserting a nested GitLab
+slug never reaches `api.github.com`. Nobody on the team has GitLab credentials, so the first real
+project pointed at this should be treated as the acceptance test.
 
 **Two departures from the plan below.** A fifth provider value, `other`, exists: a clone URL on an
 unrecognised host is a real remote, and calling it `local` is the same class of lie this work is

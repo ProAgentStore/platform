@@ -22,6 +22,10 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({
 }));
 
 import { registerRepoRoutes } from "./coding-repos.js";
+// Registered alongside the repo routes so the provider-dispatch block can assert that the
+// three hosted surfaces disagree about GitLab on purpose: issues and builds answer, pull
+// requests refuse (#221).
+import { registerPullRoutes } from "./coding-pulls.js";
 import type { Env } from "../types.js";
 
 const SECRET = "coding-repos-test-secret";
@@ -78,6 +82,7 @@ function buildApp(repo?: Record<string, unknown>) {
 	const app = new Hono<{ Bindings: Env }>();
 	const routes = new Hono<{ Bindings: Env }>();
 	registerRepoRoutes(routes);
+	registerPullRoutes(routes);
 	app.route("/v1/instances", routes);
 	app.onError((err, c) => c.json({ error: (err as Error).message }, err instanceof HttpError ? (err.status as 400) : 500));
 	return { app, ...ctx };
@@ -330,46 +335,98 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 	});
 });
 
-describe("GET /coding/repos/:id/issues — a deferred surface fails CLEANLY", () => {
+describe("GET /coding/repos/:id/issues — dispatched by provider, refused honestly (#221)", () => {
 	const gitlabRepo = {
 		id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "group/project",
-		github_repo: null, provider: "gitlab", repo_slug: "group/project", web_url: null,
-		clone_url: "https://gitlab.com/group/project.git", branch: "", workdir: null,
+		github_repo: null, provider: "gitlab", repo_slug: "group/sub/project", web_url: null,
+		clone_url: "https://gitlab.com/group/sub/project.git", branch: "", workdir: null,
 		clone_status: "ready", clone_error: null, default_client: "claude",
 		urls: null, instructions: null, merge_policy: null,
 		created_at: "2026-08-08 00:00:00", updated_at: "2026-08-08 00:00:00",
 	};
 
+	/**
+	 * Every outbound HTTP call this block makes, captured. The assertion that matters most is
+	 * negative: a GitLab slug must NEVER reach api.github.com. `group/sub/project` is not an
+	 * `owner/repo`, so letting it flow into the GitHub client would build a nonsense authenticated
+	 * request against someone else's namespace — the exact failure a provider dispatch exists to
+	 * make impossible, and one no green "it returned 400" test would have caught.
+	 */
+	let urls: string[] = [];
+	beforeEach(() => {
+		urls = [];
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			return new Response(JSON.stringify([{ iid: 3, title: "Pipeline flakes", state: "opened", labels: ["ci"], user_notes_count: 2, updated_at: "2026-08-08T00:00:00Z", web_url: "https://gitlab.com/x/-/issues/3", description: "It fails on rerun." }]), {
+				status: 200, headers: { "Content-Type": "application/json" },
+			});
+		}));
+	});
+
 	const get = async (path: string, repo: Record<string, unknown>) => {
 		const { app, env } = buildApp(repo);
 		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
 		const res = await app.request(`/v1/instances/${INSTANCE}/coding/repos/repo-1${path}`, { headers: { Authorization: `Bearer ${token}` } }, env);
-		return { status: res.status, body: (await res.json()) as { error?: string } };
+		return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 	};
 
-	it("says GitLab issues are not supported YET, not that the repo is unconnected", async () => {
-		for (const path of ["/issues", "/issues/7", "/next-issue"]) {
-			const { status, body } = await get(path, gitlabRepo);
-			expect(status, path).toBe(400);
-			expect(body.error, path).toContain("GitLab");
-			expect(body.error, path).not.toContain("isn't connected to GitHub");
-		}
+	it("lists a GitLab project's issues, addressed by its NESTED path", async () => {
+		const { status, body } = await get("/issues", gitlabRepo);
+		expect(status).toBe(200);
+		// `iid`, not `id` — the number a human sees and the one `#3` means in that project.
+		expect(body.issues).toEqual([
+			{ number: 3, title: "Pipeline flakes", state: "open", labels: ["ci"], comments: 2, updatedAt: "2026-08-08T00:00:00Z", url: "https://gitlab.com/x/-/issues/3" },
+		]);
+		// The coordinate on the wire is the project path — `github_repo` is null here, and the
+		// console renders whatever `repo` says.
+		expect(body.repo).toBe("group/sub/project");
+		expect(urls.some((u) => u.startsWith("https://gitlab.com/api/v4/projects/group%2Fsub%2Fproject/issues"))).toBe(true);
+		expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
+		// GitLab rejects `state=all` with a 400, so "open" must go out as its word for it.
+		expect(urls.some((u) => u.includes("state=opened"))).toBe(true);
 	});
 
 	it("still gives a LOCAL repo the actionable message it always got", async () => {
 		const { status, body } = await get("/issues", { ...gitlabRepo, provider: "local", repo_slug: null, clone_url: null, workdir: "~/notes" });
 		expect(status).toBe(400);
 		expect(body.error).toMatch(/local checkout/);
+		expect(urls).toEqual([]);
 	});
 
-	it("reports GitLab builds as unavailable rather than asking GitHub about them", async () => {
-		// The build routes key off `github_repo`, which a GitLab repo does not have — so they
-		// already degrade correctly. Pinned because the temptation when wiring a provider is to
-		// let the slug flow through, which would send `group/subgroup/project` to api.github.com.
-		// `env` here has no GitHub App and no fetch stub: reaching GitHub at all would be visible.
+	it("refuses a BITBUCKET repo — a host with no client, said in those words", async () => {
+		const { status, body } = await get("/issues", { ...gitlabRepo, provider: "bitbucket", repo_slug: "team/thing" });
+		expect(status).toBe(400);
+		expect(body.error).toContain("Bitbucket");
+		expect(body.error).toMatch(/yet/);
+		expect(urls).toEqual([]);
+	});
+
+	it("reads GitLab BUILDS as pipelines, and never asks GitHub about them", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			return new Response(JSON.stringify([{ iid: 12, status: "failed", source: "push", ref: "main", sha: "abcdef1234", web_url: "https://gitlab.com/x/-/pipelines/12", updated_at: "2026-08-08T01:00:00Z" }]), {
+				status: 200, headers: { "Content-Type": "application/json" },
+			});
+		}));
 		const { status, body } = await get("/deployment", gitlabRepo);
 		expect(status).toBe(200);
-		expect(body).toEqual({ available: false });
+		// GitLab's single `status` is widened into GitHub's (status, conclusion) pair, because
+		// that is the shape the console and the KV build history already read.
+		expect(body).toEqual({
+			available: true,
+			run: { status: "completed", conclusion: "failure", name: "push", runNumber: 12, url: "https://gitlab.com/x/-/pipelines/12", branch: "main", sha: "abcdef1", updatedAt: "2026-08-08T01:00:00Z" },
+		});
+		expect(urls.some((u) => u.startsWith("https://gitlab.com/api/v4/projects/group%2Fsub%2Fproject/pipelines"))).toBe(true);
+		expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
+	});
+
+	it("a GitLab repo is still refused PULL REQUESTS — the flags move independently", async () => {
+		// Merge requests have no client. `supports.pulls:false` is what keeps turning issues on
+		// from silently asserting a surface that would 404 or, worse, hit the wrong API.
+		const { status, body } = await get("/pulls", gitlabRepo);
+		expect(status).toBe(400);
+		expect(body.error).toContain("GitLab");
+		expect(urls).toEqual([]);
 	});
 });
 

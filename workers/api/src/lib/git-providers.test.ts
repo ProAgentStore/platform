@@ -6,6 +6,7 @@ import {
 	isGitProviderId,
 	mayAttachCloneCredential,
 	parseRepoRef,
+	supportsHostedFeature,
 } from "./git-providers.js";
 
 /**
@@ -138,22 +139,49 @@ describe("the registry itself", () => {
 		}
 	});
 
-	it("declares only GitHub as issue/build capable — the DEFERRED half of #221", () => {
-		expect(gitProviderFor("github").supports).toEqual({ issues: true, builds: true });
-		for (const id of ["gitlab", "bitbucket", "other", "local"]) {
-			expect(gitProviderFor(id).supports, id).toEqual({ issues: false, builds: false });
+	it("declares what each host can actually be ASKED, one flag per surface", () => {
+		// The three flags move independently on purpose. GitLab reads issues and pipelines
+		// (`gitlab-api.ts`) but has no merge-request client, and a single `hosted:boolean` would
+		// have made turning the first two on assert the third.
+		expect(gitProviderFor("github").supports).toEqual({ issues: true, builds: true, pulls: true });
+		expect(gitProviderFor("gitlab").supports).toEqual({ issues: true, builds: true, pulls: false });
+		for (const id of ["bitbucket", "other", "local"]) {
+			expect(gitProviderFor(id).supports, id).toEqual({ issues: false, builds: false, pulls: false });
 		}
+	});
+
+	it("supportsHostedFeature is the only read of the flags, and is not truthy-loose", () => {
+		expect(supportsHostedFeature(gitProviderFor("gitlab"), "issues")).toBe(true);
+		expect(supportsHostedFeature(gitProviderFor("gitlab"), "pulls")).toBe(false);
+		expect(supportsHostedFeature(gitProviderFor("local"), "builds")).toBe(false);
 	});
 });
 
-describe("hostedFeatureUnavailable — a deferred surface says so honestly", () => {
-	it("names the provider and the gap, instead of blaming the connection", () => {
-		const msg = hostedFeatureUnavailable(gitProviderFor("gitlab"), "issues");
+describe("hostedFeatureUnavailable — an unavailable surface says WHY, honestly", () => {
+	it("names the provider and the gap for a surface it genuinely cannot drive", () => {
+		// Merge requests: GitLab HAS them, PAGS has no client. "yet" is the true word.
+		const msg = hostedFeatureUnavailable(gitProviderFor("gitlab"), "pulls");
 		expect(msg).toContain("GitLab");
 		expect(msg).toMatch(/yet/);
 		// The old wording told a perfectly connected GitLab repo it "isn't connected to GitHub",
 		// which reads as a setup mistake the owner could fix. It cannot be fixed by the owner.
 		expect(msg).not.toMatch(/isn't connected to GitHub/);
+		// And it must not say GitHub is the only thing PAGS drives — since #221 phase 3 that is
+		// false, and this sentence is read by a GitLab user whose Issues panel works.
+		expect(msg).not.toMatch(/GitHub only/);
+	});
+
+	it("distinguishes a MISSING coordinate from an undrivable host, per provider", () => {
+		// The provider CAN answer — so the only thing wrong is that we don't know what to ask
+		// about. Fusing these two was what told a working GitLab repo it wasn't connected.
+		const gl = hostedFeatureUnavailable(gitProviderFor("gitlab"), "issues");
+		expect(gl).toMatch(/project path/); // GitLab namespaces nest; "owner/name" would be wrong
+		expect(gl).not.toMatch(/yet/);
+		const gh = hostedFeatureUnavailable(gitProviderFor("github"), "issues");
+		expect(gh).toMatch(/owner\/name/);
+		// Bitbucket has no client at all — a different sentence, and it must not ask the owner to
+		// re-add a repo whose coordinate is already perfectly well recorded.
+		expect(hostedFeatureUnavailable(gitProviderFor("bitbucket"), "issues")).toMatch(/yet/);
 	});
 
 	it("still tells a local checkout the actionable thing", () => {

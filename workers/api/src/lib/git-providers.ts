@@ -70,10 +70,23 @@ export interface GitProvider {
 	nestedNamespaces?: boolean;
 	/**
 	 * What the platform can actually DRIVE for this host today — not what the host offers.
-	 * GitLab has issues and pipelines; PAGS has no client for either yet, and a surface that
+	 * Bitbucket has issues and pipelines; PAGS has no client for either, and a surface that
 	 * claims otherwise is worse than one that says "not yet".
+	 *
+	 * The three flags move INDEPENDENTLY, which is the point of their being three. GitLab reads
+	 * issues and pipelines (`lib/gitlab-api.ts`) but not merge requests, so `pulls:false` is a
+	 * true statement about that provider rather than a leftover — a single `hosted: boolean`
+	 * would have forced the MR client into this change to avoid lying about it.
 	 */
-	supports: { issues: boolean; builds: boolean };
+	supports: { issues: boolean; builds: boolean; pulls: boolean };
+}
+
+/** The hosted surfaces a repo can be asked about. Exactly the keys of `GitProvider.supports`. */
+export type HostedFeature = "issues" | "builds" | "pulls";
+
+/** Does this provider have a client for `feature`? The one read of the table's flags. */
+export function supportsHostedFeature(provider: GitProvider, feature: HostedFeature): boolean {
+	return provider.supports[feature] === true;
 }
 
 export const GIT_PROVIDERS: GitProvider[] = [
@@ -83,7 +96,7 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		hosts: [],
 		gitUsername: "",
 		credential: "none",
-		supports: { issues: false, builds: false },
+		supports: { issues: false, builds: false, pulls: false },
 	},
 	{
 		id: "github",
@@ -91,7 +104,7 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		hosts: ["github.com", "www.github.com"],
 		gitUsername: "x-access-token",
 		credential: "github-app",
-		supports: { issues: true, builds: true },
+		supports: { issues: true, builds: true, pulls: true },
 	},
 	{
 		id: "gitlab",
@@ -103,10 +116,12 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		credential: "vault-token",
 		vaultProvider: "gitlab",
 		nestedNamespaces: true,
-		// Issues and pipelines are DEFERRED (#221): representing a GitLab repo honestly and
-		// cloning it is this pass; a GitLab API client is not. `false` is what makes the
-		// console hide those panels and the routes refuse with a true sentence.
-		supports: { issues: false, builds: false },
+		// Issues and pipelines are LIVE (#221 phase 3, `lib/gitlab-api.ts`) — read-only, over the
+		// same vault PAT the clone already uses, with public projects readable unauthenticated.
+		// Merge requests are not: `lib/github-prs.ts` is a substantial client (checks, review
+		// state, mergeability) and GitLab's MR API differs enough that claiming it from an
+		// untested mapping is the failure mode this flag exists to prevent.
+		supports: { issues: true, builds: true, pulls: false },
 	},
 	{
 		id: "bitbucket",
@@ -119,7 +134,7 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		// vault anyway would 401 on every private clone while looking configured — so
 		// Bitbucket is parsed and represented, and its private repos say so.
 		credential: "none",
-		supports: { issues: false, builds: false },
+		supports: { issues: false, builds: false, pulls: false },
 	},
 	{
 		id: "other",
@@ -127,7 +142,7 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		hosts: [],
 		gitUsername: "",
 		credential: "none",
-		supports: { issues: false, builds: false },
+		supports: { issues: false, builds: false, pulls: false },
 	},
 ];
 
@@ -242,16 +257,22 @@ export function mayAttachCloneCredential(provider: GitProvider, cloneUrl?: strin
  * PURE and centralised so "not supported yet" is never phrased as "not connected to GitHub" —
  * the message a GitLab repo used to get, which reads as a setup mistake the owner could fix.
  */
-export function hostedFeatureUnavailable(provider: GitProvider, feature: "issues" | "builds" | "pull requests"): string {
-	const what = feature === "issues" ? "Issues" : feature === "pull requests" ? "Pull requests" : "Build status";
+export function hostedFeatureUnavailable(provider: GitProvider, feature: HostedFeature): string {
+	const what = feature === "issues" ? "Issues" : feature === "pulls" ? "Pull requests" : "Build status";
+	const noun = feature === "pulls" ? "pull requests" : feature === "builds" ? "build status" : "issues";
 	if (provider.id === "local") {
-		return `${what} needs a hosted repo — this one is a local checkout. Add it by owner/repo or a GitHub URL to use ${feature}.`;
-	}
-	if (provider.id === "github") {
-		return `${what} needs this repo's owner/name — it isn't recorded. Re-add it by owner/repo or a GitHub URL.`;
+		return `${what} needs a hosted repo — this one is a local checkout. Add it by owner/repo or a GitHub URL to use ${noun}.`;
 	}
 	if (provider.id === "other") {
 		return `${what} isn't available for this repo — PAGS has no integration for its host, so it can be cloned and coded on but not queried.`;
 	}
-	return `${what} isn't supported for ${provider.label} repos yet — PAGS drives GitHub only. The repo still clones and codes normally.`;
+	// The provider CAN answer this — so the only thing missing is the coordinate to ask about.
+	// Splitting these two apart is the whole point of the #221 seam: a repo whose slug was never
+	// recorded and a repo on a host we cannot drive are different problems with different fixes,
+	// and fusing them is what told a working GitLab repo it "isn't connected to GitHub".
+	if (supportsHostedFeature(provider, feature)) {
+		const coordinate = provider.nestedNamespaces ? "project path" : "owner/name";
+		return `${what} needs this repo's ${coordinate} — it isn't recorded. Re-add it by ${coordinate} or a ${provider.label} URL.`;
+	}
+	return `${what} isn't supported for ${provider.label} repos yet. The repo still clones and codes normally.`;
 }

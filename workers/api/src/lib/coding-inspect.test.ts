@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ALL_INSPECT_TOOL_NAMES, buildInspectTools, executeInspectTool, INSPECT_TOOL_NAMES, ISSUE_TOOL_NAMES } from "./coding-inspect.js";
 
+// GitLab's client is mocked at the same level as GitHub's: the point of these tests is that
+// `coding-inspect` no longer KNOWS which one it is talking to (#221) — it hands the repo to
+// `hosted-repo.ts` and renders whatever comes back.
+vi.mock("./gitlab-api.js", () => ({
+	listGitlabIssues: vi.fn(async (_env: unknown, _uid: string, slug: string) =>
+		slug === "group/sub/project" ? [{ number: 3, title: "Pipeline flakes", state: "open", labels: [], comments: 0, updatedAt: "", url: "g3" }] : [],
+	),
+	readGitlabIssue: vi.fn(async () => null),
+	listGitlabPipelines: vi.fn(async () => null),
+}));
+
 vi.mock("./github-issues.js", () => ({
 	listIssues: vi.fn(async (_env: unknown, _uid: string, repo: string) =>
 		repo === "acme/widget" ? [{ number: 7, title: "Broken login", state: "open", labels: ["bug"], comments: 1, updatedAt: "", url: "u7" }] : [],
@@ -80,23 +91,47 @@ describe("executeInspectTool", () => {
 	});
 
 	// ── Issue tools: cloud-side (no runner call), work on any runner ──
-	const issueTarget = { conn: {} as never, env: {} as never, userId: "u1", githubRepo: "acme/widget" };
+	const issueTarget = { conn: {} as never, env: {} as never, userId: "u1", repo: { provider: "github", githubRepo: "acme/widget", repoSlug: "acme/widget" } };
 
-	it("list_issues → github helper, no runner call, renders the backlog", async () => {
+	it("list_issues → the repo's host, no runner call, renders the backlog", async () => {
 		const out = await executeInspectTool(issueTarget, { name: "list_issues", arguments: {} });
 		expect(calls.length).toBe(0); // never touched the runner
 		expect(out).toMatch(/#7: Broken login/);
 	});
 
-	it("read_issue → github helper, includes the body", async () => {
+	it("read_issue → the repo's host, includes the body", async () => {
 		const out = await executeInspectTool(issueTarget, { name: "read_issue", arguments: { number: 7 } });
 		expect(calls.length).toBe(0);
 		expect(out).toMatch(/Broken login/);
 		expect(out).toMatch(/Login button does nothing/);
 	});
 
-	it("issue tools without a githubRepo say so (local-only repo)", async () => {
+	it("issue tools without a readable repo say so (local-only repo)", async () => {
 		const out = await executeInspectTool({ conn: {} as never, env: {} as never, userId: "u1" }, { name: "list_issues", arguments: {} });
-		expect(out).toMatch(/connected to GitHub/i);
+		expect(out).toMatch(/needs a repo on a host PAGS can read/i);
+	});
+
+	/**
+	 * The bug this closes: the Issues PANEL listed a GitLab repo's backlog while the Co-pilot,
+	 * reading the same repo, answered "not connected to GitHub". Two mechanisms for one question
+	 * is the half-migration #221 must not ship, so the brain reads through the same dispatcher.
+	 */
+	it("list_issues reads a GITLAB repo — the brain and the panel agree", async () => {
+		const out = await executeInspectTool(
+			{ conn: {} as never, env: {} as never, userId: "u1", repo: { provider: "gitlab", repoSlug: "group/sub/project" } },
+			{ name: "list_issues", arguments: {} },
+		);
+		expect(calls.length).toBe(0); // still cloud-side; no runner needed
+		expect(out).toMatch(/#3: Pipeline flakes/);
+	});
+
+	it("a BITBUCKET repo is refused rather than answered emptily", async () => {
+		// `[]` would read to the brain as "the backlog is empty", which is a confident false
+		// statement about a repo we simply have no client for.
+		const out = await executeInspectTool(
+			{ conn: {} as never, env: {} as never, userId: "u1", repo: { provider: "bitbucket", repoSlug: "team/thing" } },
+			{ name: "list_issues", arguments: {} },
+		);
+		expect(out).toMatch(/needs a repo on a host PAGS can read/i);
 	});
 });
