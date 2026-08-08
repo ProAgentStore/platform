@@ -26,12 +26,54 @@
  * busy session writes at most 3 rows a minute; today it writes roughly one per finished turn. A
  * whole hour of continuous work is therefore bounded at ~180 rows of ≤8000 chars.
  *
+ * CORRECTION (#466). "Roughly one per finished turn" assumed the dedup below fired, and it never
+ * did — it compared the untruncated pane against its own stored tail (see
+ * {@link TERMINAL_SNAPSHOT_CHARS}), so on any real session the two strings could not be equal and
+ * the IDLE branch wrote a row per poll. Measured in production on 2026-08-09: 6,936 `terminal`
+ * rows holding 329 distinct panes — 95% duplicates, 53 MB to store ~2.6 MB — and one nine-hour
+ * session that wrote 3,364 rows / 26 MB at 6.3 rows/min, 97% of them ≤2s apart. The throttle
+ * bound above is still right about the BUSY path; the baseline it assumed is what was wrong.
+ *
  * `coding_timeline` has NO retention policy — rows are deleted only when the session's repo is
  * deleted (`coding-store.ts`) or the chat is cleared, and neither touches `terminal` rows. That
- * gap is real and predates this change; raising write frequency makes it matter sooner, which is
- * why the bound above is written down rather than left to be re-derived.
+ * gap is real, predates this change and is NOT fixed here (#466 leaves the policy — age cutoff
+ * vs. per-session cap — as an owner decision, because migration 0077 promises history forever).
  */
 export const SNAPSHOT_THROTTLE_MS = 20_000;
+
+/**
+ * How much of the pane a `terminal` row stores — and therefore the ONLY string worth comparing.
+ *
+ * THE bug (#466): three writers each compared the runner's full pane (capped at 64 KB by
+ * `MAX_PANE` in the runner) against `lastTerminal`, which returns what was STORED — the last
+ * 8,000 chars. For any pane longer than that the comparison is unequal by construction, so the
+ * dedup could never fire; 6,687 of 6,936 production rows are exactly 8,000 chars, i.e. it never
+ * fired in practice at all. Worse, `coding-watch.ts` stored a 12,000-char tail, so even a correct
+ * compare would have seen a "change" every time that writer alternated with `/capture`.
+ *
+ * One constant, one truncation helper, and the gate below truncates its own input — so a writer
+ * cannot ask "did it change?" about a different string from the one it is about to write.
+ */
+export const TERMINAL_SNAPSHOT_CHARS = 8000;
+
+/** The exact string a `terminal` row stores for this pane. Empty when there is nothing to store. */
+export function terminalSnapshotContent(pane: string): string {
+	return pane.trim() ? pane.slice(-TERMINAL_SNAPSHOT_CHARS) : "";
+}
+
+/**
+ * Is this pane's stored form different from the last stored row?
+ *
+ * Truncates first, deliberately: a change that happens ABOVE the last {@link
+ * TERMINAL_SNAPSHOT_CHARS} is not a change to anything that would be persisted, so writing a row
+ * for it would store a byte-identical duplicate. That is the behaviour change in #466 and it is
+ * the correct reading of the question — the row IS the tail.
+ */
+export function terminalSnapshotChanged(pane: string, lastContent: string | null | undefined): boolean {
+	const stored = terminalSnapshotContent(pane).trim();
+	if (!stored) return false;
+	return stored !== (lastContent ?? "").trim();
+}
 
 /**
  * Read `coding_timeline.created_at` as an instant.
@@ -64,15 +106,15 @@ export function parseTimelineTimestamp(value: string | null | undefined): number
  * writing one extra row.
  */
 export function shouldPersistSnapshot(args: {
+	/** The RAW pane from the runner. Truncated here, so the gate cannot judge a different string
+	 *  from the one the caller writes — see {@link TERMINAL_SNAPSHOT_CHARS}. */
 	pane: string;
 	lastContent: string | null;
 	lastAt: string | null;
 	runState: string;
 	now: number;
 }): boolean {
-	const pane = args.pane.trim();
-	if (!pane) return false;
-	if (pane === (args.lastContent ?? "").trim()) return false;
+	if (!terminalSnapshotChanged(args.pane, args.lastContent)) return false;
 	if (args.runState === "idle") return true;
 	const at = parseTimelineTimestamp(args.lastAt);
 	return at === null || args.now - at >= SNAPSHOT_THROTTLE_MS;

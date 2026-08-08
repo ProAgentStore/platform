@@ -19,6 +19,7 @@ import { callRunner, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-clie
 import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
+import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { claimSessionDriver, getActiveSessionForRepo, getRepo, getSession, listRepos, releaseSessionDriver, touchSessionActivity } from "../lib/coding-store.js";
 import { mirrorRuntimeTask } from "./instances-runtime.js";
@@ -254,10 +255,14 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// Persist the user's question and a terminal snapshot (if it changed) so the
 		// session has a durable, continuous history.
 		if (question) await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_user", content: question });
-		if (pane.trim()) {
+		// Same constant, same compare, as `/capture` and the watch workflow (#466) — the three
+		// writers used to disagree about the cap (8,000 here, 12,000 in `coding-watch.ts`) AND
+		// compare the untruncated pane against the stored tail, so the dedup could not fire.
+		const stored = terminalSnapshotContent(pane);
+		if (stored) {
 			const last = await lastTerminal(c.env, sessionId);
-			if (pane.trim() !== (last ?? "").trim()) {
-				await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: pane.slice(-8000) });
+			if (terminalSnapshotChanged(pane, last)) {
+				await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: stored });
 			}
 		}
 

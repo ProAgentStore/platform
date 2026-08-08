@@ -235,7 +235,29 @@ describe("terminal persistence (#coding-transcript)", () => {
 		expect(routeSrc()).toContain("lastTerminalRow");
 	});
 
-	it("caps what it stores", () => {
-		expect(routeSrc()).toContain("slice(-8000)");
+	it("caps what it stores through the shared helper, and stores exactly what it compared", () => {
+		// #466. The cap used to be an inline `pane.slice(-8000)` at the write while the dedup
+		// compared the RAW pane — so the gate judged a string the row would never contain, and for
+		// any pane over 8,000 chars (6,687 of 6,936 production rows were exactly 8,000) it could
+		// not fire. The row IS the tail; the question "did it change?" is about the tail.
+		expect(routeSrc()).toContain("terminalSnapshotContent");
+		expect(routeSrc()).toContain("content: stored");
+		expect(routeSrc()).not.toContain("slice(-8000)");
+	});
+
+	it("all three terminal writers agree about the cap, because none of them names it", () => {
+		// The third writer (`coding-watch.ts`) stored a 12,000-char tail while these two stored
+		// 8,000, so even a correct compare would have read a "change" every time the writers
+		// alternated. The invariant is not "they use the same number" — it is that the number
+		// exists in ONE place and no writer restates it.
+		const writers = ["coding.ts", "coding-brains.ts", "../workflows/coding-watch.ts"];
+		for (const f of writers) {
+			const src = readFileSync(join(import.meta.dirname, f), "utf8");
+			expect(src, f).toContain("terminalSnapshotContent");
+			expect(src, f).not.toMatch(/slice\(-(8000|12000)\)/);
+		}
+		// And the one place it does live.
+		const lib = readFileSync(join(import.meta.dirname, "../lib/terminal-snapshot.ts"), "utf8");
+		expect(lib).toContain("TERMINAL_SNAPSHOT_CHARS = 8000");
 	});
 });

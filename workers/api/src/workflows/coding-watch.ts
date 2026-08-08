@@ -3,6 +3,7 @@ import type { CodingPaneSnapshot, CodingResult } from "../lib/coding-loop.js";
 import type { CodingSessionParams } from "./coding-session-params.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
+import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { codingSessionLink } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
@@ -75,11 +76,16 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 		// Save the actual terminal transcript too (deduped) — the audit trail of what
 		// Claude really did, not just the summary. Otherwise the manual chat flow only
 		// keeps your message + the gist, and the real work isn't recorded anywhere.
-		const pane = (finalPane.pane || "").trim();
-		if (pane) {
+		// ONE cap across all three writers (#466). This one stored a 12,000-char tail while
+		// `/capture` and `/explain` stored 8,000, so even a correct compare would have seen a
+		// "change" every time the writers alternated. Nothing downstream depended on the longer
+		// tail: `contextForCopilot` already slices terminal entries to -1200.
+		const pane = finalPane.pane || "";
+		const stored = terminalSnapshotContent(pane);
+		if (stored) {
 			const prev = await lastTerminal(env, sessionId).catch(() => null);
-			if (pane !== (prev ?? "").trim()) {
-				await appendTimeline(env, { sessionId, instanceId, userId, type: "terminal", content: pane.slice(-12000) }).catch(() => undefined);
+			if (terminalSnapshotChanged(pane, prev)) {
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "terminal", content: stored }).catch(() => undefined);
 			}
 		}
 		await notifyUser(

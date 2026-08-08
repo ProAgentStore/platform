@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseTimelineTimestamp, shouldPersistSnapshot, SNAPSHOT_THROTTLE_MS } from "./terminal-snapshot.js";
+import {
+	parseTimelineTimestamp,
+	shouldPersistSnapshot,
+	SNAPSHOT_THROTTLE_MS,
+	TERMINAL_SNAPSHOT_CHARS,
+	terminalSnapshotChanged,
+	terminalSnapshotContent,
+} from "./terminal-snapshot.js";
 
 const NOW = Date.parse("2026-08-09T07:00:00Z");
 
@@ -66,5 +73,35 @@ describe("shouldPersistSnapshot — a busy session must leave a record too (#432
 
 	it("treats an undateable row as due rather than as a reason to write nothing", () => {
 		expect(shouldPersistSnapshot({ ...base, runState: "thinking", lastAt: "garbage" })).toBe(true);
+	});
+
+	// #466 — the case that was never asserted, and the one every real session is in.
+	it("writes nothing when a LONG pane's stored tail is unchanged", () => {
+		// THE bug. `lastContent` is what a previous poll STORED — the last
+		// TERMINAL_SNAPSHOT_CHARS — while `pane` is the runner's full buffer (capped at 64 KB).
+		// Comparing those two is unequal by construction, so on a 20,000-char pane the dedup could
+		// never fire: 6,936 production rows held 329 distinct panes, 53 MB to store ~2.6 MB.
+		const pane = `${"x".repeat(12_000)}${"tail".repeat(2_000)}`;
+		expect(pane.length).toBeGreaterThan(TERMINAL_SNAPSHOT_CHARS);
+		const stored = terminalSnapshotContent(pane);
+		expect(stored).toHaveLength(TERMINAL_SNAPSHOT_CHARS);
+		expect(shouldPersistSnapshot({ ...base, pane, lastContent: stored })).toBe(false);
+		// …including on the busy path, where the throttle would otherwise have licensed it.
+		expect(shouldPersistSnapshot({ ...base, pane, lastContent: stored, runState: "thinking", lastAt: null })).toBe(false);
+	});
+
+	it("ignores a change ABOVE the stored tail, because no row would differ", () => {
+		// The deliberate behaviour change. Only the tail is stored, so a scrollback edit outside it
+		// would append a byte-identical duplicate — which is 95% of what is in the table today.
+		const tail = "y".repeat(TERMINAL_SNAPSHOT_CHARS);
+		expect(shouldPersistSnapshot({ ...base, pane: `OLD HEADER\n${tail}`, lastContent: tail })).toBe(false);
+		// A change WITHIN the tail still writes, which is the whole feature.
+		expect(shouldPersistSnapshot({ ...base, pane: `${tail}z`, lastContent: tail })).toBe(true);
+	});
+
+	it("stores the empty string for a blank pane, so a writer's guard and the gate agree", () => {
+		expect(terminalSnapshotContent("   \n ")).toBe("");
+		expect(terminalSnapshotChanged("   \n ", null)).toBe(false);
+		expect(terminalSnapshotChanged("hello", null)).toBe(true);
 	});
 });

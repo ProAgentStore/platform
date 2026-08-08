@@ -14,7 +14,7 @@ import {
 	type EngineAuthResolved,
 } from "../lib/coding-engines.js";
 import { appendTimeline, clearChat, lastTerminalRow, loadChat, loadRepoTimeline, loadTerminalSnapshots, loadTimeline } from "../lib/coding-timeline.js";
-import { shouldPersistSnapshot } from "../lib/terminal-snapshot.js";
+import { shouldPersistSnapshot, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { logError } from "../lib/error-log.js";
 import {
 	claimSessionDriver,
@@ -260,12 +260,18 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// placeholder over an hour of real work (#432). It is now changed + (idle OR throttled), which
 	// leaves idle behaviour identical and adds coverage during a run. The arithmetic and the
 	// SQLite-timestamp parsing are in `lib/terminal-snapshot.ts`, tested.
+	//
+	// The dedup compares what will be STORED, not the raw pane (#466). It used to compare the
+	// runner's full 64 KB pane against `lastTerminal`'s 8,000-char tail — unequal by construction,
+	// so the gate never suppressed anything and an idle open session appended an identical 8 KB row
+	// on every poll. Measured: 6,936 production rows holding 329 distinct panes.
 	const pane = String((snap as { pane?: unknown }).pane ?? "");
 	const runState = String((snap as { runState?: unknown }).runState ?? "");
-	if (pane.trim()) {
+	const stored = terminalSnapshotContent(pane);
+	if (stored) {
 		const last = await lastTerminalRow(c.env, sessionId);
 		if (shouldPersistSnapshot({ pane, lastContent: last?.content ?? null, lastAt: last?.createdAt ?? null, runState, now: Date.now() })) {
-			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: pane.slice(-8000) }).catch(() => undefined);
+			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: stored }).catch(() => undefined);
 		}
 	}
 
