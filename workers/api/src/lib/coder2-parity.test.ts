@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sanitizeDeclaredCapabilities } from "./agent-capabilities.js";
@@ -26,6 +26,43 @@ function configFromSeed(slug: string): Record<string, unknown> {
 	const start = rest.indexOf("'{");
 	const end = rest.indexOf("}',", start);
 	return JSON.parse(rest.slice(start + 1, end + 1).replace(/''/g, "'")) as Record<string, unknown>;
+}
+
+/**
+ * The tools a slug ACTUALLY declares today.
+ *
+ * Reading ONE migration by name is how these assertions go stale: they keep passing while
+ * describing a declaration a later migration has superseded, which is the same expired-premise
+ * trap the migrations themselves are careful about. So this walks every migration in filename
+ * order — the order wrangler applies them in — and keeps the LAST statement that writes either
+ * `$.capabilities` (whole object, 0054's shape) or `$.capabilities.tools` (path, 0067/0070's)
+ * for that slug. A new migration is picked up with no test edit at all.
+ *
+ * The seeding INSERTs are deliberately not parsed: every slug asserted here has at least one
+ * later UPDATE, and `configFromSeed` already covers what the seed itself declared.
+ */
+function effectiveDeclared(slug: string): { file: string; tools: string[] } {
+	const slugRe = new RegExp(`slug\\s*=\\s*'${slug}'`);
+	let found: { file: string; tools: string[] } | null = null;
+	for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()) {
+		const sql = readFileSync(join(MIGRATIONS, f), "utf8");
+		if (!slugRe.test(sql)) continue;
+		for (const stmt of sql.split(/;\s*\n/)) {
+			if (!slugRe.test(stmt) || !stmt.includes("$.capabilities")) continue;
+			const tools = toolsFromStatement(stmt);
+			if (tools) found = { file: f, tools };
+		}
+	}
+	if (!found) throw new Error(`no migration sets capabilities.tools for ${slug}`);
+	return found;
+}
+
+function toolsFromStatement(stmt: string): string[] | null {
+	const arr = stmt.match(/'\$\.capabilities\.tools'\s*,\s*json\('(\[[\s\S]*?\])'\)/);
+	if (arr) return JSON.parse(arr[1]) as string[];
+	const obj = stmt.match(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/);
+	if (obj) return (JSON.parse(obj[1]) as { tools?: string[] }).tools ?? null;
+	return null;
 }
 
 function hardcodedCoderCapabilities(): Record<string, unknown> {
@@ -128,17 +165,42 @@ describe("0067 — the Lead's declared tools stay real and never shrink", () => 
 	});
 });
 
-describe("0070 — the Repo Coder has ONE chat, and it can still do the job (#209)", () => {
+describe("the Repo Coder has ONE chat, and it can still do the job (0070 / #209)", () => {
+	// 0070 made the decision; a LATER migration may be what states it today. So the two kinds of
+	// assertion are kept apart on purpose: what 0070 itself did (frozen text, safe to read by
+	// name) versus what the Repo Coder currently declares (resolved, so it cannot go stale). The
+	// original of this block read 0070 for BOTH, and 0101 (#415) is exactly the edit that would
+	// have left it passing while describing a superseded list.
 	const sql0070 = (): string => readFileSync(join(MIGRATIONS, "0070_coder_repo_one_chat.sql"), "utf8");
 	const declared0070 = (): string[] => {
 		const m = sql0070().match(/json\('(\[[^']*\])'\)/);
 		if (!m) throw new Error("0070 no longer sets capabilities.tools via json('[…]')");
 		return JSON.parse(m[1]) as string[];
 	};
+	const declared = (): string[] => effectiveDeclared("coder-repo").tools;
 
 	it("declares the Co-pilot OFF", () => {
 		expect(sql0070()).toContain("$.capabilities.surfaceOptions.coding.copilot");
 		expect(sql0070()).toMatch(/copilot['"\s,]*,\s*json\('false'\)/);
+	});
+
+	it("has not had the Co-pilot switched back on by a later capabilities rewrite", () => {
+		// A migration that re-sets the WHOLE `$.capabilities` object (0054's shape, which 0101
+		// follows) drops any surfaceOption it does not restate. Silently getting a second chat back
+		// is not something the tools assertions below would notice.
+		const file = effectiveDeclared("coder-repo").file;
+		const sql = readFileSync(join(MIGRATIONS, file), "utf8");
+		if (!sql.includes("'$.capabilities',")) return; // path-set: it cannot have touched options
+		const m = sql.match(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)[\s\S]*?slug = 'coder-repo'/);
+		expect(m, `${file} rewrites coder-repo's capabilities in an unreadable shape`).toBeTruthy();
+		const caps = JSON.parse((m as RegExpMatchArray)[1]) as { surfaceOptions?: { coding?: Record<string, unknown> } };
+		expect(caps.surfaceOptions?.coding).toEqual({ repos: "single", drive: false, copilot: false });
+	});
+
+	it("never loses a tool 0070 granted — a later re-set must be a superset", () => {
+		// Same guard 0067 has against 0063. A rewrite that restates the object from memory is the
+		// realistic way `repo_read_file` disappears, and nothing else here would fail.
+		for (const n of declared0070()) expect(declared(), n).toContain(n);
 	});
 
 	it("only ever touches coder-repo — the legacy hardcoded Coder must be byte-identical", () => {
@@ -156,7 +218,7 @@ describe("0070 — the Repo Coder has ONE chat, and it can still do the job (#20
 		// `repo-local`/`github`/`tmux` already publish — which is why deleting the second brain
 		// costs nothing. If a future edit drops one of these, the chat quietly gets dumber than
 		// the thing it replaced and no other test notices.
-		const tools = declared0070();
+		const tools = declared();
 		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_list_issues", "github_read_issue"]) {
 			expect(tools, n).toContain(n);
 		}
@@ -170,21 +232,79 @@ describe("0070 — the Repo Coder has ONE chat, and it can still do the job (#20
 		// declared name when CREATOR_SELECTABLE_TOOLS has it, so a real registry tool outside that
 		// set is declared, invisible to the agent, and passes every other assertion here.
 		const { CREATOR_SELECTABLE_TOOLS } = await import("../agent-do-tools.js");
-		expect(declared0070().filter((n) => !CREATOR_SELECTABLE_TOOLS.has(n))).toEqual([]);
+		expect(declared().filter((n) => !CREATOR_SELECTABLE_TOOLS.has(n))).toEqual([]);
 	});
 
 	it("grants NO write tool that would make its chat a second way to drive the engine", () => {
 		// `drive:false` already says the Lead steers a Repo Coder. Handing its chat
 		// tmux_run_command would reintroduce exactly the overlapping drive-path #154 removed.
 		for (const n of ["tmux_run_command", "tmux_send_keys", "tmux_kill_session", "tmux_new_session", "browser_act"]) {
-			expect(declared0070(), n).not.toContain(n);
+			expect(declared(), n).not.toContain(n);
 		}
 	});
 
 	it("declares no tool the registry does not actually provide", async () => {
 		const { registryToolNameSet } = await import("./tool-registry.js");
 		const known = registryToolNameSet();
-		expect(declared0070().filter((n) => !known.has(n))).toEqual([]);
+		expect(declared().filter((n) => !known.has(n))).toEqual([]);
+	});
+});
+
+describe("0101 — the Coders can read pull requests (#415)", () => {
+	// #401 shipped github_list_pulls/github_read_pull into the registry AND the console's Pulls
+	// panel, but `capabilities.tools` is an authoritative allowlist, so a tool no agent declares is
+	// a tool no agent has: production reported `allowed:false, reason:"not_declared"` on every
+	// instance. The registry half being complete is what makes that invisible — nothing fails, the
+	// agent just declines. This is the assertion that the two halves stay joined.
+	const PULLS = ["github_list_pulls", "github_read_pull"] as const;
+
+	for (const slug of ["coder-repo", "coder", "coder-lead"]) {
+		it(`${slug} declares both pull tools`, () => {
+			const { tools } = effectiveDeclared(slug);
+			for (const n of PULLS) expect(tools, n).toContain(n);
+		});
+
+		it(`${slug} stays inside MAX_DECLARED_TOOLS`, () => {
+			// sanitizeToolList truncates at 40 SILENTLY — the tail of the list simply stops existing.
+			expect(effectiveDeclared(slug).tools.length).toBeLessThanOrEqual(40);
+		});
+
+		it(`${slug} declares nothing the registry cannot serve, and nothing outside the creator set`, async () => {
+			const { CREATOR_SELECTABLE_TOOLS } = await import("../agent-do-tools.js");
+			const { tools } = effectiveDeclared(slug);
+			const known = registryToolNameSet();
+			expect(tools.filter((n) => !known.has(n))).toEqual([]);
+			expect(tools.filter((n) => !CREATOR_SELECTABLE_TOOLS.has(n))).toEqual([]);
+		});
+	}
+
+	it("the Lead keeps everything it could already do — pulls are additive, not a replacement", () => {
+		// 0101 restates the Lead's whole capabilities object, so delegation is one typo from gone.
+		const tools = effectiveDeclared("coder-lead").tools;
+		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation"]) {
+			expect(tools, n).toContain(n);
+		}
+	});
+
+	it("leaves repo-chat knowledge-only", () => {
+		// 0050's declared set is deliberately knowledge-only. Giving it connector tools is a product
+		// decision, and #415 is not it — a pass that quietly widened it would be the same class of
+		// unasked-for grant the auto-grant alternative was rejected for.
+		const { tools } = effectiveDeclared("repo-chat");
+		for (const n of PULLS) expect(tools, n).not.toContain(n);
+		expect(tools.filter((n) => n.startsWith("github_"))).toEqual([]);
+	});
+
+	it("passes the same validator the create/update routes apply", () => {
+		// A seeded capabilities object that the platform's own sanitizer would rewrite is an agent
+		// only SQL can stamp out, which defeats the point of declaring capabilities as data (#141).
+		const sql = readFileSync(join(MIGRATIONS, "0101_coder_github_pull_tools.sql"), "utf8");
+		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
+		expect(objs.length, "0101 no longer re-sets whole capabilities objects").toBe(3);
+		for (const m of objs) {
+			const caps = JSON.parse(m[1]) as Record<string, unknown>;
+			expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+		}
 	});
 });
 
