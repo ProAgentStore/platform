@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { workflowChoices } from "../lib/agent-workflows.js";
 import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
+import { AI_LEDGER_FOR_AGENT } from "./analytics.js";
 import { HttpError, isSuspended, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
@@ -151,10 +152,14 @@ agentRoutes.get("/:id/ops", async (c) => {
 	)
 		.bind(session.uid)
 		.first<{ created_at: string; last_used_at: string | null }>();
+	// Moves off `agent_executions` with the analytics card (#451), and shares that route's exact
+	// predicate rather than copying it: two readers of "what has this agent run" that phrase the
+	// question differently is how they end up disagreeing about the answer. `duration_ms` and
+	// `error` are dropped — the ledger records neither, and this list has no renderer today (the
+	// console's Ops tab is still a stub), so nulling them would only document a measurement nobody
+	// takes. Live `error` reporting belongs to `error_log` (migration 0103) / the `/trace` route.
 	const executions = await c.env.DB.prepare(
-		`SELECT id, model, duration_ms, error, created_at
-     FROM agent_executions
-     WHERE agent_id = ?1
+		`SELECT id, model, kind, created_at ${AI_LEDGER_FOR_AGENT}
      ORDER BY created_at DESC
      LIMIT 5`,
 	)

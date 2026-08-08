@@ -586,8 +586,14 @@ export default function AgentDetail() {
 				<div>
 					{!analytics ? <p className="text-muted text-sm">Loading analytics...</p> : (
 						<>
+							{/* "AI Calls", not "Executions" (#451). The number is a count of rows in the
+							    `ai_usage` ledger attributed to this agent — every model call, of every kind.
+							    It read `agent_executions` until #451, a table nothing modern writes, so it
+							    was zero for every agent that had ever done anything. The label now names
+							    what is counted, because the ledger cannot attribute voice (account-scoped)
+							    to an agent and the honest number is therefore a floor, not a total. */}
 							<div className="grid grid-cols-3 gap-3 mb-4 max-sm:grid-cols-1">
-								{[["Subscribers", analytics.subscribers], ["Chat Messages", analytics.totalChats], ["Executions", analytics.totalExecutions]].map(([label, val]) => (
+								{[["Subscribers", analytics.subscribers], ["Chat Messages", analytics.totalChats], ["AI Calls", analytics.totalExecutions]].map(([label, val]) => (
 									<div key={String(label)} className="bg-panel border border-line rounded-xl p-4 text-center">
 										<div className="text-2xl font-bold">{String(val || 0)}</div>
 										<div className="text-xs text-muted">{String(label)}</div>
