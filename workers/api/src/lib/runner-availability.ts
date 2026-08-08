@@ -107,11 +107,26 @@ export interface RunnerWaitResult {
 	remedy: string | null;
 }
 
+/**
+ * Facts in, sentence out — and ALL the facts (#461).
+ *
+ * This adapter used to forward three of the five inputs `diagnoseAttachment` takes, dropping the
+ * pin. It is the only path three surfaces reach the diagnosis by (this file's two pause messages
+ * and `noRunnerDetail`, plus the repos list's `recheck.reason`), so `pinned-machine-offline` was
+ * correct, tested, and dead everywhere it was needed: every one of them fell through to
+ * `machine-online-agent-detached` and prescribed `pags up --force` at a machine that is switched
+ * off, while `pags up` was already running on another one with a live socket for that instance.
+ *
+ * Forward everything, and let the diagnosis decide. A field added to `RuntimeFacts` for the
+ * diagnosis's benefit and not passed here is the same bug again.
+ */
 export function describeFacts(facts: RuntimeFacts): AttachmentDiagnosis {
 	return diagnoseAttachment({
 		hasRuntimeRow: facts.hasRuntimeRow,
 		relayConnected: facts.relayConnected,
 		lastSeenAt: facts.lastSeenAt,
+		pinnedNode: facts.pinnedNode,
+		liveNodeExcludedByPin: facts.liveNodeExcludedByPin,
 	});
 }
 

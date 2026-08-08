@@ -26,6 +26,12 @@ const ONLINE: RuntimeFacts = { ...OFFLINE, relayConnected: true };
 /** Registered, heartbeating within 90s, but no socket — the `pags up --force` case (#237). */
 const DETACHED: RuntimeFacts = { ...OFFLINE, lastSeenAt: new Date(Date.now() - 5_000).toISOString().replace("T", " ").replace(/\.\d+Z$/, "") };
 const NEVER: RuntimeFacts = { hasRuntimeRow: false, relayConnected: false, node: null, runnerVersion: null, lastSeenAt: null };
+/**
+ * The production shape of #461, and DELIBERATELY built on `DETACHED`: the heartbeat lands on the
+ * shared default row, so the pinned-at-a-dead-machine case is byte-identical to the `--force` case
+ * except for the two fields the adapter used to drop.
+ */
+const PINNED: RuntimeFacts = { ...DETACHED, node: "Mac", pinnedNode: "Sergeys-Mac-mini.local", liveNodeExcludedByPin: "Mac" };
 
 function waitDeps(probes: RuntimeFacts[], overrides: Partial<RunnerWaitDeps> = {}): RunnerWaitDeps & { said: string[]; slept: string[]; ticks: number[] } {
 	const said: string[] = [];
@@ -141,6 +147,33 @@ describe("waitForRunner", () => {
 		expect(runnerGoneMessage(describeFacts(DETACHED), 60_000)).toContain("pags up --force");
 		expect(runnerGoneMessage(describeFacts(OFFLINE), 60_000)).toContain("`pags up`");
 		expect(runnerGoneMessage(describeFacts(NEVER), 0)).toContain("No runner has registered");
+	});
+
+	// #461 — the ADAPTER, which is what was untested. `diagnoseAttachment`'s pinned branch has had
+	// a test since #380; `describeFacts` forwarded three of its five inputs, so every sentence in
+	// this file described a pinned agent as one that needs `--force`.
+	it("forwards the pin, so a pinned agent is never told to --force a machine that is off", () => {
+		const d = describeFacts(PINNED);
+		expect(d.state).toBe("pinned-machine-offline");
+		expect(d.remedy).toBeNull();
+		expect(d.message).toContain("Sergeys-Mac-mini.local");
+		expect(d.message).toContain("Mac");
+	});
+
+	it("carries that through both pause announcements and the no-runner line", async () => {
+		// A Workflow pausing for up to 30 minutes announces this into the owner's thread — the
+		// harder of the three call sites to notice, because it appears mid-run rather than in a
+		// response somebody is reading.
+		const paused = waitDeps([PINNED, PINNED]);
+		const r = await waitForRunner(paused, { label: "pin", waitMs: RUNNER_PROBE_INTERVAL_MS });
+		expect(paused.said[0]).toContain("Runs on");
+		expect(paused.said[0]).not.toContain("--force");
+		expect(r.state).toBe("pinned-machine-offline");
+		expect(r.message).not.toContain("--force");
+		expect(noRunnerDetail(PINNED)).toContain("Runs on");
+		expect(noRunnerDetail(PINNED)).not.toContain("--force");
+		// The unpinned case is untouched — it is the one `--force` is actually the answer to.
+		expect(noRunnerDetail(DETACHED)).toContain("--force");
 	});
 });
 

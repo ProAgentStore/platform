@@ -160,6 +160,13 @@ const MAX_VERIFY_PER_LIST = 12;
  * `reason` is `diagnoseAttachment`'s sentence, not a new one: the pin, the machine and the remedy
  * are the same facts `/runtime/status` reports, and two surfaces inventing separate wordings for
  * one connectivity state is the failure #237/#341 keep re-fixing.
+ *
+ * That was the intent and, for a day, not the behaviour (#461). `describeFacts` forwarded three of
+ * the diagnosis's five inputs, so this route said "the machine is online but this agent isn't
+ * attached … try `pags up --force`" about an instance pinned to a switched-off machine — both
+ * halves false — while `/runtime/status` said the true thing in the same second. Same function,
+ * same facts, same instance: the difference was two fields the adapter dropped, which is why the
+ * fix went there and not here.
  */
 interface RecheckReport {
 	/** A machine was asked about at least one path. */

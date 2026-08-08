@@ -99,4 +99,45 @@ describe("diagnoseAttachment", () => {
 		});
 		expect(d.state).toBe("attached");
 	});
+
+	// #461 — the two rules, stated ONCE over the whole input space instead of case by case.
+	//
+	// The wrong sentence shipped green because the surface that renders it asserted only that the
+	// reason was non-empty, and the branch itself was tested on the one input shape that reaches
+	// it. Enumerating every combination is what makes "a pinned agent is never told to `--force`"
+	// a property of the function rather than of the examples somebody thought to write down.
+	it("holds both pin invariants for every combination of inputs", () => {
+		const seen = new Set<string>();
+		for (const hasRuntimeRow of [true, false]) {
+			for (const relayConnected of [true, false]) {
+				for (const lastSeenAt of [null, "", "not-a-date", secondsAgo(10), secondsAgo(600)]) {
+					for (const pinnedNode of [null, "", "  ", "mini"]) {
+						for (const liveNodeExcludedByPin of [null, "", "  ", "mini", "Mac"]) {
+							const d = diagnoseAttachment({ hasRuntimeRow, relayConnected, lastSeenAt, now: NOW, pinnedNode, liveNodeExcludedByPin });
+							seen.add(d.state);
+							// 1. A pinned-machine diagnosis carries no command. `pags up` is already
+							//    running on the other machine and `--force` takes a machine over rather
+							//    than repointing this agent; the fix is one click in "Runs on".
+							if (d.state === "pinned-machine-offline") {
+								expect(d.remedy).toBeNull();
+								expect(d.message).toContain("Runs on");
+							}
+							// 2. A live socket on a machine the pin excludes can never read as "the
+							//    machine is online and another runner holds this agent" — that is the
+							//    sentence measured in production, and both of its halves were false.
+							const pinned = (pinnedNode || "").trim();
+							const live = (liveNodeExcludedByPin || "").trim();
+							if (pinned && live && live !== pinned) {
+								expect(d.state).not.toBe("machine-online-agent-detached");
+								expect(d.remedy).not.toBe("pags up --force");
+							}
+						}
+					}
+				}
+			}
+		}
+		// The sweep is only evidence if it actually reached the interesting states.
+		expect(seen).toContain("pinned-machine-offline");
+		expect(seen).toContain("machine-online-agent-detached");
+	});
 });

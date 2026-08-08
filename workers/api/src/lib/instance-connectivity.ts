@@ -6,7 +6,8 @@
 // Deriving "online" any other way is how a status display ends up disagreeing with the thing it
 // is describing: the DB `status` column is never cleared on disconnect (#238), so a machine whose
 // laptop closed still reads `registered` forever.
-import { getBoundRunnerConn } from "./runner-client.js";
+import { getBoundRunnerConn, liveNodeIgnoringPin } from "./runner-client.js";
+import { parseBoundRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
 export interface RuntimeFacts {
@@ -17,9 +18,37 @@ export interface RuntimeFacts {
 	node: string | null;
 	runnerVersion: string | null;
 	lastSeenAt: string | null;
+	/**
+	 * The machine this instance is pinned to (`config.runnerNode`); null/"" = automatic.
+	 *
+	 * A connectivity record has no business knowing about instance config, and these two fields
+	 * are the deliberate exception (#461). `diagnoseAttachment` cannot tell "pinned at a machine
+	 * that is switched off while another one is up" from "the machine is up and only this agent
+	 * lost its socket" without them — and the second diagnosis prescribes `pags up --force`,
+	 * which cannot repoint a pin. `describeFacts(facts)` is the ONLY path three surfaces reach
+	 * that diagnosis by, so a fact absent here is a wrong sentence there. Two named fields, not a
+	 * general "everything about this instance" record.
+	 */
+	pinnedNode?: string | null;
+	/**
+	 * A machine holding a live socket for this instance which the PIN excludes.
+	 *
+	 * DESCRIPTION ONLY, never a routing destination — taking it as one is exactly the fallback
+	 * `getBoundRunnerConn` forbids (#379/#380). It is what lets the sentence name the machine that
+	 * IS up instead of telling the user to start a runner they are already running.
+	 */
+	liveNodeExcludedByPin?: string | null;
 }
 
-const EMPTY: RuntimeFacts = { hasRuntimeRow: false, relayConnected: false, node: null, runnerVersion: null, lastSeenAt: null };
+const EMPTY: RuntimeFacts = {
+	hasRuntimeRow: false,
+	relayConnected: false,
+	node: null,
+	runnerVersion: null,
+	lastSeenAt: null,
+	pinnedNode: null,
+	liveNodeExcludedByPin: null,
+};
 
 /**
  * How many instances we will probe the relay for in one call.
@@ -67,11 +96,40 @@ async function registrations(env: Env, userId: string, ids: readonly string[]): 
 	return out;
 }
 
+/**
+ * The "Runs on" pin for a whole set of instances, in ONE statement (#461).
+ *
+ * Batched deliberately: this function is the read behind `subordinate_status`, so a per-instance
+ * config lookup would multiply the fan-out it exists to bound. `getBoundRunnerConn` already reads
+ * the same column while routing, but it returns a connection rather than the reason there isn't
+ * one, and the reason is the whole point here.
+ */
+async function pinnedNodes(env: Env, userId: string, ids: readonly string[]): Promise<Map<string, string>> {
+	const out = new Map<string, string>();
+	if (!ids.length) return out;
+	const ph = ids.map((_, i) => `?${i + 2}`).join(",");
+	const res = await env.DB.prepare(`SELECT id, config FROM agent_instances WHERE user_id = ?1 AND id IN (${ph})`)
+		.bind(userId, ...ids)
+		.all<{ id: string; config: string | null }>()
+		.catch(() => ({ results: [] as { id: string; config: string | null }[] }));
+	for (const r of res.results ?? []) {
+		const node = parseBoundRunnerNode(r.config);
+		if (node) out.set(r.id, node);
+	}
+	return out;
+}
+
 export async function runtimeConnectivityMany(env: Env, userId: string, ids: readonly string[]): Promise<Map<string, RuntimeFacts>> {
-	const rows = await registrations(env, userId, ids);
+	const [rows, pins] = await Promise.all([registrations(env, userId, ids), pinnedNodes(env, userId, ids)]);
 	const out = new Map<string, RuntimeFacts>();
 	const probe = ids.slice(0, MAX_RELAY_PROBES);
 	const live = await Promise.all(probe.map((id) => getBoundRunnerConn(env, id, userId).catch(() => null)));
+	// Which machine is up INSTEAD — asked only where it can change the answer: a pin exists AND
+	// nothing resolved. A live socket or an unpinned instance pays nothing, and the whole set is
+	// resolved in parallel under the same MAX_RELAY_PROBES bound as the probe above.
+	const excluded = await Promise.all(
+		probe.map((id, i) => (pins.get(id) && !live[i] ? liveNodeIgnoringPin(env, id, userId).catch(() => null) : Promise.resolve(null))),
+	);
 	for (const [i, id] of probe.entries()) {
 		const row = rows.get(id);
 		const conn = live[i];
@@ -83,11 +141,22 @@ export async function runtimeConnectivityMany(env: Env, userId: string, ids: rea
 			node: (conn?.runnerNode || row?.runner_node || "").trim() || null,
 			runnerVersion: (row?.runner_version || "").trim() || null,
 			lastSeenAt: row?.last_seen_at ?? null,
+			pinnedNode: pins.get(id) ?? null,
+			liveNodeExcludedByPin: excluded[i],
 		});
 	}
 	for (const id of ids.slice(MAX_RELAY_PROBES)) {
 		const row = rows.get(id);
-		out.set(id, { ...EMPTY, hasRuntimeRow: Boolean(row), node: (row?.runner_node || "").trim() || null, lastSeenAt: row?.last_seen_at ?? null });
+		// The tail carries the pin (it came from the batched read and costs nothing) but NOT the
+		// machine that is up instead, because nothing probed for one. `diagnoseAttachment` needs
+		// both, so the tail degrades to exactly its previous answer rather than to a half-diagnosis.
+		out.set(id, {
+			...EMPTY,
+			hasRuntimeRow: Boolean(row),
+			node: (row?.runner_node || "").trim() || null,
+			lastSeenAt: row?.last_seen_at ?? null,
+			pinnedNode: pins.get(id) ?? null,
+		});
 	}
 	return out;
 }

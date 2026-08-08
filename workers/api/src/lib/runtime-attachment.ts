@@ -20,7 +20,14 @@ export type AttachmentState =
 	| "runner-offline"
 	/** The machine is alive and heartbeating, yet THIS agent has no socket. */
 	| "machine-online-agent-detached"
-	/** Pinned to a machine that is down while a DIFFERENT one is up (#379/#380). */
+	/**
+	 * Pinned to a machine that is down while a DIFFERENT one is up (#379/#380).
+	 *
+	 * Two invariants ride on this state, enumerated over the whole input space in
+	 * `runtime-attachment.test.ts` (#461): it NEVER carries a remedy, and no input describing a
+	 * live socket on a pin-excluded node may diagnose `machine-online-agent-detached` instead.
+	 * Both were true here and false at every caller, because the adapter dropped the two inputs.
+	 */
 	| "pinned-machine-offline";
 
 export interface AttachmentDiagnosis {

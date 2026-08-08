@@ -14,11 +14,18 @@ import { signSession } from "../lib/session.js";
 // The runner transport, stubbed at the seam every repo route reaches the machine through. Only
 // the two entry points are replaced; the rest of the module (typed errors, timeouts) is real, so
 // a caller that starts depending on one of them is not silently handed `undefined`.
-const { getBoundRunnerConn, callRunner } = vi.hoisted(() => ({ getBoundRunnerConn: vi.fn(), callRunner: vi.fn() }));
+// `liveNodeIgnoringPin` is here for the same reason: it is a relay scan, and it is the fact that
+// turns "this agent isn't attached" into "you are pinned at a machine that is off" (#461).
+const { getBoundRunnerConn, callRunner, liveNodeIgnoringPin } = vi.hoisted(() => ({
+	getBoundRunnerConn: vi.fn(),
+	callRunner: vi.fn(),
+	liveNodeIgnoringPin: vi.fn(),
+}));
 vi.mock("../lib/runner-client.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/runner-client.js")>()),
 	getBoundRunnerConn,
 	callRunner,
+	liveNodeIgnoringPin,
 }));
 
 import { registerRepoRoutes } from "./coding-repos.js";
@@ -108,7 +115,9 @@ async function addRepo(body: Record<string, unknown>) {
 beforeEach(() => {
 	getBoundRunnerConn.mockReset();
 	callRunner.mockReset();
+	liveNodeIgnoringPin.mockReset();
 	getBoundRunnerConn.mockResolvedValue(null);
+	liveNodeIgnoringPin.mockResolvedValue(null);
 });
 
 describe("POST /coding/repos — a repo is stored as what it IS", () => {
@@ -294,7 +303,18 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		created_at: "2026-08-07 08:29:04", updated_at: "2026-08-07 08:29:04", ...over,
 	});
 
-	async function listRepos(rows: Array<Record<string, unknown>>) {
+	/** D1's `datetime('now')` format, a few seconds ago — a FRESH heartbeat. */
+	const justSeen = () => new Date(Date.now() - 5_000).toISOString().slice(0, 19).replace("T", " ");
+
+	const reasonOf = (body: { recheck?: Record<string, unknown> }) => String(body.recheck?.reason ?? "");
+
+	/**
+	 * @param opts.registered a runtime registration exists and is heartbeating right now. On a
+	 *   multi-machine account that heartbeat lands on the shared default row even while the pinned
+	 *   machine is off, which is exactly why the pin-blind diagnosis read "the machine is online".
+	 * @param opts.pinnedTo the instance's "Runs on" pin (`config.runnerNode`) (#461).
+	 */
+	async function listRepos(rows: Array<Record<string, unknown>>, opts: { registered?: boolean; pinnedTo?: string } = {}) {
 		const issued: Statement[] = [];
 		const DB = {
 			prepare(sql: string) {
@@ -305,7 +325,21 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 						return stmt;
 					},
 					first: async () => (/FROM agent_instances/.test(flat) ? { id: INSTANCE } : null),
-					all: async () => ({ results: /FROM coding_repos/.test(flat) ? rows : [] }),
+					all: async () => {
+						if (/FROM coding_repos/.test(flat)) return { results: rows };
+						// The batched "Runs on" pin read behind `runtimeConnectivity` (#461).
+						if (/SELECT id, config FROM agent_instances/.test(flat)) {
+							return { results: opts.pinnedTo ? [{ id: INSTANCE, config: JSON.stringify({ runnerNode: opts.pinnedTo }) }] : [] };
+						}
+						if (/FROM instance_runtimes/.test(flat)) {
+							return {
+								results: opts.registered
+									? [{ instance_id: INSTANCE, runner_node: opts.pinnedTo ?? "Mac", runner_version: "0.4.44", last_seen_at: justSeen() }]
+									: [],
+							};
+						}
+						return { results: [] };
+					},
 					run: async () => ({ meta: { changes: 1 } }),
 				};
 				return stmt;
@@ -374,7 +408,35 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		// were the same answer.
 		const { body } = await listRepos([row()]);
 		expect(body.recheck).toMatchObject({ ran: false, checked: 0 });
-		expect(String((body.recheck as { reason?: string }).reason)).toMatch(/\S/);
+		// #461: this used to assert only `/\S/` — that the reason was NON-EMPTY — which is how a
+		// reason that was wrong in both halves shipped green. Assert the sentence.
+		expect(reasonOf(body)).toBe("No runner has registered for this agent yet. Try: `pags up`");
+	});
+
+	// #461, measured in production on the instance #440 was filed about. Both surfaces below are
+	// the same function over the same facts about the same instance in the same second, and only
+	// one of them was told about the pin.
+	it("names the dead pin AND the machine that is up, and offers no `--force`, when the pin is why", async () => {
+		liveNodeIgnoringPin.mockResolvedValue("Mac");
+		const { body } = await listRepos([row()], { registered: true, pinnedTo: "Sergeys-Mac-mini.local" });
+		const reason = reasonOf(body);
+		expect(body.recheck).toMatchObject({ ran: false, checked: 0 });
+		expect(reason).toContain("Sergeys-Mac-mini.local");
+		expect(reason).toContain("Mac is connected");
+		expect(reason).toContain('"Runs on"');
+		// The two halves that were false: nothing else holds this agent, and `--force` cannot
+		// repoint a pin — `pags up` is already running on Mac with a live socket for this instance.
+		expect(reason).not.toContain("--force");
+		expect(reason).not.toContain("another runner");
+	});
+
+	it("still prescribes `pags up --force` when the machine really is up and only this agent is detached", async () => {
+		// The unpinned case is what `--force` is the answer to, and it must read exactly as before.
+		const { body } = await listRepos([row()], { registered: true });
+		expect(reasonOf(body)).toBe(
+			"The machine is online but this agent isn't attached — another runner on it may already hold this agent. Try: `pags up --force`",
+		);
+		expect(liveNodeIgnoringPin).not.toHaveBeenCalled();
 	});
 
 	it("says on the wire that it DID re-check, and how many paths answered", async () => {
