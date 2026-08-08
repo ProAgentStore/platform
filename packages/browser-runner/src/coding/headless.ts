@@ -544,16 +544,15 @@ export class HeadlessSession {
 	}
 
 	/**
-	 * No TTY in headless mode; control is via messages. Kept for interface parity — the human
-	 * takeover path can still route a keypress here.
-	 *
-	 * RECORDED rather than silently dropped. As a pure no-op it was indistinguishable from
-	 * success: `act` returned an ordinary snapshot with an unchanged pane, so the caller could not
-	 * tell "sent, nothing happened" from "never sent". The transcript is what the brain and the
-	 * console both read, so the truth belongs there.
+	 * No TTY in headless mode; control is via messages. RECORDED **and** REPORTED: recording came
+	 * first (#391) because a pure no-op read as success and the transcript is what the brain and
+	 * the console see — but a line in the pane is no answer to the caller, `runtime.act` had
+	 * nothing to raise, so the route answered 200 (#448). A real PTY backend flips `delivered`.
 	 */
-	key(keys: string): void {
-		this.push(`[ignored keypress ${keys.slice(0, 40)} — this session has no terminal attached]`);
+	key(keys: string): { delivered: false; reason: string } {
+		const reason = "this session has no terminal attached";
+		this.push(`[ignored keypress ${keys.slice(0, 40)} — ${reason}]`);
+		return { delivered: false, reason };
 	}
 
 	/** Abort the current turn (SIGINT, like Ctrl-C). The process stays usable. */

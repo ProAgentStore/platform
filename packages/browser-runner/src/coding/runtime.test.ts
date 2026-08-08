@@ -188,6 +188,27 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(rt.start({ sessionId: "next-warm", repoId: "r1", workDir: dir, clientType: "claude", bin, resumeFrom: "prev" }).resumed).toBe(true);
 	});
 
+	it("refuses a keystroke instead of answering it with an unchanged pane (#448)", () => {
+		// The old shape: `act` called `key()`, which pushed a transcript line and returned void,
+		// and `act` handed back an ordinary snapshot. A caller reading `{status, pane}` had no
+		// reason to parse the line, so "never sent" was indistinguishable from "sent, nothing
+		// happened" — that cost a 40-decision BYOK run before `press_keys` was withdrawn from the
+		// brain. The refusal is a 400 because with no PTY this is a bad request, not a fault.
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "keys-1", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		expect(() => rt.act("keys-1", { kind: "keys", keys: "Enter" })).toThrow(/not deliverable/i);
+		try {
+			rt.act("keys-1", { kind: "keys", keys: "Enter" });
+		} catch (e) {
+			expect((e as { status?: number }).status).toBe(400);
+			expect((e as Error).message).toMatch(/no terminal attached/i);
+		}
+		// #391 still holds: the attempt is RECORDED as well as refused, so the transcript the
+		// console and the brain read shows a keystroke was tried and dropped.
+		expect(rt.snapshot("keys-1").pane).toMatch(/ignored keypress/i);
+		rt.end("keys-1");
+	});
+
 	it("lists sessions and ends them", () => {
 		rt = new CodingRuntime(join(dir, "base"));
 		rt.start({ sessionId: "s2", repoId: "r1", workDir: dir, clientType: "claude", bin });

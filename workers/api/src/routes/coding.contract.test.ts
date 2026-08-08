@@ -682,3 +682,79 @@ describe("merge authority is set through this route, and only with a value it kn
 		expect(body.error).toBe("name, urls, mergePolicy, workdir or policies is required");
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. A keystroke is refused at the boundary, not answered with a snapshot (#448)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST …/message and the keystroke that was never delivered (#448)", () => {
+	/** Drive `/message` as the owner and report the status plus what reached the runner. */
+	async function send(body: unknown) {
+		const { DB } = ownerEnv();
+		const sent: Array<{ path: string; body: Record<string, unknown> }> = [];
+		const RELAY = {
+			idFromName: (n: string) => n,
+			get: () => ({
+				async fetch(req: Request) {
+					const url = new URL(req.url);
+					if (url.pathname === "/status") return Response.json({ connected: true });
+					const b = (await req.json()) as { path: string; body: Record<string, unknown> };
+					sent.push({ path: b.path, body: b.body });
+					return Response.json({ sessionId: "csess-1", pane: "$ ", runState: "idle", alive: true, ready: true });
+				},
+			}),
+		};
+		const env = {
+			SESSION_SIGNING_KEY: SECRET,
+			DB,
+			RELAY,
+			CODING_SESSION: { create: async () => ({ id: "cw-1" }) },
+		} as unknown as Env;
+		const token = await signSession("owner-uid", SECRET, { roles: ["user"] });
+		const res = await ownerApp().request(
+			"/v1/instances/inst-1/coding/sessions/csess-1/message",
+			{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
+			env,
+		);
+		return { status: res.status, body: (await res.json()) as { error?: string }, sent };
+	}
+
+	it("answers {keys} with 409 and never touches the runner", async () => {
+		// It used to answer 200 with a fresh snapshot. The runner's `key()` only pushed a line
+		// into the pane text, so a caller reading `{status, pane}` saw an ordinary success for an
+		// action that was never performed — the same defect that burned a 40-decision BYOK run
+		// before `press_keys` was taken off the brain's tool list.
+		const { status, sent } = await send({ keys: "Enter" });
+		expect(status).toBe(409);
+		expect(sent).toEqual([]);
+	});
+
+	it("names what to do instead — a refusal with no alternative is how the next caller invents one", async () => {
+		const { body } = await send({ keys: "Enter" });
+		expect(body.error).toContain("no terminal attached");
+		expect(body.error).toContain('{"text": "..."}');
+		expect(body.error).toContain("restart");
+	});
+
+	it("404s an unknown session BEFORE it refuses the keystroke", async () => {
+		// The 409 sits after `getSession` on purpose: `resume` and `restart` share this
+		// neighbourhood and answer 404 first, and a caller cannot act on "this session has no
+		// terminal" for a session that does not exist.
+		const { DB } = ownerEnv({ session: null });
+		const env = { SESSION_SIGNING_KEY: SECRET, DB } as unknown as Env;
+		const token = await signSession("owner-uid", SECRET, { roles: ["user"] });
+		const res = await ownerApp().request(
+			"/v1/instances/inst-1/coding/sessions/csess-1/message",
+			{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ keys: "Enter" }) },
+			env,
+		);
+		expect(res.status).toBe(404);
+	});
+
+	it("leaves {text} exactly as it was — a message still reaches the engine", async () => {
+		const { status, sent } = await send({ text: "run the tests" });
+		expect(status).toBe(200);
+		expect(sent.map((s) => s.path)).toEqual(["/coding/act"]);
+		expect(sent[0].body.action).toEqual({ kind: "message", text: "run the tests" });
+	});
+});

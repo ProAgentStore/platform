@@ -549,6 +549,18 @@ describe("HeadlessSession.key — a no-op that READS as success is worse than an
 		s.key("Enter");
 		expect(s.snapshot()).toMatch(/ignored keypress/i);
 	});
+
+	it("reports the failure to its caller too — a transcript line is not an answer (#448)", () => {
+		// Recording it (#391) fixed what the human and the brain READ. It did nothing for the
+		// HTTP caller: `runtime.act` had no value to raise, so it returned a normal snapshot and
+		// the route answered 200. `key()` now returns the failure, which is what lets the runtime
+		// refuse and what a future PTY-backed backend would flip to `delivered:true`.
+		const s = new HeadlessSession({ id: "keys2", workDir: tmpdir(), clientType: "codex", bin: "/bin/echo" });
+		const result = s.key("Enter");
+		expect(result.delivered).toBe(false);
+		expect(result.reason).toMatch(/no terminal attached/i);
+		expect(s.snapshot()).toMatch(/ignored keypress/i);
+	});
 });
 
 describe("parseCommand — an apostrophe in ordinary English must survive", () => {

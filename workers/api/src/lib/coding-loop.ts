@@ -52,10 +52,16 @@ export interface CodingPaneSnapshot {
 	stopReason?: string;
 }
 
-export type CodingActionKind =
-	| { kind: "message"; text: string }
-	| { kind: "keys"; keys: string }
-	| { kind: "interrupt" };
+/**
+ * What the cloud can ask a coding session to do.
+ *
+ * `{kind:"keys"}` was removed in #448. It had no producer left — the brain stopped offering
+ * `press_keys` (see `CODING_TOOLS` below) and `/message` now refuses `{keys}` with a 409 — but
+ * while the kind stayed in this union the mapping back into it was one line away from being
+ * re-added, which is exactly how it survived the first fix. The engine is a child process with
+ * no PTY; there is no keystroke to send, and the type now says so.
+ */
+export type CodingActionKind = { kind: "message"; text: string } | { kind: "interrupt" };
 
 export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled";
 
@@ -184,8 +190,6 @@ function describe(a: CodingActionKind): string {
 	switch (a.kind) {
 		case "message":
 			return `message: ${a.text.slice(0, 120)}`;
-		case "keys":
-			return `keys: ${a.keys}`;
 		case "interrupt":
 			return "interrupt (Ctrl-C)";
 	}
@@ -206,6 +210,8 @@ const CODING_TOOLS = [
 	// nothing sent → unchanged pane → `waitIdle` is skipped for non-message actions → the next
 	// decision sees the identical pane and repeats. The run burned all 40 decisions of BYOK Claude
 	// and ended `max_steps` having done nothing. A menu is now a `request_human`, which is true.
+	// #448 finished the job at the HTTP boundary: `POST …/message {keys}` answers 409 instead of
+	// 200-with-a-snapshot, and `{kind:"keys"}` is gone from `CodingActionKind` entirely.
 	{
 		name: "finish",
 		description: "The objective is complete (status 'done') or cannot be completed (status 'failed').",

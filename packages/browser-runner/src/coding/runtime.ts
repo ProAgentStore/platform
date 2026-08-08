@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { RunnerInputError } from "../errors.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { EngineActRecord } from "./engine-acts.js";
 import type { EngineUsageRecord } from "./engine-usage.js";
@@ -15,8 +16,8 @@ import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
  *
  * The remote brain (CodingSessionWorkflow) drives sessions through the
  * `/coding/*` HTTP surface: start a session, `capture` what the CLI shows, `act`
- * (send a message / keys), and `end`. A human can attach via the takeover
- * helpers (text frames + keystrokes) for the "stuck" handoff.
+ * (send a message), and `end`. A human can attach via the takeover helpers for the
+ * "stuck" handoff. Keystrokes are NOT part of that surface — see `act` (#448).
  *
  * Kept separate from `LocalRunner` (Playwright) so the two runtimes share the
  * runner harness — registration, tunnel, auth — without entangling their guts.
@@ -62,6 +63,13 @@ export interface StartCodingResult extends CodingSnapshot {
 
 export type CodingAction =
 	| { kind: "message"; text: string }
+	/**
+	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
+	 * kind is gone from `CodingActionKind` there — but this runner is a published npm package
+	 * that any caller can POST to, so the shape has to be RECOGNISED in order to be refused.
+	 * Dropping it from the union would make an old client's keystroke fall into `default` as an
+	 * "Unknown coding action", which is a worse sentence for the one thing it definitely is.
+	 */
 	| { kind: "keys"; keys: string }
 	| { kind: "interrupt" };
 
@@ -237,9 +245,16 @@ export class CodingRuntime {
 			case "message":
 				session.input(action.text);
 				break;
-			case "keys":
-				session.key(action.keys);
-				break;
+			case "keys": {
+				// A snapshot is no longer the whole answer (#448). `key()` records the attempt and
+				// reports that it was not delivered; answering 200 with a pane that simply did not
+				// change is the defect this replaces — a caller cannot tell it apart from success.
+				// `RunnerInputError` (400) is the honest class: with no PTY, asking this runner for
+				// a keystroke is a bad request, not a runner fault. The cloud refuses it a step
+				// earlier with a 409, so in practice this only catches a direct runner caller.
+				const { reason } = session.key(action.keys);
+				throw new RunnerInputError(`Keystrokes are not deliverable: ${reason} — send an instruction instead, or take the session over.`);
+			}
 			case "interrupt":
 				session.interrupt();
 				break;

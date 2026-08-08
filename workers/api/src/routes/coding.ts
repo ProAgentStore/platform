@@ -459,17 +459,33 @@ codingRoutes.delete("/:instanceId/coding/sessions/:sessionId/timeline", async (c
 	return c.json({ ok: true });
 });
 
-/** Send a message / keys straight to the CLI (manual drive, no brain). */
+/** Send a message straight to the CLI (manual drive, no brain). Keystrokes are refused — see below. */
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-	const action: CodingActionKind =
-		typeof body.keys === "string"
-			? { kind: "keys", keys: body.keys }
-			: { kind: "message", text: String(body.text ?? "") };
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) throw new HttpError(404, "Session not found");
+	// A keystroke has never been deliverable here, and this route used to answer one with an
+	// ordinary 200 and a fresh snapshot (#448). The engine is a child process with no PTY, so
+	// `HeadlessSession.key()` only pushed a line into the transcript; a caller reading
+	// `{status, pane}` had no reason to parse it, and "sent, nothing happened" was
+	// indistinguishable from success. That cost a full 40-decision BYOK run once — the reasoning
+	// is written out at `lib/coding-loop.ts` where `press_keys` was withdrawn from the brain's
+	// tool list. The brain was fixed there; the HTTP boundary was not, and the boundary is where
+	// the claim is made. Refusing HERE rather than only on the runner is deliberate: a published
+	// `@proagentstore/cli` older than this change still accepts `{kind:"keys"}` and no-ops it, so
+	// the cloud has to be the one that says no.
+	//
+	// AFTER `getSession` on purpose: the sibling routes (`resume`, `restart`) 404 an unknown
+	// session first, and a 409 raised ahead of the lookup would invert that ordering.
+	if (typeof body.keys === "string") {
+		throw new HttpError(
+			409,
+			"This session has no terminal attached, so a keystroke can't be delivered — a human needs to answer the prompt. Phrase the answer as an instruction and send it as {\"text\": \"...\"} on this route, or restart the engine with POST /v1/instances/:id/coding/sessions/:sid/restart.",
+		);
+	}
+	const action: CodingActionKind = { kind: "message", text: String(body.text ?? "") };
 	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	// `chat:true` = sent from the Agent chat (relay my words to Claude on my behalf),
 	// so persist it as a chat turn (survives reload) — not just the raw command log.
