@@ -76,6 +76,7 @@ import {
 } from "./lib/chat-inflight.js";
 import { MAX_TASKS, taskListPayload } from "./lib/agent-tasks.js";
 import { turnSpanFor } from "./lib/chat-turns.js";
+import { ChatTurnGate } from "./lib/chat-turn-gate.js";
 import { json } from "./lib/do-json.js";
 import {
 	assembleMessagePage,
@@ -114,6 +115,13 @@ export class AgentDO extends DurableObject<Env> {
 	 *  id is missing here belongs to a turn that died — the object restarted under it, or the
 	 *  work was killed — which is the only way to tell "still thinking" from "silently lost". */
 	private liveTurns = new Set<string>();
+
+	/** One chat turn at a time, and everything said DURING one answered together by the next
+	 *  (#429). The same instance-level shape as `summarizing` above and for the same reason: the
+	 *  input gate opens at every non-storage await, so two turns used to run against one agent,
+	 *  sample the same state at different instants, and contradict each other on screen. Rule +
+	 *  tests in lib/chat-turn-gate.ts; `fork` clones the Response because a body is read once. */
+	private turnGate = new ChatTurnGate<Response>((res) => res.clone());
 
 	/**
 	 * Async because the platform-AI switch is now a RUNTIME setting an operator can flip
@@ -464,7 +472,21 @@ export class AgentDO extends DurableObject<Env> {
 		// listening. The request still awaits it — a connected client sees exactly what it saw
 		// before — but it no longer OWNS it: navigating away mid-turn can no longer strand the
 		// tool side effects with no assistant message beside them.
-		const turn = this.runTurn(state, engine, userId, channel, message, delegation);
+		//
+		// …and only ONE at a time (#429). The user message above is already durable and broadcast,
+		// so an arrival mid-turn is never lost; the gate decides only WHEN it is answered. If a turn
+		// is running, this arrival joins the single follow-up turn that starts when it finishes, and
+		// that turn reads the transcript — including this message — so it answers everything said
+		// while the agent was talking. Two turns running at once is what produced two replies to one
+		// question, none to the other, and a step count that went backwards.
+		const turn = this.turnGate.submit(async () => {
+			// Re-read at execution time: a queued turn may start seconds after it was submitted, and
+			// `runTurn` writes `state` back at the end. Using the copy captured at submit would
+			// resurrect a status the turn before it had already moved on from.
+			const current = (await this.getState()) ?? state;
+			ensureStateDefaults(current);
+			return this.runTurn(current, engine, userId, channel, message, delegation);
+		});
 		this.keepAlive(turn);
 		return turn;
 	}

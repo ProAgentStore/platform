@@ -460,7 +460,13 @@ const PINS = {
 	// lib/message-page.ts with its tests, precisely so this file keeps only the wiring; the lines
 	// that stayed here are the ones that say WHY, namely that the fabrication stamp (#406) is
 	// decided per message and therefore applies to every page, not only the newest one.
-	"workers/api/src/agent-do.ts": 1165,
+	// +22 for #429: `handleChat` submits its turn through a gate, so two turns cannot run against
+	// one agent, sample the same run at different instants and contradict each other. Thirteen of
+	// the lines are the paragraph explaining that the user message is durable and broadcast BEFORE
+	// the gate sees it — the gate decides when an arrival is answered and never whether — because
+	// that is the sentence a future reader needs before they are tempted to move the gate earlier.
+	// The queue itself is pure and tested in lib/chat-turn-gate.ts.
+	"workers/api/src/agent-do.ts": 1187,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
