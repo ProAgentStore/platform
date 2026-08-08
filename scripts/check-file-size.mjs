@@ -478,7 +478,16 @@ const PINS = {
 	// finding "a one-shot engine's exit is the exact boundary, so a quiet timer can only ever fire
 	// early" will eventually restore one. The mechanics that could be extracted (the ceiling, the
 	// abort note) are four lines each and belong beside the spawn they guard.
-	"packages/browser-runner/src/coding/headless.ts": 874,
+	// +12 at #417 (one import, one call, ten lines of why): `settleAct` now takes an unnumbered
+	// `pr.open`/`pr.merge` target from the tool_result it already reads the outcome from, so a PR
+	// opened with `gh pr create --fill` gets a badge. Eleven of the twelve lines are the doc
+	// comment, and it is the point: the scan looks exactly like the temporal pairing
+	// `pull-attribution.ts` refuses, and the only thing distinguishing them — that this result is
+	// correlated by `tool_use_id`, so it is the command's own answer — lives in that comment.
+	// Raised rather than split BECAUSE the mechanics already were: `fillTargetFromResult` and
+	// `resultText` are pure, tested, and in engine-acts.ts. What is left here is the one call and
+	// the reason a future reader must not "simplify" it into a transcript regex.
+	"packages/browser-runner/src/coding/headless.ts": 886,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge
