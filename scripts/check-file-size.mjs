@@ -364,7 +364,16 @@ const PINS = {
 	// it is single — a session is a cache, not a thing to manage — will restore the fork as a
 	// courtesy. Both DECISIONS are pure and tested in repo-open.ts (which label, and whether the
 	// solo surface may auto-open), which is where a split would have put them anyway.
-	"agents/coder/web/src/CodingTab.tsx": 1289,
+	// +13 for #431, and 11 of the 13 are prose. The solo tab row went icon-only below `sm` by
+	// copying the Co-pilot/Terminal toggle 80 lines above it — two attributes, a `<span>` and two
+	// responsive classes — plus two `id`s the WebKit guard measures through. Raised rather than
+	// split because the prose IS the deliverable, twice over: `title`/`aria-label` look redundant
+	// beside a label that is visible on the reviewer's desktop, and `h-6` looks like arbitrary
+	// spacing. Deleting the first re-creates the four unlabelled icon buttons #389 removed from
+	// this surface; deleting the second drops the buttons to 21px, under the same ticket's 24px
+	// floor, because hiding the label takes a 16px line box out of a 13px icon's button. Both
+	// numbers are measured in the `#431` block in e2e/console.spec.ts.
+	"agents/coder/web/src/CodingTab.tsx": 1302,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt

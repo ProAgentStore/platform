@@ -3406,3 +3406,238 @@ test.describe("mobile — Copy and Delete clear the message timestamp (#426)", (
 		expect(await copy.evaluate((el) => getComputedStyle(el).opacity), "the desktop buttons stopped being hover-only").toBe("0");
 	});
 });
+
+/**
+ * The single-repo Coder's Terminal · Issues · Pulls · Builds row, on a phone, in WebKit (#431).
+ *
+ * `CodingTab.tsx`'s solo `tab()` helper rendered `<Icon size={13} /> {label}` with NO responsive
+ * class, four of them side by side in a `shrink-0` group, inside a `flex-wrap` row that also
+ * carries the repo caption and up to five action buttons. Its sibling ~80 lines above — the
+ * Co-pilot / Terminal toggle — already ships the icon-only-below-`sm` pattern. The four-button row
+ * that actually overflows was the one that never got it.
+ *
+ * ── Why this needs its OWN measurement rather than the existing overflow sweep
+ *
+ * `measureOverflow` answers "does anything stick out past the right edge", and it measured ZERO
+ * here both before and after the fix — because the parent is `flex-wrap`. An oversized tab group
+ * does not pan the page, it WRAPS: what shares its line drops to another one and the terminal pane
+ * starts further down the screen, which is #370's complaint on this exact tab. Measured in WebKit,
+ * the labelled group was 302px inside a 304px row at 320px — it "fit", by 2px, and left nothing for
+ * anything else. So the assertions here are geometric and specific: every tab shares one baseline,
+ * the group ends inside the viewport, the group is narrow enough to BE icon-only, and it fits on one
+ * line together with the action cluster beside it.
+ *
+ * ── The residual, which is NOT this ticket
+ *
+ * The row is still two lines tall at both widths (65px before, 62px after) and the remaining cause
+ * is the repo caption, not the tabs: `text-xs text-muted truncate min-w-0` has a 219px max-content,
+ * and flexbox collects lines from HYPOTHETICAL main size before it shrinks anything, so a `truncate`
+ * item in a `flex-wrap` row wraps instead of ellipsising. It needs `flex-1`/`basis-0`, it is a
+ * different element with a different root cause, and it is left for its own issue rather than
+ * folded in here. `headerHeight` is therefore RECORDED in every failure message and asserted on by
+ * nothing — a threshold this fix does not move would either fail forever or lock in the defect.
+ *
+ * ── Why the accessible name is asserted at both widths
+ *
+ * Below `sm` the label is `hidden`, so the button's name can only come from `aria-label`. Hiding
+ * the text without it would leave four unlabelled icon buttons — the regression #389 was filed to
+ * remove from this surface. `getByRole("button", { name })` computes the real accessible name, so
+ * the same query proves it at 320px (from `aria-label`) and at 1280px (from the visible text).
+ *
+ * `mobile — ` prefix on purpose: that is what puts a block in front of WebKit as well as Chromium
+ * (#384), and every phone runs WebKit.
+ */
+test.describe("mobile — the single-repo Coder tab row (#431)", () => {
+	const TABS = ["Terminal", "Issues", "Pulls", "Builds"];
+
+	/**
+	 * `repos: "single"` is what selects the solo surface, and `repos.length <= 1` is the data guard
+	 * beside it — both must hold or `CodingTab` falls through to the multi-repo list and this block
+	 * would measure a row that is not the one in the ticket.
+	 */
+	const soloCoder = [
+		{
+			id: "inst-1",
+			name: "Repo Coder",
+			slug: "repo-coder",
+			category: "code",
+			capabilities: {
+				surfaces: ["coding"],
+				runtime: "coding",
+				workflow: "CODING_SESSION",
+				surfaceOptions: { coding: { repos: "single" } },
+			},
+		},
+	];
+
+	/** A real repo name, not `repo`: the caption shares the row and its width is part of the wrap. */
+	const REPO = { id: "repo-1", name: "platform", githubRepo: "ProAgentStore/platform", provider: "github", cloneStatus: "ready" };
+
+	async function mockSoloCoder(page: Page) {
+		await mockSignedInConsole(page, { instances: soloCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [REPO] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/issues")) return json({ repo: REPO.githubRepo, issues: [] });
+			if (url.includes("/pulls")) return json({ repo: REPO.githubRepo, pulls: [] });
+			if (url.includes("/builds")) return json({ builds: [] });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			return json({});
+		});
+	}
+
+	async function openSolo(page: Page, width: number) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSoloCoder(page);
+		// Deep link: below `sm` the instance tab bar is icon-only, so there is no "Coding" text to
+		// click — which is the same convention this row is being brought into line with.
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await page.locator("#coding-solo-tabs").waitFor();
+		await page.waitForTimeout(300);
+	}
+
+	/** Rects for the row, its group and each tab — the numbers the ticket asks to be measured. */
+	async function measureTabRow(page: Page) {
+		return page.evaluate(() => {
+			const group = document.querySelector<HTMLElement>("#coding-solo-tabs");
+			const header = document.querySelector<HTMLElement>("#coding-solo-header");
+			if (!group || !header) throw new Error("the solo tab row did not render");
+			const g = group.getBoundingClientRect();
+			const h = header.getBoundingClientRect();
+			const tabs = Array.from(group.children).map((el) => {
+				const b = (el as HTMLElement).getBoundingClientRect();
+				return {
+					name: (el.getAttribute("aria-label") || el.textContent || "").trim(),
+					left: Math.round(b.left),
+					right: Math.round(b.right),
+					top: Math.round(b.top),
+					width: Math.round(b.width),
+					height: Math.round(b.height),
+				};
+			});
+			const tops = new Set(tabs.map((t) => t.top));
+			// The trailing action cluster (CLI engines, repo settings, session controls). It is
+			// `shrink-0`, so whether it shares the tabs' line is decided entirely by how much of
+			// the row the tab group takes.
+			const actions = header.querySelector<HTMLElement>(":scope > div.ml-auto");
+			const a = actions?.getBoundingClientRect();
+			const style = getComputedStyle(header);
+			const px = (v: string) => Number.parseFloat(v) || 0;
+			return {
+				viewport: window.innerWidth,
+				group: { left: Math.round(g.left), right: Math.round(g.right), width: Math.round(g.width), height: Math.round(g.height) },
+				actionsWidth: a ? Math.round(a.width) : 0,
+				// Content box of the row: what the group, the caption and the actions divide up.
+				rowContentWidth: Math.round(h.width - px(style.paddingLeft) - px(style.paddingRight)),
+				columnGap: Math.round(px(style.columnGap)),
+				// Recorded, deliberately NOT asserted — see the note on the residual below.
+				headerHeight: Math.round(h.height),
+				tabs,
+				tabRows: tops.size,
+				overflowPastViewport: Math.round(g.right - window.innerWidth),
+			};
+		});
+	}
+
+	for (const width of [320, 390]) {
+		test(`the four tabs fit one line inside ${width}px`, async ({ page }) => {
+			await openSolo(page, width);
+			const m = await measureTabRow(page);
+			const detail = JSON.stringify(m);
+
+			// The fixture landed: four tabs, not an empty group measured green.
+			expect(m.tabs.map((t) => t.name), detail).toEqual(TABS);
+
+			// No wrap INSIDE the group — all four share one baseline.
+			expect(m.tabRows, `the tabs wrapped onto ${m.tabRows} lines at ${width}w: ${detail}`).toBe(1);
+
+			// No horizontal overflow: the group ends inside the viewport, with a pixel of slack for
+			// sub-pixel rounding.
+			expect(m.overflowPastViewport, `the tab group runs ${m.overflowPastViewport}px past the right edge at ${width}w: ${detail}`).toBeLessThanOrEqual(1);
+
+			// The group is ICON-ONLY, which is the change. Four labelled tabs measure 302px in
+			// WebKit at both widths; four icon-only ones measure 130px. The ceiling sits between
+			// the two so that a label creeping back — a dropped `hidden sm:inline`, a `sm:` typo,
+			// a fifth tab — fails here rather than in someone's hand.
+			expect(m.group.width, `the tab group is ${m.group.width}px wide at ${width}w — the labels are rendering below sm: ${detail}`).toBeLessThan(200);
+
+			// And the group no longer OWNS the row. `flex-wrap` means an oversized group does not
+			// pan the page — it pushes what shares its line onto another one, and the terminal pane
+			// down with it (#370). At 302px the group plus the `shrink-0` action cluster could not
+			// coexist on one line at 320px; at 130px they fit with the caption between them.
+			const needed = m.group.width + m.actionsWidth + m.columnGap;
+			expect(needed, `the tabs + the action cluster need ${needed}px of a ${m.rowContentWidth}px row at ${width}w: ${detail}`).toBeLessThanOrEqual(m.rowContentWidth);
+
+			// WCAG 2.5.8 Target Size (Minimum), the same 24px floor the #389 block asserts — whose
+			// route list does not reach this surface, so it is asserted here rather than left to a
+			// guard that cannot see it. Taking the label away SHRANK these buttons: the text line
+			// box is 16px and the icon is 13, so `py-1` alone dropped them from 24px to 21. An
+			// icon-only fix that quietly undersizes the target is the #389 defect wearing #431's
+			// clothes, which is why it is measured in the same test.
+			for (const t of m.tabs) {
+				expect(Math.min(t.width, t.height), `"${t.name}" is ${t.width}×${t.height} at ${width}w — under the 24px minimum target: ${detail}`).toBeGreaterThanOrEqual(24);
+			}
+
+			// And the page still does not pan, by the sweep's own definition.
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+
+		test(`every tab keeps an accessible name at ${width}px`, async ({ page }) => {
+			await openSolo(page, width);
+			for (const name of TABS) {
+				const btn = page.locator("#coding-solo-tabs").getByRole("button", { name, exact: true });
+				await expect(btn, `"${name}" has no accessible name at ${width}w`).toHaveCount(1);
+				// The desktop tooltip. Below `sm` it is invisible; it costs nothing and is the only
+				// hover affordance once the text is hidden.
+				await expect(btn).toHaveAttribute("title", name);
+			}
+		});
+	}
+
+	/**
+	 * The active tab must still READ as active with no label to colour. Asserted on computed style
+	 * rather than the class string: `bg-accent-soft text-accent` is only a promise until the
+	 * cascade actually paints it, and an icon-only row where every button looks the same is a
+	 * navigation with no current-position indicator.
+	 */
+	test("mobile — the active tab is distinguishable icon-only", async ({ page }) => {
+		await openSolo(page, 320);
+		const group = page.locator("#coding-solo-tabs");
+		await group.getByRole("button", { name: "Issues", exact: true }).click();
+		await page.waitForTimeout(200);
+
+		const styles = await page.evaluate(() =>
+			Array.from(document.querySelector("#coding-solo-tabs")?.children ?? []).map((el) => {
+				const s = getComputedStyle(el as HTMLElement);
+				return { name: (el.getAttribute("aria-label") || el.textContent || "").trim(), pressed: el.getAttribute("aria-pressed"), bg: s.backgroundColor, fg: s.color };
+			}),
+		);
+		const active = styles.find((s) => s.pressed === "true");
+		expect(active?.name, JSON.stringify(styles)).toBe("Issues");
+		const others = styles.filter((s) => s.pressed !== "true");
+		expect(others, JSON.stringify(styles)).toHaveLength(3);
+		// Both channels differ, so the state survives a colour-blind reading of either one alone.
+		for (const o of others) {
+			expect(o.bg, `inactive "${o.name}" shares the active background: ${JSON.stringify(styles)}`).not.toBe(active?.bg);
+			expect(o.fg, `inactive "${o.name}" shares the active text colour: ${JSON.stringify(styles)}`).not.toBe(active?.fg);
+		}
+	});
+
+	/** At `sm` and up the row is unchanged: icon AND label, as it ships today. */
+	test("the labels come back at desktop width", async ({ page }) => {
+		await openSolo(page, 1280);
+		const group = page.locator("#coding-solo-tabs");
+		for (const name of TABS) {
+			await expect(group.getByRole("button", { name, exact: true })).toContainText(name);
+		}
+		const m = await measureTabRow(page);
+		expect(m.tabRows, JSON.stringify(m)).toBe(1);
+	});
+});

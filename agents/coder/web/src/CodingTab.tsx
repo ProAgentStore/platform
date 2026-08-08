@@ -944,20 +944,33 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// to the list, which still hides add-repo.
 	if (singleRepo && repos.length <= 1) {
 		const solo = repos[0];
+		// Icon-only below sm, icon + label from sm up — the SAME pattern as the Co-pilot/Terminal
+		// toggle ~80 lines above, copied rather than re-derived (#431). Labelled, these four are
+		// 302px of a 304px row at 320px, so nothing else on this `flex-wrap` line fits. `title` and
+		// `aria-label` are load-bearing: the accessible name comes from the visible text today, and
+		// hiding it without them leaves four unlabelled icon buttons (#389). `sm:px-2.5` keeps the
+		// desktop row as it ships. Measured in WebKit by the `#431` block in `e2e/console.spec.ts`.
+		//
+		// `h-6` is the other half of #389, and it is here because removing the label SHRANK the
+		// button: the text line box was 16px tall, the icon is 13, so `py-1` alone dropped these
+		// from 24px to 21 — under WCAG 2.5.8's 24px floor, which this repo asserts. `sm:h-auto`
+		// hands the height back to the label from sm up, so the desktop row is untouched.
 		const tab = (id: typeof soloView, label: string, Icon: typeof SquareTerminal) => (
 			<button
 				type="button"
 				onClick={() => setSoloView(id)}
+				title={label}
+				aria-label={label}
 				aria-pressed={soloView === id}
-				className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold ${soloView === id ? "bg-accent-soft text-accent" : "text-muted hover:text-accent"}`}
+				className={`flex items-center justify-center gap-1 w-8 h-6 sm:w-auto sm:h-auto sm:px-2.5 py-1 text-xs font-bold ${soloView === id ? "bg-accent-soft text-accent" : "text-muted hover:text-accent"}`}
 			>
-				<Icon size={13} /> {label}
+				<Icon size={13} /><span className="hidden sm:inline">{label}</span>
 			</button>
 		);
 		return (
 			<div className="flex flex-col h-full min-h-0">
-				<div className="px-2 pt-2 sm:px-4 sm:pt-3 flex items-center gap-2 flex-wrap">
-					<div className="inline-flex border border-line rounded-lg overflow-hidden shrink-0">
+				<div id="coding-solo-header" className="px-2 pt-2 sm:px-4 sm:pt-3 flex items-center gap-2 flex-wrap">
+					<div id="coding-solo-tabs" className="inline-flex border border-line rounded-lg overflow-hidden shrink-0">
 						{tab("terminal", "Terminal", SquareTerminal)}
 						{tab("issues", "Issues", CircleDot)}
 						{tab("pulls", "Pulls", GitPullRequest)}
