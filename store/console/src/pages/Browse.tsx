@@ -3,6 +3,7 @@ import Page from "../components/Page";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Instance } from "../lib/types";
+import Card from "../components/Card";
 
 /** Published-catalog agent (shape from GET /v1/agents). */
 interface CatalogAgent {
@@ -78,7 +79,7 @@ export default function Browse() {
 					{agents.map((a) => {
 						const sub = instanceFor(a.id);
 						return (
-							<div key={a.id} className="bg-panel border border-line rounded-xl p-3 sm:p-4 flex flex-col">
+							<Card key={a.id} className="flex flex-col">
 								<h3 className="text-base font-bold mb-1">{a.name}</h3>
 								<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-3 flex-1">{a.description || "No description"}</p>
 								<div className="flex gap-2 text-xs mb-3 flex-wrap">
@@ -107,7 +108,7 @@ export default function Browse() {
 										</button>
 									)}
 								</div>
-							</div>
+							</Card>
 						);
 					})}
 				</div>

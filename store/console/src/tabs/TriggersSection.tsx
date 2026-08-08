@@ -15,6 +15,7 @@ import {
 // One zone list for the whole console (#345) — a trigger's schedule and the account preference
 // must offer the same vocabulary, or a zone you can schedule in is one you cannot set as yours.
 import { timeZoneOptions } from "../lib/accountTimezone";
+import Card from "../components/Card";
 import {
 	eventHeadline,
 	eventTone,
@@ -312,7 +313,7 @@ export default function TriggersSection({
 	};
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4 min-w-0">
+		<Card className="mb-3 sm:mb-4 min-w-0">
 			<h3 className="text-base font-bold mb-1">Triggers</h3>
 			<p className="text-sm text-muted mb-3">
 				Start work from an inbound webhook or a schedule. Triggers run inside this private instance.
@@ -645,6 +646,6 @@ export default function TriggersSection({
 				})}
 			</div>
 			{msg && <div className="text-xs text-muted mt-2 break-words">{msg}</div>}
-		</div>
+		</Card>
 	);
 }

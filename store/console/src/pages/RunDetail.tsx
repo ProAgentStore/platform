@@ -5,6 +5,7 @@ import { api, getToken, API } from "@proagentstore/sdk/client";
 import { usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Play, Pause, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import Card from "../components/Card";
 
 /**
  * A real, routed run-detail page (not a popup) for any browser-runtime task: a
@@ -105,7 +106,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 	};
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-5">
+		<Card className="mb-5">
 			<h2 id={askLabelId} className="text-sm font-bold mb-1">Ask about this ticket</h2>
 			<p className="text-xs text-muted-soft mb-3">Answered from this ticket's record only — its reasoning, what it declared it would do, and what it logged. It can't start work from here.</p>
 			{turns.length > 0 && (
@@ -135,7 +136,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 				/>
 				<button type="button" disabled={asking || !draft.trim()} onClick={ask} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm disabled:opacity-40 shrink-0">Ask</button>
 			</div>
-		</div>
+		</Card>
 	);
 }
 
@@ -464,7 +465,7 @@ export default function RunDetail() {
 
 			{/* ── Ticket content: description + the WHY (reasoning/audit) ──────── */}
 			{(task?.description || task?.reasoning) && (
-				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-5">
+				<Card className="mb-5">
 					{task?.description && <div className="text-sm text-ink mb-3 whitespace-pre-line break-words">{linkify(task.description)}</div>}
 					{task?.reasoning && (
 						<div>
@@ -472,7 +473,7 @@ export default function RunDetail() {
 							<div className="text-sm text-ink whitespace-pre-line break-words leading-relaxed">{linkify(task.reasoning)}</div>
 						</div>
 					)}
-				</div>
+				</Card>
 			)}
 
 			{needsHuman && kind === "value" && (
@@ -521,7 +522,7 @@ export default function RunDetail() {
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
 			{shots.length > 0 ? (
-				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-5">
+				<Card className="mb-5">
 					<div className="flex items-center gap-3 mb-3">
 						<button type="button" onClick={() => setPlaying((p) => !p)} className="w-9 h-9 flex items-center justify-center rounded-lg bg-accent text-white shrink-0" aria-label={playing ? "Pause" : "Play"}>
 							{playing ? <Pause size={16} /> : <Play size={16} />}
@@ -551,7 +552,7 @@ export default function RunDetail() {
 							<span className="text-xs text-muted-soft font-mono shrink-0">{fmtStamp(cur.at)}</span>
 						</div>
 					)}
-				</div>
+				</Card>
 			) : (
 				<div className="bg-panel border border-line rounded-xl p-4 mb-5 text-sm text-muted-soft">
 					No screenshots for this run{running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}
@@ -559,7 +560,7 @@ export default function RunDetail() {
 			)}
 
 			{/* ── Full timestamped activity log ─────────────────────────────── */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
+			<Card>
 				<h2 className="text-sm font-bold mb-3">Activity — everything the agent did</h2>
 				{events.length === 0 ? (
 					<div className="text-sm text-muted-soft py-4 text-center">No activity yet.</div>
@@ -589,7 +590,7 @@ export default function RunDetail() {
 						})}
 					</div>
 				)}
-			</div>
+			</Card>
 		</Page>
 	);
 }

@@ -14,6 +14,7 @@ import ToolPermissions from "../components/ToolPermissions";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
+import Card from "../components/Card";
 
 interface Props {
 	instanceId: string;
@@ -379,7 +380,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		// sideways (the cards are all w-full, so one over-wide child would clip them all).
 		<div className="min-w-0 overflow-x-hidden">
 			{/* Instance name — distinguishes multiple instances of the same agent */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1" id="inst-name-label">Instance name</h3>
 				<p className="text-sm text-muted mb-3">
 					Shown on your dashboard and in the header — rename it to tell multiple instances of the same agent apart (e.g. "Legal PDFs" vs "Product Manuals").
@@ -397,11 +398,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<button type="button" onClick={saveInstName} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
 					{instNameMsg && <span className="text-xs text-muted">{instNameMsg}</span>}
 				</div>
-			</div>
+			</Card>
 
 			{/* Agent settings — typed fields the agent declares (settingsSchema) */}
 			{agentFields.length > 0 && (
-				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<Card className="mb-3 sm:mb-4">
 					<h3 className="text-base font-bold mb-1">Agent settings</h3>
 					<p className="text-sm text-muted mb-3">
 						Settings this agent understands. They apply to every conversation with it.
@@ -462,11 +463,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						);
 					})}
 					{settingsMsg && <div className="text-sm text-muted mt-1">{settingsMsg}</div>}
-				</div>
+				</Card>
 			)}
 
 			{/* Board maintenance */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Board maintenance</h3>
 				<p className="text-sm text-muted mb-3">
 					Tidy up the board. These only clear your view of finished items.
@@ -481,14 +482,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</button>
 				</div>
 				{maintMsg && <div className="text-sm text-muted mt-2">{maintMsg}</div>}
-			</div>
+			</Card>
 
 			{/* Runner — its own data, its own refresh cycle, its own writes; nothing else on this tab
 			    reads any of it. Cloud-only agents (runtime:null) get a one-line note instead. */}
 			<RunnerPanel instanceId={instanceId} />
 
 			{/* Where things live */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Where things live</h3>
 				<ul className="text-sm text-muted leading-relaxed pl-4 list-disc">
 					{isApply && <li><b>Resume</b> & documents → Knowledge → Documents</li>}
@@ -496,10 +497,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<li><b>Rules / special instructions</b> → Knowledge → Rules & Tips</li>
 					<li><b>Logins & secrets</b> → Knowledge → Credentials</li>
 				</ul>
-			</div>
+			</Card>
 
 			{/* Permissions & Connections */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 				<p className="text-sm text-muted mb-3">
 					What <b>this agent</b> may do, and which of your connected folders it may read. Connecting
@@ -558,7 +559,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
 				{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
-			</div>
+			</Card>
 
 			{/* Teamwork — supervision + connections (#182). Placed before Triggers: both are about
 			    work arriving from elsewhere, and wiring agents together is the more common one. */}
@@ -580,7 +581,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			{/* Voice — an OVERRIDE of your account defaults (#211). The controls themselves live in
 			    components/VoiceFields, shared verbatim with the Preferences page, so the two can
 			    never drift apart. This card only owns the choice of WHERE a change is written. */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Voice</h3>
 				<PrefOverride
 					label="voice settings"
@@ -600,10 +601,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{voiceOverride && (
 					<VoiceFields value={voiceSettings || {}} onPatch={saveVoice} hasOpenAiKey={hasOpenAiKey} />
 				)}
-			</div>
+			</Card>
 
 			{/* Translation — same override contract as Voice. */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Translation</h3>
 				<PrefOverride
 					label="translation settings"
@@ -620,10 +621,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						languages={trLanguages}
 					/>
 				)}
-			</div>
+			</Card>
 
 			{/* Danger zone */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
+			<Card>
 				<h3 className="text-base font-bold mb-1 text-danger">Danger zone</h3>
 				<p className="text-sm text-muted mb-3">
 					Stop using this agent. Your data stays unless you clear it above.
@@ -635,7 +636,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				>
 					Unsubscribe from this agent
 				</button>
-			</div>
+			</Card>
 		</div>
 	);
 }

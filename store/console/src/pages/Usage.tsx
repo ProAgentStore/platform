@@ -3,6 +3,7 @@ import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw } from "lucide-react";
+import Card from "../components/Card";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
 interface Day { date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
@@ -267,7 +268,7 @@ export default function Usage() {
 					</div>
 
 					{/* Daily chart */}
-					<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-4">
+					<Card className="mb-4">
 						<div className="flex justify-between items-center mb-2">
 							<h3 className="text-sm font-bold">Over time</h3>
 							<div className="flex gap-1">
@@ -278,7 +279,7 @@ export default function Usage() {
 							</div>
 						</div>
 						<DailyChart daily={data.daily} metric={metric} />
-					</div>
+					</Card>
 
 					{/* Breakdowns */}
 					<div className="grid md:grid-cols-2 gap-4">
@@ -286,7 +287,7 @@ export default function Usage() {
 						    how to read every other card on this page. Without it the reader has one
 						    undifferentiated total and no way to tell which part of it is money. */}
 						{!!data.byPayer?.length && (
-							<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 md:col-span-2">
+							<Card className="md:col-span-2">
 								<h3 className="text-sm font-bold mb-2">Who pays</h3>
 								<Breakdown rows={data.byPayer} labelOf={(b) => b.label || b.key} />
 								<ul className="mt-3 pt-3 border-t border-line space-y-1 text-xs text-muted-soft">
@@ -294,17 +295,17 @@ export default function Usage() {
 										<li key={b.key}><b>{b.label || b.key}</b> — {PAYER_NOTE[b.key]}</li>
 									))}
 								</ul>
-							</div>
+							</Card>
 						)}
-						<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
+						<Card>
 							<h3 className="text-sm font-bold mb-2">By agent</h3>
 							<Breakdown rows={data.byAgent} labelOf={(b) => b.label || b.key} />
-						</div>
-						<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
+						</Card>
+						<Card>
 							<h3 className="text-sm font-bold mb-2">By model</h3>
 							<Breakdown rows={data.byModel} labelOf={(b) => b.key} />
-						</div>
-						<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 md:col-span-2">
+						</Card>
+						<Card className="md:col-span-2">
 							<h3 className="text-sm font-bold mb-2">By activity</h3>
 							<Breakdown rows={data.byKind} labelOf={(b) => KIND_LABEL[b.key] || b.key} />
 							{/* Two rows here read as the same thing and differ by an order of magnitude.
@@ -319,7 +320,7 @@ export default function Usage() {
 									Codex and Grok report nothing, so they appear here at all only via the Pilot.
 								</p>
 							)}
-						</div>
+						</Card>
 					</div>
 				</>
 			) : (

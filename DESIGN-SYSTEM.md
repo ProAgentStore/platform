@@ -258,6 +258,15 @@ a table describing one call site: a `rounded-full` pill, a segmented control wit
 card-shaped button with a selected state, and an icon button drawn over content with its own
 scrim. Those stay hand-written and are counted (§5).
 
+**How much of the remaining count that accounts for, measured** so the pin is not misread as a
+to-do list of equal items. Of the console's 124 hand-authored buttons: 23 are card-shaped, 11 sit
+below the smallest step's type size (dense board chips at `text-2xs`), 5 are pills, 2 are segmented
+arms, 2 are overlaid, 1 is a fixed-size icon — call it a third that the vocabulary excludes on
+purpose. The other ~84 are ordinary buttons that have simply not been migrated. Both halves are in
+the same number today, and separating them is per-screen work: the Board's chips look migratable
+and are not, because `size="sm"` would raise their type step and change the radius in the densest
+rows in the app.
+
 Mobile: form controls are forced to `font-size: 16px; min-height: 44px` below 640px (`index.css`).
 Both numbers are deliberate — 16px is the threshold below which iOS Safari zooms the viewport on
 focus, 44px is Apple's minimum touch target. Do not "tidy" them.
@@ -396,11 +405,32 @@ it may only go down. 47 shapes accumulated because nothing failed when a fifteen
 sweep without a ratchet is a photograph of a tree that keeps growing — #367's guard caught five
 defects that landed on main from another author *while its own sweep was running*.
 
-Stated so the number is not read as "all of it": it covers `<button>` only. A `<Link>` styled as a
-button is not counted, which also means the ratchet is **evadable** by swapping the tag; cards and
-badges are not counted either, because `<div>` is the wrong unit to scan and padding+radius does
-not tell a card from a code block. And it says nothing about whether the variant chosen was the
-right one — that is taste, and the paragraph below applies.
+Stated so the number is not read as "all of it": it covers `<button>` only, and it says nothing
+about whether the variant chosen was the right one — that is taste, and the paragraph below applies.
+
+The `<Link>` evasion it warns about was **measured on 2026-08-08 and is theoretical**: across all
+three trees there are four `<a>`/`<Link>`/`<NavLink>` elements drawing a control box, and three of
+them are nav items with an active arm — the segmented shape the vocabulary excludes anyway. A rule
+for four elements, three of which it would report wrongly, is worse than the hole. Recorded so the
+worry is closed with a number instead of being re-raised.
+
+**Cards are counted now** — `findHandAuthoredCards`, pinned at **30** (console), 3 (admin) and 9
+(Coder UI), added 2026-08-08. That reverses this file's earlier claim that `<div>` is the wrong unit
+to scan, and the reversal is worth reading, because the earlier claim was right about the signature
+it had in mind. Padding + radius alone genuinely cannot tell a card from a code block. Three
+conditions at once can: a **container tag** from a closed list, the **card radius** `rounded-xl`
+(controls use `rounded-lg`, so the two populations separate with no judgement), and a **surface** —
+a panel/paper fill or the line border. That reports 58 elements in the console and every one is a
+card. Each condition was added because dropping it pulled in a real false positive: a text input
+(this app's inputs are rounded and bordered), a `<button>` already counted by the guard above, and a
+dropdown panel that is card-shaped but cannot become a `<Card>`, so the message would have been
+telling someone to do the impossible.
+
+Its stated cost: a card written at `rounded-lg` is invisible to it, and widening to catch those
+would sweep in every control in the app. §3's original measurement counted 15 of them, so this holds
+roughly four fifths of the population and knows which fifth it is missing. It also asserts nothing
+about padding — a card at `p-4` is counted the same as one at `p-3 sm:p-4`, because which padding is
+right is the taste question the component exists to make into one decision.
 
 **`e2e/console.spec.ts` — "every control clears the 24px minimum target"**, added at #389, and the
 first geometry guard here that measures a rendered box rather than source text. It walks the same
@@ -423,8 +453,10 @@ or a link, information density, when a surface is `panel` versus `paper`, icon c
 only teach people to suppress it.
 
 **Deliberately not enforced yet:** the marketing-vs-SPA palette split (§4 — resolving it is a
-restyling decision about the marketing pages, not a lint), and card/badge geometry (`<div>` is the
-wrong unit to scan, per the paragraph above).
+restyling decision about the marketing pages, not a lint), and badge geometry, where the earlier
+objection still stands unchanged: a `<span>` with a tint is indistinguishable from a highlighted
+word, and there is no third condition available to separate them the way `rounded-xl` separates a
+card from a control.
 
 ## 6. Open
 
@@ -444,7 +476,16 @@ wrong unit to scan, per the paragraph above).
   `TmuxTab`, `DataTab`, `TriggersSection`, `LoopPresetsSection`, and all of `store/admin` and
   `agents/coder/web`. Those files do not get `BUTTON_SIZE`'s 24px floor until they migrate — the
   e2e guard is what holds them meanwhile, and only on the 11 routes it visits. The ratchet in §5
-  holds each tree where it stands.
+  holds each tree where it stands. **Roughly a third of the console's 124 is not migration work at
+  all** — see §3 for the breakdown; do that separation per screen before quoting the number as
+  remaining effort.
+- **Finish the card migration.** The 28 sites whose class string was already byte-identical to
+  `cardClass()` became `<Card>` at #366 — a rename with no rendered change, which is why they went
+  as a batch. The remaining 30 differ in padding (`p-4`, `p-5`, `px-3 py-2.5`, `py-10`) and each one
+  is a decision about whether that screen's card is a card, a banner or an empty state. `<Card>`
+  takes no padding prop on purpose (adding one re-opens the three-geometry drift it replaced), so
+  moving one of these means accepting the canonical padding or leaving it hand-written and saying
+  why.
 - **A `text-2xs` audit, one screen at a time.** The scale sweep was mechanical by design (nearest
   step, ties up), so 173 sites landed on the 11px floor by arithmetic rather than by anyone deciding
   the text there is telemetry. Some of it is not: `text-2xs` under a form control on the Settings

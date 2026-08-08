@@ -8,6 +8,7 @@ import {
 	type ConnectorEntry,
 } from "../lib/accountConnections";
 import type { ConnectorReach } from "../lib/connectorState";
+import Card from "./Card";
 
 /**
  * The account's connected accounts (#355) — Gmail, Google Drive, Zoho WorkDrive, GitHub.
@@ -120,7 +121,7 @@ export default function AccountConnections() {
 	const rows = accountConnections(entries ?? []);
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+		<Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Connections</h3>
 			<p className="text-xs text-muted mb-3">
 				Accounts your agents can reach. There is one of each per account, so connecting or
@@ -205,6 +206,6 @@ export default function AccountConnections() {
 					))}
 
 			{msg && <p className="text-xs text-muted mt-2">{msg}</p>}
-		</div>
+		</Card>
 	);
 }

@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findHandAuthoredControls } from "./control-shapes.js";
+import { findHandAuthoredCards, findHandAuthoredControls } from "./control-shapes.js";
 
 /**
  * The ratchet that stops the fifteenth button shape (#366).
@@ -36,8 +36,8 @@ function tsxFiles(dir: string, out: string[] = []): string[] {
 	return out;
 }
 
-function sweep(root: string) {
-	return tsxFiles(root).flatMap((file) => findHandAuthoredControls(readFileSync(file, "utf8")).map((c) => `${relative(root, file)}:${c.line}  ${c.shape.join(" ")}`));
+function sweep(root: string, find = findHandAuthoredControls) {
+	return tsxFiles(root).flatMap((file) => find(readFileSync(file, "utf8")).map((c) => `${relative(root, file)}:${c.line}  ${c.shape.join(" ")}`));
 }
 
 /**
@@ -77,6 +77,74 @@ describe.each([
 				"Over the pin: use <Button variant size> from components/Button.tsx instead of writing padding + radius.\n" +
 				"Under it: you migrated some — lower the pin here in the same commit, or the ground is left as headroom.",
 		).toBe(PINNED[name]);
+	});
+});
+
+/**
+ * The card half (#366), added 2026-08-08 — the ticket counted "3 card geometries" and nothing
+ * held them. `<div>` really is the wrong unit to scan on its own; what makes this exact is
+ * asking for a container tag AND the card radius AND a surface at once. The reasoning, and the
+ * measured false positives that each condition removes, are in `control-shapes.ts`.
+ *
+ * 58 → 30 in the console at this commit: the 28 sites whose class string was already
+ * byte-identical to `cardClass()` became `<Card>`, which is a rename rather than a restyle —
+ * `CARD_TONE.panel` + `CARD_GEOMETRY` emit those exact utilities in that exact order, so the
+ * rendered class attribute is unchanged. The remaining 30 differ in padding and are a judgement
+ * call per screen, not a sweep.
+ */
+const PINNED_CARDS = { "store/console": 30, "store/admin": 3, "agents/coder/web": 9 };
+
+describe.each([
+	["store/console", CONSOLE_SRC],
+	["store/admin", ADMIN_SRC],
+	["agents/coder/web", CODER_WEB_SRC],
+] as const)("%s holds its count of hand-written cards", (name, root) => {
+	it("is exactly at its pin", () => {
+		const found = sweep(root, findHandAuthoredCards);
+		expect(
+			found.length,
+			`${name}: ${found.length} hand-written card(s), pinned at ${PINNED_CARDS[name]}.\n${found.map((f) => `  ${f}`).join("\n")}\n\n` +
+				"Over the pin: use <Card> from components/Card.tsx instead of writing a surface, a radius and padding.\n" +
+				"Under it: you migrated some — lower the pin here in the same commit, or the ground is left as headroom.",
+		).toBe(PINNED_CARDS[name]);
+	});
+});
+
+describe("findHandAuthoredCards", () => {
+	const cards = (src: string) => findHandAuthoredCards(src).map((c) => c.shape.join(" "));
+
+	it("reports a container with a surface, the card radius and padding", () => {
+		expect(cards(`<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-4">x</div>`)).toEqual(["p-3 sm:p-4 rounded-xl"]);
+	});
+
+	it("reports a bordered empty state with no fill, which is still a card", () => {
+		expect(cards(`<div className="text-center text-muted-soft py-10 border border-line rounded-xl">none yet</div>`)).toEqual(["py-10 rounded-xl"]);
+	});
+
+	it("ignores the three tags that made the naive version noisy", () => {
+		// Measured on the tree, not imagined: this app's text inputs are rounded and bordered, a
+		// <button> would be double-reported under the guard above, and a dropdown panel is
+		// card-SHAPED but cannot be a <Card>, so telling someone to use one would be wrong.
+		expect(cards(`<input className="bg-panel border border-line rounded-xl px-3 py-2" />`)).toEqual([]);
+		expect(cards(`<button className="bg-panel border border-line rounded-xl p-3">x</button>`)).toEqual([]);
+		expect(cards(`<nav className="bg-panel border border-line rounded-xl py-1">x</nav>`)).toEqual([]);
+	});
+
+	it("ignores a control radius, which is how the two populations stay apart", () => {
+		expect(cards(`<div className="bg-panel border border-line rounded-lg p-3">x</div>`)).toEqual([]);
+	});
+
+	it("ignores a layout box with no surface, and a surface with no padding", () => {
+		expect(cards(`<div className="rounded-xl p-4 flex gap-2">x</div>`)).toEqual([]);
+		expect(cards(`<div className="bg-panel border border-line rounded-xl overflow-hidden">x</div>`)).toEqual([]);
+	});
+
+	it("does not report a Card, which is the point", () => {
+		expect(cards(`<Card className="mb-4">x</Card>`)).toEqual([]);
+	});
+
+	it("does not read a card out of a comment", () => {
+		expect(cards(`{/* was a div with bg-panel border border-line rounded-xl p-4 */}\n<Card>x</Card>`)).toEqual([]);
 	});
 });
 

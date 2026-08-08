@@ -4,6 +4,7 @@ import { LineChart, Plus, RefreshCw } from "lucide-react";
 import StatsCard from "../components/StatsCard";
 import { historyNote, throughDayNote, windowLabel } from "../lib/stats-format";
 import type { StatsCardKind, StatsRejection, StatsResponse, StatsSourceInfo, StatsSourcesResponse } from "../lib/stats-types";
+import Card from "../components/Card";
 
 /**
  * Stats tab (#311) — what the agent shows about itself.
@@ -315,7 +316,7 @@ function AddCard({
 	const missing = source.params.filter((p) => p.required && !params[p.id]?.trim());
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 space-y-3">
+		<Card className="space-y-3">
 			<div className="grid gap-3 sm:grid-cols-2">
 				<label className="text-xs text-muted">
 					Source
@@ -402,6 +403,6 @@ function AddCard({
 				</button>
 				{missing.length > 0 && <span className="text-xs text-muted-soft self-center">Needs {missing.map((m) => m.label).join(", ")}</span>}
 			</div>
-		</div>
+		</Card>
 	);
 }

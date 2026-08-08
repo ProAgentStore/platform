@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
+import Card from "../components/Card";
 
 /**
  * Autonomous runs — the history of objectives this agent worked on by itself (#158/#182).
@@ -114,7 +115,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 	if (runs.length === 0) return null;
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+		<Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Autonomous runs</h3>
 			<p className="text-sm text-muted mb-3">
 				Objectives this agent worked on by itself. These run on the server, so they keep going
@@ -155,6 +156,6 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 				);
 			})}
 			{msg && <div className="text-xs text-muted mt-2">{msg}</div>}
-		</div>
+		</Card>
 	);
 }

@@ -6,6 +6,7 @@ import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
 import NotificationPreferences, { type NotificationTypeSpec } from "../components/NotificationPreferences";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
+import Card from "../components/Card";
 
 /** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
 function nowIn(zone: string): string {
@@ -164,7 +165,7 @@ export default function Preferences() {
 				onSaved={setMutedNotifications}
 			/>
 
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Appearance</h3>
 				<div className="flex justify-between items-center py-2.5 text-sm">
 					<span className="text-muted font-medium">Text size</span>
@@ -181,9 +182,9 @@ export default function Preferences() {
 						))}
 					</div>
 				</div>
-			</div>
+			</Card>
 
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Timezone</h3>
 				<p className="text-xs text-muted mb-2">
 					What "today", "this morning" and "overnight" mean when an agent talks to you, and the
@@ -219,17 +220,17 @@ export default function Preferences() {
 					</p>
 				)}
 				{tzMsg && <p className="text-xs text-muted mt-1">{tzMsg}</p>}
-			</div>
+			</Card>
 
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Voice</h3>
 				{loaded && <VoiceFields value={voice} onPatch={saveVoice} hasOpenAiKey={hasOpenAiKey} savedNote="Saved — applies to every agent" />}
-			</div>
+			</Card>
 
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Translation</h3>
 				{loaded && <TranslationFields value={translation} onSave={saveTranslation} languages={languages} />}
-			</div>
+			</Card>
 		</Page>
 	);
 }

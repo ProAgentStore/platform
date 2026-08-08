@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { ChevronDown, ChevronUp, Plus, Repeat, Trash2 } from "lucide-react";
+import Card from "../components/Card";
 import {
 	MAX_LOOP_PRESETS,
 	addPreset,
@@ -82,7 +83,7 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 	const incomplete = incompleteCount(list);
 
 	return (
-		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+		<Card className="mb-3 sm:mb-4">
 			<button type="button" onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between gap-2 text-left">
 				<span>
 					<span className="text-base font-bold flex items-center gap-1.5"><Repeat size={15} /> Loop presets</span>
@@ -188,6 +189,6 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 					</div>
 				</div>
 			)}
-		</div>
+		</Card>
 	);
 }

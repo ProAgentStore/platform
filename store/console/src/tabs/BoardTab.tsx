@@ -7,6 +7,7 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { boardBusy } from "../lib/pollBusy";
 import { statusBadgeClass } from "../lib/statusBadge";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
+import Card from "../components/Card";
 
 type BoardView = "kanban" | "list";
 
@@ -230,7 +231,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	return (
 		<div>
 			{isBrowseAgent && (
-				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3">
+				<Card className="mb-3">
 					<h3 className="text-base font-bold mb-1">Run browser task</h3>
 					<p className="text-sm text-muted mb-2">
 						Runs on your connected machine's browser (needs <code>pags up</code> and you signed into the site). The agent drives the page toward its objective; a login/captcha pauses for your takeover.
@@ -247,7 +248,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 						<button type="button" onClick={() => runBrowse(true)} disabled={running || !runUrl.trim()} className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">Dry run</button>
 					</div>
 					{runMsg && <p className="text-xs text-muted mt-2">{runMsg}</p>}
-				</div>
+				</Card>
 			)}
 			<div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
 				<div>
