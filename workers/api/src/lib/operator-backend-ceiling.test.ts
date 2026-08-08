@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { agentCapabilities, sanitizeDeclaredCapabilities } from "./agent-capabilities.js";
 import { lintAgentClaims } from "./agent-claims-lint.js";
-import { CONNECTOR_CONSTRAINTS, constraintsFor, enforceConstraints } from "./surface-options.js";
+import { CONNECTOR_CONSTRAINTS, constraintsFor, enforceConstraints, narrowConstraintSpec } from "./surface-options.js";
 import { getRegistryTool } from "./tool-registry.js";
 
 const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0104_operator_backend_ceilings.sql", import.meta.url)), "utf8");
@@ -167,5 +167,139 @@ describe("migration 0104 — the descriptions go back, because the capability ch
 		for (const s of [KITTY, ITERM]) {
 			expect(lintAgentClaims({ description: s.description, capabilities: { runtime: "coding", workflow: null } })).toEqual([]);
 		}
+	});
+});
+
+/**
+ * migration 0112 (#441): the FIRST agent anywhere to declare `targets: "single"`.
+ *
+ * #402 shipped the binding whole — it parses, it narrows, it is writable through
+ * `PUT /v1/instances/:id/terminal-target`, and `enforceBinding` refuses on it at dispatch — and
+ * then nothing declared it. Of the three production rows carrying `surfaceOptions` at all, every
+ * one declares only a VALUE ceiling. So the two keys had never been round-tripped together, and
+ * the refusal a `single` agent exists to give had never been produced by a real row.
+ *
+ * Checked the way 0104's is: parse what the migration will actually write, then resolve it through
+ * the REAL parser, the REAL sanitiser, the REAL creator→subscriber merge and the REAL dispatcher
+ * gate. A SQL file cannot state that the field it writes survives the sanitiser, and a field that
+ * does not survive is config the next agent update deletes.
+ */
+const SEED_SQL = readFileSync(fileURLToPath(new URL("../../migrations/0112_seed_single_pane_operator_agent.sql", import.meta.url)), "utf8");
+const SEED_DDL = SEED_SQL.split("\n")
+	.filter((l) => !l.trimStart().startsWith("--"))
+	.join("\n");
+
+/** The config the INSERT writes, read out of the SQL rather than restated here. `''` is SQL's
+ *  escaped apostrophe, not JSON's. */
+const SEED_CONFIG = JSON.parse((/json\('(\{[\s\S]*?\})'\),\s*\n\s*datetime/.exec(SEED_DDL)?.[1] ?? "{}").replace(/''/g, "'")) as {
+	capabilities: Record<string, unknown>;
+};
+
+const SEED_AGENT = { slug: "single-pane-operator", category: "coding", config: JSON.stringify(SEED_CONFIG) };
+const CAPTURE = getRegistryTool("terminal_capture");
+const LIST = getRegistryTool("terminal_list_targets");
+if (!CAPTURE || !LIST) throw new Error("the terminal tools are not registered");
+
+describe("migration 0112 — a `single` declaration that survives the round trip", () => {
+	it("declares BOTH keys: the backend ceiling and the cardinality", () => {
+		expect(constraintsFor(agentCapabilities(SEED_AGENT), "terminal")).toEqual({ backends: ["tmux"], targets: "single" });
+	});
+
+	it("survives `sanitizeDeclaredCapabilities` — the property #441 says was never exercised", () => {
+		// The write path an agent UPDATE takes. `parseConstraintSpec` handles a value list and a
+		// binding field in two different branches; a row carrying both is what proves neither branch
+		// eats the other. A field the sanitiser drops would vanish the first time anyone edited the
+		// agent, long after this migration looked applied.
+		const sanitized = sanitizeDeclaredCapabilities(SEED_CONFIG.capabilities);
+		expect(sanitized?.surfaceOptions).toEqual({ terminal: { backends: ["tmux"], targets: "single" } });
+		expect(sanitized?.tools).toEqual(["terminal_list_targets", "terminal_capture", "terminal_run_command", "terminal_send_keys"]);
+	});
+
+	it("declares no `boundTarget` — the bound identity is the SUBSCRIBER's half", () => {
+		// And unbound is the interesting state: it is what produces the "bind one first" refusal
+		// instead of a guess at somebody's pane.
+		expect(constraintsFor(agentCapabilities(SEED_AGENT), "terminal")).not.toHaveProperty("boundTarget");
+		expect(SEED_DDL).not.toMatch(/boundTarget/);
+	});
+
+	it("declares no create/kill tool — 'may not make a second terminal' is a MISSING tool, not a constraint", () => {
+		const tools = agentCapabilities(SEED_AGENT).tools ?? [];
+		expect(tools).not.toContain("terminal_new_target");
+		expect(tools).not.toContain("terminal_kill_target");
+		// `terminal_list_targets` must stay: it takes no `target`, so the binding never gates it, and
+		// it is how a subscriber discovers what to bind. Withholding it would leave a fresh instance
+		// unconfigurable.
+		expect(tools).toContain("terminal_list_targets");
+	});
+
+	it("is a DRAFT, so no published catalog entry changes", () => {
+		expect(SEED_DDL).toMatch(/'draft'/);
+	});
+
+	it("writes the NARROWEST paths on the converging UPDATE", () => {
+		// Re-setting `$.capabilities` would mean reproducing surfaces, runtime, workflow and the
+		// declared tools, and getting one wrong silently removes a capability.
+		// EVERY JSON path the file mentions, not only the ones a json_set-shaped regex happens to
+		// find first — the whole risk is a path nobody looked at.
+		const written = [...SEED_DDL.matchAll(/'(\$\.[^']+)'/g)].map((m) => m[1]);
+		expect(written).toEqual(["$.capabilities.surfaceOptions.terminal.backends", "$.capabilities.surfaceOptions.terminal.targets"]);
+	});
+
+	it("names the mechanism in its description, and the claims lint stays clean", () => {
+		const description = /'(Drives exactly ONE[^']*)',/.exec(SEED_DDL)?.[1] ?? "";
+		expect(description).toMatch(/surfaceOptions\.terminal\.targets/);
+		expect(description).toMatch(/enforced at dispatch/);
+		expect(lintAgentClaims({ description, capabilities: { runtime: "coding", workflow: null } })).toEqual([]);
+	});
+});
+
+/**
+ * The four outcomes #441 asks to be recorded, driven through the real merge and the real gate.
+ *
+ * `bound()` is the subscriber's `PUT …/terminal-target` reduced to what it stores — an instance
+ * `surfaceOptions` — merged by `narrowConstraintSpec`, which is the same function
+ * `connectorConstraintsForInstance` calls before handing the result to `enforceConstraints`. So
+ * these run the seed's own declaration through the whole chain bar the D1 read.
+ */
+describe("migration 0112 — the four outcomes of a single-target agent", () => {
+	const CEILING = constraintsFor(agentCapabilities(SEED_AGENT), "terminal");
+	const bound = (target: string | null) => narrowConstraintSpec("terminal", CEILING, target ? { boundTarget: target } : undefined);
+
+	it("(a) UNBOUND: a target-taking call is refused rather than guessing a pane", () => {
+		const r = enforceConstraints(CAPTURE, bound(null), { target: "tmux:main" });
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.refusal).toContain("`terminal.targets` (single)");
+		expect(!r.ok && r.refusal).toMatch(/terminal-target/);
+	});
+
+	it("(a′) UNBOUND: listing still works — that is how you discover what to bind", () => {
+		expect(enforceConstraints(LIST, bound(null), {})).toEqual({ ok: true, input: { backend: "tmux" } });
+	});
+
+	it("(b) BOUND: the bound pane passes, and an omitted target is filled with it", () => {
+		expect(enforceConstraints(CAPTURE, bound("tmux:main"), { target: "tmux:main" })).toEqual({ ok: true, input: { target: "tmux:main", backend: "tmux" } });
+		expect(enforceConstraints(CAPTURE, bound("tmux:main"), {})).toEqual({ ok: true, input: { target: "tmux:main", backend: "tmux" } });
+		// The same pane written the other way, canonicalised to the bound form so the runner is
+		// addressed exactly one way.
+		expect(enforceConstraints(CAPTURE, bound("tmux:main"), { target: "main" })).toEqual({ ok: true, input: { target: "tmux:main", backend: "tmux" } });
+	});
+
+	it("(c) BOUND: any OTHER pane is refused, naming what is bound", () => {
+		const r = enforceConstraints(CAPTURE, bound("tmux:main"), { target: "tmux:other" });
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.refusal).toContain("tmux:main");
+		expect(!r.ok && r.refusal).toContain("tmux:other");
+	});
+
+	it("(d) a target naming another BACKEND is refused as a backend violation, not a binding one", () => {
+		// Table order decides which constraint gets reported, and reporting the one that actually
+		// applies is the difference between a usable refusal and a misleading one.
+		const r = enforceConstraints(CAPTURE, bound("tmux:main"), { target: "kitty:main" });
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.refusal).toContain("`terminal.backends` (tmux)");
+	});
+
+	it("a subscriber cannot bind OUTSIDE the ceiling — the widen attempt in its other form", () => {
+		expect(bound("kitty:3")).toEqual({ backends: ["tmux"], targets: "single" });
 	});
 });
