@@ -1,6 +1,14 @@
 // Generic local terminal connector. The cloud side owns auth/consent/tool policy; the local
 // runner owns backend-specific adapters (tmux, kitty remote control, iTerm2 AppleScript).
 //
+// BACKEND CEILING (#404): `backend` here is a REQUEST, not the decision. An agent may declare
+// `capabilities.surfaceOptions.terminal.backends` — a subset of the three below — and
+// `runRegistryTool` enforces it at dispatch: an out-of-scope `backend`, or a `target` carrying an
+// out-of-scope prefix (`iterm2:1:1:1`), is refused before any handler here runs, and an omitted
+// `backend` arrives already narrowed to the one permitted value. So a "tmux Operator" is one by
+// construction rather than by name, and these handlers need no per-agent branching. Declaring
+// nothing leaves every call byte-identical to before the gate existed.
+//
 // METERING: this connector drives CLIs the platform cannot measure (#348). A pane carries
 // rendered text, so an AI coding CLI running in one spends real tokens that reach no ledger row —
 // and a missing row on a page of dollars reads as zero dollars. Every WRITE therefore records an

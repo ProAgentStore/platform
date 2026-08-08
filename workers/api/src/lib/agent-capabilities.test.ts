@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, columnForStatus, customSurfacesEnabled, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
-import { optionsFor } from "./surface-options.js";
+import { agentCapabilities, columnForStatus, connectorConstraintsForInstance, customSurfacesEnabled, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
+import { constraintsFor, optionsFor } from "./surface-options.js";
 
 /** Custom surfaces are fail-closed (#186); the shape rules only run once a platform enables them. */
 const ON = { CUSTOM_SURFACES_ENABLED: "1" };
@@ -392,6 +392,99 @@ describe("agentCapabilities — surfaceOptions must SURVIVE resolution", () => {
 		const caps = agentCapabilities({ slug: "coder", category: "code", config: JSON.stringify({ capabilities: { surfaceOptions: { coding: { repos: "single" } } } }) });
 		expect(caps.surfaces).toContain("coding"); // derived, not declared
 		expect(caps.surfaceOptions).toEqual({ coding: { repos: "single" } });
+	});
+});
+
+describe("capability constraints — declared, sanitised, persisted, resolved (#404)", () => {
+	const declared = (caps: Record<string, unknown>) => ({ slug: "x", category: "chat", config: JSON.stringify({ capabilities: caps }) });
+
+	it("a creator's declaration survives the authoring route's sanitiser", () => {
+		expect(sanitizeDeclaredCapabilities({ surfaces: ["tmux"], surfaceOptions: { terminal: { backends: ["tmux"] } } })).toEqual({
+			surfaces: ["tmux"],
+			surfaceOptions: { terminal: { backends: ["tmux"] } },
+		});
+	});
+
+	it("the sanitiser enforces the CLOSED vocabulary — no new connector, no new field, no new value", () => {
+		// One validator for the whole map is the argument for extending surfaceOptions rather than
+		// adding a sibling: a write cannot reach config by a path that skips it.
+		expect(sanitizeDeclaredCapabilities({ surfaceOptions: { terminal: { backends: ["ssh", "screen"] } } })).toEqual({});
+		expect(sanitizeDeclaredCapabilities({ surfaceOptions: { terminal: { domains: ["evil.example"] } } })).toEqual({});
+		expect(sanitizeDeclaredCapabilities({ surfaceOptions: { github: { backends: ["tmux"] } } })).toEqual({});
+		expect(sanitizeDeclaredCapabilities({ surfaceOptions: { terminal: { backends: ["tmux", "ssh"] } } })).toEqual({
+			surfaceOptions: { terminal: { backends: ["tmux"] } },
+		});
+	});
+
+	it("resolves back off the stored config, without needing the connector to be a declared surface", () => {
+		const caps = agentCapabilities(declared({ surfaces: [], surfaceOptions: { terminal: { backends: ["tmux"] } } }));
+		expect(constraintsFor(caps, "terminal")).toEqual({ backends: ["tmux"] });
+	});
+
+	it("an agent that declares nothing resolves to NO constraint — the invisible regression", () => {
+		expect(constraintsFor(agentCapabilities(declared({ surfaces: ["coding"] })), "terminal")).toBeUndefined();
+		expect(constraintsFor(agentCapabilities({ slug: "coder", category: "code", config: null }), "terminal")).toBeUndefined();
+	});
+});
+
+/** A DB whose one row carries the given agent + instance configs. `null` = instance not found. */
+function envWithConfigs(agentConfig: unknown, instanceConfig: unknown, found = true) {
+	return {
+		DB: {
+			prepare() {
+				return {
+					bind() {
+						return {
+							first: async () =>
+								found
+									? { agent_config: agentConfig == null ? null : JSON.stringify(agentConfig), instance_config: instanceConfig == null ? null : JSON.stringify(instanceConfig) }
+									: null,
+						};
+					},
+				};
+			},
+		},
+	} as unknown as Parameters<typeof connectorConstraintsForInstance>[0];
+}
+
+describe("connectorConstraintsForInstance — creator ceiling, subscriber narrowing", () => {
+	const ceiling = (backends: string[]) => ({ capabilities: { surfaces: ["tmux"], surfaceOptions: { terminal: { backends } } } });
+
+	it("returns the creator's ceiling when the subscriber has asked for nothing", async () => {
+		const env = envWithConfigs(ceiling(["tmux"]), {});
+		expect(await connectorConstraintsForInstance(env, "i1", "u1", "terminal")).toEqual({ backends: ["tmux"] });
+	});
+
+	it("lets the subscriber NARROW within the ceiling", async () => {
+		const env = envWithConfigs(ceiling(["tmux", "kitty"]), { surfaceOptions: { terminal: { backends: ["tmux"] } } });
+		expect(await connectorConstraintsForInstance(env, "i1", "u1", "terminal")).toEqual({ backends: ["tmux"] });
+	});
+
+	it("does NOT let the subscriber widen it — the ceiling is a catalog claim", async () => {
+		// Configuration must never make an agent's own description false (#362).
+		const env = envWithConfigs(ceiling(["tmux"]), { surfaceOptions: { terminal: { backends: ["tmux", "iterm2"] } } });
+		expect(await connectorConstraintsForInstance(env, "i1", "u1", "terminal")).toEqual({ backends: ["tmux"] });
+
+		const wholly = envWithConfigs(ceiling(["tmux"]), { surfaceOptions: { terminal: { backends: ["iterm2"] } } });
+		expect(await connectorConstraintsForInstance(wholly, "i1", "u1", "terminal")).toEqual({ backends: ["tmux"] });
+	});
+
+	it("honours a subscriber's narrowing of an agent that declared no ceiling", async () => {
+		const env = envWithConfigs({ capabilities: { surfaces: ["tmux"] } }, { surfaceOptions: { terminal: { backends: ["kitty"] } } });
+		expect(await connectorConstraintsForInstance(env, "i1", "u1", "terminal")).toEqual({ backends: ["kitty"] });
+	});
+
+	it("resolves to undefined when neither side declares anything, and when the row is gone", async () => {
+		expect(await connectorConstraintsForInstance(envWithConfigs({ capabilities: {} }, {}), "i1", "u1", "terminal")).toBeUndefined();
+		expect(await connectorConstraintsForInstance(envWithConfigs(null, null), "i1", "u1", "terminal")).toBeUndefined();
+		expect(await connectorConstraintsForInstance(envWithConfigs(ceiling(["tmux"]), {}, false), "i1", "u1", "terminal")).toBeUndefined();
+	});
+
+	it("propagates a database failure rather than resolving to 'unconstrained'", async () => {
+		// The caller refuses on a throw. A ceiling that cannot be read cannot be honoured, and a
+		// boundary that opens when its store hiccups is not a boundary.
+		const env = { DB: { prepare() { return { bind() { return { first: async () => { throw new Error("D1 down"); } }; } }; } } } as never;
+		await expect(connectorConstraintsForInstance(env, "i1", "u1", "terminal")).rejects.toThrow(/D1 down/);
 	});
 });
 

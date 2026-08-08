@@ -223,3 +223,62 @@ describe("execution authority at the consent gate (#185)", () => {
 		expect(r.content).not.toMatch(/isn't permitted/i);
 	});
 });
+
+/**
+ * The capability-constraint gate (#404) — asserted HERE because the placement is the deliverable.
+ *
+ * Every other declared constraint on this platform is applied by withholding a tool before
+ * dispatch is reached, which is why `optionsFor` is consulted in four places and none of them is
+ * this function. A tool that serves several resources (`terminal_list_targets` reaches tmux, kitty
+ * AND iTerm2) cannot be constrained that way, so the refusal has to happen at the dispatcher.
+ */
+describe("capability-constraint gate (#404)", () => {
+	/** A DB that answers the constraint join with a tmux-only ceiling, and consent with a grant. */
+	const envTmuxOnly = (asked: string[] = []) =>
+		({
+			DB: {
+				prepare(sql: string) {
+					const constraintQuery = sql.includes("agent_instances");
+					return {
+						bind(...args: unknown[]) {
+							if (constraintQuery) asked.push(String(args[0]));
+							return {
+								first: async () =>
+									constraintQuery
+										? { agent_config: JSON.stringify({ capabilities: { surfaceOptions: { terminal: { backends: ["tmux"] } } } }), instance_config: "{}" }
+										: { ok: 1 },
+							};
+						},
+					};
+				},
+			},
+		}) as unknown as Env;
+
+	it("refuses an out-of-scope ARGUMENT, with a message naming the constraint that applied", async () => {
+		const r = await runRegistryTool("terminal_capture", { env: envTmuxOnly(), userId: "u1", instanceId: "i1" }, { target: "x", backend: "iterm2" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("`terminal.backends` (tmux)");
+	});
+
+	it("resolves against the EXECUTOR, never the asker — a supervisor cannot widen a subordinate", async () => {
+		// Same rule as consent (#185): if the ceiling followed the asker, wiring a narrow agent
+		// beneath a wide one would widen it by configuration alone.
+		const asked: string[] = [];
+		const r = await runRegistryTool("terminal_capture", { env: envTmuxOnly(asked), userId: "u1", instanceId: "sub-1", onBehalfOf: "sup-1" }, { target: "kitty:3" });
+		expect(r.success).toBe(false);
+		expect(asked).toEqual(["sub-1"]);
+	});
+
+	it("costs nothing for a connector with no constraint vocabulary — no lookup at all", async () => {
+		// `env` here has NO DB. A tmux-connector tool reaching the gate would throw on it; instead
+		// it runs and fails on the missing runner, proving the lookup was skipped.
+		const r = await runRegistryTool("tmux_list_sessions", { env: {} as unknown as Env, userId: "u1", instanceId: "i1" }, {});
+		expect(r.content).toMatch(/runner|pags up/i);
+	});
+
+	it("with no instance context there is no agent to have declared one, and the handler says so", async () => {
+		const r = await runRegistryTool("terminal_list_targets", { env: {} as unknown as Env, userId: "u1" }, {});
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/no instance context/i);
+	});
+});

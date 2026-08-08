@@ -44,6 +44,12 @@ export const CONNECTORS: Connector[] = [
 		label: "Terminal (local runner)",
 		// Generic terminal connector over the runner relay. Backend-specific local adapters
 		// currently include tmux, kitty remote control, and iTerm2 AppleScript.
+		//
+		// The one connector with a capability-constraint vocabulary today (#404): an agent may
+		// declare `surfaceOptions.terminal.backends` and reach only those, enforced in
+		// `runRegistryTool`. That is why there is no `kitty`/`iterm2` sibling of the `tmux`
+		// connector below — shipping a parallel implementation per backend is the workaround
+		// that does not scale (see `docs/capability-constraints.md`).
 		auth: "none",
 		scopes: { read: true, write: true },
 		grantModel: "user",

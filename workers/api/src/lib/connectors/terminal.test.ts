@@ -12,6 +12,7 @@ vi.mock("../runner-client.js", () => ({
 
 import { TERMINAL_TOOLS } from "./terminal.js";
 import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
+import { CONNECTOR_CONSTRAINTS } from "../surface-options.js";
 import type { Env } from "../../types.js";
 
 const tool = (name: string) => {
@@ -47,6 +48,20 @@ describe("terminal connector — registration", () => {
 	it("groups terminal tools under the terminal connector", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "terminal");
 		expect(grp?.tools).toEqual(expect.arrayContaining(["terminal_list_targets", "terminal_run_command"]));
+	});
+
+	it("the constraint vocabulary matches the tools' own schemas — two lists that must not drift", () => {
+		// `CONNECTOR_CONSTRAINTS.terminal.backends` is what a creator may declare and what the gate
+		// enforces; the schema enums are what the model is offered. A backend added to one and not
+		// the other is either an unreachable declaration or an unconstrained argument.
+		const def = CONNECTOR_CONSTRAINTS.terminal.backends;
+		expect(getRegistryTool("terminal_list_targets")?.jsonSchema.properties.backend.enum).toEqual([def.wildcard, ...def.values]);
+		expect(getRegistryTool("terminal_new_target")?.jsonSchema.properties.backend.enum).toEqual([...def.values]);
+		for (const name of ["terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_kill_target"]) {
+			expect(getRegistryTool(name)?.jsonSchema.properties.backend.enum, name).toEqual([...def.values]);
+		}
+		// And the argument it governs is one every terminal tool actually takes.
+		for (const t of TERMINAL_TOOLS) expect(t.jsonSchema.properties, t.name).toHaveProperty(def.arg);
 	});
 });
 
@@ -105,5 +120,99 @@ describe("terminal connector — write consent", () => {
 		const r = await runRegistryTool("terminal_list_targets", { env: envConsent(false), userId: "u1", instanceId: "i1" }, {});
 		expect(r.success).toBe(true);
 		expect(callRunner).toHaveBeenCalled();
+	});
+});
+
+/**
+ * The backend ceiling, enforced where it has to be: at DISPATCH.
+ *
+ * These go through `runRegistryTool`, not through a handler and not through the console, because
+ * that is the claim under test — a constraint the model can talk around is not a constraint
+ * (ADR 0001, #395). Every one of them asserts the runner was never reached.
+ */
+describe("terminal connector — the backend ceiling (#404)", () => {
+	/** An owner whose agent declares `backends`, and whose write-consent answer we choose. */
+	const env = (backends: string[] | null, consent = true) =>
+		({
+			DB: {
+				prepare(sql: string) {
+					const constraintQuery = sql.includes("agent_instances");
+					return {
+						bind() {
+							return {
+								first: async () =>
+									constraintQuery
+										? {
+												agent_config: JSON.stringify({
+													capabilities: { surfaces: ["tmux"], ...(backends ? { surfaceOptions: { terminal: { backends } } } : {}) },
+												}),
+												instance_config: "{}",
+											}
+										: consent
+											? { ok: 1 }
+											: null,
+							};
+						},
+					};
+				},
+			},
+		}) as unknown as Env;
+
+	it("refuses an out-of-scope backend BEFORE the runner is touched", async () => {
+		const r = await runRegistryTool("terminal_capture", { env: env(["tmux"]), userId: "u1", instanceId: "i1" }, { target: "1", backend: "iterm2" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("`terminal.backends` (tmux)");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("refuses a target that names an out-of-scope backend by prefix", async () => {
+		// The way the tool is actually driven: a prefixed target and no `backend` at all. This is
+		// the call that made a "tmux Operator" report two iTerm2 windows (#402).
+		const r = await runRegistryTool("terminal_capture", { env: env(["tmux"]), userId: "u1", instanceId: "i1" }, { target: "iterm2:1:1:1" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("iterm2:1:1:1");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("CONSENT AND CONSTRAINTS COMPOSE — write consent granted, argument out of scope, still refused", async () => {
+		// Consent asks *may this instance mutate at all*; a constraint asks *within what*. Passing
+		// the first has never been an answer to the second.
+		const r = await runRegistryTool("terminal_run_command", { env: env(["tmux"], true), userId: "u1", instanceId: "i1" }, { target: "3", backend: "kitty", command: "rm -rf /" });
+		expect(r.success).toBe(false);
+		expect(r.content).not.toMatch(/isn't permitted/i);
+		expect(r.content).toContain("`terminal.backends` (tmux)");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("narrows a defaulted `backend` to the declared one, so listing returns only tmux", async () => {
+		callRunner.mockResolvedValue({ targets: [] });
+		await runRegistryTool("terminal_list_targets", { env: env(["tmux"]), userId: "u1", instanceId: "i1" }, {});
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/list", { backend: "tmux" }, expect.anything());
+	});
+
+	it("passes an in-scope call straight through", async () => {
+		callRunner.mockResolvedValue({ pane: "hi" });
+		const r = await runRegistryTool("terminal_capture", { env: env(["tmux"]), userId: "u1", instanceId: "i1" }, { target: "tmux:main" });
+		expect(r.success).toBe(true);
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/capture", { target: "tmux:main", backend: "tmux", lines: undefined }, expect.anything());
+	});
+
+	it("AN AGENT THAT DECLARES NOTHING IS UNCHANGED — still `all`, still reaches every backend", async () => {
+		// The regression that would be invisible: this is every agent on the platform today.
+		callRunner.mockResolvedValue({ targets: [] });
+		await runRegistryTool("terminal_list_targets", { env: env(null), userId: "u1", instanceId: "i1" }, {});
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/list", { backend: "all" }, expect.anything());
+
+		callRunner.mockResolvedValue({ pane: "hi" });
+		const r = await runRegistryTool("terminal_capture", { env: env(null), userId: "u1", instanceId: "i1" }, { target: "iterm2:1:1:1" });
+		expect(r.success).toBe(true);
+	});
+
+	it("fails CLOSED when the constraints cannot be read at all", async () => {
+		const broken = { DB: { prepare() { return { bind() { return { first: async () => { throw new Error("D1 down"); } }; } }; } } } as unknown as Env;
+		const r = await runRegistryTool("terminal_list_targets", { env: broken, userId: "u1", instanceId: "i1" }, {});
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/could not be read/i);
+		expect(callRunner).not.toHaveBeenCalled();
 	});
 });

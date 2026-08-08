@@ -14,7 +14,13 @@
  * category, so nothing needs a migration to keep working.
  */
 
-import { parseSurfaceOptions, serializeSurfaceOptions } from "./surface-options.js";
+import {
+	type ConstraintSpec,
+	constraintsFor,
+	narrowConstraintSpec,
+	parseSurfaceOptions,
+	serializeSurfaceOptions,
+} from "./surface-options.js";
 import { type AgentWorkflow, isAgentWorkflow } from "./agent-workflows.js";
 import { isAllowedBundleUrl } from "./origins.js";
 
@@ -395,6 +401,11 @@ export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabiliti
 	// same parser the consumers use, and stored compactly so declaring nothing non-default
 	// writes nothing. An option for an UNDECLARED surface is inert, never a way to switch one
 	// on; `optionsFor` gates on `surfaces` for exactly that reason.
+	//
+	// The same pass validates per-connector CONSTRAINTS (#404) against their closed vocabulary,
+	// because `parseSurfaceOptions` owns both — which is the whole argument for extending this map
+	// rather than adding a sibling one: there is exactly one validator to route a write through,
+	// and it was already routed. A value outside `CONNECTOR_CONSTRAINTS` cannot reach config.
 	if ("surfaceOptions" in o) {
 		const opts = serializeSurfaceOptions(parseSurfaceOptions(o.surfaceOptions));
 		if (Object.keys(opts).length) out.surfaceOptions = opts;
@@ -527,4 +538,47 @@ export async function capabilitiesForInstance(
 		.first<{ slug: string | null; category: string | null; config: string | null }>()
 		.catch(() => null);
 	return row ? agentCapabilities(row as never, env) : null;
+}
+
+/**
+ * The EFFECTIVE argument constraints for one connector on one instance (#404) — the creator's
+ * ceiling from `agents.config.capabilities.surfaceOptions`, narrowed by the subscriber's own
+ * `agent_instances.config.surfaceOptions`.
+ *
+ * Two configs, one merge, in the split the platform already draws: what the agent IS is the
+ * creator's (immutable by the subscriber); how this instance is used is the subscriber's, within
+ * it. `narrowConstraintSpec` is where "may narrow, may never widen" is decided and tested.
+ *
+ * Returns undefined when nothing is declared — which is every agent today, and must stay
+ * indistinguishable from the pre-#404 behaviour at the call site.
+ *
+ * It THROWS on a database failure rather than resolving to "unconstrained": the caller
+ * (`runRegistryTool`) refuses on a throw, because a ceiling that cannot be read cannot be
+ * honoured, and a security boundary that opens when its store hiccups is not one. A missing row
+ * is different and is NOT an error — the instance is gone, the tool has nothing to act on, and
+ * the handler's own "no instance context" refusal is the honest message.
+ */
+export async function connectorConstraintsForInstance(
+	env: { DB: D1Database },
+	instanceId: string,
+	userId: string | undefined,
+	connector: string,
+): Promise<ConstraintSpec | undefined> {
+	const sql = userId
+		? `SELECT a.config AS agent_config, i.config AS instance_config
+		     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		    WHERE i.id = ?1 AND i.user_id = ?2`
+		: `SELECT a.config AS agent_config, i.config AS instance_config
+		     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		    WHERE i.id = ?1`;
+	const stmt = env.DB.prepare(sql);
+	const row = await (userId ? stmt.bind(instanceId, userId) : stmt.bind(instanceId)).first<{
+		agent_config: string | null;
+		instance_config: string | null;
+	}>();
+	if (!row) return undefined;
+	const declared = parseConfig(row.agent_config).capabilities as { surfaceOptions?: unknown } | undefined;
+	const ceiling = constraintsFor({ surfaceOptions: declared?.surfaceOptions }, connector);
+	const requested = constraintsFor({ surfaceOptions: parseConfig(row.instance_config).surfaceOptions }, connector);
+	return narrowConstraintSpec(connector, ceiling, requested);
 }

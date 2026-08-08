@@ -15,7 +15,8 @@ import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
 import { getLoopRun, listDelegatedRuns, listLoopRuns, type LoopRunView } from "./agent-loop-store.js";
 import { subordinateIdsOf } from "./supervision.js";
 import { describeWorkCheck } from "./work-report.js";
-import { capabilitiesForInstance } from "./agent-capabilities.js";
+import { capabilitiesForInstance, connectorConstraintsForInstance } from "./agent-capabilities.js";
+import { CONNECTOR_CONSTRAINTS, enforceConstraints } from "./surface-options.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
 import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
@@ -439,6 +440,50 @@ export async function runRegistryTool(
 			};
 		}
 	}
+	// Capability-CONSTRAINT gate (#404). Everything above refuses a call for a reason about the
+	// TOOL — is it this agent's, may this connector write, has the owner consented. This one
+	// refuses for a reason about the ARGUMENT: the agent declared which values it may pass, and
+	// this is where that stops being a claim.
+	//
+	// It is genuinely a new enforcement point, not a repair. Every other declared constraint works
+	// by WITHHOLDING a tool before dispatch is reached (`toolNamesFor`, `surfaceOptions.coding.drive`),
+	// which is a complete answer only while "may this agent do X" and "does it have tool T" are the
+	// same question. They stop being the same the moment one tool serves several resources:
+	// `terminal_list_targets` reaches tmux, kitty AND iTerm2, so a tmux-only agent cannot be
+	// expressed by taking a tool away (#402). `optionsFor` is consulted in four places and none of
+	// them is here, for exactly that reason.
+	//
+	// Placed AFTER consent so the two compose in the order the refusals read: consent asks *may
+	// this instance mutate at all*, a constraint asks *within what*. It applies to READ tools too —
+	// listing every iTerm2 window is the disclosure #402 actually observed, and no consent gate
+	// covers a read.
+	//
+	// Resolved against the EXECUTOR (`consentInstanceOf`), like consent and like token minting: a
+	// supervisor must not be able to widen a subordinate's ceiling by delegating to it (#185).
+	//
+	// The lookup is skipped entirely for a connector with no constraint vocabulary, so this costs
+	// one indexed read on terminal calls and nothing at all anywhere else.
+	let callInput = input || {};
+	if (tool.connector && CONNECTOR_CONSTRAINTS[tool.connector]) {
+		const authority = consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf });
+		if (authority) {
+			let spec: Awaited<ReturnType<typeof connectorConstraintsForInstance>>;
+			try {
+				spec = await connectorConstraintsForInstance(ctx.env, authority, ctx.userId, tool.connector);
+			} catch {
+				// Fail CLOSED. A ceiling that cannot be read cannot be honoured, and a boundary that
+				// opens when its store hiccups is not a boundary.
+				return {
+					name,
+					content: `This agent's declared constraints for the ${tool.connector} connector could not be read, so "${name}" was refused rather than run unconstrained. Try again.`,
+					success: false,
+				};
+			}
+			const gated = enforceConstraints(tool, spec, callInput);
+			if (!gated.ok) return { name, content: gated.refusal, success: false };
+			callInput = gated.input;
+		}
+	}
 	try {
 		// Inject the connector-client factory so handlers mint tokens + enforce grant/scope
 		// through the ONE path (issue #86) instead of importing token fns directly.
@@ -448,7 +493,7 @@ export async function runRegistryTool(
 			// follow the asker either, or up-borrowing would work where consent-bypass does not.
 			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf }) || undefined })),
 		};
-		const r = await tool.handler(handlerCtx, input || {});
+		const r = await tool.handler(handlerCtx, callInput);
 		// #185 audit: record WHOSE authority ran a delegated tool call. Only when delegated —
 		// for ordinary work the authority is trivially the instance already on the event, so
 		// logging every call would be pure noise at real cost. When a supervisor asked, "who
