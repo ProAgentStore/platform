@@ -126,8 +126,12 @@ app.use("/v1/instances/*/mcp/test", rateLimitStrict());
 app.use("/v1/mcp/oauth/start", rateLimitStrict());
 
 // Admin perimeter: Cloudflare Access gate in front of the whole operator API
-// (defense-in-depth). Inert until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set;
-// the admin ROLE is still enforced per-handler behind this.
+// (defense-in-depth). Inert until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set, and
+// setting those alone only turns on AUDIT — it records whether the edge is injecting a
+// valid Access JWT without blocking anything. Enforcement is a separate secret
+// (CF_ACCESS_ENFORCE), because enforcing before that evidence exists locks the operator
+// out of the portal they would use to notice. Runbook: docs/admin-access-perimeter.md.
+// The admin ROLE is still enforced per-handler behind this.
 app.use("/v1/admin/*", cloudflareAccessGate());
 // Dedicated admin throttle (issue #109): clamps unauthenticated enumeration hard while
 // leaving room for the authenticated admin SPA's polling. Behind the CF Access gate.

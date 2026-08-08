@@ -76,12 +76,17 @@ export interface Env {
 	 * Admin/operator portal (issue #28).
 	 * ADMIN_ALLOWLIST: comma-separated session uids granted admin as a break-glass
 	 * fallback, checked in requireAdmin in addition to users.roles.
-	 * CF_ACCESS_*: when both set, the /v1/admin/* API + /admin UI require a valid
-	 * Cloudflare Access token (defense-in-depth). Inert until configured.
+	 * CF_ACCESS_*: the /v1/admin/* Cloudflare Access perimeter (defense-in-depth, #108).
+	 * Setting TEAM_DOMAIN + AUD turns the gate on in AUDIT mode — it verifies the edge's
+	 * `Cf-Access-Jwt-Assertion` and logs what it found (source `cf-access`) but allows the
+	 * request. CF_ACCESS_ENFORCE ("1"/"true"/"yes"/"on") is what makes a missing or invalid
+	 * token a 403. Enforcing before the audit log is silent locks the operator out of the
+	 * portal, so the two steps are deliberately separate secrets. Inert until configured.
 	 */
 	ADMIN_ALLOWLIST?: string;
 	CF_ACCESS_TEAM_DOMAIN?: string;
 	CF_ACCESS_AUD?: string;
+	CF_ACCESS_ENFORCE?: string;
 	/**
 	 * Meta connector (WhatsApp Business Cloud + Instagram Messaging). Platform-level
 	 * business credentials; inert until set (after Meta app + business setup + review).
