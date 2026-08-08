@@ -625,6 +625,14 @@ test.describe("mobile — no select widens the operator portal (#414)", () => {
 	 * WebKit does honour (measured `rgb(124, 58, 237)` on focus). It is worth its own ticket; it
 	 * is not this one, and asserting it here would have been a red guard blaming the wrong change.
 	 *
+	 * THAT TICKET WAS #436, AND IT IS NOW FIXED. This measurement was right in every particular
+	 * and the deferral was right too — the ring's absence in WebKit is the element, not the
+	 * containment. `select:focus-visible { outline }` now carries the indicator in both trees, and
+	 * `a focused select is visibly focused` below asserts it directly. The A/B here is unchanged
+	 * and still owns its own question: whatever the indicator is, containment must not eat it.
+	 * That is why it compares WITH against WITHOUT rather than naming a property — it keeps
+	 * working now that the property has changed, which is the point of writing it that way.
+	 *
 	 * WHAT IS ASSERTED INSTEAD is the invariant this commit is actually responsible for: whatever
 	 * the focus indicator is in this engine, turning paint containment OFF does not change it.
 	 * That is engine-independent, it is exactly the question "does the containment eat the ring",
@@ -674,6 +682,53 @@ test.describe("mobile — no select widens the operator portal (#414)", () => {
 			{ ...withContainment, contain: "-" },
 			`the focus indicator changed when paint containment was removed — containment is eating it. with: ${JSON.stringify(withContainment)} / without: ${JSON.stringify(withoutContainment)}`,
 		).toEqual({ ...withoutContainment, contain: "-" });
+	});
+
+	/**
+	 * A focused `<select>` is VISIBLY focused, in this tree too (#436, WCAG 2.4.7).
+	 *
+	 * The A/B above answers "does containment eat the indicator". This answers the question it
+	 * deliberately left open: "is there an indicator at all". They are different, and only the
+	 * second one goes red on the defect #436 filed — the portal was down to a 1px `border-color`
+	 * transition against a #0a0a0a background on all 16 controls, because WebKit computes
+	 * `box-shadow` to `none` on a native menulist and `outline: none` is declared on the same rule.
+	 *
+	 * Asserted on PIXELS as well as computed style, over a region larger than the control, for the
+	 * reason the console's twin states at length: computed style is what got this wrong the first
+	 * time, and an `outline` with an `outline-offset` paints outside the border box, so an
+	 * element-clipped screenshot would miss it.
+	 */
+	test("mobile — a focused select is visibly focused", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockAdminSurfaces(page);
+		await page.goto("/admin/errors");
+		await page.waitForLoadState("networkidle");
+		await page.locator("main select").first().waitFor();
+		await page.waitForTimeout(300);
+
+		const sel = page.locator("main select").first();
+		await sel.scrollIntoViewIfNeeded();
+		const box = await sel.boundingBox();
+		if (!box) throw new Error("the select has no box");
+		const clip = { x: box.x - 6, y: box.y - 6, width: box.width + 12, height: box.height + 12 };
+
+		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+		const blurred = await page.screenshot({ clip });
+		await sel.focus();
+		const focused = await page.screenshot({ clip });
+
+		const style = await page.evaluate(() => {
+			const s = document.querySelector("main select") as HTMLSelectElement;
+			const cs = getComputedStyle(s);
+			return { focused: s.matches(":focus"), outlineStyle: cs.outlineStyle, boxShadow: cs.boxShadow, borderColor: cs.borderColor, appearance: cs.appearance };
+		});
+
+		expect(style.focused, "the select never took focus, so this measures nothing").toBe(true);
+		expect(style.appearance, "the select stopped being a native menulist").not.toBe("none");
+		expect(
+			blurred.equals(focused),
+			`focusing the select changed no pixels — the indicator computes but does not paint: ${JSON.stringify(style)}`,
+		).toBe(false);
 	});
 });
 

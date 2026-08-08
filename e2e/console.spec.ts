@@ -2880,6 +2880,77 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 			expect(offenders, offenders.join("; ")).toEqual([]);
 		});
 	}
+
+	/**
+	 * A focused `<select>` is VISIBLY focused — in WebKit, where it was not (#436, WCAG 2.4.7).
+	 *
+	 * Every select in this console declared its focus ring as a `box-shadow`, and WebKit computes
+	 * `box-shadow` to `none` on a native menulist. `outline: none` is declared on the same rule, so
+	 * there was no platform default left; and `border-color: var(--color-accent)` never applied
+	 * either, because every select here carries a Tailwind `border-line` utility and a utility
+	 * layer beats a base-layer rule. All three indicators inert: tabbing to any of the 11 selects
+	 * on this page changed NOTHING on screen. Measured blurred → focused, byte-identical.
+	 *
+	 * ── Why this asserts PAINT and not only computed style
+	 *
+	 * Computed style is what made this ship. Two comments in the stylesheets stated the ring
+	 * "still paints outside the border box", checked — in Chromium, where it was never in doubt.
+	 * `getComputedStyle` on the shipped rule reads a real shadow in one engine and `none` in the
+	 * other, and neither number tells you whether anything appeared. So the assertion below is an
+	 * A/B of the actual pixels, over a region 6px larger than the control on every side (an
+	 * `outline` with `outline-offset` paints OUTSIDE the border box, and an element-clipped
+	 * screenshot would cut off the thing being measured and report a false negative).
+	 *
+	 * The computed-style half is kept beside it because it names WHICH property is carrying the
+	 * indicator, which a pixel diff cannot; and `appearance` is asserted so the fix cannot quietly
+	 * become `appearance: none`, rejected in #384 and #414 and again in #436.
+	 */
+	test("a focused select is visibly focused", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockSignedInConsole(page, connected);
+		await page.goto("/console/preferences");
+		await page.waitForLoadState("networkidle");
+		await page.locator("main").waitFor();
+		await page.waitForTimeout(300);
+
+		const selects = page.locator("main select");
+		expect(await selects.count(), "no selects rendered — this would measure nothing").toBeGreaterThanOrEqual(8);
+
+		const sel = selects.first();
+		await sel.scrollIntoViewIfNeeded();
+		const box = await sel.boundingBox();
+		if (!box) throw new Error("the select has no box");
+		const clip = { x: box.x - 6, y: box.y - 6, width: box.width + 12, height: box.height + 12 };
+		const blur = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+		await blur();
+		const blurred = await page.screenshot({ clip });
+		await sel.focus();
+		const focused = await page.screenshot({ clip });
+
+		const style = await page.evaluate(() => {
+			const s = document.querySelector("main select") as HTMLSelectElement;
+			const cs = getComputedStyle(s);
+			return { focused: s.matches(":focus"), outlineStyle: cs.outlineStyle, outlineWidth: cs.outlineWidth, boxShadow: cs.boxShadow, appearance: cs.appearance };
+		});
+
+		expect(style.focused, "the select never took focus, so this measures nothing").toBe(true);
+		// SOMETHING must indicate focus. `||` rather than a specific property: Chromium carries it
+		// on the box-shadow and WebKit on the outline, and pinning one would fail the other engine
+		// for being correct.
+		expect(
+			style.outlineStyle !== "none" || style.boxShadow !== "none",
+			`a focused select has no indicator at all: ${JSON.stringify(style)}`,
+		).toBe(true);
+		// Still a native menulist — `appearance: none` brings the box-shadow back and is rejected.
+		expect(style.appearance, "the select stopped being a native menulist").not.toBe("none");
+
+		// And it actually APPEARED. This is the assertion the shipped ring failed in WebKit.
+		expect(
+			blurred.equals(focused),
+			`focusing the select changed no pixels — the indicator computes but does not paint: ${JSON.stringify(style)}`,
+		).toBe(false);
+	});
 });
 
 /**

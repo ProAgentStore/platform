@@ -106,10 +106,19 @@
 	 * and `GithubIssues` renders real GitHub label names with their counts. Only the last carries
 	 * a `max-w-[16rem]`.
 	 *
-	 * `box-shadow` is NOT clipped by paint containment, so the focus ring below still paints
-	 * outside the border box. Verified rather than assumed — a fix that silently deleted the
-	 * focus indicator would be a worse bug than the one it closes — and `e2e/admin.spec.ts`
-	 * asserts it, because that is the half of this a geometry test would otherwise let rot.
+	 * `box-shadow` is NOT clipped by paint containment, so containment does not remove the focus
+	 * ring. Verified rather than assumed — a fix that silently deleted the focus indicator would
+	 * be a worse bug than the one it closes — and `e2e/admin.spec.ts` asserts it, because that is
+	 * the half of this a geometry test would otherwise let rot. That check stands.
+	 *
+	 * WHAT THIS USED TO GO ON TO CLAIM WAS WRONG (#436): that the ring "still paints outside the
+	 * border box". It does not paint at all in WebKit, and containment is not why — WebKit
+	 * computes `box-shadow` to `none` on a native menulist, the same override it applies to
+	 * `overflow` above. `admin.spec.ts` had in fact already measured this (`admin box-shadow none`
+	 * with containment on AND off) and correctly ruled it out as pre-existing rather than caused
+	 * by #414, deferring it to its own ticket. This is that ticket, so the outline below is the
+	 * indicator now. The portal's 1px `border-color` change survives and stays as a second signal,
+	 * but on its own it was a weak one against `--color-paper` #0a0a0a.
 	 */
 	select {
 		contain: paint;
@@ -121,5 +130,20 @@
 		outline: none;
 		border-color: var(--color-accent);
 		box-shadow: 0 0 0 3px var(--color-accent-soft);
+	}
+	/* The same `select` focus indicator the console gets (#436, WCAG 2.4.7).
+	 *
+	 * WebKit computes `box-shadow` to `none` on a native menulist, and `outline: none` is declared
+	 * directly above, so this portal was down to a single 1px `border-color` transition from
+	 * `--color-line` to `--color-accent` — which it does keep, unlike the console, but which is a
+	 * weak indicator against a #0a0a0a background and is the ONLY one on 16 controls.
+	 *
+	 * Applied here even though this tree is not the worst case, because both stylesheets were open
+	 * and two portals with different focus treatments is how one of them rots. `:focus-visible` so
+	 * mouse clicks do not paint rings; `select`-scoped so no other control changes; `appearance`
+	 * untouched, so it stays a native menulist (#384, #414 both rejected `appearance: none`). */
+	select:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 1px;
 	}
 }

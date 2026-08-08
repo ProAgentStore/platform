@@ -164,9 +164,20 @@
 	 * off in Chromium — where this is already the behaviour. `min-width: 0` is the obvious reach
 	 * and was MEASURED to be inert: the box is already capped by its container and shrinks
 	 * correctly (270px at a 320px viewport, in both engines), the CONTENT inside it is what
-	 * escapes. `box-shadow` is NOT clipped by paint containment, so the focus ring above still
-	 * paints outside the border box — checked, because a fix that silently removed the focus
-	 * indicator would be a worse bug than the one it closed.
+	 * escapes. `box-shadow` is NOT clipped by paint containment, so containment does not remove
+	 * the focus ring — checked, because a fix that silently removed the focus indicator would be
+	 * a worse bug than the one it closed. That check was correct and is unchanged.
+	 *
+	 * WHAT THIS SENTENCE USED TO CLAIM, AND WHY IT WAS WRONG (#436). It went on to say the ring
+	 * "still paints outside the border box", full stop. It does not — not in WebKit, and not
+	 * because of containment. WebKit computes `box-shadow` to `none` on a NATIVE MENULIST, the
+	 * same class of override as it doing this to `overflow` above. Measured on
+	 * /console/preferences, blurred → focused: Chromium reports `rgba(124,58,237,0.15) 0 0 0 3px`
+	 * and the screenshot differs; WebKit reports `none` and the screenshots are BYTE-IDENTICAL.
+	 * Setting `contain: none` at runtime leaves it at `none`, and an `<input>` or a bare `<div>`
+	 * with the identical declaration computes the shadow fine — so it is the element, not the
+	 * containment, and it was never in doubt in the engine the reassurance was checked in.
+	 * The `select:focus-visible` outline below is what actually indicates focus on this control.
 	 *
 	 * `appearance: none` also measures 0, and is not taken: it fixes this by making the control
 	 * stop being a native menulist, which deletes the disclosure arrow from every select in the
@@ -183,6 +194,34 @@
 		outline: none;
 		border-color: var(--color-accent);
 		box-shadow: 0 0 0 3px var(--color-accent-soft);
+	}
+	/* The focus indicator a <select> actually gets in Safari (#436, WCAG 2.4.7).
+	 *
+	 * Everything the rule above offers a menulist is inert in WebKit. The `box-shadow` computes to
+	 * `none` (see the note on `contain: paint`), `outline: none` is declared right here so there is
+	 * no platform default left to fall back on, and `border-color` never applies either — every
+	 * select in this console carries a Tailwind `border-line` utility, and a utility LAYER beats a
+	 * base-layer rule regardless of specificity. Net result before this rule: tabbing to any of the
+	 * 11 selects on /console/preferences changed nothing on screen at all.
+	 *
+	 * `outline` is what WebKit honours on the native control. Measured, blurred → focused, on the
+	 * region around the control so a ring painted outside the border box is captured:
+	 *
+	 *                          computed             screenshot differs
+	 *     Chromium, shipped    rgba(...) 0 0 0 3px  yes
+	 *     WebKit,   shipped    none                 NO — byte-identical
+	 *     WebKit,   +outline   solid 2px accent     yes
+	 *
+	 * Unaffected by `contain: paint`, which clips a box's CONTENTS, not its own outline.
+	 *
+	 * `:focus-visible`, not `:focus`, so a mouse click does not start painting rings nobody asked
+	 * for; scoped to `select` so the ~40 other controls here and in the vendored coder-web UI keep
+	 * the treatment they were signed off with. `appearance: none` would bring the box-shadow back
+	 * and is rejected for the third time (#384, #414): it works by making the control stop being a
+	 * native menulist, which is a design change wearing an accessibility fix's clothes. */
+	select:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 1px;
 	}
 	textarea {
 		resize: vertical;
