@@ -58,6 +58,7 @@ const COVERED: Record<string, string> = {
 	M2: "it delegates to the one toggleMute whose both-directions semantics are pinned in the SDK",
 	M3: "no phase signal appears in its render guard — 'not while speaking' cannot be expressed",
 	M4: "the same control carries the unmute direction, so muted is not a room without a door",
+	M5: "the press takes the recover default — the #228 send carve-out is not reachable from a button",
 };
 
 /** The tag that identifies a hands-free mode control in the segmented interaction picker. */
@@ -242,6 +243,24 @@ describe.each(SURFACES)("$name", (surface) => {
 		const { element } = muteControl(surface);
 		expect(element, `${surface.name}: nothing on the mute control says Unmute while muted (ADR 0001 M4).`).toMatch(/Unmute/);
 		expect(element, `${surface.name}: the control reads on \`voice.muted\`, or it cannot show both directions (ADR 0001 M4).`).toMatch(/voice\.muted/);
+	});
+
+	/**
+	 * M5, in the only form the touch channel can break it.
+	 *
+	 * What happens to the turn a mute interrupts is a PARAMETER now (#420): `pendingTurn: "send"`
+	 * keeps #228's "run the tests, mute" working, and it belongs to exactly two call sites inside
+	 * the hook, both of which have the transcript in hand. A button never does — a press carries no
+	 * words with it — so a surface that reached for that argument would be sending the agent a
+	 * request the user had just withdrawn, which is the outcome M5 names as the wrong one.
+	 *
+	 * Asserted as "hands over a bare reference", because that is the shape that cannot pass an
+	 * argument at all, rather than a blocklist of the one argument that exists today.
+	 */
+	it("passes nothing of its own — a press cannot opt the interrupted turn into being sent", () => {
+		const { openTag } = muteControl(surface);
+		expect(openTag, `${surface.name}: the mute control wraps ${TOGGLE} instead of handing it over, which is how an argument gets added to it (ADR 0001 M5).`).toMatch(/onClick=\{voice\.toggleMute\}/);
+		expect(openTag, `${surface.name}: the mute control CALLS toggleMute with something. The turn's destination is the hook's decision, not a button's (ADR 0001 M5).`).not.toMatch(/toggleMute\(/);
 	});
 
 	/**

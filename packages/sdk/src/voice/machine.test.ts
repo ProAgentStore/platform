@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, type Dictation } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, isMutedTurn, pendingUtterance, planMuteTeardown, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, type Dictation } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -47,7 +47,7 @@ describe("isLateTurn (#175 — capture before the pause is the user's own speech
 });
 
 describe("classifyResult (#175)", () => {
-	const base = { ttsSpeaking: false, speakEndedAt: 0, paused: false, muted: false, captureStartedAt: 0, pausedAt: 0 };
+	const base = { ttsSpeaking: false, speakEndedAt: 0, paused: false, muted: false, captureStartedAt: 0, pausedAt: 0, mutedAt: 0 };
 	it("a normal result is accepted (sent as a turn)", () => {
 		expect(classifyResult({ ...base, captureStartedAt: NOW - 3000 }, NOW)).toBe("accept");
 	});
@@ -85,6 +85,145 @@ describe("classifyResult (#175)", () => {
 		expect(classifyResult({ ...base, paused: true }, NOW)).toBe("ignore");
 		expect(classifyResult({ ...base, ttsSpeaking: true }, NOW)).toBe("ignore");
 		expect(classifyResult(base, NOW)).toBe("accept");
+	});
+});
+
+describe("isMutedTurn / classifyResult (#420 — a turn interrupted by mute)", () => {
+	const base = { ttsSpeaking: false, speakEndedAt: 0, paused: false, muted: false, captureStartedAt: 0, pausedAt: 0, mutedAt: 0 };
+
+	it("speech captured before the mute is the user's; after it, it is not", () => {
+		expect(isMutedTurn({ captureStartedAt: NOW - 5000, mutedAt: NOW - 1000 })).toBe(true);
+		expect(isMutedTurn({ captureStartedAt: NOW - 1000, mutedAt: NOW - 5000 })).toBe(false);
+		expect(isMutedTurn({ captureStartedAt: NOW, mutedAt: NOW })).toBe(false);
+	});
+
+	it("an unknown timing is not recoverable — under-stamping stays safe", () => {
+		expect(isMutedTurn({ captureStartedAt: 0, mutedAt: NOW })).toBe(false);
+		expect(isMutedTurn({ captureStartedAt: NOW - 1000, mutedAt: 0 })).toBe(false);
+	});
+
+	/**
+	 * THE DEFECT. Before #420 the destination of a muted turn was decided by ECHO_GUARD_MS: the
+	 * same press produced silent loss or an unwanted send depending on how much Whisper latency
+	 * happened to be left. Whisper runs ~0-2s, so the 800ms line sits INSIDE the window and both
+	 * branches were routinely reachable — pressing mute promptly (the natural action) was the one
+	 * that lost the words outright.
+	 *
+	 * Asserted across the whole window rather than at one point, because "the outcome does not
+	 * depend on when the transcript lands" is the actual acceptance criterion, and a single
+	 * sample would pass a fix that merely moved the threshold.
+	 */
+	it("the outcome is identical whether the transcript lands 200ms or 2000ms after the mute", () => {
+		const mutedAt = NOW - 2000;
+		for (const landedAfter of [0, 200, 700, 799, 800, 1200, 2000, 5000]) {
+			const at = mutedAt + landedAfter;
+			expect(
+				classifyResult({ ...base, captureStartedAt: NOW - 9000, mutedAt, speakEndedAt: mutedAt }, at),
+				`a transcript landing ${landedAfter}ms after the mute took a different path — that is the 800ms lottery (#420)`,
+			).toBe("recover");
+		}
+	});
+
+	it("does not depend on the echo tail being armed either way", () => {
+		const t = { ...base, captureStartedAt: NOW - 9000, mutedAt: NOW - 100 };
+		expect(classifyResult({ ...t, ttsSpeaking: true }, NOW)).toBe("recover");
+		expect(classifyResult({ ...t, speakEndedAt: NOW - 50 }, NOW)).toBe("recover");
+		expect(classifyResult({ ...t, paused: true }, NOW)).toBe("recover");
+	});
+
+	/**
+	 * #228's carve-out, at the level where it is decided. "run the tests, mute" is a request PLUS
+	 * a request for quiet: those call sites pass `pendingTurn:"send"`, which never stamps `mutedAt`,
+	 * so the clip still reaches the agent. A `muted` flag alone must therefore NOT route to the
+	 * composer — that was one of the rejected fixes, and it is this test that rejects it.
+	 */
+	it("mute as a trailing command leaves the turn on the send path (#228)", () => {
+		expect(classifyResult({ ...base, muted: true, captureStartedAt: NOW - 3000 }, NOW)).toBe("accept");
+	});
+});
+
+describe("pendingUtterance (#420 — the words a clear would destroy)", () => {
+	const at = NOW;
+	it("takes what the gate HEARD for a transcribing turn — its final text does not exist yet", () => {
+		expect(pendingUtterance({ text: "streaming so far", status: "transcribing", startedAt: at, heard: "file the issue" })).toBe("file the issue");
+	});
+	it("falls back to the live text when nothing was heard (iOS: no gate)", () => {
+		expect(pendingUtterance({ text: "streaming so far", status: "transcribing", startedAt: at, heard: "" })).toBe("streaming so far");
+	});
+	it("is the live words while dictating, and nothing at all with no turn", () => {
+		expect(pendingUtterance({ text: "  half a sentence  ", status: "dictating", startedAt: at, heard: "" })).toBe("half a sentence");
+		expect(pendingUtterance(null)).toBe("");
+		expect(pendingUtterance(undefined)).toBe("");
+	});
+	it("agrees with prepareConversationSwitch — the derivation these two share is now one function", () => {
+		const d: Dictation = { text: "live", status: "transcribing", startedAt: at, heard: "heard it" };
+		expect(prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: false, dictation: d }).recoverText).toBe(pendingUtterance(d));
+	});
+});
+
+describe("planMuteTeardown (#420 — mute resolves the turn, it does not delete it)", () => {
+	const transcribing: Dictation = { text: "file the issue about masters games", status: "transcribing", startedAt: NOW, heard: "file the issue about masters games" };
+	const dictating: Dictation = { text: "half a sentence", status: "dictating", startedAt: NOW, heard: "" };
+	const failed: Dictation = { text: "what I said", status: "failed", startedAt: NOW, heard: "what I said", note: "Whisper error 500" };
+
+	/**
+	 * The echo tail was added by #153 for a CANCELLED TTS tail, which is real. Mute also closes the
+	 * mic, so with nothing playing the guard protects nothing — and its only remaining effect was
+	 * to start the 800ms lottery. Both directions asserted: removing the stamp entirely would lower
+	 * the control listener's bar during a genuine cancelled utterance (ADR 0001 M3 permits raising
+	 * it, and that raise is what stops the agent commanding itself).
+	 */
+	it("arms the echo tail only when there was speech whose tail the mic could hear", () => {
+		expect(planMuteTeardown({ ttsSpeaking: true, pendingTurn: "recover", isWhisper: true, dictation: null }).armEchoTail).toBe(true);
+		expect(planMuteTeardown({ ttsSpeaking: false, pendingTurn: "recover", isWhisper: true, dictation: null }).armEchoTail).toBe(false);
+	});
+
+	it("keeps a Whisper turn's bubble — the clip is still uploading and will resolve it", () => {
+		const p = planMuteTeardown({ ttsSpeaking: false, pendingTurn: "recover", isWhisper: true, dictation: transcribing });
+		expect(p.keepPending).toBe(true);
+		expect(p.recoverText).toBe("");
+	});
+
+	/**
+	 * Exactly one destination, always. Handing the words back here AND letting the transcript land
+	 * in the composer is the double-delivery the acceptance criteria forbid; doing neither is the
+	 * defect. So `keepPending` and `recoverText` are mutually exclusive by construction, over every
+	 * combination rather than the three sampled above.
+	 */
+	it("never lands the turn in two places, and never in none", () => {
+		for (const ttsSpeaking of [true, false]) {
+			for (const isWhisper of [true, false]) {
+				for (const dictation of [null, transcribing, dictating, failed]) {
+					const p = planMuteTeardown({ ttsSpeaking, pendingTurn: "recover", isWhisper, dictation });
+					expect(p.keepPending && !!p.recoverText, `two destinations for ${dictation?.status ?? "no"} turn (whisper=${isWhisper})`).toBe(false);
+					// A turn holding real words must go SOMEWHERE. A `failed` one has already
+					// resolved — its words are on the bubble with a Dismiss — so it is excluded.
+					if (dictation && dictation.status !== "failed") {
+						expect(p.keepPending || !!p.recoverText, `a ${dictation.status} turn was dropped by mute (whisper=${isWhisper})`).toBe(true);
+					}
+				}
+			}
+		}
+	});
+
+	it("hands browser dictation back now — stop() ends the recognizer and nothing more arrives", () => {
+		const p = planMuteTeardown({ ttsSpeaking: false, pendingTurn: "recover", isWhisper: false, dictation: dictating });
+		expect(p.keepPending).toBe(false);
+		expect(p.recoverText).toBe("half a sentence");
+	});
+
+	it("leaves a failed turn where it is — it already resolved, with its words and a Dismiss", () => {
+		const p = planMuteTeardown({ ttsSpeaking: false, pendingTurn: "recover", isWhisper: false, dictation: failed });
+		expect(p.keepPending).toBe(false);
+		expect(p.recoverText).toBe("");
+	});
+
+	it("a trailing mute (#228) keeps the old behaviour exactly — clear, and let the clip send", () => {
+		for (const dictation of [transcribing, dictating]) {
+			const p = planMuteTeardown({ ttsSpeaking: false, pendingTurn: "send", isWhisper: true, dictation });
+			expect(p.keepPending).toBe(false);
+			expect(p.recoverText).toBe("");
+		}
 	});
 });
 

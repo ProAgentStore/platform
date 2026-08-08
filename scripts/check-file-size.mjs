@@ -166,7 +166,17 @@ const PINS = {
 	// The rest is the `back` command threaded through the five existing matcher call sites, with
 	// each site saying whether it may judge the word (only a final may) — the same shape `canScrap`
 	// already has, and for the same class of reason.
-	"packages/sdk/src/voice/use-voice.ts": 1756,
+	// +56 for #420, and roughly forty of them are the reasoning rather than the code. The code is:
+	// one parameter on `muteFromCommand` (`pendingTurn`), one timestamp ref beside the two this file
+	// already keeps, a `mutedRef` check in `maybeSpeakResponse`, and a report on the `ignore` branch.
+	// Every DECISION moved OUT — `planMuteTeardown`, `isMutedTurn` and `pendingUtterance` are pure
+	// and live in machine.ts, which is why the 800ms lottery is now a table in machine.test.ts
+	// instead of a paragraph here. What could not move is the prose saying WHY the two `"send"` call
+	// sites differ from the other four: that is #228's carve-out, it is invisible from either site,
+	// and a reader tidying them into consistency would delete the fix that made "run the tests, mute"
+	// still run the tests. Same for the conditional echo-tail stamp, which looks like a line someone
+	// forgot to make unconditional and is the whole of leg 1.
+	"packages/sdk/src/voice/use-voice.ts": 1812,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets

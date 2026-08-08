@@ -64,6 +64,14 @@ export interface CaptureTiming {
 	captureStartedAt: number;
 	/** Epoch ms the CURRENT pause began (0 = not paused / unknown). */
 	pausedAt: number;
+	/**
+	 * Epoch ms a STANDALONE mute closed the mic over a turn already spoken (0 = none).
+	 *
+	 * Stamped only where mute is the whole instruction — the button, the control listener, a
+	 * mute-only utterance — and deliberately NOT where mute rides on the end of a request
+	 * ("run the tests, mute"), which #228 requires to still send.
+	 */
+	mutedAt: number;
 }
 
 /**
@@ -80,8 +88,28 @@ export type ResultVerdict = "accept" | "recover" | "ignore";
  * Unknown timings (0) mean "can't prove it came first" → not recoverable, i.e. the guard's
  * existing behaviour. Under-stamping is therefore always safe.
  */
-export function isLateTurn(s: CaptureTiming): boolean {
+export function isLateTurn(s: Pick<CaptureTiming, "captureStartedAt" | "pausedAt">): boolean {
 	return s.captureStartedAt > 0 && s.pausedAt > 0 && s.captureStartedAt < s.pausedAt;
+}
+
+/**
+ * Was this speech captured BEFORE the user asked for quiet (#420)?
+ *
+ * The same question `isLateTurn` asks, about the other boundary. It exists because the answer to
+ * "what happens to a turn interrupted by mute?" was, until #420, decided by `ECHO_GUARD_MS`: a
+ * transcript landing <800ms after the press was dropped in the pipeline's one silent branch, and
+ * one landing later was SENT to the agent — with nothing on screen either way. Whisper latency runs
+ * 0-2s, so which of those a user got depended on how promptly they pressed the button, and pressing
+ * promptly (the natural action) was the branch that lost the words outright.
+ *
+ * `recover` was structurally unreachable here: it is gated on `pausedAt`, which mute never sets.
+ * That is why this is a second timestamp rather than a reuse — mute could stamp `pausedAt`, but
+ * `paused` also means "the mic may not reopen", and unmute reads it (`canOpenMic`), so a mute that
+ * paused would have to unpause on unmute and would then reopen the mic in the middle of a reply
+ * that was still being generated. Two meanings, one flag, is the drift this module exists to stop.
+ */
+export function isMutedTurn(s: Pick<CaptureTiming, "captureStartedAt" | "mutedAt">): boolean {
+	return s.captureStartedAt > 0 && s.mutedAt > 0 && s.captureStartedAt < s.mutedAt;
 }
 
 /**
@@ -94,6 +122,11 @@ export function isLateTurn(s: CaptureTiming): boolean {
  * blind into a thread that has changed since they spoke.
  */
 export function classifyResult(s: VoiceGuardState & CaptureTiming, now: number, echoMs = ECHO_GUARD_MS): ResultVerdict {
+	// FIRST, above the accept: a turn the user muted over must not be sent, and mute leaves the
+	// guard in a state that otherwise reads as a perfectly ordinary accept once the echo tail
+	// lapses (#420). Ordering matters more than the predicate here — putting this below would
+	// reproduce the 800ms lottery exactly.
+	if (isMutedTurn(s)) return "recover";
 	if (!shouldIgnoreResult(s, now, echoMs)) return "accept";
 	return isLateTurn(s) ? "recover" : "ignore";
 }
@@ -214,16 +247,79 @@ export function prepareConversationSwitch(s: {
 	ttsSpeaking: boolean;
 	dictation: Dictation | null;
 }): SwitchPrep {
-	// A dictation whose words ARE the command ("next") has nothing worth keeping; one with real
-	// content spoken before it does. `heard` covers the transcribing case, where `text` is the
-	// live transcript and the final one will never arrive anywhere useful.
-	const pending = (s.dictation?.status === "transcribing" ? s.dictation.heard || s.dictation.text : s.dictation?.text) ?? "";
 	return {
 		cancelSpeech: s.ttsSpeaking,
 		clearDictation: !!s.dictation,
-		recoverText: pending.trim(),
+		recoverText: pendingUtterance(s.dictation),
 		carryMode: s.mode === "text" ? null : s.mode,
 	};
+}
+
+/**
+ * The words a pending utterance is holding — everything that would be lost if it were cleared now.
+ *
+ * A dictation whose words ARE a command ("next") has nothing worth keeping; one with real content
+ * spoken before it does. `heard` covers the `transcribing` case, where `text` may already be a
+ * streaming transcript and `heard` is what the live gate captured at end-of-turn.
+ *
+ * Extracted out of {@link prepareConversationSwitch} for #420: mute needs the same derivation and
+ * calling a function named "switch" to get it is how the two paths drift. `prepareConversationSwitch`
+ * recovered a transcribing utterance and `muteFromCommand` destroyed one, from the same commit.
+ */
+export function pendingUtterance(d: Dictation | null | undefined): string {
+	return ((d?.status === "transcribing" ? d.heard || d.text : d?.text) ?? "").trim();
+}
+
+/** What a mute must do about the turn it is interrupting. */
+export interface MuteTeardown {
+	/** Stamp the echo-tail guard? Only when there was speech whose tail the mic could hear. */
+	armEchoTail: boolean;
+	/** Leave the pending bubble in place — a transcript is still coming and will resolve it. */
+	keepPending: boolean;
+	/** Words to hand back to the composer NOW, because nothing else will deliver them. */
+	recoverText: string;
+}
+
+/**
+ * Resolve what mute does with the utterance already in flight (#420).
+ *
+ * Mute is what a user reaches for when something has gone wrong, so firing the interrupted turn at
+ * the agent — with spend, and a spoken reply — is acting on an instruction they withdrew. But
+ * deleting it is worse, and that is what shipped: `muteFromCommand` cleared the bubble, and the
+ * clip that was still uploading then took whichever branch an unrelated 800ms timer put it in.
+ *
+ * Three decisions, each with a reason the call site cannot see:
+ *
+ *  - **`armEchoTail`** — the stamp was added by #153 to cover a CANCELLED TTS tail, which is real.
+ *    But mute also closes the mic, so when nothing was playing there is no tail to guard and the
+ *    line's only remaining effect is to start the 800ms lottery above. Conditional, so a genuine
+ *    cancelled utterance keeps its guard and the control listener keeps its raised bar (ADR 0001 M3).
+ *  - **`pendingTurn: "send"`** — mute arriving on the END of a request ("run the tests, mute") is a
+ *    request PLUS a request for quiet. #228 exists because latching there threw the request away.
+ *    Those sites keep the old behaviour exactly: clear, and let the clip land and send.
+ *  - **`keepPending` vs `recoverText`** — exactly one, never both, because the acceptance test is
+ *    that a muted turn lands in ONE place. Whisper transcribes AFTER `stop()`, so the words are
+ *    still coming and the bubble must stay to receive them (`classifyResult` then routes them to
+ *    the composer). Browser dictation has no upload: `stop()` ends the recognizer and the
+ *    accumulated speech would simply cease to exist, so it is handed back here.
+ */
+export function planMuteTeardown(s: {
+	/** Was the agent's TTS actually playing at the moment of the press? */
+	ttsSpeaking: boolean;
+	/** Is mute the whole instruction, or the tail of one? */
+	pendingTurn: "send" | "recover";
+	/** Whisper/gpt-4o-transcribe (a clip is transcribed after stop) vs browser dictation (not). */
+	isWhisper: boolean;
+	dictation: Dictation | null;
+}): MuteTeardown {
+	const armEchoTail = s.ttsSpeaking;
+	if (s.pendingTurn === "send") return { armEchoTail, keepPending: false, recoverText: "" };
+	const d = s.dictation;
+	// A `failed` turn has already resolved — its words are on screen with a Dismiss, and nothing
+	// further is coming for it either way.
+	const stillComing = !!d && d.status !== "failed" && s.isWhisper;
+	if (stillComing) return { armEchoTail, keepPending: true, recoverText: "" };
+	return { armEchoTail, keepPending: false, recoverText: d?.status === "failed" ? "" : pendingUtterance(d) };
 }
 
 // ── The pending utterance (#281) ─────────────────────────────────────────────

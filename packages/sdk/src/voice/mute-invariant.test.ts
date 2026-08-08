@@ -36,7 +36,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { readAdr } from "../../../../scripts/lib/adr.mjs";
 import { commandStateFor, matchVoiceCommand, shouldRunControlListener, type TranscriptKind, type VoiceCommand } from "./convo.js";
-import { isEchoing } from "./machine.js";
+import { classifyResult, isEchoing, planMuteTeardown, type Dictation } from "./machine.js";
 
 /** Shared with the TOUCH half of this same ADR — see `scripts/lib/adr.mjs` for why the parse is
  *  not duplicated per test file. */
@@ -54,6 +54,7 @@ const COVERED: Record<string, string> = {
 	M2: "mute closes the mic AND cancels the speech it interrupts",
 	M3: "no condition may reduce to 'not while the agent is speaking'",
 	M4: "unmute is symmetric, on the one listener that runs while muted",
+	M5: "mute resolves the turn it interrupts — to exactly one place, never to none",
 };
 
 /**
@@ -175,6 +176,21 @@ describe("M2 — immediate and bidirectional", () => {
 	 * that happens to be correct today is the same defect waiting: the fix is that there is one
 	 * implementation, not that both copies currently agree.
 	 */
+	/**
+	 * The half of M2 that is about the agent's NEXT sentence rather than its current one.
+	 *
+	 * `muteFromCommand` has always called `tts.cancel()`, which ends what is playing and drops the
+	 * queue — and that reads as complete. It is not: mute was not a STATE that suppressed speech,
+	 * so a reply that arrived a second later was read aloud while the button, the pill and the
+	 * phase all said "Muted" (#420 leg 3). Sliced on `maybeSpeakResponse`, the one function that
+	 * decides whether a reply is spoken, because the assertion is about that decision and not about
+	 * the word "muted" appearing somewhere in a 1,700-line file.
+	 */
+	it("does not speak a reply that arrives while muted", () => {
+		const body = callbackBody("maybeSpeakResponse", "// \"repeat\" voice command");
+		expect(body, "a reply arriving after the press is spoken aloud while the UI says Muted — mute is a state, not a one-shot cancel (ADR 0001 M2)").toMatch(/mutedRef\.current/);
+	});
+
 	it("routes the on-screen control into that same implementation, both directions", () => {
 		const body = callbackBody("toggleMute", "// The three modes are derived");
 		expect(body, "the on-screen mute no longer delegates to muteFromCommand — a local copy will not cancel in-flight speech (ADR 0001 M1 + M2)").toMatch(/muteFromCommandRef\.current\(\)/);
@@ -279,6 +295,119 @@ describe("M4 — unmute is symmetric", () => {
 		const body = callbackBody("unmuteFromCommand", "const unmuteFromCommandRef");
 		expect(body, "unmute no longer clears the ref synchronously (ADR 0001 M4)").toMatch(/mutedRef\.current = false/);
 		expect(body, "unmute no longer reopens the mic (ADR 0001 M4)").toMatch(/startListening\(\)/);
+	});
+});
+
+describe("M5 — mute never costs the user their words", () => {
+	/** The reported turn, at the moment the button is pressed: finished speaking, clip mid-upload,
+	 *  so the speech exists and its final text does not. */
+	const TRANSCRIBING: Dictation = { text: "file the issue about masters games", status: "transcribing", startedAt: NOW - 4000, heard: "file the issue about masters games" };
+	const DICTATING: Dictation = { text: "half a sentence", status: "dictating", startedAt: NOW - 1000, heard: "" };
+
+	/**
+	 * The rule, applied to mute implementations rather than to echo guards — the same shape as M3's
+	 * guard table above, and for the same reason: the ADR permits more than one answer (recover
+	 * here, or keep the bubble and recover the transcript when it lands), and a test that pinned
+	 * today's branch would forbid the other one while still passing the version that deletes.
+	 *
+	 * A candidate is legal iff a turn already spoken ends up somewhere a human can see it, in
+	 * exactly one place. `null` means nowhere.
+	 */
+	it("classifies a candidate mute by where the interrupted turn ends up", () => {
+		const candidates: { name: string; legal: boolean; run: (d: Dictation, isWhisper: boolean) => ("composer" | "bubble" | "agent" | null)[] }[] = [
+			// What shipped before #420: clear the bubble, and let an 800ms timer decide the rest.
+			{
+				name: "pre-#420 — clearVoiceText(), destination decided by ECHO_GUARD_MS",
+				legal: false,
+				run: () => [null],
+			},
+			// The tempting one-liner: add `muted` to shouldIgnoreResult. Drops every post-mute
+			// transcript, which is the silent-loss defect promoted to a rule.
+			{
+				name: "add muted to shouldIgnoreResult — drop whatever arrives after the press",
+				legal: false,
+				run: () => [null],
+			},
+			// stopDiscard() instead of stop(). Nothing can be lost because nothing survives — and it
+			// regresses #228, which exists because "run the tests, mute" must still send.
+			{ name: "stopDiscard() on mute — kill the upload so nothing can arrive", legal: false, run: () => [null] },
+			// Simplest possible: auto-send whatever lands. One place, but the wrong one.
+			{ name: "keep clearing, and auto-send whatever arrives", legal: false, run: () => ["agent"] },
+			// What shipped.
+			{
+				name: "shipped — planMuteTeardown: hand back now, or keep the bubble for the transcript",
+				legal: true,
+				run: (d, isWhisper) => {
+					const p = planMuteTeardown({ ttsSpeaking: false, pendingTurn: "recover", isWhisper, dictation: d });
+					const where: ("composer" | "bubble")[] = [];
+					if (p.recoverText) where.push("composer");
+					if (p.keepPending) where.push("bubble");
+					return where;
+				},
+			},
+		];
+		for (const c of candidates) {
+			for (const d of [TRANSCRIBING, DICTATING]) {
+				for (const isWhisper of [true, false]) {
+					// `null` is "nowhere" — the pre-#420 outcome, and the one that must never be legal.
+					const where = c.run(d, isWhisper).filter((w) => w !== null);
+					const ok = where.length === 1 && where[0] !== "agent";
+					expect(ok, `${c.name} — a ${d.status} turn (whisper=${isWhisper}) ended up in [${where.join(", ") || "nowhere"}]; ADR 0001 M5 requires exactly one place, and not the agent`).toBe(c.legal);
+				}
+			}
+		}
+	});
+
+	/**
+	 * The acceptance criterion stated as a property rather than a sample: the SAME press must have
+	 * the SAME outcome whatever the network did afterwards. This is what the shipped fix is really
+	 * for — the defect was never "the wrong branch", it was that there were two.
+	 */
+	it("gives the same answer wherever the transcript lands relative to the echo tail", () => {
+		const mutedAt = NOW - 3000;
+		const timing = { captureStartedAt: NOW - 9000, pausedAt: 0, mutedAt };
+		const verdicts = new Set([0, 200, 799, 800, 2000, 10_000].map((after) => classifyResult({ ttsSpeaking: false, speakEndedAt: mutedAt, paused: false, muted: true, ...timing }, mutedAt + after)));
+		expect([...verdicts], "the outcome of a mute still depends on transcription latency (ADR 0001 M5)").toEqual(["recover"]);
+	});
+
+	/**
+	 * #228's carve-out, held here rather than only in `machine.test.ts`, because it is the thing
+	 * most likely to be broken by someone strengthening M5. "Run the tests, mute" must still run
+	 * the tests — a mute that also swallowed the request would be M5 defeating the very defect it
+	 * was written to prevent, one issue later.
+	 */
+	it("still sends a request that ended with the word mute (#228)", () => {
+		expect(classifyResult({ ttsSpeaking: false, speakEndedAt: 0, paused: false, muted: true, captureStartedAt: NOW - 3000, pausedAt: 0, mutedAt: 0 }, NOW)).toBe("accept");
+		const p = planMuteTeardown({ ttsSpeaking: false, pendingTurn: "send", isWhisper: true, dictation: TRANSCRIBING });
+		expect(p.keepPending || !!p.recoverText, "a trailing mute recovered the words as well as sending them — the turn arrives twice").toBe(false);
+	});
+
+	/**
+	 * Structural, because the two legs of the pre-#420 defect were both single lines in the hook and
+	 * neither is visible to a pure test: an unconditional `clearVoiceText()`, and an unconditional
+	 * `speakEndedAtRef = Date.now()` that armed an echo guard over a mic mute had just closed.
+	 */
+	it("decides the pending turn's fate through the plan, not with an unconditional clear", () => {
+		const body = callbackBody("muteFromCommand", "const muteFromCommandRef");
+		expect(body, "mute no longer consults planMuteTeardown — the decision has moved back into the hook where no test can reach it (ADR 0001 M5)").toMatch(/planMuteTeardown\(/);
+		expect(body, "mute no longer stamps its own boundary, so a transcript landing after it cannot be told from one landing before (ADR 0001 M5)").toMatch(/mutedAtRef\.current = Date\.now\(\)/);
+		// `clearVoiceText()` is still correct — on the branches where the words have already been
+		// handed back, and on the #228 path. What it may not be is the ONLY thing that happens.
+		expect(body, "mute hands nothing back to the composer; clearing is all it does, which is the #420 defect verbatim").toMatch(/onRecoveredTextRef\.current\?\.\(/);
+		expect(body, "mute arms the echo tail unconditionally again — with the mic closed that guard protects nothing and only decides, by a timer, whether the turn is dropped or sent (#420)").toMatch(/if \(plan\.armEchoTail\)/);
+	});
+
+	/**
+	 * The `ignore` branch was the one drop path in the entire voice pipeline with no report — which
+	 * is why the production log had nothing to say about a turn that vanished. Compare `recover`
+	 * (`path: "recover"`), `emitSend` (`path: "send"`), the noise filter, and every branch of
+	 * `onError`: all of them write a row. #377 was filed and closed for this exact shape on a
+	 * different path.
+	 */
+	it("leaves no silent drop path — a turn that dies is a turn that is countable", () => {
+		const body = callbackBody("handleResult", "const makeStt = useCallback(");
+		const ignore = body.slice(body.indexOf('if (verdict === "ignore")'), body.indexOf('if (verdict === "recover")'));
+		expect(ignore, "the ignore branch is back to a bare `return` — a dropped turn leaves no message, no bubble and no error row, so nobody can answer 'where did my words go?' (#420)").toMatch(/reportClientError\(/);
 	});
 });
 

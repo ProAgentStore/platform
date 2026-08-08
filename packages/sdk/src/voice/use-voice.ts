@@ -50,7 +50,7 @@ import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
 import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
@@ -244,6 +244,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, []);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
+	// WHEN a standalone mute closed the mic (#420). The mute counterpart of `pausedAtRef`, and a
+	// separate timestamp for the reason `isMutedTurn` records: `paused` also gates whether the mic
+	// may reopen, so muting through it would make unmute reopen the mic mid-reply. Cleared on every
+	// fresh capture (`startListening`) so it can never judge a later turn, and consumed by the
+	// `recover` branch of `handleResult`.
+	const mutedAtRef = useRef(0);
 
 	// Assemble the guard snapshot ONE way from its live sources — the agent's TTS-speaking
 	// flag, the echo-tail timestamp, the paused-for-reply flag, and mute — so every decision
@@ -347,7 +353,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 								//
 								// muteFromCommand stops the recorder with stop(), not stopDiscard(),
 								// so the clip still uploads and comes back through the normal path.
-								if (cmd === "mute") muteFromCommandRef.current();
+								// "send" is what keeps that true: this is mute arriving mid-request,
+								// so the arriving transcript must reach the agent rather than the
+								// composer (#420's carve-out for #228).
+								if (cmd === "mute") muteFromCommandRef.current("send");
 								else if (cmd === "unmute") unmuteFromCommandRef.current();
 								else if (cmd === "exit") exitFromCommandRef.current();
 								// "next" LEAVES this agent, so — unlike mute — the clip still recording
@@ -672,6 +681,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		try {
 			await sttRef.current.start();
 			lastListenStartRef.current = Date.now();
+			// A fresh capture is not the turn the last mute interrupted (#420). Cleared HERE rather
+			// than in unmute so the stamp survives an unmute that does not reopen the mic (muted
+			// while the agent was thinking), which is exactly when the interrupted clip is still in
+			// flight — and so it can never judge a turn recorded after it.
+			mutedAtRef.current = 0;
 			startAudioMonitor();
 			setMicOn(true);
 			if (convoOnRef.current && !idleRecycleRef.current) playListeningChime();
@@ -767,6 +781,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Remember the last reply so a spoken "repeat" can re-speak it (even if we didn't
 		// auto-speak this time — the user may enable voice then ask to repeat).
 		if (text?.trim()) lastSpokenTextRef.current = text;
+		// ADR 0001 M2 — "muting an agent that keeps talking is not mute". Mute cancelled only the
+		// utterance in flight at that instant; it was not a STATE that suppressed speech starting
+		// afterwards, so a reply arriving after the press was read aloud while the pill said
+		// "Muted" (#420 leg 3). Nothing is lost: `lastSpokenTextRef` is set above, so "repeat"
+		// re-speaks it after unmute.
+		if (mutedRef.current) { setPaused(false); return; }
 		if (speakOnRef.current || convoOnRef.current) {
 			speakAndResume(text);
 		} else {
@@ -794,17 +814,38 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Mute button). Flip the ref synchronously so in-flight results stop being processed.
 	// "mute" means "be quiet": it silences the AGENT too (cancel any in-flight/queued TTS),
 	// not just the user's mic — so it works as an interrupt while the agent is speaking (#153).
-	const muteFromCommand = useCallback(() => {
+	//
+	// It also must not cost the user the sentence they had already finished saying (#420). What
+	// happens to that turn is decided by `planMuteTeardown`, not by the arrival time of the
+	// transcript: `pendingTurn: "send"` is the #228 case where mute rides on the end of a request
+	// and the request must still go; everywhere else the words go to the composer, either from
+	// here or — when a clip is still uploading — via `classifyResult`'s `recover` when it lands.
+	const muteFromCommand = useCallback((pendingTurn: "send" | "recover" = "recover") => {
+		const plan = planMuteTeardown({
+			ttsSpeaking: !!ttsRef.current?.speaking, // read BEFORE cancel() — after it, always false
+			pendingTurn,
+			isWhisper: sttIsWhisperRef.current,
+			dictation: dictationRef.current,
+		});
 		mutedRef.current = true;
 		setMuted(true);
-		sttRef.current?.stop();
+		sttRef.current?.stop(); // stop(), never stopDiscard() — #228: the clip must still upload
 		ttsRef.current?.cancel(); // stop the agent mid-sentence + drop the queue
 		setSpeaking(false);
-		speakEndedAtRef.current = Date.now();
+		if (plan.armEchoTail) speakEndedAtRef.current = Date.now();
 		stopAudioMonitor();
 		setMicOn(false);
+		if (pendingTurn === "recover") mutedAtRef.current = Date.now();
+		if (plan.keepPending) return; // the transcript is coming; the bubble stays to receive it
+		if (plan.recoverText) {
+			// Same treatment `leaveForSwitch` gives a destroyed utterance: the noise filter keeps a
+			// pure-echo "turn" out of the composer, and a rejection is LOGGED rather than vanishing.
+			const noise = planNoiseRejection(plan.recoverText, { gate: gateSnapshot() });
+			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: plan.recoverText.slice(0, 200), path: "mute" });
+			else onRecoveredTextRef.current?.(plan.recoverText);
+		}
 		clearVoiceText();
-	}, [stopAudioMonitor, clearVoiceText]);
+	}, [stopAudioMonitor, clearVoiceText, gateSnapshot]);
 	const muteFromCommandRef = useRef(muteFromCommand);
 	muteFromCommandRef.current = muteFromCommand;
 
@@ -949,14 +990,28 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// that out by capture time: it is RECOVERED into the composer (visible + sendable) rather
 		// than sent blind into a conversation that has since moved on.
 		const verdict = classifyResult(
-			{ ...readGuard(), captureStartedAt: lastListenStartRef.current, pausedAt: pausedAtRef.current },
+			{ ...readGuard(), captureStartedAt: lastListenStartRef.current, pausedAt: pausedAtRef.current, mutedAt: mutedAtRef.current },
 			Date.now(),
 		);
-		if (verdict === "ignore") return;
+		if (verdict === "ignore") {
+			// This was the ONE drop path in the whole voice pipeline with no report (#420) — compare
+			// every sibling below and in `onError`. A turn that dies here leaves no message, no
+			// bubble and no error row, so "my words disappeared" was unanswerable from the data. It
+			// is usually the agent's own voice tail, which is why it is a debug-level count rather
+			// than a notice; the transcript rides along because it is the only evidence of what came
+			// back. `reportClientError` de-dups per message per 30s, so an echo-heavy room cannot
+			// flood the log (#423).
+			if (isFinal && text?.trim()) reportClientError("voice", "result ignored (echo tail or a turn already abandoned)", { transcript: text.trim().slice(0, 200), path: "ignore" });
+			return;
+		}
 		if (verdict === "recover") {
 			// Only a FINAL transcript is a turn — a streaming partial would hand back a fragment
 			// and then hand back the same words again when the final lands.
 			if (!isFinal) return;
+			// A command already consumed this utterance — its words ARE the command, so recovering
+			// them would drop the literal word "mute" into the composer. The latch is normally read
+			// below; a muted turn reaches this branch first, so it has to be honoured here too.
+			if (handledUtteranceRef.current) { handledUtteranceRef.current = false; return; }
 			// Browser dictation accumulates across results, so the recovered turn is everything
 			// said this capture, not just the last fragment.
 			const soFar = utteranceSoFar({ pending: pendingTextRef.current, text, handsFree: convoOnRef.current, isWhisper: sttIsWhisperRef.current });
@@ -1077,8 +1132,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 					return;
 				}
 				// The trailing command applies FIRST — the user asked for silence in the same breath
-				// as the request, and getting it after the send is getting it late.
-				if (plan.command === "mute") muteFromCommandRef.current();
+				// as the request, and getting it after the send is getting it late. "send", because
+				// the transcript is already in hand here and `plan.text` is emitted below: this path
+				// never consults `classifyResult`, and clearing the bubble is finalize's own job.
+				if (plan.command === "mute") muteFromCommandRef.current("send");
 				else if (plan.command === "unmute") unmuteFromCommandRef.current();
 				else if (plan.command === "exit") exitFromCommandRef.current();
 				if (plan.action === "none") {
@@ -1536,6 +1593,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// We just cancelled TTS, so there's no speaker echo to guard against — clearing
 		// this stops the echo guard from swallowing the START of the user's turn.
 		speakEndedAtRef.current = 0;
+		mutedAtRef.current = 0; // a manual talk revokes an earlier mute, and its verdict with it
 		try {
 			if (!sttRef.current) sttRef.current = await makeStt();
 			if (!sttRef.current.listening) await sttRef.current.start();

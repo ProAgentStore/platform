@@ -40,8 +40,15 @@ fixes.
 
 **M2 — Immediate and bidirectional.** Mute silences **both directions at once**: it closes the
 microphone *and* cancels in-flight speech plus anything queued behind it. Muting an agent that keeps
-talking is not mute. (Today: `muteFromCommand` stops the recognizer, calls `tts.cancel()`, drops the
-queue, stops the level monitor and clears the pending capture.)
+talking is not mute — and that includes speech that starts *after* the press: mute is a state, not a
+one-shot cancel, so a reply arriving while muted is not read aloud (it stays available to "repeat").
+Silencing the agent is not the same as silencing the **user**: mute must not destroy the utterance
+they had already finished saying. See #420, and M5.
+
+*(Today: `muteFromCommand` stops the recognizer, calls `tts.cancel()`, drops the queue, stops the
+level monitor, and resolves the pending capture through `planMuteTeardown`. An earlier version of
+this paragraph described that last step as "clears the pending capture" — that was a description of
+the #420 defect, not a requirement, and is corrected here.)*
 
 **M3 — No condition may reduce to "not while the agent is speaking".** Guards that suppress speech
 input during TTS — echo guards, pause guards, `shouldIgnoreResult` — must **not** be applied
@@ -50,6 +57,23 @@ wholesale to the control path. This is the specific rule #386's first draft brok
 **M4 — Unmute is symmetric.** While muted, the only listener running is the control listener, so
 unmute must be matched there. A session that can be entered but not left by the same channel is a
 trap, and it is the same defect as M1 with the sign flipped.
+
+**M5 — Mute never costs the user their words.** Silencing the agent is not the same as silencing the
+**user**. A turn they had already finished speaking survives the press and lands in exactly one
+place: the composer, where it is visible, editable and one tap from being sent. Not the agent — mute
+is what someone reaches for when something has gone wrong, and firing the interrupted request at the
+agent, with spend and a spoken reply, acts on an instruction they withdrew. Not nothing — every other
+path in this codebase that destroys a pending utterance hands the words back first, and mute was the
+one that deleted them.
+
+The destination must be **explicit**, not derived from timing. Before #420 it was decided by whether
+the transcript happened to land inside the 800 ms echo tail: press promptly and the words were
+dropped in the pipeline's one unlogged branch, dawdle and they were sent to the agent after the mute,
+with nothing on screen either way. Same action, opposite outcomes, chosen by network latency.
+
+The one exception is a mute arriving on the END of a request. "Run the tests, mute" is a request
+*plus* a request for quiet, and #228 exists because latching there threw the request away. Those two
+call sites say so in as many words (`pendingTurn: "send"`); everywhere else the default is to recover.
 
 ### What M3 permits
 
