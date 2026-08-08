@@ -272,7 +272,12 @@ const PINS = {
 	// (repo-input.ts), which session opens by itself and which repo a session is in
 	// (session-open.ts), and the timeline→conversation mapping that was written out twice
 	// verbatim (timeline-chat.ts). Each replaced a prose paragraph with a test that executes it.
-	"agents/coder/web/src/CodingTab.tsx": 1196,
+	// +7 at #405: the unusable-repo diagnosis and its remedy, rendered beside the repo row.
+	// Raised rather than split — the phrase itself is the server's, the reconciliation that
+	// decides when it outranks `active` is already extracted into repo-status.ts (with tests),
+	// and what is left here is the JSX that displays it. A split would have moved the seven
+	// lines and left the seam in the same place.
+	"agents/coder/web/src/CodingTab.tsx": 1203,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
