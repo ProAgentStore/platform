@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { describeFacts } from "./runner-availability.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 
 const NOW = Date.parse("2026-08-06T06:00:00Z");
@@ -96,6 +97,78 @@ describe("classifySubordinateConnectivity", () => {
 			now: NOW,
 		});
 		expect(c.runnerVersion).toBe("0.4.32");
+	});
+
+	// #468 — the SECOND adapter. #461 taught `describeFacts` to forward the pin and left this
+	// function forwarding three of `diagnoseAttachment`'s five inputs, which is what
+	// `subordinate_status`, `start_work`/Loop and the chat-tool session opener all read.
+	it("forwards the pin, so a pinned agent is never told to --force the machine that IS up", () => {
+		// The exact production state #461 measured: the pin is on a switched-off machine, and the
+		// heartbeat reads FRESH because on a multi-machine account the live machine's heartbeat
+		// lands on the shared default row. Every input below is the one the three call sites hold.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: true,
+			hasRuntimeRow: true,
+			relayConnected: false,
+			node: "Sergeys-MacBook-Pro.local",
+			lastSeenAt: secondsAgo(10),
+			pinnedNode: "Sergeys-Mac-mini.local",
+			liveNodeExcludedByPin: "Sergeys-MacBook-Pro.local",
+			now: NOW,
+		});
+		expect(c.state).toBe("pinned-machine-offline");
+		// The three assertions that matter, matching `runner-availability.test.ts` for the other
+		// adapter: no remedy, and a sentence that prescribes neither command.
+		expect(c.remedy).toBeNull();
+		expect(c.message).not.toContain("--force");
+		expect(c.message).not.toContain("pags up");
+		// Both machines named — the dead pin and the live one — since the fix is to repoint the
+		// pin, and the user cannot do that without knowing what to repoint it TO.
+		expect(c.message).toContain("Sergeys-Mac-mini.local");
+		expect(c.message).toContain("Sergeys-MacBook-Pro.local");
+		// The sentence must not be suffixed with "(machine: <the excluded machine>)" — that is the
+		// one machine this agent is deliberately not allowed to run on.
+		expect(c.message).not.toContain("machine: ");
+		// Unchanged from before the fix, and the reason this is safe to ship: no delegation
+		// decision moves. Only the explanation does.
+		expect(c.canWork).toBe(false);
+	});
+
+	it("leaves the unpinned detached case saying --force", () => {
+		// The regression guard for the fix above: `--force` is the right answer when the machine
+		// really is up and only this agent lost its socket, which is every account with no pin.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: true,
+			hasRuntimeRow: true,
+			relayConnected: false,
+			node: "macbook",
+			lastSeenAt: secondsAgo(10),
+			pinnedNode: null,
+			liveNodeExcludedByPin: null,
+			now: NOW,
+		});
+		expect(c.state).toBe("machine-online-agent-detached");
+		expect(c.remedy).toBe("pags up --force");
+	});
+
+	it("agrees with the other adapter on the same facts", () => {
+		// The invariant, stated where it can be checked: `describeFacts` and this function are two
+		// adapters onto ONE diagnosis, and the whole defect class is one of them going stale when
+		// the diagnosis grows an input. Spreading the SAME `RuntimeFacts` through both must yield
+		// the same state and the same remedy, whatever the fields are.
+		const facts = {
+			hasRuntimeRow: true,
+			relayConnected: false,
+			node: "Sergeys-MacBook-Pro.local",
+			runnerVersion: "0.4.45",
+			lastSeenAt: secondsAgo(10),
+			pinnedNode: "Sergeys-Mac-mini.local",
+			liveNodeExcludedByPin: "Sergeys-MacBook-Pro.local",
+		};
+		const viaSubordinate = classifySubordinateConnectivity({ requiresRunner: true, ...facts, now: NOW });
+		const viaFacts = describeFacts(facts);
+		expect(viaSubordinate.state).toBe(viaFacts.state);
+		expect(viaSubordinate.remedy).toBe(viaFacts.remedy);
 	});
 
 	it("treats a blank node or version as absent rather than empty-string", () => {

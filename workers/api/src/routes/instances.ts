@@ -820,6 +820,11 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		// machine that is demonstrably alive with one agent detached rendered as an unexplained
 		// amber dot — the CLI knew the reason and the remedy and printed both to a terminal
 		// nobody was watching.
+		//
+		// THIRD construction site for `diagnoseAttachment` (#468) — a direct call on purpose: the
+		// liveness and the pin are already resolved above, so going through `describeFacts` would
+		// re-probe the relay and swap this row's `last_seen_at` for a different fact. A sixth input
+		// to the diagnosis must be added HERE as well as in the two adapters.
 		const attachment = diagnoseAttachment({
 			hasRuntimeRow: true,
 			relayConnected: relayIsConnected,

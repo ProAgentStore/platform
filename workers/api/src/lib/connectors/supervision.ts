@@ -37,7 +37,7 @@ import {
 } from "../instance-work.js";
 import { logError } from "../error-log.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
-import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
+import { EMPTY_RUNTIME_FACTS, runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
 import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
 import { CONFIG_LEGEND, objectiveConflict, resolveSubordinateConfig, type SubordinateConfig } from "../subordinate-config.js";
@@ -347,13 +347,13 @@ async function observeSubordinates(
 			const f = facts.get(s.instanceId);
 			return [
 				s.instanceId,
+				// SPREAD, never enumerate (#468). Listing the fields by hand is how the pin (#461)
+				// failed to reach the diagnosis here for three surfaces: `RuntimeFacts` grew two
+				// fields, this literal kept passing five, and every field is optional so nothing
+				// failed to compile.
 				classifySubordinateConnectivity({
 					requiresRunner: src?.requiresRunner ?? false,
-					hasRuntimeRow: f?.hasRuntimeRow ?? false,
-					relayConnected: f?.relayConnected ?? false,
-					node: f?.node,
-					runnerVersion: f?.runnerVersion,
-					lastSeenAt: f?.lastSeenAt,
+					...(f ?? EMPTY_RUNTIME_FACTS),
 				}),
 			] as const;
 		}),

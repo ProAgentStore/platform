@@ -13,7 +13,7 @@ import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSess
 import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { resolveSessionContinuity, type SessionContinuity } from "./coding-session-continuity.js";
-import { runtimeConnectivity } from "./instance-connectivity.js";
+import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
 import { isRunnerUnreachable } from "./runner-unreachable.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
@@ -374,11 +374,8 @@ export async function ensureSessionForChat(
 		// These tools only exist on an agent whose work runs on a local machine, so a runner is
 		// required unconditionally — same reasoning as the coding driver.
 		requiresRunner: true,
-		hasRuntimeRow: facts?.hasRuntimeRow ?? false,
-		relayConnected: facts?.relayConnected ?? false,
-		node: facts?.node,
-		runnerVersion: facts?.runnerVersion,
-		lastSeenAt: facts?.lastSeenAt,
+		// SPREAD, never enumerate (#468) — see `EMPTY_RUNTIME_FACTS`.
+		...(facts ?? EMPTY_RUNTIME_FACTS),
 	});
 	if (!connectivity.canWork) {
 		// No row is created on this path — that is the point of checking here. The existing session

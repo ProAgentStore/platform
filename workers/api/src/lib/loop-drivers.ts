@@ -25,7 +25,7 @@ import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from 
 import { ensureActiveSession } from "./coding-session-open.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
-import { runtimeConnectivity } from "./instance-connectivity.js";
+import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -165,11 +165,10 @@ const codingDriver: LoopDriver = {
 			// This driver only ever runs for `workflow: "CODING_SESSION"`, which by definition has
 			// local hands — so a runner is required, unconditionally.
 			requiresRunner: true,
-			hasRuntimeRow: facts?.hasRuntimeRow ?? false,
-			relayConnected: facts?.relayConnected ?? false,
-			node: facts?.node,
-			runnerVersion: facts?.runnerVersion,
-			lastSeenAt: facts?.lastSeenAt,
+			// SPREAD, never enumerate (#468) — see `EMPTY_RUNTIME_FACTS`. Enumerating here is what
+			// left `start_work` and the Loop button prescribing `pags up --force` to an owner whose
+			// agent is pinned to a machine that is switched off.
+			...(facts ?? EMPTY_RUNTIME_FACTS),
 		});
 		if (!connectivity.canWork) {
 			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity }) };

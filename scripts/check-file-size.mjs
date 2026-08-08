@@ -104,7 +104,11 @@ const PINS = {
 	// rather than split — three of the four blocks are one expression plus its paragraph, and every
 	// decision behind them is pure and lives elsewhere with tests (lib/machine-identity.ts,
 	// lib/runtime-attachment.ts, lib/runner-client.ts), which is where a split would have put them.
-	"workers/api/src/routes/instances.ts": 933,
+	// +4 for #468, all of it comment: this route is the THIRD construction site for
+	// `diagnoseAttachment` and the only one with no adapter in front of it, so the next input the
+	// diagnosis grows has to be added here by hand. That is exactly how #468 happened at the other
+	// two sites, and the four lines are what a reader needs to not repeat it a fourth time.
+	"workers/api/src/routes/instances.ts": 938,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -766,7 +770,8 @@ const PINS = {
 	// +N again at #456/#443, from the same cause and by a different lane on the same day. Two
 	// commits raising this one number independently is the clearest evidence yet that the PINS map
 	// wants to be its own data module — see the paragraph above for the split when it is worth it.
-	"scripts/check-file-size.mjs": 850,
+	// +5 for #468: the two pins above, and the note saying why they moved.
+	"scripts/check-file-size.mjs": 855,
 };
 
 /**

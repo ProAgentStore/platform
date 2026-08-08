@@ -126,6 +126,28 @@ describe("noSessionMessage", () => {
 		expect(noSessionMessage({ repoName: "r", connectivity: detached })).toContain("pags up --force");
 	});
 
+	it("does NOT prescribe pags up for an agent pinned to a machine that is off (#468)", () => {
+		// The refusal `start_work`, the Loop button and the chat session-opener all render. Before
+		// #468 the adapter dropped the pin, so this state diagnosed `machine-online-agent-detached`
+		// and this sentence ended `Run \`pags up --force\` on <the machine that is already up>`.
+		// `--force` cannot repoint a pin; the fix is one click in "Runs on".
+		const pinned = classifySubordinateConnectivity({
+			requiresRunner: true,
+			hasRuntimeRow: true,
+			relayConnected: false,
+			node: "macbook",
+			lastSeenAt: "2026-08-06 05:59:50",
+			pinnedNode: "mac-mini",
+			liveNodeExcludedByPin: "macbook",
+			now: NOW,
+		});
+		const msg = noSessionMessage({ repoName: "pags/platform", connectivity: pinned });
+		expect(msg).not.toContain("pags up");
+		expect(msg).toContain("Runs on");
+		expect(msg).toContain("mac-mini");
+		expect(msg).toContain("macbook");
+	});
+
 	it("surfaces the runner's own error when the session could not be started", () => {
 		// A clone failure or a bad engine command is actionable; "no live coding session" is not.
 		// Without this the user sees a generic refusal for a completely specific problem.

@@ -40,7 +40,16 @@ export interface RuntimeFacts {
 	liveNodeExcludedByPin?: string | null;
 }
 
-const EMPTY: RuntimeFacts = {
+/**
+ * "We know nothing about this instance's runner" — exported so a caller that failed to READ the
+ * facts spreads this instead of hand-writing a partial object (#468).
+ *
+ * That is the whole point of exporting it: three call sites enumerated `RuntimeFacts` field by
+ * field, and when #461 added two fields for the diagnosis's benefit, all three silently kept
+ * passing the old five. Every added field is optional (an old row must be allowed to decline to
+ * answer), so the compiler cannot object. A spread of this value cannot go stale.
+ */
+export const EMPTY_RUNTIME_FACTS: RuntimeFacts = {
 	hasRuntimeRow: false,
 	relayConnected: false,
 	node: null,
@@ -49,6 +58,8 @@ const EMPTY: RuntimeFacts = {
 	pinnedNode: null,
 	liveNodeExcludedByPin: null,
 };
+
+const EMPTY = EMPTY_RUNTIME_FACTS;
 
 /**
  * How many instances we will probe the relay for in one call.

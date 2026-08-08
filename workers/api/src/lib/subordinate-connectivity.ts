@@ -53,6 +53,18 @@ export function classifySubordinateConnectivity(input: {
 	node?: string | null;
 	runnerVersion?: string | null;
 	lastSeenAt?: string | null;
+	/**
+	 * The machine this instance is pinned to (`config.runnerNode`); null/"" = automatic.
+	 *
+	 * These two exist ONLY to be forwarded to `diagnoseAttachment`, and they are named exactly as
+	 * `RuntimeFacts` names them so every caller can spread its facts in rather than enumerate
+	 * them (#468). Without them a pinned-to-an-offline-machine agent diagnoses
+	 * `machine-online-agent-detached` and this adapter tells the human to run `pags up --force`
+	 * on the machine that is already up — the #259/#271 failure, at three surfaces.
+	 */
+	pinnedNode?: string | null;
+	/** A machine holding a live socket for this instance which the PIN excludes. Description only. */
+	liveNodeExcludedByPin?: string | null;
 	now?: number;
 }): SubordinateConnectivity {
 	const node = input.node?.trim() || null;
@@ -75,11 +87,16 @@ export function classifySubordinateConnectivity(input: {
 		};
 	}
 
+	// Forward everything the diagnosis takes. An input it grows and this adapter does not pass is
+	// the same bug a third time (3 fields in #237 → 5 in #380 → this, #468) — and it cannot be
+	// caught by the compiler, because every added field has to be optional.
 	const d = diagnoseAttachment({
 		hasRuntimeRow: input.hasRuntimeRow,
 		relayConnected: input.relayConnected,
 		lastSeenAt,
 		now: input.now,
+		pinnedNode: input.pinnedNode,
+		liveNodeExcludedByPin: input.liveNodeExcludedByPin,
 	});
 	const attached = d.state === "attached";
 	return {
@@ -94,7 +111,11 @@ export function classifySubordinateConnectivity(input: {
 		// reading it in JSON has no dot. Say what it licenses instead: delegation.
 		message: attached
 			? `Runner connected${node ? ` on ${node}` : ""} — you can delegate work to it now, whether or not it is currently busy.`
-			: `${d.message}${node ? ` (machine: ${node})` : ""}`,
+			: // `pinned-machine-offline` already names BOTH machines (the dead pin and the live one),
+				// and `node` here is the freshest heartbeat — which in that state is usually the machine
+				// the pin EXCLUDES. Appending "(machine: …)" would suffix the sentence with the one
+				// machine the agent is deliberately not allowed to run on.
+				`${d.message}${node && d.state !== "pinned-machine-offline" ? ` (machine: ${node})` : ""}`,
 		remedy: d.remedy,
 	};
 }
