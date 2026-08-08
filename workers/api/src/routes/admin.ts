@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
 import { getAgentDetail, getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
+import { ERROR_COLUMNS, ERROR_RECENCY } from "../lib/error-log.js";
 import { listAllConsents } from "../lib/connector-consent.js";
 import { registryTools } from "../lib/tool-registry.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
@@ -290,7 +291,9 @@ adminRoutes.get("/errors/summary", async (c) => {
 	const { sql, binds } = errorQuery(c, 2000);
 	const rows = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];
 	const signatures = summarizeErrors(rows);
-	return c.json({ total: rows.length, signatures });
+	// `total` is OCCURRENCES; `rows` is how many table rows they came from. Reporting only the row
+	// count would understate a collapsed runaway by whatever factor the collapse achieved (#424).
+	return c.json({ total: signatures.reduce((n, s) => n + s.count, 0), rows: rows.length, signatures });
 });
 
 /** Build a filtered cross-user error_log query from request params (parameterized). */
@@ -304,10 +307,18 @@ function errorQuery(c: Context<{ Bindings: Env }>, limit: number): { sql: string
 	if (source) { binds.push(source); where.push(`source = ?`); }
 	if (q) { binds.push(`%${q}%`); where.push(`message LIKE ?`); }
 	if (status) { binds.push(status); where.push(`status = ?`); }
-	if (since) { binds.push(new Date(Date.now() - since * 86_400_000).toISOString().slice(0, 19).replace("T", " ")); where.push(`created_at >= ?`); }
-	const sql = `SELECT id, created_at, user_id, source, status, message, context FROM error_log${
+	const level = c.req.query("level");
+	// `?level=error` is how the operator asks for bugs only. Unfiltered returns everything,
+	// including the `warn` rows (transient infra, diagnostic 4xx) that #424 stopped dropping —
+	// a severity nobody can see by default is one nobody reads.
+	if (level === "error" || level === "warn") { binds.push(level); where.push(`level = ?`); }
+	// Filtered and ordered by the LAST occurrence, not the first: a collapsed row keeps the
+	// created_at of the bucket it opened, so `since=1` on created_at would hide an outage that
+	// started two days ago and is still happening right now.
+	if (since) { binds.push(new Date(Date.now() - since * 86_400_000).toISOString().slice(0, 19).replace("T", " ")); where.push(`${ERROR_RECENCY} >= ?`); }
+	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log${
 		where.length ? ` WHERE ${where.join(" AND ")}` : ""
-	} ORDER BY created_at DESC LIMIT ${Math.max(1, limit)}`;
+	} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${Math.max(1, limit)}`;
 	return { sql, binds };
 }
 

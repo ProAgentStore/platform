@@ -34,6 +34,10 @@ function fakeDb(opts: { failOn?: string; rows?: Array<{ event: string; total: nu
 								throw new Error("FOREIGN KEY constraint failed");
 							}
 							writes.push({ sql, args });
+							// An UPDATE matches nothing here — this double holds no rows. Claiming a change
+							// made `logError`'s repeat-collapse (#424) think an identical failure was already
+							// on record and skip the INSERT, which quietly emptied the assertions below.
+							if (sql.trimStart().toUpperCase().startsWith("UPDATE")) return { meta: { changes: 0 } };
 							return { meta: { changes: 1 } };
 						},
 						async all() {

@@ -19,11 +19,27 @@ export function isTransientInfraError(err: unknown): boolean {
 }
 
 /**
+ * The 4xx worth a durable row, at `warn` (#424).
+ *
+ * Not "all 4xx": on an SPA, 401 and 404 are constant background traffic and logging them would
+ * flood the log harder than #423's cron did. These four are the ones that are evidence of
+ * something — 402 says no API key is connected, 403 a permission wall, 409 a conflicting write,
+ * 429 a user repeatedly hitting a limit. Before this, a user hammering a rate limit produced no
+ * record anywhere, on either side.
+ *
+ * The 402 already visible in the log gets there because `chat` logs it explicitly at its own call
+ * site; that is the shape this generalises.
+ */
+const DIAGNOSTIC_CLIENT_ERRORS = new Set([402, 403, 409, 429]);
+
+/**
  * Persist an exception that reached the global handler so it's never lost to the
- * ephemeral worker console. Decides WHAT to log:
- *  - transient infra (DO reset on deploy, overload) → skip; not a bug, self-heals.
- *  - HttpError < 500  → expected client error (validation/not-found/auth). Skip —
- *    logging every denial would flood the log.
+ * ephemeral worker console. Decides WHAT to log, and AT WHICH LEVEL:
+ *  - transient infra (DO reset on deploy, overload) → `warn`, source `transient`. Not a bug and
+ *    the 503 is the right answer, but it must be COUNTABLE: "how often does a deploy break a live
+ *    request?" was unanswerable while these were dropped, and that is the question that was asked.
+ *  - HttpError 402/403/409/429 → `warn`. Expected, but diagnostic.
+ *  - other HttpError < 500 → skip; logging every 401/404 would flood the log.
  *  - HttpError >= 500 → a real server failure. Log message + where.
  *  - anything else    → a genuine unhandled bug. Log the full message + STACK.
  * `req.userId` attributes the failure to the signed-in user (when known) so it shows
@@ -35,11 +51,25 @@ export async function logUnhandled(
 	err: unknown,
 	req: { path: string; method: string; userId?: string | null },
 ): Promise<void> {
-	if (isTransientInfraError(err)) return;
+	if (isTransientInfraError(err)) {
+		// A distinct SOURCE as well as a distinct level, so `?source=transient` counts deploy
+		// disruption directly instead of requiring a message match against platform wording that
+		// is not ours and can change.
+		await logError(env, {
+			source: "transient",
+			level: "warn",
+			status: 503,
+			message: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+			userId: req.userId ?? null,
+			context: { path: req.path, method: req.method },
+		}).catch(() => undefined);
+		return;
+	}
 	if (err instanceof HttpError) {
-		if (err.status < 500) return;
+		if (err.status < 500 && !DIAGNOSTIC_CLIENT_ERRORS.has(err.status)) return;
 		await logError(env, {
 			source: "unhandled",
+			level: err.status < 500 ? "warn" : "error",
 			status: err.status,
 			message: err.message,
 			userId: req.userId ?? null,

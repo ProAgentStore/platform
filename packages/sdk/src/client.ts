@@ -39,8 +39,13 @@ export function setToken(t: string | null) {
 const _reportedAt = new Map<string, number>();
 export function reportClientError(source: string, message: string, context?: Record<string, unknown>, status?: number): void {
 	try {
+		// NO token is not a reason to stay silent (#424). This used to `return` here, on the
+		// premise that "the log is per-user; nothing to attribute it to" — but the server has
+		// always written null-user rows (migration 0034: `user_id TEXT, -- nullable: some failures
+		// have no user context`), and the effect of the early return was that every sign-in and
+		// OAuth-callback failure was invisible. That is exactly the class a user cannot report
+		// from their side, because they never got a session to read their own errors with.
 		const token = getToken();
-		if (!token) return; // the log is per-user; nothing to attribute it to
 		const key = `${source}|${message}`.slice(0, 200);
 		const now = Date.now();
 		const last = _reportedAt.get(key);
@@ -50,11 +55,22 @@ export function reportClientError(source: string, message: string, context?: Rec
 		void fetch(`${API}/v1/errors/client`, {
 			method: "POST",
 			keepalive: true,
-			headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+			headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
 			body: JSON.stringify({ source: String(source).slice(0, 40), message: String(message).slice(0, 2000), status, context }),
 		}).catch(() => {});
 	} catch { /* reporting must never throw */ }
 }
+
+/**
+ * The 4xx worth reporting from the browser (#424).
+ *
+ * Mirrors `DIAGNOSTIC_CLIENT_ERRORS` in the Worker's `on-error.ts`, and for the same reason: 401
+ * and 404 are constant SPA background traffic and reporting them would bury the log, while these
+ * four are evidence — 402 no API key connected, 403 a permission wall, 409 a conflicting write,
+ * 429 a user repeatedly hitting a limit. The server files them at `warn`, so they are countable
+ * without inflating the error count.
+ */
+const DIAGNOSTIC_STATUSES = new Set([402, 403, 409, 429]);
 
 export async function api<T = Record<string, unknown>>(
 	path: string,
@@ -98,8 +114,10 @@ export async function api<T = Record<string, unknown>>(
 	try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
 	if (!res.ok) {
 		// Server errors (5xx) are always worth capturing; ordinary 4xx (validation,
-		// 404, 401) are expected and would just be noise.
-		if (res.status >= 500 && !path.startsWith("/v1/errors")) {
+		// 404, 401) are expected and would just be noise. The four DIAGNOSTIC statuses are the
+		// exception — they are the evidence that a user is hitting a wall, and before #424 a user
+		// repeatedly rate-limited left no trace on either side of the wire.
+		if ((res.status >= 500 || DIAGNOSTIC_STATUSES.has(res.status)) && !path.startsWith("/v1/errors")) {
 			reportClientError("api", `${opts.method || "GET"} ${path} → ${res.status}`, { body: text.slice(0, 300) }, res.status);
 		}
 		throw new Error((data as Record<string, string>)?.error || `HTTP ${res.status}`);

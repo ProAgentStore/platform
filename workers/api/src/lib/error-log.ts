@@ -5,6 +5,30 @@
 import type { Env } from "../types.js";
 import { logEvent } from "./events.js";
 
+/**
+ * How severe a logged failure is.
+ *
+ * `warn` exists so a failure can be RECORDED without being counted as a bug (#424). Two classes
+ * were previously dropped entirely for want of it: transient infrastructure (a Durable Object
+ * reset by a deploy — self-healing, and the 503 is the correct answer) and the diagnostic 4xx
+ * (402/403/409/429 — expected, but the only evidence that a user is repeatedly hitting a wall).
+ * Dropping them made "how often does a deploy break a live request?" unanswerable.
+ */
+export type ErrorLevel = "error" | "warn";
+
+/**
+ * How long an identical failure folds into the row already recording it (#424).
+ *
+ * One hour, anchored on that row's `created_at` rather than on its last hit, so a permanently
+ * failing sweep produces at most 24 rows a day and still shows WHEN it was failing. #423 wrote
+ * 1809 rows with one distinct message between them and buried everything else in the log; the read
+ * side had aggregated identical signatures all along, and this is the write side finally agreeing.
+ */
+const COLLAPSE_WINDOW_MS = 60 * 60_000;
+
+/** `datetime('now')`'s own format, so a JS-computed bound compares correctly against the column. */
+const sqlTime = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+
 export interface ErrorLogInput {
 	/** Where it failed: 'keys-proxy' | 'auth' | 'job-apply' | 'coding' | 'chat' | … */
 	source: string;
@@ -14,8 +38,37 @@ export interface ErrorLogInput {
 	userId?: string | null;
 	/** HTTP-ish status when applicable. */
 	status?: number;
+	/** Defaults to `error`. See {@link ErrorLevel}. */
+	level?: ErrorLevel;
 	/** Structured extras: host, path, provider, instanceId, taskId, … */
 	context?: Record<string, unknown>;
+}
+
+/**
+ * Fold this failure into an identical one already logged inside the collapse window.
+ *
+ * Identity is EXACT — same source, level, status, user and byte-identical message. Not the
+ * normalized signature `/errors/summary` groups by: that would merge "instance abc failed" with
+ * "instance def failed" at write time and throw away which instance, irreversibly. Exact text
+ * carries no extra information by definition, which is what makes collapsing it lossless. (#423's
+ * flood was 1809 rows of one distinct message, so exact matching is enough for the case that
+ * motivated this.)
+ *
+ * Returns true when an existing row absorbed the occurrence.
+ */
+async function collapseRepeat(env: Env, e: ErrorLogInput, level: ErrorLevel, message: string, source: string): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE error_log
+		    SET repeat_count = repeat_count + 1, last_seen_at = datetime('now')
+		  WHERE id = (SELECT id FROM error_log
+		               WHERE source = ?1 AND message = ?2 AND level = ?3
+		                 AND status IS ?4 AND user_id IS ?5
+		                 AND created_at >= ?6
+		               ORDER BY created_at DESC LIMIT 1)`,
+	)
+		.bind(source, message, level, typeof e.status === "number" ? e.status : null, e.userId ?? null, sqlTime(Date.now() - COLLAPSE_WINDOW_MS))
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /**
@@ -24,16 +77,30 @@ export interface ErrorLogInput {
  */
 export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 	try {
+		const level: ErrorLevel = e.level === "warn" ? "warn" : "error";
+		const source = String(e.source).slice(0, 64);
+		const message = String(e.message ?? "").slice(0, 2000) || "(no message)";
+		// A repeat is absorbed by the row already recording it AND does not mirror into the trace:
+		// #423 flooded `agent_events` with 1811 error events for the same reason it flooded this
+		// table, so collapsing only one of the two would leave the other unreadable.
+		//
+		// A FAILING collapse falls through to the insert rather than out to the catch below. The
+		// deploy applies migrations before it replaces the Worker, so the columns are there — but
+		// the failure mode if that assumption is ever wrong is total silence in the one component
+		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
+		// than no row.
+		if (await collapseRepeat(env, e, level, message, source).catch(() => false)) return;
 		await env.DB.prepare(
-			"INSERT INTO error_log (id, user_id, source, status, message, context) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+			"INSERT INTO error_log (id, user_id, source, status, message, context, level, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
 		)
 			.bind(
 				crypto.randomUUID(),
 				e.userId ?? null,
-				String(e.source).slice(0, 64),
+				source,
 				typeof e.status === "number" ? e.status : null,
-				String(e.message ?? "").slice(0, 2000) || "(no message)",
+				message,
 				e.context ? JSON.stringify(e.context).slice(0, 4000) : null,
+				level,
 			)
 			.run();
 		// Mirror into the unified trace so failures appear inline in agent_trace next to
@@ -51,10 +118,15 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 			context: e.context,
 		}).catch(() => undefined);
 		// Opportunistic retention: there is no cron, so ~2% of writes prune rows older
-		// than 30 days (indexed on created_at). Keeps the log from growing unbounded
-		// even if a client hammers /v1/errors/client. Best-effort — never blocks.
+		// than 30 days. Keeps the log from growing unbounded even if a client hammers
+		// /v1/errors/client. Best-effort — never blocks.
+		//
+		// Aged on the LAST occurrence, not the first: a collapsed row is a bucket that stays open
+		// for an hour, and one still being hit must not be deleted because the bucket opened a
+		// month ago. (In practice a bucket is at most an hour older than its last hit, so this only
+		// matters if the window is ever widened — which is exactly when it would be forgotten.)
 		if (Math.random() < 0.02) {
-			await env.DB.prepare("DELETE FROM error_log WHERE created_at < datetime('now', '-30 days')")
+			await env.DB.prepare(`DELETE FROM error_log WHERE ${ERROR_RECENCY} < datetime('now', '-30 days')`)
 				.run()
 				.catch(() => undefined);
 		}
@@ -72,12 +144,29 @@ export interface ErrorRow {
 	status: number | null;
 	message: string;
 	context: string | null;
+	/** `error` (a bug) or `warn` (recorded, not counted). See {@link ErrorLevel}. */
+	level?: ErrorLevel | null;
+	/** Occurrences this row stands for — 1 unless repeats were collapsed into it. */
+	repeat_count?: number | null;
+	/** Most recent occurrence. Null only on a row written before migration 0103. */
+	last_seen_at?: string | null;
 }
+
+/**
+ * The columns every error read selects, and the recency expression they order by.
+ *
+ * Ordering is on the LAST occurrence, not the first: a collapsed row keeps the `created_at` of the
+ * bucket it opened, so ordering by that would sink an outage that is still happening below things
+ * that finished hours ago. `COALESCE` covers a row written before migration 0103 backfilled it —
+ * without it a NULL sorts LAST under `DESC` in SQLite, which is invisibility rather than staleness.
+ */
+export const ERROR_COLUMNS = "id, created_at, user_id, source, status, message, context, level, repeat_count, last_seen_at";
+export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 
 /** Read recent errors — for one user, or all (admin). Newest first. */
 export async function listErrors(
 	env: Env,
-	opts: { userId?: string; all?: boolean; limit?: number; source?: string },
+	opts: { userId?: string; all?: boolean; limit?: number; source?: string; level?: ErrorLevel },
 ): Promise<ErrorRow[]> {
 	const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
 	const where: string[] = [];
@@ -90,9 +179,13 @@ export async function listErrors(
 		binds.push(opts.source);
 		where.push(`source = ?${binds.length}`);
 	}
-	const sql = `SELECT id, created_at, user_id, source, status, message, context FROM error_log${
+	if (opts.level) {
+		binds.push(opts.level);
+		where.push(`level = ?${binds.length}`);
+	}
+	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log${
 		where.length ? ` WHERE ${where.join(" AND ")}` : ""
-	} ORDER BY created_at DESC LIMIT ${limit}`;
+	} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${limit}`;
 	const res = await env.DB.prepare(sql)
 		.bind(...binds)
 		.all<ErrorRow>();

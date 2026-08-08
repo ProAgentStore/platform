@@ -79,10 +79,51 @@ describe("logUnhandled", () => {
 		expect(errorLogBinds()[0][1]).toBe("google:123");
 	});
 
-	it("skips transient infra errors (DO reset on deploy) — not a bug", async () => {
+	it("RECORDS a transient infra error as a warn under its own source (#424)", async () => {
+		// It used to return before writing anything. That was right about severity — a DO reset by
+		// a deploy self-heals and the 503 is the correct answer — and wrong about visibility: it
+		// made "how often does a deploy break a live request?" unanswerable, which is the question
+		// that was actually asked. The one occurrence on record exists only because a browser
+		// reported it from the other side; a runner or the MCP server would have left nothing.
 		const { env, errorLogBinds } = mockEnv();
 		await logUnhandled(env, new Error("Durable Object reset because its code was updated."), req);
-		expect(errorLogBinds().length).toBe(0);
+		const binds = errorLogBinds();
+		expect(binds.length).toBe(1);
+		// [id, userId, source, status, message, contextJSON, level]
+		expect(binds[0][2]).toBe("transient");
+		expect(binds[0][3]).toBe(503);
+		expect(binds[0][6]).toBe("warn");
+		// A distinct source, so deploy disruption is countable with `?source=transient` rather than
+		// by matching platform wording that is not ours and can change under us.
+		expect(JSON.parse(binds[0][5] as string).path).toBe("/v1/agents/x/chat");
+	});
+
+	it("records the diagnostic 4xx at warn, and still drops 401/404", async () => {
+		// 402 no key connected · 403 a permission wall · 409 a conflicting write · 429 a user
+		// repeatedly hitting a limit. Those are evidence. 401/404 on an SPA are background traffic
+		// and logging them would flood the log harder than #423's cron did.
+		for (const status of [402, 403, 409, 429]) {
+			const { env, errorLogBinds } = mockEnv();
+			await logUnhandled(env, new HttpError(status, `wall ${status}`), req);
+			const binds = errorLogBinds();
+			expect(binds.length, `status ${status}`).toBe(1);
+			expect(binds[0][3], `status ${status}`).toBe(status);
+			expect(binds[0][6], `status ${status}`).toBe("warn");
+		}
+		for (const status of [400, 401, 404, 422]) {
+			const { env, errorLogBinds } = mockEnv();
+			await logUnhandled(env, new HttpError(status, "expected"), req);
+			expect(errorLogBinds().length, `status ${status}`).toBe(0);
+		}
+	});
+
+	it("keeps 5xx and unhandled exceptions at error level", async () => {
+		// The whole point of `warn` is that it does NOT dilute the error count. A regression that
+		// filed a real 500 as a warn would hide it from the default operator read.
+		const { env, errorLogBinds } = mockEnv();
+		await logUnhandled(env, new HttpError(502, "upstream down"), req);
+		await logUnhandled(env, new Error("boom"), req);
+		expect(errorLogBinds().map((b) => b[6])).toEqual(["error", "error"]);
 	});
 });
 

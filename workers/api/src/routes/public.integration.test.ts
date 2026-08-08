@@ -119,6 +119,13 @@ function buildApp(db: DbOpts = {}, doOpts: DoOpts = {}) {
 									throw new Error("FOREIGN KEY constraint failed");
 								}
 								writes.push({ sql, args });
+								// An UPDATE reports NO change here, because this double holds no rows to
+								// match. Reporting one made `logError`'s repeat-collapse (#424) believe an
+								// identical failure was already recorded and skip the INSERT — so the
+								// assertion below, that a swallowed reason reaches the durable log, silently
+								// stopped testing anything. `changes: 1` was never true for a statement whose
+								// WHERE cannot match; the double was overstating what D1 does.
+								if (sql.trimStart().toUpperCase().startsWith("UPDATE")) return { meta: { changes: 0 } };
 								return { meta: { changes: 1 } };
 							},
 						};
