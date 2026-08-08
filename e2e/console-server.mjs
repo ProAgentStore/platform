@@ -1,29 +1,50 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { execSync } from "node:child_process";
+import { newestMtimeUnder, sdkDistVerdict } from "./build-inputs.mjs";
 
 const port = Number(process.env.E2E_PORT || 4273);
 const storeRoot = resolve("store");
 const consoleDir = join(storeRoot, "console");
 const adminDir = join(storeRoot, "admin");
+const sdkDir = resolve("packages", "sdk");
 
 /**
- * Newest mtime under `dir`, skipping the build output itself. Used to decide whether an
- * existing bundle still represents the source that produced it.
+ * The SDK's `dist` is an INPUT to both app builds, and it is the one input this server does
+ * not build itself (#413).
+ *
+ * `packages/sdk` resolves through `dist` — its `exports` map points every subpath at
+ * `./dist/*.js` — so the console and admin bundles compile against whatever was last emitted
+ * there. CI has a named `Build SDK` step before `pnpm test:e2e`; locally there is no such
+ * step, which is the same CI/local divergence this ticket is about, one layer down.
+ *
+ * It REPORTS instead of building, unlike the app bundles below, because `dist` is shared:
+ * `pnpm typecheck` writes it, `pnpm test` reads it, and several full suites run on this repo
+ * at once (see the starvation note in `vitest.config.ts`). A `tsc` fired from inside a
+ * Playwright webServer would truncate-and-rewrite files another process is importing.
+ *
+ * Both failure modes are worth naming, because only one of them is loud:
+ *   - MISSING → rolldown dies with a 15-line stack trace about an unresolved bare specifier,
+ *     which reads as a broken test rather than a missing build step (measured, 2026-08-08).
+ *   - STALE → the build SUCCEEDS against yesterday's SDK. Nothing says anything.
  */
-function newestSourceMtime(dir) {
-	let newest = 0;
-	const walk = (d) => {
-		for (const e of readdirSync(d, { withFileTypes: true })) {
-			if (e.name === "dist" || e.name === "node_modules" || e.name.startsWith(".")) continue;
-			const p = join(d, e.name);
-			if (e.isDirectory()) walk(p);
-			else newest = Math.max(newest, statSync(p).mtimeMs);
-		}
-	};
-	walk(dir);
-	return newest;
+function requireBuiltSdk() {
+	const verdict = sdkDistVerdict({
+		entryExists: existsSync(join(sdkDir, "dist", "index.js")),
+		newestDistMtime: newestMtimeUnder(join(sdkDir, "dist")),
+		newestSrcMtime: newestMtimeUnder(join(sdkDir, "src")),
+	});
+	if (verdict === "ok") return;
+	console.error(
+		`\n✗ packages/sdk/dist is ${verdict}, and both store apps compile against it.\n` +
+			`  ${verdict === "stale" ? "The bundles would build GREEN against the previous SDK." : "The bundle build will die in rolldown on an unresolved import."}\n\n` +
+			"  Run:  pnpm --filter @proagentstore/sdk build\n\n" +
+			"  (CI does this in its own `Build SDK` step before `pnpm test:e2e`. This server does\n" +
+			"   not run it for you: dist is shared with `pnpm test` and `pnpm typecheck`, and\n" +
+			"   rewriting it under a concurrent suite is worse than stopping here.)\n",
+	);
+	process.exit(1);
 }
 
 /**
@@ -37,17 +58,38 @@ function newestSourceMtime(dir) {
  */
 function buildShell(dir, { title, description, name }) {
 	const distDir = join(dir, "dist");
-	const bundle = join(distDir, "assets", "bundle.js");
-	// Rebuild when the bundle is MISSING **or STALE**. Build-if-missing alone silently serves
-	// whatever was built last: on 2026-08-07 a full local e2e run passed 64/64 against a bundle
-	// predating the commit under test, while CI — which starts from no dist — failed 3 specs on a
-	// real regression (#309). A cached artifact that makes a broken build look green is the same
-	// trap as the unbuilt SDK dist, and costs more, because here it reports success.
-	const stale = existsSync(bundle) && statSync(bundle).mtimeMs < newestSourceMtime(join(dir, "src"));
-	if (!existsSync(bundle) || stale) {
-		console.log(`Building ${name} React app for e2e tests...${stale ? " (bundle is older than src)" : ""}`);
-		execSync("npx vite build", { cwd: dir, stdio: "inherit" });
-	}
+	// ALWAYS build. There is no staleness predicate here any more, and its absence is the fix
+	// for #413 rather than a simplification of it.
+	//
+	// WHY THE PREDICATE WAS DELETED. It compared the bundle's mtime against the newest file
+	// under this app's own `src` — and the console's sources are not all under `store/console`.
+	// `agents/coder/web` is a separate workspace package whose TypeScript Vite compiles straight
+	// into this bundle (its `exports` point at `./src/index.ts`, not at a dist), and
+	// `packages/sdk` is another. So a commit touching only the Coder UI bumped nothing the walk
+	// could see, the previous bundle was reused, and `pnpm test:e2e` ran today's specs against
+	// yesterday's UI: the three specs #405 added failed locally on `main` and were green in CI on
+	// the same SHA. Widening the root set fixes the two edges that exist TODAY; the next
+	// `workspace:*` dependency added to `store/console/package.json` reopens the hole silently,
+	// and no test can catch an omitted root, because a test can only assert the roots you listed.
+	//
+	// WHY ALWAYS-BUILDING IS AFFORDABLE, measured rather than assumed (2026-08-08, this repo,
+	// Vite 8 / rolldown, `npx vite build` wall clock including node startup):
+	//
+	//     console  cold (dist removed) 0.42s   warm 0.60 / 0.41 / 0.43s
+	//     admin    cold (dist removed) 0.32s   warm 0.34 / 0.33 / 0.34s
+	//
+	// ~0.75s for both, against a Playwright run measured in minutes. #413 named exactly this
+	// trade — "if a warm-cache no-op `vite build` is under ~2s, it is the simplest correct
+	// answer and this whole predicate can be deleted. Measure before choosing." — and 0.75 is
+	// the answer that measurement gave. The old rejection ("a single-spec debug loop would pay a
+	// full Vite build every time") was written against a slower bundler than the one now in the
+	// lockfile.
+	//
+	// The property this buys is stronger than a wider walk: the local path is now the CI path.
+	// CI checks out with no `dist` at all and therefore already builds unconditionally, which is
+	// precisely why the hole was invisible from the CI side and cost an afternoon from the other.
+	console.log(`Building ${name} React app for e2e tests...`);
+	execSync("npx vite build", { cwd: dir, stdio: "inherit" });
 	const bundleJs = readFileSync(join(distDir, "assets", "bundle.js"), "utf-8");
 	const bundleCss = readFileSync(join(distDir, "assets", "index.css"), "utf-8");
 	return `<!DOCTYPE html>
@@ -72,6 +114,8 @@ function buildShell(dir, { title, description, name }) {
 </body>
 </html>`;
 }
+
+requireBuiltSdk();
 
 const consoleHtml = buildShell(consoleDir, {
 	name: "console",

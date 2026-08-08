@@ -5,6 +5,18 @@ const baseURL = externalBaseURL || "http://127.0.0.1:4273";
 
 export default defineConfig({
 	testDir: "./e2e",
+	/**
+	 * Playwright owns `*.spec.ts` in here. Vitest owns `*.test.mjs` (#413).
+	 *
+	 * Pinned because Playwright's DEFAULT `testMatch` is
+	 * `**\/*.@(spec|test).?(c|m)[jt]s?(x)` — it claims `.test.mjs` too. `e2e/build-inputs.mjs`
+	 * decides what gets built before any spec runs, and its unit tests live beside it rather
+	 * than in a package, so without this line `pnpm test:e2e` loads a vitest file and dies in
+	 * `createExpect` with "Vitest failed to access its internal state" — an error that names
+	 * neither the file nor the reason. Every spec in this directory is `.spec.ts`, so pinning
+	 * costs nothing and states the boundary once.
+	 */
+	testMatch: /.*\.spec\.ts$/,
 	timeout: 30_000,
 	expect: { timeout: 10_000 },
 	fullyParallel: true,

@@ -32,6 +32,14 @@ const UNIT_TESTS = [
 	// matches the defect it was written for — or that it stays quiet on correct code,
 	// which is the half that decides whether people fix a finding or suppress it.
 	"scripts/**/*.test.mjs",
+	// The e2e HARNESS, not the e2e specs (`*.spec.ts`, which Playwright owns and vitest
+	// must never pick up). `e2e/console-server.mjs` decides what gets BUILT before the
+	// specs run, and for two commits it decided wrong — it could not see the workspace
+	// package that supplies the Coding tab, so the suite graded yesterday's bundle
+	// (#413). The only way to observe that was a full Playwright run, where it presents
+	// as a spec failing for a reason unrelated to the spec. `.test.mjs`, so the glob
+	// cannot widen to `.spec.ts` by accident.
+	"e2e/**/*.test.mjs",
 ];
 
 export default defineConfig({
