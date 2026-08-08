@@ -111,10 +111,22 @@ export function useVoice(instanceId: string | undefined, opts: {
 	 *
 	 * The session is already torn down when this fires: TTS cut, the pending utterance
 	 * resolved (recovered via `onRecoveredText` if it held real words). See
-	 * {@link prepareConversationSwitch} — the same guard #279's agent-mediated transfer will
-	 * use, so the two triggers can never disagree about the mic.
+	 * {@link prepareConversationSwitch} and {@link leaveForSwitch} — the same teardown #279's
+	 * agent-mediated transfer takes, so the three triggers can never disagree about the mic.
 	 */
 	onNext?: (carry: { carryMode: VoiceMode | null }) => void;
+	/**
+	 * The user said "go back" (#279) — return them to the agent they were with before this one.
+	 *
+	 * The reversal of an agent-mediated transfer, and the reason the transfer is not a one-way
+	 * door: an agent hands you over, and without this the only way back in hands-free is the
+	 * screen. Enabled by passing a handler, exactly as `onNext` is, and torn down identically —
+	 * these are two destinations for one move, not two moves.
+	 *
+	 * It is NOT `next` with a different resolver: `next` returns you to the previous agent only
+	 * when that agent has an unread notification, and being transferred away does not raise one.
+	 */
+	onBack?: (carry: { carryMode: VoiceMode | null }) => void;
 	/**
 	 * The user said "scrap that" (#342) — they want the last turn gone.
 	 *
@@ -323,7 +335,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 								text,
 								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 								voiceLangRef.current,
-								commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
+								commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current, canBack: canBackRef.current }),
 							);
 							if (cmd) {
 								// Act NOW — the user asked for silence and should get it immediately,
@@ -444,6 +456,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 	/** Declared up top (like ctrlSttRef) because the four command call sites are defined ABOVE
 	 *  the teardown this needs — see `nextFromCommand`, assigned far below. */
 	const nextFromCommandRef = useRef<() => void>(() => {});
+	const onBackRef = useRef(opts.onBack);
+	onBackRef.current = opts.onBack;
+	/** "back" is only a COMMAND where something can act on it (#279) — same gate as canSwitch.
+	 *  Separate from it on purpose: a surface may be able to go forward and not back. */
+	const canBackRef = useRef(false);
+	canBackRef.current = !!opts.onBack;
+	/** The `back` twin of `nextFromCommandRef`, and declared here for the same reason. */
+	const backFromCommandRef = useRef<() => void>(() => {});
 	const onScrapRef = useRef(opts.onScrap);
 	onScrapRef.current = opts.onScrap;
 	/** "scrap" is only a COMMAND where something can act on it (#342). Same gate as canSwitch,
@@ -863,6 +883,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 			commandStateFor(isFinal ? "final" : "partial", {
 				muted: mutedRef.current,
 				canSwitch: canSwitchRef.current,
+				// #279: this listener is live exactly when the mic is closed — the agent talking or
+				// thinking — which is the moment a user realises they were handed somewhere they did
+				// not want. commandStateFor drops the flag on a partial, so only a finished "go back"
+				// can reach it here.
+				canBack: canBackRef.current,
 				echoing: isEchoing(readGuard(), Date.now()),
 			}),
 		);
@@ -872,6 +897,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// This listener is the ONLY one running while the agent speaks or thinks and the mic is
 		// closed — i.e. exactly when a hands-free user has nothing to look at and most wants out.
 		else if (cmd === "next") nextFromCommandRef.current();
+		else if (cmd === "back") backFromCommandRef.current();
 	}, [readGuard]);
 	const handleControlResultRef = useRef(handleControlResult);
 	handleControlResultRef.current = handleControlResult;
@@ -981,7 +1007,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 						combined,
 						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 						voiceLangRef.current,
-						commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
+						commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current, canBack: canBackRef.current }),
 					)
 				: null;
 			if (cmd) {
@@ -1022,6 +1048,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					commandsEnabled: commandsEnabledRef.current,
 					canScrap: canScrapRef.current,
 					canSwitch: canSwitchRef.current,
+					canBack: canBackRef.current,
 					muted: mutedRef.current,
 					words: { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 					lang: voiceLangRef.current,
@@ -1032,6 +1059,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (plan.action === "scrap") {
 					flushSync(() => clearVoiceText());
 					onScrapRef.current?.();
+					return;
+				}
+				// "go back" consumes the turn: the words would otherwise be fired at the agent being
+				// LEFT, which is the one the user just said they were done with. Cleared first, so the
+				// teardown has no pending utterance to "recover" the command itself into the composer
+				// of wherever we land.
+				if (plan.action === "back") {
+					flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					backFromCommandRef.current();
 					return;
 				}
 				if (plan.action === "repeat") {
@@ -1145,7 +1181,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// "final" — one of only two sites where a destructive command may be judged
 					// (#342). Tap-to-talk is also where the auto-VAD is off, so this really is the
 					// whole utterance the user chose to send, not a guess at where they stopped.
-					commandStateFor("final", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
+					commandStateFor("final", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current, canBack: canBackRef.current }),
 				);
 				if (cmd === "repeat") { repeatLastRef.current(); return; }
 				if (cmd === "mute") { muteFromCommandRef.current(); return; }
@@ -1153,6 +1189,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// clearVoiceText already ran in the flushSync above, so there is no pending
 				// utterance for the switch to mistake for words worth recovering.
 				if (cmd === "next") { nextFromCommandRef.current(); return; }
+				if (cmd === "back") { backFromCommandRef.current(); return; }
 			}
 			const sent = stripStopWord(text.trim(), stopWordsRef.current).text.trim();
 			if (sent) emitSendRef.current(sent);
@@ -1344,23 +1381,28 @@ export function useVoice(instanceId: string | undefined, opts: {
 	stopConvoRef.current = stopConvo;
 
 	/**
-	 * "next" voice command (#277) — hand the conversation to the agent that is asking for you.
+	 * END this agent's voice session because the conversation is moving, and answer with the mode
+	 * to reopen in on the far side.
 	 *
-	 * Unlike the other four commands this one does not change a setting: it ENDS the session on
-	 * this agent and asks the consumer to open another. The order is the whole reason the
-	 * decision is a pure function (`prepareConversationSwitch`) instead of four lines repeated at
-	 * each of the command call sites:
+	 * THREE triggers share this and must never disagree about the mic: "next" (#277 — the user
+	 * picks), "go back" (#279 — the user reverses a transfer), and an agent-mediated TRANSFER
+	 * (#279 — the destination arrives on the chat response, so there is no command at all and the
+	 * consumer calls this directly). They differ only in who chose the destination.
+	 *
+	 * Unlike every other command this does not change a setting: it ends the session here and lets
+	 * the consumer open another. The order is the whole reason the decision is a pure function
+	 * (`prepareConversationSwitch`) rather than four lines repeated at each call site:
 	 *
 	 *   1. resolve what the switch would destroy, from ONE snapshot;
 	 *   2. hand back any real words it would have destroyed (the #175 contract);
 	 *   3. cut the outgoing agent's TTS — it must not talk over the agent you arrive at;
-	 *   4. stop the mic here, and tell the consumer which mode to REOPEN it in over there.
+	 *   4. stop the mic here, and return which mode to REOPEN it in over there.
 	 *
-	 * `stopConvo` also releases the app-wide hands-free slot, so the session started on the
-	 * other agent claims it cleanly rather than racing a recognizer on its way out. The consumer
-	 * then navigates, which unmounts this hook — nothing after `onNext` may assume otherwise.
+	 * `stopConvo` also releases the app-wide hands-free slot, so the session started on the other
+	 * agent claims it cleanly rather than racing a recognizer on its way out. The consumer then
+	 * navigates, which unmounts this hook — nothing after this call may assume otherwise.
 	 */
-	const nextFromCommand = useCallback(() => {
+	const leaveForSwitch = useCallback((): VoiceMode | null => {
 		const prep = prepareConversationSwitch({
 			mode: resolveVoiceMode(convoOnRef.current, speakOnRef.current),
 			ttsSpeaking: !!ttsRef.current?.speaking,
@@ -1381,9 +1423,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 		setMuted(false);
 		stopConvoRef.current();
 		clearVoiceText();
-		onNextRef.current?.({ carryMode: prep.carryMode });
+		return prep.carryMode;
 	}, [clearVoiceText, gateSnapshot]);
+	const leaveForSwitchRef = useRef(leaveForSwitch);
+	leaveForSwitchRef.current = leaveForSwitch;
+
+	/** "next" (#277) — hand the conversation to the agent that is asking for you. */
+	const nextFromCommand = useCallback(() => {
+		onNextRef.current?.({ carryMode: leaveForSwitchRef.current() });
+	}, []);
 	nextFromCommandRef.current = nextFromCommand;
+
+	/** "go back" (#279) — return to the agent you were with before this one. Same teardown, a
+	 *  different destination; the consumer resolves which agent that is. */
+	const backFromCommand = useCallback(() => {
+		onBackRef.current?.({ carryMode: leaveForSwitchRef.current() });
+	}, []);
+	backFromCommandRef.current = backFromCommand;
 
 	// One hands-free session app-wide: entering hands-free stops any OTHER active session first,
 	// then claims the shared slot; leaving it (or unmounting) releases the slot. Keyed on convoOn
@@ -1685,5 +1741,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 		maybeSpeakResponse,
 		/** Speak text on demand (message replay), independent of auto-speak mode. */
 		speak,
+		/**
+		 * End this voice session because the conversation is moving, and get back the mode to
+		 * reopen in on the other side (#279). For the AGENT-MEDIATED transfer, which arrives on a
+		 * chat response rather than as a spoken command — so the consumer, not this hook, is what
+		 * knows a move is happening. Identical teardown to "next" and "go back": the same TTS cut,
+		 * the same #175 recovery of a half-spoken turn, the same release of the hands-free slot.
+		 */
+		leaveForSwitch,
 	};
 }

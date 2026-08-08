@@ -626,6 +626,65 @@ describe('splitTrailingCommand — "next" (#277)', () => {
 	});
 });
 
+describe('matchVoiceCommand — "back" (#279: reversing an agent-mediated transfer)', () => {
+	const CAN = { canBack: true };
+
+	it("fires when the utterance IS the phrase", () => {
+		expect(matchVoiceCommand("go back", undefined, "en", CAN)).toBe("back");
+		expect(matchVoiceCommand("Go back.", undefined, "en", CAN)).toBe("back");
+		expect(matchVoiceCommand("take me back", undefined, "en", CAN)).toBe("back");
+		expect(matchVoiceCommand("previous agent", undefined, "en", CAN)).toBe("back");
+	});
+
+	// The reason this command is whole-utterance only where "next" is not: every phrase for it is
+	// ordinary English in the middle of a sentence, and a whole-word run would fire on all of these.
+	it("a sentence that merely CONTAINS the phrase is a message", () => {
+		expect(matchVoiceCommand("let's go back and fix the parser", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("can you take me back to the previous version", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("what did the previous agent say", undefined, "en", CAN)).toBeNull();
+	});
+
+	it("is inert unless the consumer can actually go back", () => {
+		expect(matchVoiceCommand("go back", undefined, "en")).toBeNull();
+		expect(matchVoiceCommand("go back", undefined, "en", { canBack: false })).toBeNull();
+	});
+
+	// Same rule as "next", for the same reason: mute silences the microphone, not the ability to
+	// leave. Being unable to reverse a transfer without unmuting first puts the screen back in the
+	// loop at exactly the moment the user realises they are in the wrong conversation.
+	it("still fires while muted", () => {
+		expect(matchVoiceCommand("go back", undefined, "en", { muted: true, canBack: true })).toBe("back");
+	});
+
+	// "back to text" is an EXIT phrase and exit is checked first. Leaving voice is the smaller,
+	// recoverable reading of an ambiguous "back", so it keeps the phrase.
+	it("does not steal the exit vocabulary", () => {
+		expect(matchVoiceCommand("back to text", undefined, "en", CAN)).toBe("exit");
+	});
+
+	it("respects the per-language table", () => {
+		expect(matchVoiceCommand("回到上一个", undefined, "zh", CAN)).toBe("back");
+		expect(matchVoiceCommand("go back", undefined, "zh", CAN)).toBeNull();
+	});
+
+	// The other commands must behave exactly as before for a consumer that never opts in.
+	it("does not disturb the existing vocabulary", () => {
+		expect(matchVoiceCommand("next", undefined, "en", { canSwitch: true })).toBe("next");
+		expect(matchVoiceCommand("scrap that", undefined, "en", { canScrap: true })).toBe("scrap");
+		expect(matchVoiceCommand("mute", undefined, "en")).toBe("mute");
+	});
+});
+
+describe('splitTrailingCommand — "back" is deliberately not a candidate (#279)', () => {
+	it("leaves a trailing go-back in the message rather than acting on it", () => {
+		// "ask it about the parser, then take me back" is a sentence about a plan, not two
+		// instructions, and the trailing form cannot tell the difference.
+		const r = splitTrailingCommand("ask it about the parser, then take me back", undefined, "en", { canSwitch: true });
+		expect(r.command).toBeNull();
+		expect(r.text).toBe("ask it about the parser, then take me back");
+	});
+});
+
 describe('matchVoiceCommand — "scrap" (#342: the first DESTRUCTIVE command in the vocabulary)', () => {
 	const CAN = { canScrap: true };
 
@@ -704,8 +763,8 @@ describe("commandStateFor", () => {
 		// The three live-partial call sites pass `canScrap: true` and get `false` back. That is
 		// the point: the flag is refused on the way IN rather than never passed, so the rule
 		// cannot be undone by a reader who notices one site "missing" what its siblings have.
-		expect(commandStateFor("partial", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: false, judgeable: true, whole: false });
-		expect(commandStateFor("final", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: true, judgeable: true, whole: false });
+		expect(commandStateFor("partial", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: false, canBack: false, judgeable: true, whole: false });
+		expect(commandStateFor("final", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: true, canBack: false, judgeable: true, whole: false });
 	});
 
 	it("makes the same words a delete on a final and ordinary speech on a partial", () => {
@@ -727,8 +786,17 @@ describe("commandStateFor", () => {
 	});
 
 	it("passes muted and canSwitch through as booleans, defaulting to off", () => {
-		expect(commandStateFor("final", {})).toEqual({ muted: false, canSwitch: false, canScrap: false, judgeable: true, whole: false });
-		expect(commandStateFor("final", { muted: true, canSwitch: true })).toEqual({ muted: true, canSwitch: true, canScrap: false, judgeable: true, whole: false });
+		expect(commandStateFor("final", {})).toEqual({ muted: false, canSwitch: false, canScrap: false, canBack: false, judgeable: true, whole: false });
+		expect(commandStateFor("final", { muted: true, canSwitch: true })).toEqual({ muted: true, canSwitch: true, canScrap: false, canBack: false, judgeable: true, whole: false });
+	});
+
+	it("drops the go-back flag on a PARTIAL too, for a different reason than scrap's (#279)", () => {
+		// Not destructiveness — every phrase for "back" is ordinary speech, and a partial is exactly
+		// "go back" on the way to "go back and fix the parser". Same treatment, refused on the way IN.
+		expect(commandStateFor("partial", { canBack: true }).canBack).toBe(false);
+		expect(commandStateFor("final", { canBack: true }).canBack).toBe(true);
+		expect(matchVoiceCommand("go back", undefined, "en", commandStateFor("partial", { canBack: true }))).toBeNull();
+		expect(matchVoiceCommand("go back", undefined, "en", commandStateFor("final", { canBack: true }))).toBe("back");
 	});
 });
 

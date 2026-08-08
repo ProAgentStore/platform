@@ -46,6 +46,7 @@ import {
 	ensureStateDefaults,
 } from "./agent-do-prompt.js";
 import { runAgentThink } from "./agent-think.js";
+import type { ConversationTransfer } from "./lib/conversation-transfer.js";
 import {
 	buildRepoOverview,
 	extractTextFiles,
@@ -485,7 +486,7 @@ export class AgentDO extends DurableObject<Env> {
 			} satisfies InflightTurn)
 			.catch(() => undefined);
 		try {
-			const { response, toolCalls } = await this.think(state, engine, userId, delegation);
+			const { response, toolCalls, transfer } = await this.think(state, engine, userId, delegation);
 
 			// Save tool calls as a system message (visible in chat)
 			let toolMsg: AgentMessage | undefined;
@@ -526,7 +527,12 @@ export class AgentDO extends DurableObject<Env> {
 					});
 			}
 
-			return json({ message: assistantMsg, toolMessage: toolMsg });
+			// #279: the destination the user asked to be moved to, on the response they are already
+			// awaiting. It is attached HERE and nowhere else in this DO — not on a broadcast, not on a
+			// system message, not on the message list — because a channel a client polls could deliver
+			// a move nobody asked for, and this one physically cannot: it exists only as the answer to
+			// a sentence the user just spoke. See lib/conversation-transfer.ts.
+			return json({ message: assistantMsg, toolMessage: toolMsg, ...(transfer ? { transfer } : {}) });
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
 			const status =
@@ -654,7 +660,7 @@ export class AgentDO extends DurableObject<Env> {
 		engine: AgentStorageEngine,
 		userId?: string,
 		delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null },
-	): Promise<{ response: string; toolCalls: string[] }> {
+	): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
 		const tasks = await this.getAllTasks();

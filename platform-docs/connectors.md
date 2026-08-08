@@ -42,7 +42,7 @@ resolved before the run and is refused at dispatch instead.
 | `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 | `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
-| `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write) |
+| `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write), `transfer_conversation` (write) |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 
@@ -236,6 +236,26 @@ refused → `list_subordinates` → `subordinate_status(uuid)`), and that refusa
 refusal is now `success: false`. Each subordinate's `repo` block also carries `githubRepo` — the
 repository's `owner/name` on GitHub, the only value a GitHub tool accepts; `repo.name` is a display
 label that may look like a path and not be one.
+
+**A supervisor can hand you over, when you ask** (#279). `transfer_conversation` moves the *person*
+to another agent in the same graph — "put me through to the FWS coder" — and is the only tool on the
+platform that acts on the browser rather than on the world. It is write-scoped, so the per-instance
+write-consent gate covers it like any other write, and the destination is resolved server-side
+through the same `resolveSubordinate` the tools above use: a name that is not in the graph is
+refused, and an ambiguous one is refused rather than guessed, so untrusted text an agent has read
+cannot become a navigation.
+
+What makes it safe is the CHANNEL, not a rule the model is asked to follow. The destination travels
+on the response to the chat turn the browser is already awaiting — so it is consumed once (no
+replay on reload), it costs no extra round trip, and it **cannot carry a spontaneous transfer**,
+because there is no response to put one on unless the user just spoke. An agent that decides
+mid-loop you should be elsewhere has `notifyUser` plus the spoken "next" command, which is an offer
+you accept with a word. Nothing is written into the destination instance: the handing agent's note
+is read *aloud to you* on arrival and never into the other agent's transcript, so the marketplace's
+storage isolation is untouched and the claim one agent makes about what you want stays correctable
+by the only party who can correct it. Arrival is always announced by name, and the spoken **"go
+back"** command returns you — it moves you back, and does not undo anything you said while you were
+there.
 
 **The Lead owns direction, each subordinate owns tasks** (#330). A supervisor could say what its
 agents had *done* — `subordinate_status` reports every subordinate's board cards, runs, repo state

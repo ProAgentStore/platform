@@ -45,9 +45,11 @@ export type ImmediateCommand = Extract<VoiceCommand, "mute" | "unmute" | "exit">
 /**
  * What closing a hands-free turn does.
  *
- * `scrap` and `repeat` CONSUME the turn — there is nothing left to send, by different logic:
- * scrap matches whole-utterance only (so there is no message half), and repeat asks to hear the
- * LAST reply, which sending a new message first would replace.
+ * `scrap`, `back` and `repeat` CONSUME the turn — there is nothing left to send, by different
+ * logic: scrap and back match whole-utterance only (so there is no message half), and repeat asks
+ * to hear the LAST reply, which sending a new message first would replace. `back` (#279) consumes
+ * it rather than sending first because the words would be fired at the agent you are LEAVING —
+ * the one you just said you were done with.
  *
  * `send` and `none` both carry the command to apply FIRST and whether to leave afterwards, so a
  * turn can be all three things at once: "run the tests, mute" mutes and sends, "next" sends
@@ -56,6 +58,7 @@ export type ImmediateCommand = Extract<VoiceCommand, "mute" | "unmute" | "exit">
  */
 export type FinalizedTurn =
 	| { action: "scrap" }
+	| { action: "back" }
 	| { action: "repeat" }
 	| { action: "send"; text: string; command: ImmediateCommand | null; switchAfter: boolean }
 	| { action: "none"; command: ImmediateCommand | null; switchAfter: boolean };
@@ -65,9 +68,10 @@ export type FinalizedTurn =
  * the max-duration timer, so all three close a turn identically.
  *
  * The order is the content:
- *   1. `scrap` (#342) — BEFORE the splitter, which deliberately does not know the word.
- *      Judged on this whole, finished utterance and only when the consumer enabled it; with it
- *      off, "scrap that" is ordinary speech and gets sent, which is the conservative half.
+ *   1. `scrap` (#342) and `back` (#279) — BEFORE the splitter, which deliberately does not know
+ *      either word. Both are judged on this whole, finished utterance and only when the consumer
+ *      enabled them; with either off, the phrase is ordinary speech and gets sent, which is the
+ *      conservative half.
  *   2. the trailing control word — applied, with what came before it KEPT as the message.
  *   3. the stop-word — stripped from whatever survived step 2.
  * A turn that was only a command leaves nothing to send, and says so rather than sending "".
@@ -80,6 +84,8 @@ export function planFinalizedTurn(
 		canScrap: boolean;
 		/** The consumer can move to another agent (#277). */
 		canSwitch: boolean;
+		/** The consumer can return to the agent before this one (#279). Off ⇒ ordinary speech. */
+		canBack?: boolean;
 		muted: boolean;
 		words?: VoiceCommandWords;
 		lang?: string;
@@ -92,6 +98,13 @@ export function planFinalizedTurn(
 		matchVoiceCommand(msg, cfg.words, cfg.lang, commandStateFor("final", { muted: cfg.muted, canScrap: true })) === "scrap"
 	) {
 		return { action: "scrap" };
+	}
+	if (
+		cfg.commandsEnabled &&
+		cfg.canBack &&
+		matchVoiceCommand(msg, cfg.words, cfg.lang, commandStateFor("final", { muted: cfg.muted, canBack: true })) === "back"
+	) {
+		return { action: "back" };
 	}
 	let body = msg;
 	let command: ImmediateCommand | null = null;

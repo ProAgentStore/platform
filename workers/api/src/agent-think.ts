@@ -15,6 +15,7 @@ import { parseAccountPreferences } from "./lib/preferences.js";
 import { clockPrompt } from "./lib/agent-clock.js";
 import { stableStringify } from "./lib/stable-json.js";
 import { fenceUntrusted } from "./lib/untrusted-fence.js";
+import { transferFromToolResults, type ConversationTransfer } from "./lib/conversation-transfer.js";
 import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { resolveStatsCards, statsPromptBlock } from "./lib/stats-schema.js";
@@ -156,7 +157,10 @@ export async function runAgentThink(opts: {
 	 *    rendered as one tree.
 	 */
 	delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null };
-}): Promise<{ response: string; toolCalls: string[] }> {
+	// Returns `transfer` (#279) only on a turn where `transfer_conversation` ran — which is the
+	// whole safety argument: there is no response to put it on unless the user just spoke, so this
+	// field cannot carry a move nobody asked for. See lib/conversation-transfer.ts.
+}): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> {
 	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
 
@@ -686,6 +690,10 @@ export async function runAgentThink(opts: {
 	}
 
 	const allToolLog: string[] = [];
+	// Every registry result this turn produced, kept only so the destination can be read back out
+	// of them at each exit. A transfer set in round 2 must still travel when round 3 calls no
+	// tools and returns early — an accumulator, not a flag set at the last place it was seen.
+	const registryResults: { success: boolean; transfer?: ConversationTransfer }[] = [];
 	const storageToolNames = storageToolNameSet();
 	const registryToolNames = registryToolNameSet();
 	// Multi-step tasks (e.g. read goal + list files + fetch job page, THEN
@@ -717,7 +725,7 @@ export async function runAgentThink(opts: {
 	 * Repo Coder's invented `<tool_response>` blocks reached the transcript: three GitHub issues
 	 * quoted by number and title from a tool that never ran, which the user then acted on.
 	 */
-	const deliver = async (reply: ParsedReply): Promise<{ response: string; toolCalls: string[] }> => {
+	const deliver = async (reply: ParsedReply): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> => {
 		const honest = await honestReply({
 			reply,
 			executed: executedTools,
@@ -750,7 +758,12 @@ export async function runAgentThink(opts: {
 				traceId: delegation?.traceId ?? null,
 			});
 		}
-		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, honest.notices) };
+		// #279: the destination the user asked to be moved to, read back out of the turn's registry
+		// results at the ONE exit — so a transfer resolved in round 2 still travels when a later
+		// round calls no tools and returns early. Null for every turn that did not run the tool,
+		// which is the property that keeps the response channel honest.
+		const transfer = transferFromToolResults(registryResults);
+		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, honest.notices), ...(transfer ? { transfer } : {}) };
 	};
 
 	for (let round = 0; round < maxToolRounds; round++) {
@@ -850,7 +863,7 @@ export async function runAgentThink(opts: {
 				// where the request and the result name different tools is unreadable.
 				toolResult = { name: tc.name, content: r.content, success: r.success };
 			} else if (registryToolNames.has(tc.name)) {
-					toolResult = await runRegistryTool(
+					const registry = await runRegistryTool(
 						tc.name,
 						{
 							env,
@@ -865,6 +878,14 @@ export async function runAgentThink(opts: {
 						},
 						(tc.arguments ?? {}) as Record<string, unknown>,
 					);
+					// The two halves of a registry result are kept APART on purpose (#279). What the
+					// model reads is text and goes on to the transcript and the `tool_call` broadcast;
+					// a destination for the browser is neither, and passing the whole object through
+					// would put it on that broadcast — a push channel, which is exactly the shape this
+					// design declined to build. The `toolResult` below is rebuilt field by field so a
+					// client directive cannot ride out on it by accident.
+					registryResults.push({ success: registry.success, ...(registry.transfer ? { transfer: registry.transfer } : {}) });
+					toolResult = { name: registry.name, content: registry.content, success: registry.success };
 				} else if (storageToolNames.has(tc.name)) {
 				toolResult = await executeStorageTool(
 					{ name: tc.name, input: tc.arguments },

@@ -356,10 +356,12 @@ describe("command matcher call sites", () => {
 	 * that must pass the kind through rather than name it, so it is pinned separately instead of
 	 * being allowed to vanish from the count.
 	 */
-	it("keeps two partial sites, two final ones, and one that passes the kind through", () => {
+	it("keeps two partial sites, three final ones, and one that passes the kind through", () => {
 		const all = Object.values(sources).join("\n");
 		expect(all.match(/commandStateFor\("partial"/g)?.length, "the gate, the interim keyword path").toBe(2);
-		expect(all.match(/commandStateFor\("final"/g)?.length, "the finished hands-free turn, the push-to-talk final").toBe(2);
+		// Three, since #279: `planFinalizedTurn` judges "scrap" and "back" as separate whole-utterance
+		// questions before the splitter runs, and the push-to-talk final is the third.
+		expect(all.match(/commandStateFor\("final"/g)?.length, "scrap and back on a finished turn, the push-to-talk final").toBe(3);
 		expect(all.match(/commandStateFor\(isFinal \? "final" : "partial"/g)?.length, "the always-on control listener").toBe(1);
 	});
 

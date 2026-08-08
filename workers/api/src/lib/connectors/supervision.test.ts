@@ -882,3 +882,65 @@ describe("direction — the Lead's epic for one agent", () => {
 		expect(src).not.toMatch(/setBy:\s*"user"/);
 	});
 });
+
+describe("transfer_conversation — moving the PERSON (#279)", () => {
+	it("is a WRITE tool on the supervision connector, so write-consent gates it like any other", () => {
+		// Deliberately not special-cased. Moving somebody is the most consequential thing here, and
+		// "this agent may move me" belongs in the place the owner turned everything else on (#90).
+		expect(tool("transfer_conversation").scope).toBe("write");
+		expect(tool("transfer_conversation").connector).toBe("supervision");
+	});
+
+	it("resolves the destination against the GRAPH, by the name the user said", async () => {
+		const r = await tool("transfer_conversation").handler(ctx(buildEnv()) as never, { instanceId: "Repo Coder", note: "about the parser" });
+		expect(r.success).toBe(true);
+		expect(r.transfer).toEqual({ instanceId: "sub", name: "Repo Coder", note: "about the parser" });
+	});
+
+	it("survives a transcriber's full stop, because a spoken name is what reaches it", async () => {
+		// #392's normalisation, exercised on the caller that made it matter: a voice user says
+		// "transfer me to Repo Coder" and the transcript carries the punctuation.
+		const r = await tool("transfer_conversation").handler(ctx(buildEnv()) as never, { instanceId: "Repo Coder." });
+		expect(r.success).toBe(true);
+		expect(r.transfer?.instanceId).toBe("sub");
+	});
+
+	it("refuses an agent outside the graph, and carries no destination when it does", async () => {
+		// The refusal is the whole scoping story: a Repo Coder reads untrusted repo files and issue
+		// bodies, and without this, injected text naming an agent would be a navigation.
+		const r = await tool("transfer_conversation").handler(ctx(buildEnv()) as never, { instanceId: "someone-elses-agent" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/do not supervise/i);
+		expect(r.transfer).toBeUndefined();
+	});
+
+	it("refuses an ambiguous name rather than guessing which agent to send you to", async () => {
+		const env = buildEnv({
+			edges: [["sup", "a"], ["sup", "b"]],
+			instances: [
+				{ id: "a", status: "active", config: null, agent_name: "FAS platform" },
+				{ id: "b", status: "active", config: null, agent_name: "FAS platform 2" },
+			],
+		});
+		// Exact wins outright, so the fully-typed name still resolves — this is the FUZZY case.
+		const fuzzy = await tool("transfer_conversation").handler(ctx(env) as never, { instanceId: "FAS" });
+		expect(fuzzy.success).toBe(false);
+		expect(fuzzy.content).toMatch(/name one exactly/i);
+		expect((await tool("transfer_conversation").handler(ctx(env) as never, { instanceId: "FAS platform" })).success).toBe(true);
+	});
+
+	it("will not strand anyone on a canceled subscription", async () => {
+		// Its console page cannot load, so the move would end with the mic reopening into a dead
+		// route — worse than not moving, and invisible to a user who is not looking.
+		const env = buildEnv({ instances: [{ id: "sub", status: "canceled", config: null, agent_name: "Repo Coder" }] });
+		const r = await tool("transfer_conversation").handler(ctx(env) as never, { instanceId: "Repo Coder" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/canceled/i);
+		expect(r.transfer).toBeUndefined();
+	});
+
+	it("tells the model the move already happened, so it stops talking", async () => {
+		const r = await tool("transfer_conversation").handler(ctx(buildEnv()) as never, { instanceId: "sub", note: "about the parser" });
+		expect(r.content).toMatch(/no longer reading/i);
+	});
+});

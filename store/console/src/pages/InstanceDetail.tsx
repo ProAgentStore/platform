@@ -13,6 +13,7 @@ import { useVoice, buildTranscribePrompt, resolveVoiceStatus, resolveComposer } 
 import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { useConversation, useConversationSwitch } from "../lib/ConversationContext";
+import { parseChatTransfer, type ChatTransfer } from "../lib/transfer";
 import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
@@ -221,7 +222,7 @@ function InstancePage() {
 	// The conversation, as the whole app sees it (#277/#278). Read here so this page can report
 	// who you are talking to, and so "next" has one switch primitive to go through.
 	const { setConversation, detachConversation, takeHandoff } = useConversation();
-	const { switchToNext } = useConversationSwitch();
+	const { switchTo, switchToNext, switchBack } = useConversationSwitch();
 	// The name is read from a callback that runs long after the render that built it, and the
 	// instance loads asynchronously — so the announcement gets the live name, not "".
 	const instanceNameRef = useRef("");
@@ -257,6 +258,24 @@ function InstancePage() {
 				// before we knew whether there was anywhere to go (it must — a hands-free mic left
 				// open across the lookup would capture speech destined for nobody), so put the user
 				// back in the mode they were in before saying why nothing happened.
+				if (carryMode && carryMode !== "text") await voiceRef.current.setVoiceMode(carryMode);
+				if (r.say) await voiceRef.current.speak(r.say);
+			})();
+		},
+		/**
+		 * "go back" (#279) — the reversal of an agent-mediated transfer.
+		 *
+		 * Same shape as `onNext`, and passed here for the same reason: this is the only surface
+		 * that can change which agent you are talking to, so everywhere else the words stay
+		 * ordinary speech. Shipped WITH the transfer deliberately — an agent that can move you,
+		 * with no way back, is a one-way door, and in hands-free the only alternative way back is
+		 * the screen.
+		 */
+		onBack: ({ carryMode }) => {
+			if (!id) return;
+			void (async () => {
+				const r = await switchBack({ instanceId: id, name: instanceNameRef.current || "this agent", mode: carryMode });
+				if (r.moved) return;
 				if (carryMode && carryMode !== "text") await voiceRef.current.setVoiceMode(carryMode);
 				if (r.say) await voiceRef.current.speak(r.say);
 			})();
@@ -599,11 +618,17 @@ function InstancePage() {
 		const { audioKey, dictation } = meta ?? {};
 		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString(), audioKey, dictation }]);
 		setThinking(true);
+		// #279: the destination an agent resolved when the user asked to be handed over. It rides
+		// on THIS response and nowhere else — no poll reads it, no socket carries it — which is
+		// what makes it consumed-once and makes a move nobody asked for structurally impossible:
+		// there is no response unless the user just spoke. See lib/transfer.ts.
+		let transfer: ChatTransfer | null = null;
 		try {
-			const data = await api<{ message?: Message; toolMessage?: Message }>(
+			const data = await api<{ message?: Message; toolMessage?: Message; transfer?: unknown }>(
 				`/v1/instances/${id}/chat`,
 				{ method: "POST", body: JSON.stringify({ message: msg, audioKey, dictation }) },
 			);
+			transfer = parseChatTransfer(data);
 			if (data.toolMessage) {
 				setMessages((prev) => [...prev, data.toolMessage!]);
 			}
@@ -613,7 +638,10 @@ function InstancePage() {
 				// covers the wait; a slow/failed gloss falls back to lazy fill-in).
 				if (data.message.role === "assistant") await glossReplyRef.current(data.message.content);
 				setMessages((prev) => [...prev, data.message!]);
-				speakRef.current(data.message.content);
+				// Not spoken when we are leaving: this page is about to unmount, so the utterance
+				// would be cut off a word in — and the announcement on the OTHER side is the line
+				// that matters, because it says who is listening now.
+				if (!transfer) speakRef.current(data.message.content);
 			} else {
 				setMessages((prev) => [...prev, { role: "system", content: "No response. Check Profile → API Keys.", createdAt: new Date().toISOString() }]);
 			}
@@ -624,9 +652,18 @@ function InstancePage() {
 			]);
 		}
 		setThinking(false);
+		if (transfer) {
+			// The SAME teardown "next" and "go back" take — TTS cut, a half-spoken turn recovered
+			// (#175), the hands-free slot released — so three triggers cannot disagree about the
+			// mic. `carryMode` rides the baton, so hands-free survives the move; `announce` is never
+			// suppressed, because a silent move means the next sentence goes to an agent the user
+			// did not know they were talking to.
+			const carryMode = voiceRef.current.leaveForSwitch();
+			switchTo({ instanceId: transfer.instanceId, name: transfer.name }, { mode: carryMode, reason: transfer.note });
+		}
 		// #158: no client-side continuation. When a loop is running the SERVER sends the next
 		// instruction; a kick from here would race the workflow and double-send.
-	}, [id]);
+	}, [id, switchTo]);
 
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;

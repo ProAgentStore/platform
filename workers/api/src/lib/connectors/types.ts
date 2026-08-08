@@ -25,6 +25,7 @@
  */
 import type { Env } from "../../types.js";
 import type { ConnectorGrant } from "../connector-grants.js";
+import type { ConversationTransfer } from "../conversation-transfer.js";
 
 // ── The tool contract (was lib/tool-registry.ts) ─────────────────────────────
 
@@ -88,6 +89,18 @@ export interface RegistryToolCtx {
 export interface RegistryToolResult {
 	content: string;
 	success: boolean;
+	/**
+	 * A destination for the CLIENT to move the conversation to (#279) — the one tool result that
+	 * acts on the browser rather than on the world.
+	 *
+	 * Optional and unread by every surface but one: the chat runtime lifts it onto the response the
+	 * browser is already awaiting, and the `/v1/instances/:id/tools` route, the pipeline binder and
+	 * MCP all keep only `content`/`success` and drop it. That is not an oversight — a transfer is
+	 * only meaningful when a person is on the other end of the request, and dropping it everywhere
+	 * else is what stops it becoming a general "agent steers the app" channel. See
+	 * lib/conversation-transfer.ts for why the response is the whole security argument.
+	 */
+	transfer?: ConversationTransfer;
 }
 
 /** A draft-07 JSON Schema for a tool's input — an object schema with typed properties.

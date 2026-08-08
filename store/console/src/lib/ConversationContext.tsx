@@ -30,6 +30,7 @@ import type { VoiceMode } from "@proagentstore/sdk/hooks";
 import type { ConversationSnapshot } from "./conversation";
 import { announceSwitch, nothingWaitingLine } from "./conversation";
 import { pickNextConversation, type NotificationLike, type RosterEntry } from "./nextAgent";
+import { backFromLine, noWayBackLine, resolveGoBack } from "./transfer";
 
 /** The one-shot instruction the arriving instance page consumes. */
 export interface ConversationHandoff {
@@ -191,5 +192,38 @@ export function useConversationSwitch() {
 		[lastEngagedId, switchTo],
 	);
 
-	return { switchTo, switchToNext };
+	/**
+	 * "go back": return to the agent you were with before this one (#279).
+	 *
+	 * The reversal of an agent-mediated transfer, and the reason shipping one is not shipping a
+	 * one-way door — an agent hands you over, and in hands-free the only other way back is the
+	 * screen, which is the failure this whole area exists to remove.
+	 *
+	 * Its own resolver rather than `switchToNext`'s, for the reason `resolveGoBack` states: `next`
+	 * returns you to `lastEngagedId` only when that agent has an unread notification, and being
+	 * transferred away does not raise one. Same `{moved, say}` contract, and for the same reason —
+	 * staying put has to put the user back in the mode they were in before saying why.
+	 */
+	const switchBack = useCallback(
+		async (from: { instanceId: string; name: string; mode: VoiceMode | null }): Promise<{ moved: boolean; say?: string }> => {
+			// Cheap refusal first: with nowhere to go there is no reason to spend a request.
+			if (!lastEngagedId) return { moved: false, say: noWayBackLine(from.name) };
+			let roster: RosterEntry[] = [];
+			try {
+				roster = (await api<{ instances: RosterEntry[] }>("/v1/instances/my/instances")).instances ?? [];
+			} catch {
+				return { moved: false, say: "I couldn't check where you came from just now." };
+			}
+			const pick = resolveGoBack({ roster, lastEngagedId, currentId: from.instanceId });
+			if (!pick) return { moved: false, say: noWayBackLine(from.name) };
+			// `announce` is never passed: a transfer and its reversal both move the conversation
+			// without the user touching anything, so the destination must always be spoken. The
+			// silent form is for a tap on the indicator, where they are looking at what they clicked.
+			switchTo(pick, { mode: from.mode, reason: backFromLine(from.name) });
+			return { moved: true };
+		},
+		[lastEngagedId, switchTo],
+	);
+
+	return { switchTo, switchToNext, switchBack };
 }

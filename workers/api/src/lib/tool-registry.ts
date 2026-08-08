@@ -30,6 +30,7 @@ import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 // Moved to its own leaf module for #345, so `connectors/supervision.ts` can share it: importing
 // this file from there would close a cycle (this file imports the connector registry).
 import { accountTimeZone } from "./account-timezone.js";
+import type { ConversationTransfer } from "./conversation-transfer.js";
 
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
@@ -385,12 +386,20 @@ export function registryConnectorGroups(): Array<{ connector: string; tools: str
 	return [...byConnector.entries()].map(([connector, tools]) => ({ connector, tools }));
 }
 
-/** Run a registry tool, wrapping errors into a ToolCallResult-compatible shape. */
+/**
+ * Run a registry tool, wrapping errors into a ToolCallResult-compatible shape.
+ *
+ * `transfer` (#279) is carried through UNCHANGED from the handler's result and is the only field
+ * here that is not text: it is a destination for the browser, and it is meaningful on exactly one
+ * of this function's callers. Every other caller assigns the result to a `ToolCallResult` and the
+ * extra key falls on the floor, which is the behaviour that keeps a client directive from leaking
+ * onto a pipeline step or an MCP call — see lib/conversation-transfer.ts.
+ */
 export async function runRegistryTool(
 	name: string,
 	ctx: RegistryToolCtx,
 	input: Record<string, unknown>,
-): Promise<{ name: string; content: string; success: boolean }> {
+): Promise<{ name: string; content: string; success: boolean; transfer?: ConversationTransfer }> {
 	const tool = REGISTRY.get(name);
 	if (!tool) return { name, content: `Unknown tool: ${name}`, success: false };
 	// Declared-capability gate (#381), FIRST because it is the cheapest and the most fundamental:
@@ -456,7 +465,7 @@ export async function runRegistryTool(
 				context: { tool: name, scope: tool.scope, onBehalfOf: ctx.onBehalfOf, success: r.success },
 			}).catch(() => undefined);
 		}
-		return { name, content: r.content, success: r.success };
+		return { name, content: r.content, success: r.success, ...(r.transfer ? { transfer: r.transfer } : {}) };
 	} catch (err) {
 		return { name, content: `Error: ${err instanceof Error ? err.message : String(err)}`, success: false };
 	}

@@ -157,7 +157,16 @@ const PINS = {
 	// that said nothing, and is now a durable `client:voice` row plus a notice that deliberately does
 	// not expire; both come out of `planRestartBail` in convo.ts, so what landed here is the dispatch
 	// and the reason the notice outlives the ones above it.
-	"packages/sdk/src/voice/use-voice.ts": 1692,
+	// +64 for #279, and the change is a net simplification wearing extra length. `nextFromCommand`
+	// was one callback that both TORE THE SESSION DOWN and told the consumer where to go; it is now
+	// `leaveForSwitch` (the teardown, returning the mode to carry) plus two two-line callbacks that
+	// name a destination. That seam is what lets a THIRD trigger — the agent-mediated transfer,
+	// which arrives on a chat response and so is not a command at all — take the identical path
+	// rather than reimplementing the TTS cut, the #175 recovery and the hands-free slot release.
+	// The rest is the `back` command threaded through the five existing matcher call sites, with
+	// each site saying whether it may judge the word (only a final may) — the same shape `canScrap`
+	// already has, and for the same class of reason.
+	"packages/sdk/src/voice/use-voice.ts": 1756,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -170,7 +179,15 @@ const PINS = {
 	// the door closing, and why a bail needs both a notice and a durable row. A split along
 	// "commands" / "session control" is available later if this keeps growing; today it would put the
 	// restart guard on one side of a line and the thing that reports its failure on the other.
-	"packages/sdk/src/voice/convo.ts": 845,
+	// +64 for #279 ("go back"), and about fifty of them are the reasoning. The code is one phrase
+	// table, one union member, one field, two matcher branches and one derived flag. The prose is
+	// why this command takes `scrap`'s whole-utterance/final-only treatment instead of `next`'s:
+	// every phrase for it — "go back", "take me back", "previous agent" — is ordinary English in
+	// the middle of a sentence, so BOTH of the rules the rest of this file uses fire on ordinary
+	// speech, including the whole-utterance rule applied to a partial. That reasoning has to live
+	// beside the table it constrains, because the failure it prevents is a reader "fixing" the
+	// inconsistency between this command and its neighbour.
+	"packages/sdk/src/voice/convo.ts": 909,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -238,7 +255,13 @@ const PINS = {
 	// that would break it, so the pointer has to sit where someone adding a condition would read
 	// it. A line of prose bought against a 1,400-line pin, and the cheapest of the three things
 	// that keep this invariant true.
-	"store/console/src/pages/InstanceDetail.tsx": 1404,
+	// +37 at #279: the chat response may now carry a destination, and the page acts on it. Three
+	// slices — the `onBack` handler (the mirror of `onNext`), reading the destination off the
+	// awaited POST, and the switch itself. Not split, and the reason is the guard in
+	// lib/transfer.test.ts: the destination must be read in exactly ONE place and that place must
+	// be the send path, because a second reader would silently remove the property the whole design
+	// rests on. Every decision it makes is pure and lives in lib/transfer.ts with its tests.
+	"store/console/src/pages/InstanceDetail.tsx": 1441,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -319,7 +342,12 @@ const PINS = {
 	// saying which of the three things a delete removes and, more importantly, which it cannot.
 	// Raised rather than split: it belongs beside the clear it must not diverge from, and the
 	// DECISION it encodes (what a turn IS) is pure and lives in lib/chat-turns.ts.
-	"workers/api/src/agent-do.ts": 1134,
+	// +6 for #279: the chat turn's response now carries the destination the user asked to be moved
+	// to. Raised rather than split, and the six lines are five of comment and one of code — the
+	// spread onto the existing `json(...)`. The comment is the load-bearing part: it says the field
+	// is attached HERE and on no broadcast, no system message and no poll, which is the property
+	// that makes a move nobody asked for impossible rather than merely discouraged.
+	"workers/api/src/agent-do.ts": 1140,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -365,7 +393,14 @@ const PINS = {
 	// final answer after the loop was never parsed at all, and that is where three invented GitHub
 	// issues reached the user" will eventually restore a raw return. security-invariants.test.ts
 	// holds the ground the pin cannot.
-	"workers/api/src/agent-think.ts": 934,
+	// +21 for #279: a registry tool may now hand back a destination for the CLIENT as well as text
+	// for the model, so the loop accumulates the two halves separately and `deliver` — #395's single
+	// exit, which is exactly the seam this needed — reads the destination back out. An accumulator
+	// rather than a flag, because a transfer resolved in one round must still travel when a later
+	// round calls no tools and returns early. The tool result handed on to the model and the
+	// `tool_call` broadcast is rebuilt field by field, so a client directive cannot ride out on a
+	// push channel. Picking the destination is pure and lives in lib/conversation-transfer.ts.
+	"workers/api/src/agent-think.ts": 955,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

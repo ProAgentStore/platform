@@ -154,7 +154,7 @@ export function resolveVoiceStatus(input: {
 }
 
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
-export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit" | "next" | "scrap";
+export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit" | "next" | "back" | "scrap";
 
 /** Per-instance overrides for the command keywords (Settings → Voice). Empty/absent =
  *  use the built-in defaults for repeat/mute/unmute/exit/next; stop-words are OFF unless configured.
@@ -170,6 +170,9 @@ export interface VoiceCommandWords {
 	exit?: string[];
 	/** Phrases that move you to the next agent asking for you (#277). */
 	next?: string[];
+	/** Phrases that return you to the agent you were with before this one (#279). Whole-utterance
+	 *  AND final-only — see BACK_BY_LANG. */
+	back?: string[];
 	/** Phrases that scrap the last turn (#342). Whole-utterance ONLY — see SCRAP_BY_LANG. */
 	scrap?: string[];
 	/**
@@ -268,6 +271,47 @@ const NEXT_BY_LANG: Record<string, string[]> = {
 	ja: ["次", "エージェント切り替え"],
 	ko: ["다음", "에이전트 전환"],
 	hi: ["अगला", "एजेंट बदलो"],
+};
+
+/**
+ * "Go back" phrasings per language (#279) — return to the agent you were with before this one.
+ *
+ * This is the reversal of an agent-mediated TRANSFER, and shipping the transfer without it would
+ * ship a one-way door: an agent hands you to another agent, and in hands-free the only way back is
+ * the screen — which is the exact failure the whole feature exists to remove. It is deliberately
+ * NOT `next`: `next` returns you to the previous agent only if that agent has an unread
+ * notification, and being transferred AWAY from an agent does not notify you about it, so "next"
+ * would either do nothing or take you somewhere third.
+ *
+ * ── Matched like `scrap`, not like `next`, and the reason is the partial
+ *
+ * Every phrase here is ordinary English in the middle of a sentence — "let's go back and fix the
+ * parser", "can you take me back to the previous version". The two rules the rest of this file
+ * uses both fire on those:
+ *
+ *   - the multi-word rule matches a whole-word run ANYWHERE, so "go back" fires inside the first;
+ *   - the whole-utterance rule applied to a PARTIAL fires too, because the recognizer's guess at a
+ *     sentence still being spoken is momentarily exactly "go back" on the way to the rest of it.
+ *
+ * So `back` takes `scrap`'s treatment (#342): whole-utterance AND judged on FINAL transcripts only
+ * ({@link commandStateFor}). "Go back." moves you; "we should go back and fix that" is a message.
+ * That costs a beat — the move lands when the recognizer closes the utterance rather than mid-word
+ * — which is the right trade for a command that changes who is listening to you.
+ *
+ * No bare single word. "Back" alone is a plausible one-word answer to an agent's question, and
+ * this list must not be reachable by a slip of the recogniser.
+ */
+const BACK_BY_LANG: Record<string, string[]> = {
+	en: ["go back", "take me back", "switch back", "go back to the previous agent", "previous agent"],
+	es: ["volver", "vuelve al agente anterior", "agente anterior"],
+	fr: ["reviens en arrière", "agent précédent", "ramène moi"],
+	de: ["zurück zum vorherigen agenten", "vorheriger agent", "bring mich zurück"],
+	it: ["torna indietro", "agente precedente"],
+	pt: ["voltar atrás", "agente anterior", "me leve de volta"],
+	zh: ["回到上一个", "上一个代理", "带我回去"],
+	ja: ["前のエージェントに戻って", "戻って"],
+	ko: ["이전 에이전트로", "돌아가 줘"],
+	hi: ["वापस ले चलो", "पिछला एजेंट"],
 };
 
 /**
@@ -467,12 +511,20 @@ export function matchVoiceCommand(
 		if (hit(pick("unmute"))) return "unmute";
 		if (hit(pick("exit"))) return "exit";
 		if (canSwitch && hit(pick("next"))) return "next";
+		// Muted for the same reason `next` is: mute silences the microphone, not the ability to
+		// leave. Being unable to reverse a transfer without unmuting first would put the screen back
+		// in the loop at exactly the moment the user realises they are in the wrong conversation.
+		if (state?.canBack && hit(pick("back"), { whole: true })) return "back";
 		return null;
 	}
 	// Not muted: unmute is meaningless, and matching it here would fire on someone SAYING the
 	// word ("say unmute to turn the mic back on") rather than commanding it.
 	if (hit(pick("exit"))) return "exit";
 	if (canSwitch && hit(pick("next"))) return "next";
+	// "back" (#279) — after `exit`, which owns "back to text" and must keep it: leaving voice is
+	// the smaller, recoverable reading of an ambiguous "back". `{ whole: true }` and the final-only
+	// flag are what keep "let's go back and fix the parser" a message — see BACK_BY_LANG.
+	if (state?.canBack && hit(pick("back"), { whole: true })) return "back";
 	// "scrap" (#342). Gated on `canScrap` for the same two reasons `next` is gated on `canSwitch`,
 	// and one more. (1) A surface with no delete path — the Coder's Co-pilot — must leave the word
 	// as ordinary speech rather than swallow it. (2) The consumer passing a handler is what turns
@@ -498,6 +550,8 @@ export interface CommandMatchState {
 	muted: boolean;
 	canSwitch: boolean;
 	canScrap: boolean;
+	/** May THIS transcript reverse a transfer (#279)? False on every partial — see BACK_BY_LANG. */
+	canBack: boolean;
 	/** May this transcript be judged for a command at all? False for a partial captured while the
 	 *  agent's own voice may be in the microphone (#386). */
 	judgeable: boolean;
@@ -548,13 +602,18 @@ export interface CommandMatchState {
  */
 export function commandStateFor(
 	kind: TranscriptKind,
-	ctx: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean; echoing?: boolean },
+	ctx: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean; canBack?: boolean; echoing?: boolean },
 ): CommandMatchState {
 	const echoing = ctx.echoing === true;
 	return {
 		muted: ctx.muted === true,
 		canSwitch: ctx.canSwitch === true,
 		canScrap: kind === "final" && ctx.canScrap === true,
+		// `back` (#279) takes scrap's final-only rule for a different reason than scrap's: not that
+		// it destroys anything, but that every phrase for it is ordinary speech, and a partial is
+		// exactly "go back" on the way to "go back and fix the parser". Dropped on the way IN, like
+		// canScrap, so a call site cannot enable it on a partial by forgetting.
+		canBack: kind === "final" && ctx.canBack === true,
 		judgeable: !(echoing && kind === "partial"),
 		whole: echoing,
 	};
@@ -673,6 +732,7 @@ const TABLES: Record<VoiceCommand, Record<string, string[]>> = {
 	unmute: UNMUTE_BY_LANG,
 	exit: EXIT_BY_LANG,
 	next: NEXT_BY_LANG,
+	back: BACK_BY_LANG,
 	scrap: SCRAP_BY_LANG,
 };
 const ALL_COMMANDS = Object.keys(TABLES) as VoiceCommand[];
@@ -751,6 +811,10 @@ export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords,
  * so there is never a message half to keep — and the trailing form is precisely the dangerous one:
  * "let's rewrite the parser, scrap that" would delete the previous exchange AND send a truncated
  * request. Callers check for it separately, on a final turn, before reaching here.
+ *
+ * `back` (#279) is absent for the same reason and one more: "ask it about the parser, then take me
+ * back" is a sentence about a plan, not two instructions, and the trailing form cannot tell the
+ * difference. Whole-utterance only, judged on the final — see BACK_BY_LANG.
  */
 export function splitTrailingCommand(
 	text: string,
