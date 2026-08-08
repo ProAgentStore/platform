@@ -13,7 +13,7 @@ import siteBuilder from "./site-builder.json" with { type: "json" };
 import siteDeploy from "./site-deploy.json" with { type: "json" };
 import { validatePipeline } from "../pipeline.js";
 import { agentCapabilities } from "../agent-capabilities.js";
-import { pipelineDeclarationError } from "../pipeline-tool-policy.js";
+import { pipelineDeclarationError, undeclaredPipelineTools } from "../pipeline-tool-policy.js";
 import { getRegistryTool } from "../tool-registry.js";
 
 const MIGRATION = fileURLToPath(new URL("../../../migrations/0057_seed_site_builder_agent.sql", import.meta.url));
@@ -89,9 +89,13 @@ describe("migration 0096 — the seeded agent declares what its pipelines dispat
 	}
 
 	it("covers every gated tool in BOTH shipped pipelines", () => {
-		// Asked of the real registry, so a step swapped for a different connector tool fails here
-		// rather than at 3am on someone's cron.
-		const gated = [...new Set([...siteBuilder.steps, ...siteDeploy.steps].map((s) => s.tool))].filter((t) => !!getRegistryTool(t)?.connector);
+		// Asked of the real registry through the real rule, so a step swapped for a different
+		// connector tool fails here rather than at 3am on someone's cron. Via the rule rather than
+		// `steps[].tool` since #396: a step can reach a connector tool it does not name (`geocode`
+		// needs `http_request`), and a hand-rolled derivation here would be exactly the second
+		// reading of the definition that issue is about.
+		const declaresNothing = agentCapabilities({ slug: "site-builder", category: "Sales", config: JSON.stringify({ capabilities: { surfaces: [], runtime: null, workflow: null, tools: [] } }) });
+		const gated = [...new Set([siteBuilder, siteDeploy].flatMap((p) => undeclaredPipelineTools(p, declaresNothing, getRegistryTool).map((u) => u.tool)))];
 		expect(gated.length).toBeGreaterThan(0);
 		expect([...declaredTools()].sort()).toEqual(gated.sort());
 	});

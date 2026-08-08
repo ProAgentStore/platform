@@ -133,8 +133,13 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 						return null;
 					});
 				}
+				// What a step NAMES is not always what it RAN (#396): `enrich` dispatches a tool from
+				// its own inputs, and the trace carried `tool: "enrich"` and nothing else — so the
+				// #394 audit had to infer the inner tool from the shape of the data it left behind.
+				// One extra field, resolved once per step in `executePipelineStep`.
+				const ran = result.dispatched ? `${s.tool} → ${result.dispatched}` : s.tool;
 				await step.do(`s${i}-trace`, async () => {
-					await logEvent(env, { source: "pipeline", event: "pipeline.step", level: result.success ? "info" : "warn", message: `${s.tool} → ${bind}: ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, bind, success: result.success } }).catch(() => undefined);
+					await logEvent(env, { source: "pipeline", event: "pipeline.step", level: result.success ? "info" : "warn", message: `${ran} → ${bind}: ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, ...(result.dispatched ? { dispatched: result.dispatched } : {}), bind, success: result.success } }).catch(() => undefined);
 					return null;
 				});
 				if (!result.success) {
@@ -142,7 +147,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 					// Per-step error with input context (issue #98) into the error store so a
 					// failed step is debuggable — which step, what input reference shape.
 					await step.do(`s${i}-error`, async () => {
-						await logError(env, { source: "pipeline-step", userId, status: 500, message: `step ${i} (${s.tool}) failed: ${result.content.slice(0, 200)}`, context: { instanceId, runId, pipeline: pipeline.name, step: i, tool: s.tool, bind, inputs: s.inputs } }).catch(() => undefined);
+						await logError(env, { source: "pipeline-step", userId, status: 500, message: `step ${i} (${ran}) failed: ${result.content.slice(0, 200)}`, context: { instanceId, runId, pipeline: pipeline.name, step: i, tool: s.tool, dispatched: result.dispatched, bind, inputs: s.inputs } }).catch(() => undefined);
 						return null;
 					});
 					await step.do("trace-fail", async () => {

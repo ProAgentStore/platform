@@ -25,6 +25,13 @@ attach time if the pipeline is attached through the API, and at dispatch either 
 *step library* (`map`, `filter`, `slice`, `dedupe_upsert`, …) is not connector-provided and is
 therefore not declarable, so it is exempt by construction.
 
+Three of those exempt steps still reach a connector tool from inside themselves, and the check sees
+it: `geocode` and `fan_out` need `http_request`, and `enrich` runs the tool named in its own
+`tool` input. So a pipeline whose only step is `geocode` is refused up front on an agent that
+declares nothing, with a message naming the STEP (`step 0 ("geocode") needs "http_request"`) rather
+than a tool the definition never mentions. An `enrich` whose tool comes from a `$param` cannot be
+resolved before the run and is refused at dispatch instead.
+
 | Connector | Auth | Scopes | Tools (examples) |
 |---|---|---|---|
 | `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_create_issue` (write), `github_workflow_runs` |

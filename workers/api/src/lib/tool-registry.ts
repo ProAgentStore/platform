@@ -399,7 +399,11 @@ export async function runRegistryTool(
 	// runner), so every other surface is unchanged — but a caller that does assert one gets the
 	// gate on NESTED dispatches too, which is the case a step-name check cannot reach: `enrich`
 	// takes the tool to run as an input and re-dispatches it per record through this same path.
-	const undeclared = undeclaredToolRefusal(name, ctx.declaredTools, tool.connector);
+	//
+	// `ctx.stepTool` only changes the WORDING (#396): a nested dispatch names the step that needs
+	// the tool, because a definition that never mentions `http_request` cannot be searched for it.
+	// The rule itself is unchanged — this is the security boundary and it stays exactly as strict.
+	const undeclared = undeclaredToolRefusal(name, ctx.declaredTools, tool.connector, ctx.stepTool);
 	if (undeclared) return { name, content: undeclared, success: false };
 	// Scope enforcement (issue #86): a write-scoped tool on a read-only connector is
 	// unreachable — reject before consent/handler so the abstraction can't be bypassed.

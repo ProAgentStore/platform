@@ -83,6 +83,16 @@ export interface StepResult {
 	success: boolean;
 	content: string;
 	output: unknown;
+	/**
+	 * The registry tool this step actually dispatched from its own inputs (#396), when its handler
+	 * takes one there — today `enrich`.
+	 *
+	 * Every trace event a run writes carried `context.tool = "enrich"` and nothing about what ran,
+	 * so the #394 audit had to INFER the inner tool from the shape of the output it left on each
+	 * record. Resolved here rather than in the handler because the inputs are already resolved at
+	 * this point: it costs one map lookup per step and nothing per item.
+	 */
+	dispatched?: string;
 }
 
 /**
@@ -111,6 +121,9 @@ export function capStepOutput(result: StepResult, tool: string, index: number): 
 	return {
 		tool,
 		bind: result.bind,
+		// Carried through the rewrite: the trace line for an over-large step is exactly the one a
+		// reader needs "what actually ran" for, and dropping it here would blank it on failure only.
+		...(result.dispatched ? { dispatched: result.dispatched } : {}),
 		success: false,
 		content:
 			`step ${index} (${tool}) produced ${kb}KB, over the 1MiB per-step limit. ` +
@@ -188,7 +201,10 @@ export function auditStepEntry(step: PipelineStep, index: number, result: StepRe
 	const bind = stepBind(step, index);
 	const verb = result.success ? "→" : "failed";
 	const count = result.success ? ` ${outputCount(result.output)} record(s)` : `: ${result.content.slice(0, 160)}`;
-	return { step: `step ${index}: ${step.tool}`, detail: `${verb} ${bind}${count}`, at: new Date().toISOString() };
+	// The inner tool when the step dispatched one (#396) — a record's own trail said `enrich` and
+	// left the reader to guess which tool produced the field sitting right next to it.
+	const ran = result.dispatched ? `${step.tool} → ${result.dispatched}` : step.tool;
+	return { step: `step ${index}: ${ran}`, detail: `${verb} ${bind}${count}`, at: new Date().toISOString() };
 }
 
 /**
@@ -462,16 +478,27 @@ export async function executePipelineStep(
 	params: Record<string, unknown>,
 ): Promise<StepResult> {
 	const bind = stepBind(step, index);
+	const def = getRegistryTool(step.tool);
 	// The declared-tools gate (#381), refused BEFORE any input is resolved. `runRegistryTool` would
 	// refuse it too — that is where the rule is enforced, including for a tool `enrich` names in
 	// its inputs — but a `forEach` would refuse once per item, so the whole step is short-circuited
 	// here on the same rule rather than N times on the far side of it.
 	//
 	// `budgetId` rides on the ctx built ONCE for the whole step, so a fan-out draws every iteration
-	// against the same pool instead of opening one per item (#382).
-	const registryCtx = { env: ctx.env, userId: ctx.userId, instanceId: ctx.instanceId, traceId: ctx.traceId, budgetId: ctx.budgetId, declaredTools: ctx.declaredTools };
-	const undeclared = undeclaredToolRefusal(step.tool, ctx.declaredTools, getRegistryTool(step.tool)?.connector);
+	// against the same pool instead of opening one per item (#382). `stepTool` rides with it so a
+	// tool this handler dispatches from inside itself is refused by NAME OF STEP (#396).
+	const registryCtx = { env: ctx.env, userId: ctx.userId, instanceId: ctx.instanceId, traceId: ctx.traceId, budgetId: ctx.budgetId, declaredTools: ctx.declaredTools, stepTool: step.tool };
+	const undeclared = undeclaredToolRefusal(step.tool, ctx.declaredTools, def?.connector);
 	if (undeclared) return { tool: step.tool, bind, success: false, content: undeclared, output: null };
+
+	// What this step will hand to `runRegistryTool` from inside its own handler, when it takes the
+	// tool as an input (`enrich`). Read off the RESOLVED inputs, so a `$param`-supplied tool is
+	// reported too — the case the trace could never answer before.
+	const innerKey = def?.dispatchesFromInput;
+	const dispatchedFrom = (input: Record<string, unknown>): string | undefined => {
+		const v = innerKey ? input[innerKey] : undefined;
+		return typeof v === "string" && v ? v : undefined;
+	};
 
 	if (step.forEach !== undefined) {
 		const list = resolveInputValue(step.forEach, { outputs, params });
@@ -480,18 +507,21 @@ export async function executePipelineStep(
 		}
 		const results: unknown[] = [];
 		let allOk = true;
+		let dispatched: string | undefined;
 		for (const item of list) {
 			const input = resolveInputs(step.inputs, { outputs, params, item });
+			dispatched ??= dispatchedFrom(input);
 			const r = await runRegistryTool(step.tool, registryCtx, input);
 			if (!r.success) allOk = false;
 			results.push(parseOutput(r.content));
 		}
-		return { tool: step.tool, bind, success: allOk, content: `${results.length} item(s)`, output: results };
+		return { tool: step.tool, bind, success: allOk, content: `${results.length} item(s)`, output: results, ...(dispatched ? { dispatched } : {}) };
 	}
 
 	const input = resolveInputs(step.inputs, { outputs, params });
+	const dispatched = dispatchedFrom(input);
 	const r = await runRegistryTool(step.tool, registryCtx, input);
-	return { tool: step.tool, bind, success: r.success, content: r.content, output: parseOutput(r.content) };
+	return { tool: step.tool, bind, success: r.success, content: r.content, output: parseOutput(r.content), ...(dispatched ? { dispatched } : {}) };
 }
 
 /**

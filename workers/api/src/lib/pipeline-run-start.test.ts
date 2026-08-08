@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// A registry whose tools are all "known" so a stored def validates. `places` is
-// connector-provided, so it is the one the declared-tools gate (#381) can refuse; everything else
-// is step-library-shaped and exempt.
+// A registry whose tools are all "known" so a stored def validates. `places` and `http_request` are
+// connector-provided, so they are what the declared-tools gate (#381) can refuse; everything else is
+// step-library-shaped and exempt. `geocode` mirrors the real declaration — a connector-LESS step
+// that dispatches a connector tool from inside itself, which is the whole of #396.
+const TOOLS: Record<string, { connector?: string; dispatches?: string[] }> = {
+	places: { connector: "http" },
+	http_request: { connector: "http" },
+	geocode: { dispatches: ["http_request"] },
+};
 vi.mock("./tool-registry.js", () => ({
-	getRegistryTool: (name: string) => (name === "places" ? { name, connector: "http" } : { name }),
+	getRegistryTool: (name: string) => ({ name, ...(TOOLS[name] ?? {}) }),
 	runRegistryTool: vi.fn(),
 }));
 
@@ -16,7 +22,10 @@ import { startPipelineRun } from "./pipeline-run-start.js";
 import { loadPipeline } from "./pipeline.js";
 import type { Env } from "../types.js";
 
-const PIPE = { name: "leads", steps: [{ tool: "geocode", inputs: { city: { $param: "city" } } }], sink: { collection: "leads" } };
+// A genuinely exempt pipeline — a pure step that reaches nothing external. It used to be a
+// `geocode` step, which reads as exempt and is not: since #396 the gate can see the `http_request`
+// underneath it, so using it here would make every test below assert the refusal instead.
+const PIPE = { name: "leads", steps: [{ tool: "map", inputs: { items: { $param: "city" } } }], sink: { collection: "leads" } };
 
 beforeEach(() => {
 	openBudget.mockClear();
@@ -112,6 +121,30 @@ describe("startPipelineRun — the declared-tools gate", () => {
 		const env = envWithConfig({ pipelines: { leads: CONNECTOR_PIPE } }, create, { capabilities: { tools: ["places"] } });
 		expect((await startPipelineRun(env, "i1", "u1", "leads", {}, "api")).ok).toBe(true);
 		expect((create.mock.calls[0][0] as { params: { declaredTools?: string[] } }).params.declaredTools).toEqual(["places"]);
+	});
+
+	// ── #396 ───────────────────────────────────────────────────────────────────
+	const GEO_PIPE = { name: "leads", steps: [{ tool: "geocode", inputs: { address: { $param: "city" } } }, { tool: "map" }] };
+
+	it("refuses a geocode-only pipeline at KICK, not eight steps into a run", async () => {
+		// The regression this issue is about. Every step here is step-library and connector-less, so
+		// the definition looked exempt: attach passed, kick passed, the workflow opened a run row and
+		// the FIRST step was refused by `runRegistryTool` — a run that started, spent and stopped,
+		// which is exactly what the kick check exists to prevent.
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: GEO_PIPE } }, create, { capabilities: { tools: [] } });
+		const res = await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger");
+		expect(res.ok).toBe(false);
+		// Naming the STEP is the point: the definition never mentions `http_request`.
+		if (!res.ok) expect(res.error).toMatch(/step 0 \("geocode"\) needs "http_request"/);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("kicks the same pipeline once the agent declares what geocode needs", async () => {
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const env = envWithConfig({ pipelines: { leads: GEO_PIPE } }, create, { capabilities: { tools: ["http_request"] } });
+		expect((await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger")).ok).toBe(true);
+		expect(create).toHaveBeenCalledTimes(1);
 	});
 });
 

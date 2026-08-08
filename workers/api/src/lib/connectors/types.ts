@@ -67,6 +67,16 @@ export interface RegistryToolCtx {
 	 */
 	declaredTools?: readonly string[];
 	/**
+	 * The pipeline STEP this dispatch happens under (#396) — the step's own `tool` name.
+	 *
+	 * Audit + phrasing only, never a permission. `geocode`, `fan_out` and `enrich` dispatch a
+	 * registry tool from INSIDE their handler and forward this ctx, so when the declared-tools gate
+	 * refuses one of those the refusal can say WHICH STEP needs it. Without it the author reads
+	 * `"http_request" is not one of this agent's tools` against a definition that never mentions
+	 * `http_request`, and goes looking for a step that does not exist.
+	 */
+	stepTool?: string;
+	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
 	 * grant/scope, instead of importing token-minting fns directly. Injected by
@@ -107,6 +117,33 @@ export interface ToolDef {
 	tier: "base" | "standard" | "runtime" | "connector";
 	/** Which connector provides it (e.g. "github"). Present for connector-tier tools. */
 	connector?: string;
+	/**
+	 * Registry tools this handler may dispatch from INSIDE itself (#396) — declared here, beside
+	 * the handler that does it, because anywhere else is a second list somebody has to remember.
+	 *
+	 * The pre-flight (`pipeline-tool-policy.ts`) unions these with the step names it already reads,
+	 * so a definition built entirely from exempt-looking steps is refused at attach/kick rather than
+	 * mid-run. Before this, `geocode` and `fan_out` named `http_request` NOWHERE in the definition —
+	 * no author could know their pipeline depended on it, and no static reading could tell them.
+	 *
+	 * "May", not "will": `fan_out` only dispatches in its `pages` mode. Over-declaring costs a
+	 * refusal the author can fix by declaring a read-scoped tool; under-declaring is the mid-run
+	 * refusal this exists to remove, so the honest reading is the conservative one.
+	 *
+	 * `step-dispatch.test.ts` derives the same table from the handler SOURCE and fails when the two
+	 * disagree — that test, not this comment, is what keeps it from being forgotten.
+	 */
+	dispatches?: readonly string[];
+	/**
+	 * The input key whose value NAMES a registry tool this handler dispatches (#396). `enrich` is
+	 * the case: `{"tool":"enrich","inputs":{"tool":"web_search"}}` re-dispatches per record.
+	 *
+	 * Dynamic by construction, so the pre-flight resolves it only when the value is a literal
+	 * string — which is every reference pipeline, and the authoring mistake. A `$param`-supplied
+	 * name stays unknowable until the run, which is exactly why the enforcing gate lives in
+	 * `runRegistryTool` and this one is an early warning.
+	 */
+	dispatchesFromInput?: string;
 	/** read = safe; write = mutates the external system (gated by consent, #90). */
 	scope?: "read" | "write";
 	handler: (ctx: RegistryToolCtx, input: Record<string, unknown>) => Promise<RegistryToolResult>;

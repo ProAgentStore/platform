@@ -382,6 +382,18 @@ describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missi
 		expect(res.status).toBe(400);
 		expect((await jsonBody(res)).error).toMatch(/github_workflow_runs/);
 	});
+
+	it("400s a geocode-only definition, naming the step that needs http_request (#396)", async () => {
+		// Every step here is step-library and connector-less, so this definition passed attach AND
+		// kick and was refused mid-run — the outcome the pre-flight exists to prevent, reached
+		// through a door it could not see. The message must name `geocode`: the author's definition
+		// does not contain the word `http_request` anywhere.
+		const def = { name: "sweep", steps: [{ tool: "geocode", inputs: { address: "Sydney, NSW" }, bind: "geo" }] };
+		const { app, env } = testApp({ agentConfig: JSON.stringify({ capabilities: { tools: [] } }) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(def) }, await tok("u1"));
+		expect(res.status).toBe(400);
+		expect((await jsonBody(res)).error).toMatch(/step 0 \("geocode"\) needs "http_request"/);
+	});
 });
 
 describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {

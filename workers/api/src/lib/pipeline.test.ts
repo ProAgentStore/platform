@@ -9,11 +9,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // `connector` is part of the fake def because the declared-tools gate (#381) reads it: a
 // connector-provided tool is declarable (and therefore gated), a connector-less one is the step
 // library and is exempt. `places`/`noop` are deliberately connector-less.
-const KNOWN: Record<string, { connector?: string }> = {
+//
+// `dispatchesFromInput` (#396) mirrors the real `enrich`: the tool it runs per record arrives as an
+// input, so what the step NAMES and what it RUNS are two different answers.
+const KNOWN: Record<string, { connector?: string; dispatchesFromInput?: string }> = {
 	geocode: { connector: "geo" },
 	reachable: { connector: "http" },
 	places: {},
 	noop: {},
+	enrich: { dispatchesFromInput: "tool" },
 };
 const runRegistryTool = vi.fn();
 vi.mock("./tool-registry.js", () => ({
@@ -238,7 +242,7 @@ describe("executePipelineStep — dispatches via runRegistryTool + threads outpu
 		const step = { tool: "geocode", inputs: { city: { $param: "city" } }, bind: "geo" };
 		const res = await executePipelineStep(ctx, step, 0, {}, { city: "Sydney" });
 		// dispatched through the single registry path with (name, ctx, resolvedInput)
-		expect(runRegistryTool).toHaveBeenCalledWith("geocode", { env, userId: "u1", instanceId: "i1" }, { city: "Sydney" });
+		expect(runRegistryTool).toHaveBeenCalledWith("geocode", expect.objectContaining({ env, userId: "u1", instanceId: "i1" }), { city: "Sydney" });
 		// parsed JSON output threaded under the bind
 		expect(res.bind).toBe("geo");
 		expect(res.success).toBe(true);
@@ -337,6 +341,46 @@ describe("executePipelineStep — the declared-tools gate (#381)", () => {
 		runRegistryTool.mockResolvedValue({ name: "geocode", content: "{}", success: true });
 		expect((await executePipelineStep(ctx, { tool: "geocode" }, 0, {}, {})).success).toBe(true);
 	});
+
+	it("tells the dispatch gate which STEP it is running under (#396)", async () => {
+		// Wording only, never permission: a tool `geocode` dispatches from inside itself is refused
+		// with "geocode needs http_request" instead of a name the definition never mentions.
+		runRegistryTool.mockResolvedValue({ name: "places", content: "[]", success: true });
+		await executePipelineStep(scoped, { tool: "places" }, 0, {}, {});
+		expect(runRegistryTool).toHaveBeenCalledWith("places", expect.objectContaining({ stepTool: "places" }), {});
+	});
+});
+
+// ── #396 ────────────────────────────────────────────────────────────────────────
+// Every trace event a run wrote carried `context.tool = "enrich"` and nothing about the tool it
+// actually dispatched, so the #394 audit had to infer the inner tool from the shape of the data it
+// left on each record. Resolved off the RESOLVED inputs, so a `$param`-supplied tool is reported
+// too — one map lookup per step, nothing per item.
+describe("executePipelineStep — what a step actually dispatched", () => {
+	it("reports the tool an enrich step ran per record", async () => {
+		runRegistryTool.mockResolvedValue({ name: "enrich", content: "{}", success: true });
+		const step = { tool: "enrich", inputs: { items: [], tool: "reachable", as: "up" } };
+		expect((await executePipelineStep(ctx, step, 0, {}, {})).dispatched).toBe("reachable");
+	});
+
+	it("reports one supplied by a run param, which no static reading could give", async () => {
+		runRegistryTool.mockResolvedValue({ name: "enrich", content: "{}", success: true });
+		const step = { tool: "enrich", inputs: { tool: { $param: "probe" }, as: "up" } };
+		expect((await executePipelineStep(ctx, step, 0, {}, { probe: "reachable" })).dispatched).toBe("reachable");
+	});
+
+	it("reports it for a fan-out too, without re-reading it per item", async () => {
+		runRegistryTool.mockResolvedValue({ name: "enrich", content: "{}", success: true });
+		const step = { tool: "enrich", forEach: { $ref: "batches" }, inputs: { tool: "reachable", as: "up" } };
+		const res = await executePipelineStep(ctx, step, 0, { batches: [[1], [2]] }, {});
+		expect(res.dispatched).toBe("reachable");
+		expect(runRegistryTool).toHaveBeenCalledTimes(2);
+	});
+
+	it("says nothing for a step that dispatches nothing", async () => {
+		runRegistryTool.mockResolvedValue({ name: "places", content: "[]", success: true });
+		expect((await executePipelineStep(ctx, { tool: "places", inputs: { tool: "reachable" } }, 0, {}, {})).dispatched).toBeUndefined();
+	});
 });
 
 // ── #382 ────────────────────────────────────────────────────────────────────────
@@ -385,6 +429,13 @@ describe("auditStepEntry", () => {
 	it("captures a failed step's reason instead of a count", () => {
 		const e = auditStepEntry({ tool: "geocode" }, 0, ok({ success: false, content: "boom" }));
 		expect(e.detail).toBe("failed step0: boom");
+	});
+
+	it("names the inner tool an enrich step ran (#396)", () => {
+		// A record's own trail said `enrich` and left the reader to guess which tool produced the
+		// field sitting next to it.
+		const e = auditStepEntry({ tool: "enrich" }, 2, ok({ tool: "enrich", dispatched: "reachable", output: [{}] }));
+		expect(e.step).toBe("step 2: enrich → reachable");
 	});
 });
 

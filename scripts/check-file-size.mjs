@@ -322,7 +322,14 @@ const PINS = {
 	// the local that read it — nothing ever used the value), replaced by four lines saying why it
 	// must not come back. The knob is the kind of debt the deleted code cannot record: a model that
 	// sets it believes it tuned throughput. Net is code removed, prose added.
-	"workers/api/src/lib/steps.ts": 990,
+	// +16 for #396: three DECLARATIONS (geocode/fan_out `dispatches`, enrich `dispatchesFromInput`)
+	// and the paragraphs saying why each one is where it is. Raised rather than split, and this file
+	// is the only correct home: the whole bug was that "what a step dispatches" lived apart from the
+	// handler that dispatches it, so the pre-flight read step NAMES while `geocode` quietly needed
+	// `http_request`. A separate table would be the same defect one file over. The rule that reads
+	// them is pure in lib/pipeline-tool-policy.ts, and step-dispatch.test.ts derives the same table
+	// from this source so a declaration cannot be forgotten.
+	"workers/api/src/lib/steps.ts": 1006,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about

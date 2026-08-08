@@ -28,6 +28,18 @@ export function explainRefusal(name: string, reason: ToolPolicyReason): string {
 }
 
 /**
+ * The same refusal, when the tool was reached from INSIDE another one (#396).
+ *
+ * `geocode`, `fan_out` and `enrich` dispatch a registry tool their step never names, so the plain
+ * sentence above sends the author hunting through a definition for `http_request` and finding
+ * nothing. Naming the step is the difference between a message that is true and one that is
+ * actionable — it says which line to look at and which two fixes exist.
+ */
+export function explainNestedRefusal(name: string, stepTool: string): string {
+	return `"${stepTool}" needs "${name}", which is not one of this agent's tools. It can only run the tools its agent declares — add "${name}" to them, or drop the "${stepTool}" step.`;
+}
+
+/**
  * The declared-allowlist rule for ONE tool call — the refusal to report, or null to proceed (#381).
  *
  * Three ways to pass, and each is a decision worth stating:
@@ -51,7 +63,9 @@ export function undeclaredToolRefusal(
 	name: string,
 	declaredTools: readonly string[] | null | undefined,
 	connector: string | undefined,
+	/** The step whose handler is dispatching this, when it is not the step's own tool (#396). */
+	stepTool?: string,
 ): string | null {
 	if (!declaredTools || !connector || declaredTools.includes(name)) return null;
-	return explainRefusal(name, "not_declared");
+	return stepTool && stepTool !== name ? explainNestedRefusal(name, stepTool) : explainRefusal(name, "not_declared");
 }

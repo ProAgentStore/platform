@@ -609,6 +609,12 @@ export const STEP_TOOLS: ToolDef[] = [
 		name: "fan_out",
 		tier: "standard",
 		scope: "read",
+		// `pages` mode drives an http_request cursor from inside this handler (#396), so the
+		// pre-flight can see it. `grid` mode dispatches nothing — the declaration is per TOOL rather
+		// than per mode, because a predicate over inputs is not something the source-derived guard in
+		// `step-dispatch.test.ts` could keep honest, and over-declaring fails at attach where the
+		// author is present.
+		dispatches: ["http_request"],
 		description:
 			"Iterate a source over pages (drive an http_request pagination cursor) OR over a generated set (grid cells around a centre), and aggregate the items. mode 'grid': given center{lat,lng}, extentKm, stepKm → yields (2n+1)² cell centres (the lead-finder's grid). mode 'pages': repeatedly runs an http_request `request` template, threading the returned nextCursor into `cursorParam` until exhausted or `maxPages`. Returns the aggregated {items} (+ cells for grid).",
 		jsonSchema: {
@@ -678,6 +684,12 @@ export const STEP_TOOLS: ToolDef[] = [
 		name: "enrich",
 		tier: "standard",
 		scope: "read",
+		// The tool to run per record arrives as an INPUT and is re-dispatched through the same
+		// registry path (#396). Naming the key here lets the pre-flight resolve it whenever the
+		// author wrote a literal — which every reference pipeline does — while a `$param`-supplied
+		// name stays for `runRegistryTool` to refuse, as it must: that gate is the security boundary
+		// and `{"tool":"enrich","inputs":{"tool":"tmux_run_command"}}` is the case it exists for.
+		dispatchesFromInput: "tool",
 		description:
 			"Call a tool once PER record and merge each result back onto the record — the general 'enrich a list with a per-item connector call' primitive. `tool` is dispatched with `input`, a template resolved against each item: a `{\"$item\":\"path\"}` node reads that dotted field off the item (e.g. `{url:{\"$item\":\"websiteUri\"}}`). The tool's parsed result is written under key `as` on a COPY of the item. Concurrency-capped (default 4, max 20). Powers 'keep no-website OR unreachable' (enrich with http_reachable) and #99 socials/email (enrich with web_search → extract_contacts). Returns {items,count}.",
 		jsonSchema: {
@@ -761,6 +773,10 @@ export const STEP_TOOLS: ToolDef[] = [
 		name: "geocode",
 		tier: "standard",
 		scope: "read",
+		// Unconditionally an http_request underneath (#396) — it reuses the #95 tool for vault
+		// api-key injection rather than fetching itself. A `geocode`-only pipeline on an agent that
+		// declares nothing used to pass attach AND kick and die on its first step.
+		dispatches: ["http_request"],
 		description:
 			"Resolve a city/address to coordinates via the generic 'http' connector (#95) + a maps provider (Google Geocoding by default; api-key from the vault). Returns {lat,lng,country,state,locality,formatted}. The lead-finder's city→centre step; the result feeds fan_out grid mode.",
 		jsonSchema: {
