@@ -89,7 +89,7 @@ export const META_MANIFEST: ConnectorManifest = {
 			name: "whatsapp_send_message",
 			scope: "write",
 			description:
-				"Send a WhatsApp message via the WhatsApp Business Cloud API. Use `text` only inside a 24h reply window; otherwise supply `template_name` (a pre-approved template) with `template_lang` and optional `template_params`. WRITE — requires the meta connector's write consent.",
+				"Send a WhatsApp message via the WhatsApp Business Cloud API. Use `text` only inside a 24h reply window; otherwise supply `template_name` (a pre-approved template) with `template_lang` and optional `template_params`. WRITE — the message is really sent.",
 			handler: "whatsapp_send_message",
 			params: {
 				to: { type: "string", required: true, description: "Recipient phone in E.164, e.g. +14155552671." },
@@ -103,7 +103,7 @@ export const META_MANIFEST: ConnectorManifest = {
 			name: "instagram_send_dm",
 			scope: "write",
 			description:
-				"Send/reply to an Instagram Direct Message from a connected Instagram Business account (Instagram Messaging API). Messaging-window rules apply — you can reply to people who messaged you; no cold-DM. WRITE — requires the meta connector's write consent.",
+				"Send/reply to an Instagram Direct Message from a connected Instagram Business account (Instagram Messaging API). Messaging-window rules apply — you can reply to people who messaged you; no cold-DM. WRITE — the message is really sent.",
 			handler: "instagram_send_dm",
 			params: {
 				recipient_id: { type: "string", required: true, description: "The recipient's Instagram-scoped ID (IGSID) from an incoming message." },

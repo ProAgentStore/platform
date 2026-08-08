@@ -81,7 +81,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine; requires the tmux connector's write consent. Returns the pane right after sending; capture again after a moment to read the result.",
+			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. Returns the pane right after sending; capture again after a moment to read the result.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -107,7 +107,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for answering a running CLI's prompt (e.g. an interactive Claude/Codex session), pressing Escape/Enter, or sending Ctrl keys. WRITE: requires the tmux connector's write consent. Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\".",
+			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for answering a running CLI's prompt (e.g. an interactive Claude/Codex session), pressing Escape/Enter, or sending Ctrl keys. WRITE: runs on the user's machine. Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\".",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -135,7 +135,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Create a new detached tmux session (optionally running a command in a working directory). WRITE: requires the tmux connector's write consent. No-op if a session with that name already exists.",
+			"Create a new detached tmux session (optionally running a command in a working directory). WRITE: runs on the user's machine. No-op if a session with that name already exists.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -164,7 +164,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Kill a tmux session by name. WRITE: requires the tmux connector's write consent. Destroys whatever is running in it — use with care.",
+			"Kill a tmux session by name. WRITE: runs on the user's machine. Destroys whatever is running in it — use with care.",
 		jsonSchema: {
 			type: "object",
 			properties: {

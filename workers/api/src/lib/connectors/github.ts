@@ -210,7 +210,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		{
 			name: "github_create_issue",
 			scope: "write",
-			description: "Open a new GitHub issue in a repo. WRITE — requires the GitHub connector's write consent for this instance.",
+			description: "Open a new GitHub issue in a repo. WRITE — the issue is really created.",
 			handler: "github_create_issue",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },

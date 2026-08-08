@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CONSENT_RULE, connectorToolsPrompt, consentLabel, type PromptTool } from "./connector-tool-prompt.js";
+import { registryToolDefs, registryTools } from "./tool-registry.js";
 
 /** The four write tools from the reported instance, as the registry declares them. */
 const TERMINAL_WRITES: PromptTool[] = [
-	{ name: "terminal_run_command", description: "WRITE: run a command. Requires terminal write consent.", connector: "terminal", scope: "write", jsonSchema: {} },
-	{ name: "terminal_send_keys", description: "WRITE: send keys. Requires terminal write consent.", connector: "terminal", scope: "write", jsonSchema: {} },
+	{ name: "terminal_run_command", description: "WRITE: run a command.", connector: "terminal", scope: "write", jsonSchema: {} },
+	{ name: "terminal_send_keys", description: "WRITE: send keys.", connector: "terminal", scope: "write", jsonSchema: {} },
 	{ name: "terminal_new_target", description: "WRITE: open a target.", connector: "terminal", scope: "write", jsonSchema: {} },
 	{ name: "terminal_kill_target", description: "WRITE: kill a target.", connector: "terminal", scope: "write", jsonSchema: {} },
 ];
@@ -84,6 +85,58 @@ describe("#399 item 2 — the remedy is stated once, by the platform", () => {
 		// "current" is what makes the granted label outrank that prior.
 		expect(CONSENT_RULE).toMatch(/resolved/);
 		expect(CONSENT_RULE).toMatch(/CURRENT/);
+	});
+});
+
+describe("#419 — no tool description restates the consent rule", () => {
+	// The half of #399 that was diagnosed and not fixed. The label above each line is resolved per
+	// instance per turn by `writeConsentOf`; a static sentence in the description can only ever
+	// repeat it — and when the label says GRANTED and the sentence says a consent is required, the
+	// model's plainest reading is that it is blocked. Twelve of these accumulated by copy-paste from
+	// the previous connector, which is why the guard is a test and not a review note.
+	it("NO registry tool description contains the phrase 'write consent'", () => {
+		const offenders = registryToolDefs()
+			.filter((t) => t.description.toLowerCase().includes("write consent"))
+			.map((t) => t.name);
+		expect(offenders).toEqual([]);
+	});
+
+	// The two tools that legitimately say something about consent in their own description. Neither
+	// is this gate, so neither may be swept up by a future blanket edit — asserted POSITIVELY so the
+	// sweep fails here rather than silently flattening a distinction that was filed for.
+	it("mcp_call_tool keeps its PER-SERVER wording (#262) — a finer gate than the connector grant", () => {
+		// Outbound MCP consent is per (instance, endpoint, tool), so "the connector is granted" is
+		// not the answer to "may I call this". `consentLabel`'s `per_call` branch words the label
+		// correctly; the description carries the part the label cannot: WHICH server and tool.
+		const mcp = registryToolDefs().find((t) => t.name === "mcp_call_tool");
+		expect(mcp?.description).toContain("that specific server and tool");
+	});
+
+	it("http_request stays scope:'read' with its per-CALL method caveat (#307)", () => {
+		// Its gate is the HTTP method the caller chose, not a connector grant, so `consentLabel`
+		// cannot express it and the description is the right place. A GET must never need write
+		// consent — demanding it for a pipeline that only looks things up trains an owner to grant
+		// blanket write.
+		const http = registryTools().find((t) => t.name === "http_request");
+		expect(http?.scope).toBe("read");
+		expect(http?.description).toContain("HTTPS-only, SSRF-guarded");
+	});
+
+	// Acceptance, stated end-to-end against the REAL registry rather than the fixtures above: the
+	// block a granted tmux/terminal agent actually receives.
+	it("a rendered block for a granted terminal agent says GRANTED and never asks for consent", () => {
+		const terminalTools: PromptTool[] = registryTools()
+			.filter((t) => t.connector === "terminal")
+			.map((t) => ({ name: t.name, description: t.description, connector: t.connector, scope: t.scope, jsonSchema: t.jsonSchema }));
+		expect(terminalTools.length).toBeGreaterThan(0);
+
+		const block = connectorToolsPrompt(terminalTools, ["terminal"]);
+		expect(block).toContain("consent GRANTED");
+		expect(block).not.toMatch(/requires[^.]*write consent/i);
+		// CONSENT_RULE is the one place the block is allowed to talk about a consent NOT being
+		// granted; nothing on a tool line may.
+		const toolLines = block.split("\n").filter((l) => l.startsWith("- "));
+		for (const line of toolLines) expect(line.toLowerCase()).not.toContain("write consent");
 	});
 });
 

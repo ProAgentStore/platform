@@ -76,7 +76,7 @@ export const GOOGLE_SHEETS_MANIFEST: ConnectorManifest = {
 		{
 			name: "sheets_append",
 			scope: "write",
-			description: "Append rows to the end of a Google Sheet range (e.g. add newly-found leads). WRITE — requires the google_sheets connector's write consent.",
+			description: "Append rows to the end of a Google Sheet range (e.g. add newly-found leads). WRITE — the rows are really appended.",
 			handler: "sheets_append",
 			params: {
 				spreadsheetId: { type: "string", required: true, description: "The spreadsheet id from its URL." },

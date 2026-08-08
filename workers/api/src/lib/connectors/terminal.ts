@@ -94,7 +94,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Type a command line into a local terminal target and press Enter. WRITE: runs on the user's machine and requires terminal write consent.",
+			"Type a command line into a local terminal target and press Enter. WRITE: runs on the user's machine.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -121,7 +121,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter. WRITE: requires terminal write consent. iTerm2 currently supports text only.",
+			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter. WRITE: runs on the user's machine. iTerm2 currently supports text only.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -151,7 +151,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Create a new local terminal target. tmux creates a detached session; kitty opens an OS window via remote control; iTerm2 opens a new window. WRITE: requires terminal write consent.",
+			"Create a new local terminal target. tmux creates a detached session; kitty opens an OS window via remote control; iTerm2 opens a new window. WRITE: runs on the user's machine.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -177,7 +177,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Close or kill a local terminal target. tmux kills the session; kitty closes the window; iTerm2 closes the addressed session. WRITE: requires terminal write consent.",
+			"Close or kill a local terminal target. tmux kills the session; kitty closes the window; iTerm2 closes the addressed session. WRITE: runs on the user's machine.",
 		jsonSchema: {
 			type: "object",
 			properties: {
