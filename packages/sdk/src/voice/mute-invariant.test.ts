@@ -434,4 +434,25 @@ describe("the known hole — a browser with no Web Speech API (ADR 0001, Consequ
 		// commit that updates the ADR's Consequences section. That is the point of writing the gap
 		// down as an assertion rather than as a sentence nobody re-reads.
 	});
+
+	/**
+	 * The SECOND way into that hole, found by #425 and worse than the first: the browser HAS Web
+	 * Speech, and refuses the microphone. `ensureControlStt`'s `onError` was an empty block whose
+	 * own comment named "mic denied" as an expected case — so a denial removed mute-by-voice with
+	 * no row, no notice and no state change, and an ADR 0001 M1 violation was unobservable in
+	 * production by construction. The log's 18 mic failures were all from the MAIN recognizer,
+	 * which is the only one of the three that could report; that is not evidence the other two
+	 * worked, and the product had no way to find out either.
+	 */
+	it("says when it has lost the voice channel, instead of failing into silence", () => {
+		const body = callbackBody("ensureControlStt", "const handleResult = useCallback(");
+		const onError = body.slice(body.indexOf("onError:"), body.indexOf("onEnd:"));
+		expect(onError.trim().length, "the onError slice is empty — fix it before trusting the assertions").toBeGreaterThan(0);
+		expect(onError, "a denied control listener writes nothing to the durable log, so ADR 0001 M1 can be violated and nobody learns (#425)").toMatch(/reportClientError\(/);
+		expect(onError, "a denied control listener tells the user nothing, and the on-screen control is then the WHOLE invariant (ADR 0001, Consequences)").toMatch(/setNotice\(/);
+		// The narrowness is the load-bearing part, not the reporting. `audio-capture` is two
+		// recognizers contending for one device; latching the re-arm off on that would disable
+		// mute-by-voice for the rest of the session — causing the failure this guard is about.
+		expect(onError, "the re-arm is disabled on something wider than a permission verdict — a transient device conflict would then delete mute (ADR 0001 M1)").toMatch(/if \(!isMicPermissionDenied\(code\)\) return;\s*\n\s*ctrlWantRef\.current = false;/);
+	});
 });

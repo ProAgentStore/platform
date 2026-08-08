@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -96,6 +96,33 @@ describe("LocalRunner", () => {
 		expect(task.status).toBe("running");
 		expect(task.requiresApproval).toBe(false);
 		expect(runner.store.getTask(task.id)?.status).toBe("running");
+	});
+
+	/**
+	 * #425 — the automation browser must never prompt for the microphone, and must never be able
+	 * to reach the real one.
+	 *
+	 * Nothing in this package uses audio: it navigates to job/ATS pages, and the console where
+	 * voice actually runs is a different browser. So a media prompt from here is pure noise — a
+	 * third-party site asking for something no part of the product needs — and answering it is
+	 * policy rather than a workaround.
+	 *
+	 * The PAIRING is the whole point, and it is why this is asserted rather than left to the
+	 * comment beside it: `--use-fake-ui-for-media-stream` ALONE auto-**grants** the real microphone
+	 * to whatever page asked, which is strictly worse than the prompt it removes. Read from the
+	 * source rather than by launching Chrome, so it costs nothing and still fails if someone tidies
+	 * one of the two flags away.
+	 */
+	it("never lets an automated page prompt for, or reach, the real microphone", () => {
+		const src = readFileSync(new URL("./runner.ts", import.meta.url), "utf8");
+		const args = src.slice(src.indexOf("const baseOpts"), src.indexOf("const preferChrome"));
+		expect(args.length, "the launch options moved — this guard is looking at nothing").toBeGreaterThan(0);
+		expect(args, "an automated page can still raise a microphone prompt (#425)").toContain("--use-fake-ui-for-media-stream");
+		expect(args, "the prompt is auto-answered but the page gets the REAL microphone — strictly worse than prompting (#425)").toContain("--use-fake-device-for-media-stream");
+		// The inverse, stated so the pair cannot be half-removed: nothing here may hand out a real
+		// media grant. `grantPermissions(['microphone'])` was considered and rejected for exactly
+		// the reason above.
+		expect(src, "the runner grants a real media permission to pages it drives (#425)").not.toMatch(/grantPermissions\([^)]*(microphone|camera)/);
 	});
 
 	it("does not share empty store arrays across fresh data directories", () => {

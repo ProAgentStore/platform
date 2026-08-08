@@ -622,7 +622,25 @@ export class LocalRunner {
 			// --remote-debugging-port=0 → Chrome picks a free CDP port and writes it to
 			// DevToolsActivePort in the profile dir; the standard @playwright/mcp server
 			// attaches to that endpoint so it drives THIS same real-profile browser.
-			args: ["--disable-blink-features=AutomationControlled", "--start-maximized", "--window-size=1512,982", "--remote-debugging-port=0"],
+			// The media-permission pair is POLICY, not a workaround (#425). Nothing in this package
+			// uses audio — `grep -niE "microphone|grantPermissions" src` finds nothing — and the
+			// runner navigates only to job/ATS pages, so any mic prompt from here is a third-party
+			// site asking for something no part of this product needs. Both flags, and in this
+			// order of reasoning:
+			//   --use-fake-ui-for-media-stream   auto-answers the prompt, so the UI never appears…
+			//   --use-fake-device-for-media-stream  …and hands over a SYNTHETIC device, because the
+			//     first flag ALONE auto-GRANTS the real microphone to whatever page asked. That is
+			//     strictly worse than the prompt it removes, which is why it must never ship alone.
+			// The console, where voice actually runs, is a different browser and is untouched: a
+			// real mic grant stays the user's decision.
+			args: [
+				"--disable-blink-features=AutomationControlled",
+				"--start-maximized",
+				"--window-size=1512,982",
+				"--remote-debugging-port=0",
+				"--use-fake-ui-for-media-stream",
+				"--use-fake-device-for-media-stream",
+			],
 		};
 		// Prefer the real Chrome build (better TLS/fingerprint → fewer CAPTCHAs);
 		// fall back to bundled Chromium if Chrome isn't installed. Disable with

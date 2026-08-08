@@ -269,7 +269,7 @@ describe("resolveVoiceStatus", () => {
 	});
 });
 
-import { classifyVoiceError, isRetryableVoiceError, micUnavailableMessage, normalizeMediaError } from "./convo.js";
+import { classifyVoiceError, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, micUnavailableMessage, normalizeMediaError } from "./convo.js";
 import { TRANSCRIBE_TIMEOUT_MESSAGE } from "./stt.js";
 
 /**
@@ -318,6 +318,35 @@ describe("classifyVoiceError", () => {
 		expect(classifyVoiceError("Whisper error 400: ...")).toBe("error");
 		expect(classifyVoiceError("aborted")).toBe("error");
 	});
+	/**
+	 * #425 — two questions about one error code, and they have different answers.
+	 *
+	 * PAGS runs THREE recognizers over one microphone and two of them re-arm forever. Whether a
+	 * code is worth a durable ROW and whether it should STOP the re-arm loop are separate, because
+	 * getting the second one too wide is how mute-by-voice would be disabled by a transient.
+	 */
+	it("reports a background recognizer's refusal, and its missing device, but not its churn", () => {
+		for (const code of ["not-allowed", "service-not-allowed", "audio-capture"]) {
+			expect(isReportableMicError(code), `${code} should reach the durable log`).toBe(true);
+		}
+		// The codes these handlers exist to ignore. Reporting them would flood the log on a path
+		// that fires every few seconds while voice is engaged (see #423).
+		for (const code of ["no-speech", "aborted", "network", "", null, undefined]) {
+			expect(isReportableMicError(code), `${code} must not be reported`).toBe(false);
+		}
+	});
+
+	it("stops re-arming ONLY for a verdict the browser cannot produce by contention", () => {
+		expect(isMicPermissionDenied("not-allowed")).toBe(true);
+		expect(isMicPermissionDenied("service-not-allowed")).toBe(true);
+		// The important negative. `audio-capture` can be two recognizers fighting over one device;
+		// latching on it would permanently disable the always-on control listener, i.e. delete
+		// mute-by-voice for the rest of the session — the exact ADR 0001 M1 failure #425 is meant
+		// to expose rather than cause.
+		expect(isMicPermissionDenied("audio-capture"), "a transient device conflict must not disable mute-by-voice (ADR 0001 M1)").toBe(false);
+		for (const code of ["no-speech", "aborted", "network", "", null, undefined]) expect(isMicPermissionDenied(code)).toBe(false);
+	});
+
 	it("gives a device-specific hint", () => {
 		expect(micUnavailableMessage("audio-capture")).toMatch(/microphone found/i);
 		expect(micUnavailableMessage("not-allowed")).toMatch(/blocked/i);

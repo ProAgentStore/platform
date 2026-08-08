@@ -51,7 +51,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, commandStateFor, decideRestart, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
 import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
@@ -320,6 +320,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// vouch for a turn made of the agent's own TTS (#332). Without it a silent turn
 					// after a spoken reply was uploaded and came back as a vocabulary term.
 					acceptSpeech: () => !mutedRef.current && !shouldIgnoreResult(readGuard(), Date.now()),
+					// A denied gate is not a no-op: `planNoiseRejection` treats a dead gate as
+					// "cannot vouch for this turn", so it quietly changes which marginal turns
+					// survive — and until #425 it produced no evidence of itself at all.
+					onDenied: (code) => reportClientError("voice-gate", `speech gate refused the microphone: ${code}`, { code }),
 					onInterim: (text) => {
 						// Control words during CAPTURE (#228). In Whisper/OpenAI mode the main path
 						// records with MediaRecorder and produces nothing until the clip uploads, and
@@ -959,7 +963,34 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// Interim AND final both reach the handler; which one this is now MATTERS (#386), so it
 				// is passed through rather than discarded at the boundary.
 				onResult: (text, isFinal) => handleControlResultRef.current(text, isFinal),
-				onError: () => { /* mic denied / no-speech — onEnd re-arms if still wanted */ },
+				/**
+				 * This handler used to be empty, with a comment naming "mic denied" as an expected
+				 * case (#425). It is the listener that carries ADR 0001 M1 in every phase where the
+				 * mic is closed — the agent speaking or thinking — so a denial here DELETES
+				 * mute-by-voice, and it did so with no error row, no notice and no state change.
+				 * An ADR 0001 violation was unobservable in production by construction.
+				 *
+				 * Two different verdicts, deliberately:
+				 *  - REPORT covers a missing device too, because that is diagnostic.
+				 *  - STOP RE-ARMING is narrower, and only for the two codes the browser can only
+				 *    produce by refusing. `onEnd` re-starts on every end, Chrome ends a continuous
+				 *    recognizer after a short silence, and Chrome activates the mic on every
+				 *    `start()` — so against a non-persistent grant this loop IS the "asks me all the
+				 *    time" report. But `audio-capture` can come from two recognizers contending for
+				 *    one device, and latching on that would silently disable mute for the rest of
+				 *    the session, i.e. cause the exact failure this ticket exists to expose.
+				 */
+				onError: (err) => {
+					const code = String(err ?? "");
+					if (!isReportableMicError(code)) return; // no-speech / aborted: ordinary churn
+					reportClientError("voice-control", `control listener refused the microphone: ${code}`, { code });
+					if (!isMicPermissionDenied(code)) return;
+					ctrlWantRef.current = false;
+					// Said ONCE, not once per restart. ADR 0001's known hole, reached the other way:
+					// with no control listener the on-screen mute is the whole invariant, so the
+					// user has to be told which channel they have left.
+					setNotice("⚠ Voice commands are off — the microphone is blocked for this site.");
+				},
 				onEnd: () => { if (ctrlWantRef.current) { try { ctrlSttRef.current?.start(); } catch { /* SR busy */ } } },
 			});
 		} else {

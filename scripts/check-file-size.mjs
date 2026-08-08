@@ -185,7 +185,15 @@ const PINS = {
 	// and why a transcription timeout is exempted from the `isConnectivityError` skip — that helper
 	// matches /timed? ?out/, so the one failure this ticket exists to count would have been filtered
 	// out by the thing that hides network noise.
-	"packages/sdk/src/voice/use-voice.ts": 1871,
+	// +31 for #425, and this is the entry where the prose IS the deliverable. The code is four
+	// statements in a handler that used to be `() => { /* mic denied — onEnd re-arms */ }`. What
+	// the length buys is the reason the two verdicts differ: REPORT covers a missing device because
+	// that is diagnostic, STOP RE-ARMING covers only the two codes a browser can produce by
+	// refusing — because `audio-capture` can be two recognizers contending for one microphone, and
+	// latching on it would disable the always-on control listener, i.e. delete mute-by-voice for
+	// the rest of the session. A reader tidying those two conditions into one would cause the ADR
+	// 0001 M1 failure this handler was changed to expose. Both predicates are pure and in convo.ts.
+	"packages/sdk/src/voice/use-voice.ts": 1902,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -212,7 +220,14 @@ const PINS = {
 	// two readings of the same error string in two files. Most of the addition is why the refusal
 	// check runs FIRST — every one of these strings contains the word "error", so a 4xx would
 	// otherwise be read as retryable and charge the user to discover it was not.
-	"packages/sdk/src/voice/convo.ts": 932,
+	// +36 for #425's two mic-error predicates, which are eight lines of code and thirty of why they
+	// are TWO and not one. They sit here beside `classifyVoiceError` because all three read the same
+	// error string and answer different questions about it — report? stop retrying? stop re-arming?
+	// — and splitting them would put three readings of one vocabulary in three files, which is the
+	// drift this file was consolidated to prevent. The reasoning that had to stay is the negative:
+	// `audio-capture` is deliberately NOT a permission verdict, because two recognizers contending
+	// for one device produce it, and treating it as terminal would silently disable mute-by-voice.
+	"packages/sdk/src/voice/convo.ts": 968,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -332,7 +347,12 @@ const PINS = {
 	// courtesy. Both DECISIONS are pure and tested in repo-open.ts (which label, and whether the
 	// solo surface may auto-open), which is where a split would have put them anyway.
 	"agents/coder/web/src/CodingTab.tsx": 1289,
-	"packages/browser-runner/src/runner.ts": 1208,
+	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
+	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
+	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
+	// it removes — so the second flag is not belt-and-braces, it is the point. That sentence has to
+	// live next to the flags, because removing "the redundant-looking one" is the obvious tidy-up.
+	"packages/browser-runner/src/runner.ts": 1226,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in

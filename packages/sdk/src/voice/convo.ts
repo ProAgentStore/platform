@@ -890,6 +890,42 @@ export function isRetryableVoiceError(err: string | null | undefined): boolean {
 	return /timed out|timeout|\b5\d\d\b|updating|stream failed|whisper failed|network|load failed|failed to fetch/.test(e);
 }
 
+/**
+ * Is this Web Speech error a PERMISSION VERDICT — i.e. terminal until the user changes something
+ * in their browser (#425)?
+ *
+ * PAGS runs THREE recognizers over one microphone: the main one, the dictation gate, and the
+ * always-on control listener. The last two re-arm themselves on every `onend`, and Chrome ends a
+ * continuous recognizer after a short silence — so while voice is engaged they are a perpetual
+ * start → end → start cycle, and Chrome activates the mic on every `start()`. Against a grant that
+ * is not persistent ("Allow this time"), that is one permission prompt per RESTART, which is the
+ * shape of "it asks me all the time". Re-arming into a denied device is what turns one denial into
+ * an endless loop, so a denial has to stop the loop.
+ *
+ * Deliberately NARROW. `no-speech` and `aborted` are the ordinary churn those handlers exist to
+ * ignore, and `audio-capture` can be produced by two recognizers contending for one device — a
+ * transient that must NOT permanently disable the control listener, because doing so would silently
+ * remove mute-by-voice and cause the exact ADR 0001 failure this ticket is meant to expose. These
+ * two codes cannot be caused by contention; they are the browser saying no.
+ */
+export function isMicPermissionDenied(code: string | null | undefined): boolean {
+	return code === "not-allowed" || code === "service-not-allowed";
+}
+
+/**
+ * Is this worth a durable row from a BACKGROUND recognizer (#425)?
+ *
+ * Wider than the above, because the question is different: a missing device is diagnostic even
+ * though it is not a permission decision. Both background recognizers swallowed everything —
+ * `onError: () => {}` with a comment naming "mic denied" as an expected case, and `r.onerror = () => {}` —
+ * so a control listener dying took mute-by-voice with it and left no evidence anywhere. The
+ * production log's 18 mic failures were all from the MAIN recognizer, which is the only one that
+ * could report; "no errors from the other two" was never evidence that they worked.
+ */
+export function isReportableMicError(code: string | null | undefined): boolean {
+	return isMicPermissionDenied(code) || code === "audio-capture";
+}
+
 /** Human hint for a mic-unavailable error code. */
 export function micUnavailableMessage(err: string): string {
 	if (err === "audio-capture") return "No microphone found — check your device.";

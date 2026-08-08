@@ -17,6 +17,7 @@
  */
 
 import { isNoiseTranscript } from "./audio.js";
+import { isMicPermissionDenied } from "./convo.js";
 
 interface SpeechRecognitionAlternativeLike {
 	readonly transcript: string;
@@ -85,6 +86,16 @@ export interface SpeechGateOptions {
 	 * the veto and the display agree about whose voice they are hearing.
 	 */
 	acceptSpeech?: () => boolean;
+	/**
+	 * The recognizer was refused the microphone (#425).
+	 *
+	 * `r.onerror` was an empty block. That silence had two costs: nobody could learn that a gate had
+	 * died, and `planNoiseRejection` treats a dead gate as "cannot vouch for this turn", so a
+	 * blocked gate quietly changes which marginal turns survive. Reported through a callback rather
+	 * than by importing the client here, so this module stays a pure browser adapter and the test
+	 * can observe the call without a network stub.
+	 */
+	onDenied?: (code: string) => void;
 }
 
 /** Is browser dictation available at all? (Used to decide whether to gate.) */
@@ -108,6 +119,8 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 	let active = false;
 	let heard = false;
 	let alive = false;
+	/** The browser refused this origin the microphone. Terminal until the user changes it (#425). */
+	let denied = false;
 	let restartFails = 0;
 
 	const build = (): SpeechRecognitionLike => {
@@ -134,12 +147,19 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 				opts.onSpeech?.();
 			}
 		};
-		r.onerror = () => {
-			/* "no-speech"/"aborted" are normal for a gate — the onend restart handles it. */
+		r.onerror = (e: { error: string }) => {
+			// "no-speech"/"aborted" are normal for a gate — the onend restart handles it. A
+			// PERMISSION verdict is not: it will not resolve by trying again, and re-arming into it
+			// is what makes Chrome re-prompt on every restart (#425).
+			if (!isMicPermissionDenied(e?.error)) return;
+			denied = true;
+			opts.onDenied?.(e.error);
 		};
 		r.onend = () => {
 			alive = true; // it started and ended → the engine is running
-			if (!active) return;
+			// `denied` is checked with `active` because a restart here cannot succeed and each
+			// attempt costs the user another prompt.
+			if (!active || denied) return;
 			// Keep watching: restart unless it's failing in a tight loop (mic blocked).
 			try {
 				r.start();
@@ -154,7 +174,7 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 
 	return {
 		start() {
-			if (active) return;
+			if (active || denied) return;
 			active = true;
 			if (!rec) rec = build();
 			try {
