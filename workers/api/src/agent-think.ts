@@ -31,6 +31,7 @@ import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-tru
 import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
+import { attachedReposPrompt } from "./lib/repo-status-prompt.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
@@ -489,18 +490,18 @@ export async function runAgentThink(opts: {
 				const boundConn = await getBoundRunnerConn(env, state.agentId, userId).catch(() => null);
 				const runnerOnline = boundConn ? await relayConnected(env, state.agentId, boundConn.runnerNode ?? null) : false;
 				systemPrompt += runnerStatusPrompt(selfModel, runnerOnline);
-				systemPrompt += "\n\n## Attached Repositories\n";
-				for (const r of repos) {
-					const status =
-						r.cloneStatus === "ready"
-							? "ready"
-							: r.cloneStatus === "cloning"
-								? "cloning…"
-								: r.cloneStatus === "error"
-									? `clone error${r.cloneError ? `: ${r.cloneError}` : ""}`
-									: r.cloneStatus;
-					systemPrompt += `- ${r.name}${r.githubRepo ? ` (${r.githubRepo})` : ""} — ${status}\n`;
-				}
+				// #416: the block is a pure function now, not a ternary chain. The chain read
+				// `cloneError` on exactly ONE branch and printed the raw enum token for every status it
+				// did not enumerate — so #405's relayable diagnosis ("the configured checkout … exists
+				// but is EMPTY") never reached the model, which was told `needs_attention` and nothing
+				// else. The phrase table in `repo-status-prompt.ts` is `satisfies Record<CloneStatus,
+				// string>`, so the next new status is a compile error rather than another leaked token.
+				//
+				// It is NOT a second rendering of what `selfDescriptionPrompt` said above: that block
+				// states OWNERSHIP (which repository is mine, and where), this one states HEALTH
+				// (whether there is code at that path). Verified before wiring it — neither
+				// `agent-self-description.ts` nor `agent-style-prompt.ts` reads `cloneStatus` at all.
+				systemPrompt += attachedReposPrompt(repos);
 				const sessions = await listSessions(env, state.agentId, userId);
 				const active = sessions.filter((s) => s.status === "active");
 				if (active.length > 0) {
