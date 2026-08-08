@@ -184,7 +184,43 @@ function buildShell(dir, { title, description, name }) {
 </html>`;
 }
 
+/**
+ * `store/docs` is GENERATED and gitignored, and a spec reads it (#452).
+ *
+ * `.gitignore:12` ignores `store/docs/`, so a fresh checkout — and every new git worktree, which
+ * is how several agents work this repo at once — has no `/docs/*` at all until `pnpm docs:build`
+ * runs. CI does that in a named `Build docs` step before `pnpm test:e2e`, which is exactly why
+ * this is invisible from the CI side and costs an afternoon from the other.
+ *
+ * There WAS a message for this, and it was in the wrong place: the 404 branch below names
+ * `pnpm docs:build`, but a 404 reaches the spec as a missing heading, so the failure arrives
+ * saying "waiting for getByRole('heading', { name: 'ProAgentStore Browser Runtime' })". That
+ * reads as a broken docs page. Observed today, in this worktree, on the first full run.
+ *
+ * It is the same class as the shared bundle and the shared port: a run graded against state that
+ * is not its own — here, state that does not exist. So it is refused at startup, where the
+ * message can name the command, rather than per-request.
+ *
+ * MISSING is checked; STALE deliberately is not. The docs sources are edited constantly by
+ * concurrent sessions, and failing every run until each one re-ran `docs:build` would cost more
+ * than it catches. `pnpm docs:drift` is the gate that watches docs content.
+ */
+function requireBuiltDocs() {
+	// The one path any spec actually loads (`console.spec.ts` → `/docs/browser-runtime/`).
+	if (existsSync(join(storeRoot, "docs", "browser-runtime", "index.html"))) return;
+	console.error(
+		"\n✗ store/docs is missing, and a spec loads /docs/browser-runtime/.\n" +
+			"  It is BUILD OUTPUT and gitignored, so a fresh checkout or a new git worktree has none.\n" +
+			"  Without it that spec fails naming a heading, which reads as a broken page rather than\n" +
+			"  a missing build step.\n\n" +
+			"  Run:  pnpm docs:build\n\n" +
+			"  (CI does this in its own `Build docs` step before `pnpm test:e2e`.)\n",
+	);
+	process.exit(1);
+}
+
 requireBuiltSdk();
+requireBuiltDocs();
 
 const consoleHtml = buildShell(consoleDir, {
 	name: "console",
