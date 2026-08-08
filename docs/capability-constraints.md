@@ -106,6 +106,36 @@ Set through `GET`/`PUT /v1/instances/{id}/terminal-target`, merged by
 one; with nothing bound, a target-taking call is refused rather than guessed — the same call the
 backend ceiling already makes when several backends are permitted and none is named.
 
+### The posture: fail CLOSED, in both directions (#441)
+
+The gate refuses whenever it cannot **locate** the ceiling it is meant to honour — not only when
+reading it throws. Two failures are refusals and one is not, and the distinction is the whole
+design:
+
+| Lookup result | Gate | Why |
+|---|---|---|
+| the read throws | **refused** | a ceiling that cannot be read cannot be honoured, and a boundary that opens when its store hiccups is not a boundary |
+| no authority on the call, or an authority the join does not match | **refused** | the ceiling exists and this call cannot say whose it is |
+| the row is there and declares nothing | **runs, unconstrained** | every agent on the platform bar three — byte-identical to before #404 existed |
+
+This matches the write-consent gate three blocks above it, whose posture is the same and whose
+comment says so; the value of a gate is that its posture is predictable, and this was the only
+permission-shaped check in `runRegistryTool` that opened rather than closed on a missing input.
+
+The refusal-on-no-authority case is not hypothetical. `ctx.instanceId` holds an instance id on every
+production path, but the agent-TEMPLATE chat surfaces (`/v1/agents/:id/chat` and the public trial)
+pass an **agent** id, so the `agent_instances` join misses. `lookupConnectorConstraints` returns a
+discriminated `{instance:"found", spec}` / `{instance:"missing"}` precisely so the gate can tell
+"no such row" from "no ceiling declared" — the old lookup answered `undefined` to both, which is
+what left a creator's own trial chat of a ceiling-declaring agent unconstrained while the consent
+gate refused the identical input. **The fix is at the gate, not at the caller**: a rule that holds
+only where the caller remembered to pass the right kind of id is not a rule.
+
+Blast radius, stated because it is small and should not be overestimated: only a connector present
+in `CONNECTOR_CONSTRAINTS` reaches this gate at all. Every other connector skips the block
+entirely. Adding a key to that table therefore turns the posture on for that connector's tools, and
+its dispatch paths must be checked for an instance id first.
+
 ## What this is NOT
 
 - **Not a general policy engine.** A closed vocabulary per connector, reviewed like every other
