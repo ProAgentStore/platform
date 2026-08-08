@@ -112,6 +112,22 @@ describe("normalizeToolCalls", () => {
 		expect(calls[1].arguments.b).toBe(2);
 	});
 
+	it("passes the provider's tool_use id through, and omits it when there isn't one (#398)", () => {
+		// The id is what ties a RESULT back to the call that asked for it. Without it, two calls to
+		// the same tool with different arguments in one round come back as two results the model can
+		// only tell apart by reading them — and when it cannot, it guesses.
+		const calls = normalizeToolCalls([
+			{ name: "repo_read_file", arguments: { path: "a.ts" }, id: "tu_1" },
+			{ name: "repo_read_file", arguments: { path: "b.ts" }, id: "tu_2" },
+			{ name: "no_id_here", arguments: {} },
+			{ name: "blank_id", arguments: {}, id: "" },
+		]);
+		expect(calls.map((c) => c.id)).toEqual(["tu_1", "tu_2", undefined, undefined]);
+		// Absent, not undefined-valued: a caller that branches on the structured protocol asks
+		// whether the key is there.
+		expect(Object.hasOwn(calls[2], "id")).toBe(false);
+	});
+
 	it("collapses non-object args (null / primitive) to {}", () => {
 		const calls = normalizeToolCalls([
 			{ name: "n1", arguments: null },

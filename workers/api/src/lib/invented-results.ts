@@ -22,8 +22,11 @@
  * ── The one fact this module stands on
  *
  * The platform NEVER writes tool-result markup into an assistant message. Results reach the model
- * as a separate `I called tools:\n[name]: …` message and reach the user as the tool log. So a
- * result block in the model's own text is proof by construction, not a heuristic. It is
+ * as the PLATFORM's own turn — since #398 a `user` turn of real `tool_result` blocks on the
+ * structured path, and the older `[name]: …` prose message on the Workers-AI fallback — and reach
+ * the user as the tool log. So a result block in the model's own text is proof by construction,
+ * not a heuristic. (#398 strengthens this rather than weakening it: on the structured path a
+ * result is now a block type an assistant turn cannot legally contain.) It is
  * `untrusted-fence.ts` pointed the other way: that one fences text coming IN so it is never read
  * as instructions, this one catches text going OUT that claims to be a platform record.
  *

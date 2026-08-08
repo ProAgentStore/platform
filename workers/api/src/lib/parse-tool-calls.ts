@@ -102,11 +102,17 @@ function findMatchingBrace(text: string, start: number): number {
  * Normalize tool_calls from Workers AI response.
  * REST API returns OpenAI format: tool_calls[i].function.{name, arguments}
  * Workers AI binding returns flat: tool_calls[i].{name, arguments}
+ *
+ * `id` is passed through when the provider supplied one (#398). It is the provider's `tool_use` id
+ * and the only thing that ties a result back to the call that asked for it — without it, two calls
+ * to the same tool with different arguments in one round produce two results the model can only
+ * tell apart by reading them. Optional, because the text-embedded path has no ids to give and the
+ * Workers-AI fallback does not use them; a caller that needs the structured protocol checks for it.
  */
 export function normalizeToolCalls(
 	rawCalls: unknown[],
-): Array<{ name: string; arguments: Record<string, unknown> }> {
-	const out: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+): Array<{ name: string; arguments: Record<string, unknown>; id?: string }> {
+	const out: Array<{ name: string; arguments: Record<string, unknown>; id?: string }> = [];
 	for (const tc of rawCalls) {
 		try {
 			const call = tc as Record<string, unknown>;
@@ -126,7 +132,8 @@ export function normalizeToolCalls(
 			// (which failed the entire chat turn). Non-object results collapse to {}.
 			const parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
 			const args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-			out.push({ name, arguments: args });
+			const id = typeof call.id === "string" && call.id ? call.id : undefined;
+			out.push({ name, arguments: args, ...(id ? { id } : {}) });
 		} catch {
 			// malformed arguments for this call — skip it, keep the rest
 		}

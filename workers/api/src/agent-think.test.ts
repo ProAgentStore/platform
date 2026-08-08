@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { toolBlurbFor, withPartialToolLog } from "./agent-think.js";
-import { findCalls, stripCommentsAndLiterals } from "./lib/source-guard.js";
+import { findCalls, matchLines, stripCommentsAndLiterals } from "./lib/source-guard.js";
 import type { AgentCapabilities } from "./lib/agent-capabilities.js";
 
 /** agent-think.ts as written, and with comments/strings blanked (line numbers preserved). */
@@ -130,6 +130,62 @@ describe("connector tools are described with the instance's real consent (#399)"
 		// Over the RAW file, comments included: the sentence is the defect, and a copy of it left in
 		// a comment next to a call site is one revert away from being live again.
 		expect(THINKER).not.toContain("[write — needs the connector's consent]");
+	});
+});
+
+// ── #398: a tool result arrives as the PLATFORM's block, never as the model's prose ──
+//
+// The loop used to append `{role:"assistant", content:"I called tools:\n…"}` and never append the
+// model's `tool_use` turn at all. Ground truth lived in the one role that means "the model's own
+// words", which is the convention #395's fabrication imitated — the model reproduced the format it
+// was shown every single turn. The shape of the fix is asserted over the source because the
+// regression is a REVERT to something that reads perfectly well: two `aiMessages.push` calls of
+// plain strings.
+describe("tool results are the platform's blocks, not the assistant's words (#398)", () => {
+	// These read the RAW file: `stripCommentsAndLiterals` blanks string bodies, so `role: "user"`
+	// survives as `role: "    "` and a rule about which ROLE carries the blocks cannot be written
+	// against the lexed form.
+	it("appends the provider's own assistant turn, blocks intact", () => {
+		expect(THINKER).toContain('aiMessages.push({ role: "assistant", content: rawResult.contentBlocks })');
+	});
+
+	it("answers it with a USER turn of tool_result blocks — never an assistant one", () => {
+		// The role is the whole point. `invented-results.ts` proves a fabrication by construction
+		// from the fact that the platform never writes result markup into an ASSISTANT message; put
+		// these blocks on an assistant turn and that proof is gone along with the fix.
+		expect(THINKER).toMatch(/aiMessages\.push\(\{\s*role:\s*"user",\s*content:\s*toolResultTurn\(/);
+		expect(THINKER).not.toMatch(/role:\s*"assistant",\s*content:\s*toolResultTurn\(/);
+	});
+
+	it("takes the ids from the assistant turn, not from the normalized call list", () => {
+		// `normalizeToolCalls` skips a call with malformed arguments; its `tool_use` block stays in
+		// the turn, and an unanswered id makes the provider reject the whole request.
+		expect(findCalls(THINKER_CODE, "toolUseIdsOf")).toHaveLength(1);
+		expect(findCalls(THINKER_CODE, "toolResultTurn")).toHaveLength(1);
+	});
+
+	it("keeps the prose shape ONLY as the no-blocks fallback", () => {
+		// Workers AI does not speak this protocol, and its limitation must not set the format for
+		// `claude-sonnet-4-6`, which is what almost every chat actually runs on. One occurrence: any
+		// second one is the unconditional path coming back.
+		expect(THINKER.split("I called tools:").length - 1).toBe(1);
+	});
+
+	it("still DEFINES the tools on the two prose-only completions", () => {
+		// The final answer and #395's correction round send no tools, which is how they discourage
+		// another round. Once the transcript holds tool blocks the provider rejects that outright —
+		// a 400 on the whole turn, not a worse reply. Both must go through `proseOnly()`.
+		// matchLines, not findCalls: the call sites spread it (`...proseOnly()`), and findCalls's
+		// lookbehind — which is what stops `stub.fetch(` matching `fetch(` — rejects the leading dot.
+		expect(matchLines(THINKER_CODE, /proseOnly\(\)/g)).toHaveLength(2);
+		expect(findCalls(THINKER_CODE, "hasToolBlocks")).toHaveLength(1);
+	});
+
+	it("records every call's outcome against its id, including refusals and de-duplicated repeats", () => {
+		// An id with no entry is answered by a placeholder, so a miss degrades one result instead of
+		// failing the request — but a refusal that never reaches the map is a result the model is
+		// told the platform did not run, which is a different and false fact.
+		expect(findCalls(THINKER_CODE, "record").length).toBeGreaterThanOrEqual(3);
 	});
 });
 

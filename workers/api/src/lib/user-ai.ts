@@ -1,4 +1,5 @@
 import { decryptKey } from "./crypto.js";
+import { mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -46,7 +47,7 @@ export async function runUserWorkersAi(
 	if (anthropicKey) {
 		// content is usually a string, but may be an array of content blocks (e.g. a
 		// PDF `document` block for résumé parsing) — passed straight through to Anthropic.
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number }, ctx);
+		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number }, ctx);
 	}
 
 	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
@@ -64,6 +65,14 @@ export async function runUserWorkersAi(
  * leaves two adjacent `user` messages once the `system` error note is filtered out,
  * and the tool loop appends `assistant, user, user`. Normalize before sending:
  * drop leading assistants, then merge consecutive same-role messages into one.
+ *
+ * It now also knows about `tool_use` / `tool_result` blocks (#398). It has to: those are the two
+ * block types the API pairs across turns, and this function is the only thing between the caller's
+ * array and the wire that DROPS and MERGES turns. Its merge of consecutive same-role turns is
+ * exactly what used to erase the boundary between a platform result and the model's own prose, and
+ * left unchanged it would now bury a `tool_result` behind a trailing string or orphan one behind a
+ * dropped leading assistant — both of which the provider answers with a 400 on the whole request.
+ * The rules are pure and live in lib/anthropic-tool-turns.ts with their tests.
  */
 function normalizeForAnthropic(
 	msgs: Array<{ role: string; content: unknown }>,
@@ -74,11 +83,14 @@ function normalizeForAnthropic(
 	}));
 	let start = 0;
 	while (start < mapped.length && mapped[start].role === "assistant") start++;
+	// Pair BEFORE merging: an orphan is created by the drop above, and merging first would fold it
+	// into a neighbouring turn where "which turn introduced this id" is no longer answerable.
+	const paired = pairToolBlocks(mapped.slice(start));
 	const merged: Array<{ role: "user" | "assistant"; content: unknown }> = [];
-	for (const m of mapped.slice(start)) {
+	for (const m of paired) {
 		const last = merged[merged.length - 1];
 		if (last && last.role === m.role) {
-			last.content = mergeAnthropicContent(last.content, m.content);
+			last.content = mergeContent(last.content, m.content);
 		} else {
 			merged.push({ role: m.role, content: m.content });
 		}
@@ -86,18 +98,11 @@ function normalizeForAnthropic(
 	return merged;
 }
 
-function mergeAnthropicContent(a: unknown, b: unknown): unknown {
-	if (typeof a === "string" && typeof b === "string") return `${a}\n\n${b}`;
-	const toBlocks = (c: unknown): unknown[] =>
-		Array.isArray(c) ? c : [{ type: "text", text: String(c) }];
-	return [...toBlocks(a), ...toBlocks(b)];
-}
-
 async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
 	apiKey: string,
-	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number },
+	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number },
 	ctx?: UsageContext,
 ): Promise<unknown> {
 	const messages = normalizeForAnthropic((body.messages || []).filter((m) => m.role !== "system"));
@@ -131,6 +136,12 @@ async function runAnthropic(
 				input_schema: t.function?.parameters || t.parameters || { type: "object", properties: {} },
 			});
 		}
+		// `none` declares the tools without permitting a call (#398). The caller that needs it is
+		// the one producing a FINAL answer after a structured tool round: the provider requires
+		// `tools` to be defined whenever the messages contain `tool_use`/`tool_result`, and simply
+		// omitting them — which is how the final call used to discourage another round — turns the
+		// whole request into a 400 the moment the transcript is in the structured protocol.
+		if (body.toolChoice === "none") anthropicBody.tool_choice = { type: "none" };
 	}
 
 	const timeoutMs = body.timeoutMs ?? 25_000;
@@ -185,7 +196,7 @@ async function runAnthropic(
 	).bind(userId).run();
 
 	// Convert Anthropic response to Workers AI format for compatibility
-	const content = (data.content as Array<{ type: string; text?: string; name?: string; input?: unknown }>) || [];
+	const content = (data.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }>) || [];
 	const textParts = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
 	const toolUse = content.filter((c) => c.type === "tool_use");
 	const u = (data.usage as Record<string, number>) || {};
@@ -219,7 +230,17 @@ async function runAnthropic(
 			tool_calls: toolUse.map((t) => ({
 				name: t.name,
 				arguments: t.input || {},
+				// The id is what makes a result ATTRIBUTABLE (#398). Dropping it is why the follow-up
+				// context read `[repo_read_file]: <contents>` with no path: call one tool twice in a
+				// round with different arguments and the model had to infer which result was which.
+				id: t.id,
 			})),
+			// The assistant turn EXACTLY as the provider produced it, so the caller can append it and
+			// answer its `tool_use` blocks with real `tool_result`s instead of narrating them back as
+			// the model's own prose. Named `contentBlocks` rather than `content` so it cannot be
+			// mistaken for a message's content field. Absent on every non-Anthropic provider, which
+			// is how the caller branches without a provider enum to keep in sync.
+			contentBlocks: content,
 			usage,
 			stopReason,
 		};

@@ -423,7 +423,23 @@ const PINS = {
 	// genuinely IS blocked — is pure and lives in lib/connector-tool-prompt.ts with its tests. What
 	// is left here is the one thing only this function can do: read the instance's consent rows at
 	// the moment the prompt is built, which is exactly what a cache would have got wrong.
-	"workers/api/src/agent-think.ts": 988,
+	// +50 at #398, and about two thirds of it is prose about a protocol change that is invisible in
+	// the diff: a tool result now arrives as the PLATFORM's `tool_result` block on a `user` turn,
+	// answering the model's own `tool_use` turn, instead of as an assistant paragraph that narrated
+	// them while the `tool_use` turn was dropped entirely. That old shape is the convention #395's
+	// fabrication imitated — the model reproduced the format it was shown every turn — so a reader
+	// who finds the branch without finding WHY will eventually simplify it back to two string
+	// pushes, which is the bug. The decisions are pure and live in lib/anthropic-tool-turns.ts with
+	// their tests: which ids must be answered, the turn that answers them, the merge that cannot
+	// bury a result, and the pairing that stops an orphan 400ing the whole chat. What is left here
+	// is the part only this function can do — recording each call's outcome against its id as the
+	// round executes, choosing the branch from whether the completion carried blocks at all, and
+	// `proseOnly()` — the provider requires `tools` to be DEFINED whenever the messages contain tool
+	// blocks, so the two completions that deliberately send none (the final answer, and #395's
+	// correction round) declare them with `tool_choice:"none"` instead. Omitting them is a 400 on
+	// the whole turn rather than a worse reply, which is exactly the kind of constraint that has to
+	// be written down beside the call that would otherwise look fine.
+	"workers/api/src/agent-think.ts": 1053,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

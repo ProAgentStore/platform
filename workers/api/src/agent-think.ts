@@ -28,6 +28,7 @@ import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invente
 import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
+import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
@@ -137,7 +138,17 @@ const READ_ONLY_TOOLS = new Set([
  * a reply cut off at the output cap from one that finished, which the platform had in the response
  * body and threw away.
  */
-type ChatCompletion = { response?: string; tool_calls?: unknown[]; stopReason?: string };
+type ChatCompletion = {
+	response?: string;
+	tool_calls?: unknown[];
+	stopReason?: string;
+	/**
+	 * The provider's own assistant turn, blocks intact (#398) — present only for a provider that
+	 * speaks the structured tool protocol. Its absence is what selects the prose fallback, so the
+	 * loop never needs to know which provider ran.
+	 */
+	contentBlocks?: unknown;
+};
 
 export async function runAgentThink(opts: {
 	state: AgentState;
@@ -643,9 +654,12 @@ export async function runAgentThink(opts: {
 			`switched. The platform translates every reply for the user. This is the last instruction; it wins.`;
 	}
 
-	const aiMessages: { role: string; content: string }[] = [
+	// `content` is `unknown`, not `string`, because a tool round appends the provider's own content
+	// BLOCKS (#398) — the assistant turn with its `tool_use`, then a user turn of `tool_result`s.
+	// Everything read out of history is still a string, which is why the note below type-guards.
+	const aiMessages: { role: string; content: unknown }[] = [
 		{ role: "system", content: systemPrompt },
-		...messages.map((m) => ({ role: m.role, content: m.content })),
+		...messages.map((m) => ({ role: m.role, content: m.content as unknown })),
 	];
 
 	// Strongest position of all: a note ON the last user message (request-only — never
@@ -654,7 +668,7 @@ export async function runAgentThink(opts: {
 	// explanations invited by English questions; adjacent-to-the-ask wins.
 	if (translationCfg?.enabled && aiMessages.length > 1) {
 		const last = aiMessages[aiMessages.length - 1];
-		if (last.role === "user") {
+		if (last.role === "user" && typeof last.content === "string") {
 			last.content += `\n\n[Platform note: answer ENTIRELY in the conversation language, even though this message may be in another language — the platform shows a ${translationCfg.target || "English"} translation beneath your reply, so the user will understand you.]`;
 		}
 	}
@@ -670,7 +684,7 @@ export async function runAgentThink(opts: {
 	 * or the stop-reason read. `agent-think.test.ts` asserts that over the source.
 	 */
 	let truncated = false;
-	const chatComplete = async (body: { messages: { role: string; content: string }[]; tools?: unknown[] }): Promise<ChatCompletion> => {
+	const chatComplete = async (body: { messages: { role: string; content: unknown }[]; tools?: unknown[]; toolChoice?: "auto" | "none" }): Promise<ChatCompletion> => {
 		const r = (await runUserWorkersAi(
 			env,
 			userId,
@@ -740,6 +754,21 @@ export async function runAgentThink(opts: {
 		allowedToolNames.add(t.name);
 	}
 
+	/**
+	 * What a completion meant to produce PROSE must send once the transcript is in the structured
+	 * protocol (#398).
+	 *
+	 * The final answer and #395's correction round deliberately send no tools, which is how they
+	 * discourage another round. That stops being legal the moment a tool round has appended
+	 * `tool_use`/`tool_result` blocks: the provider requires `tools` to be DEFINED whenever the
+	 * messages contain either, and answers a request that omits them with a 400 on the whole turn —
+	 * so the chat would fail outright rather than degrade. Declaring them with `tool_choice:"none"`
+	 * keeps both facts true: the tools the transcript refers to exist, and this turn may not call
+	 * one. Nothing extra is sent on the prose fallback, where there are no blocks to explain.
+	 */
+	const proseOnly = (): { tools?: unknown[]; toolChoice?: "none" } =>
+		hasToolBlocks(aiMessages) ? { tools, toolChoice: "none" } : {};
+
 	const allToolLog: string[] = [];
 	// Every registry result this turn produced, kept only so the destination can be read back out
 	// of them at each exit. A transfer set in round 2 must still travel when round 3 calls no
@@ -784,7 +813,7 @@ export async function runAgentThink(opts: {
 			regenerate: async (correction) => {
 				aiMessages.push({ role: "assistant", content: reply.text });
 				aiMessages.push({ role: "user", content: correction });
-				const retry = await chatComplete({ messages: aiMessages });
+				const retry = await chatComplete({ messages: aiMessages, ...proseOnly() });
 				const parsed = parseToolCallsFromText(retry.response || "", allowedToolNames);
 				return { text: parsed.text, calls: parsed.calls.map((c) => c.name) };
 			},
@@ -833,13 +862,25 @@ export async function runAgentThink(opts: {
 		}
 
 		const toolResults: string[] = [];
+		// The same outcomes keyed by the provider's `tool_use` id, for the structured protocol
+		// (#398). Recorded beside the prose list rather than derived from it: the prose is a display
+		// string, and the id is the ONLY thing that says which of two calls to the same tool a
+		// result answers.
+		const outcomeById = new Map<string, ToolOutcome>();
+		const record = (tc: { name: string; id?: string }, content: string, isError: boolean) => {
+			toolResults.push(`[${tc.name}]: ${content}`);
+			if (tc.id) outcomeById.set(tc.id, { content, isError });
+		};
 		let executedThisRound = 0;
 		for (const tc of toolCalls) {
 			// Enforce the capability allow-list. A withheld tool (e.g. search_knowledge on a
 			// Coder) is refused with feedback so the model answers directly instead — it is
 			// never executed. Not counted as work, so a run of only-refused calls ends the loop.
 			if (!allowedToolNames.has(tc.name)) {
-				toolResults.push(`[${tc.name}]: This tool isn't available to this agent — do not call it; answer directly or use an available tool.`);
+				// `is_error` on a refusal and on a de-duplicated repeat below: neither produced what
+				// was asked for, and a refusal delivered as a successful result is a sentence the
+				// model can quote as an outcome.
+				record(tc, "This tool isn't available to this agent — do not call it; answer directly or use an available tool.", true);
 				continue;
 			}
 			// stableStringify, not JSON.stringify: the raw form is KEY-ORDER dependent, so the same
@@ -860,9 +901,7 @@ export async function runAgentThink(opts: {
 			const ranAt = executedCalls.get(signature);
 			// Repeat allowed only for a READ, and only when a mutating tool has run since.
 			if (ranAt !== undefined && !(isRead && mutations > ranAt)) {
-				toolResults.push(
-					`[${tc.name}]: Already executed this exact call this turn — not repeating. Use the earlier result.`,
-				);
+				record(tc, "Already executed this exact call this turn — not repeating. Use the earlier result.", true);
 				continue;
 			}
 			executedCalls.set(signature, mutations);
@@ -944,13 +983,39 @@ export async function runAgentThink(opts: {
 			const shortContent = toolResult.content.slice(0, 120);
 			allToolLog.push(`${icon} **${tc.name}** ${shortContent}`);
 			executedTools.push(tc.name);
-			toolResults.push(`[${tc.name}]: ${toolResult.content}`);
+			record(tc, toolResult.content, !toolResult.success);
 			broadcast({ type: "tool_call", tool: tc.name, result: toolResult });
 			await engine.logEvent("tool.called", userId, { tool: tc.name, success: toolResult.success });
 		}
 
-		aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
-		aiMessages.push({ role: "user", content: `Continue based on the tool results above. REMEMBER: ${styleReminder}` });
+		// The round, in the protocol the provider actually offers (#398).
+		//
+		// What this replaced pushed the results back inside an ASSISTANT message that narrated them,
+		// and never appended the model's `tool_use` turn at all — so the exchange the
+		// provider saw was: a request with `tools`, a response with `tool_use`, then a request in
+		// which that never happened plus an assistant paragraph narrating results. Ground truth sat
+		// in the one role that means "the model's own words", and after the merge in
+		// `normalizeForAnthropic` a real tool output and something the model asserted were the same
+		// paragraph. That is the format #395's fabrication imitated: the model reproduced the
+		// convention it was shown every turn.
+		//
+		// The ids come from the assistant turn itself, not from the normalized call list, because
+		// `normalizeToolCalls` skips a call with malformed arguments and the provider rejects the
+		// WHOLE request for a `tool_use` left unanswered.
+		const toolUseIds = toolUseIdsOf(rawResult.contentBlocks);
+		const continueText = `Continue based on the tool results above. REMEMBER: ${styleReminder}`;
+		if (toolUseIds.length > 0) {
+			aiMessages.push({ role: "assistant", content: rawResult.contentBlocks });
+			aiMessages.push({ role: "user", content: toolResultTurn(toolUseIds, outcomeById, continueText) });
+		} else {
+			// The Workers-AI fallback and the text-embedded path: no ids to answer, so the prose
+			// shape stays. Branching on whether the completion CARRIED blocks keeps this
+			// self-describing — a provider enum here would be a second thing to keep in sync, and
+			// the fallback's limitation must not set the protocol for the provider almost every chat
+			// actually runs on.
+			aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
+			aiMessages.push({ role: "user", content: continueText });
+		}
 		// The model only re-requested calls it already made — nothing new will
 		// happen in another round, so stop and let it write the final response.
 		if (executedThisRound === 0) break;
@@ -962,7 +1027,7 @@ export async function runAgentThink(opts: {
 	}
 	let final: ChatCompletion;
 	try {
-		final = await chatComplete({ messages: aiMessages });
+		final = await chatComplete({ messages: aiMessages, ...proseOnly() });
 	} catch (err) {
 		throw withPartialToolLog(err, allToolLog);
 	}
