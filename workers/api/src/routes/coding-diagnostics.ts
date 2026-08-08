@@ -218,6 +218,10 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				activeSessions: activeSessions.length,
 				issue: r.cloneStatus === "error" ? `clone failed: ${r.cloneError || "unknown error"}`
 					: r.cloneStatus === "missing_url" ? "no clone URL and no local path"
+					// #405 — the machine looked at this local path and it is not usable. Reported
+					// here too: "the agent answers about a repo that isn't there" is exactly the
+					// symptom someone opens this panel to explain.
+					: r.cloneStatus === "needs_attention" ? r.cloneError || "the local path is not usable"
 					: null,
 			};
 		});
@@ -242,7 +246,17 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			if (s.issue) issues.push({ severity: "warn", message: `Session ${s.id.slice(-8)} (${s.repoName}): ${s.issue}`, fix: s.issue.startsWith("orphaned") ? "Kill the session and start a new one" : "Restart the session from ⚙" });
 		}
 		for (const r of repos) {
-			if (r.issue) issues.push({ severity: "warn", message: `Repo "${r.name}": ${r.issue}`, fix: r.cloneStatus === "error" ? "Delete and re-add the repo, or fix the clone URL" : undefined });
+			if (r.issue)
+				issues.push({
+					severity: "warn",
+					message: `Repo "${r.name}": ${r.issue}`,
+					fix:
+						r.cloneStatus === "error"
+							? "Delete and re-add the repo, or fix the clone URL"
+							: r.cloneStatus === "needs_attention"
+								? "Point the repo at the real checkout (⚙ Repo settings), or delete it — the agent cannot read code that isn't there"
+								: undefined,
+				});
 		}
 
 		const activeSessions = sessions.filter((s) => s.status === "active");

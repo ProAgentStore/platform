@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -11,6 +11,86 @@ import { join } from "node:path";
  * inside it (#247). Split out so the tmux module is only tmux, and only the terminal-operator
  * agents depend on it.
  */
+
+/**
+ * What is ACTUALLY at a configured workdir (#405).
+ *
+ * The cloud used to write `clone_status = "ready"` for a local path the moment someone typed it,
+ * without asking the machine that would run in it. An empty directory then answered every read
+ * tool with a true-but-useless sentence ("(no files found at that path)") and the model, with no
+ * diagnosis to relay, invented the repository instead — the transcript in #395.
+ *
+ * This is the question nobody was asking, and only the runner can answer it. Deliberately three
+ * separate facts rather than one boolean, because the remedies differ: a path that is GONE has
+ * moved, a path that is EMPTY was never cloned into, and a path that is a plain folder is not a
+ * checkout at all.
+ *
+ * `checked: true` is a version marker, not decoration. An older runner 404s this endpoint and the
+ * cloud gets `{error:"Not found"}` back through the relay — which must mean "unverified", never
+ * "broken", or a CLI skew would condemn every healthy repo on the machine.
+ */
+export interface WorkdirCheck {
+	checked: true;
+	/** The path as the runner resolved it (`~` expanded) — what any message should name. */
+	path: string;
+	exists: boolean;
+	isDirectory: boolean;
+	/** Entries directly inside it, dotfiles included. 0 for a missing path. */
+	entryCount: number;
+	/**
+	 * Is this inside a git WORK TREE — not merely "does it contain `.git`"?
+	 *
+	 * `~/dev/monorepo/apps/thing` is a perfectly good workdir with no `.git` of its own, and an
+	 * existence test on `.git` would condemn every subdirectory of every monorepo checkout. Only
+	 * `git rev-parse` knows the difference.
+	 */
+	insideWorkTree: boolean;
+	/**
+	 * Did `git` actually run? A machine without git on PATH answers "not a work tree" for every
+	 * path on it, and a checkout must not be condemned by a missing binary. `false` means
+	 * `insideWorkTree` carries no information.
+	 */
+	gitChecked: boolean;
+}
+
+/**
+ * Inspect a workdir: does it exist, does it hold anything, is it a checkout. Never throws —
+ * every failure is a `false`, because this function exists to REPORT a broken path and one that
+ * threw would be reported as a broken runner instead.
+ */
+export function checkWorkdir(dir: string): WorkdirCheck {
+	const absent = { checked: true, path: dir, exists: false, isDirectory: false, entryCount: 0, insideWorkTree: false, gitChecked: true } as const;
+	let isDirectory = false;
+	try {
+		isDirectory = statSync(dir).isDirectory();
+	} catch {
+		return { ...absent };
+	}
+	if (!isDirectory) return { ...absent, exists: true };
+	let entryCount = 0;
+	try {
+		entryCount = readdirSync(dir).length;
+	} catch {
+		// Unreadable (permissions) — reported as empty rather than as a crash; the cloud's
+		// message for "empty" tells the owner to look at the path either way.
+	}
+	let insideWorkTree = false;
+	let gitChecked = true;
+	try {
+		const out = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+			cwd: dir,
+			encoding: "utf-8",
+			timeout: 10_000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		insideWorkTree = out.trim() === "true";
+	} catch (e) {
+		// Exit 128 ("not a git repository") is an ANSWER. ENOENT is git missing from PATH, which
+		// is not — and reporting it as "not a checkout" would condemn every repo on that machine.
+		if ((e as NodeJS.ErrnoException | undefined)?.code === "ENOENT") gitChecked = false;
+	}
+	return { checked: true, path: dir, exists: true, isDirectory, entryCount, insideWorkTree, gitChecked };
+}
 
 /**
  * A safe, collision-resistant label derived from an arbitrary string.

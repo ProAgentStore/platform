@@ -8,9 +8,19 @@
  * GitHub", which is a sentence about a setup mistake they had not made.
  */
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
+// The runner transport, stubbed at the seam every repo route reaches the machine through. Only
+// the two entry points are replaced; the rest of the module (typed errors, timeouts) is real, so
+// a caller that starts depending on one of them is not silently handed `undefined`.
+const { getBoundRunnerConn, callRunner } = vi.hoisted(() => ({ getBoundRunnerConn: vi.fn(), callRunner: vi.fn() }));
+vi.mock("../lib/runner-client.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/runner-client.js")>()),
+	getBoundRunnerConn,
+	callRunner,
+}));
+
 import { registerRepoRoutes } from "./coding-repos.js";
 import type { Env } from "../types.js";
 
@@ -74,15 +84,27 @@ function buildApp(repo?: Record<string, unknown>) {
 }
 
 async function addRepo(body: Record<string, unknown>) {
-	const { app, env, insertedRepo } = buildApp();
+	const { app, env, insertedRepo, issued } = buildApp();
 	const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
 	const res = await app.request(
 		`/v1/instances/${INSTANCE}/coding/repos`,
 		{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
 		env,
 	);
-	return { status: res.status, body: (await res.json()) as { repo?: Record<string, unknown>; error?: string }, row: insertedRepo() };
+	return {
+		status: res.status,
+		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; error?: string },
+		row: insertedRepo(),
+		issued,
+	};
 }
+
+/** No machine is connected — the default for every test that predates #405. */
+beforeEach(() => {
+	getBoundRunnerConn.mockReset();
+	callRunner.mockReset();
+	getBoundRunnerConn.mockResolvedValue(null);
+});
 
 describe("POST /coding/repos — a repo is stored as what it IS", () => {
 	it("stores a GitLab URL as a GitLab repo, with its nested slug and NO github_repo", async () => {
@@ -139,6 +161,172 @@ describe("POST /coding/repos — a repo is stored as what it IS", () => {
 	it("calls an unrecognised host `other` — a real remote, not a local checkout", async () => {
 		const { row } = await addRepo({ cloneUrl: "https://git.internal.example/team/service.git" });
 		expect(row).toMatchObject({ provider: "other", clone_url: "https://git.internal.example/team/service.git" });
+	});
+});
+
+/**
+ * `ready` is a CLAIM, and the platform may only make it about a path it has looked at (#405).
+ *
+ * A local repo used to become `ready` — the same word a successful clone gets — the instant
+ * someone typed a path. The runner was connected at that moment and could have answered all
+ * three questions; it was never asked. Two days later the agent was still being asked about code
+ * in an empty directory the console called ready, and it invented the code (#395).
+ */
+describe("POST /coding/repos — a local path is CHECKED before it is called ready", () => {
+	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const HEALTHY = { checked: true, path: "/home/u/dev/thing", exists: true, isDirectory: true, entryCount: 91, insideWorkTree: true, gitChecked: true };
+
+	/** The last `clone_status`/`clone_error` written for a repo, or null if nothing was written. */
+	const statusWritten = (issued: Statement[]) => {
+		const update = issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status")).pop();
+		return update ? { status: update.binds[1], error: update.binds[2] } : null;
+	};
+
+	it("asks the machine that will use the path, passing the path the owner typed", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue(HEALTHY);
+		await addRepo({ localPath: "~/dev/thing" });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/coding/repo-check", { workDir: "~/dev/thing" }, expect.anything());
+	});
+
+	it("marks an EMPTY directory needs_attention, with a message naming it", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ ...HEALTHY, entryCount: 0, insideWorkTree: false });
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/pas/platform/apps/chess-academy" });
+		// Still created: the row is the handle the owner needs to fix or delete it. What changed
+		// is that it no longer says `ready`.
+		expect(status).toBe(201);
+		expect(statusWritten(issued)).toMatchObject({ status: "needs_attention" });
+		expect(body.repo?.cloneStatus).toBe("needs_attention");
+		expect(body.warning).toContain("/home/u/dev/thing");
+		expect(body.warning).toMatch(/EMPTY/);
+	});
+
+	it("marks a path that does not exist needs_attention too", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "/home/u/typo", exists: false });
+		const { body } = await addRepo({ localPath: "~/typo" });
+		expect(body.repo?.cloneStatus).toBe("needs_attention");
+		expect(body.warning).toMatch(/does not exist/);
+	});
+
+	it("leaves a real checkout `ready`, and writes nothing it did not have to", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue(HEALTHY);
+		const { body, issued } = await addRepo({ localPath: "~/dev/thing" });
+		expect(body.repo?.cloneStatus).toBe("ready");
+		expect(body.warning).toBeUndefined();
+		expect(statusWritten(issued)).toBeNull();
+	});
+
+	// "Only when the runner is live" — with no machine connected there is nobody to ask, and the
+	// honest outcome is not a silent `ready`. `unknown` is a path nobody has looked at yet; the
+	// repos list upgrades it the moment one is.
+	it("does NOT say ready when no machine is connected to check", async () => {
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/thing" });
+		expect(status).toBe(201);
+		expect(statusWritten(issued)).toMatchObject({ status: "unknown" });
+		expect(body.repo?.cloneStatus).toBe("unknown");
+		// Not a defect, so not a warning — the console's offline banner is the true sentence here.
+		expect(body.warning).toBeUndefined();
+	});
+
+	// An older CLI 404s /coding/repo-check; the relay hands the cloud `{error:"Not found"}`. A
+	// version skew must not condemn a repo — but it must not mint `ready` either.
+	it("treats an older runner as unchecked, not as broken", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ error: "Not found" });
+		const { body, issued } = await addRepo({ localPath: "~/dev/thing" });
+		expect(statusWritten(issued)).toMatchObject({ status: "unknown" });
+		expect(body.warning).toBeUndefined();
+	});
+
+	it("never asks the machine about a CLONE — there is no local path to look at yet", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		await addRepo({ cloneUrl: "https://github.com/o/r.git" });
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * A checkout can be moved or deleted long after it was added — the same state arriving later.
+ * The list is the only place that state can be caught, because it is what the console reads.
+ */
+describe("GET /coding/repos — the path is re-checked on every list", () => {
+	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const row = (over: Record<string, unknown> = {}) => ({
+		id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "apps/chess-academy",
+		github_repo: null, provider: "local", repo_slug: null, web_url: null, clone_url: null,
+		branch: "", workdir: "~/dev/pas/platform/apps/chess-academy", clone_status: "ready",
+		clone_error: null, default_client: "claude", urls: null, instructions: null, merge_policy: null,
+		created_at: "2026-08-07 08:29:04", updated_at: "2026-08-07 08:29:04", ...over,
+	});
+
+	async function listRepos(rows: Array<Record<string, unknown>>) {
+		const issued: Statement[] = [];
+		const DB = {
+			prepare(sql: string) {
+				const flat = sql.replace(/\s+/g, " ").trim();
+				const stmt = {
+					bind: (...binds: unknown[]) => {
+						issued.push({ sql: flat, binds });
+						return stmt;
+					},
+					first: async () => (/FROM agent_instances/.test(flat) ? { id: INSTANCE } : null),
+					all: async () => ({ results: /FROM coding_repos/.test(flat) ? rows : [] }),
+					run: async () => ({ meta: { changes: 1 } }),
+				};
+				return stmt;
+			},
+		};
+		const env = { SESSION_SIGNING_KEY: SECRET, DB } as unknown as Env;
+		const app = new Hono<{ Bindings: Env }>();
+		const routes = new Hono<{ Bindings: Env }>();
+		registerRepoRoutes(routes);
+		app.route("/v1/instances", routes);
+		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const res = await app.request(`/v1/instances/${INSTANCE}/coding/repos`, { headers: { Authorization: `Bearer ${token}` } }, env);
+		return { body: (await res.json()) as { repos: Array<Record<string, unknown>> }, issued };
+	}
+
+	it("downgrades a repo whose checkout has gone since it was added", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "/home/u/dev/chess-academy", exists: false });
+		const { body, issued } = await listRepos([row()]);
+		expect(body.repos[0].cloneStatus).toBe("needs_attention");
+		expect(String(body.repos[0].cloneError)).toContain("/home/u/dev/chess-academy");
+		expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status"))).toBe(true);
+	});
+
+	it("upgrades one back to ready when the checkout is there again", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "/home/u/dev/x", exists: true, isDirectory: true, entryCount: 12, insideWorkTree: true, gitChecked: true });
+		const { body } = await listRepos([row({ clone_status: "needs_attention", clone_error: "…was empty" })]);
+		expect(body.repos[0].cloneStatus).toBe("ready");
+		expect(body.repos[0].cloneError).toBeUndefined();
+	});
+
+	// A laptop that closed says nothing new about the path on it. Downgrading on its absence
+	// would flip every repo in the list every time someone shut a lid, while the console's
+	// offline banner already says the true thing.
+	it("leaves every stored verdict alone when no machine is connected", async () => {
+		const { body, issued } = await listRepos([row(), row({ id: "repo-2", clone_status: "needs_attention", clone_error: "gone" })]);
+		expect(body.repos.map((r) => r.cloneStatus)).toEqual(["ready", "needs_attention"]);
+		expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status"))).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("does not ask the machine about repos that have no local path", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		await listRepos([row({ provider: "github", workdir: null, github_repo: "o/r", clone_url: "https://github.com/o/r.git" })]);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("writes nothing when the verdict has not changed", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "~/dev/x", exists: true, isDirectory: true, entryCount: 3, insideWorkTree: true, gitChecked: true });
+		const { issued } = await listRepos([row()]);
+		expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status"))).toBe(false);
 	});
 });
 

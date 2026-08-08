@@ -189,3 +189,56 @@ describe("the terminal poll's busy signal is deliberately wider than the engine'
 		expect(terminalPollBusy({ state: "working", sending: false, looping: false })).toBe(true);
 	});
 });
+
+/**
+ * The third signal: the SERVER checked this repo's local path and it is not usable (#405).
+ *
+ * A repo pointed at an empty directory read "Ready", in green, for two days. The tab was not
+ * wrong about the engine — there was no engine — it simply had no way to say anything about the
+ * configuration underneath it. Reconciled here for the same reason `offline` was: two surfaces
+ * reading one signal must not disagree, and the one that says "Ready" is the one that lets an
+ * agent be asked about code that isn't there.
+ */
+describe("a repo whose path the machine could not use", () => {
+	const signals = (over: Partial<RepoSignals> = {}): RepoSignals => ({
+		runnerOnline: true,
+		hasActiveSession: false,
+		workdirUnusable: true,
+		...over,
+	});
+
+	it("is never `ready`, with or without a session", () => {
+		expect(resolveRepoState(signals())).toBe("unusable");
+		expect(resolveRepoState(signals({ hasActiveSession: true, state: "idle" }))).toBe("unusable");
+	});
+
+	// The engine is mid-turn: it is demonstrably running in SOMETHING, and the stored verdict may
+	// be older than the capture that just answered. The same precedence `offline` already yields to.
+	it("yields to a turn that is visibly in progress", () => {
+		expect(resolveRepoState(signals({ hasActiveSession: true, state: "responding" }))).toBe("working");
+	});
+
+	// `pags up` comes first either way, and the offline banner is already on screen saying so.
+	it("yields to an offline machine, which is the earlier remedy", () => {
+		expect(resolveRepoState(signals({ runnerOnline: false }))).toBe("offline");
+	});
+
+	it("outranks `active` — a session over an empty directory is not activity", () => {
+		expect(resolveRepoState(signals({ hasActiveSession: true, state: undefined }))).toBe("unusable");
+	});
+
+	it("changes nothing at all when the flag is absent or false", () => {
+		expect(resolveRepoState(signals({ workdirUnusable: false }))).toBe("ready");
+		expect(resolveRepoState({ runnerOnline: true, hasActiveSession: false })).toBe("ready");
+	});
+
+	it("says so in words, and marks the session badge as an error rather than idle", () => {
+		expect(repoStatusLabel(signals())).toBe("Path unusable");
+		expect(sessionBadge("unusable").tone).toBe("error");
+	});
+
+	// The heaviest poll in the app must not run for a repo with nothing under it.
+	it("does not put the terminal poll on the fast tier", () => {
+		expect(terminalPollBusy({ state: "unusable", sending: false, looping: false })).toBe(false);
+	});
+});

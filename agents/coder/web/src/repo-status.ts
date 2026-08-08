@@ -40,7 +40,7 @@ export type RunnerOnline = boolean | null;
  * repo-status poll is disabled while a session is open, and on the landing view the first tick is
  * 3s away. Calling that `ready` would claim knowledge the tab does not have.
  */
-export type RepoState = "working" | "offline" | "active" | "ready";
+export type RepoState = "working" | "offline" | "unusable" | "active" | "ready";
 
 export interface RepoSignals {
 	/** `repoStatuses[repoId]` — the runner's `runState`; undefined before the first poll. */
@@ -49,15 +49,27 @@ export interface RepoSignals {
 	runnerOnline: RunnerOnline;
 	/** Does this repo have a session in `active` status? */
 	hasActiveSession: boolean;
+	/**
+	 * The SERVER checked this repo's local path on the machine and it is not usable — gone,
+	 * empty, or not a checkout (`clone_status = needs_attention`, #405).
+	 *
+	 * A third signal, and a different KIND from the other two: those describe a live engine,
+	 * this describes the configuration under it. It has to be reconciled here for the same
+	 * reason offline did — otherwise a repo pointed at an empty directory reads "Ready", in
+	 * green, which is precisely the claim that let an agent invent the code it could not see.
+	 */
+	workdirUnusable?: boolean;
 }
 
-export function resolveRepoState({ state, runnerOnline, hasActiveSession }: RepoSignals): RepoState {
+export function resolveRepoState({ state, runnerOnline, hasActiveSession, workdirUnusable }: RepoSignals): RepoState {
 	// A runState may never outlive the session that produced it — the same rule ./runner-online
 	// applies to a capture's connectivity verdict, and for the same reason. `repoStatuses` is
 	// only rewritten while at least one session is active (the poll returns early otherwise), so
 	// the last state of a finished run stays in the map indefinitely. Reading it here would
 	// leave a repo saying "Working..." forever after its engine stopped existing.
-	if (!hasActiveSession) return runnerOnline === false ? "offline" : "ready";
+	// An offline machine still outranks a broken path: `pags up` is the first step either way,
+	// and the verdict was recorded when a machine WAS connected, so it is the older fact.
+	if (!hasActiveSession) return runnerOnline === false ? "offline" : workdirUnusable ? "unusable" : "ready";
 	// A turn in progress outranks everything. The state came from a capture that just answered;
 	// `runnerOnline` may be up to 10s stale, and reporting a working engine as offline would be
 	// the same class of lie in the other direction.
@@ -65,6 +77,11 @@ export function resolveRepoState({ state, runnerOnline, hasActiveSession }: Repo
 	// `=== false`, never falsy. `null` means "not answered yet", and treating it as offline is how
 	// the tab would flash "run pags up" at someone whose runner is fine, on every first paint.
 	if (runnerOnline === false || state === "offline") return "offline";
+	// A machine is connected and the engine is not busy — so the server's verdict on the path is
+	// the most recent thing anyone knows about this repo, and it outranks "there is a session".
+	// A session open on a directory that is empty is not "Active"; it is a session with nothing
+	// under it, and saying otherwise is the same lie in a quieter voice.
+	if (workdirUnusable) return "unusable";
 	// A session exists and nothing has reported on it yet.
 	if (state !== "idle") return "active";
 	return "ready";
@@ -73,6 +90,7 @@ export function resolveRepoState({ state, runnerOnline, hasActiveSession }: Repo
 const REPO_LABEL: Record<RepoState, string> = {
 	working: "Working...",
 	offline: "Runner offline",
+	unusable: "Path unusable",
 	active: "Active",
 	ready: "Ready",
 };
@@ -91,6 +109,7 @@ export interface SessionBadge {
 const BADGE: Record<RepoState, SessionBadge> = {
 	working: { label: "Working", tone: "working" },
 	offline: { label: "Error", tone: "error" },
+	unusable: { label: "No repo", tone: "error" },
 	active: { label: "Idle", tone: "idle" },
 	ready: { label: "Idle", tone: "idle" },
 };

@@ -6,6 +6,11 @@ export interface CodingRepo {
 	name: string;
 	workdir?: string;
 	cloneStatus?: string;
+	/**
+	 * Why the path is unusable, when `cloneStatus` is `needs_attention` (#405) — written by the
+	 * machine that looked at it, so it names the path and the condition. Rendered verbatim.
+	 */
+	cloneError?: string;
 	githubRepo?: string;
 	/** Which host it lives on (#221): local | github | gitlab | bitbucket | other. */
 	provider?: string;

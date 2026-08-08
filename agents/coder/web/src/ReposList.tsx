@@ -90,6 +90,11 @@ export default function ReposList({
 		const active = getActiveSession(r.id);
 		const status = repoStatuses[r.id];
 		const phase = audio?.id === r.id ? audio.phase : null;
+		// The machine looked at this local path and it is not usable (#405). The remedy sits
+		// BESIDE the repo, the way #378 put the offline runner's remedy beside the terminal —
+		// a row that reads "Ready" over an empty directory is how an agent ends up inventing
+		// the code it cannot see.
+		const unusable = r.cloneStatus === "needs_attention";
 		return (
 			<div className={bare ? "" : "bg-paper border border-line rounded-lg p-3"}>
 				<div className="flex justify-between items-center gap-3">
@@ -108,7 +113,7 @@ export default function ReposList({
 							{isEngineBusy(status) ? (
 								<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
 							) : (
-								<span className={`w-2 h-2 rounded-full ${active && status !== "offline" ? "bg-green" : "bg-muted"}`} />
+								<span className={`w-2 h-2 rounded-full ${unusable ? "bg-red" : active && status !== "offline" ? "bg-green" : "bg-muted"}`} />
 							)}
 							{repoLabel(r)}
 							{r.instructions && <span className="text-2xs px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
@@ -133,6 +138,18 @@ export default function ReposList({
 						<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
 					</div>
 				</div>
+				{unusable && (
+					<div data-testid={`repo-unusable-${r.id}`} className="mt-2 bg-red/10 border border-red/40 text-red rounded-lg p-2 text-xs">
+						{/* The server's own sentence — it names the path and the condition, and it is the
+						    same one the agent is given to relay, so the console and the chat cannot say
+						    two different things about one directory. `break-words` because a checkout
+						    path is long and this card is 320px wide on a phone. */}
+						<p className="break-words">{r.cloneError || "This path could not be used on your machine."}</p>
+						<p className="mt-1 text-muted break-words">
+							Point it at the real checkout (⚙ Repo settings) or remove it. The agent cannot read code that isn't there.
+						</p>
+					</div>
+				)}
 				{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
 			</div>
 		);

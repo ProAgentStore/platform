@@ -6,7 +6,7 @@ import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
-import { ensureRepo, sanitizeSessionName } from "./repo.js";
+import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 
 /**
  * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
@@ -136,6 +136,17 @@ export class CodingRuntime {
 	 *  local-path repo with its GitHub owner/repo (so build status can query Actions). */
 	gitRemote(input: { sessionId?: string; workDir?: string }) {
 		return { remote: readGitRemoteOrigin(this.resolveWorkDir(input)) };
+	}
+
+	/**
+	 * Is the configured workdir usable AT ALL — present, non-empty, a checkout (#405)?
+	 *
+	 * The only endpoint here that answers a question about the PATH rather than about its
+	 * contents, and the one the cloud needs before it may call a repo `ready`. Reports the
+	 * resolved path so a message can name the thing the owner actually typed, `~` and all.
+	 */
+	checkRepo(input: { sessionId?: string; workDir?: string }) {
+		return checkWorkdir(this.resolveWorkDir(input));
 	}
 
 	static taskTypes(): string[] {

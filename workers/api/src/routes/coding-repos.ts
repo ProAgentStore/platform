@@ -13,14 +13,16 @@
  */
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
-import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "../lib/github-actions.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { logError } from "../lib/error-log.js";
 import { asClient } from "../lib/coding-engines.js";
-import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo } from "../lib/coding-store.js";
+import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
+import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
+import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { gitProviderFor, hostedFeatureUnavailable, parseRepoRef } from "../lib/git-providers.js";
@@ -77,10 +79,68 @@ async function latestRunFor(env: Env, uid: string, full: string | undefined): Pr
 	return { available: true, run: res.runs[0] ? mapWorkflowRun(res.runs[0]) : null };
 }
 
+/** No runner to ask — a fact about the CONNECTION, never about the path (see coding-workdir). */
+function unverified(workDir: string): WorkdirVerdict {
+	return {
+		state: "unverified",
+		path: workDir,
+		detail: `\`${workDir}\` has not been checked — no machine is connected. Run \`pags up\` on the machine that has this checkout.`,
+	};
+}
+
+/**
+ * Ask the machine what is at a local repo's path, and store what we learned (#405).
+ *
+ * `onUnverified` is the whole difference between the two callers, and it is deliberate:
+ *
+ *   - ADD time passes `"unknown"`. A path nobody has looked at must not be called `ready` —
+ *     `ready` is the same word a successful clone gets, and writing it about an unseen path is
+ *     what let an empty directory look usable for two days.
+ *   - LIST time passes `null` (leave it). A machine that has gone offline says nothing new about
+ *     a path it verified yesterday, and downgrading on its absence would flip every repo in the
+ *     list every time a laptop closed — while the offline banner already says the true thing.
+ *
+ * Never throws, and never writes when nothing changed.
+ */
+async function verifyLocalWorkdir(
+	env: Env,
+	repo: CodingRepo,
+	conn: RunnerConn | null,
+	opts: { onUnverified: CloneStatus | null },
+): Promise<{ repo: CodingRepo; verdict: WorkdirVerdict }> {
+	const workdir = repo.workdir;
+	if (!workdir) return { repo, verdict: { state: "ok", path: "", detail: "" } };
+	const verdict = conn ? await checkWorkdirVia(conn, workdir) : unverified(workdir);
+	const status = verdict.state === "unverified" ? opts.onUnverified : cloneStatusForVerdict(verdict);
+	if (!status) return { repo, verdict };
+	const cloneError = verdict.detail || null;
+	if (repo.cloneStatus === status && (repo.cloneError ?? null) === cloneError) return { repo, verdict };
+	await updateRepoClone(env, repo.id, { cloneStatus: status, cloneError });
+	return { repo: { ...repo, cloneStatus: status, cloneError: cloneError ?? undefined }, verdict };
+}
+
+/**
+ * How many local repos one list request will verify. A checkout can be moved or deleted long
+ * after it was added — the same state arriving later — so the list is where it has to be caught.
+ * The cap (and the short per-call timeout in coding-workdir) is what keeps the Coding tab's first
+ * paint bounded when a machine is connected but slow.
+ */
+const MAX_VERIFY_PER_LIST = 12;
+
 export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	codingRoutes.get("/:instanceId/coding/repos", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		return c.json({ repos: await listRepos(c.env, instanceId, uid) });
+		const repos = await listRepos(c.env, instanceId, uid);
+		const local = repos.filter((r) => r.workdir).slice(0, MAX_VERIFY_PER_LIST);
+		if (!local.length) return c.json({ repos });
+		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
+		if (!conn) return c.json({ repos });
+		// One relay command each, in parallel on the one socket — the worst case is a single
+		// WORKDIR_CHECK_TIMEOUT_MS, not one per repo.
+		const settled = await Promise.allSettled(local.map((r) => verifyLocalWorkdir(c.env, r, conn, { onUnverified: null })));
+		const fresh = new Map<string, CodingRepo>();
+		for (const s of settled) if (s.status === "fulfilled") fresh.set(s.value.repo.id, s.value.repo);
+		return c.json({ repos: repos.map((r) => fresh.get(r.id) ?? r) });
 	});
 
 	codingRoutes.post("/:instanceId/coding/repos", async (c) => {
@@ -92,7 +152,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// A local checkout the user already has on the runner machine — run there, no clone.
 		const localPath = typeof body.localPath === "string" ? body.localPath.trim() : "";
 		if (localPath) {
-			const repo = await createRepo(c.env, instanceId, uid, {
+			const created = await createRepo(c.env, instanceId, uid, {
 				// A bare folder name ("platform") is ambiguous — default to the last two
 				// path segments ("pags/platform"). Editable later either way.
 				name: name || lastTwoSegments(localPath) || "repo",
@@ -100,7 +160,17 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 				provider: "local",
 				defaultClient: asClient(body.defaultClient),
 			});
-			return c.json({ repo }, 201);
+			// `createRepo` optimistically calls any local path `ready`. Ask the machine that will
+			// run in it BEFORE letting that stand (#405): the runner is connected at this moment
+			// and can answer all three questions — does it exist, does it hold anything, is it a
+			// checkout — and it was simply never asked.
+			//
+			// Still a 201, not a 400. The row is the handle the owner needs to fix or delete the
+			// repo, and refusing to create it would leave them with a typo and no way to see it;
+			// what changes is that the row says what is wrong instead of saying `ready`.
+			const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
+			const { repo, verdict } = await verifyLocalWorkdir(c.env, created, conn, { onUnverified: "unknown" });
+			return c.json(isWorkdirBroken(verdict) ? { repo, warning: verdict.detail } : { repo }, 201);
 		}
 		// A clone URL alone is enough: it carries the provider, the slug and the web URL (#221).
 		// The URL is the AUTHORITY when both arrive — `githubRepo` and `cloneUrl` are independent

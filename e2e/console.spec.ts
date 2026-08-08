@@ -2766,3 +2766,83 @@ test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)",
 		});
 	}
 });
+
+/**
+ * A repo the machine could not use says so, beside the repo (#405).
+ *
+ * The Coding tab called a local repo "Ready", in green, while the directory it pointed at was
+ * empty and not a checkout — the state it had been in since the moment it was added. The agent,
+ * asked about that code and given nothing but "(no files found at that path)", invented it
+ * (#395). The console's half of the fix is that the row cannot say Ready about it.
+ *
+ * Under `mobile — ` so it runs in WebKit as well as Chromium: the remedy carries a full checkout
+ * path, which is the longest unbroken string this card has ever held, and the width at which it
+ * has to fit is 320px.
+ */
+test.describe("mobile — a repo whose path is unusable says so (#405)", () => {
+	const LONG_PATH = "/Users/somebody/dev/stores/pas/platform/apps/chess-academy";
+	const DIAGNOSIS = `The configured checkout \`${LONG_PATH}\` exists but is EMPTY — nothing was ever cloned into it, or its contents were moved away. There is no code at that path to read.`;
+
+	async function mockCoder(page: Page, repo: Record<string, unknown>) {
+		await mockSignedInConsole(page, {
+			instances: [{
+				id: "inst-1",
+				name: "Chess coder",
+				slug: "coder",
+				category: "code",
+				capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+			}],
+		});
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [repo] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			return json({});
+		});
+	}
+
+	const brokenRepo = {
+		id: "repo-1",
+		name: "apps/chess-academy",
+		workdir: "~/dev/pas/platform/apps/chess-academy",
+		cloneStatus: "needs_attention",
+		cloneError: DIAGNOSIS,
+	};
+
+	for (const width of [320, 390]) {
+		test(`the diagnosis and the remedy are both readable at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockCoder(page, brokenRepo);
+			await page.goto("/console/instances/inst-1/coding");
+			await page.waitForLoadState("networkidle");
+
+			const banner = page.getByTestId("repo-unusable-repo-1");
+			await expect(banner).toBeVisible();
+			// The server's own sentence, verbatim — the console and the chat must not describe one
+			// directory two different ways.
+			await expect(banner).toContainText(LONG_PATH);
+			await expect(banner).toContainText("Repo settings");
+
+			// The word the row must NOT be saying about this repo, which is the whole defect.
+			await expect(page.getByText("Path unusable")).toBeVisible();
+			await expect(page.getByText("Ready", { exact: true })).toHaveCount(0);
+
+			// A 58-character path in a card this narrow is exactly the thing that pans a phone.
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("mobile — a healthy repo is untouched: no banner, and it still reads Ready", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockCoder(page, { id: "repo-1", name: "apps/chess-academy", workdir: "~/dev/thing", cloneStatus: "ready" });
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await expect(page.getByTestId("repo-unusable-repo-1")).toHaveCount(0);
+		await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+	});
+});

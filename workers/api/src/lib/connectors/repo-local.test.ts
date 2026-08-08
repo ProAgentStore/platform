@@ -193,3 +193,95 @@ describe("repo-local — tool behaviour", () => {
 		expect(r.content).toContain("escapes the repo");
 	});
 });
+
+/**
+ * The reason an agent invents a repository (#405).
+ *
+ * Every tool here used to report the ABSENCE of a checkout as a success with a true, useless
+ * sentence — "(no files found at that path)", "(no git origin remote)". An agent handed no
+ * problem, and still asked about the code, has nothing to relay and fills the gap (#395).
+ *
+ * The pair of expectations below is the whole ticket, and neither half is safe on its own:
+ * a missing WORKDIR must become a named failure, and an empty SUBFOLDER of a healthy checkout
+ * must stay exactly the success it was.
+ */
+describe("repo-local — an empty answer is diagnosed, not shrugged at (#405)", () => {
+	const HEALTHY = { checked: true, path: "/home/u/work/my-repo", exists: true, isDirectory: true, entryCount: 87, insideWorkTree: true, gitChecked: true };
+	const EMPTY = { checked: true, path: "/home/u/work/my-repo", exists: true, isDirectory: true, entryCount: 0, insideWorkTree: false, gitChecked: true };
+	const GONE = { checked: true, path: "/home/u/work/my-repo", exists: false, isDirectory: false, entryCount: 0, insideWorkTree: false, gitChecked: true };
+
+	/** Answer `/coding/repo-check` with `check`, and every other runner path with `rest`. */
+	const runner = (check: unknown, rest: unknown) =>
+		callRunner.mockImplementation(async (_conn: unknown, path: string) => (path === "/coding/repo-check" ? check : rest));
+
+	it("repo_tree FAILS, naming the path and the condition, when the workdir is empty", async () => {
+		runner(EMPTY, { entries: [] });
+		const r = await tool("repo_tree").handler(ctx(), {});
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("/home/u/work/my-repo");
+		expect(r.content).toMatch(/EMPTY/);
+	});
+
+	it("repo_tree KEEPS its success for an empty subfolder of a real checkout", async () => {
+		runner(HEALTHY, { entries: [] });
+		const r = await tool("repo_tree").handler(ctx(), { path: "src/components" });
+		expect(r.success).toBe(true);
+		expect(r.content).toBe("(no files found at that path)");
+	});
+
+	// The two cases above are told apart ONLY by asking about the root. Asking about the tool's
+	// `path` would make every empty subfolder look like a missing checkout.
+	it("checks the workdir ROOT, never the sub-path being listed", async () => {
+		runner(HEALTHY, { entries: [] });
+		await tool("repo_tree").handler(ctx(), { path: "src/components" });
+		const call = callRunner.mock.calls.find((c: unknown[]) => c[1] === "/coding/repo-check");
+		expect(call?.[2]).toEqual({ workDir: "~/work/my-repo" });
+	});
+
+	it("repo_remote FAILS with the diagnosis when the folder is not a checkout at all", async () => {
+		runner({ ...HEALTHY, insideWorkTree: false }, { remote: null });
+		const r = await tool("repo_remote").handler(ctx(), {});
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("/home/u/work/my-repo");
+		expect(r.content).toMatch(/not inside a git working tree/);
+	});
+
+	it("repo_remote KEEPS its success for a real checkout that simply has no origin", async () => {
+		runner(HEALTHY, { remote: null });
+		const r = await tool("repo_remote").handler(ctx(), {});
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("no git origin remote");
+	});
+
+	it("repo_git replaces the runner's anonymous 'not a git repo' with the path", async () => {
+		runner(GONE, { error: "not a git repo" });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "status" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("/home/u/work/my-repo");
+		expect(r.content).toMatch(/does not exist/);
+	});
+
+	it("repo_read_file keeps the file's own error AND names the vanished checkout", async () => {
+		runner(GONE, { error: "ENOENT: no such file or directory" });
+		const r = await tool("repo_read_file").handler(ctx(), { path: "src/auth.ts" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("/home/u/work/my-repo");
+		expect(r.content).toContain("src/auth.ts");
+	});
+
+	// A CLI that predates /coding/repo-check 404s it, and the relay hands back {error}. That is a
+	// version skew, not a broken repo — the old wording must survive it untouched.
+	it("changes nothing when the machine is running an older runner", async () => {
+		runner({ error: "Not found" }, { entries: [] });
+		const r = await tool("repo_tree").handler(ctx(), {});
+		expect(r.success).toBe(true);
+		expect(r.content).toBe("(no files found at that path)");
+	});
+
+	it("costs nothing on the answers that worked — a non-empty tree asks no second question", async () => {
+		runner(HEALTHY, { entries: [{ path: "src/index.ts", type: "file" }] });
+		const r = await tool("repo_tree").handler(ctx(), {});
+		expect(r.success).toBe(true);
+		expect(callRunner.mock.calls.some((c: unknown[]) => c[1] === "/coding/repo-check")).toBe(false);
+	});
+});

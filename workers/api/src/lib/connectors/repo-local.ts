@@ -19,6 +19,7 @@
 // where resolveInside() and gitArgv() carry the safety.
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
+import { checkWorkdirVia, isWorkdirBroken } from "../coding-workdir.js";
 
 /**
  * The typed settings (settingsSchema) that can name the checkout on the user's machine.
@@ -92,6 +93,27 @@ function failed(res: { error?: string }): string | null {
 	return typeof res.error === "string" && res.error ? res.error : null;
 }
 
+/**
+ * Is the CONFIGURED WORKDIR itself unusable? Returns the sentence to relay, or null (#405).
+ *
+ * Every tool below used to report the absence of a repository as a success: an empty result and
+ * "(no files found at that path)". That sentence is equally true of an empty subfolder inside a
+ * healthy checkout, so it describes no problem — and an agent handed no problem to relay, but
+ * still asked about the code, fills the gap by inventing it (#395).
+ *
+ * The distinction is made HERE, and only here, by asking about the workdir ROOT rather than the
+ * tool's `path` argument. That is what keeps acceptance in both directions: a missing or empty
+ * *checkout* becomes a named `success:false` diagnosis, while an empty *subfolder* of a real
+ * checkout keeps its "(no files found at that path)" success, unchanged.
+ *
+ * Only ever consulted on a path that ALREADY produced nothing, so the extra round-trip costs
+ * nothing on the answers that worked.
+ */
+async function workdirProblem(conn: RunnerConn, workDir: string): Promise<string | null> {
+	const verdict = await checkWorkdirVia(conn, workDir);
+	return isWorkdirBroken(verdict) ? verdict.detail : null;
+}
+
 const GIT_CMDS = ["status", "diff", "diff-stat", "log", "ls-files"] as const;
 type GitCmd = (typeof GIT_CMDS)[number];
 
@@ -124,7 +146,15 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			const entries = res.entries ?? [];
 			const lines = entries.map((e) => (e.type === "dir" ? `${e.path}/` : e.path));
 			const note = res.truncated ? "\n(truncated — narrow with `path`)" : "";
-			return { content: lines.length ? lines.join("\n") + note : "(no files found at that path)", success: true };
+			if (!lines.length) {
+				// Nothing here. Is that an empty CORNER of a real checkout, or is the checkout
+				// itself gone? Only the ROOT can tell you, and the answer decides whether this is
+				// a success worth shrugging at or a diagnosis worth relaying.
+				const problem = await workdirProblem(t.conn, t.workDir);
+				if (problem) return { content: problem, success: false };
+				return { content: "(no files found at that path)", success: true };
+			}
+			return { content: lines.join("\n") + note, success: true };
 		},
 	},
 	{
@@ -153,7 +183,12 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
 			const err = failed(res);
-			if (err) return { content: err, success: false };
+			if (err) {
+				// "ENOENT" on one file is usually a wrong guess at a filename — but it reads the
+				// same when the whole checkout has gone, and that is the case worth naming.
+				const problem = await workdirProblem(t.conn, t.workDir);
+				return { content: problem ? `${problem} (the read of \`${path}\` failed: ${err})` : err, success: false };
+			}
 			if (res.binary) return { content: `${path} is a binary file (${res.size ?? 0} bytes) — not readable as text.`, success: true };
 			const body = res.content ?? "";
 			const note = res.truncated ? `\n… (truncated at ${CAPS.read_file} bytes of ${res.size ?? "?"} )` : "";
@@ -190,7 +225,12 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
 			const err = failed(res);
-			if (err) return { content: err, success: false };
+			if (err) {
+				// The runner says "not a git repo" without saying WHICH path is not one — and a
+				// vanished checkout produces exactly that. Name it.
+				const problem = await workdirProblem(t.conn, t.workDir);
+				return { content: problem ?? err, success: false };
+			}
 			const out = (res.output ?? "").slice(0, CAPS.git);
 			return { content: out || `(git ${cmd} produced no output)`, success: true };
 		},
@@ -214,7 +254,15 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			);
 			const err = failed(res);
 			if (err) return { content: err, success: false };
-			return { content: res.remote ? `origin: ${res.remote}` : "(no git origin remote — this checkout has no configured remote)", success: true };
+			if (!res.remote) {
+				// A checkout with no `origin` is a real and unremarkable thing. A folder that is
+				// not a checkout at all reports identically — and only one of the two is a
+				// problem the owner can act on.
+				const problem = await workdirProblem(t.conn, t.workDir);
+				if (problem) return { content: problem, success: false };
+				return { content: "(no git origin remote — this checkout has no configured remote)", success: true };
+			}
+			return { content: `origin: ${res.remote}`, success: true };
 		},
 	},
 ];

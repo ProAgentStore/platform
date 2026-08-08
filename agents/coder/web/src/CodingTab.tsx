@@ -361,7 +361,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// effect re-pushes only when the state actually changes — depending on the object would
 	// re-fire every poll (a render storm).
 	const openState: RepoState = openSession
-		? resolveRepoState({ state: repoStatuses[openSession.repoId], runnerOnline, hasActiveSession: true })
+		? resolveRepoState({
+				state: repoStatuses[openSession.repoId],
+				runnerOnline,
+				hasActiveSession: true,
+				workdirUnusable: repos.find((r) => r.id === openSession.repoId)?.cloneStatus === "needs_attention",
+			})
 		: "ready";
 	const terminalBusy = terminalPollBusy({ state: openState, sending: summaryBusy, looping: loop.loopOn });
 	useTieredPolling(pollTerminal, { activeMs: 1500, passiveMs: 6000 }, terminalBusy, !!openSession);
@@ -700,6 +705,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			state: repoStatuses[r.id],
 			runnerOnline,
 			hasActiveSession: !!getActiveSession(r.id),
+			// The server checked the local path on the machine and it is not usable (#405).
+			workdirUnusable: r.cloneStatus === "needs_attention",
 		});
 
 	const [repoMenuOpen, setRepoMenuOpen] = useState(false);

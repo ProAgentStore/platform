@@ -253,6 +253,17 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
+	// Does the configured workdir exist / hold files / belong to a checkout (#405)? An older
+	// runner 404s this; the cloud reads the missing `checked:true` as "unverified" and leaves
+	// the repo's status alone rather than condemning it.
+	if (req.method === "POST" && path === "/coding/repo-check") {
+		const b = await readJson<{ sessionId?: string; workDir?: string }>(req);
+		try {
+			return json(res, 200, runner.coding.checkRepo(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	if (req.method === "POST" && path === "/coding/tree") {
 		const b = await readJson<{ sessionId?: string; workDir?: string; path?: string; maxDepth?: number; maxEntries?: number }>(req);
 		try {

@@ -11,7 +11,13 @@ import type { GitProviderId } from "./git-providers.js";
 
 export type CodingClientType = "claude" | "gemini" | "codex" | "grok";
 
-export type CloneStatus = "unknown" | "cloning" | "ready" | "missing_url" | "error";
+/**
+ * `needs_attention` (#405): a LOCAL path the machine has looked at and found unusable — gone,
+ * empty, or not a checkout. Distinct from `error`, which is a clone that failed, and from
+ * `unknown`, which is a path nobody has been able to look at yet. It is a string column, so no
+ * migration: what changed is that `ready` is now only written about a path someone checked.
+ */
+export type CloneStatus = "unknown" | "cloning" | "ready" | "missing_url" | "error" | "needs_attention";
 
 export type CodingSessionStatus = "active" | "ended" | "error" | "suspended";
 
