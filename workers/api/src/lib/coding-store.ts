@@ -322,6 +322,43 @@ export async function getActiveSessionForRepo(env: Env, instanceId: string, user
 	return row ? toSession(row) : null;
 }
 
+/**
+ * The repo's most recently-USED finished session — the one whose engine conversation a new session
+ * would continue (#408).
+ *
+ * Ordered by `last_activity_at`, not by `ended_at`, and the difference is the point: `ended_at` is
+ * when the platform closed the row (the reaper closes a batch in one tick, so several rows can
+ * share a second), while `last_activity_at` is when a human or a Pilot last touched it — which is
+ * the clock {@link resolveSessionContinuity} judges staleness by and the clock the idle reaper
+ * already measures. Selecting by one and judging by the other would let a session that was closed
+ * later, but used earlier, decide the answer.
+ *
+ * Returns the raw fields rather than a `CodingSessionRecord` because `last_activity_at` is not on
+ * that type, and putting it there would invite the rest of the surface to start reading it.
+ */
+export async function getLastFinishedSessionForRepo(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	repoId: string,
+): Promise<{ id: string; clientType: string; status: string; lastActivityAt: number | null } | null> {
+	const row = await env.DB.prepare(
+		`SELECT id, client_type, status, last_activity_at
+		   FROM coding_sessions
+		  WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status IN ('ended', 'error')
+		  ORDER BY COALESCE(last_activity_at, 0) DESC, updated_at DESC LIMIT 1`,
+	)
+		.bind(repoId, instanceId, userId)
+		.first<{ id: string; client_type: string; status: string; last_activity_at: number | null }>();
+	if (!row) return null;
+	return {
+		id: row.id,
+		clientType: client(row.client_type),
+		status: row.status,
+		lastActivityAt: typeof row.last_activity_at === "number" ? row.last_activity_at : null,
+	};
+}
+
 export async function getSession(env: Env, instanceId: string, userId: string, sessionId: string): Promise<CodingSessionRecord | null> {
 	const row = await env.DB.prepare(
 		"SELECT * FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",

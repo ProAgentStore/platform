@@ -40,6 +40,24 @@ export interface StartCodingInput {
 	bin?: string;
 	/** The exact CLI launch command for this session's engine (e.g. `claude --dangerously-skip-permissions`, `codex`). */
 	command?: string;
+	/**
+	 * A previous coding-session id whose engine conversation this one should continue (#408).
+	 * Optional and additive: a runner published before #408 ignores it and starts clean, which is
+	 * exactly what every re-open did before this existed.
+	 */
+	resumeFrom?: string;
+}
+
+/**
+ * What `/coding/start` answers: the first snapshot, plus the one fact only this side knows —
+ * whether the engine actually launched with a conversation to continue (#408).
+ *
+ * On the snapshot rather than beside it because every other "the machine decided this, not the
+ * cloud" field (`authResolved`, `engineRuntime`) rides there too, and because the cloud reads the
+ * start response and the capture response through the same shape.
+ */
+export interface StartCodingResult extends CodingSnapshot {
+	resumed: boolean;
 }
 
 export type CodingAction =
@@ -154,7 +172,7 @@ export class CodingRuntime {
 	}
 
 	/** Start (or return the existing) session and report its first snapshot. */
-	start(input: StartCodingInput): CodingSnapshot {
+	start(input: StartCodingInput): StartCodingResult {
 		let session = this.sessions.get(input.sessionId);
 		if (!session) {
 			// Resolve the working dir and ensure the repo is present (clone on first
@@ -171,12 +189,17 @@ export class CodingRuntime {
 				command: input.command,
 				env: input.env,
 				statePath: defaultStatePath(this.reposBaseDir),
+				resumeFrom: input.resumeFrom,
 				bin: input.bin,
 			});
 			this.sessions.set(input.sessionId, session);
 		}
+		// Read BEFORE `start()`: a bad `--resume` can kill the process on spawn, and the engine
+		// clears its own key on that exit. Reporting after would say "started clean" about a launch
+		// that did carry a conversation, and the transcript (which shows the crash) would disagree.
+		const resumed = session.resumedConversation;
 		session.start();
-		return this.snapshot(input.sessionId);
+		return { ...this.snapshot(input.sessionId), resumed };
 	}
 
 	/**

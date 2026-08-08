@@ -105,6 +105,19 @@ The runner starts that CLI as a **child process** and speaks to it directly — 
 Workflow brain -> RelayDO -> local runner -> coding CLI child process (stream-json)
 ```
 
+### What a session remembers
+
+A session is closed automatically after **six hours** with nothing touching it — a `claude` child process resident on your laptop indefinitely, one per repo, is the cost that buys. Whatever needs the session next simply opens a new one, so you never have to think about that.
+
+What the new session **starts with** is a decision the platform makes and states:
+
+- The previous conversation on that repo was used **within the last four days** → it continues where it left off.
+- Older than that, or a different engine, or a session whose engine never launched → it starts clean.
+
+The two windows measure different things on purpose. Six hours asks "is anyone looking right now?", and is deliberately shorter than a night so a session abandoned at the end of the day does not hold a process until morning. Four days asks "is this still the same piece of work?", and is long enough to cover a long weekend — the cost of continuing a stale conversation is tokens, paid on every turn.
+
+Either way the agent tells you which one happened on the turn it happens, and it only claims to have continued a conversation when the machine confirms it did. Two caveats worth knowing rather than discovering: a conversation only exists on the machine that held it, so opening the repo on a different laptop starts clean; and continuing requires `pags up` from **0.4.44** or later.
+
 tmux *is* still used on this platform, but by a different family: the **terminal connector**, which drives tmux, kitty or iTerm2 targets on the user's machine for terminal-operator agents. Those create real tmux sessions; Coder agents do not.
 
 This allows long-running coding sessions while preserving the account-level control plane and audit model.

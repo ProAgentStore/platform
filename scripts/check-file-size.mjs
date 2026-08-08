@@ -288,7 +288,11 @@ const PINS = {
 	// mount; the panel itself is PullsPanel.tsx and every decision it renders (badge set, ordering,
 	// attribution) is pure in pulls-view.ts, with tests. A split would have extracted the fifteen
 	// lines that are least worth extracting.
-	"agents/coder/web/src/CodingTab.tsx": 1218,
+	// +3 at #408, all comment: the Fresh button now sends `fresh: true`. Same reason as
+	// workers/mcp/src/index.ts above — a default introduced in the API would otherwise have made
+	// this button hand back the exact state the user pressed it to escape, silently, and the note
+	// is what stops the flag being tidied away as redundant.
+	"agents/coder/web/src/CodingTab.tsx": 1221,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
@@ -316,7 +320,12 @@ const PINS = {
 	// `agent-workflows.ts` as the canonical table plus the drift test that now holds this mirror
 	// equal to it. This worker builds standalone and cannot import the catalog, so the comment is
 	// the only thing at this call site that says where the truth lives.
-	"workers/mcp/src/index.ts": 1154,
+	// +3 at #408, all comment: `coding_session_fresh` now sends `fresh: true`. Raised rather than
+	// split because the three lines ARE the change — the POST body gained one field, and the reason
+	// is that a policy in another Worker (a new session continues the repo's recent conversation)
+	// would otherwise have deleted this tool's entire contract without touching this file. A reader
+	// who finds the flag without finding that sentence will drop it as redundant.
+	"workers/mcp/src/index.ts": 1157,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -519,7 +528,19 @@ const PINS = {
 	// Raised rather than split BECAUSE the mechanics already were: `fillTargetFromResult` and
 	// `resultText` are pure, tested, and in engine-acts.ts. What is left here is the one call and
 	// the reason a future reader must not "simplify" it into a transcript regex.
-	"packages/browser-runner/src/coding/headless.ts": 886,
+	// +31 at #408, and 26 of them are prose. Two additions: a `resumeFrom` config field (the cloud
+	// may nominate a PREVIOUS coding-session id whose conversation to adopt, consulted only when
+	// this session's own id has no entry) and a `resumedConversation` getter reporting what
+	// actually happened. Raised rather than split BECAUSE of the paragraphs. The resume store is
+	// four private functions at the bottom of this file keyed by our session id, and that keying is
+	// the entire subject of #408 — it meant a reaped session came back cold and silent, while this
+	// file's own header says the engine "survives a runner restart", which is true only for the
+	// same row. A reader who finds the field without finding why it exists will "simplify" the
+	// lookup order, or drop the getter for the cloud's own intent, and the product will start
+	// telling users it remembers things it does not. The DECISION — when continuing is still
+	// appropriate — is not here at all: it is pure, tested, and in
+	// workers/api/src/lib/coding-session-continuity.ts.
+	"packages/browser-runner/src/coding/headless.ts": 917,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge

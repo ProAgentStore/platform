@@ -632,7 +632,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	};
 
-	// End current session + start a brand new one (no --resume, clean state)
+	// End current session + start a brand new one (clean state). `fresh: true` is load-bearing
+	// since #408: a new session continues the repo's recent conversation by default, and the one
+	// this just ended is the most recent there is — without the flag this hands back the exact
+	// state the user pressed it to escape.
 	const freshStart = async () => {
 		if (!openSession) return;
 		const repoId = openSession.repoId;
@@ -640,7 +643,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/end`, { method: "POST" });
 			const d = await api<{ session: CodingSession }>(`/v1/instances/${instanceId}/coding/sessions`, {
 				method: "POST",
-				body: JSON.stringify({ repoId, engineId: defaultEngine }),
+				body: JSON.stringify({ repoId, engineId: defaultEngine, fresh: true }),
 			});
 			if (d.session) {
 				await loadCoding();

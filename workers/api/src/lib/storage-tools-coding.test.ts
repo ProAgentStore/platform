@@ -18,6 +18,7 @@ vi.mock("./coding-store.js", () => ({
 	listRepos: vi.fn(),
 	listSessions: vi.fn(async () => []),
 	getActiveSessionForRepo: vi.fn(),
+	getLastFinishedSessionForRepo: vi.fn(async () => null),
 	createSession: vi.fn(),
 	endSession: vi.fn(async () => true),
 	getRepo: vi.fn(async () => null),
@@ -85,6 +86,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	vi.mocked(store.listRepos).mockResolvedValue([repo]);
 	vi.mocked(store.listSessions).mockResolvedValue([]);
+	vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(null);
 	vi.mocked(store.endSession).mockResolvedValue(true);
 	vi.mocked(runner.getRunnerConn).mockResolvedValue(conn as never);
 	vi.mocked(runner.getBoundRunnerConn).mockResolvedValue(conn as never);

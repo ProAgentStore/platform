@@ -27,7 +27,7 @@ import { optionsFor } from "../lib/surface-options.js";
 import { logEvent } from "../lib/events.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
-import { startSessionOnRunner } from "../lib/coding-session-open.js";
+import { ensureSessionForChat, startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingGoal } from "../lib/coding-loop.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
@@ -60,7 +60,7 @@ async function driveClaude(
 		// Reattach a session lost to a runner restart — and on a machine SWITCH this relocates
 		// the session to the live machine and returns THAT connection, so retry there (the
 		// captured `conn` still points at the old, now-dead machine).
-		const relocated = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+		const relocated = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)).conn;
 		if (relocated) conn = relocated;
 		snap = await act();
 	}
@@ -117,11 +117,18 @@ async function delegateToTarget(
 	// learning anything about it.
 	const repoId = targetId(target);
 	const repo = await getRepo(c.env, instanceId, uid, repoId);
-	const session = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 	const targetLabel = repo?.name ?? "that repo";
-	if (!repo || !session) {
-		return { ok: false, reply: `${targetLabel} has no live session — open it (or tap Start) first, then I can drive it.` };
-	}
+	if (!repo) return { ok: false, reply: `${targetLabel} is not a repo on this agent.` };
+	// A SESSION-NEEDING path, so it ensures one (#408). It used to refuse with "open it (or tap
+	// Start) first" — the Overseer, whose entire job is to act across repos on the user's behalf,
+	// telling the user to go and press a button in a tab they may not have open, for a session the
+	// platform is better placed to open than they are. `ensureSessionForChat` rather than
+	// `ensureActiveSession` because the connectivity gate has to come FIRST: without a runner this
+	// must answer with the runner diagnosis and write no row at all, and that ordering already
+	// exists here rather than being copied (#407).
+	const ensured = await ensureSessionForChat(c.env, instanceId, uid, repo);
+	if (!ensured.ok) return { ok: false, reply: ensured.message };
+	const session = ensured.session;
 
 	// Single-flight BEFORE anything observable is written (#208). This is the third path that
 	// starts a Pilot on a real session, and it was the one still left open: the claim went on
@@ -164,7 +171,11 @@ async function delegateToTarget(
 			driverId,
 		},
 	});
-	return { ok: true, taskId, label: targetLabel, reply: `On it — delegated to ${repo.name}; track it on the board.` };
+	// The notice is only set when THIS call opened the session (#407/#408), and it is news the
+	// user has to have: a child process just appeared on their machine, and whether it kept the
+	// previous conversation decides whether the objective above needed the context it carries.
+	const opened = ensured.opened && ensured.notice ? ` ${ensured.notice}` : "";
+	return { ok: true, taskId, label: targetLabel, reply: `On it — delegated to ${repo.name}; track it on the board.${opened}` };
 }
 
 /**

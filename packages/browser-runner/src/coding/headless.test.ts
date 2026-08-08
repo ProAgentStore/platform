@@ -154,6 +154,53 @@ describe("HeadlessSession (stream-json engine)", () => {
 		const revived = new HeadlessSession({ id: "sess2", workDir: dir, clientType: "claude", bin, statePath });
 		expect(revived.snapshot()).toBe(""); // no live process yet, but it knows the id
 		// (resume is exercised by start(); we assert the persistence contract here.)
+		expect(revived.resumedConversation).toBe(true);
+	});
+
+	it("a NEW session id has nothing to resume — the reap-then-reopen gap #408 closes", async () => {
+		// The fact the whole of #408 turns on, pinned so it cannot be assumed away again. The resume
+		// store is keyed by OUR coding_sessions id. The reaper ENDS that row, the next open creates
+		// a new one, and a new id has no entry — so re-opening a repo started a brand-new Claude
+		// conversation while the surface said nothing. It "lost a process, not a memory" only for a
+		// runner restart on the SAME row.
+		const statePath = defaultStatePath(dir);
+		const first = new HeadlessSession({ id: "reaped1", workDir: dir, clientType: "claude", bin, statePath });
+		first.start();
+		await until(() => readState(statePath, "reaped1") === "sess-abc-123");
+		first.stop();
+
+		const successor = new HeadlessSession({ id: "reopened1", workDir: dir, clientType: "claude", bin, statePath });
+		expect(successor.resumedConversation).toBe(false);
+
+		// …and with the cloud naming the predecessor, it continues instead.
+		const continued = new HeadlessSession({ id: "reopened2", workDir: dir, clientType: "claude", bin, statePath, resumeFrom: "reaped1" });
+		expect(continued.resumedConversation).toBe(true);
+	});
+
+	it("prefers its OWN key over the nominated predecessor, and ignores an unknown one", async () => {
+		// Ordering matters on a re-attach: this session's own conversation is always the better
+		// answer, and a `resumeFrom` must never be able to override it. A predecessor that is not in
+		// the store (another machine, a wiped state file) is simply absent — never an error, never a
+		// half-resume.
+		const statePath = defaultStatePath(dir);
+		const mine = new HeadlessSession({ id: "own1", workDir: dir, clientType: "claude", bin, statePath });
+		mine.start();
+		await until(() => readState(statePath, "own1") === "sess-abc-123");
+		mine.stop();
+		writeFileSync(statePath, JSON.stringify({ own1: "sess-abc-123", other: "sess-other" }));
+
+		expect(new HeadlessSession({ id: "own1", workDir: dir, clientType: "claude", bin, statePath, resumeFrom: "other" }).resumedConversation).toBe(true);
+		expect(new HeadlessSession({ id: "cold1", workDir: dir, clientType: "claude", bin, statePath, resumeFrom: "never-seen" }).resumedConversation).toBe(false);
+	});
+
+	it("never reports a resumed conversation for a raw engine", () => {
+		// `--resume` is a Claude Code flag and `buildClaudeArgs` is only reached in stream-json mode,
+		// so a resume key on a codex/grok session is inert. Reporting true would make the cloud tell
+		// the user their engine remembers something it structurally cannot.
+		const statePath = defaultStatePath(dir);
+		writeFileSync(statePath, JSON.stringify({ raw1: "sess-abc-123" }));
+		const raw = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", command: "codex", bin, statePath });
+		expect(raw.resumedConversation).toBe(false);
 	});
 });
 

@@ -67,6 +67,20 @@ export interface HeadlessSessionConfig {
 	env?: Record<string, string>;
 	/** Path to persist the Claude session id (for --resume across runner restarts). */
 	statePath?: string;
+	/**
+	 * A PREVIOUS coding-session id whose conversation this session should adopt (#408).
+	 *
+	 * The resume store is keyed by {@link HeadlessSessionConfig.id}, so it only ever survived a
+	 * runner restart for the SAME row. A reaped session gets a new row and therefore a new id, so
+	 * re-opening a repo silently started a brand-new Claude conversation — the "it forgot
+	 * everything" report. The cloud decides whether continuing is still appropriate
+	 * (`resolveSessionContinuity`) and names the row to continue here; this side only looks it up.
+	 *
+	 * Consulted ONLY when this session's own id has no entry. Our own key is always the better
+	 * answer — it is this exact session's conversation — and preferring it keeps a re-attach
+	 * byte-identical to what it was before this field existed.
+	 */
+	resumeFrom?: string;
 	/** Override the spawned binary (tests). Defaults to "claude". */
 	bin?: string;
 	/** Override the one-shot turn ceiling in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_MS}. */
@@ -219,9 +233,26 @@ export class HeadlessSession {
 		return resolveEngineAuth(this.config.clientType, mergeEnv(process.env, this.config.env) as Record<string, string | undefined>);
 	}
 
+	/**
+	 * Did this engine launch with a conversation to continue (#408)?
+	 *
+	 * Reported back to the cloud by `/coding/start` so the sentence the agent says to the user is
+	 * something this side CONFIRMED rather than something the cloud asked for. The distinction is
+	 * not academic: a runner published before #408 ignores `resumeFrom` entirely and always starts
+	 * clean, so a cloud that announced "resumed where we left off" on its own intent would be
+	 * telling most of the fleet's users the opposite of what happened.
+	 *
+	 * False for a raw (non-Claude) engine under every circumstance — `--resume` is a Claude Code
+	 * flag and {@link buildClaudeArgs} is only reached in stream-json mode.
+	 */
+	get resumedConversation(): boolean {
+		return this.mode === "stream-json" && this.claudeSessionId !== null;
+	}
+
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;
-		this.claudeSessionId = readState(config.statePath, config.id);
+		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`.
+		this.claudeSessionId = readState(config.statePath, config.id) ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom) : null);
 		// Claude is the structured engine; everything else is a raw CLI.
 		this.mode = config.clientType === "claude" ? "stream-json" : "raw";
 		const { bin, args } = parseCommand(config.command);

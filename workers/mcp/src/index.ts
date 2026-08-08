@@ -1033,7 +1033,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const repoId = repo_id || active?.repoId;
 				if (!repoId) return text("No repo specified and no active session to infer from.");
 				if (active) await authedCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, this.env);
-				const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify({ repoId, engineId: engine_id || "claude" }) }, this.env);
+				// `fresh: true` (#408): a new session now CONTINUES the repo's recent conversation by
+				// default, and the one this tool just ended is the most recent there is — so without the
+				// flag, "clean state, no --resume" hands back the very state it was called to escape.
+				const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify({ repoId, engineId: engine_id || "claude", fresh: true }) }, this.env);
 				await audit(this.safety(token), { tool: "coding_session_fresh", action: "completed", input: { instance_id, repoId } });
 				return jsonText(d);
 			},

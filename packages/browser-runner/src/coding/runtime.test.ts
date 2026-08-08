@@ -169,6 +169,25 @@ describe("CodingRuntime over the stream-json engine", () => {
 		rt.end("one-shot");
 	});
 
+	it("reports back whether the engine came up with a conversation to continue (#408)", async () => {
+		// The cloud cannot know this. It nominates a predecessor; only the machine holding
+		// `~/.claude` and the resume store can say whether one was found — and a runner published
+		// before #408 answers with no `resumed` key at all, which the cloud must read as "clean".
+		// Announcing the cloud's INTENT instead would tell most of the fleet the opposite of what
+		// happened.
+		rt = new CodingRuntime(join(dir, "resume-base"));
+		const cold = rt.start({ sessionId: "prev", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		expect(cold.resumed).toBe(false);
+		await until(() => rt.snapshot("prev").pane !== "" || true);
+		await until(() => rt.list().some((s) => s.sessionId === "prev"));
+		// Let the fake engine's init event land, which is what persists the resume key.
+		await wait(300);
+		rt.end("prev");
+
+		expect(rt.start({ sessionId: "next-cold", repoId: "r1", workDir: dir, clientType: "claude", bin }).resumed).toBe(false);
+		expect(rt.start({ sessionId: "next-warm", repoId: "r1", workDir: dir, clientType: "claude", bin, resumeFrom: "prev" }).resumed).toBe(true);
+	});
+
 	it("lists sessions and ends them", () => {
 		rt = new CodingRuntime(join(dir, "base"));
 		rt.start({ sessionId: "s2", repoId: "r1", workDir: dir, clientType: "claude", bin });

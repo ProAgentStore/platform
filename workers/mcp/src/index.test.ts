@@ -467,6 +467,24 @@ describe("coding_session_message (coding surface)", () => {
 	});
 });
 
+describe("coding_session_fresh", () => {
+	it("asks for a CLEAN session explicitly — the default now continues the last conversation (#408)", async () => {
+		// This tool's contract is "clean state, no --resume", and since #408 a new session continues
+		// the repo's recent conversation by default. The session it ends a line earlier is the most
+		// recent one there is, so without `fresh: true` this tool would hand back the very state it
+		// exists to escape — a feature deleted silently by someone else's default.
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", {
+			body: { sessions: [{ id: "sess-1", status: "active", repoId: "repo-1" }] },
+		});
+		h.fetchStub.respond((u, m) => u.endsWith("/sess-1/end") && m === "POST", { body: { ok: true } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-2" } } });
+		await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1" });
+		const post = h.fetchStub.calls.find((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")!;
+		expect(JSON.parse(post.body!)).toMatchObject({ repoId: "repo-1", fresh: true });
+	});
+});
+
 // ── Operator suspension (#273) ───────────────────────────────────────────────
 
 describe("suspension gate", () => {

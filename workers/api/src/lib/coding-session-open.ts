@@ -9,14 +9,38 @@
 import { callRunner, getBoundRunnerConn, getRunnerConn, relayConnected, type RunnerConn } from "./runner-client.js";
 import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
-import { createSession, endSession, getActiveSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
+import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
+import { resolveSessionContinuity, type SessionContinuity } from "./coding-session-continuity.js";
 import { runtimeConnectivity } from "./instance-connectivity.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { CodingRepo, CodingSessionRecord } from "./coding-types.js";
 import type { Env } from "../types.js";
+
+/**
+ * What launching a session on a machine tells us back.
+ *
+ * `conn` was the whole return value until #408. `resumed` is here rather than in a second function
+ * because it is the ONLY answer to "did the engine come up with its previous conversation", it can
+ * only be known by the machine, and a caller that wants to state which one happened must not be
+ * able to obtain the connection without also being handed the fact.
+ */
+export interface StartOnRunnerResult {
+	/** The connection the session actually runs on. Null when nothing could be reached. */
+	conn: RunnerConn | null;
+	/**
+	 * The runner CONFIRMED it launched the engine with a conversation to continue.
+	 *
+	 * False is the honest default for everything else, including an older `pags up`: a runner
+	 * published before #408 has no `resumed` field and could not have resumed a NEW session id
+	 * anyway (its resume store is keyed by that id and has no entry for one it has never seen).
+	 * So "no answer" and "started clean" really are the same outcome here, and treating the absent
+	 * field as false is not an assumption — it is the behaviour.
+	 */
+	resumed: boolean;
+}
 
 /**
  * Ensure a session is live on the user's runner: clone the repo (idempotent on
@@ -27,6 +51,10 @@ import type { Env } from "../types.js";
  * IMPORTANT: on a machine switch this RELOCATES the session to the live machine and
  * returns THAT machine's connection — callers retrying a command must use the returned
  * conn, not one they captured earlier (which may point at the now-dead old machine).
+ *
+ * `opts.resumeFrom` is set ONLY by a fresh open that has decided to continue the repo's previous
+ * conversation (#408). A re-attach never sets it: that path's session id IS the conversation's key
+ * on the runner, so passing a predecessor could only ever override the better answer.
  */
 export async function startSessionOnRunner(
 	env: Env,
@@ -34,7 +62,8 @@ export async function startSessionOnRunner(
 	uid: string,
 	session: CodingSessionRecord,
 	repo: CodingRepo,
-): Promise<RunnerConn | null> {
+	opts?: { resumeFrom?: string | null },
+): Promise<StartOnRunnerResult> {
 	let conn = await getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);
 	// Machine-switch reclaim. `conn` resolves from the DB (endpoint+token) even for a machine
 	// that's gone offline — the `status` column isn't cleared on disconnect — so verify the
@@ -53,7 +82,7 @@ export async function startSessionOnRunner(
 			conn = fallback;
 		}
 	}
-	if (!conn) return null;
+	if (!conn) return { conn: null, resumed: false };
 	// Provider-dispatched (#221): GitHub still resolves through the App installation token, and a
 	// non-GitHub repo gets its own provider's credential — or none, which means "clone it
 	// publicly / with whatever this machine already has", the same thing a public GitHub repo
@@ -61,7 +90,7 @@ export async function startSessionOnRunner(
 	const credential = await resolveCloneCredential(env, uid, repo);
 	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
 	try {
-		await callRunner(conn, "/coding/start", {
+		const started = await callRunner<{ resumed?: unknown }>(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
 			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
@@ -77,19 +106,60 @@ export async function startSessionOnRunner(
 			// The exact CLI command for this session's engine (Claude default, or a
 			// user-configured Codex/Grok/custom). The runner spawns it.
 			command: session.launchCommand || undefined,
+			// Unknown to a runner older than #408, which drops it and starts clean — the behaviour
+			// every re-open had before the field existed. That degradation is why the notice reads
+			// the ANSWER below instead of assuming this request was honoured.
+			resumeFrom: opts?.resumeFrom || undefined,
 			env: engineEnv,
 		});
 		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
-		return conn;
+		return { conn, resumed: started?.resumed === true };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
 		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
-		return null;
+		return { conn: null, resumed: false };
 	}
 }
 
+/**
+ * Should a session about to be created continue this repo's previous conversation (#408)?
+ *
+ * The lookup half of {@link resolveSessionContinuity}; the rule itself is pure and tested next to
+ * its own reasoning. Called only on a FRESH open — a reuse or re-attach is by definition already
+ * the conversation it would have continued.
+ *
+ * Never throws: a D1 hiccup here must degrade to "start clean", which is what every open did
+ * before this existed, rather than fail the open.
+ */
+export async function continuityForNewSession(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	repoId: string,
+	engine: string,
+	opts?: { forceFresh?: boolean },
+): Promise<SessionContinuity> {
+	// Skip the read entirely when the answer is already fixed — a Fresh start has nothing to learn
+	// from the row it just ended.
+	if (opts?.forceFresh) return resolveSessionContinuity({ engine, previous: null, forceFresh: true });
+	const previous = await getLastFinishedSessionForRepo(env, instanceId, userId, repoId).catch(() => null);
+	return resolveSessionContinuity({ engine, previous });
+}
+
 export type EnsureSessionResult =
-	| { ok: true; session: CodingSessionRecord; opened: boolean }
+	| {
+			ok: true;
+			session: CodingSessionRecord;
+			opened: boolean;
+			/**
+			 * What was DECIDED about continuing the repo's previous conversation, and what the
+			 * machine ACTUALLY did (#408). Present only on the open path — a reuse continues the
+			 * conversation it is reusing, and there is no decision to report.
+			 */
+			continuity?: SessionContinuity;
+			/** The runner confirmed the engine came up with the previous conversation. */
+			resumed?: boolean;
+	  }
 	/**
 	 * `session` is the one that EXISTS but could not be revived — set only on the re-attach path,
 	 * never on a fresh open (that row is ended before we return, so handing it back would name a
@@ -126,7 +196,8 @@ export async function ensureActiveSession(
 	// reads `ok: true` as a live engine, claims the driver, opens the run row and bills the Pilot's
 	// reasoning turns against a pane that never launched. Report what the fresh path reports.
 	const reattach = async (s: CodingSessionRecord): Promise<EnsureSessionResult> => {
-		if (await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null)) return { ok: true, session: s, opened: false };
+		const started = await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null);
+		if (started?.conn) return { ok: true, session: s, opened: false };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null, session: s };
 	};
@@ -152,8 +223,12 @@ export async function ensureActiveSession(
 		return reattach(winner);
 	}
 
-	const started = await startSessionOnRunner(env, instanceId, userId, session, repo);
-	if (!started) {
+	// Resolved AFTER the insert, so the row this call just created cannot be its own predecessor
+	// (`getLastFinishedSessionForRepo` only reads finished rows, but the ordering makes that a fact
+	// rather than a coincidence), and BEFORE the launch, because the runner needs the answer.
+	const continuity = await continuityForNewSession(env, instanceId, userId, repo.id, clientType);
+	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom });
+	if (!started.conn) {
 		// A session row whose engine never launched is worse than none: `getActiveSessionForRepo`
 		// would hand it to every later attempt, so the repo would be permanently stuck behind a
 		// session that cannot do anything. Close it and report the real reason.
@@ -164,7 +239,7 @@ export async function ensureActiveSession(
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null };
 	}
-	return { ok: true, session, opened: true };
+	return { ok: true, session, opened: true, continuity, resumed: started.resumed };
 }
 
 /**
@@ -180,6 +255,17 @@ export async function ensureActiveSession(
  * the user's previous session had been taken away six hours after they stopped touching it, the
  * timeline said so in the Co-pilot view they were not looking at, and from chat the session had
  * simply stopped existing.
+ *
+ * And since #408 it carries whether the engine picked the previous conversation back up. THREE
+ * outcomes, not two, and collapsing them is the mistake this function exists to prevent:
+ *
+ *   1. asked to resume, machine CONFIRMED it   → "picked up where it left off"
+ *   2. decided to start clean                  → "fresh, and here is why"
+ *   3. asked to resume, no confirmation        → ALSO fresh. A runner published before #408 drops
+ *      the field and starts clean, and both of the owner's machines run such a build today. A
+ *      cloud that reported its own INTENT would tell most of the fleet the opposite of what
+ *      happened, which is a worse bug than the silence #408 set out to fix — it would be a
+ *      confident, wrong answer to "did you remember what we were doing?".
  */
 export function sessionOpenedNotice(input: {
 	repoName: string;
@@ -188,14 +274,31 @@ export function sessionOpenedNotice(input: {
 	node?: string | null;
 	reapedPrevious?: boolean;
 	idleHours?: number;
+	/** What was decided about continuing the repo's previous conversation. */
+	continuity?: SessionContinuity;
+	/** What the machine confirmed it did. Absent/false means the engine started clean. */
+	resumed?: boolean;
 }): string {
 	const where = input.node ? ` on ${input.node}` : "";
 	const previous = input.reapedPrevious
 		? ` The previous session for this repo had been closed automatically after ${input.idleHours ?? Math.round(IDLE_SESSION_MS / 3_600_000)} hours with no activity, which is why there was none to read.`
 		: "";
+	let continuity = "";
+	if (input.resumed === true) {
+		continuity = " It picked up this repo's previous conversation, so the earlier context is still there.";
+	} else if (input.continuity?.mode === "resume") {
+		// Case 3. Say what happened (clean) and why the intent did not land, without guessing which
+		// of the two causes it was — both are true statements about the boundary.
+		continuity =
+			" It started a FRESH conversation: the previous one could not be continued on that machine" +
+			" — a conversation only exists on the machine that held it, and a `pags up` older than this feature cannot resume at all.";
+	} else if (input.continuity) {
+		continuity = ` It started a fresh conversation — ${input.continuity.reason}.`;
+	}
 	return (
-		`Started a coding session for ${input.repoName}${where} — the ${input.engine} Engine is running there now (session ${input.sessionId}).${previous}` +
-		" Say in your reply that you started it: a process just appeared on the user's machine and they did not ask for one."
+		`Started a coding session for ${input.repoName}${where} — the ${input.engine} Engine is running there now (session ${input.sessionId}).${previous}${continuity}` +
+		" Say in your reply that you started it, and whether it kept the previous conversation:" +
+		" a process just appeared on the user's machine, they did not ask for one, and what it does or does not remember changes what they should tell it next."
 	);
 }
 
@@ -272,6 +375,8 @@ export async function ensureSessionForChat(
 			node: connectivity.node,
 			reapedPrevious: Boolean(reaped),
 			idleHours: Math.round(IDLE_SESSION_MS / 3_600_000),
+			continuity: ensured.continuity,
+			resumed: ensured.resumed,
 		}),
 	};
 }

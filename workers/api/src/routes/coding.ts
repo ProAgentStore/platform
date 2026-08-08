@@ -32,7 +32,7 @@ import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineUsage } from "../lib/usage.js";
-import { startSessionOnRunner } from "../lib/coding-session-open.js";
+import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -135,7 +135,7 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// directory and conflict (concurrent edits, git index races). Reuse the live one.
 	const existing = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 	if (existing) {
-		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, existing, repo)) != null;
+		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, existing, repo)).conn != null;
 		return c.json({ session: existing, runnerConnected, reused: true }, 200);
 	}
 
@@ -173,12 +173,19 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 		// whoever won instead of erroring.
 		const winner = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 		if (!winner) throw new HttpError(409, "Could not start a session — try again.");
-		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, winner, repo)) != null;
+		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, winner, repo)).conn != null;
 		return c.json({ session: winner, runnerConnected, reused: true }, 200);
 	}
 
-	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)) != null;
-	return c.json({ session, runnerConnected }, 201);
+	// This route CREATES a session, so it decides continuity exactly like `ensureActiveSession`
+	// does (#408). Both open paths must agree: a repo re-opened from the console and the same repo
+	// re-opened by the agent's own tool would otherwise start with different memories.
+	// `fresh: true` is the console's **Fresh** button and MCP's `coding_session_fresh`, both of
+	// which end a session and open another in the same breath. Without the flag the policy would
+	// resume the session they just ended — the one the user is trying to get away from.
+	const continuity = await continuityForNewSession(c.env, instanceId, uid, repoId, clientType, { forceFresh: body.fresh === true });
+	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom });
+	return c.json({ session, runnerConnected: started.conn != null, resumed: started.resumed, continuity }, 201);
 });
 
 /**
@@ -194,7 +201,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/start", async (c) => 
 	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
 	if (!repo) throw new HttpError(404, "Repo not found");
 	await touchSessionActivity(c.env, instanceId, uid, session.id);
-	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)) != null;
+	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)).conn != null;
 	return c.json({ ok: runnerConnected, runnerConnected });
 });
 
@@ -489,7 +496,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		// the captured `conn` (which points at the old, now-dead machine → 409).
 		const fresh = await getSession(c.env, instanceId, uid, sessionId);
 		const repo = fresh ? await getRepo(c.env, instanceId, uid, fresh.repoId) : null;
-		const relocated = fresh && repo ? await startSessionOnRunner(c.env, instanceId, uid, fresh, repo) : null;
+		const relocated = fresh && repo ? (await startSessionOnRunner(c.env, instanceId, uid, fresh, repo)).conn : null;
 		snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action }).catch(() => null);
 	}
 	if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
@@ -696,7 +703,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 		);
 	}
 	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
-	if (!started) {
+	if (!started.conn) {
 		// Re-read the repo to get the clone error
 		const freshRepo = await getRepo(c.env, instanceId, uid, session.repoId);
 		return c.json({ ok: false, runnerConnected: true, error: freshRepo?.cloneError || "Failed to start session on runner" });

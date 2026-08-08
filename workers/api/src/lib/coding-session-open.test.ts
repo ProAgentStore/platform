@@ -11,6 +11,7 @@ vi.mock("./coding-store.js", () => ({
 	createSession: vi.fn(),
 	endSession: vi.fn(async () => true),
 	getActiveSessionForRepo: vi.fn(),
+	getLastFinishedSessionForRepo: vi.fn(),
 	getRepo: vi.fn(),
 	reassignSessionNode: vi.fn(async () => undefined),
 	updateRepoClone: vi.fn(async () => undefined),
@@ -80,6 +81,7 @@ beforeEach(() => {
 		lastSeenAt: null,
 	});
 	vi.mocked(sweeper.lastIdleReapForRepo).mockResolvedValue(null);
+	vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(null);
 });
 
 describe("ensureActiveSession — who owns the session (#271, #275)", () => {
@@ -260,5 +262,80 @@ describe("sessionOpenedNotice", () => {
 		expect(n).toContain("chess-academy");
 		expect(n).toContain("csess_1");
 		expect(n).not.toMatch(/closed automatically/);
+	});
+
+	it("claims a resume ONLY when the machine confirmed one (#408)", () => {
+		// The single most important correctness detail in #408. `mode: "resume"` is what the CLOUD
+		// asked for; `resumed` is what the MACHINE did. A runner published before this feature drops
+		// the request and starts clean, so announcing the intent would tell most of the fleet the
+		// opposite of what happened — a confident wrong answer to "do you remember what we were
+		// doing?", which is worse than the silence this notice was added to fix.
+		const asked = { mode: "resume", resumeFrom: "csess_old", reason: "the previous conversation on this repo was last touched 2 hours ago" } as const;
+		const confirmed = sessionOpenedNotice({ repoName: "r", sessionId: "csess_2", engine: "claude", continuity: asked, resumed: true });
+		expect(confirmed).toMatch(/picked up this repo's previous conversation/);
+
+		for (const unconfirmed of [undefined, false]) {
+			const n = sessionOpenedNotice({ repoName: "r", sessionId: "csess_2", engine: "claude", continuity: asked, resumed: unconfirmed });
+			expect(n).toMatch(/FRESH conversation/);
+			expect(n).not.toMatch(/picked up/);
+		}
+	});
+
+	it("says WHY it started clean, so a fresh start is never unexplained", () => {
+		const n = sessionOpenedNotice({
+			repoName: "r",
+			sessionId: "csess_3",
+			engine: "claude",
+			continuity: { mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 9 days ago" },
+		});
+		expect(n).toContain("9 days ago");
+		expect(n).toMatch(/fresh conversation/);
+	});
+});
+
+describe("continuity on the open path (#408)", () => {
+	const priorClaude = { id: "csess_old", clientType: "claude", status: "ended", lastActivityAt: Date.now() - 3_600_000 };
+
+	it("asks the runner to continue a recent conversation, and reports what it confirmed", async () => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(priorClaude);
+		vi.mocked(runner.callRunner).mockResolvedValue({ resumed: true } as never);
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		const startBody = vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string };
+		expect(startBody.resumeFrom).toBe("csess_old");
+		expect(res.ok && res.notice).toMatch(/picked up this repo's previous conversation/);
+	});
+
+	it("degrades to a truthful FRESH notice against a runner that ignores the field", async () => {
+		// Backward compatibility is load-bearing, not a nicety: an older `pags up` answers
+		// `/coding/start` with a snapshot that has no `resumed` key at all, and it always starts a
+		// new conversation because its resume store is keyed by a session id it has never seen. The
+		// cloud must read the absence as "clean", not as "presumably fine".
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(priorClaude);
+		vi.mocked(runner.callRunner).mockResolvedValue({ sessionId: "csess_new", pane: "", ready: true } as never);
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res.ok && res.notice).toMatch(/FRESH conversation/);
+		expect(res.ok && res.notice).not.toMatch(/picked up/);
+	});
+
+	it("does not ask for a resume it decided against", async () => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue({ ...priorClaude, lastActivityAt: Date.now() - 30 * 24 * 3_600_000 });
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect((vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string }).resumeFrom).toBeUndefined();
+		expect(res.ok && res.notice).toMatch(/30 days ago/);
+	});
+
+	it("decides nothing on a REUSED session — it already IS the conversation", async () => {
+		// A re-attach's own session id is the resume key on the runner, so nominating a predecessor
+		// there could only override the better answer. The lookup must not even happen.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
+		await ensureSessionForChat(env, "inst", "u", repo);
+		expect(store.getLastFinishedSessionForRepo).not.toHaveBeenCalled();
+		expect((vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string }).resumeFrom).toBeUndefined();
 	});
 });
