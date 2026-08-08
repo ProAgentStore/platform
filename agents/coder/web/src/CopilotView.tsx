@@ -222,6 +222,13 @@ export default function CopilotView({
 						</button>
 					))}
 				</div>
+				{/* Mute. It renders on the interaction MODE and on nothing else, it is never disabled,
+				    and it never moves behind a disclosure — every other condition is a phase in which
+				    the user cannot stop the agent. On a browser with no Web Speech API the voice
+				    channel does not exist at all (`ensureControlStt` returns null) and this control is
+				    the whole invariant. Read docs/adr/0001-mute-is-always-available.md (M1) before
+				    adding a condition here; the guard is checked by
+				    store/console/src/pages/mute-touch-invariant.test.ts. */}
 				{voice.mode === "handsfree" && (
 					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
 						<MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span>

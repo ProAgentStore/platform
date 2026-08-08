@@ -34,10 +34,14 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { readAdr } from "../../../../scripts/lib/adr.mjs";
 import { commandStateFor, matchVoiceCommand, shouldRunControlListener, type TranscriptKind, type VoiceCommand } from "./convo.js";
 import { isEchoing } from "./machine.js";
 
-const ADR = readFileSync(new URL("../../../../docs/adr/0001-mute-is-always-available.md", import.meta.url), "utf-8");
+/** Shared with the TOUCH half of this same ADR — see `scripts/lib/adr.mjs` for why the parse is
+ *  not duplicated per test file. */
+const adr = readAdr(1);
+const ADR = adr.text;
 const USE_VOICE = readFileSync(new URL("./use-voice.ts", import.meta.url), "utf-8");
 
 /**
@@ -117,9 +121,9 @@ function callbackBody(name: string, endsAt: string): string {
 
 describe("ADR 0001 — mute is available at every moment (#388)", () => {
 	it("covers every rule the ADR states — adding a fifth is a visible test change, not a silent gap", () => {
-		const stated = [...ADR.matchAll(/^\*\*(M\d+) — /gm)].map((m) => m[1]);
-		expect(stated.length, "no rules parsed out of the ADR — the document's format changed under this test").toBeGreaterThan(0);
-		expect(stated, "the ADR states a rule this file does not hold, or holds one the ADR no longer states").toEqual(Object.keys(COVERED));
+		// `readAdr` throws rather than returning [] when nothing parses, so "no rules" can never be
+		// mistaken here for "every rule covered".
+		expect(adr.rules, "the ADR states a rule this file does not hold, or holds one the ADR no longer states").toEqual(Object.keys(COVERED));
 	});
 });
 
@@ -157,6 +161,25 @@ describe("M2 — immediate and bidirectional", () => {
 		const body = callbackBody("muteFromCommand", "const muteFromCommandRef");
 		expect(body, "mute no longer closes the microphone (ADR 0001 M2)").toMatch(/sttRef\.current\?\.stop\(\)/);
 		expect(body, "mute no longer cancels in-flight speech — muting an agent that keeps talking is not mute (ADR 0001 M2)").toMatch(/ttsRef\.current\?\.cancel\(\)/);
+	});
+
+	/**
+	 * M1's two channels have to arrive at M2's one implementation. This is the assertion that was
+	 * missing, and #388 found the defect it describes: `toggleMute` — the ON-SCREEN control, and
+	 * the ONLY channel on a browser with no Web Speech API — restated the mute branch instead of
+	 * delegating, one line short of the version above, and the line it was missing was
+	 * `tts.cancel()`. Pressing Mute mid-sentence closed the mic and left the agent talking, while
+	 * the button, the pill and the state all read "Muted".
+	 *
+	 * Asserted as delegation rather than by re-checking the two effects here, because a second copy
+	 * that happens to be correct today is the same defect waiting: the fix is that there is one
+	 * implementation, not that both copies currently agree.
+	 */
+	it("routes the on-screen control into that same implementation, both directions", () => {
+		const body = callbackBody("toggleMute", "// The three modes are derived");
+		expect(body, "the on-screen mute no longer delegates to muteFromCommand — a local copy will not cancel in-flight speech (ADR 0001 M1 + M2)").toMatch(/muteFromCommandRef\.current\(\)/);
+		expect(body, "the on-screen unmute no longer delegates to unmuteFromCommand — a local copy will not reopen the mic (ADR 0001 M4)").toMatch(/unmuteFromCommandRef\.current\(\)/);
+		expect(body, "the on-screen control sets mute state itself instead of delegating — that is how the two copies drifted (ADR 0001 M2)").not.toMatch(/setMuted\(|mutedRef\.current =/);
 	});
 });
 

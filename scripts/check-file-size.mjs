@@ -233,7 +233,12 @@ const PINS = {
 	// button in the message header — the arithmetic that says a wide overlay on the destructive
 	// Delete would swallow a third of Copy is exactly the kind of thing that gets "tidied" away
 	// and re-broken. The classes themselves are three words on lines that already existed.
-	"store/console/src/pages/InstanceDetail.tsx": 1403,
+	// +1 at #388: one comment line, above the Mute button, pointing at ADR 0001. The ADR's own
+	// enforcement section asks for exactly this — the constraint is not discoverable from the code
+	// that would break it, so the pointer has to sit where someone adding a condition would read
+	// it. A line of prose bought against a 1,400-line pin, and the cheapest of the three things
+	// that keep this invariant true.
+	"store/console/src/pages/InstanceDetail.tsx": 1404,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

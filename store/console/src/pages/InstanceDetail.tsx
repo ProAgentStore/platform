@@ -1222,6 +1222,7 @@ function InstancePage() {
 									</label>
 								))}
 							</div>
+							{/* Mute — reachable in EVERY phase, never disabled, never behind a disclosure: on a browser with no Web Speech API this is the ONLY way to mute. Read docs/adr/0001-mute-is-always-available.md (M1) before adding a condition here. */}
 							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
 								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-2xs rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button>

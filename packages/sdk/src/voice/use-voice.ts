@@ -1577,23 +1577,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 		releaseWakeLock();
 	}, [stopAudioMonitor, releaseWakeLock, setPaused]);
 
+	// The on-screen control, and the SAME two implementations the voice commands use — see
+	// docs/adr/0001-mute-is-always-available.md. M1 requires two channels, and M2 requires each of
+	// them to silence BOTH directions. Until #388 only the unmute half delegated: the mute branch
+	// was written out here again, one line short of `muteFromCommand`, and the missing line was
+	// `tts.cancel()`. So pressing Mute while the agent talked closed the microphone and left it
+	// talking — which is not mute, and which was invisible because every label, state and status
+	// said "Muted". On a browser with no Web Speech API this button is the ONLY channel, so that
+	// was the whole feature, gone, in the phase it exists for.
 	const toggleMute = useCallback(() => {
-		if (muted) {
-			// ONE unmute implementation, shared with the voice command — see unmuteFromCommand
-			// for the stale-ref trap it exists to contain.
-			unmuteFromCommandRef.current();
-		} else {
-			// Mute: stop mic but keep convo mode on. Flip the ref too, not just state: several
-			// guards (canOpenMic, the gate's onInterim) read the REF, and React only refreshes
-			// it on the next render.
-			mutedRef.current = true;
-			setMuted(true);
-			sttRef.current?.stop();
-			stopAudioMonitor();
-			setMicOn(false);
-			clearVoiceText();
-		}
-	}, [muted, stopAudioMonitor, clearVoiceText]);
+		// Both directions delegate. `muteFromCommand` cancels in-flight + queued speech (M2) and
+		// `unmuteFromCommand` reopens the mic rather than only clearing the flag (M4, the stale-ref
+		// trap) — neither is safe to restate here, and a copy is how this one drifted.
+		if (muted) unmuteFromCommandRef.current();
+		else muteFromCommandRef.current();
+	}, [muted]);
 
 	// The three modes are derived from the primitives so there's ONE source of truth:
 	// hands-free ⇒ continuous convo; ptt ⇒ replies aloud but no continuous listen; text

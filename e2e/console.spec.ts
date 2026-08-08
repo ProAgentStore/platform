@@ -2605,3 +2605,164 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 		});
 	}
 });
+
+/**
+ * ADR 0001 M1, rendered and hit-tested: the on-screen mute is reachable in every phase (#388).
+ *
+ * `packages/sdk/src/voice/mute-invariant.test.ts` proves the VOICE channel over the phase table.
+ * `store/console/src/pages/mute-touch-invariant.test.ts` proves the SHAPE of the touch channel —
+ * that its render guard names the interaction mode and nothing else. Neither of them opens a
+ * browser, and neither can answer the question a user actually has: with the agent talking, on a
+ * phone, is the mute button on the screen and can my thumb land on it.
+ *
+ * That question matters most in the case the ADR records as a KNOWN HOLE. The control listener is
+ * built on the browser Web Speech API; where the constructor is absent `ensureControlStt` returns
+ * null, no control listener runs, and mute by voice does not exist at all. On such a browser this
+ * button is the entire invariant. So the block runs twice — once as it ships, once with Web Speech
+ * deleted — and it carries the `mobile — ` prefix, which puts it in the WebKit project (#384).
+ * WebKit is not a simulation of that browser: it has no `SpeechRecognition` of its own, and every
+ * phone runs it.
+ *
+ * ── How a real phase is reached, rather than asserted about
+ *
+ * The status pill is `resolveVoiceStatus`, the one presentation of `derivePhase`, so reading it
+ * back is how the test knows WHICH phase the app is in rather than assuming a click worked:
+ *
+ *   listening   enter hands-free — the mic is open, and the pill says so
+ *   processing  `GET /state` reports an in-flight turn (#251/#252), so the page is working
+ *   speaking    replay an assistant message through a `speechSynthesis` that never ends its
+ *               utterance, which is what a long reply looks like from the UI's side
+ *   muted       press mute for real, and assert the way BACK out (M4)
+ *
+ * `transcribing` is the one phase not reached here — it needs a real clip through a real STT — and
+ * it is covered structurally instead, by the guard that no phase signal may appear in the control's
+ * render condition at all.
+ *
+ * Reachability is asserted as visible + enabled + `click({ trial: true })`, which runs Playwright's
+ * full actionability check — in the viewport, stable, hit-testable, not covered by the status pill
+ * or the composer — WITHOUT performing the click and changing the phase under test. Visibility
+ * alone would pass a control sitting under an overlay, and `toBeEnabled` alone would pass one
+ * pushed off the bottom of a 320px screen.
+ */
+test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)", () => {
+	/** Long enough that the browser-TTS fallback timer (3s + 80ms/char) cannot end the utterance
+	 *  mid-assertion, so `speaking` is a phase this test holds rather than races. */
+	const REPLY = `Here is what I found in the repository, at length. ${"Reading on, and on. ".repeat(12)}`;
+
+	/**
+	 * A `speechSynthesis` that starts and never finishes — an agent mid-sentence, held there.
+	 *
+	 * Stubbed rather than driven with a real voice because headless engines have no voices
+	 * installed: `speak()` there either ends instantly or never fires at all, and neither is the
+	 * state this test is about.
+	 */
+	async function holdTheAgentTalking(page: Page) {
+		await page.addInitScript(() => {
+			Object.defineProperty(window, "speechSynthesis", {
+				configurable: true,
+				value: {
+					speaking: true,
+					pending: false,
+					paused: false,
+					getVoices: () => [],
+					speak: () => {},
+					cancel: () => {},
+					pause: () => {},
+					resume: () => {},
+					addEventListener: () => {},
+					removeEventListener: () => {},
+				},
+			});
+		});
+	}
+
+	/** The ADR's known hole, made real: a browser where the control listener cannot exist. */
+	async function removeWebSpeech(page: Page) {
+		await page.addInitScript(() => {
+			Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: undefined });
+			Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
+		});
+	}
+
+	/** Present, enabled, and hit-testable where it is — the three halves of "reachable". */
+	async function expectMuteReachable(page: Page, phase: string) {
+		const mute = page.getByTitle(/^(Mute|Unmute) the mic/);
+		await expect(mute, `${phase}: the on-screen mute is gone. ADR 0001 M1 — no phase may be a dead zone, and on a browser with no Web Speech API this control is the only channel.`).toBeVisible();
+		await expect(mute, `${phase}: the on-screen mute is disabled. A disabled mute is present, legible, and unreachable (ADR 0001 M1).`).toBeEnabled();
+		// Actionability without the action: in the viewport, stable, and receiving the pointer.
+		await mute.click({ trial: true, timeout: 5_000 });
+	}
+
+	for (const webSpeech of [true, false]) {
+		test(`mobile — reachable while listening, working, speaking and muted${webSpeech ? "" : ", with no Web Speech API"}`, async ({ page }) => {
+			await holdTheAgentTalking(page);
+			if (!webSpeech) await removeWebSpeech(page);
+			await mockSignedInConsole(page);
+
+			// One assistant reply to replay, with no `audioKey` so playback falls through to TTS.
+			await page.route("**/v1/instances/inst-1/messages*", (route) =>
+				route.fulfill({
+					status: 200,
+					contentType: "application/json",
+					body: JSON.stringify({ messages: [{ id: "m1", role: "assistant", content: REPLY, createdAt: "2026-08-08T10:00:00.000Z" }] }),
+				}),
+			);
+			// The server-side "this agent is working" signal (#252), switchable mid-test. Registered
+			// after the catch-all so it wins, and falling back to it while the flag is off.
+			let working = false;
+			await page.route("**/v1/instances/inst-1/state", async (route) => {
+				if (!working) return route.fallback();
+				await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "idle", inflight: [{ turnId: "t1", startedAt: Date.now() }] }) });
+			});
+
+			await page.setViewportSize({ width: 320, height: 812 });
+			await page.goto("/console/instances/inst-1");
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+
+			const pill = page.locator("[aria-live='polite']").filter({ hasText: /Hands-free|Listening|Working|Speaking|Muted/ }).first();
+
+			// ── listening ────────────────────────────────────────────────────────────────────
+			// Entering hands-free is SETUP, not the claim, and it is the one step here that depends
+			// on a hardware device: `toggleConvo` awaits a config read and `getUserMedia`, and on a
+			// loaded machine that can lose the race with the click. Retried rather than given a
+			// longer single timeout, because the failure mode is a start that did not take, not a
+			// start that was slow. A repeat press cannot double-open the mic — `setVoiceMode`
+			// returns early once the mode matches, and `resolveToggleAction` answers "ignore" while
+			// a start is still in flight (#284). Everything after this point is asserted once.
+			await expect(async () => {
+				await page.getByTitle(/^Hands-free:/).click();
+				await expect(pill).toHaveText(/Listening|Hands-free/, { timeout: 5_000 });
+			}).toPass({ timeout: 25_000 });
+			await expectMuteReachable(page, "listening");
+
+			// ── speaking (the agent is talking) ──────────────────────────────────────────────
+			// The window mute exists for, and the one #386's first draft would have closed.
+			await page.getByRole("button", { name: "Play this message" }).click();
+			await expect(pill).toHaveText(/Speaking/, { timeout: 15_000 });
+			await expectMuteReachable(page, "speaking");
+
+			// ── muted, entered from speaking ─────────────────────────────────────────────────
+			// M2 as the user meets it: this press must silence BOTH directions. Until #388 the
+			// button's own branch was a copy of `muteFromCommand` missing its `tts.cancel()`, so
+			// the mic closed, the agent kept talking, and the pill stayed on "Speaking" — which is
+			// how this assertion found it. The phase moving to "Muted" IS the cancellation.
+			await page.getByTitle(/^Mute the mic/).click();
+			await expect(pill, "muting an agent that keeps talking is not mute (ADR 0001 M2)").toHaveText(/Muted/, { timeout: 15_000 });
+			await expectMuteReachable(page, "muted");
+			// The same control, now offering the other direction — a session that can be entered
+			// and not left is M1 with the sign flipped.
+			await expect(page.getByTitle(/^Unmute the mic/), "muted: nothing on screen offers unmute (ADR 0001 M4)").toBeVisible();
+			await page.getByTitle(/^Unmute the mic/).click();
+			await expect(pill).not.toHaveText(/Muted/, { timeout: 15_000 });
+
+			// ── processing (the agent is thinking) ───────────────────────────────────────────
+			// Last, because it is the one phase driven by a 10s server poll rather than a click,
+			// and `thinking` outranks every other phase in `derivePhase` — so it is asserted where
+			// nothing after it has to wait for the poll to go back the other way.
+			working = true;
+			await expect(pill).toHaveText(/Working on it/, { timeout: 20_000 });
+			await expectMuteReachable(page, "processing");
+		});
+	}
+});
