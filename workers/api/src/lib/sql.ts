@@ -260,9 +260,13 @@ export interface CompoundSelectOverrun {
  * WHAT IT CANNOT SEE, stated so nobody reads its silence as coverage:
  *
  *   • A union assembled at RUNTIME — `parts.join("\nUNION ALL\n")`, one branch per element of a
- *     list. The literal holds one `UNION`; the ceiling is crossed by the sixth element. That shape
- *     is live in `instance-work.ts` (`unionAll`) and a static scan cannot decide it; it needs a cap
- *     at the point of construction. Do not add a branch-per-item union without one.
+ *     list. The literal holds one `UNION`; the ceiling is crossed by the sixth element. A static
+ *     scan cannot decide it; it needs a cap at the point of construction. Do not add a
+ *     branch-per-item union without one. The one live instance of the shape,
+ *     `instance-work.ts` (`unionAllChunks`), now has that cap — it chunks at
+ *     {@link D1_MAX_COMPOUND_TERMS} and emits `ceil(n / 5)` statements (#434). What changed is
+ *     that file, not this guard: the shape is still invisible from here, so a NEW one would be
+ *     just as unseen.
  *   • SQL concatenated from several literals.
  *   • A literal holding more than one statement, where the count is the sum rather than any one
  *     statement's. Conservative in the safe direction: it can only over-report.

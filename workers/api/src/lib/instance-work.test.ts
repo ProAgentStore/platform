@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { actsInWindow, recentActsForInstances, recentRunsForInstances, recentWorkForInstances } from "./instance-work.js";
+import { D1_MAX_COMPOUND_TERMS } from "./sql.js";
 import type { Env } from "../types.js";
 
 /** D1 stub that COUNTS prepare() calls — the query-cost claim is the thing that silently regresses. */
@@ -24,20 +25,64 @@ function stubEnv(rows: unknown[] = []) {
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `inst-${i}`);
 
-describe("recentWorkForInstances / recentRunsForInstances — cost is constant in fan-out", () => {
-	it("issues EXACTLY ONE statement for 12 subordinates", async () => {
-		// MAX_SUBORDINATES is 12. Naive per-instance looping would be 12 round trips each, 24
-		// total, on the hot path of a tool the Lead is told to call first. This is the assertion
-		// that keeps it at 2.
-		const a = stubEnv();
-		await recentWorkForInstances(a.env, "u1", ids(12));
-		expect(a.sqls).toHaveLength(1);
+/** The compound terms of one statement. `UNION ALL` joins them, so terms = joins + 1. */
+const branchesOf = (sql: string) => sql.split("UNION ALL");
 
-		const b = stubEnv();
-		await recentRunsForInstances(b.env, "u1", ids(12));
-		expect(b.sqls).toHaveLength(1);
+/** The three cross-instance readers, with the bind slots their instance ids start at. */
+const readers = [
+	{ name: "recentWorkForInstances", read: recentWorkForInstances, firstIdParam: 3, lead: 2 },
+	{ name: "recentRunsForInstances", read: recentRunsForInstances, firstIdParam: 3, lead: 2 },
+	// `?3` is the bound event name, so acts start one slot later.
+	{ name: "recentActsForInstances", read: recentActsForInstances, firstIdParam: 4, lead: 3 },
+] as const;
+
+describe("the compound-SELECT ceiling — every statement stays under D1's limit (#434)", () => {
+	// D1 sets SQLITE_MAX_COMPOUND_SELECT to 5 (measured against production in #423). The sixth
+	// branch is a PARSE failure, so the statement never executes once — and every consumer wraps
+	// these reads in `.catch(() => [])`, so a supervisor with six subordinates was told, with
+	// complete confidence, that its whole team was idle.
+	//
+	// This replaces an "issues EXACTLY ONE statement for 12 subordinates" assertion, which pinned
+	// the broken shape as if it were the design. The anti-fan-out guarantee it was defending is
+	// kept below as ceil(n/5) — bounded and sub-linear, never one statement per instance.
+	for (const { name, read, firstIdParam, lead } of readers) {
+		for (const n of [5, 6, 12]) {
+			const stmts = Math.ceil(n / D1_MAX_COMPOUND_TERMS);
+			it(`${name}: ${n} subordinates → ${stmts} statement${stmts === 1 ? "" : "s"}, none over the ceiling`, async () => {
+				const { env, sqls, binds } = stubEnv();
+				await read(env, "u1", ids(n));
+
+				expect(sqls).toHaveLength(Math.ceil(n / D1_MAX_COMPOUND_TERMS));
+				for (const sql of sqls) expect(branchesOf(sql).length).toBeLessThanOrEqual(D1_MAX_COMPOUND_TERMS);
+				// No id is dropped by the chunking: the branches still add up to the whole team.
+				expect(sqls.reduce((t, sql) => t + branchesOf(sql).length, 0)).toBe(n);
+
+				// Parameter numbering is RE-BASED per chunk — each statement carries its own bind
+				// array, so its ids restart at the same first slot. A running offset would read
+				// another instance's rows into this one's answer, silently.
+				const all = ids(n);
+				for (let c = 0; c < sqls.length; c++) {
+					const chunk = all.slice(c * D1_MAX_COMPOUND_TERMS, (c + 1) * D1_MAX_COMPOUND_TERMS);
+					for (let j = 0; j < chunk.length; j++) expect(sqls[c]).toContain(`instance_id = ?${firstIdParam + j}`);
+					expect(binds[c].slice(lead)).toEqual(chunk);
+					expect(binds[c][0]).toBe("u1"); // ?1 is the owner in every chunk
+				}
+			});
+		}
+	}
+
+	it("keeps the per-branch LIMIT bound, not spliced, in every chunk", async () => {
+		// The whole point of the union (see the docstring): moving the limit to the merged set
+		// returns the globally newest rows and a supervisor reads a team of one. And the cap is a
+		// runtime value, so it stays a parameter rather than text spliced into each branch (#327).
+		const { env, sqls, binds } = stubEnv();
+		await recentWorkForInstances(env, "u1", ids(12), 4);
+		for (const sql of sqls) for (const b of branchesOf(sql)) expect(b).toContain("LIMIT ?2");
+		for (const bind of binds) expect(bind[1]).toBe(4);
 	});
+});
 
+describe("recentWorkForInstances / recentRunsForInstances — cost is sub-linear in fan-out", () => {
 	it("gives each subordinate its OWN limit, so one busy agent can't crowd out eleven", async () => {
 		// A flat `IN (…) ORDER BY updated_at DESC LIMIT n` returns the globally newest n rows —
 		// so a supervisor with one chatty subordinate sees a team of one. Per-instance branches.

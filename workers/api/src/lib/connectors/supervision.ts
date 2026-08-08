@@ -26,7 +26,16 @@ import { subordinatesOf } from "../supervision-graph.js";
 import { buildTransfer, describeTransfer } from "../conversation-transfer.js";
 import { normalizeSpeech } from "../normalize-speech.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
-import { actsInWindow, recentActsForInstances, recentRunsForInstances, recentWorkForInstances, type ActItem } from "../instance-work.js";
+import {
+	actsInWindow,
+	recentActsForInstances,
+	recentRunsForInstances,
+	recentWorkForInstances,
+	type ActItem,
+	type RunItem,
+	type WorkItem,
+} from "../instance-work.js";
+import { logError } from "../error-log.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
 import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
@@ -261,12 +270,36 @@ async function observeSubordinates(
 	// The OWNER's zone, resolved once for the whole payload (#345). Every timestamp below is
 	// rendered through it — see `stampTimes`.
 	const zonePromise = accountTimeZone(ctx.env, userId);
-	// Two statements for the work picture, regardless of fan-out — see instance-work.ts. The
-	// connectivity read is a third plus one relay probe per subordinate (see MAX_RELAY_PROBES).
+	// A handful of statements for the work picture, bounded and sub-linear in fan-out — see
+	// instance-work.ts, which chunks its per-instance union at D1's compound-SELECT ceiling. The
+	// connectivity read adds one more plus one relay probe per subordinate (see MAX_RELAY_PROBES).
+	//
+	// Each read degrades to an empty answer rather than taking the whole status tool down with it,
+	// which is right — but until #434 it degraded in COMPLETE SILENCE, so a supervisor whose reads
+	// all failed was indistinguishable from a supervisor whose team was genuinely idle. That is
+	// exactly what happened: six or more subordinates over-ran the compound-SELECT ceiling, every
+	// read returned `[]`, and the tool reported a busy team as doing nothing, with nothing recorded
+	// anywhere. `degrade` records first and then returns the same fallback as before.
+	const degrade =
+		<T>(read: string, fallback: T) =>
+		async (err: unknown): Promise<T> => {
+			// logError never throws (it is try/caught end to end), so observing the failure cannot
+			// itself become the failure — the degradation below happens either way.
+			await logError(ctx.env, {
+				source: "supervision",
+				// `warn`, not `error`: one failed read is a degraded answer, not a broken platform —
+				// but it must still be countable, which is the whole reason the level exists (#424).
+				level: "warn",
+				userId: userId || null,
+				message: `subordinate ${read} read failed: ${err instanceof Error ? err.message : String(err)}`,
+				context: { read, supervisorId: ctx.instanceId ?? null, subordinates: ids.length },
+			});
+			return fallback;
+		};
 	const [work, runs, facts, acts] = await Promise.all([
-		recentWorkForInstances(ctx.env, userId, ids, limit).catch(() => []),
-		recentRunsForInstances(ctx.env, userId, ids).catch(() => []),
-		runtimeConnectivityMany(ctx.env, userId, ids).catch(() => new Map<string, RuntimeFacts>()),
+		recentWorkForInstances(ctx.env, userId, ids, limit).catch(degrade("work", [] as WorkItem[])),
+		recentRunsForInstances(ctx.env, userId, ids).catch(degrade("runs", [] as RunItem[])),
+		runtimeConnectivityMany(ctx.env, userId, ids).catch(degrade("connectivity", new Map<string, RuntimeFacts>())),
 		// What each subordinate has actually DONE (#294). One more indexed read, on the same
 		// per-instance UNION-ALL shape as work/runs — not a fan-out.
 		//
@@ -276,7 +309,7 @@ async function observeSubordinates(
 		// of command text into every prompt this supervisor builds. Small because acts are RARE by
 		// construction — an ordinary run produces none — so this only bites the pathological case,
 		// and in that case the newest few already say what is happening.
-		recentActsForInstances(ctx.env, userId, ids, MAX_ACTS_PER_SUBORDINATE).catch(() => [] as ActItem[]),
+		recentActsForInstances(ctx.env, userId, ids, MAX_ACTS_PER_SUBORDINATE).catch(degrade("acts", [] as ActItem[])),
 	]);
 	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
 	// Connectivity is attached HERE rather than inside `summarizeSubordinates` because it is a

@@ -4,7 +4,7 @@
 // (`mirroredRuntimeTasks`, `buildInstanceBoard`, `listLoopRuns`). A supervisor needs the same data
 // for its whole team in one call, so these are the cross-instance counterparts.
 //
-// DELIBERATELY IMPORTS ONLY `../types.js`. These are the tables a supervisor is allowed to know
+// DELIBERATELY IMPORTS NO DOMAIN MODULE. These are the tables a supervisor is allowed to know
 // about — generic, written by every agent family. The moment this file imports a domain module
 // (coding-store, apply-loop, repo-ingest) the supervision path has learned about a domain, which
 // is the coupling migration 0063 removed and a first attempt at this feature re-introduced
@@ -12,6 +12,11 @@
 // imports `routes/instances-runtime.js`, and pulling a routes module in here would drag the whole
 // Hono router into the supervision path. The title/detail extraction below is a deliberate small
 // duplicate of `board.ts:224` for that reason.
+//
+// `./sql.js` is the one other import and is not a domain: it is a dependency-free module holding
+// the measured D1 platform limits, and taking the constant from there rather than writing `5` here
+// is what stops the two copies drifting (#434).
+import { D1_MAX_COMPOUND_TERMS } from "./sql.js";
 import type { Env } from "../types.js";
 
 /** One card off an agent's board. `kind`/`status` are the writer's own words, not a platform enum. */
@@ -70,21 +75,66 @@ export interface ActItem {
 /** Per-instance row cap. Clamped so a caller can't turn one tool call into an unbounded read. */
 const clampPer = (n: number | undefined, dflt: number) => Math.max(1, Math.min(25, Math.floor(n ?? dflt)));
 
+/** One statement of the chunked union, with exactly the instance ids its branches bind. */
+interface UnionChunk {
+	sql: string;
+	ids: readonly string[];
+}
+
 /**
- * Build a `UNION ALL` of one indexed branch per instance.
+ * Build `UNION ALL` statements of one indexed branch per instance, CHUNKED at D1's ceiling.
  *
  * NOT a flat `WHERE instance_id IN (…) ORDER BY … LIMIT n`: that returns the globally most recent
  * n rows, so one busy subordinate crowds out the other eleven and the supervisor sees a team of
  * one. Per-instance branches each get their own LIMIT.
  *
  * Each branch is an equality seek on the instance index with the sort satisfied by the index, so
- * this is 12 seeks in one round trip rather than 12 round trips. `ROW_NUMBER() OVER (PARTITION BY
+ * this is 12 seeks in 3 round trips rather than 12 round trips. `ROW_NUMBER() OVER (PARTITION BY
  * …)` would be tidier but has zero precedent in this repo and is unverified on D1.
+ *
+ * WHY IT IS CHUNKED (#434). D1 sets `SQLITE_MAX_COMPOUND_SELECT` to {@link D1_MAX_COMPOUND_TERMS}
+ * — five, measured against the production database in #423. The sixth branch is a PARSE failure,
+ * so the statement never executes even once. `MAX_SUBORDINATES` is 12, every supervision read here
+ * is wrapped in a `.catch`, and the result was a supervisor with six subordinates being told with
+ * complete confidence that its whole team was idle. `ceil(n / 5)` statements keeps every property
+ * the per-branch design exists for — its own LIMIT per branch, one indexed seek per branch — while
+ * staying sub-linear in fan-out: 12 ids is 3 statements, not 12 and not 1 broken one.
+ *
+ * Each chunk is its OWN statement with its OWN bind array, so the ids restart at `firstIdParam`
+ * in every chunk. Carrying a running offset across chunks would read another instance's rows into
+ * this one's answer — silently, since the ids are all well-formed.
  */
-function unionAll(branch: (idParam: number) => string, count: number, firstIdParam: number): string {
-	const parts: string[] = [];
-	for (let i = 0; i < count; i++) parts.push(`SELECT * FROM (${branch(i + firstIdParam)})`);
-	return parts.join("\nUNION ALL\n");
+function unionAllChunks(
+	branch: (idParam: number) => string,
+	instanceIds: readonly string[],
+	firstIdParam: number,
+): UnionChunk[] {
+	const chunks: UnionChunk[] = [];
+	for (let i = 0; i < instanceIds.length; i += D1_MAX_COMPOUND_TERMS) {
+		const ids = instanceIds.slice(i, i + D1_MAX_COMPOUND_TERMS);
+		const parts = ids.map((_, j) => `SELECT * FROM (${branch(j + firstIdParam)})`);
+		chunks.push({ sql: parts.join("\nUNION ALL\n"), ids });
+	}
+	return chunks;
+}
+
+/**
+ * Run every chunk in parallel and concatenate the rows.
+ *
+ * Order across chunks does not matter: every consumer groups by `instanceId`
+ * (`summarizeSubordinates`), and within a chunk each branch's own `ORDER BY … LIMIT` is intact.
+ * `lead` is the fixed leading bind slots each branch shares — `?1` userId, `?2` limit, and for
+ * acts `?3` the event name — so the instance ids follow it positionally in every chunk.
+ */
+async function readChunks<Row>(env: Env, chunks: readonly UnionChunk[], lead: readonly unknown[]): Promise<Row[]> {
+	const results = await Promise.all(
+		chunks.map((chunk) =>
+			env.DB.prepare(chunk.sql)
+				.bind(...lead, ...chunk.ids)
+				.all<Row>(),
+		),
+	);
+	return results.flatMap((r) => r.results ?? []);
 }
 
 interface TaskRow {
@@ -124,19 +174,17 @@ export async function recentWorkForInstances(
 	// An empty `UNION ALL` is a syntax error, and a supervisor with no links is perfectly ordinary.
 	if (!instanceIds.length) return [];
 	const limit = clampPer(perInstance, 8);
-	const sql = unionAll(
+	const chunks = unionAllChunks(
 		(p) =>
 			`SELECT instance_id, id, type, status, payload, updated_at
 			   FROM instance_runtime_tasks
 			  WHERE instance_id = ?${p} AND user_id = ?1 AND hidden = 0
 			  ORDER BY updated_at DESC LIMIT ?2`,
-		instanceIds.length,
+		instanceIds,
 		3,
 	);
-	const res = await env.DB.prepare(sql)
-		.bind(userId, limit, ...instanceIds)
-		.all<TaskRow>();
-	return (res.results ?? []).map((r) => {
+	const rows = await readChunks<TaskRow>(env, chunks, [userId, limit]);
+	return rows.map((r) => {
 		let payload: Record<string, unknown> = {};
 		try {
 			const p = r.payload ? JSON.parse(r.payload) : {};
@@ -180,20 +228,18 @@ export async function recentRunsForInstances(
 ): Promise<RunItem[]> {
 	if (!instanceIds.length) return [];
 	const limit = clampPer(perInstance, 5);
-	const sql = unionAll(
+	const chunks = unionAllChunks(
 		(p) =>
 			`SELECT instance_id, run_id, objective, status, stop_reason, detail, iteration,
 			        max_iterations, started_at, finished_at, last_progress_at
 			   FROM agent_loop_runs
 			  WHERE instance_id = ?${p} AND user_id = ?1
 			  ORDER BY started_at DESC LIMIT ?2`,
-		instanceIds.length,
+		instanceIds,
 		3,
 	);
-	const res = await env.DB.prepare(sql)
-		.bind(userId, limit, ...instanceIds)
-		.all<RunRow>();
-	return (res.results ?? []).map((r) => ({
+	const rows = await readChunks<RunRow>(env, chunks, [userId, limit]);
+	return rows.map((r) => ({
 		instanceId: r.instance_id,
 		runId: r.run_id,
 		objective: String(r.objective ?? "").slice(0, 300),
@@ -264,19 +310,18 @@ export async function recentActsForInstances(
 ): Promise<ActItem[]> {
 	if (!instanceIds.length) return [];
 	const limit = clampPer(perInstance, 10);
-	const sql = unionAll(
+	const chunks = unionAllChunks(
 		(p) =>
 			`SELECT ${ACT_COLUMNS}
 			   FROM agent_events
 			  WHERE instance_id = ?${p} AND user_id = ?1 AND event = ?3
 			  ORDER BY ts DESC LIMIT ?2`,
-		instanceIds.length,
+		instanceIds,
 		4,
 	);
-	const res = await env.DB.prepare(sql)
-		.bind(userId, limit, ACT_EVENT, ...instanceIds)
-		.all<ActRow>();
-	return (res.results ?? []).map(toActItem);
+	// Three leading slots here, not two: `?3` is the bound event name, so ids start at `?4`.
+	const rows = await readChunks<ActRow>(env, chunks, [userId, limit, ACT_EVENT]);
+	return rows.map(toActItem);
 }
 
 /**
