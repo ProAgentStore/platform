@@ -424,6 +424,82 @@ export function reduceDictation(cur: Dictation | null, ev: DictationEvent): Dict
 	}
 }
 
+/**
+ * ── THE UTTERANCE THE LIVE RECOGNIZER HAS HEARD SO FAR (#458)
+ *
+ * {@link reduceDictation} REPLACES its text, and that is right for its other caller: streaming
+ * `gpt-4o-transcribe` partials are cumulative by construction (each partial is the whole
+ * transcript so far), so appending them would duplicate every word. The reducer is not the bug.
+ *
+ * The bug is that the speech GATE fed it a fragment. Web Speech reports per PHRASE, and its
+ * `resultIndex` is the first CHANGED result — so the text arriving at each event is the phrase
+ * being recognised right now, not the turn. Every pause finalised a phrase, the next event
+ * started a new one, and the bubble was overwritten: "part by part", with the earlier words
+ * gone. The recogniser also restarts itself on `onend`, which resets `results` entirely, so the
+ * loss happened at phrase boundaries AND at restarts.
+ *
+ * That cost more than the display. `heard` is stamped from the bubble at end-of-turn and fed to
+ * {@link dictationDiverged} — the "did the final transcript lose a clause?" guard (#281, #371) —
+ * so a systematically truncated `heard` made `final.length < heard.length * 0.6` unsatisfiable
+ * and the guard silently stopped working for any turn containing a pause. Which is most of them.
+ *
+ * The fold is four rules with an ordering dependency (append finals, hold the interim apart,
+ * survive a restart, reset per turn), and Web Speech re-emits a phrase as interim and THEN as
+ * final — so a naive append doubles it. That is exactly the shape this module exists for, so it
+ * is a pure reducer beside {@link reduceDictation} rather than closure state in the adapter.
+ *
+ * THE RULE THAT MAKES IT SAFE: a `results` event carries the WHOLE current session (its caller
+ * scans `results` from 0, not from `resultIndex`), so the session halves are RECOMPUTED rather
+ * than accumulated. Re-delivering a phrase as final after delivering it as interim therefore
+ * cannot double it — the second event overwrites the first's reading of the same array. Only
+ * what a restart is about to destroy is ever accumulated, and that happens once, at `sessionEnd`.
+ */
+export interface HeardState {
+	/** Text from recogniser sessions that have already ENDED — the only accumulated part. */
+	committed: string;
+	/** The finalised text of the CURRENT session, recomputed from its results on every event. */
+	sessionFinal: string;
+	/** The live, not-yet-final tail of the current session. */
+	sessionInterim: string;
+}
+
+export type HeardEvent =
+	/** One `onresult`, carrying the whole current session split into final and not-yet-final. */
+	| { type: "results"; final: string; interim: string }
+	/** The recogniser ended (it restarts itself) — its `results` are about to be thrown away. */
+	| { type: "sessionEnd" }
+	/** A new turn begins. The ONLY thing that forgets an utterance. */
+	| { type: "reset" };
+
+export const EMPTY_HEARD: HeardState = { committed: "", sessionFinal: "", sessionInterim: "" };
+
+/** Join transcript fragments with single spaces, ignoring the empty ones. */
+function joinHeard(...parts: string[]): string {
+	return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+export function reduceHeard(cur: HeardState, ev: HeardEvent): HeardState {
+	switch (ev.type) {
+		case "results":
+			return { ...cur, sessionFinal: joinHeard(ev.final), sessionInterim: joinHeard(ev.interim) };
+		case "sessionEnd": {
+			// The interim is carried too, not just the final. A recogniser that ends mid-phrase has
+			// not always promoted its last words to final first, and losing them is the very defect
+			// this reducer exists to fix — whereas carrying them cannot duplicate, because the
+			// session halves are cleared in the same step.
+			const carried = joinHeard(cur.sessionFinal, cur.sessionInterim);
+			return { committed: joinHeard(cur.committed, carried), sessionFinal: "", sessionInterim: "" };
+		}
+		case "reset":
+			return EMPTY_HEARD;
+	}
+}
+
+/** Everything heard this turn, in speaking order — what the bubble shows. */
+export function heardText(s: HeardState): string {
+	return joinHeard(s.committed, s.sessionFinal, s.sessionInterim);
+}
+
 /** Words of an utterance, normalized for comparison (case/punctuation-insensitive). */
 function words(s: string): string[] {
 	return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);

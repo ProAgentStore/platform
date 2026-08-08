@@ -18,6 +18,7 @@
 
 import { isNoiseTranscript } from "./audio.js";
 import { isMicPermissionDenied } from "./convo.js";
+import { EMPTY_HEARD, type HeardState, heardText, reduceHeard } from "./machine.js";
 
 interface SpeechRecognitionAlternativeLike {
 	readonly transcript: string;
@@ -67,8 +68,20 @@ export interface SpeechGate {
 
 export interface SpeechGateOptions {
 	lang?: string;
-	/** Live partial text as the user speaks — the always-visible dictation. */
-	onInterim: (text: string) => void;
+	/**
+	 * Live text as the user speaks — the always-visible dictation.
+	 *
+	 * TWO arguments, because two consumers want two different things and conflating them is a
+	 * regression either way (#458):
+	 *  - `text` is the whole UTTERANCE so far ({@link reduceHeard}), which is what the bubble
+	 *    shows and what `heard` is stamped from. Before #458 it was the phrase, so a pause erased
+	 *    everything said before it.
+	 *  - `phrase` is just what changed in THIS event — the recogniser's own unit. It is what a
+	 *    command scanner must see: a single-word command only fires when it IS the whole utterance
+	 *    ({@link phraseMatchesTranscript}), so handing an accumulator to the matcher would make
+	 *    "run the tests" + "mute" unmatchable and delete mute-during-capture (#228, ADR 0001 M1).
+	 */
+	onInterim: (text: string, phrase: string) => void;
 	/** Fired the first time real words are heard this turn (→ the turn is legit). */
 	onSpeech?: () => void;
 	/**
@@ -118,6 +131,8 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 	let rec: SpeechRecognitionLike | null = null;
 	let active = false;
 	let heard = false;
+	/** The utterance so far — accumulated across phrases AND across the gate's own restarts (#458). */
+	let utterance: HeardState = EMPTY_HEARD;
 	let alive = false;
 	/** The browser refused this origin the microphone. Terminal until the user changes it (#425). */
 	let denied = false;
@@ -130,19 +145,39 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		r.lang = opts.lang || "en-US";
 		r.onresult = (e: SpeechRecognitionEventLike) => {
 			alive = true;
+			// The WHOLE session (from 0) and the DELTA (from resultIndex) in one pass. The session
+			// halves are what {@link reduceHeard} folds — recomputed, never accumulated, so a phrase
+			// re-delivered as final after arriving as interim cannot be counted twice. The delta is
+			// the recogniser's own unit and is what the phrase-scoped consumers below still see.
 			let interim = "";
 			let final = "";
-			for (let i = e.resultIndex; i < e.results.length; i++) {
+			let deltaInterim = "";
+			let deltaFinal = "";
+			for (let i = 0; i < e.results.length; i++) {
 				const t = e.results[i][0].transcript;
-				if (e.results[i].isFinal) final += t;
-				else interim += t;
+				const isFinal = e.results[i].isFinal;
+				if (isFinal) final += ` ${t}`;
+				else interim += ` ${t}`;
+				if (i >= e.resultIndex) {
+					if (isFinal) deltaFinal += t;
+					else deltaInterim += t;
+				}
 			}
-			const shown = (final || interim).trim();
-			if (shown) opts.onInterim(shown);
+			utterance = reduceHeard(utterance, { type: "results", final, interim });
+			const whole = heardText(utterance);
+			// `(deltaFinal || deltaInterim)` — NOT `deltaFinal + deltaInterim`. This value reaches
+			// the command matcher, where a single-word command must BE the whole transcript, so
+			// appending the next phrase's opening syllable to a finalised "mute" would stop it
+			// firing. The display half gets both, from `whole`, which is where the flicker #458
+			// also reports actually lived.
+			const phrase = (deltaFinal || deltaInterim).trim();
+			if (whole) opts.onInterim(whole, phrase);
 			// Real words (not a bare filler/punctuation) from someone who is not the agent → the
 			// turn is legitimate. `acceptSpeech` is the ONLY thing standing between the agent's own
-			// voice and a gate that vouches for a turn the user never took (#332).
-			if (!heard && opts.acceptSpeech?.() !== false && !isNoiseTranscript(final || interim)) {
+			// voice and a gate that vouches for a turn the user never took (#332). Judged on the
+			// DELTA, as it always has been: the accumulated utterance would re-ask the question
+			// about words already ruled on, under a guard whose answer has since changed.
+			if (!heard && opts.acceptSpeech?.() !== false && !isNoiseTranscript(deltaFinal || deltaInterim)) {
 				heard = true;
 				opts.onSpeech?.();
 			}
@@ -157,6 +192,11 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		};
 		r.onend = () => {
 			alive = true; // it started and ended → the engine is running
+			// A restart resets `results`, so whatever this session heard has to be banked BEFORE it
+			// is gone (#458). Done here rather than in `start()` because only this handler knows a
+			// session ended at all — which is why the accumulator has to live in the gate and not
+			// at the `onInterim` call site.
+			utterance = reduceHeard(utterance, { type: "sessionEnd" });
 			// `denied` is checked with `active` because a restart here cannot succeed and each
 			// attempt costs the user another prompt.
 			if (!active || denied) return;
@@ -207,6 +247,10 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		},
 		reset() {
 			heard = false;
+			// The one place an utterance is forgotten, and the caller already calls this exactly
+			// once per turn (`startAudioMonitor`) — which is what keeps text from bleeding across
+			// turns now that it survives a restart.
+			utterance = reduceHeard(utterance, { type: "reset" });
 		},
 	};
 }

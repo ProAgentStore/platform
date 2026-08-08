@@ -199,7 +199,14 @@ const PINS = {
 	// to OpenAI on the user's own key so a mute button can be spoken to, and silence leaves a user
 	// unable to tell "this browser cannot" from "the app is ignoring me". That belongs at the null
 	// check, which is the only place a reader would consider building the fallback.
-	"packages/sdk/src/voice/use-voice.ts": 1921,
+	// +5 for #458, and four of the five are the comment. The change itself is `onInterim: (text,
+	// phrase)` and one identifier swapped at the matcher call — but WHICH argument goes where is
+	// the entire fix: the bubble takes the accumulated utterance, and the command scanner must NOT,
+	// because a single-word command only fires when it IS the whole transcript, so handing it an
+	// accumulator deletes mute-during-capture (#228, ADR 0001 M1). The accumulation itself is a
+	// pure reducer in machine.ts (`reduceHeard`) with the gate as its adapter, so what landed here
+	// is the wiring and the reason a later tidy-up must not collapse the two arguments into one.
+	"packages/sdk/src/voice/use-voice.ts": 1926,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets

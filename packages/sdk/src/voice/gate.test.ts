@@ -18,6 +18,30 @@ class FakeSR {
 	emit(transcript: string, isFinal: boolean) {
 		this.onresult?.({ resultIndex: 0, results: { length: 1, 0: { isFinal, length: 1, 0: { transcript } } } });
 	}
+
+	// ── A closer model of Chrome's CONTINUOUS mode, for #458.
+	//
+	// `emit` above is a one-phrase session, which is precisely the shape that hid the bug: with a
+	// single result there is no difference between "the phrase" and "the turn". Real continuous
+	// recognition grows a `results` ARRAY — an open result is revised by each interim and closed by
+	// a final, the next phrase opens a new index, and `resultIndex` points at the first CHANGED
+	// one. That difference is the whole defect.
+	private phrases: Array<{ isFinal: boolean; transcript: string }> = [];
+	say(transcript: string, isFinal: boolean) {
+		const last = this.phrases[this.phrases.length - 1];
+		const idx = last && !last.isFinal ? this.phrases.length - 1 : this.phrases.length;
+		this.phrases[idx] = { isFinal, transcript };
+		const results: Record<string | number, unknown> = { length: this.phrases.length };
+		this.phrases.forEach((p, i) => {
+			results[i] = { isFinal: p.isFinal, length: 1, 0: { transcript: p.transcript } };
+		});
+		this.onresult?.({ resultIndex: idx, results });
+	}
+	/** Chrome ends a continuous recognizer after a silence and the gate re-arms it; `results` is gone. */
+	endsItself() {
+		this.phrases = [];
+		this.onend?.();
+	}
 }
 
 function withFakeSR(): { instances: FakeSR[]; restore: () => void } {
@@ -223,6 +247,106 @@ describe("a refused microphone (#425)", () => {
 		endsItself(sr);
 		expect(sr.started).toBeGreaterThan(1);
 		expect(denials).toEqual([]);
+		restore();
+	});
+});
+
+/**
+ * #458 — "dictating hands-free, pausing makes the previous part vanish and the next part appear
+ * in its place." Production, `bd43f4de-…`: a 23-word message whose stored `dictation` was the
+ * five-word tail of the utterance.
+ *
+ * The gate emitted `e.results[e.resultIndex…]` — the phrase being recognised — and
+ * `reduceDictation` REPLACES its text (correctly, for streaming Whisper partials). So every
+ * pause overwrote the bubble, and every self-restart threw away the session with it.
+ */
+describe("the gate accumulates the utterance (#458)", () => {
+	/** The last thing the bubble was told, and the last thing the command scanner was told. */
+	const listen = () => {
+		const seen: Array<{ text: string; phrase: string }> = [];
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: (text, phrase) => seen.push({ text, phrase }) })!;
+		gate.start();
+		return { gate, sr: instances[0], seen, last: () => seen[seen.length - 1], restore };
+	};
+
+	it("keeps the earlier clauses when the user pauses mid-sentence", () => {
+		const { sr, last, restore } = listen();
+		sr.say("Is the feature done?", false);
+		sr.say("Is the feature done?", true); // ← the pause. Pre-#458 the next line replaced this.
+		sr.say(" Can I now sign in with email and password?", false);
+		expect(last().text).toBe("Is the feature done? Can I now sign in with email and password?");
+		sr.say(" Can I now sign in with email and password?", true);
+		sr.say(" Was it tested?", false);
+		expect(last().text).toBe("Is the feature done? Can I now sign in with email and password? Was it tested?");
+		restore();
+	});
+
+	// The half an accumulator at the `onInterim` call site could not have fixed: only the gate
+	// knows a session ended, and only the gate can bank it before `results` is reset.
+	it("survives its own restart, which is what a silence produces", () => {
+		const { sr, last, restore } = listen();
+		sr.say("deploy the api worker", true);
+		sr.endsItself();
+		sr.say("and then check the logs", false);
+		expect(last().text).toBe("deploy the api worker and then check the logs");
+		restore();
+	});
+
+	it("does not double a phrase that is revised from interim to final", () => {
+		const { sr, last, restore } = listen();
+		sr.say("run the", false);
+		sr.say("run the tests", false);
+		sr.say("run the tests", true);
+		expect(last().text).toBe("run the tests");
+		restore();
+	});
+
+	// The accumulator's own failure mode: text bleeding from one turn into the next. `reset()` is
+	// called once per turn by `startAudioMonitor`, and it is the only thing that forgets.
+	it("starts each turn empty, and only reset empties it", () => {
+		const { gate, sr, last, restore } = listen();
+		sr.say("first turn", true);
+		sr.endsItself();
+		gate.reset();
+		sr.say("second turn", false);
+		expect(last().text).toBe("second turn");
+		restore();
+	});
+
+	/**
+	 * THE REGRESSION THIS SHAPE EXISTS TO PREVENT, and the reason `onInterim` takes two arguments.
+	 *
+	 * `matchVoiceCommand` fires a single-word command only when it IS the whole transcript
+	 * (`phraseMatchesTranscript`), deliberately, so "don't forget to mute" stays a message. Hand
+	 * the ACCUMULATED utterance to that matcher and mute-during-capture — #228, ADR 0001 M1 —
+	 * stops working for every turn in which the user said anything first.
+	 */
+	it("still reports the bare phrase, so a mid-capture command is still matchable", () => {
+		const { sr, last, restore } = listen();
+		sr.say("run the tests", true);
+		sr.say(" mute", false);
+		expect(last().phrase, "the command scanner must see the command, not the sentence before it").toBe("mute");
+		expect(last().text, "the bubble must still see everything").toBe("run the tests mute");
+		restore();
+	});
+
+	// The gate's OTHER job is unchanged: vouching for the turn is judged on the new words, not on
+	// the accumulated ones, so a guard that has since closed cannot be re-asked about old words.
+	it("leaves the heard-speech verdict on the delta", () => {
+		const { instances, restore } = withFakeSR();
+		let mine = true;
+		const gate = createSpeechGate({ onInterim: () => {}, acceptSpeech: () => mine })!;
+		gate.start();
+		const sr = instances[0];
+		mine = false;
+		sr.say("here is what I found in the repository", true); // the agent, aloud
+		expect(gate.heardSpeech()).toBe(false);
+		sr.endsItself();
+		gate.reset();
+		mine = false;
+		sr.say("you", true); // noise, on a turn nobody took
+		expect(gate.heardSpeech()).toBe(false);
 		restore();
 	});
 });

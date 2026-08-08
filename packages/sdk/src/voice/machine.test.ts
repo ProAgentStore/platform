@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, isMutedTurn, pendingUtterance, planMuteTeardown, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, type Dictation } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, isMutedTurn, pendingUtterance, planMuteTeardown, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, reduceHeard, heardText, EMPTY_HEARD, type Dictation } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -553,5 +553,102 @@ describe("storedDictation (#319 — what is worth keeping beside the transcript)
 	it("caps what it stores, so one runaway recognizer cannot bloat a message", () => {
 		const long = "word ".repeat(2000);
 		expect(storedDictation(long, "short")?.length).toBe(DICTATION_MAX);
+	});
+});
+
+/**
+ * #458 — the gate emitted the phrase being recognised, not the turn, so every pause replaced the
+ * bubble instead of extending it. These are the four folding rules stated as tests, because the
+ * bug was never in any one of them: it was in there being no fold at all.
+ */
+describe("reduceHeard (#458 — the utterance survives a pause and a restart)", () => {
+	/** Replay `onresult` events. Each carries the WHOLE session, as the gate's caller computes it. */
+	const play = (evs: Array<{ final?: string; interim?: string } | "end" | "reset">) =>
+		heardText(
+			evs.reduce<ReturnType<typeof reduceHeard>>(
+				(s, e) =>
+					e === "end"
+						? reduceHeard(s, { type: "sessionEnd" })
+						: e === "reset"
+							? reduceHeard(s, { type: "reset" })
+							: reduceHeard(s, { type: "results", final: e.final ?? "", interim: e.interim ?? "" }),
+				EMPTY_HEARD,
+			),
+		);
+
+	it("shows the finalised words plus the live tail, not one or the other", () => {
+		expect(play([{ final: "is the feature done", interim: " can I now" }])).toBe("is the feature done can I now");
+	});
+
+	// THE REPORTED BUG, in the shape production produced it: four clauses, three pauses, and a
+	// bubble that ended up holding the last five words of twenty-three.
+	it("accumulates across pauses instead of replacing", () => {
+		expect(
+			play([
+				{ interim: "is the feature done" },
+				{ final: "Is the feature done?" },
+				{ final: "Is the feature done?", interim: " can I now sign in" },
+				{ final: "Is the feature done? Can I now sign in with email and password?" },
+				{ final: "Is the feature done? Can I now sign in with email and password?", interim: " was it tested" },
+			]),
+		).toBe("Is the feature done? Can I now sign in with email and password? was it tested");
+	});
+
+	// Web Speech emits a phrase as interim and THEN as final. A fold that appended would double it;
+	// recomputing the session from the array is what makes that structurally impossible.
+	it("does not double a phrase that arrives as interim and then as final", () => {
+		expect(play([{ interim: "run the tests" }, { final: "run the tests" }])).toBe("run the tests");
+	});
+
+	// A restart resets `results` — the other half of the loss, and the half an accumulator at the
+	// call site could not have fixed, because only the gate sees `onend`.
+	it("carries the session across a restart, banking the interim as well as the final", () => {
+		expect(play([{ final: "deploy the api worker" }, "end", { interim: "and then check" }])).toBe(
+			"deploy the api worker and then check",
+		);
+		expect(play([{ interim: "half a sentence" }, "end", { final: "and the rest" }])).toBe("half a sentence and the rest");
+	});
+
+	it("banks a session exactly once, however many events described it", () => {
+		expect(play([{ interim: "mute" }, { final: "mute" }, "end", "end"])).toBe("mute");
+	});
+
+	// Bleeding across turns is the failure mode an accumulator introduces, and `reset` is the one
+	// per-turn hook the gate already had.
+	it("forgets everything on reset, and only on reset", () => {
+		expect(play([{ final: "turn one" }, "end", "reset", { final: "turn two" }])).toBe("turn two");
+		expect(play([{ final: "turn one" }, "reset"])).toBe("");
+	});
+
+	it("normalises whitespace so joined fragments read as one utterance", () => {
+		expect(play([{ final: "  first   part ", interim: "  second  part " }])).toBe("first part second part");
+	});
+});
+
+/**
+ * The consequence that is not cosmetic. `heard` is stamped from the bubble at end-of-turn, so a
+ * fragment made `dictationDiverged` — the #281/#371 lost-clause guard — unsatisfiable in the
+ * DEFAULT mode: with `heard` always a tail, `final.length < heard.length * 0.6` can never hold.
+ */
+describe("a truthful `heard` is what lets the divergence guard fire at all (#458)", () => {
+	// The reported turn: four clauses spoken, and a transcript that came back holding the first one.
+	const spoken =
+		"is the feature done can I now sign in with email and password was it tested is there an end to end automation test for it";
+	const lastPhraseOnly = "is there an end to end automation test for it";
+	const lostTail = "is the feature done can I now sign in";
+
+	it("was silent when `heard` was the last phrase only — the pre-#458 shape", () => {
+		// 8 final words against a 10-word `heard` clears the 40% bar comfortably. It always will:
+		// the fragment is a fraction of the utterance, so the final is systematically the LONGER
+		// of the two and the volume test has nothing to measure.
+		expect(dictationDiverged(lastPhraseOnly, lostTail)).toBe(false);
+	});
+
+	it("fires on the same turn once `heard` is the accumulated utterance", () => {
+		expect(dictationDiverged(spoken, lostTail)).toBe(true);
+	});
+
+	it("still stays quiet when the two engines merely disagree about wording", () => {
+		expect(dictationDiverged(spoken, "Is the feature done? Can I now sign in with e-mail and password? Was it tested? Is there an end-to-end automation test for it?")).toBe(false);
 	});
 });

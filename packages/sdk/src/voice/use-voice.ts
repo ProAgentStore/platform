@@ -327,7 +327,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// "cannot vouch for this turn", so it quietly changes which marginal turns
 					// survive — and until #425 it produced no evidence of itself at all.
 					onDenied: (code) => reportClientError("voice-gate", `speech gate refused the microphone: ${code}`, { code }),
-					onInterim: (text) => {
+					// `text` is the whole utterance so far; `phrase` is only what the recognizer just
+					// changed. The command scan below takes `phrase` and the bubble takes `text` —
+					// see the two-argument rationale on SpeechGateOptions.onInterim (#458).
+					onInterim: (text, phrase) => {
 						// Control words during CAPTURE (#228). In Whisper/OpenAI mode the main path
 						// records with MediaRecorder and produces nothing until the clip uploads, and
 						// the background control listener has yielded because the mic is open — so for
@@ -349,7 +352,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 							// it is momentarily exactly "scrap that" on the way to "scrap that idea and
 							// let's move on". commandStateFor drops the destructive flag (#342).
 							const cmd = matchVoiceCommand(
-								text,
+								phrase,
 								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 								voiceLangRef.current,
 								commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current, canBack: canBackRef.current }),
@@ -383,7 +386,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 						if (mutedRef.current || shouldIgnoreResult(readGuard(), now)) return;
 						// The gate is the ONLY live view of a Whisper turn (the recorder produces
 						// nothing until upload), so these words are what the thread shows while
-						// the user is still speaking.
+						// the user is still speaking — and, at end-of-turn, what `heard` is stamped
+						// from for `dictationDiverged`. The ACCUMULATED utterance, so a pause no
+						// longer erases the clauses before it (#458).
 						dictate({ type: "speech", text, at: now });
 					},
 				});
