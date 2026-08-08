@@ -311,6 +311,48 @@ describe("enforceConstraints — an out-of-scope argument is refused, naming the
 		expect(enforceConstraints(LIST, { backends: ["tmux", "kitty"] }, { backend: "kitty" })).toEqual({ ok: true, input: { backend: "kitty" } });
 	});
 
+	/**
+	 * #441: a two-of-three ceiling refused a target it explicitly permits.
+	 *
+	 * The four cases are the ones measured on the issue, kept together because only ONE of them
+	 * changed: the bug was invisible against a single-value ceiling (narrowing to `allowed[0]` is
+	 * the same answer as narrowing to the prefix), so the fix is only meaningful next to the three
+	 * neighbours it must not disturb.
+	 */
+	describe("a prefixed target NAMES its backend, whatever the ceiling's size", () => {
+		const BOTH = { backends: ["tmux", "kitty"] };
+
+		it("single-value ceiling: `tmux:main` passes and pins `backend` — unchanged", () => {
+			expect(enforceConstraints(CAPTURE, TMUX_ONLY, { target: "tmux:main" })).toEqual({ ok: true, input: { target: "tmux:main", backend: "tmux" } });
+		});
+
+		it("multi-value ceiling: `tmux:main` passes, narrowed to the backend the target named", () => {
+			// Was refused with "`all` is not available to this agent — pass `backend` explicitly",
+			// which is wrong twice: the caller never used the wildcard, and the value it asks for is
+			// the one already sitting in `target`.
+			expect(enforceConstraints(CAPTURE, BOTH, { target: "tmux:main" })).toEqual({ ok: true, input: { target: "tmux:main", backend: "tmux" } });
+		});
+
+		it("multi-value ceiling: a prefix OUTSIDE it is still refused as a backend violation", () => {
+			const r = enforceConstraints(CAPTURE, BOTH, { target: "iterm2:1:1:1" });
+			expect(r.ok).toBe(false);
+			expect(!r.ok && r.refusal).toContain("`terminal.backends` (tmux, kitty)");
+			expect(!r.ok && r.refusal).toContain("iterm2:1:1:1");
+		});
+
+		it("multi-value ceiling: an explicit `backend` with an unprefixed target still passes", () => {
+			expect(enforceConstraints(CAPTURE, BOTH, { backend: "tmux", target: "main" })).toEqual({ ok: true, input: { backend: "tmux", target: "main" } });
+		});
+
+		it("still ASKS when the target names no backend and the ceiling holds more than one", () => {
+			// The narrowing is only ever "the caller already said so", never a guess: an unprefixed
+			// target carries no backend, so the ambiguity the refusal exists for is still there.
+			const r = enforceConstraints(CAPTURE, BOTH, { target: "main" });
+			expect(r.ok).toBe(false);
+			expect(!r.ok && r.refusal).toMatch(/pass `backend` explicitly/);
+		});
+	});
+
 	it("does not touch a tool whose schema has no such argument", () => {
 		const noArgs = { name: "x", connector: "terminal", jsonSchema: { properties: {} } };
 		const input = { anything: 1 };

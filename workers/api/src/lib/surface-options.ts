@@ -466,6 +466,14 @@ export function enforceConstraints(
 		// A prefixed argument FIRST: `terminal_capture({target:"iterm2:1:1:1"})` reaches iTerm2
 		// without ever setting `backend`, so checking only `backend` would leave the ceiling
 		// decorative on every tool that takes a target.
+		//
+		// A PERMITTED prefix is recorded rather than merely waved past (#441). `tmux:main` names its
+		// backend unambiguously, in the argument the tool actually acts on; discarding that fact left
+		// the `arg` rule below seeing an absent `backend` and — whenever the ceiling held more than
+		// one value — refusing the call with "pass `backend` explicitly", about a value the caller
+		// had already given, and naming a wildcard they never used. A single-value ceiling hid it,
+		// because narrowing to `allowed[0]` happens to be the same answer there.
+		let namedByPrefix = "";
 		for (const p of def.prefixArgs ?? []) {
 			if (!(p in props)) continue;
 			const raw = out[p];
@@ -474,7 +482,11 @@ export function enforceConstraints(
 			const prefix = sep > 0 ? raw.slice(0, sep).trim().toLowerCase() : "";
 			// An UNPREFIXED target is not waved through: it falls to the `arg` rule below, which
 			// pins `backend` to the single permitted value before the runner gets to guess.
-			if (!def.values.includes(prefix) || allowed.includes(prefix)) continue;
+			if (!def.values.includes(prefix)) continue;
+			if (allowed.includes(prefix)) {
+				namedByPrefix ||= prefix;
+				continue;
+			}
 			return {
 				ok: false,
 				refusal: `Refused by this agent's declared capability constraint ${because}: "${raw}" names a ${def.noun} this agent may not use.`,
@@ -492,6 +504,13 @@ export function enforceConstraints(
 		}
 		// Absent, junk, or the wildcard — all of which mean "whatever the platform allows", which
 		// is exactly the value the ceiling exists to replace.
+		//
+		// A prefixed target already named one, so narrow to THAT (#441) rather than to the ceiling's
+		// only member: the two coincide under a single-value ceiling and differ under any other.
+		if (namedByPrefix) {
+			out = { ...out, [def.arg]: namedByPrefix };
+			continue;
+		}
 		if (allowed.length === 1) {
 			out = { ...out, [def.arg]: allowed[0] };
 			continue;
