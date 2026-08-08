@@ -189,6 +189,58 @@ describe("tool results are the platform's blocks, not the assistant's words (#39
 	});
 });
 
+// ── #442: a failed tool round is resumable ──────────────────────────────────────────
+//
+// The decisions live in `lib/resumable-round.ts` and are unit-tested there. What CANNOT be
+// unit-tested is the wiring: `runAgentThink` needs D1, a Durable Object and a provider, so these
+// are source assertions for the same reason every other guard in this file is one. Each of them
+// fails on a specific wrong fix, and each of those wrong fixes is invisible in review.
+describe("a failed round is resumable, and resuming does not re-run the tool (#442)", () => {
+	it("BOTH provider-failure exits offer a resumable round", () => {
+		// There are exactly two: the per-round completion at the top of the loop, and the final
+		// answer. The final one is the most valuable — every tool has run and only the generation
+		// failed — and it is also the one a reader is most likely to miss, because it sits after
+		// the loop rather than in it.
+		expect(matchLines(THINKER_CODE, /withResumableRound\(/g)).toHaveLength(2);
+		// Wrapped AROUND withPartialToolLog rather than replacing it: #427 praised the partial-log
+		// behaviour and #442 requires resumption to be purely additive.
+		expect(matchLines(THINKER_CODE, /withResumableRound\(withPartialToolLog\(/g)).toHaveLength(2);
+	});
+
+	it("a round is recorded only after the whole round settled, and only in the structured shape", () => {
+		// Recording before the tools settle stores a `tool_result` for work that may not have
+		// happened — resuming it would SKIP a write whose result was never recorded, which is the
+		// duplicate-side-effect hazard facing the other way.
+		//
+		// One push site, on the `tool_use` branch. The prose fallback must NOT be resumable: it is
+		// the `I called tools:` shape #398 removed from the live path, and replaying it would
+		// re-teach the format #395's fabrication imitated.
+		expect(findCalls(THINKER_CODE, "roundMessages.push")).toHaveLength(1);
+	});
+
+	it("a resumed turn continues the round budget instead of restarting it", () => {
+		// `for (let round = 0; …)` on a resumed turn hands a retry eight fresh rounds on top of the
+		// ones already paid for — the opposite of the ticket, which is about not paying twice.
+		expect(THINKER_CODE).toMatch(/for \(let round = resume\?\.roundsUsed \?\? 0;/);
+	});
+
+	it("seeds the dedup map from the resumed round, so a WRITE cannot run twice", () => {
+		// This is the criterion the ticket cares most about. The in-turn dedup is scoped to ONE
+		// request and cannot see the previous one, so without seeding, a retry of a round whose
+		// tools were writes re-commits the side effects. A `new Map()` here is the obvious wrong
+		// fix and is silent — reads merely cost money again, writes duplicate.
+		expect(THINKER_CODE).toMatch(/new Map<string, number>\(resume\?\.executed \?\? \[\]\)/);
+		expect(THINKER_CODE).toMatch(/mutations = resume\?\.mutations \?\? 0/);
+	});
+
+	it("carries the failed attempt's executed tools into #395's ground truth", () => {
+		// `honestReply` audits the model's text against what actually ran. A resumed turn whose
+		// answer cites `github_read_issue` — correctly, from a real result — would be corrected as
+		// a fabrication if the executed list started empty.
+		expect(THINKER_CODE).toMatch(/executedTools: string\[\] = \[\.\.\.\(resume\?\.executedTools \?\? \[\]\)\]/);
+	});
+});
+
 describe("cross-round dedup — a read repeats only when something CHANGED", () => {
 	// The rule is stated in agent-think.ts and worth pinning as data, because getting it wrong is
 	// invisible in both directions:

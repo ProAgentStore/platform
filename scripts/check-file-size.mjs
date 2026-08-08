@@ -508,7 +508,12 @@ const PINS = {
 	// the gate sees it — the gate decides when an arrival is answered and never whether — because
 	// that is the sentence a future reader needs before they are tempted to move the gate earlier.
 	// The queue itself is pure and tested in lib/chat-turn-gate.ts.
-	"workers/api/src/agent-do.ts": 1187,
+	// +25 for #442: ~+40 of feature less ~−15 of tidy-up. `runTurn` reads a stored round before
+	// thinking and stores one when a turn that ran tools fails, so a retry continues from results
+	// already paid for rather than re-fetching them — and where those tools were writes, does not
+	// commit the side effect twice. Decisions are pure in lib/resumable-round.ts; the −15 is the
+	// fourth copy of one five-field system-message literal collapsing into `systemMessage()`.
+	"workers/api/src/agent-do.ts": 1212,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -615,18 +620,17 @@ const PINS = {
 	// re-enters the next round's prompt. The note is the point — the cap sits ABOVE every deliberate
 	// per-tool cap, and a reader who does not know that will read it as a policy about context
 	// budgets and start lowering it. The logic itself is one call in lib/tool-result-cap.ts.
-	// −1 at #453 and +10 at #459, net +9. #453 was structural and paid for itself: one
-	// `resolveResponseStyle` hoisted above the repo block so `indexedReposPrompt` can be told
-	// whether the owner asked for plain speech, and the redundant style comment at the old
-	// resolution site went with it. #459 is the growth, and it is prompt prose rather than logic —
-	// a HONESTY clause covering asserted FAILURE. Everything already there guards false success;
-	// nothing guarded a false stall, and a live agent called a working run "stalled … nothing I can
-	// do" while the engine was mid-edit. Five of the ten lines are the sentence the model reads and
-	// five are why it exists, which a reader deleting it for brevity needs. The better long-term
-	// home is a prompt module beside `agent-style-prompt.ts` — #315 already moved the
-	// capability-naming literals out for exactly this reason — but extracting the whole HONESTY
-	// block is a prompt-composition change and does not belong inside a bug fix.
-	"workers/api/src/agent-think.ts": 1076,
+	// −1 at #453 (`resolveResponseStyle` hoisted above the repo block so `indexedReposPrompt` knows
+	// whether plain speech was asked for; the stale comment at the old site went with it) and +10 at
+	// #459 — prompt PROSE, not logic: a HONESTY clause covering asserted FAILURE, where everything
+	// already there guarded only false success. A live agent called a working run "stalled … nothing
+	// I can do" while the engine was mid-edit. A prompt module beside agent-style-prompt.ts is the
+	// better home (#315 did this for the capability literals), but that is not a bug fix's business.
+	// +37 at #442, WIRING only: the resume option, the seeded dedup/tool-log/round state, the replay
+	// of stored rounds into the transcript, and the `resumableNow()` closure both provider-failure
+	// exits hand to the error. Every DECISION is pure in lib/resumable-round.ts, where a split would
+	// have put them; what is left is closure over this function's own loop state and cannot move.
+	"workers/api/src/agent-think.ts": 1113,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -729,7 +733,9 @@ const PINS = {
 	// by deleting reasons. The entry is the ledger admitting it is now one of the files it is about.
 	// The right split, when the next raise makes it worth doing, is the PINS map into its own data
 	// module — the ~50 lines of enforcement above and below are stable and are not what is growing.
-	"scripts/check-file-size.mjs": 813,
+	// +4 at #442, which is three pin raises' worth of reasons (agent-think, agent-do, and this) —
+	// exactly the "can only get longer by adding reasons" growth the paragraph above predicts.
+	"scripts/check-file-size.mjs": 819,
 };
 
 /**

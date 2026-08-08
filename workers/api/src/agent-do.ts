@@ -46,6 +46,7 @@ import {
 	ensureStateDefaults,
 } from "./agent-do-prompt.js";
 import { runAgentThink } from "./agent-think.js";
+import { isResumableFor, RESUMED_NOTICE, type ResumableRound, resumableRoundOf } from "./lib/resumable-round.js";
 import type { ConversationTransfer } from "./lib/conversation-transfer.js";
 import {
 	buildRepoOverview,
@@ -103,6 +104,23 @@ export type {
 } from "./agent-types.js";
 
 const MAX_CONTEXT_MESSAGES = 10;
+
+/**
+ * Where a failed turn's completed tool rounds wait for the retry (#442). ONE slot per instance: a
+ * stored round is only valid for an immediate retry of the same question, so a second could only be
+ * an older ghost, and a per-turn scheme would need a sweeper for rounds nobody came back for.
+ */
+const RESUMABLE_KEY = "resumableRound";
+
+/**
+ * A system line in the transcript. `runTurn` built this five-field literal four times over — the
+ * tool-call log, the #24 partial log, the error line, and now #442's resumed notice — and the
+ * `channel || "chat"` fallback is part of the shape, so four copies are four places for a system
+ * line to land on the wrong channel. Collapsed when the fourth arrived, not before.
+ */
+function systemMessage(content: string, channel: string | undefined): AgentMessage {
+	return { id: crypto.randomUUID(), role: "system", content, channel: channel || "chat", createdAt: new Date().toISOString() };
+}
 
 export class AgentDO extends DurableObject<Env> {
 	/** In-flight guard for fire-and-forget summarization. The DO input gate lets two
@@ -515,19 +533,28 @@ export class AgentDO extends DurableObject<Env> {
 				preview: previewOf(message),
 			} satisfies InflightTurn)
 			.catch(() => undefined);
+		// #442: a previous attempt at THIS question that got as far as running tools and then failed
+		// in generation. Read and CLEARED in one step, whether or not it is usable — a round that
+		// does not match the question being asked is stale by definition, and leaving it would let a
+		// later, unrelated retry of the same words pick it up. One slot per instance; the failure is
+		// per-turn and a second stored round would only ever be the first one's ghost.
+		const stored = await this.ctx.storage.get<ResumableRound>(RESUMABLE_KEY).catch(() => null);
+		const resume = isResumableFor(stored, message, Date.now()) ? stored : undefined;
+		if (stored) await this.ctx.storage.delete(RESUMABLE_KEY).catch(() => undefined);
+		if (resume) {
+			// Labelled, per #442: a user who retries is asking for the answer, not for a decision
+			// about caching — but they are entitled to know the results are not fresh.
+			const notice = systemMessage(RESUMED_NOTICE, channel);
+			await this.appendMessage(notice);
+			this.broadcast({ type: "message", message: notice });
+		}
 		try {
-			const { response, toolCalls, transfer } = await this.think(state, engine, userId, delegation);
+			const { response, toolCalls, transfer } = await this.think(state, engine, userId, delegation, resume);
 
 			// Save tool calls as a system message (visible in chat)
 			let toolMsg: AgentMessage | undefined;
 			if (toolCalls.length > 0) {
-				toolMsg = {
-					id: crypto.randomUUID(),
-					role: "system",
-					content: toolCalls.join("\n"),
-					channel: channel || "chat",
-					createdAt: new Date().toISOString(),
-				};
+				toolMsg = systemMessage(toolCalls.join("\n"), channel);
 				await this.appendMessage(toolMsg);
 				this.broadcast({ type: "message", message: toolMsg });
 			}
@@ -589,6 +616,14 @@ export class AgentDO extends DurableObject<Env> {
 				}).catch(() => undefined);
 			}
 
+			// #442: this turn ran tools and then failed. Store the round so the retry the user is
+			// about to perform continues from the results instead of re-fetching them — and, where
+			// the round's tools were writes, does not commit the side effect twice. Stored only on
+			// failure and only when something executed; `buildResumableRound` returns null
+			// otherwise, and a null store leaves behaviour byte-identical to before.
+			const resumable = resumableRoundOf(err);
+			if (resumable) await this.ctx.storage.put(RESUMABLE_KEY, resumable).catch(() => undefined);
+
 			// #24: a late-round failure can leave earlier side effects already committed
 			// (memory writes, created tasks, inserted records). Surface that completed work
 			// as a tool message BEFORE the error, so it isn't hidden behind "Error:…".
@@ -597,24 +632,12 @@ export class AgentDO extends DurableObject<Env> {
 					? (err as { partialToolLog?: string[] }).partialToolLog
 					: undefined;
 			if (partialToolLog && partialToolLog.length > 0) {
-				const partialMsg: AgentMessage = {
-					id: crypto.randomUUID(),
-					role: "system",
-					content: partialToolLog.join("\n"),
-					channel: channel || "chat",
-					createdAt: new Date().toISOString(),
-				};
+				const partialMsg = systemMessage(partialToolLog.join("\n"), channel);
 				await this.appendMessage(partialMsg);
 				this.broadcast({ type: "message", message: partialMsg });
 			}
 
-			const errorMsg: AgentMessage = {
-				id: crypto.randomUUID(),
-				role: "system",
-				content: `Error: ${errMsg}`,
-				channel: channel || "chat",
-				createdAt: new Date().toISOString(),
-			};
+			const errorMsg = systemMessage(`Error: ${errMsg}`, channel);
 			await this.appendMessage(errorMsg);
 			this.broadcast({ type: "message", message: errorMsg });
 
@@ -690,6 +713,7 @@ export class AgentDO extends DurableObject<Env> {
 		engine: AgentStorageEngine,
 		userId?: string,
 		delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null },
+		resume?: ResumableRound,
 	): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
@@ -705,6 +729,7 @@ export class AgentDO extends DurableObject<Env> {
 			doStorage: this.ctx.storage,
 			broadcast: (data) => this.broadcast(data),
 			delegation,
+			resume,
 		});
 	}
 

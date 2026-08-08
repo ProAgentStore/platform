@@ -16,6 +16,7 @@ import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js
 import { parseAccountPreferences } from "./lib/preferences.js";
 import { clockPrompt } from "./lib/agent-clock.js";
 import { stableStringify } from "./lib/stable-json.js";
+import { buildResumableRound, type ResumableRound, withResumableRound } from "./lib/resumable-round.js";
 import { fenceUntrusted } from "./lib/untrusted-fence.js";
 import { transferFromToolResults, type ConversationTransfer } from "./lib/conversation-transfer.js";
 import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
@@ -183,11 +184,15 @@ export async function runAgentThink(opts: {
 	 *    rendered as one tree.
 	 */
 	delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null };
+	/** A previous attempt's completed tool rounds, to continue from instead of re-running (#442).
+	 *  Validated by the CALLER (`isResumableFor`), so by the time it arrives it is a fact, not a
+	 *  candidate. Absent ⇒ byte-identical behaviour, which is what every failure mode falls back to. */
+	resume?: ResumableRound;
 	// Returns `transfer` (#279) only on a turn where `transfer_conversation` ran — which is the
 	// whole safety argument: there is no response to put it on unless the user just spoke, so this
 	// field cannot carry a move nobody asked for. See lib/conversation-transfer.ts.
 }): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> {
-	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation } = opts;
+	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation, resume } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
 
 	// ONE instant for the whole turn. The clock block and the "N minutes ago" work report are read
@@ -787,7 +792,12 @@ export async function runAgentThink(opts: {
 	const proseOnly = (): { tools?: unknown[]; toolChoice?: "none" } =>
 		hasToolBlocks(aiMessages) ? { tools, toolChoice: "none" } : {};
 
-	const allToolLog: string[] = [];
+	const allToolLog: string[] = [...(resume?.toolLog ?? [])];
+	// The failed attempt's completed rounds, replayed into this transcript (#442). Appended AFTER
+	// the history — whose last entry is the user's retry, the same question — so the model reads
+	// "here are your results", not "here is the question", and the tools are never called again.
+	const roundMessages: { role: string; content: unknown }[] = [...(resume?.messages ?? [])];
+	for (const m of roundMessages) aiMessages.push({ role: m.role, content: m.content });
 	// Every registry result this turn produced, kept only so the destination can be read back out
 	// of them at each exit. A transfer set in round 2 must still travel when round 3 calls no
 	// tools and returns early — an accumulator, not a flag set at the last place it was seen.
@@ -807,13 +817,16 @@ export async function runAgentThink(opts: {
 	// with identical args ran once, then twice, then three times in a single turn, each time
 	// returning the same three rows. A read is only worth repeating when something CHANGED since
 	// the last identical call, which is exactly what this counter answers.
-	const executedCalls = new Map<string, number>();
-	let mutations = 0;
+	// Seeded from a resumed round (#442) so the dedup spans the two REQUESTS, not just two rounds:
+	// without it the retry re-issues the write the failed attempt already committed — the duplicate
+	// this map exists to prevent, reached through the one door it cannot see.
+	const executedCalls = new Map<string, number>(resume?.executed ?? []);
+	let mutations = resume?.mutations ?? 0;
 	// What this turn ACTUALLY ran, in order — the ground truth `honestReply` audits the model's
 	// text against (#395). Kept beside `allToolLog` rather than derived from it: the log is a
 	// display string, and a check that has to re-parse its own evidence is one rename from
 	// silently passing everything.
-	const executedTools: string[] = [];
+	const executedTools: string[] = [...(resume?.executedTools ?? [])];
 
 	/**
 	 * The ONE way a model-authored reply leaves this function (#395).
@@ -858,12 +871,29 @@ export async function runAgentThink(opts: {
 		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, withTruncation(honest.notices)), ...(transfer ? { transfer } : {}) };
 	};
 
-	for (let round = 0; round < maxToolRounds; round++) {
+	/** What to hand a retry, evaluated at the moment of failure. Null when nothing ran. */
+	const resumableNow = (): ResumableRound | null =>
+		buildResumableRound(
+			{
+				prompt: lastUserMessage,
+				roundsUsed: roundMessages.length / 2,
+				executed: [...executedCalls],
+				mutations,
+				executedTools: [...executedTools],
+				toolLog: [...allToolLog],
+				messages: [...roundMessages],
+			},
+			Date.now(),
+		);
+
+	// A resumed turn does NOT get a fresh budget: `maxToolRounds` bounds the work done for ONE
+	// question, and restarting the count buys eight more rounds on top of those already paid for.
+	for (let round = resume?.roundsUsed ?? 0; round < maxToolRounds; round++) {
 		let rawResult: ChatCompletion;
 		try {
 			rawResult = await chatComplete({ messages: aiMessages, tools });
 		} catch (err) {
-			throw withPartialToolLog(err, allToolLog);
+			throw withResumableRound(withPartialToolLog(err, allToolLog), resumableNow());
 		}
 
 		let toolCalls = normalizeToolCalls(rawResult.tool_calls || []);
@@ -1030,6 +1060,11 @@ export async function runAgentThink(opts: {
 		if (toolUseIds.length > 0) {
 			aiMessages.push({ role: "assistant", content: rawResult.contentBlocks });
 			aiMessages.push({ role: "user", content: toolResultTurn(toolUseIds, outcomeById, continueText) });
+			// Recorded only on the structured path and only once the round has settled (#442). Read
+			// back off `aiMessages` so a resume replays exactly what this turn sent. The prose
+			// fallback is deliberately NOT resumable — replaying it re-enters the narrated shape
+			// #398 removed, and it is the Workers-AI fallback, not the provider chats run on.
+			roundMessages.push(aiMessages[aiMessages.length - 2], aiMessages[aiMessages.length - 1]);
 		} else {
 			// The Workers-AI fallback and the text-embedded path: no ids to answer, so the prose
 			// shape stays. Branching on whether the completion CARRIED blocks keeps this
@@ -1052,7 +1087,9 @@ export async function runAgentThink(opts: {
 	try {
 		final = await chatComplete({ messages: aiMessages, ...proseOnly() });
 	} catch (err) {
-		throw withPartialToolLog(err, allToolLog);
+		// The most valuable place to be resumable: every tool has run and only the generation
+		// failed, so a retry re-pays for the whole turn to produce one paragraph.
+		throw withResumableRound(withPartialToolLog(err, allToolLog), resumableNow());
 	}
 	// A call written into the FINAL answer can never execute — the loop is over — so it is reported
 	// as named-but-never-run rather than left on screen as if it had.
