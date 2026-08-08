@@ -388,11 +388,24 @@ describe("resolveResponseStyle — a preference changes language, never capabili
 
 	it("keeps a coding agent's grounding even when its owner asks for plain language", () => {
 		// Low technicality is a request about WORDS. The Coder still has live sessions and must
-		// still be grounded in them, or it starts inventing what the engine is doing.
+		// still be grounded in them, or it starts inventing what the engine is doing — so
+		// `codingContext` stays true and `styleGuidance` still picks a coding branch.
 		const r = resolveResponseStyle({ ...coder, behaviour: { technicality: 10 } });
 		expect(r.codingContext).toBe(true);
 		expect(r.technical).toBe(false);
-		expect(r.plainSpeech).toBe(false); // the coding block owns the style, not plain-speech
+	});
+
+	it("lets an explicit low technicality reach plain speech on a coding agent (#430)", () => {
+		// This was `!codingContext && !technical`, so capability VETOED preference: `codingContext`
+		// is true for any instance with a repo attached, which made the plain-speech rules — and in
+		// particular "never mention filenames, paths, function names, or code" — unreachable at
+		// every slider position, including 0. The Behaviour tab offered a control that did nothing
+		// on exactly the agent type where its effect is most visible.
+		expect(resolveResponseStyle({ ...coder, behaviour: { technicality: 10 } }).plainSpeech).toBe(true);
+		expect(resolveResponseStyle({ ...repoChat, behaviour: { technicality: 0 } }).plainSpeech).toBe(true);
+		// Unset is untouched: a coding agent nobody configured keeps the technical voice it had.
+		expect(resolveResponseStyle({ ...coder, behaviour: {} }).plainSpeech).toBe(false);
+		expect(resolveResponseStyle({ ...coder, behaviour: { technicality: 90 } }).plainSpeech).toBe(false);
 	});
 
 	it("keeps 'grounded in the code above' when only VERBOSITY is declared", () => {

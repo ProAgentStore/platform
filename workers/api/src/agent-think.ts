@@ -635,15 +635,15 @@ export async function runAgentThink(opts: {
 	// landing in the Repo Chat branch and being told it was READ-ONLY with a Repo tab. That is the
 	// single strongest cause of both #254's denial and #255's invented tab.
 	//
-	// The 2-sentence cap is a LENGTH rule that happened to live inside the plain-speech block. A
-	// subscriber who asked for thorough answers has already overruled it, so honour that rather than
-	// telling the model both things in the same prompt.
+	// Length is DECLARED here, defaulted there: `undefined` means no `verbosity` was set, and only
+	// `styleGuidance` knows what silence means for this kind of agent. Passing the 2-sentence cap from
+	// here made it every agent's fallback, so it was emitted only inside plain speech (#430).
 	systemPrompt += styleGuidance({
 		model: selfModel,
 		codingContext,
 		hasCodingContext,
 		plainSpeech,
-		lengthRule: behaviour.verbosity ? fieldPrompt(behaviourField("verbosity")!, behaviour.verbosity) : "MAXIMUM 2 sentences. Shorter is better.",
+		lengthRule: behaviour.verbosity ? fieldPrompt(behaviourField("verbosity")!, behaviour.verbosity) : undefined,
 	});
 
 	// LAST instruction on purpose: end-of-prompt position carries the most weight (same

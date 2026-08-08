@@ -750,7 +750,12 @@ export interface ResponseStyle {
 	technical: boolean;
 	/** The one-line reminder appended after tool rounds. */
 	styleReminder: string;
-	/** Emit the plain-speech block? False once the owner has asked for technical language. */
+	/**
+	 * Use the plain-speech, read-aloud VOICE? False once the owner has asked for technical language.
+	 * Not "instead of the coding block" — alongside it: `styleGuidance` takes the grounding from
+	 * `codingContext` and the voice from this, so a Coder at technicality 0 keeps every factual line
+	 * about what it can see and stops citing file paths (#430).
+	 */
 	plainSpeech: boolean;
 }
 
@@ -781,5 +786,11 @@ export function resolveResponseStyle(opts: {
 			? `${GROUNDED} Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help.`
 			: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
 
-	return { codingContext, technical, styleReminder, plainSpeech: !codingContext && !technical };
+	// `!technical`, NOT `!codingContext && !technical` (#430). Capability vetoing preference here was
+	// the last place the two were still conflated: `codingContext` is true for any instance with a
+	// repo attached, so the plain-speech rules — including "never mention filenames, paths, function
+	// names, or code", the one thing a non-technical owner reaches for — were unreachable for a
+	// Coder at EVERY slider position, including 0. The grounding is not lost with them: the coding
+	// branch still emits its factual lines, and only the voice changes.
+	return { codingContext, technical, styleReminder, plainSpeech: !technical };
 }

@@ -109,13 +109,28 @@ describe("what counts as a claim", () => {
  */
 function assemblePrompt(
 	capabilities: AgentCapabilities,
-	opts: { technicalSeed: boolean; hasRepos: boolean; runnerOnline: boolean; activeSession: boolean; indexedRepos: boolean },
+	opts: {
+		technicalSeed: boolean;
+		hasRepos: boolean;
+		runnerOnline: boolean;
+		activeSession: boolean;
+		indexedRepos: boolean;
+		/**
+		 * The owner dragged technicality to the bottom (#430).
+		 *
+		 * An axis rather than a separate test because it is a BRANCH: since #430 an explicit low
+		 * technicality reaches `plainSpeech` on a coding agent, which pairs the read-aloud voice with
+		 * a coding grounding block for the first time. #430's own regression note calls that
+		 * #254/#255 territory, so every fixture is swept in both voices rather than trusted in one.
+		 */
+		lowTechnicality: boolean;
+	},
 ): string {
 	const model = resolveSelfModel(capabilities);
 	const { codingContext, plainSpeech } = resolveResponseStyle({
 		repoChatStyle: opts.technicalSeed,
 		hasCodingContext: opts.hasRepos,
-		behaviour: {},
+		behaviour: opts.lowTechnicality ? { technicality: 0 } : {},
 	});
 	const attached = opts.hasRepos ? [{ name: "platform", githubRepo: "ProAgentStore/platform", workdir: "~/dev/platform" }] : [];
 	const parts = [
@@ -127,7 +142,9 @@ function assemblePrompt(
 		opts.indexedRepos ? indexedReposPrompt(model) : "",
 		opts.hasRepos ? runnerStatusPrompt(model, opts.runnerOnline) : "",
 		opts.hasRepos && !opts.activeSession ? noActiveSessionPrompt(model) : "",
-		styleGuidance({ model, codingContext, hasCodingContext: opts.hasRepos, plainSpeech, lengthRule: "MAXIMUM 2 sentences." }),
+		// No `lengthRule`: the unset case is the one that shipped broken (#430), and the default it
+		// falls back to is chosen inside `styleGuidance`, so passing one here would hide it.
+		styleGuidance({ model, codingContext, hasCodingContext: opts.hasRepos, plainSpeech }),
 		// Unconditional in `runAgentThink`, so unconditional here: the semantic check must see it for
 		// every agent and every branch, not only the ones a condition happens to reach (#340).
 		voiceControlPrompt,
@@ -141,7 +158,16 @@ const CONDITIONS = [true, false].flatMap((technicalSeed) =>
 	[true, false].flatMap((hasRepos) =>
 		[true, false].flatMap((runnerOnline) =>
 			[true, false].flatMap((activeSession) =>
-				[true, false].map((indexedRepos) => ({ technicalSeed, hasRepos, runnerOnline, activeSession, indexedRepos })),
+				[true, false].flatMap((indexedRepos) =>
+					[true, false].map((lowTechnicality) => ({
+						technicalSeed,
+						hasRepos,
+						runnerOnline,
+						activeSession,
+						indexedRepos,
+						lowTechnicality,
+					})),
+				),
 			),
 		),
 	),

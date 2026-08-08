@@ -123,7 +123,58 @@ export function indexedReposPrompt(model: SelfModel): string {
 }
 
 /**
- * The STYLE block: four mutually exclusive branches, one per kind of agent.
+ * The read-aloud voice — the LANGUAGE half of the plain-speech branch (#430).
+ *
+ * Separated from the branch because a branch is chosen on what the agent IS and this is chosen by
+ * what its owner ASKED for. They were one thing, and that is why the technicality slider was inert
+ * on a Coder: `plainSpeech` was `!codingContext && !technical`, so every instance with a repo
+ * attached was refused these rules at every slider position — including 0, where they are the
+ * entire point of the setting.
+ */
+const PLAIN_SPEECH_HEADER = "\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them.\nRULES:";
+
+const PLAIN_SPEECH_RULES =
+	"\n- Never mention filenames, paths, line numbers, git status, CSS classes, function names, or code." +
+	"\n- Never repeat raw tool output. Summarize in plain English." +
+	"\n- Say WHAT happened and WHETHER it needs anything from the user." +
+	"\n- Only get technical if the user explicitly asks for details/code/files." +
+	"\n- Good: 'You have 3 repos connected. Everything looks good.' Bad: 'I found repos pags/platform with modified files agent-capabilities.ts...'.";
+
+/** What an unset `verbosity` means when the reply is going to be spoken aloud. */
+const PLAIN_SPEECH_LENGTH = "MAXIMUM 2 sentences. Shorter is better.";
+
+/**
+ * What an unset `verbosity` means for a reader who wants technical language.
+ *
+ * "MAXIMUM 2 sentences" is right for read-aloud plain speech and absurd for a code explainer, which
+ * is why it was only ever emitted in the plain-speech block. The bug was concluding that the other
+ * branches therefore need NO length rule: unset then meant unbounded, and a Coder with `verbosity`
+ * absent had no length instruction anywhere in its system prompt (#430).
+ */
+const TECHNICAL_LENGTH_DEFAULT =
+	"Keep it to a few short paragraphs or a handful of bullets: answer what was asked, then stop. Expand only when asked for more.";
+
+/**
+ * One kind of agent's STYLE block, split so preference and capability stop fighting (#430).
+ *
+ * `lengthDefault` is REQUIRED, and that is the guard: a fifth branch cannot be added without
+ * stating what an unset `verbosity` means for it. The previous shape computed one length rule at
+ * the call site and used it inside a single `if`, so the four branches did not disagree about
+ * length — three of them said nothing at all.
+ */
+interface StyleBranch {
+	/** The opening line: what kind of answer this is. Replaced wholesale under plain speech. */
+	header: string;
+	/** What this agent may ground an answer in — a FACT, emitted whatever language level applies. */
+	grounding: string;
+	/** How to write it, for a reader who wants technical language. */
+	voice: string;
+	/** The length rule to emit when the subscriber has declared no `verbosity`. */
+	lengthDefault: string;
+}
+
+/**
+ * The STYLE block: four mutually exclusive branches, one per kind of agent, plus the length rule.
  *
  * The branch order encodes a distinction that took three tickets to find. `guardrails.responseStyle
  * === "technical"` is NOT "is this Repo Chat" — `coder-repo` and `coder-lead` both seed it — so the
@@ -131,6 +182,12 @@ export function indexedReposPrompt(model: SelfModel): string {
  * handed every Repo Coder the read-only explainer's self-description ("You are READ-ONLY … you have
  * no ability to change code", plus a Repo tab), which is the strongest single cause of both #254's
  * denial and #255's invented tab.
+ *
+ * The branch decides GROUNDING; `plainSpeech` decides the VOICE. Reached with `plainSpeech`, a
+ * coding branch keeps every factual line about what it can and cannot see — the blocks that stop a
+ * Coder inventing an index — and swaps only how it is allowed to say it. Nothing here names a tab
+ * or an index that `SelfModel` does not have, in either voice, which is what keeps #254/#255 shut
+ * now that plain speech is reachable for a coding agent.
  */
 export function styleGuidance(opts: {
 	model: SelfModel;
@@ -140,22 +197,49 @@ export function styleGuidance(opts: {
 	hasCodingContext: boolean;
 	/** The plain-speech, read-aloud voice (non-technical owner). */
 	plainSpeech: boolean;
-	/** Resolved length rule — the subscriber's `verbosity` band, or the default 2-sentence cap. */
-	lengthRule: string;
+	/**
+	 * The subscriber's declared `verbosity` band, or `undefined` when they have declared none.
+	 *
+	 * `undefined` rather than a caller-side default on purpose: only this function knows which kind
+	 * of agent the block is for, and therefore what "no answer" should mean.
+	 */
+	lengthRule?: string;
 }): string {
-	const { model, codingContext, hasCodingContext, plainSpeech, lengthRule } = opts;
+	const branch = styleBranch(opts);
+	if (!branch) return "";
+	const { plainSpeech, lengthRule } = opts;
+	const length = lengthRule ?? (plainSpeech ? PLAIN_SPEECH_LENGTH : branch.lengthDefault);
+	return (
+		(plainSpeech ? PLAIN_SPEECH_HEADER : branch.header) +
+		branch.grounding +
+		(plainSpeech ? PLAIN_SPEECH_RULES : branch.voice) +
+		`\n- ${length}`
+	);
+}
+
+/** Which kind of agent this is — `null` when no STYLE block applies at all. */
+function styleBranch(opts: {
+	model: SelfModel;
+	codingContext: boolean;
+	hasCodingContext: boolean;
+	plainSpeech: boolean;
+}): StyleBranch | null {
+	const { model, codingContext, hasCodingContext, plainSpeech } = opts;
 
 	if (codingContext && model.hasCodeIndex) {
 		// Repo Chat genuinely HAS a vector index of the code (RAG context injected above), so
 		// grounding answers in "the indexed code" is correct here.
-		return (
-			"\n\nSTYLE: You are a precise code explainer helping a developer understand a repository." +
-			"\n- Be accurate and concrete. Reference real file paths, functions, and types from the indexed code above when relevant." +
-			"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge," +
-			` say you didn't find it${tabClause(model, "Repo", " (suggest adding the repo in the Repo tab)")} rather than guessing.` +
-			readOnlyClause(model) +
-			"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify."
-		);
+		return {
+			header: "\n\nSTYLE: You are a precise code explainer helping a developer understand a repository.",
+			grounding:
+				"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge," +
+				` say you didn't find it${tabClause(model, "Repo", " (suggest adding the repo in the Repo tab)")} rather than guessing.` +
+				readOnlyClause(model),
+			voice:
+				"\n- Be accurate and concrete. Reference real file paths, functions, and types from the indexed code above when relevant." +
+				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.",
+			lengthDefault: TECHNICAL_LENGTH_DEFAULT,
+		};
 	}
 
 	// `hasCodingContext` as well as the declaration: this branch has always been reached by "this
@@ -169,16 +253,18 @@ export function styleGuidance(opts: {
 		// The two "you do not drive the engine / that work runs in the Coding tab" lines that used to
 		// close this block are gone (#254). What replaces them is `executionAuthorityPrompt`,
 		// derived from whether this agent actually has an executor.
-		return (
-			"\n\nSTYLE: You are a precise code explainer helping a developer understand their repositories." +
-			"\n- You do NOT have a searchable code index. Do not fabricate code findings. You read live coding sessions, not a vector code" +
-			" index (that is the Repo Chat agent) — so if the user asks about indexing, just explain that plainly; never invent an indexing" +
-			" status, and never retract a correct summary you already gave as if it were fabricated." +
-			"\n- Base answers on the Attached Repositories and live terminal snapshots above, plus what your own tools return." +
-			githubClause(model) +
-			actionClause(model) +
-			"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify."
-		);
+		return {
+			header: "\n\nSTYLE: You are a precise code explainer helping a developer understand their repositories.",
+			grounding:
+				"\n- You do NOT have a searchable code index. Do not fabricate code findings. You read live coding sessions, not a vector code" +
+				" index (that is the Repo Chat agent) — so if the user asks about indexing, just explain that plainly; never invent an indexing" +
+				" status, and never retract a correct summary you already gave as if it were fabricated." +
+				"\n- Base answers on the Attached Repositories and live terminal snapshots above, plus what your own tools return." +
+				githubClause(model) +
+				actionClause(model),
+			voice: "\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.",
+			lengthDefault: TECHNICAL_LENGTH_DEFAULT,
+		};
 	}
 
 	if (codingContext) {
@@ -187,31 +273,25 @@ export function styleGuidance(opts: {
 		// Both used to land in the Repo Chat branch purely because their seeded `responseStyle` is
 		// "technical", and were told they were READ-ONLY explainers of "the indexed code" with a Repo
 		// tab. All three claims are false for the Lead.
-		return (
-			"\n\nSTYLE: You are talking to a developer, so be concrete: cite real file paths, functions and short snippets when they help." +
-			"\n- You do NOT have a searchable code index. Never claim code is or isn't indexed, and never invent an indexing status." +
-			"\n- Everything you can do, you do by calling the tools listed above. If none of them can do what is asked, say so plainly rather than describing work you did not do." +
-			"\n- Ground every claim in what a tool actually returned. Do not retract a report your own tool results support."
-		);
+		return {
+			header: "\n\nSTYLE: You are talking to a developer, so be concrete: cite real file paths, functions and short snippets when they help.",
+			grounding:
+				"\n- You do NOT have a searchable code index. Never claim code is or isn't indexed, and never invent an indexing status." +
+				"\n- Everything you can do, you do by calling the tools listed above. If none of them can do what is asked, say so plainly rather than describing work you did not do." +
+				"\n- Ground every claim in what a tool actually returned. Do not retract a report your own tool results support.",
+			voice: "",
+			lengthDefault: TECHNICAL_LENGTH_DEFAULT,
+		};
 	}
 
 	if (plainSpeech) {
 		// `!technical`, not a bare `else`: an agent with NO coding context whose owner asked for
 		// technical language used to land here and be told "MAXIMUM 2 sentences, never mention
 		// filenames or code" — the exact opposite of the setting.
-		return (
-			"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them." +
-			"\nRULES:" +
-			`\n- ${lengthRule}` +
-			"\n- Never mention filenames, paths, line numbers, git status, CSS classes, function names, or code." +
-			"\n- Never repeat raw tool output. Summarize in plain English." +
-			"\n- Say WHAT happened and WHETHER it needs anything from the user." +
-			"\n- Only get technical if the user explicitly asks for details/code/files." +
-			"\n- Good: 'You have 3 repos connected. Everything looks good.' Bad: 'I found repos pags/platform with modified files agent-capabilities.ts...'."
-		);
+		return { header: PLAIN_SPEECH_HEADER, grounding: "", voice: PLAIN_SPEECH_RULES, lengthDefault: PLAIN_SPEECH_LENGTH };
 	}
 
-	return "";
+	return null;
 }
 
 /**
