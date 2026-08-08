@@ -122,7 +122,7 @@ built-ins for that command** and apply in any language, because you chose them.
 > have silently removed working commands from everyone who never opened the panel) and fixed the
 > defect it caused with a precedence rule instead: see *A phrase you bind is yours* below.
 
-### Mute is available at every moment — [ADR 0001](../docs/adr/0001-mute-is-always-available.md)
+### Mute is available at every moment — [ADR 0001](https://github.com/ProAgentStore/platform/blob/main/docs/adr/0001-mute-is-always-available.md)
 
 This is an **invariant**, not a feature of one code path: in a live voice session you can mute by
 voice and by touch while the agent is listening, transcribing, thinking, or **speaking** — and
