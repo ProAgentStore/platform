@@ -1,4 +1,17 @@
 import { decryptKey } from "./crypto.js";
+import {
+	AI_FIRST_TOKEN_TIMEOUT_MS,
+	AI_STALL_TIMEOUT_MS,
+	AI_TOTAL_TIMEOUT_MS,
+	type AiDeadlineKind,
+	deadlineMessage,
+} from "./ai-deadlines.js";
+import {
+	AnthropicStreamAssembler,
+	AnthropicStreamError,
+	type AnthropicMessageBody,
+	parseSseEvents,
+} from "./anthropic-stream.js";
 import { mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
@@ -144,34 +157,46 @@ async function runAnthropic(
 		if (body.toolChoice === "none") anthropicBody.tool_choice = { type: "none" };
 	}
 
-	const timeoutMs = body.timeoutMs ?? 25_000;
+	// STREAMED (#427). Not for the client — the caller still gets one whole message — but so the
+	// deadline can measure SILENCE instead of LENGTH. Non-streamed, the 25s ceiling had to cover the
+	// entire generation, which a 4,096-token reply cannot fit at any observed throughput: the tool
+	// loop's second round failed by construction, twice on the same message, after the tool call had
+	// already committed its side effects. See lib/ai-deadlines.ts for the three deadlines.
+	anthropicBody.stream = true;
+
+	const startedAt = Date.now();
+	const firstTokenMs = body.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
+	const firstTokenDeadline = startedAt + firstTokenMs;
+	const totalDeadline = startedAt + AI_TOTAL_TIMEOUT_MS;
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	let res: Response;
 	try {
-		res = await fetch("https://api.anthropic.com/v1/messages", {
-			method: "POST",
-			headers: {
-				"x-api-key": apiKey,
-				"anthropic-version": "2023-06-01",
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(anthropicBody),
-			signal: controller.signal,
-		});
+		res = await withDeadline(
+			fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				headers: {
+					"x-api-key": apiKey,
+					"anthropic-version": "2023-06-01",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(anthropicBody),
+				signal: controller.signal,
+			}),
+			firstTokenDeadline - Date.now(),
+			"first-token",
+			firstTokenMs,
+		);
 	} catch (err) {
-		clearTimeout(timeout);
-		if (err instanceof Error && err.name === "AbortError") {
-			throw new UserAiProviderError(`AI request timed out (${Math.round(timeoutMs / 1000)}s)`, 504);
-		}
-		throw err;
+		controller.abort();
+		throw asProviderError(err) ?? err;
 	}
-	clearTimeout(timeout);
 
-	const data = await res.json().catch(() => ({})) as Record<string, unknown>;
 	if (!res.ok) {
-		const errObj = (data as { error?: { message?: string; type?: string } }).error;
-		const errMsg = errObj?.message || JSON.stringify(data);
+		// An error is still a plain JSON body even with `stream: true` — the provider only opens the
+		// event stream once the request is accepted — so this branch is unchanged.
+		const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+		const errObj = (errBody as { error?: { message?: string; type?: string } }).error;
+		const errMsg = errObj?.message || JSON.stringify(errBody);
 		const hint = res.status === 404
 			? " — Your API key may not have access to this model. Get a key from console.anthropic.com/settings/keys"
 			: res.status === 401
@@ -181,14 +206,19 @@ async function runAnthropic(
 			`Anthropic (${res.status}): ${errMsg}${hint}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
-			data,
+			errBody,
 		);
 	}
-	if (!data.content) {
-		throw new UserAiProviderError(
-			`Anthropic: unexpected response: ${JSON.stringify(data).slice(0, 200)}`,
-			502,
-		);
+
+	let data: AnthropicMessageBody;
+	try {
+		data = await readAnthropicStream(res, { firstTokenDeadline, totalDeadline, firstTokenMs });
+	} catch (err) {
+		controller.abort();
+		throw asProviderError(err) ?? err;
+	}
+	if (!data.content.length) {
+		throw new UserAiProviderError("Anthropic: the reply arrived empty — no content blocks", 502);
 	}
 
 	await env.DB.prepare(
@@ -196,10 +226,10 @@ async function runAnthropic(
 	).bind(userId).run();
 
 	// Convert Anthropic response to Workers AI format for compatibility
-	const content = (data.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }>) || [];
+	const content = data.content;
 	const textParts = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
 	const toolUse = content.filter((c) => c.type === "tool_use");
-	const u = (data.usage as Record<string, number>) || {};
+	const u = data.usage;
 	// Kept SEPARATE, not summed (#212). Anthropic bills a cache read at 0.1x input and a cache
 	// write at 1.25x; folding all three into `input` priced every read at the full rate and made
 	// the cache invisible — you could not tell a hit from a miss, so you could not tell whether
@@ -248,6 +278,99 @@ async function runAnthropic(
 	return { response: textParts, usage, stopReason };
 }
 
+/** One deadline ran out. Carries WHICH, because the three mean different things to the user. */
+class DeadlineExceeded extends Error {
+	constructor(
+		readonly kind: AiDeadlineKind,
+		readonly budgetMs: number,
+	) {
+		super(`${kind} deadline exceeded after ${budgetMs}ms`);
+		this.name = "DeadlineExceeded";
+	}
+}
+
+/**
+ * Bound a promise, without touching the AbortController.
+ *
+ * A race rather than only `signal.abort()` because an abort is advisory — it unblocks the socket,
+ * but whether the pending `read()` rejects, and how soon, is the runtime's business. The deadline
+ * has to be OURS or the ceiling is a suggestion. The caller aborts as well, to free the connection.
+ */
+function withDeadline<T>(promise: Promise<T>, remainingMs: number, kind: AiDeadlineKind, budgetMs: number): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new DeadlineExceeded(kind, budgetMs)), Math.max(0, remainingMs));
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(err) => {
+				clearTimeout(timer);
+				reject(err);
+			},
+		);
+	});
+}
+
+/** Translate our two internal failures into the error the user reads. Anything else is a real bug. */
+function asProviderError(err: unknown): UserAiProviderError | null {
+	if (err instanceof DeadlineExceeded) return new UserAiProviderError(deadlineMessage(err.kind, err.budgetMs), 504);
+	if (err instanceof AnthropicStreamError) return new UserAiProviderError(`Anthropic: ${err.message}`, 502);
+	// The runtime's own abort, raised by a socket we cancelled or one the provider dropped.
+	if (err instanceof Error && err.name === "AbortError") {
+		return new UserAiProviderError(deadlineMessage("stall", AI_STALL_TIMEOUT_MS), 504);
+	}
+	return null;
+}
+
+/**
+ * Read the SSE body to a whole message, under the three deadlines.
+ *
+ * The first read carries the FIRST-TOKEN budget; every read after it carries the STALL budget,
+ * re-armed per chunk — that is the whole point of streaming here, because a long reply now looks
+ * like steady progress rather than one long silence. The TOTAL ceiling clamps both, so a provider
+ * that dribbles a token every 19 seconds forever still ends.
+ */
+async function readAnthropicStream(
+	res: Response,
+	deadlines: { firstTokenDeadline: number; totalDeadline: number; firstTokenMs: number },
+): Promise<AnthropicMessageBody> {
+	if (!res.body) throw new UserAiProviderError("Anthropic: the response carried no body to stream", 502);
+	const reader = res.body.getReader();
+	const decoder = new TextDecoder();
+	const assembler = new AnthropicStreamAssembler();
+	let buffer = "";
+	let first = true;
+	try {
+		for (;;) {
+			const now = Date.now();
+			const silenceDeadline = first ? deadlines.firstTokenDeadline : now + AI_STALL_TIMEOUT_MS;
+			const kind: AiDeadlineKind =
+				deadlines.totalDeadline < silenceDeadline ? "total" : first ? "first-token" : "stall";
+			const budgetMs =
+				kind === "total" ? AI_TOTAL_TIMEOUT_MS : kind === "first-token" ? deadlines.firstTokenMs : AI_STALL_TIMEOUT_MS;
+			const chunk = await withDeadline(
+				reader.read(),
+				Math.min(silenceDeadline, deadlines.totalDeadline) - now,
+				kind,
+				budgetMs,
+			);
+			first = false;
+			if (chunk.done) break;
+			buffer += decoder.decode(chunk.value, { stream: true });
+			const { events, rest } = parseSseEvents(buffer);
+			buffer = rest;
+			for (const event of events) assembler.push(event);
+			// Stop at `message_stop` rather than waiting for the socket to close: the message is whole,
+			// and a provider that keeps the connection open would otherwise cost a full stall timeout.
+			if (assembler.done) break;
+		}
+	} finally {
+		await reader.cancel().catch(() => undefined);
+	}
+	return assembler.finish();
+}
+
 async function runCloudflareAi(
 	env: Env,
 	userId: string | undefined,
@@ -257,7 +380,11 @@ async function runCloudflareAi(
 	ctx?: UsageContext,
 ): Promise<unknown> {
 	const encodedModel = model.split("/").map(encodeURIComponent).join("/");
-	const timeoutMs = (body as { timeoutMs?: number })?.timeoutMs ?? 25_000;
+	// Still non-streamed, and correctly so: this path is the fallback for a user with CF creds and no
+	// Anthropic key, where the model is `llama-3.2-3b` and the REST endpoint's default output is a few
+	// hundred tokens — a total-time deadline is the right measurement for a call that short. It shares
+	// the CONSTANT with the Anthropic path so there is one 25 in the codebase, not two.
+	const timeoutMs = (body as { timeoutMs?: number })?.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	let res: Response;
@@ -277,7 +404,8 @@ async function runCloudflareAi(
 	} catch (err) {
 		clearTimeout(timeout);
 		if (err instanceof Error && err.name === "AbortError") {
-			throw new UserAiProviderError(`AI request timed out (${Math.round(timeoutMs / 1000)}s)`, 504);
+			// A non-streamed call that ran out of time IS the total-budget failure, so it reads as one.
+			throw new UserAiProviderError(deadlineMessage("total", timeoutMs), 504);
 		}
 		throw err;
 	}

@@ -173,6 +173,59 @@ async function envWithAnthropicKey(apiKey = "sk-ant-test") {
 	return env;
 }
 
+/**
+ * The Anthropic call is STREAMED (#427), so every stub below has to speak SSE.
+ *
+ * Written as "describe the message you want back, get the frames the provider would have sent"
+ * rather than by hand-rolling event arrays per test: the tests above are about normalization, tool
+ * ids and stop reasons, and none of them should have to know the wire protocol. The frames it emits
+ * are the ones the real API sends, in the real order — `message_start` carrying input/cache usage,
+ * a start/delta/stop trio per block, `message_delta` carrying the stop reason and output tokens.
+ */
+function anthropicSse(reply: Record<string, unknown>): Response {
+	const blocks = (reply.content as Array<Record<string, unknown>> | undefined) ?? [];
+	const frames: string[] = [];
+	const emit = (event: Record<string, unknown>) => {
+		frames.push(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	};
+	emit({ type: "message_start", message: { usage: reply.usage ?? {} } });
+	blocks.forEach((block, index) => {
+		if (block.type === "tool_use") {
+			emit({ type: "content_block_start", index, content_block: { type: "tool_use", id: block.id, name: block.name, input: {} } });
+			emit({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input ?? {}) } });
+		} else {
+			emit({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+			emit({ type: "content_block_delta", index, delta: { type: "text_delta", text: String(block.text ?? "") } });
+		}
+		emit({ type: "content_block_stop", index });
+	});
+	emit({
+		type: "message_delta",
+		delta: reply.stop_reason ? { stop_reason: reply.stop_reason } : {},
+		usage: {},
+	});
+	emit({ type: "message_stop" });
+	return sseResponse(frames.join(""));
+}
+
+/** Serve `text` as a stream, optionally split at arbitrary byte offsets to model TCP chunking. */
+function sseResponse(text: string, chunkSize = 0): Response {
+	const bytes = new TextEncoder().encode(text);
+	const size = chunkSize > 0 ? chunkSize : bytes.length || 1;
+	let offset = 0;
+	const stream = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (offset >= bytes.length) {
+				controller.close();
+				return;
+			}
+			controller.enqueue(bytes.slice(offset, offset + size));
+			offset += size;
+		},
+	});
+	return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+}
+
 describe("runAnthropic message normalization", () => {
 	it("drops leading assistant messages and merges consecutive same-role turns", async () => {
 		const env = await envWithAnthropicKey();
@@ -181,7 +234,7 @@ describe("runAnthropic message normalization", () => {
 			"fetch",
 			vi.fn(async (_url: string, init: RequestInit) => {
 				sentBody = JSON.parse(init.body as string);
-				return Response.json({
+				return anthropicSse({
 					content: [{ type: "text", text: "ok" }],
 					usage: { input_tokens: 1, output_tokens: 1 },
 				});
@@ -221,7 +274,7 @@ describe("runAnthropic output cap and stop reason (#397)", () => {
 			"fetch",
 			vi.fn(async (_url: string, init: RequestInit) => {
 				sent = JSON.parse(init.body as string);
-				return Response.json({ usage: { input_tokens: 1, output_tokens: 1 }, ...reply });
+				return anthropicSse({ usage: { input_tokens: 1, output_tokens: 1 }, ...reply });
 			}),
 		);
 		const result = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
@@ -278,7 +331,7 @@ describe("tool rounds reach the provider in its own protocol (#398)", () => {
 			"fetch",
 			vi.fn(async (_url: string, init: RequestInit) => {
 				body = JSON.parse(init.body as string);
-				return Response.json({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
 			}),
 		);
 		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages });
@@ -295,7 +348,7 @@ describe("tool rounds reach the provider in its own protocol (#398)", () => {
 			{ type: "text", text: "looking" },
 			{ type: "tool_use", id: "tu_1", name: "repo_read_file", input: { path: "a.ts" } },
 		];
-		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ content: blocks, usage: {} })));
+		vi.stubGlobal("fetch", vi.fn(async () => anthropicSse({ content: blocks, usage: {} })));
 		const result = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
 			messages: [{ role: "user", content: "read a.ts" }],
 		})) as Record<string, unknown>;
@@ -342,7 +395,7 @@ describe("tool rounds reach the provider in its own protocol (#398)", () => {
 			"fetch",
 			vi.fn(async (_url: string, init: RequestInit) => {
 				body = JSON.parse(init.body as string);
-				return Response.json({ content: [{ type: "text", text: "ok" }], usage: {} });
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: {} });
 			}),
 		);
 		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
@@ -361,7 +414,7 @@ describe("tool rounds reach the provider in its own protocol (#398)", () => {
 			"fetch",
 			vi.fn(async (_url: string, init: RequestInit) => {
 				body = JSON.parse(init.body as string);
-				return Response.json({ content: [{ type: "text", text: "ok" }], usage: {} });
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: {} });
 			}),
 		);
 		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
@@ -381,5 +434,68 @@ describe("tool rounds reach the provider in its own protocol (#398)", () => {
 		]);
 		expect(JSON.stringify(body.messages)).not.toContain("tool_result");
 		expect(body.messages[0].role).toBe("user");
+	});
+});
+
+describe("the chat call streams, and its deadlines measure silence (#427)", () => {
+	it("asks for a stream, which is what makes the deadline measure the right thing", async () => {
+		// Non-streamed, one number had to cover the whole generation — so `CHAT_MAX_TOKENS = 4096`
+		// under a 25s ceiling failed by construction on the tool loop's second round, twice, on the
+		// same message. `stream: true` is the difference between "how long is the reply" and "has the
+		// provider gone away".
+		const env = await envWithAnthropicKey();
+		let body: Record<string, unknown> = {};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				body = JSON.parse(init.body as string);
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: {} });
+			}),
+		);
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] });
+		expect(body.stream).toBe(true);
+	});
+
+	it("reassembles a reply delivered one byte at a time", async () => {
+		// The pathological chunking: every frame split mid-JSON, repeatedly. If the reader lost a
+		// remainder anywhere, a long reply would come back with holes in it and nothing would say so.
+		const env = await envWithAnthropicKey();
+		const frames = anthropicSse({ content: [{ type: "text", text: "a long answer, in pieces" }], usage: {} });
+		const text = await frames.text();
+		vi.stubGlobal("fetch", vi.fn(async () => sseResponse(text, 1)));
+		const result = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [{ role: "user", content: "hi" }],
+		})) as { response: string };
+		expect(result.response).toBe("a long answer, in pieces");
+	});
+
+	it("gives up on a provider that never starts, and says a retry is worth it", async () => {
+		const env = await envWithAnthropicKey();
+		vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+		await expect(
+			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+				messages: [{ role: "user", content: "hi" }],
+				timeoutMs: 20,
+			}),
+		).rejects.toMatchObject({ name: "UserAiProviderError", status: 504, message: expect.stringMatching(/did not begin replying/) });
+	});
+
+	it("fails a stream that dies mid-reply instead of returning the half it got", async () => {
+		// A partial answer returned as whole is #397 with a new cause. The user is told the reply was
+		// discarded; the turn fails honestly.
+		const env = await envWithAnthropicKey();
+		const full = await anthropicSse({ content: [{ type: "text", text: "half an ans" }], usage: {} }).text();
+		vi.stubGlobal("fetch", vi.fn(async () => sseResponse(full.slice(0, full.indexOf("message_delta")))));
+		await expect(
+			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
+		).rejects.toMatchObject({ name: "UserAiProviderError", message: expect.stringMatching(/mid-stream/) });
+	});
+
+	it("still reports a request-level error as JSON, because that body is not a stream", async () => {
+		const env = await envWithAnthropicKey();
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { message: "credit balance too low" } }, { status: 400 })));
+		await expect(
+			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
+		).rejects.toMatchObject({ name: "UserAiProviderError", upstreamStatus: 400, message: expect.stringMatching(/credit balance too low/) });
 	});
 });
