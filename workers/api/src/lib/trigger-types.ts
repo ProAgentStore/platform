@@ -55,6 +55,9 @@ export interface TriggerRow {
 	config: string;
 	last_run_at: string | null;
 	next_run_at: string | null;
+	/** The un-jittered scheduled time this row is currently pointing at (#412). NULL on webhook
+	 *  triggers, and on cron rows written before migration 0100 — see `advanceCron`. */
+	next_slot_at: string | null;
 	failure_count: number;
 	last_error: string | null;
 	created_at: string;

@@ -76,4 +76,71 @@ describe("runDueTriggers — one bad row must not stop the platform's cron", () 
 		await runDueTriggers(env, new Date("2026-08-04T01:00:00.000Z"));
 		expect(updates.some((u) => u.sql.includes("enabled = 0"))).toBe(false);
 	});
+
+	it("clears the slot when it disables an unschedulable row", async () => {
+		// Leaving a slot on a disabled row means re-enabling it later would advance from a
+		// position belonging to a schedule that no longer parses.
+		const { env, updates } = stubEnv([trigger({ id: "bad", schedule: "* * * * *", next_slot_at: "2026-08-04T00:00:00.000Z" })]);
+		await runDueTriggers(env, new Date("2026-08-04T01:00:00.000Z"));
+		const disable = updates.find((u) => u.args[0] === "bad" && u.sql.includes("enabled = 0"));
+		expect(disable?.sql).toContain("next_slot_at = NULL");
+	});
+});
+
+/**
+ * #412 — the sweep advances from the SLOT, so a negatively-jittered run cannot fire twice.
+ *
+ * `cron-advance.test.ts` pins the arithmetic. These pin the WIRING: that the sweep reads
+ * `next_slot_at` off the row, and writes the new one inside the same compare-and-swap claim that
+ * advances `next_run_at`. A perfect `advanceCron` called with the wrong argument — or whose
+ * result is dropped on the floor — reproduces the original bug exactly.
+ */
+describe("runDueTriggers — the slot advances by one period, whatever the jitter", () => {
+	/** Claim UPDATE binds: (id, nextRunAt, previousNextRunAt, nextSlotAt). */
+	const claimFor = (updates: Array<{ sql: string; args: unknown[] }>, id: string) =>
+		updates.find((u) => u.args[0] === id && u.sql.includes("next_run_at = ?2"));
+
+	it("THE BUG: a run firing BEFORE its slot still advances a full day", async () => {
+		// The ticket's live row. Slot 2026-08-09T00:00Z; a −24m jitter fired it at 23:36 on the
+		// 8th. The old sweep called `nextRunAt("@daily", now = 23:36)` and got 2026-08-09T00:00Z
+		// — the slot it was already on — so the next fire landed within about two hours and
+		// "@daily" ran twice in one night, with failure_count 0 and last_error null throughout.
+		const { env, updates } = stubEnv([
+			trigger({
+				id: "daily",
+				schedule: "@daily",
+				config: JSON.stringify({ jitterMinutes: 90 }),
+				next_run_at: "2026-08-08T23:36:00.000Z",
+				next_slot_at: "2026-08-09T00:00:00.000Z",
+			}),
+		]);
+		const now = new Date("2026-08-08T23:36:00.000Z");
+		await runDueTriggers(env, now);
+
+		const claim = claimFor(updates, "daily");
+		expect(claim?.args[3]).toBe("2026-08-10T00:00:00.000Z");
+		// The fire time it stored is a day out, not later the same night — the observable symptom.
+		expect(Date.parse(String(claim?.args[1]))).toBeGreaterThan(now.getTime() + 20 * 60 * 60 * 1000);
+	});
+
+	it("writes the slot in the SAME claim that advances next_run_at", async () => {
+		// Two statements would let a crash between them leave a fire time from this period beside
+		// a slot from the last — which is the split state the ticket is about, re-created.
+		const { env, updates } = stubEnv([trigger({ id: "good", schedule: "@daily", next_slot_at: "2026-08-04T00:00:00.000Z" })]);
+		await runDueTriggers(env, new Date("2026-08-04T00:00:30.000Z"));
+
+		const claim = claimFor(updates, "good");
+		expect(claim?.sql).toContain("next_slot_at = ?4");
+		expect(claim?.args[3]).toBe("2026-08-05T00:00:00.000Z");
+	});
+
+	it("a legacy row with no slot advances from now and is given one", async () => {
+		// No backfill: the row heals on its next sweep. Before this it had nothing to advance
+		// from, which is indistinguishable from the old behaviour — for exactly one run.
+		const { env, updates } = stubEnv([trigger({ id: "legacy", schedule: "@daily", next_slot_at: null })]);
+		await runDueTriggers(env, new Date("2026-08-04T00:16:00.000Z"));
+
+		const claim = claimFor(updates, "legacy");
+		expect(claim?.args[3]).toBe("2026-08-05T00:00:00.000Z");
+	});
 });

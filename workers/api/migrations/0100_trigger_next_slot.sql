@@ -1,0 +1,44 @@
+-- Where a cron trigger IS in its schedule, as distinct from when it will fire (#412).
+--
+-- ## The bug
+--
+-- `agent_triggers` stored ONE time, `next_run_at`, and used it for two different things: the
+-- moment to fire (jittered) and the position in the schedule. After a run the sweep computed
+-- the next slot from the moment it fired — `nextRunAt(schedule, now)` — which let presentation
+-- mutate state.
+--
+-- `applyJitter` is symmetric (±j), so a run whose jitter landed NEGATIVE fires BEFORE its slot,
+-- and the next slot derived from that earlier moment is the SAME slot. With `@daily` and
+-- `jitterMinutes: 90`:
+--
+--   1. slot 00:00, jitter -24m  -> fires 23:36
+--   2. nextRunAt("@daily", 23:36) -> 00:00 tonight, 24 minutes away
+--   3. jitter +/-90 around that, floored at now + 60s -> next in [23:37, 01:30]
+--
+-- Every outcome of step 3 clears the floor, so "daily" did not merely RISK running twice in a
+-- night: it always did, and if the second run also landed before midnight the cycle repeated.
+-- The failure is silent and self-concealing — every individual run succeeds, `failure_count`
+-- stays 0, `last_error` stays NULL — so the only symptom is a workload the owner did not ask
+-- for. On this account the live trigger was `run_browse` against a logged-in Facebook session,
+-- which makes "daily, sometimes twice" a mass-action-frequency question (#75) arriving through
+-- a bug rather than a policy.
+--
+-- ## Why a column rather than arithmetic
+--
+-- The slot is recoverable from `next_run_at` only if the applied offset is also stored, and
+-- storing the offset is this column with an extra subtraction in front of it. The honest
+-- version keeps the un-jittered time itself: the slot is the state, the jitter is applied at
+-- dispatch, and `advanceCron` steps slot -> slot so the interval is exactly one period whatever
+-- the jitter does.
+--
+-- ## No backfill, and none is possible
+--
+-- NULL means "written before this column existed". `advanceCron` treats it as unknown and falls
+-- back to `now` for exactly one more run — byte-for-byte the old behaviour — after which the row
+-- has a slot and is correct forever. Inventing a slot here from a jittered `next_run_at` would
+-- be a guess carrying the full +/-jitter error bar, and a wrong slot persists, where a missing
+-- one heals itself on the next sweep.
+--
+-- Webhook triggers never have a schedule and keep NULL in both columns.
+
+ALTER TABLE agent_triggers ADD COLUMN next_slot_at TEXT;

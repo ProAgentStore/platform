@@ -463,13 +463,13 @@ const PINS = {
 	// `pags up`, which for a cloud-only agent is a command that cannot help. Raised rather than
 	// split — the sentences themselves are pure and tested in lib/trigger-capability.ts, so what
 	// is left here is the one lookup that feeds them.
-	// +6 at #361 (one argument, five lines of why): the skip notice now declares the EVENT it is
-	// about — (trigger, offline-or-busy) — so a five-minute cron whose runner stayed offline all
-	// afternoon says so once per window instead of once per tick. The key cannot be computed
-	// anywhere else: only this call site knows which trigger and which condition, and the whole
-	// point of #361's floor is that the caller names its event rather than the layer guessing
-	// from the prose.
-	"workers/api/src/lib/triggers.ts": 853,
+	// `workers/api/src/lib/triggers.ts` was pinned here at 853 until #412 moved the schedule
+	// arithmetic — `normalizeSchedule`, `nextRunAt`, `previewRuns`, `applyJitter` and the new
+	// `advanceCron` — into `workers/api/src/lib/cron-schedule.ts`. That took it to 771, under the
+	// 800-line threshold, so the entry is gone rather than lowered. The split was forced by the
+	// ratchet doing its job: #412 needed one more scheduling function, the file had one line of
+	// headroom, and "raise the pin" would have meant defending time arithmetic living in a
+	// dispatch module. It could not be defended, so it moved.
 	// +55 at #391 (a constant, a config field, a timer, and the paragraphs saying why): one-shot
 	// turn boundaries moved from three inferred timers to the process's own exit, and the
 	// 15-minute backstop had to become an ENFORCED ceiling — a timer that ends the turn — rather

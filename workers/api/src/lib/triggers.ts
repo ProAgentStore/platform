@@ -2,7 +2,8 @@ import { HttpError } from "./auth.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { runnerSkipMessage } from "./trigger-capability.js";
 import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
-import { cronFields, isValidTimeZone, nextCronInstant } from "./cron-time.js";
+import { isValidTimeZone } from "./cron-time.js";
+import { advanceCron } from "./cron-schedule.js";
 import { applyMapping } from "./trigger-config.js";
 import {
 	describeSync,
@@ -67,101 +68,6 @@ export function sanitizeTriggerName(value: unknown): string {
 	const name = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
 	if (!name) throw new HttpError(400, "name required");
 	return name.slice(0, 100);
-}
-
-export function normalizeSchedule(value: unknown): string {
-	const raw = typeof value === "string" ? value.trim().toLowerCase().replace(/\s+/g, " ") : "";
-	if (!raw) throw new HttpError(400, "schedule required for cron triggers");
-	if (raw === "@hourly" || raw === "@daily" || raw === "@weekly") return raw;
-	const every = raw.match(/^every\s+(\d+)\s*(m|min|mins|minute|minutes|h|hour|hours|d|day|days)$/);
-	if (every) {
-		const n = Number(every[1]);
-		const unit = every[2][0];
-		const minutes = unit === "m" ? n : unit === "h" ? n * 60 : n * 1440;
-		if (minutes < 5) throw new HttpError(400, "minimum cron interval is 5 minutes");
-		if (minutes > 31 * 24 * 60) throw new HttpError(400, "maximum cron interval is 31 days");
-		return `every ${minutes} minutes`;
-	}
-	const parts = raw.split(" ");
-	if (parts.length === 5 && parts.every((p) => p === "*" || /^\d+$/.test(p))) {
-		const [minute, hour, day, month, weekday] = parts;
-		const valid =
-			validRange(minute, 0, 59) &&
-			validRange(hour, 0, 23) &&
-			validRange(day, 1, 31) &&
-			validRange(month, 1, 12) &&
-			validRange(weekday, 0, 7);
-		if (!valid) throw new HttpError(400, "cron expression has an out-of-range field");
-		// Enforce the same 5-minute floor as the `every N` form. The grammar only allows `*`
-		// or a literal digit per field (no `*/N`), so a `*` minute means EVERY minute — which
-		// would fire per worker-cron tick, bypassing the interval floor and multiplying
-		// connector-scan / AI cost. Require a specific minute (≥ hourly) instead.
-		if (minute === "*") throw new HttpError(400, "minimum cron interval is 5 minutes — pin a specific minute, or use 'every N minutes'");
-		return parts.join(" ");
-	}
-	throw new HttpError(400, "unsupported schedule; use @hourly, @daily, every N minutes, or a simple 5-field cron");
-}
-
-function validRange(part: string, min: number, max: number): boolean {
-	if (part === "*") return true;
-	const n = Number(part);
-	return Number.isInteger(n) && n >= min && n <= max;
-}
-
-/**
- * When this schedule next fires, as an ISO instant.
- *
- * `timeZone` (#18) decides which clock the WALL-CLOCK schedules are read against — `@daily`,
- * `@weekly` and 5-field cron. Absent or unknown → UTC, i.e. exactly the behaviour of every
- * trigger that existed before timezones did. Interval schedules (`@hourly`, `every N minutes`)
- * are durations, not clock times, so a zone cannot change them and is not applied.
- */
-export function nextRunAt(schedule: string, from = new Date(), timeZone?: string): string {
-	const normalized = normalizeSchedule(schedule);
-	const base = new Date(from.getTime());
-	base.setUTCSeconds(0, 0);
-	if (normalized === "@hourly") return addMinutes(base, 60).toISOString();
-	const every = normalized.match(/^every\s+(\d+)\s+minutes$/);
-	if (every) return addMinutes(base, Number(every[1])).toISOString();
-
-	// The aliases ARE cron expressions; expanding them here means there is one wall-clock
-	// evaluator rather than a cron path and an alias path that can disagree about a timezone.
-	const expression = normalized === "@daily" ? "0 0 * * *" : normalized === "@weekly" ? "0 0 * * 0" : normalized;
-	const zone = isValidTimeZone(timeZone) ? timeZone : "UTC";
-	const instant = nextCronInstant(cronFields(expression), base, zone);
-	if (instant === null) throw new HttpError(400, "schedule has no run in the next year");
-	return new Date(instant).toISOString();
-}
-
-/**
- * The next `count` fire times, for an honest console preview (#18). Computed by the SAME
- * function the scheduler uses, on the server, so a preview cannot drift from behaviour — the
- * one thing worse than no next-run preview is a next-run preview that lies.
- */
-export function previewRuns(schedule: string, timeZone?: string, count = 3, from = new Date()): string[] {
-	const runs: string[] = [];
-	let cursor = from;
-	for (let i = 0; i < Math.max(1, Math.min(count, 10)); i++) {
-		const next = nextRunAt(schedule, cursor, timeZone);
-		runs.push(next);
-		cursor = new Date(Date.parse(next));
-	}
-	return runs;
-}
-
-function addMinutes(date: Date, minutes: number): Date {
-	return new Date(date.getTime() + minutes * 60_000);
-}
-
-/** Offset a scheduled time by a random ± jitter (minutes) so recurring runs don't fire
- *  exactly on the dot — a cheap anti-pattern defense for automation. Clamped to ≥ 1 min
- *  in the future so jitter can never schedule a run in the past. */
-export function applyJitter(iso: string, jitterMinutes?: number): string {
-	const j = typeof jitterMinutes === "number" && jitterMinutes > 0 ? Math.min(jitterMinutes, 720) : 0;
-	if (!j) return iso;
-	const offsetMs = (Math.random() * 2 - 1) * j * 60_000;
-	const floor = Date.now() + 60_000;
-	return new Date(Math.max(Date.parse(iso) + offsetMs, floor)).toISOString();
 }
 
 export function publicWebhookUrl(origin: string, token: string): string {
@@ -468,14 +374,24 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 		// no cron trigger on the whole platform ever fires again, for any user, with nothing but
 		// a repeating admin-log entry to say so.
 		let next: string | null;
+		let nextSlot: string | null;
 		try {
 			const cfg = parseConfig(trigger.config);
-			next = trigger.schedule ? applyJitter(nextRunAt(trigger.schedule, now, cfg.timezone), cfg.jitterMinutes) : null;
+			// Advance from the SLOT, never from `now` (#412). `now` is the JITTERED fire time, and
+			// jitter is symmetric, so a negatively-jittered run happens BEFORE its slot — deriving
+			// the next slot from it returned that same slot, minutes away instead of a period away,
+			// and "@daily" reliably fired twice in one night. See `advanceCron` for the full
+			// mechanism and for why the base is `max(slot, now)`.
+			const advance = trigger.schedule
+				? advanceCron(trigger.schedule, { now, slot: trigger.next_slot_at, timeZone: cfg.timezone, jitterMinutes: cfg.jitterMinutes })
+				: null;
+			next = advance?.fire ?? null;
+			nextSlot = advance?.slot ?? null;
 		} catch (e) {
 			// Disable the row and record why. It cannot be repaired here (the schedule is invalid
 			// under the current grammar), and leaving it enabled means re-hitting it every minute.
 			await env.DB.prepare(
-				"UPDATE agent_triggers SET enabled = 0, next_run_at = NULL, last_error = ?2, updated_at = datetime('now') WHERE id = ?1",
+				"UPDATE agent_triggers SET enabled = 0, next_run_at = NULL, next_slot_at = NULL, last_error = ?2, updated_at = datetime('now') WHERE id = ?1",
 			)
 				.bind(trigger.id, `Disabled: schedule "${trigger.schedule}" is no longer valid — ${e instanceof Error ? e.message : String(e)}`.slice(0, 300))
 				.run()
@@ -487,9 +403,12 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 		// overlapping scheduled() invocations, and a plain WHERE id=? UPDATE let BOTH read the
 		// same due row and dispatch it → duplicate tasks/knowledge. Advance only if next_run_at
 		// is STILL the due value we read; if another invocation already claimed it, skip dispatch.
+		//
+		// The slot rides along INSIDE the claim, so the pair advances atomically: a row can never
+		// hold a fire time from this period and a slot from the last one.
 		const claim = await env.DB.prepare(
-			"UPDATE agent_triggers SET next_run_at = ?2, updated_at = datetime('now') WHERE id = ?1 AND next_run_at IS ?3",
-		).bind(trigger.id, next, trigger.next_run_at).run();
+			"UPDATE agent_triggers SET next_run_at = ?2, next_slot_at = ?4, updated_at = datetime('now') WHERE id = ?1 AND next_run_at IS ?3",
+		).bind(trigger.id, next, trigger.next_run_at, nextSlot).run();
 		if (!claim.meta.changes) continue;
 		try {
 			await dispatchTrigger(env, trigger, "cron", { schedule: trigger.schedule, dueAt: dueIso });

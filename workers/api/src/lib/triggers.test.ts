@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HttpError } from "./auth.js";
 import { encryptKey } from "./crypto.js";
-import { applyJitter, dispatchTrigger, nextRunAt, normalizeSchedule, previewRuns, publicWebhookUrl, type TriggerRow } from "./triggers.js";
+import { dispatchTrigger, publicWebhookUrl, type TriggerRow } from "./triggers.js";
+import { applyJitter, nextRunAt, normalizeSchedule, previewRuns } from "./cron-schedule.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
 import { startBrowserTask } from "../routes/instances-browse.js";
 import { notifyUser } from "../routes/push.js";

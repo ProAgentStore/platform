@@ -2,15 +2,11 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import {
-	applyJitter,
 	assertTriggerAction,
 	assertTriggerType,
 	dispatchTrigger,
 	makeTriggerSecret,
-	nextRunAt,
-	normalizeSchedule,
 	parseConfig,
-	previewRuns,
 	publicWebhookUrl,
 	recordTriggerEvent,
 	safeJson,
@@ -19,6 +15,7 @@ import {
 	type TriggerRow,
 	type TriggerType,
 } from "../lib/triggers.js";
+import { advanceCron, normalizeSchedule, previewRuns } from "../lib/cron-schedule.js";
 import { validateTriggerConfig } from "../lib/trigger-config.js";
 import { triggerActionDenial, triggerActionOffers } from "../lib/trigger-capability.js";
 import { agentCapabilities, capabilitiesForInstance, type AgentCapabilities } from "../lib/agent-capabilities.js";
@@ -84,6 +81,17 @@ function presentTrigger(trigger: TriggerRow, origin: string, unavailable: string
 		unavailable,
 		lastRunAt: trigger.last_run_at,
 		nextRunAt: trigger.next_run_at,
+		/**
+		 * The un-jittered slot `nextRunAt` was derived from (#412).
+		 *
+		 * Exposed because the two-runs-a-night bug was invisible from the outside: `nextRunAt`
+		 * alone is a jittered time, and a jittered time cannot be checked against a schedule —
+		 * "23:36 for an @daily trigger" is either a −24m jitter or a broken interval and the
+		 * field does not say which. With the slot beside it, "did this advance by one period"
+		 * is a question the API can answer. NULL on webhook triggers and on cron rows that have
+		 * not swept since migration 0100.
+		 */
+		nextSlotAt: trigger.next_slot_at,
 		failureCount: trigger.failure_count,
 		lastError: trigger.last_error,
 		createdAt: trigger.created_at,
@@ -252,13 +260,17 @@ triggerRoutes.post("/", async (c) => {
 	assertValidConfig(action, type, body.config);
 	const schedule = type === "cron" ? normalizeSchedule(body.schedule) : null;
 	const timezone = typeof body.config?.timezone === "string" ? body.config.timezone : undefined;
-	const next = schedule ? applyJitter(nextRunAt(schedule, new Date(), timezone), typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined) : null;
+	// A create anchors the schedule at now — there is no prior slot to advance from — and stores
+	// BOTH halves, so the very first run already has the un-jittered slot to step from (#412).
+	const advance = schedule
+		? advanceCron(schedule, { now: new Date(), timeZone: timezone, jitterMinutes: typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined })
+		: null;
 	const secret = type === "webhook" ? makeTriggerSecret() : null;
 	const id = crypto.randomUUID();
 	await c.env.DB.prepare(
 		`INSERT INTO agent_triggers
-       (id, user_id, agent_id, instance_id, name, type, action, enabled, secret_token, schedule, config, next_run_at, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'), datetime('now'))`,
+       (id, user_id, agent_id, instance_id, name, type, action, enabled, secret_token, schedule, config, next_run_at, next_slot_at, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'), datetime('now'))`,
 	)
 		.bind(
 			id,
@@ -272,7 +284,8 @@ triggerRoutes.post("/", async (c) => {
 			secret,
 			schedule,
 			safeJson(body.config || {}),
-			next,
+			advance?.fire ?? null,
+			advance?.slot ?? null,
 		)
 		.run();
 	const trigger = await requireOwnedTrigger(c.env, session.uid, id);
@@ -305,6 +318,7 @@ triggerRoutes.put("/:id", async (c) => {
 	assertValidConfig(action, trigger.type, effectiveConfig);
 	let schedule = trigger.schedule;
 	let next = trigger.next_run_at;
+	let nextSlot = trigger.next_slot_at;
 	const timezone = typeof effectiveConfig.timezone === "string" ? effectiveConfig.timezone : undefined;
 	const zoneChanged = body.config !== undefined && timezone !== (typeof stored.timezone === "string" ? stored.timezone : undefined);
 	if (trigger.type === "cron" && (body.schedule !== undefined || zoneChanged)) {
@@ -313,12 +327,19 @@ triggerRoutes.put("/:id", async (c) => {
 		// Changing the ZONE changes when the same expression fires, so the stored next_run_at is
 		// stale the moment it changes. Not recomputing here would leave the trigger firing on the
 		// old zone until its next run — and the console would show a next-run time that is wrong.
-		next = schedule ? applyJitter(nextRunAt(schedule, new Date(), timezone), jm) : next;
+		//
+		// Re-anchored at now with NO prior slot (#412): the old slot belongs to the old schedule
+		// or the old zone, so advancing from it would carry the previous meaning forward. Both
+		// halves are rewritten together — a slot from one schedule beside a fire time from another
+		// is the split-state this ticket exists to remove.
+		const advance = schedule ? advanceCron(schedule, { now: new Date(), timeZone: timezone, jitterMinutes: jm }) : null;
+		next = advance ? advance.fire : next;
+		nextSlot = advance ? advance.slot : nextSlot;
 	}
 	const secret = trigger.type === "webhook" && body.rotateSecret === true ? makeTriggerSecret() : trigger.secret_token;
 	await c.env.DB.prepare(
 		`UPDATE agent_triggers
-     SET name = ?2, action = ?3, enabled = ?4, secret_token = ?5, schedule = ?6, config = ?7, next_run_at = ?8, updated_at = datetime('now')
+     SET name = ?2, action = ?3, enabled = ?4, secret_token = ?5, schedule = ?6, config = ?7, next_run_at = ?8, next_slot_at = ?10, updated_at = datetime('now')
      WHERE id = ?1 AND user_id = ?9`,
 	)
 		.bind(
@@ -331,6 +352,7 @@ triggerRoutes.put("/:id", async (c) => {
 			body.config === undefined ? trigger.config : safeJson(body.config),
 			next,
 			session.uid,
+			nextSlot,
 		)
 		.run();
 	const updated = await requireOwnedTrigger(c.env, session.uid, trigger.id);
