@@ -472,7 +472,11 @@ const PINS = {
 	// later, having run no tools at all. The five comment lines say what is withheld (the model's
 	// reading) and what is not (the stored row, which the console still gets), since a future reader
 	// finding a redactor on the context path will otherwise assume the transcript was edited.
-	"workers/api/src/agent-think.ts": 1061,
+	// +6 at #427: one import and a five-line note on `record`, the single seam where a tool result
+	// re-enters the next round's prompt. The note is the point — the cap sits ABOVE every deliberate
+	// per-tool cap, and a reader who does not know that will read it as a policy about context
+	// budgets and start lowering it. The logic itself is one call in lib/tool-result-cap.ts.
+	"workers/api/src/agent-think.ts": 1067,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

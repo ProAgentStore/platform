@@ -29,6 +29,7 @@ import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invente
 import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
+import { capToolResult } from "./lib/tool-result-cap.js";
 import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
@@ -875,9 +876,14 @@ export async function runAgentThink(opts: {
 		// string, and the id is the ONLY thing that says which of two calls to the same tool a
 		// result answers.
 		const outcomeById = new Map<string, ToolOutcome>();
+		// Capped HERE, at the one seam where a result re-enters the prompt (#427). Both branches take
+		// the same capped string, because both are read by the model on the next round and a cap on
+		// one of them is not a cap. Well above every deliberate per-tool cap, so it can only fire on a
+		// tool that bounded nothing; see lib/tool-result-cap.ts for why it truncates visibly.
 		const record = (tc: { name: string; id?: string }, content: string, isError: boolean) => {
-			toolResults.push(`[${tc.name}]: ${content}`);
-			if (tc.id) outcomeById.set(tc.id, { content, isError });
+			const capped = capToolResult(content);
+			toolResults.push(`[${tc.name}]: ${capped}`);
+			if (tc.id) outcomeById.set(tc.id, { content: capped, isError });
 		};
 		let executedThisRound = 0;
 		for (const tc of toolCalls) {
