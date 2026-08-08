@@ -350,7 +350,17 @@ const PINS = {
 	// `lib/supervision.ts`, both unit-tested. What is left here is the gate (only an agent that
 	// declares a supervision tool pays for the read) and one `systemPrompt +=` — and the gate has to
 	// be here, next to the capabilities it reads.
-	"workers/api/src/agent-think.ts": 871,
+	// +63 at #395, and the split it looks like it wants is the one that was already done: what a
+	// reply CLAIMS, what the turn actually ran, the correction handed back and the answer that
+	// replaces a second fabrication are all pure and live in lib/invented-results.ts with their
+	// tests. What landed here is the one thing only this function can do — `deliver`, the single
+	// exit every model-authored reply now leaves through, closing over the turn's own execution
+	// record and the message array a correction round has to be appended to. It is raised rather
+	// than split because the prose is the point: a reader who finds the audit without finding "the
+	// final answer after the loop was never parsed at all, and that is where three invented GitHub
+	// issues reached the user" will eventually restore a raw return. security-invariants.test.ts
+	// holds the ground the pin cannot.
+	"workers/api/src/agent-think.ts": 934,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

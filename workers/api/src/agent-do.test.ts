@@ -90,7 +90,7 @@ describe("AgentDO types", () => {
 describe("parseToolCallsFromText", () => {
 	it("parses single tool call from text", () => {
 		const text = '{"name": "insert_record", "parameters": {"collection": "jobs", "data": "{\\"company\\": \\"Acme\\"}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("insert_record");
 		expect(calls[0].arguments.collection).toBe("jobs");
@@ -98,7 +98,7 @@ describe("parseToolCallsFromText", () => {
 
 	it("parses multiple tool calls separated by semicolons", () => {
 		const text = '{"name": "insert_record", "parameters": {"collection": "apps", "data": "{\\"x\\": 1}"}}; {"name": "write_memory", "parameters": {"key": "k", "type": "identity", "content": "v"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(2);
 		expect(calls[0].name).toBe("insert_record");
 		expect(calls[1].name).toBe("write_memory");
@@ -106,7 +106,7 @@ describe("parseToolCallsFromText", () => {
 
 	it("handles nested JSON in data field", () => {
 		const text = '{"name": "insert_record", "parameters": {"collection": "applications", "data": "{\\"company\\": \\"Kula AI\\", \\"url\\": \\"https://example.com\\", \\"status\\": \\"queued\\"}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].arguments.collection).toBe("applications");
 		const data = JSON.parse(calls[0].arguments.data as string);
@@ -116,22 +116,22 @@ describe("parseToolCallsFromText", () => {
 
 	it("handles prose before tool call", () => {
 		const text = 'I will now store the application.\n\n{"name": "insert_record", "parameters": {"collection": "jobs", "data": "{\\"x\\": 1}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("insert_record");
 	});
 
 	it("handles function.name format", () => {
 		const text = '{"function": {"name": "write_memory", "arguments": "{\\"key\\": \\"test\\"}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("write_memory");
 	});
 
 	it("returns empty for no tool calls", () => {
-		expect(parseToolCallsFromText("Hello world")).toHaveLength(0);
-		expect(parseToolCallsFromText("")).toHaveLength(0);
-		expect(parseToolCallsFromText('{"foo": "bar"}')).toHaveLength(0);
+		expect(parseToolCallsFromText("Hello world").calls).toHaveLength(0);
+		expect(parseToolCallsFromText("").calls).toHaveLength(0);
+		expect(parseToolCallsFromText('{"foo": "bar"}').calls).toHaveLength(0);
 	});
 });
 

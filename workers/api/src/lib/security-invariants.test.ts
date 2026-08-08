@@ -455,6 +455,55 @@ describe("destructiveness is never taken from the server", () => {
 	});
 });
 
+// ── 7. A model-authored reply never reaches the user unaudited ───────────────────────
+//
+// #395. A Repo Coder wrote its own `<tool_call>` AND `<tool_response>` blocks, invented three
+// GitHub issues by number and title from a tool that never ran, and the platform passed it
+// through as fetched fact; the user decided what to build next from it. The mechanism was that
+// `runAgentThink` had two exits handing back raw model text, and the one that mattered — the
+// final answer after the tool loop — was never parsed at all.
+//
+// Same shape as every guard above: a correct mechanism (`honestReply`) and a new exit that does
+// not go through it. There is nothing about a raw `return` that looks wrong in review.
+describe("a model-authored reply leaves the agent loop only through the audit", () => {
+	const thinker = () => {
+		const f = ALL.find((s) => s.rel === "agent-think.ts");
+		expect(f, "agent-think.ts moved — repoint this guard").toBeTruthy();
+		return f as Source;
+	};
+
+	/** The spellings that mean "this line hands the text to the audit rather than to the user". */
+	const AUDITED = /parseToolCallsFromText|honestReply|\btext:/;
+
+	it("every read of a provider's response feeds the parser or the audit", () => {
+		// Written as a rule about the READ, not about the `return`, because the exit that did the
+		// damage was `const response = final.response || ""` three lines above an innocent-looking
+		// `return { response, … }`. A guard shaped like the symptom would not have seen it.
+		const offenders = matchLines(thinker().code, /\b(?:rawResult|final|retry|result)\.response\b/g)
+			.filter((h) => !AUDITED.test(h.excerpt))
+			.map((h) => `agent-think.ts:${h.line} ${h.excerpt}`);
+		expect(
+			offenders,
+			`Hand the text to parseToolCallsFromText and then to honestReply (lib/invented-results.ts).\n` +
+				`Raw model text ships whatever the model wrote — including a tool RESULT it wrote itself, which\n` +
+				`the platform never produces and therefore knows to be invented (#395).\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+
+	it("the audit is what it calls", () => {
+		expect(findCalls(thinker().code, "honestReply").length).toBeGreaterThan(0);
+	});
+
+	it("the co-pilot's one-shot returns are scrubbed too", () => {
+		// The other surface that returns model text straight to a human (#395 cites it by line).
+		const copilot = ALL.find((s) => s.rel === "lib/coding-copilot.ts");
+		expect(copilot, "lib/coding-copilot.ts moved — repoint this guard").toBeTruthy();
+		expect(matchLines(copilot?.code ?? "", /return\s*\(?\s*(?:raw|res|fin)\.response\b/g)).toEqual([]);
+		expect(findCalls(copilot?.code ?? "", "scrubOneShotReply").length).toBeGreaterThan(0);
+	});
+});
+
 /** The text between the paren at `open` and its match — a CREATE TABLE body, however it ends. */
 function balancedBody(sql: string, open: number): string {
 	let depth = 0;

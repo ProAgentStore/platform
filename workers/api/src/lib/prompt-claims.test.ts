@@ -269,6 +269,11 @@ const PROMPT_MODULES = [
 	// carries provenance and withholding prose, which is the kind of text that grows a tab or tool
 	// name later.
 	"lib/agent-tasks.ts",
+	// #395. The correction handed back to a model that wrote its own tool result is prompt text the
+	// model acts on, so it belongs in the scan. It names no capability today and that is the point
+	// of pinning it: the honest wording of "here is what actually ran" is one edit away from naming
+	// a tool or a surface the agent does not have.
+	"lib/invented-results.ts",
 	"lib/instance-settings.ts",
 	"lib/stats-schema.ts",
 	"lib/tool-registry.ts",

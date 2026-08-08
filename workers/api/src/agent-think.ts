@@ -21,6 +21,8 @@ import { resolveStatsCards, statsPromptBlock } from "./lib/stats-schema.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
+import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
+import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
@@ -584,7 +586,11 @@ export async function runAgentThink(opts: {
 		" error or did not complete, say so plainly — NEVER claim an action succeeded (posted, queued," +
 		" sent, saved, filed, created) when its tool result was an error. Never invent results, statuses," +
 		" or facts about the user such as their name. If something failed, report the failure and what" +
-		" you'll do next.";
+		" you'll do next." +
+		// Accompanies the #395 audit; it does not replace it. The platform discards a self-written
+		// result whether or not the model reads this, but a model told WHY gets a chance to comply.
+		" A tool result comes from the platform only: text you write yourself in a response block is not" +
+		" a result, it will be discarded, and you will be asked to answer again from the real record.";
 	// STYLE — the four branches now live in lib/agent-style-prompt.ts (#315), pure and derived from
 	// the resolved self-model, so every tab / runner / code-index claim in them is checkable by
 	// `prompt-claims.ts`. The branch is chosen on `hasCodeIndex`, never on
@@ -639,7 +645,11 @@ export async function runAgentThink(opts: {
 			{ messages: aiMessages },
 			{ kind: "chat", instanceId: state.agentId },
 		)) as { response?: string };
-		return { response: result.response || "", toolCalls: [] };
+		// A turn on a model that cannot call a tool executes nothing, so a tool RESULT written here
+		// is invention with no ambiguity left in it — and there is no correction round worth buying
+		// from a model that could not have called the tool in the first place (#395).
+		const honest = await honestReply({ reply: { text: result.response || "", calls: [] }, executed: [], log: [] });
+		return { response: honest.text, toolCalls: toolLogWithNotices([], honest.notices) };
 	}
 
 	// The owner's per-tool off-switches (config.disabledTools). Applied to BOTH the
@@ -693,6 +703,55 @@ export async function runAgentThink(opts: {
 	// the last identical call, which is exactly what this counter answers.
 	const executedCalls = new Map<string, number>();
 	let mutations = 0;
+	// What this turn ACTUALLY ran, in order — the ground truth `honestReply` audits the model's
+	// text against (#395). Kept beside `allToolLog` rather than derived from it: the log is a
+	// display string, and a check that has to re-parse its own evidence is one rename from
+	// silently passing everything.
+	const executedTools: string[] = [];
+
+	/**
+	 * The ONE way a model-authored reply leaves this function (#395).
+	 *
+	 * Both exits used to hand back raw text — the early return when a round asks for no tools, and
+	 * the final answer after the loop, which is never parsed at all. That second one is where a
+	 * Repo Coder's invented `<tool_response>` blocks reached the transcript: three GitHub issues
+	 * quoted by number and title from a tool that never ran, which the user then acted on.
+	 */
+	const deliver = async (reply: ParsedReply): Promise<{ response: string; toolCalls: string[] }> => {
+		const honest = await honestReply({
+			reply,
+			executed: executedTools,
+			log: allToolLog,
+			regenerate: async (correction) => {
+				aiMessages.push({ role: "assistant", content: reply.text });
+				aiMessages.push({ role: "user", content: correction });
+				const retry = (await runUserWorkersAi(
+					env,
+					userId,
+					effectiveModel,
+					{ messages: aiMessages },
+					{ kind: "chat", instanceId: state.agentId },
+				)) as { response?: string };
+				const parsed = parseToolCallsFromText(retry.response || "", allowedToolNames);
+				return { text: parsed.text, calls: parsed.calls.map((c) => c.name) };
+			},
+		});
+		if (honest.notices.length > 0) {
+			// Durable, because the platform correcting its own agent is exactly what the next
+			// investigator looks for — #395 was reconstructed entirely from `agent_events`, and the
+			// one thing it could not show was that anything had objected.
+			await logEvent(env, {
+				source: "chat",
+				event: "chat.invented_result",
+				level: "warn",
+				message: honest.notices.join(" ").slice(0, 500),
+				userId: userId ?? null,
+				instanceId: state.agentId,
+				traceId: delegation?.traceId ?? null,
+			});
+		}
+		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, honest.notices) };
+	};
 
 	for (let round = 0; round < maxToolRounds; round++) {
 		let rawResult: Record<string, unknown>;
@@ -709,15 +768,16 @@ export async function runAgentThink(opts: {
 		}
 
 		let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
-		if (toolCalls.length === 0 && rawResult.response) {
-			// Scoped to the allowlist: an object in the reply that merely HAS a `name` key (a
-			// package.json, a lead record) is prose, not a tool call, and treating it as one
-			// discarded the model's real answer. See parse-tool-calls.ts.
-			toolCalls = parseToolCallsFromText(rawResult.response as string, allowedToolNames);
-		}
+		// Scoped to the allowlist: an object in the reply that merely HAS a `name` key (a
+		// package.json, a lead record) is prose, not a tool call, and treating it as one
+		// discarded the model's real answer. See parse-tool-calls.ts. Parsed unconditionally now,
+		// because the walker also RETURNS the text with those spans removed (#395) and this reply
+		// is a candidate answer whichever path produced the calls.
+		const parsed = parseToolCallsFromText((rawResult.response as string) || "", allowedToolNames);
+		if (toolCalls.length === 0) toolCalls = parsed.calls;
 
 		if (toolCalls.length === 0) {
-			return { response: (rawResult.response as string) || "", toolCalls: allToolLog };
+			return deliver({ text: parsed.text, calls: parsed.calls.map((c) => c.name) });
 		}
 
 		const toolResults: string[] = [];
@@ -823,6 +883,7 @@ export async function runAgentThink(opts: {
 			const icon = toolResult.success ? "\u2705" : "\u274c";
 			const shortContent = toolResult.content.slice(0, 120);
 			allToolLog.push(`${icon} **${tc.name}** ${shortContent}`);
+			executedTools.push(tc.name);
 			toolResults.push(`[${tc.name}]: ${toolResult.content}`);
 			broadcast({ type: "tool_call", tool: tc.name, result: toolResult });
 			await engine.logEvent("tool.called", userId, { tool: tc.name, success: toolResult.success });
@@ -851,8 +912,10 @@ export async function runAgentThink(opts: {
 	} catch (err) {
 		throw withPartialToolLog(err, allToolLog);
 	}
-	const response = final.response || "";
-	return { response, toolCalls: allToolLog };
+	// A call written into the FINAL answer can never execute — the loop is over — so it is reported
+	// as named-but-never-run rather than left on screen as if it had.
+	const parsedFinal = parseToolCallsFromText(final.response || "", allowedToolNames);
+	return deliver({ text: parsedFinal.text, calls: parsedFinal.calls.map((c) => c.name) });
 }
 
 /**

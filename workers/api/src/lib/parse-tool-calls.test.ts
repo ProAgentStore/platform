@@ -3,7 +3,7 @@ import { parseToolCallsFromText, normalizeToolCalls } from "./parse-tool-calls.j
 
 describe("parseToolCallsFromText", () => {
 	it("parses single tool call", () => {
-		const calls = parseToolCallsFromText('{"name":"write_memory","parameters":{"key":"test","type":"identity","content":"val"}}');
+		const { calls } = parseToolCallsFromText('{"name":"write_memory","parameters":{"key":"test","type":"identity","content":"val"}}');
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("write_memory");
 		expect(calls[0].arguments.key).toBe("test");
@@ -12,7 +12,7 @@ describe("parseToolCallsFromText", () => {
 	it("parses flat-shape calls where args are sibling top-level keys", () => {
 		// A model emitting {"name":"write_memory","key":"x","type":"knowledge","content":"y"}
 		// (no parameters/arguments wrapper) must still yield the args, not {}.
-		const calls = parseToolCallsFromText('{"name":"write_memory","key":"x","type":"knowledge","content":"y"}');
+		const { calls } = parseToolCallsFromText('{"name":"write_memory","key":"x","type":"knowledge","content":"y"}');
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("write_memory");
 		expect(calls[0].arguments).toEqual({ key: "x", type: "knowledge", content: "y" });
@@ -20,7 +20,7 @@ describe("parseToolCallsFromText", () => {
 
 	it("parses multiple tool calls separated by semicolons", () => {
 		const text = '{"name":"insert_record","parameters":{"collection":"apps","data":"{\\"x\\":1}"}}; {"name":"write_memory","parameters":{"key":"k","type":"identity","content":"v"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(2);
 		expect(calls[0].name).toBe("insert_record");
 		expect(calls[1].name).toBe("write_memory");
@@ -28,7 +28,7 @@ describe("parseToolCallsFromText", () => {
 
 	it("handles nested JSON in data fields", () => {
 		const text = '{"name":"insert_record","parameters":{"collection":"applications","data":"{\\"company\\":\\"Kula AI\\",\\"url\\":\\"https://example.com\\",\\"status\\":\\"queued\\"}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		const data = JSON.parse(calls[0].arguments.data as string);
 		expect(data.company).toBe("Kula AI");
@@ -37,27 +37,27 @@ describe("parseToolCallsFromText", () => {
 
 	it("handles prose before tool call", () => {
 		const text = 'I will now store the application.\n\n{"name":"insert_record","parameters":{"collection":"jobs","data":"{\\"x\\":1}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("insert_record");
 	});
 
 	it("handles function.name format", () => {
 		const text = '{"function":{"name":"write_memory","arguments":"{\\"key\\":\\"test\\"}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("write_memory");
 	});
 
 	it("returns empty for no tool calls", () => {
-		expect(parseToolCallsFromText("Hello world")).toHaveLength(0);
-		expect(parseToolCallsFromText("")).toHaveLength(0);
-		expect(parseToolCallsFromText('{"foo":"bar"}')).toHaveLength(0);
+		expect(parseToolCallsFromText("Hello world").calls).toHaveLength(0);
+		expect(parseToolCallsFromText("").calls).toHaveLength(0);
+		expect(parseToolCallsFromText('{"foo":"bar"}').calls).toHaveLength(0);
 	});
 
 	it("handles URLs with special chars in data", () => {
 		const text = '{"name":"insert_record","parameters":{"collection":"apps","data":"{\\"url\\":\\"https://careers.example.com/job/123?src=LinkedIn&ref=456\\"}"}}';
-		const calls = parseToolCallsFromText(text);
+		const { calls } = parseToolCallsFromText(text);
 		expect(calls).toHaveLength(1);
 		const data = JSON.parse(calls[0].arguments.data as string);
 		expect(data.url).toContain("src=LinkedIn");
@@ -134,25 +134,56 @@ describe("parseToolCallsFromText — an object with a `name` key is not a tool c
 		// the round broke, and the user got an answer regenerated from a transcript reading
 		// "I called tools: [@proagentstore/sdk]: This tool isn't available to this agent".
 		const reply = 'Here is the file:\n{"name":"@proagentstore/sdk","version":"0.4.0","type":"module"}';
-		expect(parseToolCallsFromText(reply, allowed)).toEqual([]);
+		expect(parseToolCallsFromText(reply, allowed).calls).toEqual([]);
 	});
 
 	it("ignores any record carrying a name — a lead, a site, a person", () => {
-		expect(parseToolCallsFromText('{"name":"Joe\'s Cafe","suburb":"Newtown"}', allowed)).toEqual([]);
+		expect(parseToolCallsFromText('{"name":"Joe\'s Cafe","suburb":"Newtown"}', allowed).calls).toEqual([]);
 	});
 
 	it("still parses a REAL text-embedded call", () => {
-		const calls = parseToolCallsFromText('I will check.\n{"name":"get_tasks"}', allowed);
+		const { calls } = parseToolCallsFromText('I will check.\n{"name":"get_tasks"}', allowed);
 		expect(calls).toEqual([{ name: "get_tasks", arguments: {} }]);
 	});
 
 	it("rejects a non-string name rather than coercing it", () => {
-		expect(parseToolCallsFromText('{"name":42,"x":1}', allowed)).toEqual([]);
-		expect(parseToolCallsFromText('{"name":{"a":1}}', allowed)).toEqual([]);
-		expect(parseToolCallsFromText('{"name":["get_tasks"]}', allowed)).toEqual([]);
+		expect(parseToolCallsFromText('{"name":42,"x":1}', allowed).calls).toEqual([]);
+		expect(parseToolCallsFromText('{"name":{"a":1}}', allowed).calls).toEqual([]);
+		expect(parseToolCallsFromText('{"name":["get_tasks"]}', allowed).calls).toEqual([]);
 	});
 
 	it("without an allowlist stays permissive — the old contract for callers that have none", () => {
-		expect(parseToolCallsFromText('{"name":"anything"}')).toEqual([{ name: "anything", arguments: {} }]);
+		expect(parseToolCallsFromText('{"name":"anything"}').calls).toEqual([{ name: "anything", arguments: {} }]);
+	});
+});
+
+describe("parseToolCallsFromText removes what it parsed (#395)", () => {
+	const allowed = new Set(["get_tasks", "write_memory", "repo_remote"]);
+
+	// The reported half of #395: the walker extracted the calls and nothing cleaned up after it,
+	// so the raw markup was persisted and shown to the user as part of the agent's answer.
+	it("returns the reply without the call it lifted out", () => {
+		const out = parseToolCallsFromText('Let me check.\n{"name":"get_tasks"}\nOne moment.', allowed);
+		expect(out.calls).toHaveLength(1);
+		expect(out.text).not.toContain("get_tasks");
+		expect(out.text).toContain("Let me check.");
+		expect(out.text).toContain("One moment.");
+	});
+
+	it("removes every call it took, not only the first", () => {
+		const out = parseToolCallsFromText('{"name":"get_tasks"} then {"name":"repo_remote"}', allowed);
+		expect(out.calls.map((c) => c.name)).toEqual(["get_tasks", "repo_remote"]);
+		expect(out.text.trim()).toBe("then");
+	});
+
+	it("leaves an object it did NOT treat as a call exactly where it was", () => {
+		// The answer-eating regression's twin: a package.json in the reply is the ANSWER, so it must
+		// survive verbatim — the walker may only remove what it actually took.
+		const reply = 'Here is the file:\n{"name":"@proagentstore/sdk","version":"0.4.0"}';
+		expect(parseToolCallsFromText(reply, allowed).text).toBe(reply);
+	});
+
+	it("leaves an ordinary reply byte-for-byte", () => {
+		expect(parseToolCallsFromText("Nothing to do here.", allowed).text).toBe("Nothing to do here.");
 	});
 });

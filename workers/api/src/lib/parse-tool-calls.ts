@@ -19,9 +19,22 @@
  * here means such an object stays prose and the reply survives. A genuine attempt to call a
  * DISALLOWED tool still gets its refusal through the structured `tool_calls` path, which is
  * unambiguous.
+ *
+ * RETURNS THE TEXT IT ATE (#395). This used to return only the calls, and nothing downstream
+ * cleaned up after it, so a text-embedded call survived into the persisted message and onto the
+ * user's screen — the reported half of #395. Returning `{ calls, text }` makes the strip
+ * impossible to forget: the caller cannot get the calls without also being handed the reply with
+ * their spans removed. The wider markup families the model wraps around these objects
+ * (`<tool_call>`, `</parameter>`, and any invented `<tool_response>`) are not this walker's
+ * business — they are stripped and adjudicated in `invented-results.ts`.
  */
-export function parseToolCallsFromText(text: string, allowed?: ReadonlySet<string>): Array<{ name: string; arguments: Record<string, unknown> }> {
-	const results: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+export function parseToolCallsFromText(
+	text: string,
+	allowed?: ReadonlySet<string>,
+): { calls: Array<{ name: string; arguments: Record<string, unknown> }>; text: string } {
+	const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+	// The spans that became calls, in order — removed from the returned text.
+	const spans: Array<[number, number]> = [];
 	// Walk the text character by character, extracting balanced JSON objects
 	let i = 0;
 	while (i < text.length) {
@@ -48,11 +61,24 @@ export function parseToolCallsFromText(text: string, allowed?: ReadonlySet<strin
 				rawArgs = rest;
 			}
 			const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
-			results.push({ name, arguments: args });
+			calls.push({ name, arguments: args });
+			spans.push([start, end + 1]);
 		} catch {
 		}
 	}
-	return results;
+	return { calls, text: removeSpans(text, spans) };
+}
+
+/** Cut the given [start, end) ranges out of `text`. Ranges arrive in order and never overlap. */
+function removeSpans(text: string, spans: ReadonlyArray<[number, number]>): string {
+	if (spans.length === 0) return text;
+	let out = "";
+	let cursor = 0;
+	for (const [start, end] of spans) {
+		out += text.slice(cursor, start);
+		cursor = end;
+	}
+	return `${out}${text.slice(cursor)}`;
 }
 
 /** Find the index of the closing brace that matches the opening brace at `start`. */

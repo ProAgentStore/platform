@@ -1,4 +1,5 @@
 import { ALL_INSPECT_TOOL_NAMES, buildInspectTools, executeInspectTool } from "./coding-inspect.js";
+import { scrubOneShotReply } from "./invented-results.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.js";
 import type { RunnerConn } from "./runner-client.js";
 import { runUserWorkersAi } from "./user-ai.js";
@@ -73,7 +74,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 			messages,
 			maxTokens: question ? 600 : 160,
 		}, { kind: "copilot", instanceId: args.instanceId })) as { response?: string };
-		return res.response || "";
+		return scrubOneShotReply(res.response || "");
 	}
 
 	// Substantive question + something readable → a BOUNDED read-only tool loop so the answer is
@@ -85,8 +86,12 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	for (let round = 0; round < 3; round++) {
 		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as Record<string, unknown>;
 		let calls = normalizeToolCalls((raw.tool_calls as unknown[]) || []);
-		if (calls.length === 0 && raw.response) calls = parseToolCallsFromText(raw.response as string, ALL_INSPECT_TOOL_NAMES);
-		if (calls.length === 0) return (raw.response as string) || "";
+		// The walker hands back the reply with the call spans removed (#395); `scrubOneShotReply`
+		// takes the markup families around them and discloses an invented RESULT rather than
+		// deleting it silently, which would leave a confident summary with its evidence gone.
+		const parsed = parseToolCallsFromText((raw.response as string) || "", ALL_INSPECT_TOOL_NAMES);
+		if (calls.length === 0 && raw.response) calls = parsed.calls;
+		if (calls.length === 0) return scrubOneShotReply(parsed.text);
 
 		const results: string[] = [];
 		let did = 0;
@@ -110,5 +115,5 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		if (did === 0) break; // only refused/duplicate calls — stop rather than spin
 	}
 	const fin = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as { response?: string };
-	return fin.response || "";
+	return scrubOneShotReply(fin.response || "");
 }
