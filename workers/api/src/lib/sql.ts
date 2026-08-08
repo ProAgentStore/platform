@@ -278,7 +278,7 @@ export function findCompoundSelectOverruns(source: string, maxTerms = D1_MAX_COM
 
 	const consider = (text: string, at: number) => {
 		if (!readsAsSql(text)) return;
-		const unions = text.match(/\bUNION\b/gi)?.length ?? 0;
+		const unions = compoundSelectTerms(text) - 1;
 		if (unions + 1 <= maxTerms) return;
 		const line = lineOf(at);
 		hits.push({ line, unions, excerpt: (lines[line - 1] ?? "").trim().slice(0, 160) });
@@ -317,6 +317,175 @@ export function findCompoundSelectOverruns(source: string, maxTerms = D1_MAX_COM
 
 	scan(0, source.length);
 	return hits;
+}
+
+/**
+ * Compound terms in one statement — the number D1 compares against its ceiling.
+ *
+ * `UNION` keywords plus one. Shared with the runtime double in `d1-sqlite.ts` so the static scan
+ * and the executing harness cannot disagree about what "six terms" means: local SQLite parses 500
+ * of them happily, so the ceiling is only ever enforced by this count, never by the engine.
+ *
+ * Counts every `UNION` in the text, including ones inside a subquery, where SQLite would apply the
+ * ceiling per compound rather than to the sum. Conservative in the safe direction: it can only
+ * over-report, and no query here nests one.
+ */
+export function compoundSelectTerms(sql: string): number {
+	return (sql.match(/\bUNION\b/gi)?.length ?? 0) + 1;
+}
+
+// ── Every statement a static reader can resolve ──────────────────────────────────────────────
+
+/** One SQL statement written out in full in a source file. */
+export interface LiteralSqlStatement {
+	/** 1-based line where the statement's first literal begins. */
+	line: number;
+	/** The statement text, with adjacent `"a" + "b"` fragments already joined. */
+	sql: string;
+}
+
+/**
+ * Every complete SQL statement in `source` that is written as a literal, in a form a test can
+ * hand straight to a real SQLite parser.
+ *
+ * The point of returning these is that PARSING a statement checks things no string match can:
+ * that it is syntactically valid at all, and that every table and column it names exists in the
+ * schema the migrations actually build. `external-usage.ts` selected a `users.email` that has
+ * never existed in any migration; it threw on every call, inside a `catch {}`, and read as
+ * "nobody is an admin" for as long as it shipped.
+ *
+ * Adjacent string concatenation is joined (`"SELECT …" + " LEFT JOIN …"`, the shape
+ * `stats-store.ts` and `loop-presets-store.ts` use) because a fragment is not a statement and
+ * would otherwise report a false failure — the reading that made a first version of this guard
+ * unusable.
+ *
+ * WHAT IT CANNOT SEE, stated so nobody reads its silence as coverage:
+ *
+ *   • SQL assembled at RUNTIME — any statement with a `${…}` in it. That is ~50 statements here
+ *     and includes the highest-risk shapes: an interpolated column list, a WHERE built from
+ *     clauses pushed onto an array, an `IN (${placeholders})`, a table name chosen per call.
+ *     Those need the statement the code actually issues, which only running it produces —
+ *     `realSchemaD1()` in `d1-sqlite.ts` is for exactly that, and a module is only covered once
+ *     some test drives it through one.
+ *   • A statement built by joining fragments held in variables or returned by a helper.
+ *   • Anything outside the file handed in.
+ *   • Whether a statement that parses returns the RIGHT ROWS. #451 shipped a `WHERE agent_id = ?1`
+ *     against a column that is always NULL: perfectly valid SQL, zero rows, forever. Parsing has
+ *     no opinion on data, and this guard must never be described as if it did.
+ */
+export function findLiteralSqlStatements(source: string): LiteralSqlStatement[] {
+	const hits: LiteralSqlStatement[] = [];
+	const lineOf = (idx: number) => source.slice(0, idx).split("\n").length;
+	const skipWs = (at: number) => {
+		let j = at;
+		while (j < source.length && /\s/.test(source[j] as string)) j++;
+		return j;
+	};
+	const backTo = (at: number) => {
+		let j = at - 1;
+		while (j >= 0 && /\s/.test(source[j] as string)) j--;
+		return source[j];
+	};
+	/** Is this literal the CONTINUATION of an expression — `… + "SELECT …"`? Then it is a fragment. */
+	const isContinuation = (at: number) => backTo(at) === "+";
+	/**
+	 * An element of an array literal. Every array of SQL in this Worker is a statement being
+	 * ASSEMBLED — `["UPDATE agents SET", sets.join(", "), "WHERE id = ?1"].join(" ")` — so the
+	 * element on its own is a fragment. An array of whole statements would be skipped too; that
+	 * costs coverage, never a false red, which is the only direction this guard may be wrong in.
+	 */
+	const isArrayElement = (at: number, end: number) => {
+		const before = backTo(at);
+		const after = source[skipWs(end)];
+		return (before === "[" || before === ",") && (after === "," || after === "]");
+	};
+
+	/** Join `"…" + "…" + …` runs so a statement split for line length is read as one. */
+	const readConcatenation = (start: number, quote: string): { text: string; end: number; partial: boolean } => {
+		let text = "";
+		let i = start;
+		let q = quote;
+		for (;;) {
+			const end = skipQuoted(source, i, q);
+			text += unescapeJs(source.slice(i + 1, Math.max(i + 1, end - 1)));
+			const plus = skipWs(end);
+			if (source[plus] !== "+") return { text, end, partial: false };
+			const nextLit = skipWs(plus + 1);
+			const c = source[nextLit];
+			// `"UPDATE agents SET " + sets.join(", ")` — the rest of the statement is a value, so
+			// what is written here is a fragment and reporting it as a statement is noise.
+			if (c !== '"' && c !== "'") return { text, end, partial: true };
+			i = nextLit;
+			q = c;
+		}
+	};
+
+	const scan = (from: number, to: number) => {
+		let i = from;
+		while (i < to) {
+			const c = source[i];
+			const next = source[i + 1];
+			if (c === "/" && next === "/") {
+				while (i < to && source[i] !== "\n") i++;
+				continue;
+			}
+			if (c === "/" && next === "*") {
+				const end = source.indexOf("*/", i + 2);
+				i = end === -1 ? to : end + 2;
+				continue;
+			}
+			if (c === '"' || c === "'") {
+				const run = readConcatenation(i, c);
+				if (!run.partial && !isContinuation(i) && !isArrayElement(i, run.end) && isWholeStatement(run.text)) {
+					hits.push({ line: lineOf(i), sql: run.text });
+				}
+				i = run.end;
+				continue;
+			}
+			if (c === "`") {
+				const tpl = readTemplate(source, i);
+				// An interpolation means the statement is only complete at runtime. Skipped, and
+				// said so above rather than guessed at with a placeholder.
+				if (!tpl.interps.length && !isContinuation(i) && !isArrayElement(i, tpl.end) && isWholeStatement(tpl.text)) {
+					hits.push({ line: lineOf(i), sql: tpl.text });
+				}
+				for (const it of tpl.interps) scan(it.bodyFrom, it.bodyTo);
+				i = tpl.end;
+				continue;
+			}
+			i++;
+		}
+	};
+
+	scan(0, source.length);
+	return hits;
+}
+
+/**
+ * Where a statement STARTS, which is the difference between a query and a sentence about one.
+ *
+ * `readsAsSql` asks whether SQL keywords appear anywhere in the text, which is the right question
+ * for "could an interpolation here widen a WHERE" and the wrong one for "is this a statement I can
+ * hand to a parser". Prompt prose passes it easily — `apply-loop.ts` writes *"always pass the
+ * element's exact ref from the snapshot to type/select/check/click/upload"*, which contains both a
+ * verb and a clause keyword and is not SQL.
+ *
+ * It also contains the blast radius of a mis-lexed file. This scanner has no notion of a regex
+ * literal, so `description.replace(/"/g, "'")` inside an interpolation leaves it a quote out of
+ * step and the next backtick reads as an opener — one real occurrence, in `mcp-tool-catalog.ts`.
+ * The runaway capture that produces begins mid-expression, so requiring a leading verb discards it
+ * instead of reporting a source file as a broken query.
+ */
+function isWholeStatement(text: string): boolean {
+	return STATEMENT_START.test(text) && readsAsSql(text);
+}
+
+const STATEMENT_START =
+	/^\s*\(?\s*(?:SELECT\s|INSERT\s+(?:OR\s+\w+\s+)?INTO\s|UPDATE\s+[A-Za-z_"]|DELETE\s+FROM\s|REPLACE\s+INTO\s|WITH\s+[A-Za-z_]\w*\s+AS\s*\(|CREATE\s+TABLE\s)/i;
+
+/** Undo the JS escapes a quoted literal carries, so SQLite sees the string the engine would. */
+function unescapeJs(text: string): string {
+	return text.replace(/\\(.)/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
 }
 
 // ── The two sanctioned builders ──────────────────────────────────────────────────────────────

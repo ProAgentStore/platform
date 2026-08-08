@@ -12,5 +12,6 @@
 		"rootDir": "src"
 	},
 	"include": ["src"],
-	"exclude": ["src/**/*.test.ts"]
+	"//": "d1-sqlite.ts is test-only: it reads workers/api/migrations off disk and opens node:sqlite, neither of which exists in a Worker. Excluding it is also the barrier that keeps it out of the bundle — a production module importing it drags node:fs into the Worker's type environment and fails this typecheck, which is the point.",
+	"exclude": ["src/**/*.test.ts", "src/lib/d1-sqlite.ts"]
 }
