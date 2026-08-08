@@ -240,7 +240,17 @@ const PINS = {
 	// drift this file was consolidated to prevent. The reasoning that had to stay is the negative:
 	// `audio-capture` is deliberately NOT a permission verdict, because two recognizers contending
 	// for one device produce it, and treating it as terminal would silently disable mute-by-voice.
-	"packages/sdk/src/voice/convo.ts": 968,
+	// +67 for #456, and the split it asks for happened first: `collapseRepeatedRuns` and its thirty
+	// lines of reasoning went to normalize.ts, which is where a reader would be tempted to fold the
+	// repetition into the SHARED normaliser — and where the reason not to therefore has to be. What
+	// stayed is the part that is only meaningful here: `foldedReading` and `boundByUser`, because a
+	// FOLDED reading must never outrank an explicit binding. That is not an edge case — without it
+	// the fold reopened #385's exact collision (`stopSpeechKeyword: "stop stop"` folds to `"stop"`,
+	// which is still a built-in EXIT phrase, so the destructive reading the user never chose comes
+	// back through the door the fold just opened), and #385's own tests caught it. `boundByUser` is
+	// also what `reservedElsewhere` now delegates to, so the two readings of "the user bound this"
+	// cannot drift apart — the consolidation this file's entry keeps being about.
+	"packages/sdk/src/voice/convo.ts": 1035,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -713,6 +723,13 @@ const PINS = {
 	// whole-definition check in lib/pipeline-tool-policy.ts, which is where a split would have put
 	// it anyway; the enforcing gate is in `runRegistryTool`, not here.
 	"workers/api/src/routes/tools.ts": 1032,
+	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
+	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
+	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
+	// by deleting reasons. The entry is the ledger admitting it is now one of the files it is about.
+	// The right split, when the next raise makes it worth doing, is the PINS map into its own data
+	// module — the ~50 lines of enforcement above and below are stable and are not what is growing.
+	"scripts/check-file-size.mjs": 813,
 };
 
 /**

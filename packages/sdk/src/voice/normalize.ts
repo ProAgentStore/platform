@@ -75,3 +75,47 @@ export function normalizeSpeech(text: string): string {
 export function trimTrailingPunctuation(text: string): string {
 	return text.replace(/[\p{P}\s]+$/u, "");
 }
+
+/**
+ * Fold a run of the SAME thing said twice or more down to one (#456).
+ *
+ * The reported failure: `"Mute, mute, mute, mute, mute"` matched NOTHING and was delivered to the
+ * agent as a chat turn. One "mute" works; two or more work less well than one, because the
+ * whole-utterance rule wants exact equality and `"mute mute mute mute mute"` is not `"mute"`. That
+ * is the worst possible shape, because **repetition is what a user does when the first attempt
+ * appears not to have worked** — the natural recovery action was the one guaranteed to fail, and
+ * it published the attempt into the conversation. ADR 0001 M1 says mute is reachable in every
+ * phase; there it was unreachable precisely when the user was trying hardest to reach it.
+ *
+ * Repetition is the disambiguator, and it is the reason this is safe. A bare trailing "mute" is
+ * genuinely ambiguous — `"don't forget to mute"` is prose — which is why the single-word rule
+ * exists and stays. A REPEATED bare command word is not ambiguous: no English sentence ends
+ * `"…, mute mute"`, and no sentence IS `"mute mute mute mute mute"`.
+ *
+ * IT LIVES BESIDE {@link normalizeSpeech} AND IS DELIBERATELY NOT PART OF IT, which is why it is
+ * in this file: this is where a reader would be tempted to fold the repetition once and for all.
+ * `normalizeSpeech` is shared with the transcript comparison and the noise filter, where a
+ * legitimately doubled word ("very very") must survive. Its callers in `convo.ts` fold only while
+ * a command match is being EVALUATED, only as a second attempt after the raw transcript has been
+ * tried, and never over a phrase the user has explicitly bound — so it can add a match, never
+ * remove one, and it cannot outrank a binding (#385).
+ *
+ * Two rules, because "adjacent identical tokens" only sees a script that writes spaces:
+ *  1. adjacent identical whitespace-separated tokens → one;
+ *  2. a single spaceless token that IS one unit repeated → that unit, which is how a repeated
+ *     `"停"`/`"ミュート"` arrives when the engine emits no separator. Only ever consulted against a
+ *     command phrase list, so an ordinary word that happens to be its own halves ("murmur",
+ *     "bonbon") folds to something that matches nothing and changes no outcome.
+ */
+export function collapseRepeatedRuns(normalized: string): string {
+	const out: string[] = [];
+	for (const tok of normalized.split(" ")) {
+		if (tok && out[out.length - 1] !== tok) out.push(tok);
+	}
+	const s = out.join(" ");
+	if (s.includes(" ") || s.length < 2) return s;
+	for (let len = 1; len <= s.length / 2; len++) {
+		if (s.length % len === 0 && s.slice(0, len).repeat(s.length / len) === s) return s.slice(0, len);
+	}
+	return s;
+}

@@ -271,6 +271,7 @@ describe("resolveVoiceStatus", () => {
 
 import { classifyVoiceError, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, micUnavailableMessage, normalizeMediaError } from "./convo.js";
 import { TRANSCRIBE_TIMEOUT_MESSAGE } from "./stt.js";
+import { collapseRepeatedRuns } from "./normalize.js";
 
 /**
  * #421 — "users need to see the message and know what to do, retry now or later".
@@ -1013,5 +1014,101 @@ describe("planRestartBail (#387 — hands-free never gives up in silence)", () =
 		expect(d.nextRapidEnds).toBe(0);
 		expect(d.rapidEnds).toBe(4);
 		expect(planRestartBail({ rapidEnds: d.rapidEnds, sttWhisper: false }).context.rapidEnds).toBe(4);
+	});
+});
+
+/**
+ * #456 — "Saying 'mute' once works. Saying it twice does nothing — and ships the word to the agent
+ * as a chat message." Live from `bd43f4de-…`:
+ *
+ *     10:58:14  user | "Yes, of course, push, everything has to be pushed."
+ *     10:58:54  user | "Mute, mute, mute, mute, mute"
+ *
+ * The second message IS the command, five times over, delivered to the model as a chat turn.
+ * Repetition is what a user does when the first attempt appears not to have worked, so the natural
+ * recovery action was the one guaranteed to fail — and it published the attempt into the
+ * conversation. ADR 0001 M1 says mute is reachable in every phase.
+ */
+describe("a repeated command word is a command, not a message (#456)", () => {
+	const notMuted = { muted: false, canSwitch: false };
+
+	it("fires mute at one, two and five repetitions, and sends nothing", () => {
+		for (const said of ["mute", "Mute, mute", "mute mute", "Mute, mute, mute, mute, mute"]) {
+			expect(matchVoiceCommand(said, undefined, "en", { muted: false }), said).toBe("mute");
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ command: "mute", text: "" });
+		}
+	});
+
+	// THE PRECISION RULE THAT MUST SURVIVE. A bare trailing command word is genuinely ambiguous,
+	// and truncating a sentence is the expensive mistake — so one stays a message.
+	it("leaves a single trailing command word alone, which is why the threshold is two", () => {
+		for (const said of ["don't forget to mute", "push everything, mute", "remind me to unmute later"]) {
+			expect(matchVoiceCommand(said, undefined, "en", { muted: false }), said).toBeNull();
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ command: null, text: said });
+		}
+	});
+
+	it("strips a REPEATED trailing run and keeps the message that came before it", () => {
+		expect(splitTrailingCommand("push everything, mute mute", undefined, "en", notMuted)).toEqual({
+			command: "mute",
+			text: "push everything",
+		});
+		expect(splitTrailingCommand("Run the tests, mute mute mute.", undefined, "en", notMuted)).toEqual({
+			command: "mute",
+			text: "Run the tests",
+		});
+	});
+
+	// The other repeatable commands, in the states they are meaningful in. `unmute` is checked only
+	// while muted and `exit` in both, so the coverage has to follow the candidate list.
+	it("covers the other repeatable commands, not just mute", () => {
+		expect(matchVoiceCommand("unmute unmute unmute", undefined, "en", { muted: true })).toBe("unmute");
+		expect(splitTrailingCommand("unmute unmute", undefined, "en", { muted: true })).toEqual({ command: "unmute", text: "" });
+		expect(matchVoiceCommand("stop stop stop stop", undefined, "en", { muted: false })).toBe("exit");
+	});
+
+	/**
+	 * Every configured language, derived from the built-in tables rather than transcribed — a
+	 * hand-written list would drift the moment a language is added, and #456's acceptance criterion
+	 * is about all of them.
+	 */
+	it("works in every language a command ships in", () => {
+		for (const lang of ["en", "es", "fr", "de", "it", "pt", "zh", "ja", "ko", "hi"]) {
+			for (const command of ["mute", "unmute", "exit"] as const) {
+				const phrase = commandPhrases(command, undefined, lang)[0];
+				const muted = command === "unmute";
+				const doubled = `${phrase} ${phrase}`;
+				expect(matchVoiceCommand(doubled, undefined, lang, { muted }), `${lang}/${command}: "${doubled}"`).toBe(command);
+			}
+		}
+	});
+
+	// A script that writes without spaces arrives as ONE token, so token folding alone would miss
+	// it — the second rule in `collapseRepeatedRuns` is what covers `"静音静音静音"`.
+	it("folds a repetition that arrives with no separator at all", () => {
+		expect(matchVoiceCommand("静音静音静音", undefined, "zh", { muted: false })).toBe("mute");
+		expect(matchVoiceCommand("停停", undefined, "zh", { muted: false })).toBe("exit");
+	});
+
+	/**
+	 * The regression the fix is shaped to avoid. Folding inside `normalizeSpeech` would have reached
+	 * the transcript comparison and the noise filter, where a legitimately doubled word must
+	 * survive. This folds only while a command match is being evaluated, and only after the raw
+	 * transcript has already been tried.
+	 */
+	it("does not touch ordinary speech that happens to repeat a word", () => {
+		for (const said of ["very very good work", "I said no no to that", "that that is fine"]) {
+			expect(matchVoiceCommand(said, undefined, "en", { muted: false }), said).toBeNull();
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ command: null, text: said });
+		}
+	});
+
+	it("folds only what it claims to fold", () => {
+		expect(collapseRepeatedRuns("mute mute mute mute mute")).toBe("mute");
+		expect(collapseRepeatedRuns("push everything mute mute")).toBe("push everything mute");
+		expect(collapseRepeatedRuns("very very good")).toBe("very good"); // harmless: matches no command
+		expect(collapseRepeatedRuns("停停")).toBe("停");
+		expect(collapseRepeatedRuns("mute")).toBe("mute");
+		expect(collapseRepeatedRuns("")).toBe("");
 	});
 });

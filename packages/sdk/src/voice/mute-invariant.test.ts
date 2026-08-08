@@ -142,6 +142,25 @@ describe("M1 — reachable at every moment", () => {
 	 * transcription paths, which run only while the mic is capturing a user turn, so mute did
 	 * nothing during the three phases where a user most wants it.
 	 */
+	/**
+	 * #456 — the guard above asks whether ANY phrasing reaches mute, which is the right question
+	 * for M1 and the reason this gap survived: `SAYS_MUTE`'s doubled form matched nothing, and
+	 * `.some` hid it behind the bare word that did. Repetition is what a user does when the first
+	 * attempt appears not to have worked, so the phrasings a user reaches for while ESCALATING are
+	 * exactly the ones that must not be the dead zone. Asserted per phrasing, not per set.
+	 */
+	it("dispatches mute for a repeated command word, in every phase and at every count (#456)", () => {
+		for (const p of PHASES) {
+			for (const text of ["mute", "mute mute", "mute mute mute mute mute"]) {
+				const via = shouldRunControlListener({ engaged: true, mainRecording: p.mainRecording }) ? "the always-on control listener" : "the main transcription path";
+				expect(
+					KINDS.some((kind) => dispatch(text, kind, p, false) === "mute"),
+					`${p.name}: "${text}" reaches nothing via ${via}. Repeating a command is the user's own recovery action — ADR 0001 M1.`,
+				).toBe(true);
+			}
+		}
+	});
+
 	it("hands every mic-idle phase to the control listener, and yields only where the main path is already matching", () => {
 		for (const p of PHASES) {
 			expect(shouldRunControlListener({ engaged: true, mainRecording: p.mainRecording }), `${p.name}: the wrong listener is live`).toBe(!p.mainRecording);

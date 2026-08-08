@@ -4,7 +4,7 @@
  * unit-tested without a browser.
  */
 
-import { normalizeSpeech, trimTrailingPunctuation } from "./normalize.js";
+import { collapseRepeatedRuns, normalizeSpeech, trimTrailingPunctuation } from "./normalize.js";
 
 /** Tunables for the restart/freeze guard. */
 export interface RestartConfig {
@@ -464,7 +464,6 @@ export function phraseMatchesTranscript(normalizedTranscript: string, phrase: st
 	if (!p.includes(" ")) return false; // single word → whole-utterance only
 	return new RegExp(`(?:^| )${escapeRegExp(p)}(?: |$)`).test(normalizedTranscript);
 }
-
 /**
  * Detect a hands-free voice COMMAND ("repeat" / "mute") in a transcript. A single-word command
  * matches only when the whole utterance IS the command (punctuation ignored), so a normal
@@ -485,12 +484,17 @@ export function matchVoiceCommand(
 	// finished, is not evidence of anything (#386) — see commandStateFor.
 	if (state?.judgeable === false) return null;
 	const t = normalizeTranscript(text);
+	// The same transcript with a repeated run folded to one (#456). Tried only AFTER the raw one,
+	// so this is strictly additive: every match that fired before still fires, on the same reading.
+	const folded = foldedReading(t, words);
 	const pick = (command: VoiceCommand) => commandPhrases(command, words, lang);
 	// `state.whole` raises EVERY phrase to the whole-utterance rule for the same reason `opts.whole`
 	// raises `scrap` to it: when a match would be acted on despite the transcript being untrustworthy,
 	// the run-inside-a-sentence reading is the one that fires on somebody else's words.
-	const hit = (phrases: string[], opts?: { whole?: boolean }) =>
-		phrases.some((p) => phraseMatchesTranscript(t, p, { whole: opts?.whole === true || state?.whole === true }));
+	const hit = (phrases: string[], opts?: { whole?: boolean }) => {
+		const o = { whole: opts?.whole === true || state?.whole === true };
+		return phrases.some((p) => phraseMatchesTranscript(t, p, o) || (folded !== t && phraseMatchesTranscript(folded, p, o)));
+	};
 	// "next" is a command ONLY where something can act on it (#277). The voice stack has no
 	// idea what an agent roster is, so the consumer opting in — by passing a handler — is what
 	// turns the word on. Everywhere else ("next" said to the Coder's Co-pilot, which has no
@@ -750,15 +754,39 @@ const ALL_COMMANDS = Object.keys(TABLES) as VoiceCommand[];
  *    keyword, and the explicit binding is what the user chose.
  */
 function reservedElsewhere(command: VoiceCommand, phrase: string, words?: VoiceCommandWords): boolean {
+	return boundByUser(phrase, words, command);
+}
+
+/**
+ * Has the user explicitly bound this phrase to something? (`skip` excludes one command, which is
+ * what makes {@link reservedElsewhere} "bound to something ELSE".)
+ *
+ * Used on its own by the repetition fold (#456), which is a FALLBACK reading and must therefore
+ * never outrank a binding. Without this the fold reopened exactly the collision #385 closed: an
+ * account with `stopSpeechKeyword: "stop stop"` says its own keyword, the fold reads it as `"stop"`,
+ * and `"stop"` is still a built-in EXIT phrase — so hands-free is torn down by the destructive
+ * reading the user never chose, through a door the fold had just opened. Caught by #385's own
+ * tests, which is why they are written against the reported account verbatim.
+ */
+function boundByUser(phrase: string, words?: VoiceCommandWords, skip?: VoiceCommand): boolean {
 	if (!words) return false;
 	const p = normalizeTranscript(phrase);
 	if (!p) return false;
 	for (const other of ALL_COMMANDS) {
-		if (other === command) continue;
+		if (other === skip) continue;
 		if (words[other]?.some((w) => normalizeTranscript(w) === p)) return true;
 	}
 	const stop = normalizeTranscript(words.stopSpeech ?? "");
 	return !!stop && p.includes(stop);
+}
+
+/**
+ * The repetition-folded reading of a transcript, or the transcript itself when folding it is not
+ * allowed (#456). ONE place, so the matcher and the splitter cannot disagree about it — the same
+ * reason {@link commandPhrases} exists.
+ */
+function foldedReading(norm: string, words?: VoiceCommandWords): string {
+	return boundByUser(norm, words) ? norm : collapseRepeatedRuns(norm);
 }
 
 /**
@@ -830,9 +858,13 @@ export function splitTrailingCommand(
 		: (["exit", ...(canSwitch ? (["next"] as const) : []), "repeat", "mute"] as VoiceCommand[]);
 	const norm = normalizeTranscript(text);
 
-	// The turn IS the command → nothing to send.
+	// The turn IS the command → nothing to send. Judged on the transcript AND on its
+	// repetition-folded reading (#456), so `"Mute, mute, mute, mute, mute"` is the command it
+	// obviously is rather than a chat message. Folded second, so nothing that matched stops.
+	const foldedNorm = foldedReading(norm, words);
 	for (const cmd of candidates) {
-		if (commandPhrases(cmd, words, lang).some((p) => normalizeTranscript(p) === norm)) {
+		const phrases = commandPhrases(cmd, words, lang).map((p) => normalizeTranscript(p));
+		if (phrases.some((p) => p === norm || (foldedNorm !== norm && p === foldedNorm))) {
 			return { command: cmd, text: "" };
 		}
 	}
@@ -849,7 +881,42 @@ export function splitTrailingCommand(
 		const stripped = stripStopWord(text, multiWord);
 		if (stripped.ended && stripped.text.trim()) return { command: cmd, text: stripped.text };
 	}
+
+	// A REPEATED bare command word at the end (#456) — the "smart cut-off" the multi-word rule
+	// above deliberately refuses to do for a single one. `"push everything, mute"` stays a whole
+	// message and fires nothing, because it might be `"don't forget to mute"`; `"push everything,
+	// mute mute"` sends `"push everything"` and mutes, because repetition is the signal that
+	// distinguishes an instruction from a mention. Last, so it can never preempt a rule above it.
+	for (const cmd of candidates) {
+		for (const p of commandPhrases(cmd, words, lang)) {
+			const w = normalizeTranscript(p);
+			if (!w || w.includes(" ")) continue; // multi-word phrases are already handled above
+			const stripped = stripRepeatedTail(text, w, words);
+			if (stripped?.trim()) return { command: cmd, text: stripped };
+		}
+	}
 	return { command: null, text };
+}
+
+/**
+ * Cut a trailing run of `word` repeated TWICE OR MORE from the original text, or null (#456).
+ *
+ * Two is the threshold and it is the whole precision argument: at one repetition the utterance is
+ * `"don't forget to mute"` as often as it is a command, and truncating a sentence is the expensive
+ * mistake ({@link splitTrailingCommand}). At two it is neither ambiguous nor accidental.
+ */
+function stripRepeatedTail(text: string, word: string, words?: VoiceCommandWords): string | null {
+	const cleaned = trimTrailingPunctuation(text);
+	const toks = normalizeTranscript(cleaned).split(" ");
+	let run = 0;
+	while (run < toks.length && toks[toks.length - 1 - run] === word) run++;
+	if (run < 2 || run === toks.length) return null; // not repeated, or nothing would be left
+	const phrase = Array(run).fill(word).join(" ");
+	// The run itself may be a phrase the user bound elsewhere — `"…, stop stop"` on the #385
+	// account is their stop-speech keyword, not two exits. A binding outranks a fold here for the
+	// same reason it does in the matcher.
+	if (boundByUser(phrase, words)) return null;
+	return dropNormalizedSuffix(cleaned, phrase);
 }
 
 /**
