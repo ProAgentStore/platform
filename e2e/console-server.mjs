@@ -296,9 +296,16 @@ createServer((req, res) => {
 	}
 
 	if (resolved.type === "console" || resolved.type === "admin") {
+		// `no-store`, because that is what the product sends: `CONSOLE_HEADERS` in
+		// `workers/host/src/index.ts` overrides `HTML_HEADERS`' `max-age=300` for /console and
+		// /console/*, and serves the same for the /admin/* SPA shell. This line said
+		// `public, max-age=300` while a spec asserted `max-age=300` against it, so the assertion
+		// was about THIS FILE and passed in CI for a header the Worker has never sent — it fails
+		// the moment it meets the real origin (#437). The fixture and the Worker have to agree or
+		// the test means nothing.
 		res.writeHead(200, {
 			"Content-Type": "text/html; charset=utf-8",
-			"Cache-Control": "public, max-age=300",
+			"Cache-Control": "no-store",
 		});
 		res.end(resolved.type === "admin" ? adminHtml : consoleHtml);
 		return;

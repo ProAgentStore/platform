@@ -771,10 +771,26 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(html).toContain("Creator Console");
 	});
 
-	test("console HTML uses short cache headers", async ({ page }) => {
+	/**
+	 * The console shell is never cached, and this asserts the PRODUCT's header (#437).
+	 *
+	 * It used to read `toContain("max-age=300")`, which is what `e2e/console-server.mjs` sent and
+	 * what `workers/host` has never sent for this path: `CONSOLE_HEADERS` (`workers/host/src/index.ts`)
+	 * spreads `HTML_HEADERS` and overrides `Cache-Control` to `no-store`, used for `/console`,
+	 * `/console/*` and the `/admin/*` shell. So the test passed in CI because the FIXTURE satisfied
+	 * it, and failed against the real origin — verified, `curl -I https://proagentstore.online/console/`
+	 * → `cache-control: no-store`. That is #413's shape one layer down: the local server was not
+	 * merely possibly-stale, it was the only thing the assertion was about.
+	 *
+	 * `toBe`, not `toContain`: `no-store` is the whole promise, and a `no-store, max-age=300` that
+	 * `toContain` would wave through is a contradiction, not a superset. The fixture was moved to
+	 * `no-store` in the same commit — moving one side alone turns this from meaningless-and-green
+	 * into meaningless-and-red.
+	 */
+	test("console HTML is served no-store, as the Worker sends it", async ({ page }) => {
 		const res = await page.request.get("/console/");
 		expect(res.ok()).toBe(true);
-		expect(res.headers()["cache-control"]).toContain("max-age=300");
+		expect(res.headers()["cache-control"], "workers/host serves CONSOLE_HEADERS (no-store) for /console/ — the fixture must agree").toBe("no-store");
 	});
 
 	test("signed-in creator console shows agents grid", async ({ page }) => {
@@ -1932,6 +1948,40 @@ test.describe("ProAgentStore authenticated Console", () => {
  *
  * `scrollers` deliberately stays scoped to `<main>`: the header nav IS `overflow-x-auto` by design
  * from `sm` up, and `navOv` below is the assertion that owns it.
+ *
+ * ── `escapes`: a box past its OWN container's right edge (#437)
+ *
+ * Every measurement above shares one axis — *does anything reach past the right edge of the
+ * WINDOW*. The defect class none of them can see is *does anything reach past the right edge of its
+ * own card*, and that is not hypothetical: it is what #393 shipped. A `truncate shrink-0` span has
+ * no width to clamp to, so it draws its full text straight out of the row it sits in and is painted
+ * over by the button beside it — two overlapping controls, one unreadable. The span is 288px inside
+ * a 288px card inside a 320px window, so `docOv`, `mainOv`, `body` and `wide` all read **0**, in
+ * both engines, and always will. Reproduced in a standalone fixture: four green, one red, one
+ * defect. `store/console/src/lib/truncation.test.ts` says the same thing from the source side and
+ * stays — it catches the CAUSE cheaply, this catches the CLASS, including shapes that are not
+ * `truncate shrink-0`.
+ *
+ * The rule: an element's `right` past its parent's CONTENT-box right (parent rect minus its right
+ * border and padding). Attribution is by class name for both the offender and the container,
+ * because "the page is 13px too wide" names nobody — the reason #414 asked for it on `wide`.
+ *
+ * Two exclusions, both narrow and both load-bearing:
+ *
+ *   - **`position: absolute|fixed`.** Their containing block is the nearest POSITIONED ancestor,
+ *     which is usually not the parent, so parent geometry is the wrong yardstick and the answer
+ *     would be noise rather than a finding. The overlap defects that live in absolute elements
+ *     (#426, #445) are measured directly by intersection in their own blocks.
+ *   - **A parent that does not have `overflow-x: visible`.** It clips or scrolls its child, so the
+ *     child cannot paint outside it — that parent has taken responsibility for the excess. This is
+ *     what excuses the deliberate pans (the instance sub-tab strip) without a list of allowances.
+ *
+ * Measured before it was gated, rather than assumed: with these two exclusions the current tree
+ * reports ZERO on all 11 sweep routes × 320/390 in WebKit, and zero at all 12 call sites below in
+ * both engines. So it gates at `[]` rather than ratcheting — there is no deliberate offender to
+ * allow, and a guard with a standing allowance list is one nobody reads. The non-vacuity proof is
+ * its own test: `mobile — the container-relative guard sees what the viewport guards cannot`
+ * injects #393's exact shape and asserts this is the only measurement that goes red.
  */
 async function measureOverflow(page: Page) {
 	return page.evaluate(() => {
@@ -1958,18 +2008,33 @@ async function measureOverflow(page: Page) {
 				scrollers.push(`${name(h)} (+${over}px)`);
 			}
 		}
+		const escapes: string[] = [];
 		for (const el of Array.from(document.body.querySelectorAll("*"))) {
 			const h = el as HTMLElement;
 			const r = h.getBoundingClientRect();
-			if (r.width > 0 && r.right > window.innerWidth + 1 && !insideScroller(h)) {
+			if (r.width <= 0) continue;
+			if (r.right > window.innerWidth + 1 && !insideScroller(h)) {
 				wide.push(`${name(h)} (right ${Math.round(r.right)} > ${window.innerWidth})`);
 			}
+			// Container-relative: past the right edge of its OWN box, which no measurement above
+			// can see. See the two exclusions in the block comment — both are why this gates at [].
+			const p = h.parentElement;
+			if (!p || p === document.body) continue;
+			const pos = getComputedStyle(h).position;
+			if (pos === "absolute" || pos === "fixed") continue;
+			const ps = getComputedStyle(p);
+			if (ps.overflowX !== "visible") continue;
+			const px = (v: string) => Number.parseFloat(v) || 0;
+			const limit = p.getBoundingClientRect().right - px(ps.borderRightWidth) - px(ps.paddingRight);
+			const past = Math.round(r.right - limit);
+			if (past > 1) escapes.push(`${name(h)} escapes ${name(p)} by ${past}px`);
 		}
 		const nav = document.querySelector('header nav[aria-label="Primary"]');
 		return {
 			mainOv: m ? m.scrollWidth - m.clientWidth : 0,
 			docOv: document.documentElement.scrollWidth - window.innerWidth,
 			wide,
+			escapes,
 			// The primary nav used to be the ONLY thing that panned on a phone, and the guard
 			// explicitly excused it — so the guard was green on the page users said scrolled
 			// sideways. It is hidden below sm now (the hamburger carries it), so it must measure 0
@@ -2015,16 +2080,77 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 				await page.locator("main").waitFor();
 				await page.waitForTimeout(300); // let async content settle
 
-				const { mainOv, docOv, navOv, wide } = await measureOverflow(page);
+				const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
 				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
 				expect(docOv, `page overflows by ${docOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
 				expect(navOv, `primary nav pans by ${navOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
 				// The `overflow-x: visible` case the other three miss: content past the right edge
 				// that is clipped rather than scrollable, so nothing reports it and nobody can reach it.
 				expect(wide, `content past the right edge at ${width}w on ${route}: ${wide.join(", ")}`).toEqual([]);
+				expect(escapes, `a box past its own container at ${width}w on ${route}: ${escapes.join(", ")}`).toEqual([]);
 			});
 		}
 	}
+
+	/**
+	 * The guard is not vacuous, and the four beside it genuinely cannot do its job (#437).
+	 *
+	 * `escapes` reads `[]` on every route above, which is indistinguishable from a measurement that
+	 * can never report anything — the exact failure #414 and #431 both had to write "NON-VACUITY
+	 * FIRST" about. So the shape is injected rather than argued: #393's element verbatim, a
+	 * `truncate shrink-0` span with no width, inside a rounded card inside `<main>`.
+	 *
+	 * The assertion is deliberately BOTH halves. That `escapes` goes red is half the ticket; that
+	 * `docOv`, `mainOv` and `wide` all stay 0/empty ON THE SAME PAGE is the other half, and it is
+	 * the half that stops someone deleting this as a duplicate of the viewport guards. If a future
+	 * change makes the viewport guards able to see this, this test fails and says so — which is a
+	 * finding, not a flake.
+	 */
+	test("mobile — the container-relative guard sees what the viewport guards cannot", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		await mockSignedInConsole(page);
+		await page.goto("/console/");
+		await page.waitForLoadState("networkidle");
+		await page.locator("main").waitFor();
+
+		const clean = await measureOverflow(page);
+		expect(clean.escapes, `the page was already reporting escapes, so this proves nothing: ${clean.escapes.join(", ")}`).toEqual([]);
+
+		await page.evaluate(() => {
+			const card = document.createElement("div");
+			card.className = "e2e-393-card";
+			// The #393 card: a NARROW bounded box with `overflow-x: visible`, which is what lets its
+			// child paint outside it instead of being clipped or scrolled. The width matters — the
+			// card has to be narrow enough that the escaping span still ends INSIDE the 320px
+			// window, because "escapes its card but not the viewport" is the entire defect class.
+			// Sized in px with an explicit font so the fixture does not move with the theme.
+			card.style.cssText = "width:120px;padding:8px;border-radius:12px;border:1px solid #303030;font-size:12px";
+			const row = document.createElement("div");
+			row.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;align-items:center";
+			const span = document.createElement("span");
+			// `truncate shrink-0` with no width — `overflow:hidden` clips the TEXT, but `flex-shrink:0`
+			// plus `min-width:auto` means the BOX is never narrower than the text, so the box escapes.
+			span.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0";
+			span.className = "e2e-393-probe";
+			span.textContent = "Sergeys-MacBook-Air.local";
+			row.appendChild(span);
+			card.appendChild(row);
+			document.querySelector("main")?.appendChild(card);
+		});
+		await page.waitForTimeout(100);
+
+		const dirty = await measureOverflow(page);
+		const detail = JSON.stringify(dirty);
+
+		// The class this guard exists for, attributed to the element that did it.
+		expect(dirty.escapes.join(" "), `the injected #393 shape was not detected: ${detail}`).toContain("e2e-393-probe");
+
+		// And every measurement that predates it is still blind, on this very page. This is the
+		// argument for the guard, restated as an assertion so it cannot rot into a duplicate.
+		expect(dirty.docOv, `docOv saw it (${dirty.docOv}) — the premise of #437 has changed: ${detail}`).toBeLessThanOrEqual(1);
+		expect(dirty.mainOv, `mainOv saw it (${dirty.mainOv}) — the premise of #437 has changed: ${detail}`).toBeLessThanOrEqual(1);
+		expect(dirty.wide, `wide saw it — the premise of #437 has changed: ${detail}`).toEqual([]);
+	});
 });
 
 /**
@@ -2112,8 +2238,9 @@ test.describe("mobile — the terminal pane is readable (#370)", () => {
 			expect(await paneLines(page), `terminal pane shows too few lines at ${width}px`).toBeGreaterThanOrEqual(MIN_LINES);
 
 			// And it did not buy that height by panning the page sideways.
-			const { mainOv, docOv, wide } = await measureOverflow(page);
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 			expect(mainOv).toBeLessThanOrEqual(1);
 			expect(docOv).toBeLessThanOrEqual(1);
 		});
@@ -2131,8 +2258,9 @@ test.describe("mobile — the terminal pane is readable (#370)", () => {
 		expect(rootPx, "text scale did not reach the document").toBeGreaterThan(19);
 		expect(await paneLines(page), "terminal pane shows too few lines at 1.3x").toBeGreaterThanOrEqual(MIN_LINES);
 
-		const { wide, mainOv } = await measureOverflow(page);
+		const { wide, mainOv, escapes } = await measureOverflow(page);
 		expect(wide, `content past the right edge at 390w / 1.3x: ${wide.join(", ")}`).toEqual([]);
+		expect(escapes, `a box past its own container at 390w / 1.3x: ${escapes.join(", ")}`).toEqual([]);
 		expect(mainOv).toBeLessThanOrEqual(1);
 	});
 
@@ -2319,8 +2447,9 @@ test.describe("mobile — the Terminal tab on a tmux-only agent (#409)", () => {
 			await page.getByRole("button", { name: "Targets", exact: true }).click();
 			await expect(page.getByText("build")).toBeVisible();
 
-			const { wide, mainOv } = await measureOverflow(page);
+			const { wide, mainOv, escapes } = await measureOverflow(page);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 			expect(mainOv).toBeLessThanOrEqual(1);
 		});
 	}
@@ -2432,11 +2561,12 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 			await page.getByRole("button", { name: "Show" }).click();
 			await page.waitForTimeout(200);
 
-			const { mainOv, docOv, navOv, scrollers, wide } = await measureOverflow(page);
+			const { mainOv, docOv, navOv, scrollers, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 			// A pannable strip inside the page reads as horizontal page scroll on a touch device
 			// even when nothing reports document overflow. Profile has no legitimate one.
 			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
@@ -2463,8 +2593,9 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 		await page.locator("main").waitFor();
 		await page.waitForTimeout(200);
 
-		const { mainOv, wide } = await measureOverflow(page);
+		const { mainOv, wide, escapes } = await measureOverflow(page);
 		expect(wide, `roles row pushed content past the right edge: ${wide.join(", ")}`).toEqual([]);
+		expect(escapes, `roles row pushed a box past its own container: ${escapes.join(", ")}`).toEqual([]);
 		expect(mainOv).toBeLessThanOrEqual(1);
 	});
 
@@ -2497,8 +2628,9 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 				const rootPx = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
 				expect(rootPx, "text scale did not reach the document").toBeGreaterThan(19);
 
-				const { mainOv, wide } = await measureOverflow(page);
+				const { mainOv, wide, escapes } = await measureOverflow(page);
 				expect(wide, `content past the right edge at ${width}w / 1.3x on ${route}: ${wide.join(", ")}`).toEqual([]);
+				expect(escapes, `a box past its own container at ${width}w / 1.3x on ${route}: ${escapes.join(", ")}`).toEqual([]);
 				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w / 1.3x on ${route}`).toBeLessThanOrEqual(1);
 			});
 		}
@@ -2554,8 +2686,9 @@ test.describe("mobile — Preferences with a connected account (#333)", () => {
 			await expect(page.getByRole("heading", { name: "Timezone" })).toBeVisible();
 			await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
 
-			const { mainOv, docOv, navOv, scrollers, wide } = await measureOverflow(page);
+			const { mainOv, docOv, navOv, scrollers, wide, escapes } = await measureOverflow(page);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
@@ -2615,11 +2748,12 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 			// block is named after — not "Not set — agents will say UTC" wearing its numbers.
 			await expect(page.getByLabel("Your timezone")).toHaveValue("America/North_Dakota/New_Salem");
 
-			const { mainOv, docOv, navOv, scrollers, wide } = await measureOverflow(page);
+			const { mainOv, docOv, navOv, scrollers, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
 		});
 	}
@@ -3080,10 +3214,11 @@ test.describe("mobile — a repo whose path is unusable says so (#405)", () => {
 			await expect(page.getByText("Ready", { exact: true })).toHaveCount(0);
 
 			// A 58-character path in a card this narrow is exactly the thing that pans a phone.
-			const { mainOv, docOv, wide } = await measureOverflow(page);
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 		});
 	}
 
@@ -3209,11 +3344,12 @@ test.describe("mobile — the Pulls panel (#401)", () => {
 			await expect(page.getByText("Checks failed")).toBeVisible();
 			await expect(page.getByText("Opened by your agent")).toBeVisible();
 
-			const { mainOv, docOv, navOv, wide } = await measureOverflow(page);
+			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 		});
 	}
 
@@ -3583,10 +3719,11 @@ test.describe("mobile — the single-repo Coder tab row (#431)", () => {
 			}
 
 			// And the page still does not pan, by the sweep's own definition.
-			const { mainOv, docOv, wide } = await measureOverflow(page);
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 		});
 
 		test(`every tab keeps an accessible name at ${width}px`, async ({ page }) => {
