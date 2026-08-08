@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { DEFAULT_TMUX_VIEW, TMUX_VIEWS, type TmuxPaneInputs, type TmuxView, tmuxBlockClass, tmuxPaneState, WRITE_HINT } from "./tmuxView.js";
+import { TERMINAL_FAMILY, TMUX_FAMILY } from "./terminalTools.js";
+import { DEFAULT_TMUX_VIEW, TMUX_VIEWS, type TmuxPaneInputs, type TmuxView, tmuxBlockClass, tmuxPaneState, writeHint } from "./tmuxView.js";
 
 /**
  * The invariant the #370 fix rests on, stated as a property rather than as three examples:
@@ -75,12 +76,16 @@ describe("the view set", () => {
 /** A tab with a live runner, one target, nothing to report — the state everything else varies from. */
 const HEALTHY: TmuxPaneInputs = {
 	presence: { online: true, node: "Mac" },
+	access: { state: "ready", family: TERMINAL_FAMILY, canCapture: true },
 	error: "",
 	status: "",
 	canWrite: true,
 	selected: "tmux:work",
 	targetCount: 1,
 };
+
+/** The same tab on an agent that declares the backend-exclusive `tmux_*` family (#403). */
+const TMUX_ONLY: TmuxPaneInputs = { ...HEALTHY, access: { state: "ready", family: TMUX_FAMILY, canCapture: true } };
 
 describe("tmuxPaneState — the offline state the tab never had", () => {
 	it("THE BUG: an empty error slot cannot blank the offline notice", () => {
@@ -165,8 +170,17 @@ describe("tmuxPaneState — the online notices", () => {
 	});
 
 	it("falls back to the write-access hint, and to no row at all", () => {
-		expect(tmuxPaneState({ ...HEALTHY, canWrite: false }).notice).toEqual({ tone: "hint", text: WRITE_HINT, remedy: null, remedyOn: "" });
+		expect(tmuxPaneState({ ...HEALTHY, canWrite: false }).notice).toEqual({ tone: "hint", text: writeHint(TERMINAL_FAMILY), remedy: null, remedyOn: "" });
 		expect(tmuxPaneState(HEALTHY).notice).toBeNull();
+	});
+
+	it("asks for the grant the CONSENT ROW is keyed by, not for 'terminal' every time", () => {
+		// #403 carries this agent's existing `terminal` consent to `tmux` precisely so the owner does
+		// not have to re-grant. A hint naming the wrong connector points at a checkbox that is not
+		// the one standing in the way.
+		expect(writeHint(TMUX_FAMILY)).toContain("Grant tmux write access");
+		expect(writeHint(TMUX_FAMILY)).not.toContain("terminal");
+		expect(writeHint(TERMINAL_FAMILY)).toContain("Grant terminal write access");
 	});
 
 	it("names the machine it can see, and offers Controls rather than a hidden block", () => {
@@ -180,6 +194,89 @@ describe("tmuxPaneState — the online notices", () => {
 	it("leaves a selected target's pane genuinely empty while its first capture is in flight", () => {
 		expect(tmuxPaneState(HEALTHY).emptyPane).toBe("");
 		expect(tmuxPaneState({ ...HEALTHY, selected: "" }).emptyPane).toBe("Select a terminal target to capture its output.");
+	});
+});
+
+describe("tmuxPaneState — the agent has no terminal tool (#409)", () => {
+	const UNSUPPORTED: TmuxPaneInputs = { ...HEALTHY, access: { state: "unsupported", needs: ["terminal_list_targets", "tmux_list_sessions"] }, targetCount: 0, selected: "" };
+
+	it("THE BUG: it never again says the machine has no terminals", () => {
+		// The reported symptom. With #403 applied, `terminal_list_targets` 403s on the tmux Operator,
+		// the target list stays empty, and the empty state told the owner to go open a tmux session —
+		// which they can do all day without changing anything, because nothing was ever asked of the
+		// machine. That sentence is the actively harmful part of the failure.
+		const s = tmuxPaneState(UNSUPPORTED);
+		for (const line of [s.emptyPane, s.emptyTargets, s.hint]) {
+			expect(line).not.toMatch(/No terminal targets found|No tmux sessions found/);
+			expect(line).not.toMatch(/Open tmux|Start a/);
+		}
+	});
+
+	it("names the tool it needs and who decides it", () => {
+		const s = tmuxPaneState(UNSUPPORTED);
+		expect(s.notice?.tone).toBe("error");
+		expect(s.notice?.text).toContain("terminal_list_targets or tmux_list_sessions");
+		// Not a 403 string addressed to a creator: the reader declared nothing and can act on neither.
+		expect(s.notice?.text).not.toContain("is not one of this agent's tools");
+		expect(s.notice?.text).toContain("Settings");
+	});
+
+	it("outranks offline — `pags up` is not the remedy for a tool that was never declared", () => {
+		// Both facts are true at once on a machine that is down. Only one of them is the reason the
+		// tab is empty, and printing the other sends the reader to fix something that is not broken.
+		const s = tmuxPaneState({ ...UNSUPPORTED, presence: { online: false, node: "Mac", attachment: { message: "The runner isn't running.", remedy: "pags up" } } });
+		expect(s.offline).toBe(false);
+		expect(s.notice?.remedy).toBeNull();
+		expect(s.notice?.text).toContain("terminal_list_targets");
+	});
+
+	it("is STABLE across polls — it is derived from the policy, never from an error slot (#378)", () => {
+		// The same property #378 established for the offline notice, and the reason the tab must not
+		// go on calling a tool it knows will be refused: a notice written by a failing poll is a
+		// notice the next poll erases, four seconds apart, forever.
+		const settled = tmuxPaneState(UNSUPPORTED);
+		const midPoll = tmuxPaneState({ ...UNSUPPORTED, error: "" });
+		const afterAFailure = tmuxPaneState({ ...UNSUPPORTED, error: '"terminal_list_targets" is not one of this agent\'s tools.' });
+		expect(midPoll).toEqual(settled);
+		expect(afterAFailure.notice?.text).toBe(settled.notice?.text);
+	});
+
+	it("says nothing at all until the policy has answered", () => {
+		// A first paint that asserted "this agent has no terminal tools" and withdrew it 200ms later
+		// is the #378 flicker rebuilt from the other side.
+		const s = tmuxPaneState({ ...HEALTHY, access: { state: "loading" }, targetCount: 0, selected: "" });
+		expect(s.notice).toBeNull();
+		expect(s.offline).toBe(false);
+		expect(s.emptyPane).not.toMatch(/no terminal tool|No terminal targets/);
+	});
+});
+
+describe("tmuxPaneState — the resolved family owns the vocabulary", () => {
+	it("a tmux-only agent is never told to go open kitty", () => {
+		const s = tmuxPaneState({ ...TMUX_ONLY, targetCount: 0, selected: "" });
+		expect(s.emptyTargets).toBe("No tmux sessions found on Mac. Open tmux there, or create one from Controls.");
+		expect(s.emptyTargets).not.toMatch(/kitty|iTerm2/);
+		expect(s.hint).toBe(s.emptyTargets);
+	});
+
+	it("the generic agent keeps every word it had — three of the four Operators still use it", () => {
+		const s = tmuxPaneState({ ...HEALTHY, targetCount: 0, selected: "" });
+		expect(s.emptyTargets).toBe("No terminal targets found on Mac. Open tmux, kitty, or iTerm2 there, or create one from Controls.");
+	});
+
+	it("asks you to select a tmux session, not a terminal target, when that is what the agent has", () => {
+		expect(tmuxPaneState({ ...TMUX_ONLY, selected: "" }).emptyPane).toBe("Select a tmux session to capture its output.");
+		// Byte-identical to what it said before #409: this is the sentence the other three Operators
+		// still read.
+		expect(tmuxPaneState({ ...HEALTHY, selected: "" }).emptyPane).toBe("Select a terminal target to capture its output.");
+	});
+
+	it("a family that can list but not capture says so, rather than showing a blank pane", () => {
+		// `1f3ca00` gates per TOOL. An agent declaring the list tool and not the capture tool is a
+		// real declaration, and the honest answer is which half is missing — not an empty `<pre>`.
+		const s = tmuxPaneState({ ...TMUX_ONLY, access: { state: "ready", family: TMUX_FAMILY, canCapture: false } });
+		expect(s.emptyPane).toContain("tmux_capture_pane");
+		expect(s.emptyPane).toContain("but not read one");
 	});
 });
 
@@ -213,6 +310,23 @@ describe("the tab actually routes through the resolver", () => {
 			expect(start, `${fn} not found — did it get renamed?`).toBeGreaterThan(-1);
 			const head = src.slice(start, src.indexOf("try {", start));
 			expect(head, `${fn} clears the error on attempt`).not.toContain("setError(");
+		}
+	});
+
+	it("BOTH polled calls are gated on the resolved family, and neither writes the error slot to do it", () => {
+		// #409's fix in the same shape #378's is checked: a resolver the component does not consult is
+		// the bug intact. The reads must bail BEFORE the fetch — a gate that fires the call and then
+		// interprets the 403 is the 4-second refusal storm with better copy.
+		const src = tab();
+		for (const [fn, guard] of [
+			["const refreshTargets = useCallback(", "if (!family) return;"],
+			["const capture = useCallback(", "if (!session || !family || !canCapture) return;"],
+		]) {
+			const start = src.indexOf(fn);
+			expect(start, `${fn} not found — did it get renamed?`).toBeGreaterThan(-1);
+			const head = src.slice(start, src.indexOf("try {", start));
+			expect(head, `${fn} no longer checks the agent declares the tool`).toContain(guard);
+			expect(head, `${fn} writes the error slot on a refusal it could predict`).not.toContain("setError(");
 		}
 	});
 

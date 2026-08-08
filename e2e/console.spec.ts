@@ -2188,6 +2188,133 @@ test.describe("mobile — the terminal pane is readable (#370)", () => {
 });
 
 /**
+ * The same tab on an agent that declares the backend-exclusive `tmux_*` family (#403/#409).
+ *
+ * The fixture above declares `terminal_*`, which is what three of the four Operators still have —
+ * so it stayed green through the entire failure. This one is the tmux Operator: six `tmux_*` tools,
+ * no `terminal_*` at all, and a `/tmux/list` payload in the runner's actual shape, which carries a
+ * NAME and no `backend`/`id`. That last detail is the whole reason a name-swap would not have
+ * worked: the rows would have parsed to nothing and the tab would have looked empty rather than
+ * broken.
+ *
+ * Both phone widths, because the pane's height was the #370 defect and the family change alters the
+ * create row's column count. Carries the `mobile — ` prefix on purpose: that is what puts a block in
+ * front of WebKit as well as Chromium, and this one measures a phone layout.
+ */
+test.describe("mobile — the Terminal tab on a tmux-only agent (#409)", () => {
+	const PANE = Array.from({ length: 60 }, (_, i) => `❯ tmux line ${i} ${"x".repeat(60)}`).join("\n");
+
+	const tmuxOperator = [{
+		id: "inst-1",
+		name: "tmux Operator",
+		slug: "tmux-operator",
+		category: "productivity",
+		capabilities: { surfaces: ["tmux"], runtime: "terminal", workflow: null },
+	}];
+
+	/** `TOOLS` is the whole variable: swap it and the same fixture becomes the unsupported case. */
+	async function mockTmuxOnly(page: Page, TOOLS: string[]) {
+		await mockSignedInConsole(page, { instances: tmuxOperator });
+		await page.route("**/v1/instances/inst-1/tools**", async (route) => {
+			const path = new URL(route.request().url()).pathname;
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (path.endsWith("/tools")) {
+				return json({ tools: TOOLS.map((name) => ({ name, allowed: true, scope: /_(list|capture)/.test(name) ? "read" : "write" })) });
+			}
+			if (path.endsWith("/tmux_list_sessions")) {
+				// Exactly what `browser-runner/src/coding/tmux.ts` `listSessionsDetailed` returns.
+				return json({
+					success: true,
+					content: JSON.stringify([
+						{ name: "main", windows: 3, attached: true, activeCommand: "pnpm test", activeWindow: "editor", created: "1754600000" },
+						{ name: "build", windows: 1, attached: false, activeCommand: "vite", activeWindow: "shell", created: "1754600001" },
+					]),
+				});
+			}
+			if (path.endsWith("/tmux_capture_pane")) return json({ success: true, content: PANE });
+			// The declared-allowlist gate, in the exact shape production returns it (#409's repro).
+			if (/\/tools\/terminal_/.test(path)) {
+				return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: '"terminal_list_targets" is not one of this agent\'s tools. It can only run the tools its agent declares.' }) });
+			}
+			return json({ success: true, content: "" });
+		});
+	}
+
+	const TMUX_TOOLS = ["tmux_list_sessions", "tmux_capture_pane", "tmux_run_command", "tmux_send_keys", "tmux_new_session", "tmux_kill_session"];
+
+	for (const width of [320, 390]) {
+		test(`lists tmux sessions and captures a pane at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockTmuxOnly(page, TMUX_TOOLS);
+			await page.goto("/console/instances/inst-1/tmux");
+			await page.waitForLoadState("networkidle");
+			await page.waitForTimeout(500);
+
+			// The pane really rendered — not the 403 the tab showed before this fix.
+			await expect(page.locator("pre")).toContainText("tmux line 0");
+			const body = await page.evaluate(() => document.body.innerText);
+			expect(body).not.toContain("is not one of this agent");
+			// And NOT the sentence that sent the owner off to open a session that was already open.
+			expect(body).not.toContain("No terminal targets found");
+
+			// Rows survived a payload with no `backend` and no `id` — the trap.
+			await page.getByRole("button", { name: "Targets", exact: true }).click();
+			await expect(page.getByText("build")).toBeVisible();
+
+			const { wide, mainOv } = await measureOverflow(page);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(mainOv).toBeLessThanOrEqual(1);
+		});
+	}
+
+	test("the create row offers no backend to choose, and the write controls are live", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockTmuxOnly(page, TMUX_TOOLS);
+		await page.goto("/console/instances/inst-1/tmux");
+		await page.waitForLoadState("networkidle");
+		await page.waitForTimeout(500);
+
+		await page.getByRole("button", { name: "Controls", exact: true }).click();
+		// A tmux-exclusive agent has exactly one backend, so the picker was three options of which
+		// two produced a call it cannot make.
+		await expect(page.getByRole("combobox", { name: "Terminal backend" })).toBeHidden();
+		await expect(page.getByRole("textbox", { name: "Session name" })).toBeEnabled();
+		await expect(page.getByRole("textbox", { name: "Text to send" })).toBeEnabled();
+	});
+
+	test("an agent with no terminal tool says which tool, and never blames the machine", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		// The pre-fix state of the tmux Operator, and the state of any future agent on this surface
+		// that declares neither family.
+		await mockTmuxOnly(page, ["web_search"]);
+		await page.goto("/console/instances/inst-1/tmux");
+		await page.waitForLoadState("networkidle");
+		await page.waitForTimeout(500);
+
+		const body = await page.evaluate(() => document.body.innerText);
+		expect(body).toContain("terminal_list_targets or tmux_list_sessions");
+		expect(body).not.toContain("No terminal targets found");
+		expect(body).not.toContain("Open tmux, kitty, or iTerm2");
+		expect(body).not.toContain("is not one of this agent");
+
+		// It must STAND, and it must not cost a call. The tab used to fire two refused requests every
+		// four seconds for as long as it was open.
+		const seen: string[] = [];
+		page.on("request", (r) => { if (/\/tools\/[a-z]/.test(r.url())) seen.push(r.url()); });
+		const misses = await page.evaluate(async () => {
+			let missed = 0;
+			for (let i = 0; i < 55; i++) {
+				await new Promise((r) => setTimeout(r, 100));
+				if (!document.body.innerText.includes("tmux_list_sessions")) missed++;
+			}
+			return missed;
+		});
+		expect(misses, "the not-declared notice disappeared during a poll").toBe(0);
+		expect(seen, `the tab kept calling tools it knows are refused: ${seen.join(", ")}`).toEqual([]);
+	});
+});
+
+/**
  * Profile, with the data a real account actually has (#235).
  *
  * The sweep above ran Profile with the default fixture: no profile fields, no API providers, a

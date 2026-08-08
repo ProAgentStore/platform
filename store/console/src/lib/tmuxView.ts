@@ -21,6 +21,7 @@
  * disagree with the stylesheet.
  */
 
+import type { TerminalToolAccess, TerminalToolFamily } from "./terminalTools";
 import type { RunnerPresence } from "./types";
 
 /** The three things a phone can show one at a time. */
@@ -101,6 +102,13 @@ export interface TmuxNotice {
 
 export interface TmuxPaneInputs {
 	presence: RunnerPresence;
+	/**
+	 * What this agent's own tool list lets the tab do (#409). Read BEFORE presence, because a tool
+	 * the agent does not have is not fixed by a runner: telling the owner to run `pags up` when
+	 * nothing was ever asked of the machine is the same false remedy as telling them to open a tmux
+	 * session, and that sentence is exactly what this ticket exists to delete.
+	 */
+	access: TerminalToolAccess;
 	/** The message from the last COMPLETED call — "" when that call succeeded. */
 	error: string;
 	/** The last action's confirmation ("Ran in …"). */
@@ -133,7 +141,34 @@ export interface TmuxPaneState {
 	hint: string;
 }
 
-export const WRITE_HINT = "Grant terminal write access in Settings to run commands, send keys, create targets, or close targets.";
+/**
+ * The write-access hint, named for the connector the CONSENT ROW is actually keyed by.
+ *
+ * It used to say "terminal" unconditionally. On the tmux Operator the grant the owner needs is
+ * `tmux` (#403 carries the existing `terminal` consent across for exactly this reason), and a hint
+ * that points at the wrong checkbox is a hint that cannot be followed.
+ */
+export function writeHint(family: TerminalToolFamily): string {
+	return `Grant ${family.connector} write access in Settings to run commands, send keys, and create or close ${family.noun}s.`;
+}
+
+/** "tmux" / "tmux, kitty, or iTerm2" — only ever the backends the resolved family can reach. */
+function backendList(backends: readonly string[]): string {
+	const names = backends.map((b) => (b === "iterm2" ? "iTerm2" : b));
+	if (names.length <= 1) return names[0] ?? "a terminal";
+	return `${names.slice(0, -1).join(", ")}, or ${names[names.length - 1]}`;
+}
+
+/**
+ * "tmux session" for the backend-exclusive family, "terminal target" for the generic one.
+ *
+ * Derived from the family's own backends rather than switched on its id, so the generic family's
+ * sentences come out byte-identical to what they said before #409 — the three Operators that kept
+ * `terminal_*` must read exactly as they did.
+ */
+function targetLabel(family: TerminalToolFamily): string {
+	return family.backends.length === 1 ? `${backendList(family.backends)} ${family.noun}` : `terminal ${family.noun}`;
+}
 
 /**
  * Said when the status probe reports no socket but names no reason — the `transient`/error
@@ -151,7 +186,36 @@ function machinePhrase(presence: RunnerPresence): string {
 	return presence.online === true ? "on the connected machine" : "on your machine";
 }
 
-export function tmuxPaneState({ presence, error, status, canWrite, selected, targetCount }: TmuxPaneInputs): TmuxPaneState {
+export function tmuxPaneState({ presence, access, error, status, canWrite, selected, targetCount }: TmuxPaneInputs): TmuxPaneState {
+	// Before anything else: has the tool policy even landed? Every other branch below asserts
+	// something about what this agent can do, and for the first round trip we do not know.
+	if (access.state === "loading") {
+		const empty = "Checking what this agent can reach…";
+		return { offline: false, notice: null, emptyPane: empty, emptyTargets: empty, hint: empty };
+	}
+
+	// The #409 state. It OUTRANKS offline deliberately: with no terminal tool declared, nothing was
+	// ever asked of the machine, so "run `pags up`" is advice that cannot work, and "open tmux
+	// there" — the sentence the old empty state printed — is worse, because a reader who follows it
+	// gets the same tab back and concludes the product is broken.
+	if (access.state === "unsupported") {
+		const empty = "This agent has no terminal tool, so nothing was asked of your machine.";
+		return {
+			offline: false,
+			notice: {
+				tone: "error",
+				text: `This agent doesn't have the tool this tab needs (${access.needs.join(" or ")}). An agent's creator declares which tools it has — Settings › Tools lists them.`,
+				remedy: null,
+				remedyOn: "",
+			},
+			emptyPane: empty,
+			emptyTargets: empty,
+			hint: "There is nothing to control: this agent cannot call a terminal tool.",
+		};
+	}
+
+	const { family, canCapture } = access;
+
 	if (presence.online === false) {
 		// Four blocks are on screen at once on a phone, so each says a DIFFERENT part of one
 		// consistent answer: the notice carries the reason and the remedy, the header states the
@@ -183,15 +247,25 @@ export function tmuxPaneState({ presence, error, status, canWrite, selected, tar
 			? { tone: "status", text: status, remedy: null, remedyOn: "" }
 			: canWrite
 				? null
-				: { tone: "hint", text: WRITE_HINT, remedy: null, remedyOn: "" };
-	const emptyTargets = `No terminal targets found ${machine}. Open tmux, kitty, or iTerm2 there, or create one from Controls.`;
+				: { tone: "hint", text: writeHint(family), remedy: null, remedyOn: "" };
+	// Every sentence below is spoken in the RESOLVED family's vocabulary. A tmux-only agent offering
+	// to go open kitty is the same class of false instruction as the empty state this ticket exists
+	// to delete: it names a thing the tab cannot reach on this agent.
+	const emptyTargets = `No ${targetLabel(family)}s found ${machine}. Open ${backendList(family.backends)} there, or create one from Controls.`;
 	return {
 		offline: false,
 		notice,
 		// A selected target with no output yet is a genuinely empty pane, not a placeholder: the
-		// capture is in flight and a sentence here would be replaced a moment later.
-		emptyPane: targetCount === 0 ? emptyTargets : selected ? "" : "Select a terminal target to capture its output.",
+		// capture is in flight and a sentence here would be replaced a moment later. Unless reading a
+		// pane is the one thing this agent cannot do — that is a fact, not a wait.
+		emptyPane: !canCapture
+			? `This agent can list ${targetLabel(family)}s but not read one — it doesn't have ${family.capture}.`
+			: targetCount === 0
+				? emptyTargets
+				: selected
+					? ""
+					: `Select a ${targetLabel(family)} to capture its output.`,
 		emptyTargets,
-		hint: targetCount === 0 ? emptyTargets : `Start a terminal target from Controls, or open tmux, kitty, or iTerm2 ${machine}.`,
+		hint: targetCount === 0 ? emptyTargets : `Start a ${targetLabel(family)} from Controls, or open ${backendList(family.backends)} ${machine}.`,
 	};
 }

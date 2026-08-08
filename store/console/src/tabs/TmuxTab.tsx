@@ -5,6 +5,20 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Clipboard, Keyboard, List, Loader2, Play, Plus, RefreshCw, SlidersHorizontal, SquareTerminal, Terminal, Trash2 } from "lucide-react";
 import { tmuxBusy } from "../lib/pollBusy";
+import {
+	captureArgs,
+	createArgs,
+	createdTargetKey,
+	killArgs,
+	parseTargets,
+	resolveTerminalAccess,
+	resolveTerminalWrites,
+	runArgs,
+	sendKeysArgs,
+	type TerminalBackend,
+	type TerminalTarget,
+	targetKey,
+} from "../lib/terminalTools";
 import { DEFAULT_TMUX_VIEW, TMUX_VIEWS, type TmuxView, tmuxBlockClass, tmuxPaneState } from "../lib/tmuxView";
 import type { RunnerPresence } from "../lib/types";
 
@@ -20,17 +34,6 @@ interface Props {
 	runner?: RunnerPresence;
 }
 
-interface TerminalTarget {
-	backend: "tmux" | "kitty" | "iterm2";
-	id: string;
-	name: string;
-	windows?: number;
-	attached?: boolean;
-	activeCommand?: string;
-	activeWindow?: string;
-	created?: string;
-}
-
 interface ToolResult {
 	content?: string;
 	success?: boolean;
@@ -44,43 +47,22 @@ interface ToolPolicyEntry {
 	reason?: string;
 }
 
-function targetKey(t: TerminalTarget): string {
-	return `${t.backend}:${t.id}`;
-}
-
-function parseTargets(content?: string): TerminalTarget[] {
-	if (!content) return [];
-	try {
-		const parsed = JSON.parse(content) as unknown;
-		if (!Array.isArray(parsed)) return [];
-		return parsed.flatMap((item): TerminalTarget[] => {
-			if (!item || typeof item !== "object") return [];
-			const row = item as Record<string, unknown>;
-			const backend = row.backend === "tmux" || row.backend === "kitty" || row.backend === "iterm2" ? row.backend : null;
-			const id = typeof row.id === "string" ? row.id : "";
-			if (!backend || !id) return [];
-			return [{
-				backend,
-				id,
-				name: typeof row.name === "string" && row.name ? row.name : id,
-				windows: typeof row.windows === "number" ? row.windows : undefined,
-				attached: typeof row.attached === "boolean" ? row.attached : undefined,
-				activeCommand: typeof row.activeCommand === "string" ? row.activeCommand : undefined,
-				activeWindow: typeof row.activeWindow === "string" ? row.activeWindow : undefined,
-				created: typeof row.created === "string" ? row.created : undefined,
-			}];
-		});
-	} catch {
-		return [];
-	}
-}
-
 /** Icon + label for each phone view. Icon-only below `sm` so the switch is not itself the thing eating the viewport. */
 const VIEW_CHROME: Record<TmuxView, { label: string; Icon: typeof List }> = {
 	targets: { label: "Targets", Icon: List },
 	output: { label: "Output", Icon: SquareTerminal },
 	controls: { label: "Controls", Icon: SlidersHorizontal },
 };
+
+/**
+ * The create-target row, with and without the backend picker.
+ *
+ * Both spelled out in full, never composed — Tailwind v4 generates utilities by scanning source
+ * text for whole class names, so a template literal that assembled the column list would emit no
+ * rule at all. Same reason `tmuxView.ts` writes out its two `hidden lg:*` variants.
+ */
+const CREATE_GRID_WITH_BACKEND = "grid grid-cols-1 sm:grid-cols-[8rem_11rem_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2";
+const CREATE_GRID_ONE_BACKEND = "grid grid-cols-1 sm:grid-cols-[11rem_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2";
 
 /** Notice tone → colour. The DECISION of which tone applies is `tmuxPaneState`'s; this is paint. */
 const NOTICE_TONE: Record<"error" | "status" | "hint", string> = {
@@ -108,10 +90,15 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	const [sendText, setSendText] = useState("");
 	const [sendKeys, setSendKeys] = useState("");
 	const [newSession, setNewSession] = useState("");
-	const [newBackend, setNewBackend] = useState<"tmux" | "kitty" | "iterm2">("tmux");
+	const [newBackend, setNewBackend] = useState<TerminalBackend>("tmux");
 	const [newWorkDir, setNewWorkDir] = useState("");
 	const [newCommand, setNewCommand] = useState("");
-	const [allowedTools, setAllowedTools] = useState<Set<string>>(new Set());
+	/**
+	 * `null` until the policy lands — NOT an empty set (#409). An empty set is a real answer ("this
+	 * agent has no terminal tools"), and rendering that answer during the first round trip would put
+	 * a red line on screen and then withdraw it, which is the flicker #378 removed.
+	 */
+	const [allowedTools, setAllowedTools] = useState<Set<string> | null>(null);
 	// Which block a phone shows. Inert from `lg` up — see `lib/tmuxView.ts` for why the breakpoint
 	// stays in CSS and never becomes JS state.
 	const [view, setView] = useState<TmuxView>(DEFAULT_TMUX_VIEW);
@@ -136,6 +123,19 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 		}
 	}, [instanceId]);
 
+	/**
+	 * WHICH tools this tab may call, and therefore which family's argument shapes it builds (#409).
+	 *
+	 * This is the fix's load-bearing line. `1f3ca00` gated the four WRITE controls on this same
+	 * policy and left the two reads ungated, because at the time every agent on the `tmux` surface
+	 * declared `terminal_*` and the reads were guaranteed present. #403 removed that guarantee, so
+	 * the reads now consult it too — and the tab calls the family the agent actually has rather than
+	 * a name it hopes for.
+	 */
+	const access = useMemo(() => resolveTerminalAccess(allowedTools), [allowedTools]);
+	const family = access.state === "ready" ? access.family : null;
+	const canCapture = access.state === "ready" && access.canCapture;
+
 	// The two POLLED calls write the error slot only when they SETTLE — never on attempt (#378).
 	//
 	// Clearing it first unmounted the conditionally-rendered notice row and remounted it when the
@@ -143,11 +143,17 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	// message that blinks forever and can never be read. Writing on completion means it holds
 	// the outcome of the LAST COMPLETED attempt, whichever of the two calls that was — so a list
 	// that succeeds cannot wipe the reason a capture failed before anyone has seen it either.
+	//
+	// Both now return EARLY when the agent has not declared the tool, and — the #378 half that
+	// matters here — they return without touching the error slot. A refusal we can predict is not
+	// an outcome to report in the transport channel; `tmuxPaneState` states it once, from `access`,
+	// and it therefore stands across every poll instead of being rewritten by each one.
 	const refreshTargets = useCallback(async () => {
+		if (!family) return;
 		setLoadingList(true);
 		try {
-			const content = await callTool("terminal_list_targets");
-			const list = parseTargets(content);
+			const content = await callTool(family.list);
+			const list = parseTargets(family, content);
 			setTargets(list);
 			setSelected((current) => {
 				if (current && list.some((s) => targetKey(s) === current)) return current;
@@ -160,13 +166,13 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 		} finally {
 			setLoadingList(false);
 		}
-	}, [callTool]);
+	}, [callTool, family]);
 
 	const capture = useCallback(async (session = selectedRef.current) => {
-		if (!session) return;
+		if (!session || !family || !canCapture) return;
 		setLoadingPane(true);
 		try {
-			const content = await callTool("terminal_capture", { target: session, lines: 500 });
+			const content = await callTool(family.capture, captureArgs(family, session, 500));
 			setPane(content);
 			setError("");
 		} catch (e) {
@@ -174,12 +180,19 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 		} finally {
 			setLoadingPane(false);
 		}
-	}, [callTool]);
+	}, [callTool, family, canCapture]);
 
+	// Two effects, not one. Folded together, the policy would be re-fetched the moment it resolved
+	// the family that `refreshTargets` closes over — a second identical round trip on every mount.
 	useEffect(() => {
 		void loadToolPolicy();
+	}, [loadToolPolicy]);
+
+	// Fires when `family` first resolves, which is what makes the first list wait for the policy
+	// rather than race it.
+	useEffect(() => {
 		void refreshTargets();
-	}, [loadToolPolicy, refreshTargets]);
+	}, [refreshTargets]);
 
 	useEffect(() => {
 		if (selected) void capture(selected);
@@ -202,28 +215,31 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	useTieredPolling(tick, { activeMs: 4000, passiveMs: 20000 }, tmuxBusy(targets, !!error || runner?.online === false));
 
 	const selectedInfo = useMemo(() => targets.find((s) => targetKey(s) === selected), [targets, selected]);
-	const canRunCommand = allowedTools.has("terminal_run_command");
-	const canSendKeys = allowedTools.has("terminal_send_keys");
-	const canCreateTarget = allowedTools.has("terminal_new_target");
-	const canKillTarget = allowedTools.has("terminal_kill_target");
-	const canWrite = canRunCommand || canSendKeys || canCreateTarget || canKillTarget;
-	// Every sentence this tab prints about connectivity is decided in `lib/tmuxView.ts`, including
-	// which of the notice / error / status / write-hint lines wins. Rendering only.
+	// Still one verdict per WRITE tool, which is `1f3ca00`'s shipped promise — resolved against the
+	// family this agent actually has rather than against six hardcoded names.
+	const writes = useMemo(() => resolveTerminalWrites(family, allowedTools), [family, allowedTools]);
+	const noun = family?.noun ?? "target";
+	/** The backends the create form may offer; a backend-exclusive family has nothing to choose. */
+	const backends = family?.backends ?? [];
+	const createBackend: TerminalBackend = backends.includes(newBackend) ? newBackend : (backends[0] ?? "tmux");
+	// Every sentence this tab prints about connectivity — and, since #409, about what this agent can
+	// reach at all — is decided in `lib/tmuxView.ts`. Rendering only.
 	const paneState = tmuxPaneState({
 		presence: runner ?? { online: null },
+		access,
 		error,
 		status,
-		canWrite,
+		canWrite: writes.any,
 		selected,
 		targetCount: targets.length,
 	});
 
 	const runCommand = async () => {
-		if (!selected || !command.trim()) return;
+		if (!selected || !command.trim() || !family) return;
 		setStatus("");
 		setError("");
 		try {
-			const content = await callTool("terminal_run_command", { target: selected, command });
+			const content = await callTool(family.run, runArgs(family, selected, command));
 			setPane(content);
 			setCommand("");
 			setStatus(`Ran in ${selected}`);
@@ -233,12 +249,12 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	};
 
 	const sendKeysToPane = async () => {
-		if (!selected || (!sendText && !sendKeys.trim())) return;
+		if (!selected || (!sendText && !sendKeys.trim()) || !family) return;
 		setStatus("");
 		setError("");
 		try {
 			const keys = sendKeys.split(",").map((key) => key.trim()).filter(Boolean);
-			const content = await callTool("terminal_send_keys", { target: selected, text: sendText || undefined, keys });
+			const content = await callTool(family.sendKeys, sendKeysArgs(family, selected, sendText, keys));
 			setPane(content);
 			setSendText("");
 			setSendKeys("");
@@ -253,15 +269,13 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	};
 
 	const createSession = async () => {
-		if (!newSession.trim()) return;
+		if (!newSession.trim() || !family) return;
 		const sessionName = newSession.trim();
 		setStatus("");
 		setError("");
 		try {
-			const raw = await callTool("terminal_new_target", { backend: newBackend, name: sessionName, workDir: newWorkDir.trim() || undefined, command: newCommand.trim() || undefined });
-			const created = JSON.parse(raw || "{}") as Partial<TerminalTarget> & { target?: Partial<TerminalTarget> };
-			const target = created.target ?? created;
-			const next = target.backend && target.id ? `${target.backend}:${target.id}` : `${newBackend}:${sessionName}`;
+			const raw = await callTool(family.create, createArgs(family, { backend: createBackend, name: sessionName, workDir: newWorkDir.trim(), command: newCommand.trim() }));
+			const next = createdTargetKey(family, raw, createBackend, sessionName);
 			setStatus(`Created ${sessionName}`);
 			setNewSession("");
 			setNewWorkDir("");
@@ -274,11 +288,11 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	};
 
 	const killSession = async () => {
-		if (!selected || !confirm(`Kill terminal target "${selected}"?`)) return;
+		if (!selected || !family || !confirm(`Kill ${family.noun} "${selected}"?`)) return;
 		setStatus("");
 		setError("");
 		try {
-			await callTool("terminal_kill_target", { target: selected });
+			await callTool(family.kill, killArgs(family, selected));
 			setPane("");
 			setSelected("");
 			setStatus(`Killed ${selected}`);
@@ -325,7 +339,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 					})}
 				</div>
 				{/* Which target the Controls view is typing into, since its header belongs to Output. */}
-				<span className="font-mono text-2xs text-muted-soft truncate min-w-0">{selected || "no target selected"}</span>
+				<span className="font-mono text-2xs text-muted-soft truncate min-w-0">{selected || `no ${noun} selected`}</span>
 			</div>
 
 			<div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[17rem_minmax(0,1fr)]">
@@ -335,7 +349,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 							<Terminal size={16} className="text-accent shrink-0" />
 							<h2 className="text-sm font-bold truncate">Terminal</h2>
 						</div>
-							<button type="button" onClick={refreshTargets} title="Refresh targets" aria-label="Refresh targets" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-50" disabled={loadingList}>
+							<button type="button" onClick={refreshTargets} title={`Refresh ${noun}s`} aria-label={`Refresh ${noun}s`} className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-50" disabled={loadingList || !family}>
 							<RefreshCw size={14} className={loadingList ? "animate-spin" : ""} />
 						</button>
 					</div>
@@ -367,7 +381,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 					<div className={`${tmuxBlockClass(view, ["output"])} border-b border-line px-3 py-2 flex-wrap items-center justify-between gap-2`}>
 						<div className="min-w-0">
 							<div className="flex items-center gap-2 min-w-0">
-								<span className="font-mono text-sm font-bold truncate">{selected || "No target selected"}</span>
+								<span className="font-mono text-sm font-bold truncate">{selected || `No ${noun} selected`}</span>
 								{selectedInfo?.attached != null && <span className={`text-2xs px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-green/15 text-green" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
 							</div>
 							<div className="text-2xs text-muted-soft truncate">
@@ -375,13 +389,13 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 							</div>
 						</div>
 						<div className="flex items-center gap-1.5">
-							<button type="button" onClick={() => capture()} disabled={!selected || loadingPane} title="Capture pane" aria-label="Capture pane" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<button type="button" onClick={() => capture()} disabled={!selected || loadingPane || !canCapture} title={canCapture ? "Capture pane" : `Not available: this agent has no ${family?.capture ?? "capture"} tool`} aria-label="Capture pane" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 								{loadingPane ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
 							</button>
 							<button type="button" onClick={copyPane} disabled={!pane} title="Copy pane output" aria-label="Copy pane output" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 								<Clipboard size={14} />
 							</button>
-								<button type="button" onClick={killSession} disabled={!selected || !canKillTarget} title={canKillTarget ? "Kill target" : "Grant terminal kill access in Settings"} aria-label="Kill target" className="p-1.5 rounded-lg border border-line text-muted hover:text-red hover:border-red disabled:opacity-40">
+								<button type="button" onClick={killSession} disabled={!selected || !writes.kill} title={writes.kill ? `Kill ${noun}` : `Grant ${family?.connector ?? "terminal"} kill access in Settings`} aria-label={`Kill ${noun}`} className="p-1.5 rounded-lg border border-line text-muted hover:text-red hover:border-red disabled:opacity-40">
 								<Trash2 size={14} />
 							</button>
 						</div>
@@ -420,10 +434,10 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 									onKeyDown={(e) => { if (e.key === "Enter") runCommand(); }}
 									aria-label="Command"
 									placeholder="Command"
-										disabled={!selected || !canRunCommand}
+										disabled={!selected || !writes.run}
 								className="font-mono"
 							/>
-								<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !canRunCommand} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
+								<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !writes.run} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
 								<Play size={15} />
 							</button>
 						</div>
@@ -433,22 +447,24 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 					    full-width, fixed-height inputs. They get their own view instead of the pane's. */}
 					<div className={`${tmuxBlockClass(view, ["controls"], "block")} border-t border-line lg:border-t-0 p-2 lg:pt-0 space-y-2 bg-panel/40`}>
 						<div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_11rem_auto] gap-2">
-									<input value={sendText} onChange={(e) => setSendText(e.target.value)} aria-label="Text to send" placeholder="Text to send" disabled={!selected || !canSendKeys} className="font-mono" />
-									<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} aria-label="Keys to send" placeholder="Keys, e.g. Enter" disabled={!selected || !canSendKeys} className="font-mono" />
-								<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !canSendKeys} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+									<input value={sendText} onChange={(e) => setSendText(e.target.value)} aria-label="Text to send" placeholder="Text to send" disabled={!selected || !writes.sendKeys} className="font-mono" />
+									<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} aria-label="Keys to send" placeholder="Keys, e.g. Enter" disabled={!selected || !writes.sendKeys} className="font-mono" />
+								<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !writes.sendKeys} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 								<Keyboard size={15} />
 							</button>
 						</div>
-						<div className="grid grid-cols-1 sm:grid-cols-[8rem_11rem_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
-									<select value={newBackend} onChange={(e) => setNewBackend(e.target.value as "tmux" | "kitty" | "iterm2")} aria-label="Terminal backend" disabled={!canCreateTarget}>
-								<option value="tmux">tmux</option>
-								<option value="kitty">kitty</option>
-								<option value="iterm2">iTerm2</option>
-							</select>
-									<input value={newSession} onChange={(e) => setNewSession(e.target.value)} aria-label="Target name" placeholder="Name" disabled={!canCreateTarget} className="font-mono" />
-									<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} aria-label="Working directory" placeholder="Working directory" disabled={!canCreateTarget} className="font-mono" />
-									<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} aria-label="Startup command" placeholder="Startup command" disabled={!canCreateTarget} className="font-mono" />
-								<button type="button" onClick={createSession} disabled={!newSession.trim() || !canCreateTarget} title="Create target" aria-label="Create target" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+						<div className={backends.length > 1 ? CREATE_GRID_WITH_BACKEND : CREATE_GRID_ONE_BACKEND}>
+							{/* Only when there is a choice. A backend-exclusive family has exactly one, so the
+							    picker was three options of which two produced a call the agent cannot make. */}
+							{backends.length > 1 && (
+										<select value={createBackend} onChange={(e) => setNewBackend(e.target.value as TerminalBackend)} aria-label="Terminal backend" disabled={!writes.create}>
+									{backends.map((b) => <option key={b} value={b}>{b === "iterm2" ? "iTerm2" : b}</option>)}
+								</select>
+							)}
+									<input value={newSession} onChange={(e) => setNewSession(e.target.value)} aria-label={`${noun[0].toUpperCase()}${noun.slice(1)} name`} placeholder="Name" disabled={!writes.create} className="font-mono" />
+									<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} aria-label="Working directory" placeholder="Working directory" disabled={!writes.create} className="font-mono" />
+									<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} aria-label="Startup command" placeholder="Startup command" disabled={!writes.create} className="font-mono" />
+								<button type="button" onClick={createSession} disabled={!newSession.trim() || !writes.create} title={`Create ${noun}`} aria-label={`Create ${noun}`} className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 								<Plus size={15} />
 							</button>
 						</div>
