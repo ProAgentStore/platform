@@ -505,25 +505,98 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		return c.json({ issue });
 	});
 
-	/** Update a repo/project: rename and/or set its launch URLs (dev/staging/prod). */
+	/**
+	 * Update a repo/project: rename, set its launch URLs (dev/staging/prod), its merge policy —
+	 * and, since #410/#411, MOVE it: change the folder its working copy lives in.
+	 *
+	 * ── Identity is immutable; address is not
+	 *
+	 * `workdir` was the one thing about a repo that could not be corrected. It was displayed in the
+	 * settings sheet as read-only text styled exactly like every input around it, and the payload
+	 * type here did not name it — so an owner who fixed a mistyped path watched the platform accept
+	 * the edit and keep reading the old directory ("I updated it, but it is still using the old
+	 * one"). The only remaining remedy was DELETE, which throws away the row's name, URLs, merge
+	 * policy (#314), instructions and issue mode, and is the foreign key for `coding_sessions` and
+	 * `coding_timeline` — the owner had to destroy the history to fix a typo.
+	 *
+	 * It was never a decision that the address was fixed. `50a9746` split this route out of
+	 * `coding.ts` carrying whatever the pre-split code happened to accept; nothing anywhere records
+	 * a rationale. The rule that IS right is narrower than "editable": WHICH repository this is
+	 * stays fixed, because sessions and the timeline hang off it. WHERE its working copy sits is a
+	 * fact about a machine, and machines get reorganised.
+	 *
+	 * The safety is therefore expressed as WHEN, not whether — see the 409 below.
+	 */
 	codingRoutes.put("/:instanceId/coding/repos/:repoId", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
+		const repoId = c.req.param("repoId");
 		const body = (await c.req.json().catch(() => ({}))) as {
 			name?: string;
 			urls?: { dev?: string; staging?: string; prod?: string };
 			mergePolicy?: string;
+			workdir?: string;
 		};
 		const name = typeof body.name === "string" ? body.name.trim() : undefined;
 		const hasUrls = body.urls !== undefined && typeof body.urls === "object";
 		const policy = mergePolicyPatch(body.mergePolicy); // #314 — merge authority for THIS repo
 		if (!policy.ok) return c.json({ error: policy.error }, 400);
-		if (!name && !hasUrls && policy.value === undefined) return c.json({ error: "name, urls or mergePolicy is required" }, 400);
-		const ok = await updateRepo(c.env, instanceId, uid, c.req.param("repoId"), {
+		const workdirIn = typeof body.workdir === "string" ? body.workdir.trim() : undefined;
+		// Blanking is refused rather than stored: every tool addresses this repo BY its workdir, so
+		// an empty one is not a state anyone wants — it is a delete, and delete has its own route.
+		if (workdirIn === "") return c.json({ error: "A folder is required. To remove this repo, delete it." }, 400);
+		if (!name && !hasUrls && policy.value === undefined && workdirIn === undefined) {
+			return c.json({ error: "name, urls, mergePolicy or workdir is required" }, 400);
+		}
+
+		// Only a MOVE needs the extra read and the session check. A save that resends the same path
+		// (which the settings sheet does on every Save, because the field is now always populated)
+		// must behave exactly as it did before this route learned about folders.
+		let moving = false;
+		if (workdirIn !== undefined) {
+			const existing = await getRepo(c.env, instanceId, uid, repoId);
+			if (!existing) throw new HttpError(404, "Repo not found");
+			moving = workdirIn !== (existing.workdir ?? "");
+			if (moving) {
+				// A live session's engine has the OLD path as its cwd, and changing the row does not
+				// move the process: the platform would believe path B while the CLI works in path A,
+				// and Claude Code would `--resume` a conversation about different code. Refuse and
+				// name the session, rather than silently splitting the brain.
+				const active = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
+				if (active) {
+					return c.json(
+						{
+							error: "A session is running on this repo. End it before moving the folder — its CLI is still working in the old directory.",
+							sessionId: active.id,
+						},
+						409,
+					);
+				}
+			}
+		}
+
+		const ok = await updateRepo(c.env, instanceId, uid, repoId, {
 			name: name || undefined,
 			urls: hasUrls ? body.urls : undefined,
 			mergePolicy: policy.value,
+			workdir: moving ? workdirIn : undefined,
 		});
 		if (!ok) throw new HttpError(404, "Repo not found");
-		return c.json({ ok: true });
+		if (!moving) return c.json({ ok: true });
+
+		// Store, THEN verify — the same order and the same helper the add path uses (#405), so all
+		// three entry points give one verdict in one wording. Storing first is deliberate: an owner
+		// may be fixing this from a phone with the laptop shut, and refusing the save would make the
+		// product unusable for the case it exists to serve. What must not happen is a stale claim.
+		//
+		// `onUnverified: "unknown"` (ADD's answer, not LIST's) is the difference that matters here.
+		// A moved repo's `clone_status` was earned by the OLD directory; leaving `ready` on a path
+		// nobody has looked at is exactly the false claim #405 removed. `unknown` does not condemn
+		// the new path — it says nobody has been asked yet, and the list upgrades it on the next
+		// read once a machine is connected.
+		const moved = await getRepo(c.env, instanceId, uid, repoId);
+		if (!moved) throw new HttpError(404, "Repo not found");
+		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
+		const { repo, verdict } = await verifyLocalWorkdir(c.env, moved, conn, { onUnverified: "unknown" });
+		return c.json(isWorkdirBroken(verdict) ? { ok: true, repo, warning: verdict.detail } : { ok: true, repo });
 	});
 }

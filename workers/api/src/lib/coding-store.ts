@@ -170,7 +170,14 @@ export async function updateRepoClone(
 		.run();
 }
 
-/** Update a repo's editable fields (name, launch URLs and/or merge policy). Scoped to the owner. */
+/**
+ * Update a repo's editable fields (name, launch URLs, merge policy and/or workdir). Owner-scoped.
+ *
+ * `workdir` is here rather than on `updateRepoClone` (which can also write it) so that the ONE
+ * owner-scoped write covers every field the settings sheet can change: `updateRepoClone` is keyed
+ * on `id` alone because its callers have already resolved ownership, and routing an owner-supplied
+ * value through it would put a user-controlled id on a statement with no tenant clause (#410/#411).
+ */
 export async function updateRepo(
 	env: Env,
 	instanceId: string,
@@ -181,6 +188,13 @@ export async function updateRepo(
 		urls?: { dev?: string; staging?: string; prod?: string };
 		/** #314. A validated policy sets the override; `""` clears it back to "inherit". */
 		mergePolicy?: string;
+		/**
+		 * #410/#411 — where this repo's working copy lives. IDENTITY is immutable (sessions and
+		 * the timeline hang off the row); the ADDRESS is a fact about the world and changes.
+		 * `undefined` leaves it; `""` is refused by the caller, because blanking the address of a
+		 * repo every tool addresses BY it is not an intent anyone has — deleting the repo is.
+		 */
+		workdir?: string;
 	},
 ): Promise<boolean> {
 	const urlsJson =
@@ -196,6 +210,7 @@ export async function updateRepo(
 		 SET name = COALESCE(?4, name),
 		     urls = CASE WHEN ?6 = 1 THEN ?5 ELSE urls END,
 		     merge_policy = COALESCE(?7, merge_policy),
+		     workdir = COALESCE(?8, workdir),
 		     updated_at = datetime('now')
 		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
@@ -207,6 +222,7 @@ export async function updateRepo(
 			urlsJson,
 			patch.urls === undefined ? 0 : 1,
 			patch.mergePolicy === undefined ? null : patch.mergePolicy,
+			patch.workdir === undefined ? null : patch.workdir.slice(0, 400),
 		)
 		.run();
 	return (res.meta.changes ?? 0) > 0;

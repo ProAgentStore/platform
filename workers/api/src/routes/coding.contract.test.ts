@@ -670,6 +670,7 @@ describe("merge authority is set through this route, and only with a value it kn
 	it("a PUT that changes nothing is refused, so an empty body cannot look like a policy change", async () => {
 		const { status, body } = await putRepo({});
 		expect(status).toBe(400);
-		expect(body.error).toBe("name, urls or mergePolicy is required");
+		// `workdir` joined the list in #410 — the folder is editable through this same route now.
+		expect(body.error).toBe("name, urls, mergePolicy or workdir is required");
 	});
 });

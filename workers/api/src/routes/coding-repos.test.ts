@@ -372,3 +372,177 @@ describe("GET /coding/repos/:id/issues — a deferred surface fails CLEANLY", ()
 		expect(body).toEqual({ available: false });
 	});
 });
+
+/**
+ * A repo can be MOVED. Its identity cannot (#410/#411).
+ *
+ * `workdir` was the one thing about a repo that could not be corrected: the settings sheet showed
+ * it as read-only text styled exactly like the inputs around it, and this route's payload type did
+ * not name it — so the console was not failing to send a change, there was nothing to send. The
+ * owner's only remedy was DELETE, which takes the name, the URLs, the merge policy (#314), the
+ * instructions and the issue mode with it, and is the foreign key for `coding_sessions` and
+ * `coding_timeline`. Fixing a typo meant destroying the history.
+ *
+ * The rule these tests pin is neither "editable" nor "immutable": WHICH repository this is stays
+ * fixed, WHERE its working copy lives does not.
+ */
+describe("PUT /coding/repos/:id — the folder is editable, and checked when it changes", () => {
+	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const HEALTHY = { checked: true, path: "~/dev/stores/pas/apps/chess-academy", exists: true, isDirectory: true, entryCount: 21039, insideWorkTree: true, gitChecked: true };
+
+	const repoRow = (over: Record<string, unknown> = {}) => ({
+		id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "apps/chess-academy",
+		github_repo: null, provider: "local", repo_slug: null, web_url: null, clone_url: null,
+		branch: "", workdir: "~/dev/pas/platform/apps/chess-academy", clone_status: "ready",
+		clone_error: null, default_client: "claude", urls: null, instructions: null, merge_policy: null,
+		created_at: "2026-08-07 08:29:04", updated_at: "2026-08-07 08:29:04", ...over,
+	});
+
+	/**
+	 * A D1 whose repo row actually CHANGES when the route updates it — the route re-reads the row
+	 * before verifying, so a harness echoing the pre-update row would have it checking the OLD path
+	 * and every assertion below would pass for the wrong reason.
+	 *
+	 * `session` is the active-session lookup's answer; `null` is a quiet repo.
+	 */
+	function movableEnv(row: Record<string, unknown> | null, session: Record<string, unknown> | null = null) {
+		const issued: Statement[] = [];
+		let current = row;
+		const DB = {
+			prepare(sql: string) {
+				const flat = sql.replace(/\s+/g, " ").trim();
+				const stmt = {
+					bind: (...binds: unknown[]) => {
+						issued.push({ sql: flat, binds });
+						// updateRepo binds: repoId, instanceId, userId, name, urlsJson, hasUrls, mergePolicy, workdir
+						if (flat.startsWith("UPDATE coding_repos SET name") && current) {
+							if (binds[7] != null) current = { ...current, workdir: binds[7] };
+							if (binds[3] != null) current = { ...current, name: binds[3] };
+						}
+						if (flat.startsWith("UPDATE coding_repos SET clone_status") && current) {
+							current = { ...current, clone_status: binds[1], clone_error: binds[2] };
+						}
+						return stmt;
+					},
+					first: async () => {
+						if (/FROM agent_instances/.test(flat)) return { id: INSTANCE };
+						if (/FROM coding_sessions/.test(flat)) return session;
+						if (/FROM coding_repos/.test(flat)) return current;
+						return null;
+					},
+					all: async () => ({ results: [] }),
+					run: async () => ({ meta: { changes: current ? 1 : 0 } }),
+				};
+				return stmt;
+			},
+		};
+		return { env: { SESSION_SIGNING_KEY: SECRET, DB } as unknown as Env, issued, row: () => current };
+	}
+
+	async function put(body: Record<string, unknown>, ctx: ReturnType<typeof movableEnv>) {
+		const app = new Hono<{ Bindings: Env }>();
+		const routes = new Hono<{ Bindings: Env }>();
+		registerRepoRoutes(routes);
+		app.route("/v1/instances", routes);
+		app.onError((err, c) => c.json({ error: (err as Error).message }, err instanceof HttpError ? (err.status as 400) : 500));
+		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const res = await app.request(
+			`/v1/instances/${INSTANCE}/coding/repos/repo-1`,
+			{ method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
+			ctx.env,
+		);
+		return { status: res.status, body: (await res.json()) as { ok?: boolean; error?: string; sessionId?: string; warning?: string; repo?: Record<string, unknown> } };
+	}
+
+	it("writes the new folder, keeping the row — and therefore its sessions and its history", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue(HEALTHY);
+		const ctx = movableEnv(repoRow());
+		const { status } = await put({ workdir: "~/dev/stores/pas/apps/chess-academy" }, ctx);
+		expect(status).toBe(200);
+		expect(ctx.row()).toMatchObject({ id: "repo-1", workdir: "~/dev/stores/pas/apps/chess-academy" });
+		// The handle everything else hangs off is untouched — this is the whole reason
+		// delete-and-re-add was not an acceptable answer.
+		expect(ctx.issued.some((s) => s.sql.startsWith("DELETE FROM coding_repos"))).toBe(false);
+	});
+
+	it("checks the NEW path on the machine, and clears needs_attention when it is good", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue(HEALTHY);
+		const ctx = movableEnv(repoRow({ clone_status: "needs_attention", clone_error: "…is EMPTY" }));
+		const { body } = await put({ workdir: "~/dev/stores/pas/apps/chess-academy" }, ctx);
+		// It asked about the new path, not the one the row held when the request arrived.
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/coding/repo-check", { workDir: "~/dev/stores/pas/apps/chess-academy" }, expect.anything());
+		expect(body.repo?.cloneStatus).toBe("ready");
+		expect(body.warning).toBeUndefined();
+	});
+
+	it("stores a broken path and MARKS it — the same sentence the add path gives", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockResolvedValue({ checked: true, path: "~/typo", exists: false });
+		const ctx = movableEnv(repoRow());
+		const { status, body } = await put({ workdir: "~/typo" }, ctx);
+		// Not a 400. The owner may be fixing this from a phone with the machine shut, and refusing
+		// the save would make the product unusable for the case it exists to serve. What must not
+		// happen is the row going on claiming `ready` about a directory that is not there.
+		expect(status).toBe(200);
+		expect(body.repo?.cloneStatus).toBe("needs_attention");
+		expect(body.warning).toMatch(/does not exist/);
+		expect(body.warning).toContain("~/typo");
+	});
+
+	// `unknown`, NOT the `ready` the OLD directory earned. `clone_status` is a claim about the path
+	// the row holds NOW, so it must move with it — #405's point, applied to an edit instead of an add.
+	it("does not let a moved repo keep the previous path's `ready`", async () => {
+		const ctx = movableEnv(repoRow({ clone_status: "ready" })); // no machine connected
+		const { body } = await put({ workdir: "~/dev/somewhere/else" }, ctx);
+		expect(body.repo?.cloneStatus).toBe("unknown");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("refuses the move while a session is live, and names the session", async () => {
+		const ctx = movableEnv(repoRow(), { id: "sess-9", instance_id: INSTANCE, user_id: UID, repo_id: "repo-1", status: "active" });
+		const { status, body } = await put({ workdir: "~/dev/elsewhere" }, ctx);
+		// The engine's cwd is the old path and moving the row does not move the process: the
+		// platform would believe path B while the CLI works in path A, and Claude Code would
+		// `--resume` a conversation about different code.
+		expect(status).toBe(409);
+		expect(body.sessionId).toBe("sess-9");
+		expect(ctx.row()).toMatchObject({ workdir: "~/dev/pas/platform/apps/chess-academy" });
+	});
+
+	it("does NOT refuse a save that resends the SAME folder while a session is live", async () => {
+		// The settings sheet posts the folder on every Save, because the field is always populated.
+		// A no-op must stay a no-op, or renaming a repo becomes impossible while it is being worked.
+		const ctx = movableEnv(repoRow(), { id: "sess-9", instance_id: INSTANCE, user_id: UID, repo_id: "repo-1", status: "active" });
+		const { status } = await put({ name: "chess", workdir: "~/dev/pas/platform/apps/chess-academy" }, ctx);
+		expect(status).toBe(200);
+		expect(ctx.row()).toMatchObject({ name: "chess" });
+		expect(callRunner).not.toHaveBeenCalled(); // nothing moved, nothing to re-check
+	});
+
+	it("refuses a BLANK folder — that is a delete, and delete has its own route", async () => {
+		const ctx = movableEnv(repoRow());
+		const { status, body } = await put({ workdir: "   " }, ctx);
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/folder is required/i);
+		expect(ctx.issued.some((s) => s.sql.startsWith("UPDATE coding_repos"))).toBe(false);
+	});
+
+	it("is still owner-scoped — another user's repo is a 404, and is not written", async () => {
+		const ctx = movableEnv(null); // getRepo finds nothing for this (user, instance, repo)
+		const { status } = await put({ workdir: "~/dev/theirs" }, ctx);
+		expect(status).toBe(404);
+		expect(ctx.issued.some((s) => s.sql.startsWith("UPDATE coding_repos"))).toBe(false);
+	});
+
+	it("leaves the name/urls-only path exactly as it was — no read, no session check, no probe", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		const ctx = movableEnv(repoRow());
+		const { status, body } = await put({ name: "renamed" }, ctx);
+		expect(status).toBe(200);
+		expect(body).toEqual({ ok: true });
+		expect(ctx.issued.some((s) => /FROM coding_sessions/.test(s.sql))).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+});

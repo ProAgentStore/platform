@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
 import type { CodingRepo, CodingSession } from "./types";
 import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
+import AddRepoForm from "./AddRepoForm";
 import RepoIssues from "./RepoIssues";
 import PullsPanel from "./PullsPanel";
 import { repoProviderBadge, repoTitle } from "./repo-title";
@@ -173,6 +174,16 @@ export default function ReposList({
 	);
 
 	const activeCount = sessions.filter((s) => s.status === "active").length;
+	/**
+	 * A one-repo agent hides add-repo at ONE repo and must show it at ZERO (#411).
+	 *
+	 * Hiding it unconditionally was right about the steady state and wrong about the empty one: it
+	 * used to be paired with a `repo` SETTING that seeded the row, and that setting is gone (it was
+	 * read by nothing after the first save, which is the bug this ticket came from). Without this,
+	 * a single-repo agent that deletes its repo has no way to add another — not in the repo list,
+	 * not in settings, nowhere but the API by hand.
+	 */
+	const needsFirstRepo = singleRepo && repos.length === 0;
 	return (
 		<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
 			<div className="bg-panel border border-line rounded-xl p-3">
@@ -180,7 +191,7 @@ export default function ReposList({
 					<span className="text-ink font-bold text-base">{singleRepo ? "Repository" : "Repositories"}</span>
 					<div className="flex gap-1.5">
 						{enginesButton}
-						{/* A one-repo agent cannot use this — its repo comes from its settings. */}
+						{/* A one-repo agent that HAS its repo cannot use this — one is its maximum. */}
 						{!singleRepo && (
 							<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
 						)}
@@ -193,31 +204,21 @@ export default function ReposList({
 					</div>
 				)}
 
-				{showAddRepo && !singleRepo && (
-					<div className="mt-3">
-						<div className="flex gap-1.5 flex-wrap">
-								<input
-									value={addRepoInput}
-									onChange={(e) => setAddRepoInput(e.target.value)}
-									onKeyDown={(e) => { if (e.key === "Enter") addRepo(); }}
-									aria-label="Repository path or URL"
-									placeholder="~/dev/my-repo or owner/repo or clone URL"
-									className="flex-1 min-w-[180px] bg-panel border border-line rounded-xl px-3 py-2 text-sm"
-							/>
-							<button type="button" onClick={addRepo} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Add</button>
-						</div>
-						<p className="text-xs text-muted mt-1.5">
-							<b>Best for dev:</b> point at a repo you already have (<code>~/dev/my-repo</code>) — the agent works in your real checkout.
-						</p>
-					</div>
+				{/* Open by default when there is no repo: with nothing else on the panel, a form the
+				    user must first reveal with a button that is not there is not an affordance. */}
+				{((showAddRepo && !singleRepo) || needsFirstRepo) && (
+					<AddRepoForm className="mt-3" value={addRepoInput} onChange={setAddRepoInput} onAdd={addRepo} />
 				)}
 
 				{offlineCta}
 
 				<div className="flex flex-col gap-1.5 mt-3">
 					{repos.length === 0 ? (
+						// Was "add its path in Settings → Agent settings" — a sign pointing at a field
+						// that no code read and that no longer exists (#411). The form above IS the
+						// affordance now, for one repo and for many.
 						<p className="text-center py-4 text-muted-soft text-sm">
-							{singleRepo ? "No repository set yet — add its path in Settings → Agent settings." : "No repos yet. Add one above."}
+							{singleRepo ? "No repository yet. Add one above." : "No repos yet. Add one above."}
 						</p>
 					) : (
 						repos.map((r) => <RepoCard key={r.id} r={r} />)

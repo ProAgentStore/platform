@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { createRepo, listRepos } from "../lib/coding-store.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
@@ -722,56 +721,30 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	// `voiceSettings` itself, which sits in the same blob and is written by a different route.
 	await patchInstanceConfig(c.env, instanceId, session.uid, "settings", result.settings);
 
-	// A `repo` setting on a coding agent should MEAN something. Before this it was prompt
-	// context only: you told the agent which repo it owned, and it still had no repo attached,
-	// so a delegated goal was refused with "no repository yet" and the owner had to add the
-	// same path a second time on the Coding tab. Attach it here, once, when it is first named.
-	// Idempotent by workdir, and never touches an instance that already has repos — the Coding
-	// tab stays the place to manage several.
-	// `result.settings`, not `cfg.settings`: the local blob is no longer mutated before the
-	// write (the patch goes straight to SQL), so reading it back here would serve the values
-	// from BEFORE the save — a settings page that shows your old choice, and a repo that never
-	// attaches on the turn you first name it.
-	await attachSettingRepo(c.env, instanceId, session.uid, result.settings).catch(() => undefined);
+	// ── A settings field does NOT get to create or move a repo row (#411)
+	//
+	// `attachSettingRepo` used to run here: a `repo` setting on a coding agent created a
+	// `coding_repos` row, once, if the instance had none. It was added for a real gap (#157/#182 —
+	// you named the repo an agent owned and it still had none, so a delegated goal was refused with
+	// "no repository yet"), and it is exactly HALF a wire, which turned out to be worse than none.
+	//
+	// It fired on create and never again. So the second edit — the one an owner makes because the
+	// first path was wrong — was stored faithfully in `config.settings.repo` and read by nothing,
+	// while every tool went on reading `coding_repos.workdir`. That is the whole of the reported
+	// bug: "I updated it, but it is still using the old one." Both halves were true.
+	//
+	// Removed rather than finished. A mirror is a second place the same fact is written down; it
+	// needs a sync, and a sync that can fail is a disagreement waiting to happen. `settings.repo`
+	// was declared on ONE agent (`coder-repo`, migration 0063) and migration 0101 takes it off;
+	// the repo row is the single home for a repo's address, and #410 makes that address editable
+	// where the repo actually lives — the Coding tab's repo settings sheet.
+	//
+	// Stored `settings.repo` values are left ORPHANED on purpose. They were never validated and at
+	// least one of them is wrong, so adopting one into `workdir` would install a broken path as
+	// though somebody had chosen it — the false claim #405 spent a ticket removing.
 
 	return c.json({ settings: resolveSettingsValues(schema, result.settings) });
 });
-
-/**
- * Attach the repo named in an agent's typed settings, if it has none yet.
- *
- * Deliberately conservative: only for an agent whose declared runtime is coding, only when the
- * instance has NO repos, and only for a value that looks like a path or owner/name. Anything
- * more eager would fight the Coding tab rather than complement it.
- */
-async function attachSettingRepo(env: Env, instanceId: string, userId: string, settings: unknown): Promise<void> {
-	const value = (settings && typeof settings === "object" ? (settings as Record<string, unknown>).repo : null);
-	const spec = typeof value === "string" ? value.trim() : "";
-	if (!spec || spec.length > 400) return;
-
-	const row = await env.DB.prepare(
-		"SELECT a.slug AS slug, a.category AS category, a.config AS config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
-	)
-		.bind(instanceId, userId)
-		.first<{ slug: string; category: string; config: string | null }>();
-	if (!row || agentCapabilities(row as never).runtime !== "coding") return;
-
-	const existing = await listRepos(env, instanceId, userId);
-	if (existing.length) return;
-
-	const isLocalPath = spec.startsWith("~") || spec.startsWith("/") || spec.startsWith(".");
-	const isOwnerRepo = /^[\w.-]+\/[\w.-]+$/.test(spec);
-	const isUrl = /^(https?:\/\/|git@)/.test(spec);
-	if (!isLocalPath && !isOwnerRepo && !isUrl) return;
-
-	const name = isLocalPath ? spec.split("/").filter(Boolean).slice(-2).join("/") : spec.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "");
-	await createRepo(env, instanceId, userId, {
-		name: name || spec,
-		workdir: isLocalPath ? spec : undefined,
-		githubRepo: isOwnerRepo ? spec : undefined,
-		cloneUrl: isUrl ? spec : undefined,
-	});
-}
 
 /** Probe a registered runtime's health and capabilities through PAGS. */
 instanceRoutes.get("/:instanceId/runtime/status", async (c) => {

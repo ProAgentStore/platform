@@ -15,6 +15,7 @@ import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session
 import { chatMessagesFrom, lastTerminalSnapshot, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
+import AddRepoForm from "./AddRepoForm";
 import ReposList from "./ReposList";
 import RepoIssues from "./RepoIssues";
 import RepoSettingsModal from "./RepoSettingsModal";
@@ -937,9 +938,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					) : (
 						<div className="flex-1 min-h-0 flex flex-col">
 							{!solo ? (
-								<div className="flex-1 flex items-center justify-center p-6 text-center">
-									<p className="text-sm text-muted-soft">No repository set yet — add its path in <b>Settings → Agent settings</b>.</p>
-								</div>
+								// This agent's ONLY surface: its empty state IS the add form, not a sign pointing at the settings field 0101 deletes (#411).
+								<AddRepoForm className="m-6 max-w-md self-center w-full" heading="This agent has no repository yet. Point it at one:" value={addRepoInput} onChange={setAddRepoInput} onAdd={addRepo} />
 							) : (
 								<>
 									{/* Actions and warnings sit in a strip ABOVE the transcript, never in place

@@ -31,7 +31,7 @@ describe("single-repo agents hide the multi-repo affordances", () => {
 
 	it("ReposList gates the add form too — not just the button", () => {
 		// Hiding only the button would leave the form reachable if state were ever set.
-		expect(src("ReposList.tsx")).toContain("{showAddRepo && !singleRepo && (");
+		expect(src("ReposList.tsx")).toContain("{((showAddRepo && !singleRepo) || needsFirstRepo) && (");
 	});
 
 	it("defaults to FALSE so every existing coding agent is unchanged", () => {
@@ -109,6 +109,51 @@ describe("a one-repo agent gets Terminal / Issues / Pulls / Builds, not a repo l
 		expect(list).not.toContain("repos.length === 1");
 		// …but still hides add-repo in the misconfiguration fallback.
 		expect(list).toContain("!singleRepo && (");
+	});
+});
+
+/**
+ * Hiding add-repo at ONE repo is right; hiding it at ZERO is what made a deleted repo
+ * unrecoverable (#411).
+ *
+ * The hiding was always paired with something else that could set the repo: a `repo` field in
+ * Agent settings, which seeded a `coding_repos` row the FIRST time it was saved and was read by
+ * nothing afterwards. That half-wire is the bug this pair of tickets came from ("I updated it,
+ * but it is still using the old one"), migration 0101 deletes the field, and the add form is what
+ * takes its place — so a one-repo agent with no repo has an affordance rather than a sign pointing
+ * at a control that no longer exists.
+ */
+describe("a one-repo agent with NO repo can still add one", () => {
+	const list = src("ReposList.tsx");
+	const tab = code("CodingTab.tsx");
+
+	it("ReposList shows the add form at zero repos, even when singleRepo", () => {
+		expect(list).toContain("const needsFirstRepo = singleRepo && repos.length === 0;");
+		expect(list).toContain("|| needsFirstRepo) && (");
+	});
+
+	it("the solo view — the ONLY surface a one-repo agent reaches — carries the form itself", () => {
+		// CodingTab returns its solo branch before ReposList is ever rendered for this agent, so
+		// ReposList's empty state alone would still be unreachable.
+		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
+		expect(solo).toContain("{!solo ? (");
+		expect(solo).toContain("<AddRepoForm");
+	});
+
+	it("both surfaces render the SAME form, not two copies of an input and a button", () => {
+		// Two copies is how a console acquires a fourteenth button shape (#366/#367) — and the
+		// lesson of this very ticket is that one fact gets one place, control included.
+		for (const f of ["ReposList.tsx", "CodingTab.tsx"]) {
+			expect(code(f), f).toContain('import AddRepoForm from "./AddRepoForm"');
+			expect(code(f), f).not.toContain('aria-label="Repository path or URL"');
+		}
+	});
+
+	it("no empty state still points at the deleted Agent-settings field", () => {
+		// The sentence that sent an owner to a control that did nothing, in both places it appeared.
+		for (const f of ["ReposList.tsx", "CodingTab.tsx"]) {
+			expect(code(f), f).not.toContain("Settings → Agent settings");
+		}
 	});
 });
 

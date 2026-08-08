@@ -2,9 +2,18 @@ import { useState, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
 import { repoProviderLabel } from "./repo-title";
-import { Settings, Trash2 } from "lucide-react";
+import { Settings, Trash2, Lock } from "lucide-react";
 
-/** Per-repo settings sheet: name, special instructions (rules), launch URLs, and delete. */
+/**
+ * Per-repo settings sheet: name, FOLDER, special instructions (rules), launch URLs, and delete.
+ *
+ * The Folder row used to be a `Detail` — a read-only div wearing this app's text-input costume
+ * (same border, same radius, same `font-mono`; `bg-paper` vs `bg-panel` is #0a0a0a against #141414
+ * on a dark-only theme, which is not a distinction anyone can see). An owner clicked it, typed a
+ * corrected path into what they reasonably took for the field, saved, and the agent kept reading
+ * the old directory — because there was no such field, and no PUT parameter behind it either
+ * (#410/#411). It is a real input now, and `Detail` no longer imitates one.
+ */
 export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, onDelete }: {
 	repo: CodingRepo;
 	instanceId: string;
@@ -14,12 +23,20 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 	onDelete: () => void | Promise<void>;
 }) {
 	const [name, setName] = useState(repo.name);
+	const [workdir, setWorkdir] = useState(repo.workdir || "");
 	const [rules, setRules] = useState(repo.instructions || "");
 	const [dev, setDev] = useState(repo.urls?.dev || "");
 	const [staging, setStaging] = useState(repo.urls?.staging || "");
 	const [prod, setProd] = useState(repo.urls?.prod || "");
 	const [saving, setSaving] = useState(false);
 	const [deleting, setDeleting] = useState(false);
+	/**
+	 * What the server said about the folder, shown beside the field rather than in an `alert`.
+	 * `warn` is a stored-but-unusable path (the save SUCCEEDED — see the route: an owner may be
+	 * fixing this from a phone with the machine shut, so the value is kept and marked); `error` is
+	 * a refusal (blank, or a session still running in the old directory).
+	 */
+	const [folderNote, setFolderNote] = useState<{ kind: "warn" | "error"; text: string } | null>(null);
 
 	const del = async () => {
 		if (!confirm(`Delete repo "${repo.name}"? This removes it from the agent.`)) return;
@@ -46,11 +63,25 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 	}, [onClose]);
 
 	const save = async () => {
+		const folder = workdir.trim();
+		// Caught here as well as on the server: blanking the address of a repo every tool addresses
+		// BY it is a delete, and delete is the button next to this one.
+		if (!folder && repo.workdir) {
+			setFolderNote({ kind: "error", text: "A folder is required. To remove this repo, use Delete." });
+			return;
+		}
 		setSaving(true);
+		setFolderNote(null);
 		try {
-			await api(`/v1/instances/${instanceId}/coding/repos/${repo.id}`, {
+			const res = await api<{ warning?: string }>(`/v1/instances/${instanceId}/coding/repos/${repo.id}`, {
 				method: "PUT",
-				body: JSON.stringify({ name: name.trim() || repo.name, urls: { dev: dev.trim(), staging: staging.trim(), prod: prod.trim() } }),
+				body: JSON.stringify({
+					name: name.trim() || repo.name,
+					urls: { dev: dev.trim(), staging: staging.trim(), prod: prod.trim() },
+					// Only when it is set. An unchanged value is a no-op on the server (it compares
+					// before it moves), so this costs nothing and keeps one payload shape.
+					...(folder ? { workdir: folder } : {}),
+				}),
 			});
 			await api(`/v1/instances/${instanceId}/coding/repos/${repo.id}/instructions`, {
 				method: "PUT",
@@ -58,9 +89,22 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 			});
 			repo.instructions = rules;
 			onSaved();
+			// A stored-but-unusable folder keeps the sheet OPEN with the server's own sentence under
+			// the field. This is the moment the owner can act on it — closing on a warning would put
+			// the diagnosis on a screen they have just left, which is how the empty directory in
+			// #405 survived for two days.
+			if (res?.warning) {
+				setFolderNote({ kind: "warn", text: res.warning });
+				setSaving(false);
+				return;
+			}
 			onClose();
 		} catch (e) {
-			alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
+			const msg = e instanceof Error ? e.message : String(e);
+			// The server's refusals are all ABOUT the folder (blank, or a live session in the old
+			// directory), so they belong beside it rather than in an alert box.
+			if (/folder|session is running/i.test(msg)) setFolderNote({ kind: "error", text: msg });
+			else alert("Save failed: " + msg);
 		}
 		setSaving(false);
 	};
@@ -76,6 +120,31 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 				<label htmlFor="repo-settings-name" className="block text-xs font-bold text-muted mb-1">Name</label>
 				<input id="repo-settings-name" value={name} onChange={(e) => setName(e.target.value)} className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm mb-3" />
 
+				{/* The ADDRESS — editable, because a checkout moves and the platform must be able to
+				    follow it (#410/#411). The repo's IDENTITY stays fixed: sessions and the timeline
+				    hang off this row, which is why correcting a path must not mean deleting it. */}
+				<label htmlFor="repo-settings-workdir" className="block text-xs font-bold text-muted mb-1">Folder on your machine</label>
+				<input
+					id="repo-settings-workdir"
+					value={workdir}
+					onChange={(e) => { setWorkdir(e.target.value); setFolderNote(null); }}
+					placeholder="~/dev/my-repo"
+					spellCheck={false}
+					autoCapitalize="off"
+					autoCorrect="off"
+					className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm font-mono mb-1"
+				/>
+				{folderNote ? (
+					<p
+						data-testid="repo-settings-folder-note"
+						className={`text-xs mb-3 break-words ${folderNote.kind === "error" ? "text-red" : "text-yellow"}`}
+					>
+						{folderNote.text}
+					</p>
+				) : (
+					<p className="text-xs text-muted-soft mb-3">Checked on your connected machine when you save.</p>
+				)}
+
 				{/* Read-only details */}
 				<div className="grid grid-cols-2 gap-2 mb-3">
 					{/* The HOST, not "GitHub" (#221) — this panel is where an owner checks what a repo
@@ -83,7 +152,6 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 					{repo.repoSlug || repo.githubRepo ? (
 						<Detail label={repoProviderLabel(repo.provider ?? (repo.githubRepo ? "github" : null))} value={repo.repoSlug || repo.githubRepo || ""} />
 					) : null}
-					{repo.workdir && <Detail label="Folder" value={repo.workdir} />}
 					{repo.cloneStatus && <Detail label="Clone status" value={repo.cloneStatus} />}
 					<Detail label="Repo id" value={repo.id} />
 				</div>
@@ -118,11 +186,26 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 	);
 }
 
+/**
+ * A value you can READ, and a value you can CHANGE, must not look the same (#410).
+ *
+ * This used to render `bg-paper border border-line rounded-lg p-2` with a `font-mono` value —
+ * which is the text-input costume two components away (`bg-panel border border-line rounded-xl
+ * px-3 py-2`, and `font-mono` is what this console reserves for path/command INPUTS). The only
+ * difference was #0a0a0a against #141414 on a dark-only theme. So a static label sat in a sheet
+ * whose neighbouring controls are real fields, invited a click, did nothing, and read as the app
+ * being broken rather than as the value being fixed.
+ *
+ * No box, no border, dimmer text, and a padlock: three signals, none of which an input has.
+ */
 function Detail({ label, value }: { label: string; value: string }) {
 	return (
-		<div className="bg-paper border border-line rounded-lg p-2 min-w-0">
-			<div className="text-2xs uppercase tracking-wide text-muted-soft mb-0.5">{label}</div>
-			<div className="text-xs text-ink break-words font-mono">{value}</div>
+		<div className="min-w-0 py-1">
+			<div className="text-2xs uppercase tracking-wide text-muted-soft mb-0.5 flex items-center gap-1">
+				<Lock size={9} aria-hidden="true" />
+				{label}
+			</div>
+			<div className="text-xs text-muted break-words font-mono">{value}</div>
 		</div>
 	);
 }
