@@ -108,8 +108,29 @@ reaches for when something has gone wrong.
 - **Known hole, deliberately recorded:** the control listener is built on the browser Web Speech API
   (`ensureControlStt` returns `null` where the constructor is absent). Where it is absent, mute by
   **voice** during TTS/thinking is unavailable and only the on-screen control satisfies M1. This is a
-  gap in the invariant, not an exception to it — see the enforcement issue. Any surface shipping
-  hands-free must keep a touch-reachable mute for exactly this reason.
+  gap in the invariant, not an exception to it. Any surface shipping hands-free must keep a
+  touch-reachable mute for exactly this reason.
+
+  **Decided (#388): the hole stays open, and is announced.** Three options were on the table —
+  accept it silently and make the touch control unmissable; say so once in the UI; or build a
+  non-Web-Speech fallback.
+
+  The fallback is rejected. The only other recogniser available here is Whisper over the key proxy,
+  so a control channel built on it means **continuously uploading the room's audio to OpenAI, billed
+  to the user's own key, for the whole time voice is engaged** — in order that a mute button can be
+  spoken to. That is a privacy and cost trade far larger than the gap it closes, and it would run
+  hardest in exactly the phase (the agent talking) where most of what the microphone hears is the
+  agent.
+
+  Silence is rejected too, and it was the worst of the three: a user whose configured command words
+  simply did nothing had no way to distinguish "this browser cannot do that" from "the app is
+  ignoring me". So the absence is now stated once per session, in the same words as a **refused**
+  microphone (#425) — because from the user's side those are the same event, and both leave the
+  on-screen control carrying the whole invariant.
+
+  A second way into the same hole was found by **#425**: the API is present and the browser
+  **refuses** it. That is worse, because the capability disappears while everything looks supported,
+  and it used to be completely unlogged. Both paths now report and both tell the user.
 - Mute remains a **sub-control of hands-free** in the UI. That is a placement decision, not a
   weakening of M1: the on-screen control is one of the two required channels.
 

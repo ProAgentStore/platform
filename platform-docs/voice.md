@@ -223,6 +223,24 @@ Recorded here rather than discovered twice:
   the browser recognizer and returns nothing where the constructor is absent. Where that happens,
   mute-by-voice while the agent speaks is unavailable and only the on-screen control satisfies
   ADR 0001. Any surface shipping hands-free must keep a touch-reachable mute.
+
+  **The gap stays, and the app now says so** (#388): *"Voice commands aren't available in this
+  browser — use the Mute button."*, once per session. A Whisper-based fallback was rejected — it
+  would mean continuously uploading the room's audio to OpenAI on your own key so that a mute button
+  can be spoken to. The same message appears if the browser **refuses** the microphone (#425), which
+  is the same event from your side: three recognizers share one mic, the two background ones used to
+  re-arm forever into a denial (one permission prompt per restart), and now a refusal stops the loop
+  and is written to the error log instead of being swallowed.
+
+- **Mute never costs you the sentence you just finished** (#420). Muting mid-transcription hands the
+  words to the composer rather than sending them — mute is what you reach for when something has
+  gone wrong, so the interrupted request is not fired at the agent. The exception is a mute on the
+  END of a request ("run the tests, mute"), which still sends. While muted, a reply that arrives is
+  not read aloud; "repeat" replays it after unmuting.
+
+- **A transcription that stalls now ends** (#421). Twenty seconds to first response, then the bubble
+  says it timed out and offers **Retry**, which re-sends the same recording. The composer is never
+  held by a turn that is only waiting on the network, so you can always type instead.
 - **Commands are judged more strictly while the agent talks.** Fixing #386 without breaking
   ADR 0001 meant raising the bar rather than closing the door: inside TTS and its echo tail a
   partial transcript is not judged at all and a command must be the whole utterance. A deliberate

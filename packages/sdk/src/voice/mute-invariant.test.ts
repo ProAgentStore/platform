@@ -436,6 +436,25 @@ describe("the known hole — a browser with no Web Speech API (ADR 0001, Consequ
 	});
 
 	/**
+	 * …and the DECISION about it (#388), which was the last open item on the enforcement issue.
+	 *
+	 * The hole stays open — a Whisper-based control channel means continuously uploading the room's
+	 * audio to OpenAI on the user's own key so that a mute button can be spoken to, which is a
+	 * larger trade than the gap it closes. What was NOT acceptable is the third option, silence: a
+	 * user whose configured command words did nothing could not tell "this browser cannot" from
+	 * "the app is ignoring me", and would keep saying them into a channel that does not exist.
+	 */
+	it("announces the hole rather than leaving configured command words to do nothing", () => {
+		const effect = USE_VOICE.slice(USE_VOICE.indexOf("const want = shouldRunControlListener("));
+		const body = effect.slice(0, effect.indexOf("}, [convoOn, speakOn, micOn"));
+		expect(body.length, "the control-listener reconcile effect moved — this guard is looking at nothing").toBeGreaterThan(0);
+		expect(body, "a browser with no Web Speech API now fails into silence again: mute-by-voice does not exist there and nothing says so (ADR 0001, Consequences)").toMatch(/if \(!stt/);
+		expect(body, "…and the user is not told, so only the on-screen control satisfies M1 and they do not know it").toMatch(/setNotice\(/);
+		// Once, not once per mic transition — this effect re-runs on every one of them.
+		expect(body, "the notice is not latched, so it re-fires on every mic transition for the whole session").toMatch(/noWebSpeechToldRef\.current/);
+	});
+
+	/**
 	 * The SECOND way into that hole, found by #425 and worse than the first: the browser HAS Web
 	 * Speech, and refuses the microphone. `ensureControlStt`'s `onError` was an empty block whose
 	 * own comment named "mic denied" as an expected case — so a denial removed mute-by-voice with

@@ -217,6 +217,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// yield the mic to the main recorder synchronously. Wired below (ensureControlStt + effect).
 	const ctrlSttRef = useRef<VoiceStt | null>(null);
 	const ctrlWantRef = useRef(false);
+	/** Have we already said that this browser has no voice-command channel at all? Once per
+	 *  session — the reconcile effect below runs on every mic transition (#388). */
+	const noWebSpeechToldRef = useRef(false);
 	// Browser-dictation SPEECH GATE (Whisper mode only). Runs alongside the recorder to
 	// (a) show live words as you speak and (b) confirm real speech happened this turn — so
 	// silence / keyboard clicks / background noise never get uploaded to Whisper (which
@@ -1754,6 +1757,22 @@ export function useVoice(instanceId: string | undefined, opts: {
 		ctrlWantRef.current = want;
 		if (want) {
 			const stt = ensureControlStt();
+			// ADR 0001's KNOWN HOLE, decided (#388). Where the browser has no `SpeechRecognition`
+			// constructor — iOS Safari, most notably — `ensureControlStt` returns null, no control
+			// listener ever runs, and mute-by-voice during TTS/thinking does not exist. There the
+			// on-screen control is not one of two channels: it is the whole invariant.
+			//
+			// The decision recorded in the ADR's Consequences is to SAY SO rather than to build a
+			// fallback. A non-Web-Speech control channel means continuously uploading the room's
+			// audio to OpenAI, on the user's own key, so that a mute button can be spoken to — a
+			// privacy and cost trade far larger than the gap it closes. Silence was the worst of
+			// the three: a user whose configured words did nothing had no way to tell that from
+			// the app ignoring them. Once per session, and the same shape as the DENIED message,
+			// because from the user's side those two are the same event.
+			if (!stt && !noWebSpeechToldRef.current) {
+				noWebSpeechToldRef.current = true;
+				setNotice("⚠ Voice commands aren't available in this browser — use the Mute button.");
+			}
 			if (stt && !stt.listening) { try { stt.start(); } catch { /* SR busy — onEnd re-arms */ } }
 		} else {
 			if (ctrlSttRef.current?.listening) { try { ctrlSttRef.current.stop(); } catch { /* already stopped */ } }

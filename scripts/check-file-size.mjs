@@ -193,7 +193,13 @@ const PINS = {
 	// latching on it would disable the always-on control listener, i.e. delete mute-by-voice for
 	// the rest of the session. A reader tidying those two conditions into one would cause the ADR
 	// 0001 M1 failure this handler was changed to expose. Both predicates are pure and in convo.ts.
-	"packages/sdk/src/voice/use-voice.ts": 1902,
+	// +19 for #388's last open item — the decision about ADR 0001's known hole. Four lines of code
+	// (a latch ref and a notice when `ensureControlStt` returns null) and fifteen of why the OTHER
+	// two options lose: a Whisper-based control channel would continuously upload the room's audio
+	// to OpenAI on the user's own key so a mute button can be spoken to, and silence leaves a user
+	// unable to tell "this browser cannot" from "the app is ignoring me". That belongs at the null
+	// check, which is the only place a reader would consider building the fallback.
+	"packages/sdk/src/voice/use-voice.ts": 1921,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
