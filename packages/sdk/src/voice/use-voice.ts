@@ -510,9 +510,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// after mount) — the TTS is created once, so re-create it if the flag flips.
 	const technicalRef = useRef(opts.technical);
 	technicalRef.current = opts.technical;
-	// Send a transcript, attaching a saved-audio turn id when this turn had recorded
-	// audio (Whisper). The upload is fire-and-forget; the message sends immediately.
-	const emitSend = (text: string) => {
+	// Send a transcript, attaching a saved-audio turn id when this turn had recorded audio (Whisper).
+	// Upload is fire-and-forget. REPORTS whether a message was created — the caller owns the bubble (#455).
+	const emitSend = (text: string): { sent: true } | { sent: false; note: string } => {
 		// Did the final transcript drop most of what the live recognizer heard (#281)? A lost
 		// tail used to be invisible — the partials were overwritten and only the final was ever
 		// recorded, so "it isn't capturing everything I say" could not be told apart from a
@@ -545,9 +545,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// The user "didn't say anything", or said it in a language we can't be sure we heard.
 			// Ditch the recording and let the mic recycle instead of sending a phantom turn.
 			setPaused(false);
-			// The bubble was cleared by `finalize` before we got here, so a drop at this point is
-			// invisible from every side — which is precisely why #377 could not be confirmed from the
-			// data. Fixed message (de-duped per 30s), evidence in the context.
+			// Until #455 `finalize` had ALREADY cleared the bubble before we got here, so a drop was
+			// invisible from every side — precisely why #377 could not be confirmed from the data. The
+			// verdict now goes back with the return. Fixed message (de-duped per 30s), evidence in context.
 			reportClientError("voice", `voice turn dropped before sending — ${plan.reason}`, { transcript: text.slice(0, 200), path: "send" });
 			// The language nudge asks them to repeat — never an automatic language switch. Noise
 			// gets no notice at all: there is nothing for the user to do about a turn they didn't
@@ -556,7 +556,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				flushSync(() => setNotice("Didn't catch your language — please say that again."));
 				setTimeout(() => setNotice((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
 			}
-			return;
+			return { sent: false, note: plan.reason === "language" ? "Not the language you set, so nothing was sent — these are the words heard live." : "Came back as noise, so nothing was sent — these are the words heard live." };
 		}
 		if (plan.attachAudio && blob && instanceId) {
 			const turnId = crypto.randomUUID();
@@ -568,6 +568,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// would recurse forever (stack overflow) on every dictation send.
 			onSendRef.current(plan.text, plan.dictation ? { dictation: plan.dictation } : undefined);
 		}
+		return { sent: true };
 	};
 	const emitSendRef = useRef(emitSend);
 	emitSendRef.current = emitSend;
@@ -1183,15 +1184,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 					if (plan.switchAfter) nextFromCommandRef.current();
 					return;
 				}
-				flushSync(() => {
-					clearVoiceText();
-					stopAudioMonitor();
-					setPaused(true);
-					if (sttRef.current?.listening) sttRef.current.stop();
-					setMicOn(false);
-					playThinkingChime();
-				});
-				emitSendRef.current(plan.text);
+				// ONE commit for the bubble→message handoff, and React batching is the only thing that makes it one:
+				// `emitSend` runs synchronously through to `onSend`'s `setMessages`, so a `clearVoiceText()` batched
+				// behind it swaps the two states in a single paint. Inside the flushSync it painted a frame holding
+				// NEITHER (#455); an `await` between these lines brings it back. The flush keeps the mic half (#284).
+				flushSync(() => { stopAudioMonitor(); setPaused(true); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+				playThinkingChime(); // a sound is not a render; it does not belong in a flush callback
+				const outcome = emitSendRef.current(plan.text);
+				if (outcome.sent) clearVoiceText(); else dictate({ type: "failed", note: outcome.note, at: Date.now() });
 				// "…, next" is a message AND a departure, and the ORDER is the point: the message
 				// belongs to the agent being LEFT, so it is sent from here before the switch tears
 				// the session down. Switching first would fire it at whoever we land on. The reply

@@ -357,6 +357,25 @@ describe("reduceDictation (#281 — the words must survive the status change)", 
 		expect(next).toMatchObject({ text: "new sentence", status: "dictating", startedAt: AT + 900 });
 		expect(next?.note).toBeUndefined(); // the previous turn's failure must not stick to the new one
 	});
+	/**
+	 * THE SAME RULE, at the other entry point (#455). `endOfTurn` did not check the status, so a
+	 * turn that had already been rejected was revived as the NEXT turn's live bubble.
+	 *
+	 * Reachable since a dropped hands-free send began marking the bubble `failed` instead of
+	 * clearing it. Where the browser has no speech gate (iOS) there are no `speech` events at
+	 * all, so the amplitude end-of-turn of turn 2 is the FIRST event the failed bubble sees —
+	 * nothing interposes to start the new turn.
+	 */
+	it("a failed turn is over — an end-of-turn starts the next one instead of reviving it", () => {
+		const failed = reduceDictation(live, { type: "failed", note: "Came back as noise", at: AT + 1 })!;
+		const next = reduceDictation(failed, { type: "endOfTurn", at: AT + 9_000 })!;
+		expect(next.text, "turn 1's rejected sentence reappeared as what the user just said").toBe("");
+		expect(next.note, "the previous turn's failure must not stick to the new one").toBeUndefined();
+		// `heard` is the input to dictationDiverged — seeded from turn 1 it accuses turn 2 of a
+		// lost tail that never happened, which is the exact signal #281 built.
+		expect(next.heard, "the new turn was seeded with the old turn's words").toBe("");
+		expect(next).toMatchObject({ status: "transcribing", startedAt: AT + 9_000, transcribingAt: AT + 9_000 });
+	});
 	// The single invariant this reducer exists to hold: only an explicit clear removes words.
 	it("ONLY clear removes the utterance", () => {
 		expect(reduceDictation(live, { type: "clear" })).toBeNull();

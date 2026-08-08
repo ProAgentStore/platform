@@ -401,7 +401,13 @@ export function reduceDictation(cur: Dictation | null, ev: DictationEvent): Dict
 		case "endOfTurn":
 			// THE #281 FIX: status moves, text does NOT. The old code assigned "Transcribing…"
 			// over the words here.
-			if (!cur) return { text: "", status: "transcribing", startedAt: ev.at, heard: "", transcribingAt: ev.at };
+			//
+			// A failed turn is finished — the same rule the `speech` branch above states, applied at
+			// the other entry point (#455). Without it a rejected turn is revived as the NEXT turn's
+			// live bubble: its words reappear as though they were what the user just said, its `note`
+			// outlives it, and `heard` is seeded with the old words, which makes
+			// {@link dictationDiverged} accuse turn 2 of a lost tail that never happened.
+			if (!cur || cur.status === "failed") return { text: "", status: "transcribing", startedAt: ev.at, heard: "", transcribingAt: ev.at };
 			return { ...cur, status: "transcribing", heard: cur.text, transcribingAt: ev.at };
 		case "failed":
 			if (!cur) return { text: "", status: "failed", startedAt: ev.at, heard: "", transcribingAt: 0, note: ev.note };
