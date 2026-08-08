@@ -2496,6 +2496,71 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 			}
 		});
 	}
+
+	/**
+	 * A `<select>` cannot widen the row it sits in, named per control (#384).
+	 *
+	 * The block above measures `<main>`, which is the number a user feels. This one measures the
+	 * ROW, which is the number that says what to fix — and it exists because of exactly how the
+	 * first fix for this ticket failed.
+	 *
+	 * `overflow: hidden` on the control was measured green, shipped, and left `main` red for
+	 * twelve consecutive commits: WebKit's menulist renderer OVERRIDES that declaration (the
+	 * computed `overflow-x` on every one of these selects reads `visible`), while the
+	 * `text-overflow: ellipsis` beside it in the same rule applies normally — so the rule looks
+	 * live and half of it is inert. The only signal was `mainOv = 68` with `wide` EMPTY: nothing's
+	 * box is past the right edge, because what escapes is the OPTION LIST inside a native control,
+	 * which has no element of its own to measure. That pair of numbers names nothing.
+	 *
+	 * So this asserts the mechanism rather than the symptom, and fails by NAME — the select's id
+	 * and its widest option. It goes red the moment `contain: paint` leaves `index.css`.
+	 *
+	 * The widest OPTION, not the selected label, because that is what was measured: at 320px
+	 * `voice-tts-provider` widened its card by 43px while showing a value that fits, and the
+	 * entry that did not fit was one further down its list. Shortening what the control displays
+	 * would therefore have fixed nothing.
+	 *
+	 * Not scoped to the timezone control on purpose: the 68px at 320px came from TWO cards, and
+	 * the widest option on this page belongs to a Voice select ("Smart (AI) — Whisper, most
+	 * accurate (appears at end)"), not to a zone name. Any long option anywhere is this defect.
+	 */
+	for (const width of [320, 390]) {
+		test(`no select widens its own row at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockSignedInConsole(page, connected);
+			await page.goto("/console/preferences");
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+			await page.waitForTimeout(300);
+
+			// The selects are really on the page — an unrendered Voice section would make this
+			// vacuous, which is the hollow-fixture failure this file has already shipped twice.
+			expect(await page.locator("main select").count()).toBeGreaterThanOrEqual(8);
+
+			const offenders = await page.evaluate(() => {
+				const out: string[] = [];
+				for (const el of Array.from(document.querySelectorAll("main select"))) {
+					const s = el as HTMLSelectElement;
+					const row = s.parentElement;
+					if (!row) continue;
+					const before = row.scrollWidth - row.clientWidth;
+					if (before <= 1) continue;
+					// ATTRIBUTION, not correlation. Several of these selects share one card, so the
+					// card's overflow reads the same on all of them and blames the innocent. Take
+					// the control out of flow and re-measure: if the row stops overflowing without
+					// it, it is the one that did it, and the widest option is what to shorten.
+					s.style.display = "none";
+					const without = row.scrollWidth - row.clientWidth;
+					s.style.display = "";
+					if (without > 1) continue;
+					const widest = Array.from(s.options).reduce((a, o) => (o.text.length > a.length ? o.text : a), "");
+					out.push(`select#${s.id || s.getAttribute("aria-label") || "?"} (widest option "${widest}") widens its row by ${before}px`);
+				}
+				return out;
+			});
+			expect(offenders, offenders.join("; ")).toEqual([]);
+		});
+	}
 });
 
 /**
