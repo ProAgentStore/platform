@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	endOnUserTurn,
 	hasToolBlocks,
 	mergeContent,
 	pairToolBlocks,
@@ -166,5 +167,82 @@ describe("pairToolBlocks — neither half of a pair may travel alone", () => {
 	it("never touches plain string turns", () => {
 		const msgs: RoleMessage[] = [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }];
 		expect(pairToolBlocks(msgs)).toEqual(msgs);
+	});
+});
+
+describe("endOnUserTurn — a trailing assistant turn is a prefill this model refuses (#429)", () => {
+	it("leaves an array that already ends on user untouched", () => {
+		const msgs: RoleMessage[] = [
+			{ role: "user", content: "a" },
+			{ role: "assistant", content: "reply" },
+			{ role: "user", content: "b" },
+		];
+		expect(endOnUserTurn(msgs)).toEqual(msgs);
+	});
+
+	it("restores the conversation's logical order for a coalesced turn", () => {
+		// Exactly what #429's serialisation stores: the mid-turn arrival is written when it
+		// arrives, the running turn's reply when it finishes.
+		expect(
+			endOnUserTurn([
+				{ role: "user", content: "retry now" },
+				{ role: "user", content: "https://www.youtube.com" },
+				{ role: "assistant", content: "still running" },
+			]),
+		).toEqual([
+			{ role: "user", content: "retry now" },
+			{ role: "assistant", content: "still running" },
+			{ role: "user", content: "https://www.youtube.com" },
+		]);
+	});
+
+	it("keeps the reply the agent just gave — dropping it is what makes an agent answer twice", () => {
+		const out = endOnUserTurn([
+			{ role: "user", content: "a" },
+			{ role: "user", content: "b" },
+			{ role: "assistant", content: "the answer to a" },
+		]);
+		expect(out.map((m) => m.content)).toContain("the answer to a");
+	});
+
+	it("moves the LAST user turn past every trailing assistant turn, in order", () => {
+		expect(
+			endOnUserTurn([
+				{ role: "user", content: "a" },
+				{ role: "user", content: "b" },
+				{ role: "assistant", content: "one" },
+				{ role: "assistant", content: "two" },
+			]),
+		).toEqual([
+			{ role: "user", content: "a" },
+			{ role: "assistant", content: "one" },
+			{ role: "assistant", content: "two" },
+			{ role: "user", content: "b" },
+		]);
+	});
+
+	it("drops the trailing assistants when the move would create a LEADING one", () => {
+		// A ten-message window holding a single user turn: reordering would swap one 400 for the
+		// other, so the shorter legal array wins.
+		expect(
+			endOnUserTurn([
+				{ role: "user", content: "b" },
+				{ role: "assistant", content: "the answer to a" },
+			]),
+		).toEqual([{ role: "user", content: "b" }]);
+	});
+
+	it("an all-assistant array has nothing to answer", () => {
+		expect(endOnUserTurn([{ role: "assistant", content: "x" }])).toEqual([]);
+		expect(endOnUserTurn([])).toEqual([]);
+	});
+
+	it("does not disturb a tool round, which already ends on the tool_result turn", () => {
+		const msgs: RoleMessage[] = [
+			{ role: "user", content: "read the file" },
+			{ role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: "repo_read_file", input: {} }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "…" }] },
+		];
+		expect(endOnUserTurn(msgs)).toEqual(msgs);
 	});
 });

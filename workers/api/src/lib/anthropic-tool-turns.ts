@@ -203,3 +203,59 @@ export function pairToolBlocks(msgs: readonly RoleMessage[]): RoleMessage[] {
 	}
 	return out;
 }
+
+/**
+ * Make the array end on a `user` turn, because `claude-sonnet-4-6` refuses a prefill.
+ *
+ * ── The shape that produced this
+ *
+ * Serialising chat turns (#429) made a history that had never occurred before. A message arriving
+ * mid-turn is appended to the transcript the moment it arrives — that is what stops it being lost —
+ * but the running turn's reply is appended when it FINISHES, so the stored order is:
+ *
+ *     user A            06:11:01
+ *     user B            06:11:05   ← arrived while turn A was still running
+ *     assistant A-reply 06:11:07
+ *
+ * Chronologically correct, and the next turn's context therefore ended on an assistant turn.
+ * Anthropic reads a trailing assistant turn as a PREFILL, and this model does not support one:
+ * `400 — This model does not support assistant message prefill. The conversation must end with a
+ * user message.` Observed in production immediately after #429 deployed, on the exact instance
+ * #429 was reported from.
+ *
+ * ── Why the last user turn MOVES rather than the assistant turn being dropped
+ *
+ * Dropping it would delete the reply the agent just gave from its own context — precisely the fact
+ * #429 exists to make visible, since a turn that cannot see it answers the same message twice. The
+ * move loses nothing and restores the order the conversation logically had:
+ *
+ *     user A → assistant A-reply → user B
+ *
+ * Applied BEFORE the same-role merge in `normalizeForAnthropic`, deliberately: merged first, `user
+ * A` and `user B` become one turn and the array still ends on the assistant.
+ *
+ * The one case that cannot be reordered is a window holding a single user turn followed by
+ * assistant turns (the earlier user message fell out of the ten). Moving it would leave a LEADING
+ * assistant, which the provider also rejects, so those turns are dropped instead — the same trade
+ * `normalizeForAnthropic` already makes at the front of the array, for the same reason.
+ */
+export function endOnUserTurn(msgs: readonly RoleMessage[]): RoleMessage[] {
+	if (msgs.length === 0) return [];
+	if (msgs[msgs.length - 1].role === "user") return [...msgs];
+	let lastUser = -1;
+	for (let i = msgs.length - 1; i >= 0; i--) {
+		if (msgs[i].role === "user") {
+			lastUser = i;
+			break;
+		}
+	}
+	// Nothing the model could be answering. An all-assistant array is already dropped to nothing at
+	// the front of `normalizeForAnthropic`; this is the same answer for the same reason.
+	if (lastUser < 0) return [];
+	const moved = [...msgs.slice(0, lastUser), ...msgs.slice(lastUser + 1), msgs[lastUser]];
+	// Re-drop at the front: with exactly one user turn the move creates the leading assistant the
+	// provider rejects, and a legal short array beats an illegal complete one.
+	let start = 0;
+	while (start < moved.length && moved[start].role === "assistant") start++;
+	return moved.slice(start);
+}

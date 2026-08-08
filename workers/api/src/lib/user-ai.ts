@@ -12,7 +12,7 @@ import {
 	type AnthropicMessageBody,
 	parseSseEvents,
 } from "./anthropic-stream.js";
-import { mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
+import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -96,9 +96,15 @@ function normalizeForAnthropic(
 	}));
 	let start = 0;
 	while (start < mapped.length && mapped[start].role === "assistant") start++;
+	// …and the same rule at the OTHER end (#429). Serialising chat turns made a history whose tail
+	// is `user, user, assistant` — the mid-turn arrival is stored when it arrives, the running
+	// turn's reply when it finishes — and a trailing assistant turn is a PREFILL, which
+	// `claude-sonnet-4-6` refuses with a 400 on the whole request. Before merging, deliberately:
+	// merged first, the two user turns become one and the array still ends on the assistant.
+	const ordered = endOnUserTurn(mapped.slice(start));
 	// Pair BEFORE merging: an orphan is created by the drop above, and merging first would fold it
 	// into a neighbouring turn where "which turn introduced this id" is no longer answerable.
-	const paired = pairToolBlocks(mapped.slice(start));
+	const paired = pairToolBlocks(ordered);
 	const merged: Array<{ role: "user" | "assistant"; content: unknown }> = [];
 	for (const m of paired) {
 		const last = merged[merged.length - 1];

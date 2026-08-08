@@ -263,6 +263,39 @@ describe("runAnthropic message normalization", () => {
 		expect(sentBody.messages[2].content).toContain("errored turn");
 		expect(sentBody.messages[2].content).toContain("new question");
 	});
+
+	it("never sends an array ending on an assistant turn — this model refuses a prefill (#429)", async () => {
+		const env = await envWithAnthropicKey();
+		let sentBody: { messages: Array<{ role: string; content: unknown }> } = { messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
+			}),
+		);
+
+		// The history #429's serialisation produces: the mid-turn arrival is stored when it
+		// arrives, the running turn's reply when it finishes. Sent as-is this 400s with
+		// "This model does not support assistant message prefill" — observed in production.
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [
+				{ role: "system", content: "sys" },
+				{ role: "user", content: "retry now" },
+				{ role: "user", content: "sent while the agent was still replying" },
+				{ role: "assistant", content: "the answer to the first one" },
+			],
+		});
+
+		const roles = sentBody.messages.map((m) => m.role);
+		expect(roles[roles.length - 1]).toBe("user");
+		expect(roles[0]).toBe("user");
+		for (let i = 1; i < roles.length; i++) expect(roles[i]).not.toBe(roles[i - 1]);
+		// Reordered, NOT truncated: the reply the agent just gave is still in its own context,
+		// which is the fact that stops it answering the same message a second time.
+		expect(JSON.stringify(sentBody.messages)).toContain("the answer to the first one");
+		expect(sentBody.messages[roles.length - 1].content).toContain("sent while the agent was still replying");
+	});
 });
 
 describe("runAnthropic output cap and stop reason (#397)", () => {
