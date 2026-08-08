@@ -46,6 +46,32 @@
 // The vocabulary is CLOSED per connector (`CONNECTOR_CONSTRAINTS`): a creator picks a subset of a
 // fixed value list, never a rule of their own. Enforcement is at dispatch, in `runRegistryTool`,
 // beside the write-consent gate — a prompt is a request, a gate is a fact (ADR 0001, #395).
+//
+// ── CARDINALITY + BINDING (#402) ────────────────────────────────────────────────────────────────
+//
+// A ceiling answers "which backends". It cannot answer "which ONE of them", and for a named
+// operator that is the question that matters: a mis-addressed target here is a shell command on a
+// real machine. So a connector's vocabulary may also carry a BINDING field — a cardinality the
+// CREATOR declares (`targets: "single" | "many"`, default `many`) plus the identity the SUBSCRIBER
+// chooses within it (`boundTarget`).
+//
+//   surfaces:       ["tmux"]
+//   surfaceOptions: { terminal: { backends: ["tmux"], targets: "single" } }   ← the agent (creator)
+//   surfaceOptions: { terminal: { boundTarget: "tmux:main" } }                ← the instance (subscriber)
+//
+// This is the split the platform already draws and it is deliberately NOT a new one:
+// `config.runnerNode` is the subscriber's choice of MACHINE, while that the agent uses a machine
+// at all is the creator's declaration. `surfaceOptions.coding.repos: "single"` is the same
+// cardinality idea one resource over — declared per agent rather than imposed on all of them,
+// because a Repo Coder owns one repo while the Coder surveys many. The generic Terminal Operator
+// must stay `many`: surveying every backend is its entire purpose.
+//
+// The two halves are enforced together at dispatch, and both directions only ever narrow:
+// `single` with nothing bound REFUSES a target-taking call rather than guessing which pane, and a
+// bound target is honoured even under `many`, because a subscriber pinning one is themselves
+// narrowing. A tool that addresses no target (`terminal_list_targets`, `terminal_new_target`) is
+// untouched — you cannot bind what you have not listed, and "may not create a second terminal" is
+// expressible by NOT declaring the tool, which is what the existing allowlist is for.
 
 export interface SurfaceSpec {
 	/** "many" (default) shows add-repo + the repo list; "single" hides both. */
@@ -87,11 +113,19 @@ export interface SurfaceSpec {
 
 export const SURFACE_DEFAULTS: SurfaceSpec = { repos: "many", drive: true, copilot: true };
 
-/** One connector's declared ceilings, keyed by constraint field (e.g. `{ backends: ["tmux"] }`). */
-export type ConstraintSpec = Record<string, string[]>;
+/**
+ * One connector's declared ceilings, keyed by constraint field.
+ *
+ * A field is either a VALUE list (`{ backends: ["tmux"] }`) or, for a binding field, the
+ * cardinality and the bound identity as scalars (`{ targets: "single", boundTarget: "tmux:main" }`).
+ * Flat on purpose: this is the shape a creator types and `docs/capability-constraints.md`
+ * specifies, and it is what `serializeSurfaceOptions` round-trips.
+ */
+export type ConstraintSpec = Record<string, string[] | string>;
 
 /** One constraint field: the argument it governs and the CLOSED set of values it draws from. */
-export interface ConstraintDef {
+export interface ValueConstraintDef {
+	kind: "values";
 	/** The tool-input key carrying the value this constraint governs. */
 	arg: string;
 	/** The closed value list. A creator may declare any non-empty PROPER subset; nothing else. */
@@ -109,6 +143,41 @@ export interface ConstraintDef {
 }
 
 /**
+ * A cardinality the creator declares plus the ONE identity the subscriber binds inside it (#402).
+ *
+ * Unlike a value ceiling the bound identity is NOT drawn from a closed list — a tmux session is
+ * named by whoever created it, exactly as `config.runnerNode` names a hostname the platform has
+ * never seen. What is closed is the DECLARATION: `single` or `many`, and only `single` is ever
+ * stored, because `many` is today's behaviour and a stored ceiling always means "narrower than the
+ * platform".
+ */
+export interface BindingConstraintDef {
+	kind: "binding";
+	/** The tool-input key naming the resource. A tool without it in its schema is not gated. */
+	arg: string;
+	/** The field, in this same flat spec, holding the bound identity. */
+	bindField: string;
+	/**
+	 * The VALUE field the bound identity must sit inside, when it carries a `value:` prefix — so
+	 * "bind within the ceiling" is checked rather than assumed, wherever the binding is written.
+	 */
+	withinField?: string;
+	/** Noun for the refusal message ("terminal target"). */
+	noun: string;
+}
+
+export type ConstraintDef = ValueConstraintDef | BindingConstraintDef;
+
+/** The one field value that means "this agent addresses exactly one resource". */
+const SINGLE = "single";
+
+/** Longest bound identity accepted. A target is a session name or a window coordinate, never prose. */
+export const MAX_BOUND_LENGTH = 200;
+
+const asList = (v: string[] | string | undefined): string[] => (Array.isArray(v) ? v : []);
+const asText = (v: string[] | string | undefined): string => (typeof v === "string" ? v : "");
+
+/**
  * THE CLOSED VOCABULARY. A creator narrows within this table and can express nothing else — the
  * same discipline as steps, behaviour fields, stats sources and board actions, and for the same
  * reason: free-form rules would hand a creator a language the platform cannot reason about (#322).
@@ -122,11 +191,22 @@ export interface ConstraintDef {
 export const CONNECTOR_CONSTRAINTS: Record<string, Record<string, ConstraintDef>> = {
 	terminal: {
 		backends: {
+			kind: "values",
 			arg: "backend",
 			values: ["tmux", "kitty", "iterm2"],
 			wildcard: "all",
 			prefixArgs: ["target"],
 			noun: "terminal backend",
+		},
+		// Declared SECOND on purpose: the fields are enforced in table order, so a target naming a
+		// backend outside the ceiling is refused as a BACKEND violation — the constraint that
+		// actually applies — rather than as "not the bound target".
+		targets: {
+			kind: "binding",
+			arg: "target",
+			bindField: "boundTarget",
+			withinField: "backends",
+			noun: "terminal target",
 		},
 	},
 };
@@ -140,6 +220,12 @@ export const CONNECTOR_CONSTRAINTS: Record<string, Record<string, ConstraintDef>
  *
  * An empty or all-junk list is likewise treated as ABSENT rather than as "allow nothing": reading
  * a typo as a total ban would brick an agent on a config nobody could see was wrong.
+ *
+ * A BINDING field (#402) parses two keys: the cardinality — only `single` is kept, since `many` is
+ * the platform default and storing it would store today's behaviour as if it were a ceiling — and
+ * the bound identity, which is free text (a tmux session is named by whoever made it) and is
+ * therefore only trimmed and length-capped here. Whether it sits inside the backend ceiling is
+ * decided in `narrowConstraintSpec`, where BOTH configs are in hand; this function sees one.
  */
 export function parseConstraintSpec(id: string, raw: unknown): ConstraintSpec | undefined {
 	const vocab = CONNECTOR_CONSTRAINTS[id];
@@ -147,6 +233,13 @@ export function parseConstraintSpec(id: string, raw: unknown): ConstraintSpec | 
 	const o = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
 	const out: ConstraintSpec = {};
 	for (const [field, def] of Object.entries(vocab)) {
+		if (def.kind === "binding") {
+			const declared = o[field];
+			if (typeof declared === "string" && declared.trim().toLowerCase() === SINGLE) out[field] = SINGLE;
+			const bound = o[def.bindField];
+			if (typeof bound === "string" && bound.trim()) out[def.bindField] = bound.trim().slice(0, MAX_BOUND_LENGTH);
+			continue;
+		}
 		const declared = o[field];
 		if (!Array.isArray(declared)) continue;
 		const wanted = new Set(declared.filter((d): d is string => typeof d === "string").map((d) => d.trim().toLowerCase()));
@@ -227,6 +320,15 @@ export function constraintsFor(
  * leaves nothing, the ceiling stands unchanged: an entirely out-of-scope request is a widen
  * attempt, and the safe reading of one is "you asked for nothing you may have", never "you asked
  * for everything" and never "you are locked out of your own agent by a typo".
+ *
+ * A BINDING field (#402) obeys the same rule in its own two currencies:
+ *
+ *   • the CARDINALITY is the creator's, and `single` cannot be loosened — the subscriber may only
+ *     tighten a `many` agent to `single`, which is a narrowing they are entitled to make;
+ *   • the BOUND identity is the subscriber's unless the creator fixed one, and it is dropped when
+ *     it names a backend outside the effective ceiling. Dropped, not honoured: a `single` agent
+ *     with nothing bound refuses, which is the safe direction, while honouring it would let an
+ *     instance config reach a backend the catalog says the agent cannot.
  */
 export function narrowConstraintSpec(
 	connectorId: string,
@@ -234,16 +336,82 @@ export function narrowConstraintSpec(
 	requested: ConstraintSpec | undefined,
 ): ConstraintSpec | undefined {
 	const vocab = CONNECTOR_CONSTRAINTS[connectorId];
-	if (!vocab || !requested) return ceiling;
+	if (!vocab) return ceiling;
+	const asked = requested ?? {};
 	const out: ConstraintSpec = {};
-	for (const field of Object.keys(vocab)) {
-		const base = ceiling?.[field];
-		const want = requested[field];
-		const narrowed = want?.filter((v) => !base || base.includes(v)) ?? [];
+	for (const [field, def] of Object.entries(vocab)) {
+		if (def.kind === "binding") {
+			// `single` is the only cardinality either side ever stores, so "either declared it"
+			// IS the narrowing rule: a subscriber can add it, and cannot take the creator's away.
+			if (asText(ceiling?.[field]) === SINGLE || asText(asked[field]) === SINGLE) out[field] = SINGLE;
+			const bound = asText(ceiling?.[def.bindField]) || asText(asked[def.bindField]);
+			if (bound) out[def.bindField] = bound;
+			continue;
+		}
+		const base = asList(ceiling?.[field]);
+		const want = asList(asked[field]);
+		const narrowed = want.filter((v) => !base.length || base.includes(v));
 		const effective = narrowed.length ? narrowed : base;
-		if (effective?.length) out[field] = [...effective];
+		if (effective.length) out[field] = [...effective];
+	}
+	// Second pass, because a binding is only legal INSIDE the value ceiling and the two can be
+	// declared in different configs — the ceiling on the agent, the binding on the instance — so
+	// neither parse could see both.
+	for (const def of Object.values(vocab)) {
+		if (def.kind !== "binding" || !def.withinField) continue;
+		const within = vocab[def.withinField];
+		const allowed = asList(out[def.withinField]);
+		if (within?.kind !== "values" || !allowed.length) continue;
+		const prefix = prefixOf(asText(out[def.bindField]), within.values);
+		if (prefix && !allowed.includes(prefix)) delete out[def.bindField];
 	}
 	return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Why a proposed binding cannot be accepted, or null when it can — the check a WRITE path owes the
+ * person typing.
+ *
+ * The merge drops an out-of-scope binding silently, which is the right behaviour for a config that
+ * may have been written by a migration or an older client: the ceiling wins and the agent refuses.
+ * It is the wrong behaviour for a save, which would report success and then show an empty field.
+ */
+export function boundTargetRefusal(
+	connectorId: string,
+	field: string,
+	value: string,
+	spec: ConstraintSpec | undefined,
+): string | null {
+	const def = CONNECTOR_CONSTRAINTS[connectorId]?.[field];
+	if (def?.kind !== "binding" || !def.withinField) return null;
+	const within = CONNECTOR_CONSTRAINTS[connectorId]?.[def.withinField];
+	const allowed = asList(spec?.[def.withinField]);
+	if (within?.kind !== "values" || !allowed.length) return null;
+	const prefix = prefixOf(value.trim(), within.values);
+	if (!prefix || allowed.includes(prefix)) return null;
+	return `"${value}" names a ${within.noun} outside this agent's declared capability constraint \`${connectorId}.${def.withinField}\` (${allowed.join(", ")}).`;
+}
+
+/** The `value:` prefix of a prefixed identity (`tmux:main` → `tmux`), or "" when it names none. */
+function prefixOf(raw: string, values: readonly string[]): string {
+	const sep = raw.indexOf(":");
+	const prefix = sep > 0 ? raw.slice(0, sep).trim().toLowerCase() : "";
+	return values.includes(prefix) ? prefix : "";
+}
+
+/**
+ * Does a call's identity name the bound resource? `tmux:main` and a bare `main` are the same pane
+ * — the tools accept both, with the backend carried separately — so accepting only the exact
+ * string would refuse a legal call. Two DIFFERENT prefixes never match, whatever the suffix:
+ * `kitty:main` is not `tmux:main`, and treating it as one would silently redirect a command onto
+ * another backend rather than refusing it.
+ */
+export function matchesBoundTarget(raw: string, bound: string, values: readonly string[]): boolean {
+	const a = prefixOf(raw, values);
+	const b = prefixOf(bound, values);
+	if (a && b && a !== b) return false;
+	// Case-sensitive: a tmux session name is case-sensitive, so `Main` is a different pane.
+	return raw.slice(a ? a.length + 1 : 0) === bound.slice(b ? b.length + 1 : 0);
 }
 
 /** The minimum a tool must expose for the constraint gate to read it — structural, so a test
@@ -286,8 +454,14 @@ export function enforceConstraints(
 	const props = tool.jsonSchema?.properties ?? {};
 	let out = input;
 	for (const [field, def] of Object.entries(vocab)) {
-		const allowed = spec[field];
-		if (!allowed?.length) continue;
+		if (def.kind === "binding") {
+			const gated = enforceBinding(tool, vocab, field, def, spec, out, props);
+			if (!gated.ok) return gated;
+			out = gated.input;
+			continue;
+		}
+		const allowed = asList(spec[field]);
+		if (!allowed.length) continue;
 		const because = `\`${tool.connector}.${field}\` (${allowed.join(", ")})`;
 		// A prefixed argument FIRST: `terminal_capture({target:"iterm2:1:1:1"})` reaches iTerm2
 		// without ever setting `backend`, so checking only `backend` would leave the ceiling
@@ -332,6 +506,57 @@ export function enforceConstraints(
 		};
 	}
 	return { ok: true, input: out };
+}
+
+/**
+ * One binding field against one call (#402) — the "which ONE of them" half of the ceiling.
+ *
+ * Four outcomes, and the second is the one worth arguing for:
+ *
+ *   • nothing declared and nothing bound → untouched, which is every agent today;
+ *   • `single` with NOTHING BOUND → refused. Under `single` the agent has no way to choose, and
+ *     guessing costs a shell command on somebody's machine. This is the same call the backend
+ *     ceiling already makes when several backends are permitted and none is named: ask, do not
+ *     guess. It is also why binding is exposed as an API rather than left implicit;
+ *   • bound and the call names nothing → NARROWED to the bound identity, so the model never has to
+ *     know it and cannot get it wrong;
+ *   • bound and the call names another → refused, naming the constraint and the bound identity.
+ *
+ * A tool whose schema has no such argument is never gated here: `terminal_list_targets` is how you
+ * DISCOVER what to bind, and refusing it would leave a fresh instance unable to be configured.
+ */
+function enforceBinding(
+	tool: ConstrainedTool,
+	vocab: Record<string, ConstraintDef>,
+	field: string,
+	def: BindingConstraintDef,
+	spec: ConstraintSpec,
+	input: Record<string, unknown>,
+	props: Record<string, unknown>,
+): ConstraintOutcome {
+	const single = asText(spec[field]) === SINGLE;
+	const bound = asText(spec[def.bindField]);
+	// A bound identity is honoured even under `many`: the subscriber pinned it, and a pin only
+	// ever narrows. Declaring neither leaves the call byte-identical to before this existed.
+	if (!single && !bound) return { ok: true, input };
+	if (!(def.arg in props)) return { ok: true, input };
+	const because = `\`${tool.connector}.${field}\` (${single ? SINGLE : "bound"})`;
+	if (!bound) {
+		return {
+			ok: false,
+			refusal: `Refused by this agent's declared capability constraint ${because}: this agent drives exactly one ${def.noun} and this instance has none bound. Bind one first (\`PUT /v1/instances/{id}/terminal-target\`), then retry — \`${def.arg}\` cannot be chosen per call.`,
+		};
+	}
+	const within = def.withinField ? vocab[def.withinField] : undefined;
+	const values = within?.kind === "values" ? within.values : [];
+	const raw = String(input[def.arg] ?? "").trim();
+	// Rewritten to the BOUND form even when it already matched, so the runner is addressed one
+	// canonical way — `main` and `tmux:main` must not reach it as two different panes.
+	if (!raw || matchesBoundTarget(raw, bound, values)) return { ok: true, input: { ...input, [def.arg]: bound } };
+	return {
+		ok: false,
+		refusal: `Refused by this agent's declared capability constraint ${because}: this instance is bound to the ${def.noun} "${bound}", so "${raw}" is not one it may use.`,
+	};
 }
 
 /** Drop defaults so a stored config stays readable and adding this feature rewrites nothing. */

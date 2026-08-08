@@ -61,6 +61,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerTerminalBindingRoutes } from "./instances-terminal.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { instanceRoutes } from "./instances.js";
 
@@ -247,6 +248,8 @@ const ROUTES = [
 	"PUT /:instanceId/files/multipart/:uploadId/part",
 	"POST /:instanceId/files/multipart/:uploadId/complete",
 	"DELETE /:instanceId/files/multipart/:uploadId",
+	"GET /:instanceId/terminal-target",
+	"PUT /:instanceId/terminal-target",
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
@@ -317,6 +320,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-files.ts": registerFileUploadRoutes,
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
+	"instances-terminal.ts": registerTerminalBindingRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
 };
 
@@ -386,6 +390,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/tasks/:taskId/cancel",
 		"GET /:instanceId/task-events",
 	],
+	"instances-terminal.ts": ["GET /:instanceId/terminal-target", "PUT /:instanceId/terminal-target"],
 	"instances-translation.ts": [
 		"GET /:instanceId/translation",
 		"PUT /:instanceId/translation",
@@ -507,6 +512,11 @@ const GATES: Record<string, [number, number]> = {
 	"PUT /:instanceId/files/multipart/:uploadId/part": [401, 404],
 	"POST /:instanceId/files/multipart/:uploadId/complete": [401, 404],
 	"DELETE /:instanceId/files/multipart/:uploadId": [401, 404],
+	// The terminal-target binding (#402). Same shape as `/runner-node` above and gated the same
+	// way: the subscriber's half of a creator-declared ceiling is still the subscriber's, so a
+	// stranger must not read WHICH pane someone else's agent drives, let alone rebind it.
+	"GET /:instanceId/terminal-target": [401, 404],
+	"PUT /:instanceId/terminal-target": [401, 404],
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],

@@ -216,3 +216,112 @@ describe("terminal connector — the backend ceiling (#404)", () => {
 		expect(callRunner).not.toHaveBeenCalled();
 	});
 });
+
+/**
+ * The single-target BINDING (#402), asserted at the dispatcher for the same reason the backend
+ * ceiling is: the console is not where this holds. The creator declares `targets: "single"` in
+ * capabilities; the subscriber binds WHICH target in the instance config, the way `runnerNode`
+ * binds which machine — and the two are merged and enforced in `runRegistryTool`.
+ */
+describe("terminal connector — the single-target binding (#402)", () => {
+	/** An agent config and an instance config, exactly as the merge reads them out of D1. */
+	const env = (agent: Record<string, unknown> | null, instance: Record<string, unknown> | null) =>
+		({
+			DB: {
+				prepare(sql: string) {
+					const constraintQuery = sql.includes("agent_instances");
+					return {
+						bind() {
+							return {
+								first: async () =>
+									constraintQuery
+										? {
+												agent_config: JSON.stringify({ capabilities: { surfaces: ["tmux"], ...(agent ? { surfaceOptions: { terminal: agent } } : {}) } }),
+												instance_config: JSON.stringify(instance ? { surfaceOptions: { terminal: instance } } : {}),
+											}
+										: { ok: 1 },
+							};
+						},
+					};
+				},
+			},
+		}) as unknown as Env;
+
+	it("A SUBSCRIBER BINDS A TARGET WITHIN THE CEILING, and the call goes through", async () => {
+		callRunner.mockResolvedValue({ pane: "hi" });
+		const r = await runRegistryTool(
+			"terminal_capture",
+			{ env: env({ backends: ["tmux"], targets: "single" }, { boundTarget: "tmux:main" }), userId: "u1", instanceId: "i1" },
+			{ target: "tmux:main" },
+		);
+		expect(r.success).toBe(true);
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/capture", { target: "tmux:main", backend: "tmux", lines: undefined }, expect.anything());
+	});
+
+	it("A CALL NAMING A NON-BOUND TARGET IS REFUSED, and the runner is never reached", async () => {
+		// The acceptance test, and the whole argument of the ticket: a constraint that only hides a
+		// control in the console is walked straight through by the first confidently-wrong model
+		// call. `terminal_run_command` is a WRITE — this is a shell command on the owner's machine.
+		const r = await runRegistryTool(
+			"terminal_run_command",
+			{ env: env({ backends: ["tmux"], targets: "single" }, { boundTarget: "tmux:main" }), userId: "u1", instanceId: "i1" },
+			{ target: "tmux:prod", command: "rm -rf ." },
+		);
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("`terminal.targets` (single)");
+		expect(r.content).toContain("tmux:main");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("A SUBSCRIBER CANNOT WIDEN THE BACKENDS — the instance's own request is dropped", async () => {
+		// The ceiling is a catalog claim: `lintAgentClaims` (#362) checks a description against
+		// capabilities, so an instance that could widen it would make the agent's own description
+		// false by configuration. Asserted at the dispatcher, not only at the resolver.
+		const r = await runRegistryTool(
+			"terminal_capture",
+			{ env: env({ backends: ["tmux"] }, { backends: ["tmux", "kitty", "iterm2"] }), userId: "u1", instanceId: "i1" },
+			{ target: "iterm2:1:1:1" },
+		);
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("`terminal.backends` (tmux)");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("cannot smuggle a binding outside the ceiling in through the instance config either", async () => {
+		// Bound to iTerm2 on a tmux-only agent: the binding is dropped by the merge, and what is
+		// left is `single` with nothing bound — which refuses. Never "iTerm2 is fine after all".
+		const r = await runRegistryTool(
+			"terminal_capture",
+			{ env: env({ backends: ["tmux"], targets: "single" }, { boundTarget: "iterm2:1:1:1" }), userId: "u1", instanceId: "i1" },
+			{ target: "iterm2:1:1:1" },
+		);
+		expect(r.success).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("fills an omitted target from the binding, so the model never has to carry it", async () => {
+		callRunner.mockResolvedValue({ pane: "hi" });
+		await runRegistryTool(
+			"terminal_capture",
+			{ env: env({ targets: "single" }, { boundTarget: "tmux:main" }), userId: "u1", instanceId: "i1" },
+			{},
+		);
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/capture", { target: "tmux:main", backend: undefined, lines: undefined }, expect.anything());
+	});
+
+	it("lets an unbound single-target agent LIST — the one call that has to keep working", async () => {
+		callRunner.mockResolvedValue({ targets: [] });
+		const r = await runRegistryTool("terminal_list_targets", { env: env({ targets: "single" }, null), userId: "u1", instanceId: "i1" }, {});
+		expect(r.success).toBe(true);
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/list", { backend: "all" }, expect.anything());
+	});
+
+	it("AN AGENT THAT DECLARES NEITHER HALF IS BYTE-IDENTICAL TO TODAY", async () => {
+		// Every agent on the platform right now, including the generic Terminal Operator, which
+		// MUST stay `many` — surveying every backend is its entire purpose.
+		callRunner.mockResolvedValue({ pane: "hi" });
+		const r = await runRegistryTool("terminal_capture", { env: env(null, null), userId: "u1", instanceId: "i1" }, { target: "iterm2:1:1:1" });
+		expect(r.success).toBe(true);
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/capture", { target: "iterm2:1:1:1", backend: undefined, lines: undefined }, expect.anything());
+	});
+});

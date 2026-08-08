@@ -92,6 +92,15 @@ describe("migration 0099 — the tmux Operator's declared tools (#403)", () => {
 	});
 });
 
+/**
+ * SUPERSEDED BY 0104 (#402) as a statement about the ROWS, and kept as one about 0099.
+ *
+ * These two descriptions were the honest answer while no ceiling existed. #404 built the
+ * constraint and 0104 declares it, at which point "reaches all three backends" becomes false and
+ * the copy is rewritten in that migration. What is asserted below is still exactly right about
+ * 0099's own SQL — the file cannot be edited (`check-migrations.mjs --require-history`) and
+ * should not be. `lib/operator-backend-ceiling.test.ts` holds the current state.
+ */
 describe("migration 0099 — kitty and iTerm2 cannot be fixed this way, so they say so", () => {
 	const kitty = /slug = 'kitty-operator'/.test(SQL) ? /SET description = '(Test agent for the kitty[\s\S]*?)',/.exec(SQL)?.[1] ?? "" : "";
 	const iterm = /slug = 'iterm-operator'/.test(SQL) ? /SET description = '(Test agent for the iTerm2[\s\S]*?)',/.exec(SQL)?.[1] ?? "" : "";

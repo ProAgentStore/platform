@@ -16,6 +16,7 @@ import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
+import { registerTerminalBindingRoutes } from "./instances-terminal.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
@@ -839,6 +840,10 @@ registerBehaviourRoutes(instanceRoutes);
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);
+// The terminal-target binding (#402) — the subscriber's half of the terminal ceiling, the same
+// shape as the `/runner-node` pin above and mounted from its own module for the same reason the
+// others are: this file is already at its size pin.
+registerTerminalBindingRoutes(instanceRoutes);
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {

@@ -4529,6 +4529,81 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/terminal-target:
+    get:
+      summary: Read which single terminal target this instance drives
+      description: |
+        The subscriber's half of a creator-declared capability constraint, and the same split as
+        `/runner-node`: that the agent drives ONE terminal is the creator's declaration
+        (`capabilities.surfaceOptions.terminal.targets: "single"`), WHICH one is the subscriber's.
+
+        All three fields are returned because the caller's question is "must I bind one, and to
+        what": `targets` and `backends` come from the agent and cannot be changed here, `target`
+        is this instance's binding. `targets: "many"` (the default, and every agent today) means
+        no binding is required; `backends: null` means the agent declares no backend ceiling.
+      operationId: getTerminalTarget
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The binding, and the ceiling it must sit inside
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  target: { type: string, nullable: true }
+                  targets: { type: string, enum: [single, many] }
+                  backends:
+                    type: array
+                    nullable: true
+                    items: { type: string, enum: [tmux, kitty, iterm2] }
+                    description: The agent's declared backend ceiling, or null when it declares none.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Bind (or clear) the one terminal target this instance drives
+      description: |
+        An empty or null `target` clears the binding. A target naming a backend outside the
+        agent's declared ceiling is refused with 400 rather than stored — it would be dropped when
+        read back, and a save that reports success and then shows an empty field is worse than a
+        refusal.
+
+        Binding is not merely a console affordance: with `targets: "single"` a tool call naming any
+        other target is refused at dispatch in `runRegistryTool`, and a call naming none is filled
+        in with the bound one.
+      operationId: setTerminalTarget
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target:
+                  type: string
+                  nullable: true
+                  description: "A terminal target, preferably backend-prefixed: `tmux:main`, `kitty:3`, `iterm2:1:1:1`."
+      responses:
+        "200":
+          description: The stored binding, resolved the same way GET reports it
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  target: { type: string, nullable: true }
+                  targets: { type: string, enum: [single, many] }
+                  backends:
+                    type: array
+                    nullable: true
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Voice ─────────────────────────────────────────────────────────────────
 
   /v1/instances/{instanceId}/voice-settings:

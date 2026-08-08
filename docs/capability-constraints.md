@@ -90,6 +90,22 @@ capabilities: {
 - `targets: "single"` makes the subscriber's bound target the only legal value for a `target`
   argument, the way `runnerNode` makes the pinned node the only machine routed to.
 
+**As built** (#404 then #402). The subscriber's half lives in the same map on the INSTANCE, under
+the field `boundTarget` — spelled differently from the creator's `targets` on purpose, because the
+two sit side by side in one flat object and a one-letter difference between a cardinality and an
+identity is a reader's trap:
+
+```
+agents.config.capabilities.surfaceOptions   { terminal: { backends: ["tmux"], targets: "single" } }
+agent_instances.config.surfaceOptions       { terminal: { boundTarget: "tmux:main" } }
+```
+
+Set through `GET`/`PUT /v1/instances/{id}/terminal-target`, merged by
+`connectorConstraintsForInstance`, enforced by `enforceConstraints` inside `runRegistryTool`. Under
+`single` a call naming another target is refused and a call naming none is FILLED IN with the bound
+one; with nothing bound, a target-taking call is refused rather than guessed — the same call the
+backend ceiling already makes when several backends are permitted and none is named.
+
 ## What this is NOT
 
 - **Not a general policy engine.** A closed vocabulary per connector, reviewed like every other

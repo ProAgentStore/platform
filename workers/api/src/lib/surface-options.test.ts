@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	boundTargetRefusal,
 	CONNECTOR_CONSTRAINTS,
 	constraintsFor,
 	enforceConstraints,
@@ -330,9 +331,176 @@ describe("enforceConstraints — an out-of-scope argument is refused, naming the
 });
 
 describe("the vocabulary table itself", () => {
-	it("declares terminal.backends and nothing else — an extension point is reviewed, not inferred", () => {
+	it("declares terminal.backends and terminal.targets and nothing else — an extension point is reviewed, not inferred", () => {
 		expect(Object.keys(CONNECTOR_CONSTRAINTS)).toEqual(["terminal"]);
-		expect(Object.keys(CONNECTOR_CONSTRAINTS.terminal)).toEqual(["backends"]);
-		expect(CONNECTOR_CONSTRAINTS.terminal.backends.values).toEqual(["tmux", "kitty", "iterm2"]);
+		// Order is asserted because enforcement walks the table in it: a target naming a backend
+		// outside the ceiling must be refused as a BACKEND violation, which is the constraint that
+		// actually applies, not as "not the bound target".
+		expect(Object.keys(CONNECTOR_CONSTRAINTS.terminal)).toEqual(["backends", "targets"]);
+		const backends = CONNECTOR_CONSTRAINTS.terminal.backends;
+		expect(backends.kind === "values" && backends.values).toEqual(["tmux", "kitty", "iterm2"]);
+		const targets = CONNECTOR_CONSTRAINTS.terminal.targets;
+		expect(targets.kind).toBe("binding");
+		// The binding governs `target` and sits inside `backends` — the two facts the enforcement
+		// and the write path both read, and a rename of either silently disconnects them.
+		expect(targets.kind === "binding" && targets.arg).toBe("target");
+		expect(targets.kind === "binding" && targets.withinField).toBe("backends");
+	});
+});
+
+/**
+ * `targets: "single"` + the subscriber's bound identity (#402) — the second half of the ceiling.
+ *
+ * A backend ceiling answers "which backends"; it cannot answer "which ONE of them", and for a
+ * named operator that is the question that matters, because a mis-addressed target is a shell
+ * command on somebody's machine.
+ */
+describe("parseConstraintSpec — the binding field", () => {
+	it("keeps `single`, and DROPS `many` because many is the platform default", () => {
+		expect(parseConstraintSpec("terminal", { targets: "single" })).toEqual({ targets: "single" });
+		// A stored ceiling always means "narrower than the platform" — the same rule that drops a
+		// whole-vocabulary `backends` list. Storing `many` would store today's behaviour as a claim.
+		expect(parseConstraintSpec("terminal", { targets: "many" })).toBeUndefined();
+	});
+
+	it("reads junk as ABSENT rather than as a ban, exactly like a value list", () => {
+		for (const junk of [["single"], "", "SINGLE ", 1, null, {}]) {
+			const parsed = parseConstraintSpec("terminal", { targets: junk });
+			// " SINGLE " normalises; everything else is absent.
+			expect(parsed, JSON.stringify(junk)).toEqual(junk === "SINGLE " ? { targets: "single" } : undefined);
+		}
+	});
+
+	it("keeps a bound identity as free text — a tmux session is named by whoever made it", () => {
+		expect(parseConstraintSpec("terminal", { boundTarget: "  tmux:main  " })).toEqual({ boundTarget: "tmux:main" });
+		expect(parseConstraintSpec("terminal", { boundTarget: "" })).toBeUndefined();
+		expect(parseConstraintSpec("terminal", { boundTarget: 7 })).toBeUndefined();
+	});
+
+	it("caps the bound identity's length — a target is a name or a coordinate, never prose", () => {
+		const parsed = parseConstraintSpec("terminal", { boundTarget: "tmux:".concat("x".repeat(500)) });
+		expect((parsed?.boundTarget as string).length).toBe(200);
+	});
+
+	it("round-trips both halves through parse → serialize in the flat declared shape", () => {
+		const wire = serializeSurfaceOptions(parseSurfaceOptions({ terminal: { backends: ["tmux"], targets: "single", boundTarget: "tmux:main" } }));
+		expect(wire).toEqual({ terminal: { backends: ["tmux"], targets: "single", boundTarget: "tmux:main" } });
+	});
+});
+
+describe("narrowConstraintSpec — the binding narrows in both currencies", () => {
+	it("lets a subscriber TIGHTEN a `many` agent to single", () => {
+		expect(narrowConstraintSpec("terminal", undefined, { targets: "single" })).toEqual({ targets: "single" });
+	});
+
+	it("REFUSES to loosen: a subscriber cannot turn a single-target agent into a many-target one", () => {
+		// `many` never survives the parser, so this is what the attempt actually looks like on the
+		// wire — and the creator's `single` has to outlive it.
+		expect(narrowConstraintSpec("terminal", { targets: "single" }, {})).toEqual({ targets: "single" });
+		expect(narrowConstraintSpec("terminal", { targets: "single" }, { targets: "many" } as never)).toEqual({ targets: "single" });
+	});
+
+	it("takes the bound identity from the instance, which is whose choice it is", () => {
+		expect(narrowConstraintSpec("terminal", { targets: "single", backends: ["tmux"] }, { boundTarget: "tmux:main" })).toEqual({
+			backends: ["tmux"],
+			targets: "single",
+			boundTarget: "tmux:main",
+		});
+	});
+
+	it("DROPS a binding that names a backend outside the ceiling — the widen attempt in its other form", () => {
+		// The two halves are declared in different configs (ceiling on the agent, binding on the
+		// instance), so neither parse could see both. Dropped rather than honoured: a `single`
+		// agent with nothing bound refuses, and refusing is the safe direction.
+		expect(narrowConstraintSpec("terminal", { targets: "single", backends: ["tmux"] }, { boundTarget: "iterm2:1:1:1" })).toEqual({
+			backends: ["tmux"],
+			targets: "single",
+		});
+	});
+
+	it("keeps an UNPREFIXED binding, which names no backend to be outside the ceiling", () => {
+		expect(narrowConstraintSpec("terminal", { backends: ["tmux"] }, { boundTarget: "main" })?.boundTarget).toBe("main");
+	});
+
+	it("lets the creator fix the binding too, and the subscriber cannot then replace it", () => {
+		expect(narrowConstraintSpec("terminal", { boundTarget: "tmux:ops" }, { boundTarget: "tmux:mine" })?.boundTarget).toBe("tmux:ops");
+	});
+});
+
+describe("enforceConstraints — the single-target binding", () => {
+	const BOUND = { targets: "single", boundTarget: "tmux:main" };
+
+	it("passes a call that names the bound target", () => {
+		expect(enforceConstraints(CAPTURE, BOUND, { target: "tmux:main" })).toEqual({ ok: true, input: { target: "tmux:main" } });
+	});
+
+	it("accepts the same pane written the other way, and canonicalises it", () => {
+		// The tools take `tmux:main` and a bare `main` + `backend` as the same pane, so refusing
+		// one of them would refuse a legal call — and letting both reach the runner would address
+		// one pane two ways.
+		expect(enforceConstraints(CAPTURE, BOUND, { target: "main" })).toEqual({ ok: true, input: { target: "tmux:main" } });
+	});
+
+	it("REFUSES a call naming any other target, saying which constraint applied and what is bound", () => {
+		const r = enforceConstraints(CAPTURE, BOUND, { target: "tmux:other" });
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.refusal).toContain("`terminal.targets` (single)");
+		expect(!r.ok && r.refusal).toContain("tmux:main");
+		expect(!r.ok && r.refusal).toContain("tmux:other");
+	});
+
+	it("refuses a different backend's pane even when the suffix matches", () => {
+		// `kitty:main` and `tmux:main` are different machines' worth of different. Matching on the
+		// suffix alone would silently REDIRECT the command onto the bound pane instead of refusing.
+		expect(enforceConstraints(CAPTURE, BOUND, { target: "kitty:main" }).ok).toBe(false);
+	});
+
+	it("fills an OMITTED target with the bound one, so the model never has to know it", () => {
+		expect(enforceConstraints(CAPTURE, BOUND, {})).toEqual({ ok: true, input: { target: "tmux:main" } });
+	});
+
+	it("REFUSES a target-taking call when `single` is declared and nothing is bound", () => {
+		// The agent has no way to choose, and guessing costs a shell command on a real machine —
+		// the same call the backend ceiling already makes when several are permitted and none named.
+		const r = enforceConstraints(CAPTURE, { targets: "single" }, { target: "tmux:whatever" });
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.refusal).toContain("`terminal.targets` (single)");
+		expect(!r.ok && r.refusal).toMatch(/terminal-target/);
+	});
+
+	it("still lets an unbound single-target agent LIST — that is how you discover what to bind", () => {
+		expect(enforceConstraints(LIST, { targets: "single" }, {})).toEqual({ ok: true, input: {} });
+		// And creating a target is not the binding's business either: "may not create a second
+		// terminal" is expressible by not declaring the tool, which is what the allowlist is for.
+		expect(enforceConstraints(NEW_TARGET, { targets: "single" }, { backend: "tmux" })).toEqual({ ok: true, input: { backend: "tmux" } });
+	});
+
+	it("honours a bound target under the DEFAULT cardinality — a subscriber's pin only narrows", () => {
+		expect(enforceConstraints(CAPTURE, { boundTarget: "tmux:main" }, { target: "kitty:3" }).ok).toBe(false);
+	});
+
+	it("changes nothing at all when neither half is declared", () => {
+		const input = { target: "iterm2:1:1:1" };
+		expect(enforceConstraints(CAPTURE, { backends: undefined } as never, input)).toEqual({ ok: true, input });
+	});
+
+	it("composes with the backend ceiling, and the BACKEND is the constraint reported", () => {
+		const r = enforceConstraints(CAPTURE, { backends: ["tmux"], ...BOUND }, { target: "iterm2:1:1:1" });
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.refusal).toContain("`terminal.backends` (tmux)");
+	});
+});
+
+describe("boundTargetRefusal — what a WRITE path owes the person typing", () => {
+	it("refuses a target outside the declared ceiling, naming it", () => {
+		const why = boundTargetRefusal("terminal", "targets", "iterm2:1:1:1", { backends: ["tmux"] });
+		expect(why).toContain("`terminal.backends` (tmux)");
+		expect(why).toContain("iterm2:1:1:1");
+	});
+
+	it("accepts anything the ceiling permits, and anything at all when there is no ceiling", () => {
+		expect(boundTargetRefusal("terminal", "targets", "tmux:main", { backends: ["tmux"] })).toBeNull();
+		expect(boundTargetRefusal("terminal", "targets", "main", { backends: ["tmux"] })).toBeNull();
+		expect(boundTargetRefusal("terminal", "targets", "iterm2:1:1:1", undefined)).toBeNull();
 	});
 });
