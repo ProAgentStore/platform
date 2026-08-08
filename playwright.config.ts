@@ -1,7 +1,34 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolveE2EPort } from "./e2e/run-port.mjs";
 
 const externalBaseURL = process.env.E2E_BASE_URL;
-const baseURL = externalBaseURL || "http://127.0.0.1:4273";
+
+/**
+ * ONE port per run, and every process in the run agrees on it (#452).
+ *
+ * Before this, the port was a fixed `4273` here and `Number(process.env.E2E_PORT || 4273)` in
+ * `e2e/console-server.mjs`. `E2E_PORT` therefore moved the SERVER and nothing else: set it, and
+ * the managed server bound your port while `baseURL` and the `webServer.url` Playwright waits on
+ * both stayed 4273. `reuseExistingServer: false` only rejects a port that is ALREADY answering
+ * when Playwright pre-flights it; a neighbouring run whose server comes up a moment later sails
+ * through, and the whole suite executes against their server and their bundle. Reproduced
+ * end-to-end on 2026-08-08: `E2E_PORT=5001` + a decoy on 4273 three seconds late →
+ * `console.spec.ts` "machine-readable skill discovery files are served" failed with
+ * `Received: "I-AM-THE-NEIGHBOURS-SERVER"`. That spec is a bare `request.get`, so it cannot be
+ * explained by a shared build output; it is this. It is also the failure that was relayed round
+ * this repo all day as known-bad on `main`, and it is not a defect in anything it names.
+ *
+ * The resolution rules, and why the default is unique per run rather than a constant, live in
+ * `e2e/run-port.mjs` next to the tests that hold them — including the one property that cannot be
+ * seen by reading the expression: Playwright re-evaluates THIS FILE in every worker process, so
+ * the port has to be a decision published into the inherited environment, not an expression
+ * recomputed per process.
+ *
+ * `E2E_BASE_URL` still wins over all of it and still disables the managed server, so pointing a
+ * run at production keeps working.
+ */
+const port = externalBaseURL ? 0 : resolveE2EPort(process.env, process.pid);
+const baseURL = externalBaseURL || `http://127.0.0.1:${port}`;
 
 export default defineConfig({
 	testDir: "./e2e",
@@ -32,6 +59,9 @@ export default defineConfig({
 		: {
 				command: "node e2e/console-server.mjs",
 				url: baseURL,
+				// Hand the server the port this config resolved. It must not derive its own —
+				// that is the mismatch #452 was.
+				env: { E2E_PORT: String(port) },
 				reuseExistingServer: false,
 				timeout: 10_000,
 			},

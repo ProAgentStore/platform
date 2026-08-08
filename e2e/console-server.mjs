@@ -1,14 +1,58 @@
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { extname, join, normalize, resolve } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { newestMtimeUnder, sdkDistVerdict } from "./build-inputs.mjs";
 
-const port = Number(process.env.E2E_PORT || 4273);
+/**
+ * SEVERAL FULL SUITES RUN ON THIS MACHINE AT ONCE — that is the design, not an accident (#253),
+ * and everything below that looks over-careful is about it (#452).
+ *
+ * Two things used to be shared between runs, and both graded one run against another's work:
+ *
+ *   THE PORT. `E2E_PORT` was read here and by nothing else, so setting it moved the server and
+ *   left Playwright waiting on 4273 — someone else's. `playwright.config.ts` now resolves ONE
+ *   port per run (unique by default) and hands it down; this file only obeys it, and must keep
+ *   only obeying it. Deriving a port here again reintroduces exactly the bug.
+ *
+ *   THE BUILD OUTPUT. `store/console/dist/assets/bundle.js` is a fixed, unhashed path — pinned
+ *   deliberately in `store/console/vite.config.ts` so `workers/host/build.js` can find it — and
+ *   since #413 (correctly) deleted the staleness predicate, EVERY run writes it. Build and read
+ *   are separate steps, and `bundle.js` and `index.css` are two reads, so a neighbour's build
+ *   landing in between yields one tree's CSS with another tree's JS, or a truncated file. The
+ *   builds below therefore emit into a private temp directory, one per server process. The
+ *   committed `dist` layout is untouched: production still builds to `dist`, `build.js` still
+ *   reads it, and CI is unaffected because CI is alone either way.
+ *
+ * Isolation, not caching, is the fix. Reinstating a staleness predicate so concurrent runs skip
+ * the build would trade a loud race for a silent staleness, which is the defect #413 removed.
+ */
+// OBEY the port, never derive one. `playwright.config.ts` resolves it (see `e2e/run-port.mjs`)
+// and passes it down through `webServer.env`; the 4273 below is only for running this file by
+// hand. Computing a default here again is precisely the mismatch #452 was.
+const port = Number(process.env.E2E_PORT) || 4273;
 const storeRoot = resolve("store");
 const consoleDir = join(storeRoot, "console");
 const adminDir = join(storeRoot, "admin");
 const sdkDir = resolve("packages", "sdk");
+
+// Private build output for THIS server process. Outside the repo, so it can never be confused
+// with the committed `dist` layout and needs no .gitignore entry.
+const buildRoot = mkdtempSync(join(tmpdir(), "pags-e2e-build-"));
+let cleaned = false;
+function cleanBuildRoot() {
+	if (cleaned) return;
+	cleaned = true;
+	rmSync(buildRoot, { recursive: true, force: true });
+}
+process.on("exit", cleanBuildRoot);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+	process.on(signal, () => {
+		cleanBuildRoot();
+		process.exit(0);
+	});
+}
 
 /**
  * The SDK's `dist` is an INPUT to both app builds, and it is the one input this server does
@@ -56,8 +100,30 @@ function requireBuiltSdk() {
  * covering the destructive operator flows affordable in a repo where Playwright is the
  * heaviest thing running (#253, #274).
  */
+/**
+ * Read one build artifact and refuse to serve an empty one.
+ *
+ * A zero-length `bundle.js` renders a blank page, and a blank page fails a spec that names a
+ * component — so the failure arrives pointing at the UI rather than at the build that did not
+ * produce it. Say it here, once, naming the file and the command.
+ */
+function readArtifact(path, name) {
+	const body = existsSync(path) ? readFileSync(path, "utf-8") : "";
+	if (body.length === 0) {
+		console.error(
+			`\n✗ The ${name} build produced nothing at ${path}.\n` +
+				"  The bundle is empty or missing, so every spec would fail against a blank page.\n\n" +
+				`  Reproduce with:  cd ${name === "console" ? "store/console" : "store/admin"} && npx vite build\n`,
+		);
+		process.exit(1);
+	}
+	return body;
+}
+
 function buildShell(dir, { title, description, name }) {
-	const distDir = join(dir, "dist");
+	// Per-run output (see the header): a fixed `dist` path is a shared mutable file, and the
+	// read below is the step that gets corrupted by someone else's write.
+	const distDir = join(buildRoot, name);
 	// ALWAYS build. There is no staleness predicate here any more, and its absence is the fix
 	// for #413 rather than a simplification of it.
 	//
@@ -88,10 +154,13 @@ function buildShell(dir, { title, description, name }) {
 	// The property this buys is stronger than a wider walk: the local path is now the CI path.
 	// CI checks out with no `dist` at all and therefore already builds unconditionally, which is
 	// precisely why the hole was invisible from the CI side and cost an afternoon from the other.
-	console.log(`Building ${name} React app for e2e tests...`);
-	execSync("npx vite build", { cwd: dir, stdio: "inherit" });
-	const bundleJs = readFileSync(join(distDir, "assets", "bundle.js"), "utf-8");
-	const bundleCss = readFileSync(join(distDir, "assets", "index.css"), "utf-8");
+	console.log(`Building ${name} React app for e2e tests → ${distDir}`);
+	// `--emptyOutDir` because the target is outside the project root, where Vite otherwise
+	// declines to clear it and prints a warning instead. execFile, not a shell string: the temp
+	// path comes from the OS and must not be re-parsed by a shell.
+	execFileSync("npx", ["vite", "build", "--outDir", distDir, "--emptyOutDir"], { cwd: dir, stdio: "inherit" });
+	const bundleJs = readArtifact(join(distDir, "assets", "bundle.js"), name);
+	const bundleCss = readArtifact(join(distDir, "assets", "index.css"), name);
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
