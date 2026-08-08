@@ -57,6 +57,31 @@ function effectiveDeclared(slug: string): { file: string; tools: string[] } {
 	return found;
 }
 
+/**
+ * The last WHOLE-`$.capabilities` object written for a slug, or null if only path-sets ever were.
+ *
+ * Statement-scoped, and that is the entire point. The original of this read the whole FILE with
+ * `/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)[\s\S]*?slug = 'coder-repo'/`, which anchors
+ * on the FIRST object in the file and then merely requires the slug to appear somewhere after it.
+ * It passed on 0101 by luck — `coder-repo` happened to be the first of that file's three
+ * statements. 0108 puts it second, and the same regex silently graded `coder-lead`'s object as
+ * `coder-repo`'s: a guard passing for the wrong reason, which is #444's own subject.
+ */
+function effectiveWholeCapabilities(slug: string): { file: string; caps: Record<string, unknown> } | null {
+	const slugRe = new RegExp(`slug\\s*=\\s*'${slug}'`);
+	let found: { file: string; caps: Record<string, unknown> } | null = null;
+	for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()) {
+		const sql = readFileSync(join(MIGRATIONS, f), "utf8");
+		if (!slugRe.test(sql)) continue;
+		for (const stmt of sql.split(/;\s*\n/)) {
+			if (!slugRe.test(stmt)) continue;
+			const obj = stmt.match(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/);
+			if (obj) found = { file: f, caps: JSON.parse(obj[1]) as Record<string, unknown> };
+		}
+	}
+	return found;
+}
+
 function toolsFromStatement(stmt: string): string[] | null {
 	const arr = stmt.match(/'\$\.capabilities\.tools'\s*,\s*json\('(\[[\s\S]*?\])'\)/);
 	if (arr) return JSON.parse(arr[1]) as string[];
@@ -188,13 +213,14 @@ describe("the Repo Coder has ONE chat, and it can still do the job (0070 / #209)
 		// A migration that re-sets the WHOLE `$.capabilities` object (0054's shape, which 0101
 		// follows) drops any surfaceOption it does not restate. Silently getting a second chat back
 		// is not something the tools assertions below would notice.
-		const file = effectiveDeclared("coder-repo").file;
-		const sql = readFileSync(join(MIGRATIONS, file), "utf8");
-		if (!sql.includes("'$.capabilities',")) return; // path-set: it cannot have touched options
-		const m = sql.match(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)[\s\S]*?slug = 'coder-repo'/);
-		expect(m, `${file} rewrites coder-repo's capabilities in an unreadable shape`).toBeTruthy();
-		const caps = JSON.parse((m as RegExpMatchArray)[1]) as { surfaceOptions?: { coding?: Record<string, unknown> } };
-		expect(caps.surfaceOptions?.coding).toEqual({ repos: "single", drive: false, copilot: false });
+		const last = effectiveWholeCapabilities("coder-repo");
+		if (!last) return; // only path-sets: none of them can have touched surfaceOptions
+		const caps = last.caps as { surfaceOptions?: { coding?: Record<string, unknown> } };
+		expect(caps.surfaceOptions?.coding, `${last.file} dropped the Repo Coder's coding surfaceOptions`).toEqual({
+			repos: "single",
+			drive: false,
+			copilot: false,
+		});
 	});
 
 	it("never loses a tool 0070 granted — a later re-set must be a superset", () => {
@@ -347,6 +373,73 @@ describe("0107 — the Lead can actually hand you over (#279)", () => {
 		expect(objs.length, "0107 no longer re-sets a whole capabilities object").toBe(1);
 		const caps = JSON.parse(objs[0][1]) as Record<string, unknown>;
 		expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+	});
+});
+
+describe("0108 — the Lead can propose a direction, the Repo Coder can read CI (#444)", () => {
+	// The fourth instance of #415's class, and the one that proves a per-slug guard cannot catch it:
+	// 0107 was written YESTERDAY to fix `transfer_conversation`, re-set the Lead's entire
+	// `$.capabilities` object, and did not include `set_direction` — because a guard for names it
+	// already knows cannot see a new one. `lib/tool-reachability.test.ts` is the guard that can; the
+	// assertions here are the per-slug half it deliberately does not do (that a restated object
+	// never LOSES a name).
+	it("the Lead declares set_direction, and toolNamesFor therefore grants it", async () => {
+		const { toolNamesFor } = await import("../agent-do-tools.js");
+		const { tools } = effectiveDeclared("coder-lead");
+		expect(tools).toContain("set_direction");
+		// Declaration is necessary, not sufficient: a name outside CREATOR_SELECTABLE_TOOLS is
+		// declared and still invisible. That is the second leg of the same trap.
+		expect(toolNamesFor({ surfaces: [], runtime: null, workflow: null, tools } as never).has("set_direction")).toBe(true);
+	});
+
+	it("the Repo Coder declares github_workflow_runs", async () => {
+		const { toolNamesFor } = await import("../agent-do-tools.js");
+		const { tools } = effectiveDeclared("coder-repo");
+		expect(tools).toContain("github_workflow_runs");
+		expect(toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools } as never).has("github_workflow_runs")).toBe(true);
+	});
+
+	it("neither agent lost anything — 0108 restates both whole objects", () => {
+		const lead = effectiveDeclared("coder-lead").tools;
+		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation", "transfer_conversation", "github_list_pulls"]) {
+			expect(lead, n).toContain(n);
+		}
+		const repo = effectiveDeclared("coder-repo").tools;
+		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_create_issue", "github_read_pull"]) {
+			expect(repo, n).toContain(n);
+		}
+	});
+
+	it("the Repo Coder still has ONE chat — the surfaceOption a whole-object set would drop", () => {
+		// Covered generically above by "has not had the Co-pilot switched back on", pinned here too
+		// because 0108 is the migration that would do it: `{repos,drive,copilot}` is not in the
+		// tools array, so every tools assertion in this file passes while the Repo Coder silently
+		// regains a second way to drive its engine (#154/#209).
+		const last = effectiveWholeCapabilities("coder-repo");
+		expect(last?.file, "0108 is no longer the last migration to restate coder-repo's capabilities").toBe(
+			"0108_declare_unreachable_registry_tools.sql",
+		);
+		const caps = last?.caps as { surfaceOptions?: { coding?: Record<string, unknown> } };
+		expect(caps.surfaceOptions?.coding).toEqual({ repos: "single", drive: false, copilot: false });
+	});
+
+	it("passes the validator the create/update routes apply, like every seeded object", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0108_declare_unreachable_registry_tools.sql"), "utf8");
+		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
+		expect(objs.length, "0108 no longer re-sets three whole capabilities objects").toBe(3);
+		for (const m of objs) {
+			const caps = JSON.parse(m[1]) as Record<string, unknown>;
+			expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+		}
+	});
+
+	it("grants set_direction to nobody else — it can only resolve a subordinate", () => {
+		// Same reasoning as 0107's `transfer_conversation`: the tool resolves its target inside the
+		// caller's supervision graph, so on an agent without one it is a capability that cannot name
+		// a single destination.
+		for (const slug of ["coder", "coder-repo", "repo-chat"]) {
+			expect(effectiveDeclared(slug).tools, slug).not.toContain("set_direction");
+		}
 	});
 });
 

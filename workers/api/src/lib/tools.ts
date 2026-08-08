@@ -107,18 +107,21 @@ export const AGENT_TOOLS: ToolDef[] = [
 			contentType: { type: "string", description: "Content-Type for the body (default: application/json)" },
 		},
 	},
-	{
-		name: "store_file",
-		description: "Store a file in your persistent R2 storage.",
-		parameters: {
-			key: { type: "string", description: "File path/name", required: true },
-			content: { type: "string", description: "File content", required: true },
-			contentType: {
-				type: "string",
-				description: "MIME type (default: text/plain)",
-			},
-		},
-	},
+	// `store_file` was DELETED here (#444), not grouped into the `files` catalog group.
+	//
+	// It had a definition, a working handler that put bytes in R2, and membership in no
+	// TOOL_CATALOG group — the `delete_record` shape, unreachable through every path including an
+	// explicit `capabilities.tools:["store_file"]`, which `toolNamesFor` drops without a word.
+	//
+	// Grouping it would have been WORSE than leaving it inert. It wrote to the legacy
+	// `agents/{agentId}/{key}` prefix, while the storage engine keeps files at
+	// `agents/{agentId}/files/{id}/{name}`. The two names below that read that legacy prefix are
+	// themselves shadowed: `buildAgentToolDefinitions` merges AGENT_TOOLS then STORAGE_TOOLS into
+	// one Map by name, and `agent-think.ts` checks `storageToolNames` BEFORE this executor — so
+	// `read_file`/`list_files` resolve to the storage engine's versions everywhere. Putting
+	// `store_file` in the `files` group (which flows into FULL, the default for every agent that
+	// declares nothing) would therefore have handed every production agent a write whose result no
+	// tool can list, read or delete. `upload_file` (storage-tools.ts) is the write that works.
 	{
 		name: "read_file",
 		description: "Read a file from your persistent R2 storage.",
@@ -367,33 +370,9 @@ export async function executeTool(
 				};
 			}
 
-			case "store_file": {
-				if (!r2)
-					return {
-						name: call.name,
-						content: "R2 storage not available",
-						success: false,
-					};
-				const { key, content, contentType } = call.input as {
-					key: string;
-					content: string;
-					contentType?: string;
-				};
-				if (!key || content === undefined)
-					return {
-						name: call.name,
-						content: "key and content required",
-						success: false,
-					};
-				await r2.put(`agents/${agentId}/${key}`, content, {
-					httpMetadata: { contentType: contentType || "text/plain" },
-				});
-				return {
-					name: call.name,
-					content: `Stored file: ${key}`,
-					success: true,
-				};
-			}
+			// `store_file`'s handler is deleted with its definition (#444) — see the note above
+			// AGENT_TOOLS. Nothing could dispatch to it: it was in no catalog group, so
+			// `toolNamesFor` never enabled the name on any path.
 
 			case "read_file": {
 				if (!r2)

@@ -23,8 +23,10 @@ function mockDoStorage() {
 }
 
 describe("tool definitions", () => {
-	it("defines 11 tools", () => {
-		expect(AGENT_TOOLS).toHaveLength(11);
+	it("defines 10 tools", () => {
+		// 11 → 10 when `store_file` was deleted (#444): it was in no TOOL_CATALOG group, so it was
+		// unreachable through every path, and grouping it would have been worse than inert.
+		expect(AGENT_TOOLS).toHaveLength(10);
 	});
 
 	it("includes the self-configuration tool", () => {
@@ -56,9 +58,16 @@ describe("tool definitions", () => {
 	it("includes fetch and file tools", () => {
 		const names = AGENT_TOOLS.map((t) => t.name);
 		expect(names).toContain("fetch_url");
-		expect(names).toContain("store_file");
 		expect(names).toContain("read_file");
 		expect(names).toContain("list_files");
+	});
+
+	it("no longer offers store_file — it was in no catalog group, so nothing could call it (#444)", () => {
+		// The assertion is kept rather than deleted, and inverted, because "AGENT_TOOLS contains
+		// this name" was the whole evidence that `store_file` worked: it was true, and the tool was
+		// unreachable through every path. A name being in this array says nothing about whether any
+		// agent can call it — `tool-reachability.test.ts` is what answers that.
+		expect(AGENT_TOOLS.map((t) => t.name)).not.toContain("store_file");
 	});
 
 	it("required params are marked correctly", () => {
