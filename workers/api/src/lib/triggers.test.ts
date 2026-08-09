@@ -42,6 +42,7 @@ function trigger(config: Record<string, unknown>): TriggerRow {
 		config: JSON.stringify(config),
 		last_run_at: null,
 		next_run_at: null,
+		next_slot_at: null,
 		failure_count: 0,
 		last_error: null,
 		created_at: "2026-07-12T00:00:00Z",
