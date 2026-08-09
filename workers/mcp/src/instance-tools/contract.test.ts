@@ -261,6 +261,7 @@ const TABLE: Record<string, Row> = {
 	list_instance_tools: ["base", "none", null, null, "allowed_only,instance_id,token"],
 	list_instance_trigger_events: ["triggers", "read", null, null, "limit,token,trigger_id"],
 	list_instance_triggers: ["triggers", "read", null, null, "instance_id,token"],
+	get_instance_pipeline: ["observability", "none", null, null, "instance_id,pipeline,token"],
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
 	my_instances: ["base", "none", null, null, "token"],

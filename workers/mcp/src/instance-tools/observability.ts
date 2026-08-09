@@ -149,4 +149,20 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			return jsonText(data);
 		},
 	);
+
+	server.tool(
+		"get_instance_pipeline",
+		"Read back the stored definition of a named declarative pipeline on this instance (issue #464). Returns the full pipeline JSON (steps, sink, etc.) exactly as stored, plus `valid` and `error` so you can tell whether the live copy will run successfully. 404 when the name is not present. Use this before running or re-PUTting a pipeline — re-PUTting without reading first destroys any divergence from the reference definition.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The instance whose pipeline definition to read."),
+			pipeline: z.string().describe("The pipeline name (key under config.pipelines, e.g. 'lead_finder')."),
+		},
+		async ({ token, instance_id, pipeline }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/pipelines/${encodeURIComponent(pipeline)}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
 }

@@ -295,6 +295,44 @@ describe("GET /v1/instances/:id/pipelines (issue #97)", () => {
 	});
 });
 
+describe("GET /v1/instances/:id/pipelines/:name (issue #464)", () => {
+	it("404s when the instance isn't owned", async () => {
+		const { app, env } = testApp({ owned: false, config: JSON.stringify(STORED_PIPELINE) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/sweep", {}, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("404s when the pipeline name does not exist on the instance", async () => {
+		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/no_such_pipeline", {}, await tok("u1"));
+		expect(res.status).toBe(404);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.error).toMatch(/not found/i);
+	});
+
+	it("returns the full definition for a valid pipeline", async () => {
+		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/sweep", {}, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.name).toBe("sweep");
+		expect(body.valid).toBe(true);
+		expect(body.error).toBeNull();
+		expect(body.definition).toMatchObject({ steps: [{ tool: "github_workflow_runs" }], sink: { collection: "results" } });
+	});
+
+	it("returns valid:false and the validator error for a malformed stored definition", async () => {
+		const bad = { pipelines: { broken: { steps: [] } } }; // empty steps → invalid
+		const { app, env } = testApp({ config: JSON.stringify(bad) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/broken", {}, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.valid).toBe(false);
+		expect(body.error).toBeTruthy();
+		expect(body.definition).toMatchObject({ steps: [] });
+	});
+});
+
 describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 	it("owner-gated: 404s when the instance isn't owned (never kicks the workflow)", async () => {
 		const create = vi.fn(async () => ({ id: "wf" }));

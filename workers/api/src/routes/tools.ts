@@ -185,6 +185,35 @@ toolRoutes.get("/:id/pipelines", async (c) => {
 });
 
 /**
+ * GET /v1/instances/:id/pipelines/:name — read back a single stored pipeline definition
+ * (issue #464). Owner-scoped (same requireOwnedInstance the PUT uses). Returns
+ * { name, definition, valid, error } — `error` is the validator's message when the stored
+ * def fails validation so "why won't this run" is answerable without a write. 404 when the
+ * name is not present on this instance.
+ */
+toolRoutes.get("/:id/pipelines/:name", async (c) => {
+	const session = await requireUser(c);
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const name = c.req.param("name");
+	let cfg: Record<string, unknown> = {};
+	try {
+		cfg = JSON.parse(instance.config || "{}") as Record<string, unknown>;
+	} catch {
+		/* malformed config */
+	}
+	const pipelines = (cfg.pipelines && typeof cfg.pipelines === "object" ? cfg.pipelines : {}) as Record<string, PipelineDef>;
+	if (!Object.prototype.hasOwnProperty.call(pipelines, name)) throw new HttpError(404, `Pipeline "${name}" not found`);
+	const def = pipelines[name];
+	const validationError = validatePipeline(def);
+	return c.json({
+		name,
+		definition: def,
+		valid: validationError === null,
+		error: validationError ?? null,
+	});
+});
+
+/**
  * POST /v1/instances/:id/pipelines/:name/run { params } — start a durable pipeline run
  * (#97). Owner-scoped (requireOwnedInstance) + audited (startPipelineRun logs
  * pipeline.requested with the caller's uid). Kicks the PipelineRunWorkflow and returns the
