@@ -171,16 +171,26 @@ describe("M1 — reachable at every moment", () => {
 	});
 });
 
-describe("M2 — immediate and bidirectional", () => {
+describe("M2 — immediate and mic-only (#470)", () => {
 	/**
-	 * Mute silences BOTH directions at once. The half that is easy to lose is the second: a mute
-	 * that closes the microphone and lets the agent keep talking is the failure a user reaches for
-	 * mute to escape, and it looks complete from the mic's side.
+	 * Mute closes the microphone. It does NOT cancel TTS — that is the stop-speech keyword's job
+	 * (handled in handleControlResult). #470 separated these two concerns: "mute my mic" vs
+	 * "stop talking". Mute is now a mic-only operation; the agent's TTS continues uninterrupted.
 	 */
-	it("closes the microphone AND cancels the speech it is interrupting", () => {
+	it("closes the microphone but does NOT cancel the agent's speech (mic-only, #470)", () => {
 		const body = callbackBody("muteFromCommand", "const muteFromCommandRef");
 		expect(body, "mute no longer closes the microphone (ADR 0001 M2)").toMatch(/sttRef\.current\?\.stop\(\)/);
-		expect(body, "mute no longer cancels in-flight speech — muting an agent that keeps talking is not mute (ADR 0001 M2)").toMatch(/ttsRef\.current\?\.cancel\(\)/);
+		// #470: mute must NOT cancel TTS — that is the stop-speech keyword's responsibility.
+		expect(body, "mute cancels TTS again (#470 regression) — mute is mic-only; the stop-speech keyword in handleControlResult interrupts the agent (ADR 0001 M2)").not.toMatch(/ttsRef\.current\?\.cancel\(\)/);
+	});
+
+	/**
+	 * The stop-speech keyword in handleControlResult is the ONLY TTS interrupt path. Asserting its
+	 * presence confirms the capability still exists, just separated from mute (#470).
+	 */
+	it("the stop-speech keyword in handleControlResult is the interrupt path for agent TTS", () => {
+		const body = callbackBody("handleControlResult", "const handleControlResultRef");
+		expect(body, "handleControlResult no longer cancels TTS on the stop-speech keyword — the agent cannot be interrupted by voice (#470)").toMatch(/ttsRef\.current\?\.cancel\(\)/);
 	});
 
 	/**
@@ -405,6 +415,10 @@ describe("M5 — mute never costs the user their words", () => {
 	 * Structural, because the two legs of the pre-#420 defect were both single lines in the hook and
 	 * neither is visible to a pure test: an unconditional `clearVoiceText()`, and an unconditional
 	 * `speakEndedAtRef = Date.now()` that armed an echo guard over a mic mute had just closed.
+	 *
+	 * #470 removed `ttsRef.current?.cancel()` from muteFromCommand, which means `armEchoTail` is now
+	 * always false (no TTS cancelled → no echo tail). The `if (plan.armEchoTail)` check was removed
+	 * with it; `ttsSpeaking` is hardcoded to false in the call to planMuteTeardown.
 	 */
 	it("decides the pending turn's fate through the plan, not with an unconditional clear", () => {
 		const body = callbackBody("muteFromCommand", "const muteFromCommandRef");
@@ -413,7 +427,11 @@ describe("M5 — mute never costs the user their words", () => {
 		// `clearVoiceText()` is still correct — on the branches where the words have already been
 		// handed back, and on the #228 path. What it may not be is the ONLY thing that happens.
 		expect(body, "mute hands nothing back to the composer; clearing is all it does, which is the #420 defect verbatim").toMatch(/onRecoveredTextRef\.current\?\.\(/);
-		expect(body, "mute arms the echo tail unconditionally again — with the mic closed that guard protects nothing and only decides, by a timer, whether the turn is dropped or sent (#420)").toMatch(/if \(plan\.armEchoTail\)/);
+		// #470: ttsSpeaking is hardcoded false (TTS not cancelled → no echo tail → armEchoTail is
+		// always false and the conditional was removed). Assert the hardcoded false is in place so
+		// nobody accidentally re-reads the live ttsRef value and re-introduces the echo-tail lottery.
+		expect(body, "muteFromCommand reads ttsRef.current?.speaking again (#470 regression) — with TTS not cancelled there is no echo tail; ttsSpeaking must be hardcoded false").not.toMatch(/ttsSpeaking:\s*!!\s*ttsRef/);
+		expect(body, "muteFromCommand passes ttsSpeaking:false to planMuteTeardown (no TTS cancel → no echo tail, #470)").toMatch(/ttsSpeaking:\s*false/);
 	});
 
 	/**

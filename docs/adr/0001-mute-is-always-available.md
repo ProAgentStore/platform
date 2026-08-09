@@ -38,17 +38,17 @@ fixes.
 **touch** during every phase: `listening`, `transcribing`, `processing` (the agent is thinking),
 `speaking` (the agent is talking), and `muted` (for unmute). No phase may be a dead zone.
 
-**M2 — Immediate and bidirectional.** Mute silences **both directions at once**: it closes the
-microphone *and* cancels in-flight speech plus anything queued behind it. Muting an agent that keeps
-talking is not mute — and that includes speech that starts *after* the press: mute is a state, not a
-one-shot cancel, so a reply arriving while muted is not read aloud (it stays available to "repeat").
-Silencing the agent is not the same as silencing the **user**: mute must not destroy the utterance
-they had already finished saying. See #420, and M5.
+**M2 — Immediate and mic-only.** Mute closes the microphone immediately. It does **not** cancel
+in-flight speech — that is the job of the **stop-speech keyword**, a distinct command handled in
+`handleControlResult`. Conflating "mute my mic" with "stop talking" (the original #153 behaviour)
+was reverted by **#470**: "mute" now means "stop listening to me", not "be quiet". A reply arriving
+while muted is not read aloud (mute is a state, not a one-shot operation), so the spoken-reply
+invariant is preserved without touching TTS. Mute must not destroy the utterance the user had
+already finished saying. See #420, and M5.
 
-*(Today: `muteFromCommand` stops the recognizer, calls `tts.cancel()`, drops the queue, stops the
-level monitor, and resolves the pending capture through `planMuteTeardown`. An earlier version of
-this paragraph described that last step as "clears the pending capture" — that was a description of
-the #420 defect, not a requirement, and is corrected here.)*
+*(Today: `muteFromCommand` stops the recognizer, stops the level monitor, stamps `mutedAt`, and
+resolves the pending capture through `planMuteTeardown`. It does NOT call `tts.cancel()`. The
+stop-speech keyword in `handleControlResult` is the one interrupt path for agent TTS.)*
 
 **M3 — No condition may reduce to "not while the agent is speaking".** Guards that suppress speech
 input during TTS — echo guards, pause guards, `shouldIgnoreResult` — must **not** be applied

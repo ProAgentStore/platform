@@ -867,8 +867,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// "mute" voice command → mute the mic until the user unmutes in the app (same as the
 	// Mute button). Flip the ref synchronously so in-flight results stop being processed.
-	// "mute" means "be quiet": it silences the AGENT too (cancel any in-flight/queued TTS),
-	// not just the user's mic — so it works as an interrupt while the agent is speaking (#153).
+	// Mute is MIC-ONLY (#470): it does NOT cancel TTS or interrupt the agent's speech — that job
+	// belongs to the stop-speech keyword (handleControlResult). The old tts.cancel() here (#153)
+	// conflated "mute my mic" with "stop talking"; #388/ADR-0001 is preserved: mute stays
+	// reachable at every moment via the always-on control listener.
 	//
 	// It also must not cost the user the sentence they had already finished saying (#420). What
 	// happens to that turn is decided by `planMuteTeardown`, not by the arrival time of the
@@ -877,7 +879,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// here or — when a clip is still uploading — via `classifyResult`'s `recover` when it lands.
 	const muteFromCommand = useCallback((pendingTurn: "send" | "recover" = "recover") => {
 		const plan = planMuteTeardown({
-			ttsSpeaking: !!ttsRef.current?.speaking, // read BEFORE cancel() — after it, always false
+			ttsSpeaking: false, // #470: TTS is no longer cancelled on mute, so there is no echo tail
 			pendingTurn,
 			isWhisper: sttIsWhisperRef.current,
 			dictation: dictationRef.current,
@@ -885,9 +887,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		mutedRef.current = true;
 		setMuted(true);
 		sttRef.current?.stop(); // stop(), never stopDiscard() — #228: the clip must still upload
-		ttsRef.current?.cancel(); // stop the agent mid-sentence + drop the queue
-		setSpeaking(false);
-		if (plan.armEchoTail) speakEndedAtRef.current = Date.now();
+		// #470: TTS is NOT cancelled here — mute is mic-only.
+		// Interrupting the agent mid-sentence is the stop-speech keyword's job (handleControlResult).
 		stopAudioMonitor();
 		setMicOn(false);
 		if (pendingTurn === "recover") mutedAtRef.current = Date.now();
@@ -1849,8 +1850,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// said "Muted". On a browser with no Web Speech API this button is the ONLY channel, so that
 	// was the whole feature, gone, in the phase it exists for.
 	const toggleMute = useCallback(() => {
-		// Both directions delegate. `muteFromCommand` cancels in-flight + queued speech (M2) and
-		// `unmuteFromCommand` reopens the mic rather than only clearing the flag (M4, the stale-ref
+		// Both directions delegate. `muteFromCommand` closes the mic (mic-only since #470, ADR 0001 M2)
+		// and `unmuteFromCommand` reopens the mic rather than only clearing the flag (M4, the stale-ref
 		// trap) — neither is safe to restate here, and a copy is how this one drifted.
 		if (muted) unmuteFromCommandRef.current();
 		else muteFromCommandRef.current();
