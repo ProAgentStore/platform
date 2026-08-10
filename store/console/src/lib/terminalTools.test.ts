@@ -5,6 +5,7 @@ import {
 	createArgs,
 	createdTargetKey,
 	killArgs,
+	nextSelection,
 	parseTargets,
 	resolveTerminalAccess,
 	resolveTerminalWrites,
@@ -195,5 +196,62 @@ describe("the families themselves", () => {
 			expect(f.connector, `${f.id} must key consent by its own connector`).toBe(f.id);
 			expect(terminalFamilyToolNames(f).every((n) => n.startsWith(`${f.id}_`))).toBe(true);
 		}
+	});
+});
+
+// ── nextSelection (#487) ──────────────────────────────────────────────────────
+//
+// The bug: the tab auto-selected `list[0]` ("0") on mount and never moved when
+// the agent created a new session mid-poll, because the old session was still in
+// the list and `current && list.some(…) → keep current` held forever.
+
+function tmuxTarget(name: string) {
+	return { backend: "tmux" as const, id: name, name };
+}
+
+describe("nextSelection — follows agent-created sessions (#487)", () => {
+	const NONE = new Set<string>();
+
+	it("selects list[0] when nothing was selected and this is the first poll", () => {
+		const list = [tmuxTarget("0"), tmuxTarget("work")];
+		expect(nextSelection("", NONE, list, false)).toBe("tmux:0");
+	});
+
+	it("keeps the current selection when the list is unchanged and no new session appeared", () => {
+		const prev = new Set(["tmux:0", "tmux:build"]);
+		const list = [tmuxTarget("0"), tmuxTarget("build")];
+		expect(nextSelection("tmux:build", prev, list, false)).toBe("tmux:build");
+	});
+
+	it("follows a single newly-appeared session even when the old one still exists (the bug)", () => {
+		// Before #487: `current="tmux:0"` was in the list, so `keep current` held, and
+		// "tmux:agent-work" was never selected.
+		const prev = new Set(["tmux:0"]);
+		const list = [tmuxTarget("0"), tmuxTarget("agent-work")];
+		expect(nextSelection("tmux:0", prev, list, false)).toBe("tmux:agent-work");
+	});
+
+	it("falls back to list[0] when multiple new sessions appear at once (first poll or batch)", () => {
+		// No signal for which of the new ones matters — take the first.
+		const list = [tmuxTarget("0"), tmuxTarget("work"), tmuxTarget("extra")];
+		expect(nextSelection("", NONE, list, false)).toBe("tmux:0");
+	});
+
+	it("does not follow a new session when the user has pinned a selection", () => {
+		const prev = new Set(["tmux:0"]);
+		const list = [tmuxTarget("0"), tmuxTarget("agent-work")];
+		// User explicitly clicked "tmux:0" — respect that.
+		expect(nextSelection("tmux:0", prev, list, true)).toBe("tmux:0");
+	});
+
+	it("falls back to list[0] when the user-pinned target disappears from the list", () => {
+		const prev = new Set(["tmux:0", "tmux:gone"]);
+		const list = [tmuxTarget("0")];
+		expect(nextSelection("tmux:gone", prev, list, true)).toBe("tmux:0");
+	});
+
+	it("returns '' when the list is empty regardless of previous state", () => {
+		expect(nextSelection("tmux:0", new Set(["tmux:0"]), [], false)).toBe("");
+		expect(nextSelection("tmux:0", new Set(["tmux:0"]), [], true)).toBe("");
 	});
 });

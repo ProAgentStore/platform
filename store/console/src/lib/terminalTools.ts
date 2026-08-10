@@ -154,6 +154,56 @@ export function resolveTerminalWrites(family: TerminalToolFamily | null, allowed
 	return { run, sendKeys, create, kill, any: run || sendKeys || create || kill };
 }
 
+// ── Selection logic ──────────────────────────────────────────────────────────
+//
+// The tab used to keep whatever was selected as long as it still existed in the
+// list — `current && list.some(…current…) → return current`. That is correct for
+// a human browsing, but wrong when an AGENT creates a new session mid-poll: the
+// old session is still there, so the condition held, and the header stayed "0 ·
+// attached" while the agent's real work sat unselected in the list (#487).
+//
+// The fix: after each poll, compare the incoming key set against what was there
+// before. If exactly ONE new key appeared AND the user has not manually pinned a
+// selection, follow the new session. More than one new session at once (the first
+// poll after mount, or a batch create) falls back to `list[0]` — the original
+// behaviour — because there is no signal for which of the new ones matters.
+
+/**
+ * Decide which target to show after a poll.
+ *
+ * @param current    The currently selected key, "" if none.
+ * @param prevKeys   Keys that were present on the PREVIOUS poll (empty set on the first one).
+ * @param nextList   The incoming target list (already parsed).
+ * @param userPinned True when the user has clicked a target explicitly since the last auto-select.
+ * @returns The key to select next.
+ */
+export function nextSelection(
+	current: string,
+	prevKeys: ReadonlySet<string>,
+	nextList: readonly TerminalTarget[],
+	userPinned: boolean,
+): string {
+	const nextKeys = nextList.map(targetKey);
+
+	// Nothing in the list → nothing to select.
+	if (nextKeys.length === 0) return "";
+
+	const added = nextKeys.filter((k) => !prevKeys.has(k));
+
+	// User explicitly chose something: keep it as long as it still exists.
+	if (userPinned) {
+		return current && nextKeys.includes(current) ? current : (nextKeys[0] ?? "");
+	}
+
+	// Exactly one new session appeared → follow it (the agent created it).
+	if (added.length === 1) return added[0]!;
+
+	// First poll (prevKeys empty) or multiple new sessions: fall back to the
+	// existing logic — keep current if still present, else take list[0].
+	if (current && nextKeys.includes(current)) return current;
+	return nextKeys[0] ?? "";
+}
+
 // ── Addressing ───────────────────────────────────────────────────────────────
 //
 // The tab's selection stays a `backend:id` key in BOTH families, so the list, the header, the

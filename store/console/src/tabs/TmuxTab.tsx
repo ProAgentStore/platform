@@ -10,6 +10,7 @@ import {
 	createArgs,
 	createdTargetKey,
 	killArgs,
+	nextSelection,
 	parseTargets,
 	resolveTerminalAccess,
 	resolveTerminalWrites,
@@ -104,6 +105,13 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	const [view, setView] = useState<TmuxView>(DEFAULT_TMUX_VIEW);
 	const selectedRef = useRef("");
 	selectedRef.current = selected;
+	/** Keys visible in the PREVIOUS successful poll — used by `nextSelection` to detect new arrivals. */
+	const prevKeysRef = useRef<ReadonlySet<string>>(new Set());
+	/**
+	 * Set when the user explicitly clicks a target in the list; cleared by an auto-select so a
+	 * subsequent agent-created session can still be followed (#487).
+	 */
+	const userPinnedRef = useRef(false);
 
 	const callTool = useCallback(async (name: string, body: Record<string, unknown> = {}) => {
 		const result = await api<ToolResult>(`/v1/instances/${instanceId}/tools/${encodeURIComponent(name)}`, {
@@ -156,8 +164,12 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 			const list = parseTargets(family, content);
 			setTargets(list);
 			setSelected((current) => {
-				if (current && list.some((s) => targetKey(s) === current)) return current;
-				return list[0] ? targetKey(list[0]) : "";
+				const next = nextSelection(current, prevKeysRef.current, list, userPinnedRef.current);
+				// An auto-select (different from what the user had) clears the pin so a later
+				// agent-created session can still be followed (#487).
+				if (next !== current) userPinnedRef.current = false;
+				prevKeysRef.current = new Set(list.map(targetKey));
+				return next;
 			});
 			if (list.length === 0) setPane("");
 			setError("");
@@ -362,7 +374,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 								key={targetKey(s)}
 								type="button"
 								// Picking a target on a phone is asking for its output, so go there.
-								onClick={() => { setSelected(targetKey(s)); setView("output"); }}
+								// Setting userPinnedRef before the state update means the next poll
+								// will not auto-jump away from this explicit choice (#487).
+								onClick={() => { userPinnedRef.current = true; setSelected(targetKey(s)); setView("output"); }}
 								className={`w-full text-left px-2 py-2 rounded-lg border transition-colors ${selected === targetKey(s) ? "border-accent bg-accent-soft" : "border-transparent hover:border-line hover:bg-panel"}`}
 							>
 								<div className="flex items-center justify-between gap-2 min-w-0">
