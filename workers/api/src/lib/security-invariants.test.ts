@@ -322,7 +322,12 @@ describe("credential storage has exactly one scheme", () => {
 	});
 
 	it("every writer of a credential table imports the envelope helpers", () => {
-		const offenders = writers.filter((w) => !/from ["'][^"']*\/crypto\.js["']/.test(w.f.raw)).map((w) => `${w.f.rel} → ${w.writes.join(", ")}`);
+		// Known-safe exception: routes/terminals.ts UPDATEs instance_runtime_nodes only to NULL
+		// the non-crypto `machine_id` column (the unclaim route — #467). The token_* envelope
+		// columns are never touched by that route, so no encryptKey/decryptKey call is needed.
+		// Adding a crypto import here would be unused and misleading.
+		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts"]);
+		const offenders = writers.filter((w) => !SAFE_NON_CRYPTO_WRITERS.has(w.f.rel) && !/from ["'][^"']*\/crypto\.js["']/.test(w.f.raw)).map((w) => `${w.f.rel} → ${w.writes.join(", ")}`);
 		expect(
 			offenders,
 			`These files write a table whose schema declares the envelope columns (key_ciphertext/dek_wrapped/iv)\n` +

@@ -81,7 +81,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. Returns the pane right after sending; capture again after a moment to read the result.",
+			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready).",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -96,9 +96,10 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const session = requireSession(input);
 			const command = String(input.command ?? "");
 			if (!command.trim()) return { content: "A `command` is required.", success: false };
-			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/tmux/run", { session, command });
+			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/run", { session, command });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
-			return { content: res.pane ?? `Ran in ${session}.`, success: true };
+			const landed = res.changed === false ? " (pane did not change — the command may not have landed; is the CLI ready?)" : "";
+			return { content: (res.pane ?? `Ran in ${session}.`) + landed, success: true };
 		},
 	},
 	{
@@ -107,7 +108,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for answering a running CLI's prompt (e.g. an interactive Claude/Codex session), pressing Escape/Enter, or sending Ctrl keys. WRITE: runs on the user's machine. Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\".",
+			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for answering a running CLI's prompt (e.g. an interactive Claude/Codex session), pressing Escape/Enter, or sending Ctrl keys. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be at its input prompt yet). Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\".",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -124,9 +125,10 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const text = input.text != null ? String(input.text) : undefined;
 			const keys = String(input.keys ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 			if (text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
-			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/tmux/send", { session, text, keys });
+			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/send", { session, text, keys });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
-			return { content: res.pane ?? `Sent to ${session}.`, success: true };
+			const landed = res.changed === false ? " (pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
+			return { content: (res.pane ?? `Sent to ${session}.`) + landed, success: true };
 		},
 	},
 	{
@@ -155,7 +157,10 @@ export const TMUX_TOOLS: ToolDef[] = [
 				{ action: "create", session, workDir: input.workDir, command: input.command },
 			);
 			if (res.existed) return { content: `Session "${session}" already exists.`, success: true };
-			return { content: `Created tmux session "${session}"${res.workDir ? ` in ${res.workDir}` : ""}.`, success: true };
+			// When a startup command was given, the runner waited for the pane to quiesce before
+			// returning (#481), so "ready" is verified rather than assumed.
+			const readyNote = input.command ? ` (startup command "${input.command}" ran; pane settled)` : "";
+			return { content: `Created tmux session "${session}"${res.workDir ? ` in ${res.workDir}` : ""}${readyNote}.`, success: true };
 		},
 	},
 	{

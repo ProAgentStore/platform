@@ -130,6 +130,58 @@ export function runCommand(target: string, command: string): void {
 	sendKey(target, "Enter");
 }
 
+/**
+ * Settle heuristic constants — mirror the Coder headless.ts values (1.5s quiet = idle;
+ * 8s absolute backstop for a slow-booting CLI). The short backstop covers send/run where
+ * the pane is already live; the long one is for new-session launches where the CLI may
+ * take several seconds to paint its first prompt.
+ */
+export const SETTLE_QUIET_MS = 750;
+export const SETTLE_POLL_MS = 120;
+export const SETTLE_TIMEOUT_MS = 8_000;
+
+/**
+ * Poll-capture a pane until its content is unchanged for `quietMs` ms, or until
+ * `timeoutMs` elapses (backstop so a continuously-animated pane can't hang the tool).
+ *
+ * Returns the final pane content. This is the write-side analogue of the read-side labels
+ * in `terminal-label.ts`: before returning "Sent", we verify the pane has reacted.
+ *
+ * Pure behaviour — no side effects beyond calling `capturePane`; tested in unit tests
+ * without a real tmux by passing a custom `captureFn`.
+ */
+export async function waitForPaneSettle(
+	target: string,
+	opts: {
+		quietMs?: number;
+		timeoutMs?: number;
+		pollMs?: number;
+		/** Override for testing — avoids needing a live tmux session. */
+		captureFn?: (t: string) => string;
+	} = {},
+): Promise<string> {
+	const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
+	const timeoutMs = opts.timeoutMs ?? SETTLE_TIMEOUT_MS;
+	const pollMs = opts.pollMs ?? SETTLE_POLL_MS;
+	const capture = opts.captureFn ?? ((t: string) => capturePane(t));
+	const deadline = Date.now() + timeoutMs;
+	let last = capture(target);
+	let lastChangedAt = Date.now();
+	while (true) {
+		await new Promise<void>((r) => setTimeout(r, pollMs));
+		const now = Date.now();
+		const current = capture(target);
+		if (current !== last) {
+			last = current;
+			lastChangedAt = now;
+		}
+		const quietFor = now - lastChangedAt;
+		if (quietFor >= quietMs || now >= deadline) {
+			return last;
+		}
+	}
+}
+
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escape codes from tmux output.
 const ANSI = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 

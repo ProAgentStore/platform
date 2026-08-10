@@ -324,32 +324,39 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { session, pane: capturePane(session, lines) });
 	}
 	if (req.method === "POST" && path === "/tmux/send") {
-		const { sendText, sendKey, capturePane, sessionExists } = await import("./coding/tmux.js");
+		const { sendText, sendKey, capturePane, sessionExists, waitForPaneSettle } = await import("./coding/tmux.js");
 		const b = await readJson<{ session?: string; text?: string; keys?: string[] }>(req);
 		const session = String(b.session || "").trim();
 		if (!session) return json(res, 400, { error: "A `session` name is required." });
 		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
+		// Capture BEFORE the send so the caller can verify what changed (#481).
+		const paneBefore = capturePane(session, 200);
 		if (b.text != null) sendText(session, String(b.text));
 		for (const k of b.keys ?? []) sendKey(session, String(k));
+		// Wait for the pane to quiesce (750ms quiet / 3s backstop) instead of returning
+		// the pre-reaction snapshot. Mirrors the settle heuristic in headless.ts.
+		const pane = await waitForPaneSettle(session, { quietMs: 750, timeoutMs: 3_000 });
 		// `activeCommand` rides along on every WRITE so the cloud can record what it just drove
 		// (#348). It is a process name, never a cost — see activeTerminalCommand's comment.
 		const { activeTerminalCommand } = await import("./coding/terminal.js");
-		return json(res, 200, { session, pane: capturePane(session, 200), activeCommand: activeTerminalCommand(session, "tmux") });
+		return json(res, 200, { session, pane, paneBefore, changed: pane !== paneBefore, activeCommand: activeTerminalCommand(session, "tmux") });
 	}
 	if (req.method === "POST" && path === "/tmux/run") {
-		const { runCommand, capturePane, sessionExists } = await import("./coding/tmux.js");
+		const { runCommand, capturePane, sessionExists, waitForPaneSettle } = await import("./coding/tmux.js");
 		const b = await readJson<{ session?: string; command?: string }>(req);
 		const session = String(b.session || "").trim();
 		const command = String(b.command ?? "");
 		if (!session) return json(res, 400, { error: "A `session` name is required." });
 		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
 		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
+		const paneBefore = capturePane(session, 200);
 		runCommand(session, command);
+		const pane = await waitForPaneSettle(session, { quietMs: 750, timeoutMs: 3_000 });
 		const { activeTerminalCommand } = await import("./coding/terminal.js");
-		return json(res, 200, { session, command, pane: capturePane(session, 200), activeCommand: activeTerminalCommand(session, "tmux") });
+		return json(res, 200, { session, command, pane, paneBefore, changed: pane !== paneBefore, activeCommand: activeTerminalCommand(session, "tmux") });
 	}
 	if (req.method === "POST" && path === "/tmux/session") {
-		const { createSession, killSession, sessionExists } = await import("./coding/tmux.js");
+		const { createSession, killSession, sessionExists, waitForPaneSettle } = await import("./coding/tmux.js");
 		const { homedir } = await import("node:os");
 		const b = await readJson<{ action?: string; session?: string; workDir?: string; command?: string }>(req);
 		const session = String(b.session || "").trim();
@@ -362,6 +369,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const { resolve } = await import("node:path");
 		const workDir = resolve(String(b.workDir || "~").replace(/^~(?=$|\/)/, homedir()));
 		createSession(session, workDir, b.command ? String(b.command) : undefined);
+		// When the session starts a command (e.g. "claude"), wait until the pane quiesces
+		// (the CLI has painted its initial prompt) before returning "ready" (#481). Without a
+		// startup command the pane is already at a shell prompt — no settle needed.
+		if (b.command) {
+			await waitForPaneSettle(session, { quietMs: 750, timeoutMs: 8_000 });
+		}
 		return json(res, 200, { session, created: true, workDir });
 	}
 
@@ -383,29 +396,53 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { target, pane: captureTerminalTarget(target, { backend, lines: b.lines }) });
 	}
 	if (req.method === "POST" && path === "/terminal/run") {
-		const { runTerminalCommand, activeTerminalCommand } = await import("./coding/terminal.js");
+		const { runTerminalCommand, captureTerminalTarget, activeTerminalCommand } = await import("./coding/terminal.js");
+		const { waitForPaneSettle, SETTLE_QUIET_MS } = await import("./coding/tmux.js");
 		const b = await readJson<{ target?: string; backend?: string; command?: string }>(req);
 		const target = String(b.target || "").trim();
 		const command = String(b.command ?? "");
 		if (!target) return json(res, 400, { error: "A `target` is required." });
 		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
 		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
-		const pane = runTerminalCommand(target, command, backend);
+		// Capture BEFORE to detect whether the input landed (#481).
+		const paneBefore = captureTerminalTarget(target, { backend });
+		runTerminalCommand(target, command, backend);
+		// Settle: for tmux targets, use the tmux poll. For other backends, fall back to the
+		// just-run snapshot (they don't support a reliable settle poll).
+		let pane: string;
+		if (!backend && target.startsWith("tmux:") || backend === "tmux") {
+			const { splitTerminalTarget } = await import("./coding/terminal.js");
+			const t = splitTerminalTarget(target, backend);
+			pane = await waitForPaneSettle(t.id, { quietMs: SETTLE_QUIET_MS, timeoutMs: 3_000 });
+		} else {
+			pane = captureTerminalTarget(target, { backend });
+		}
 		// Read AFTER the command lands, so `claude "fix x"` reports `claude` rather than the shell
 		// that was sitting there a moment earlier (#348).
-		return json(res, 200, { target, command, pane, activeCommand: activeTerminalCommand(target, backend) });
+		return json(res, 200, { target, command, pane, paneBefore, changed: pane !== paneBefore, activeCommand: activeTerminalCommand(target, backend) });
 	}
 	if (req.method === "POST" && path === "/terminal/send") {
-		const { sendTerminalKeys, activeTerminalCommand } = await import("./coding/terminal.js");
+		const { sendTerminalKeys, captureTerminalTarget, activeTerminalCommand } = await import("./coding/terminal.js");
+		const { waitForPaneSettle, SETTLE_QUIET_MS } = await import("./coding/tmux.js");
 		const b = await readJson<{ target?: string; backend?: string; text?: string; keys?: string[] }>(req);
 		const target = String(b.target || "").trim();
 		if (!target) return json(res, 400, { error: "A `target` is required." });
 		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
-		const pane = sendTerminalKeys(target, { backend, text: b.text == null ? undefined : String(b.text), keys: b.keys ?? [] });
-		return json(res, 200, { target, pane, activeCommand: activeTerminalCommand(target, backend) });
+		const paneBefore = captureTerminalTarget(target, { backend });
+		sendTerminalKeys(target, { backend, text: b.text == null ? undefined : String(b.text), keys: b.keys ?? [] });
+		let pane: string;
+		if (!backend && target.startsWith("tmux:") || backend === "tmux") {
+			const { splitTerminalTarget } = await import("./coding/terminal.js");
+			const t = splitTerminalTarget(target, backend);
+			pane = await waitForPaneSettle(t.id, { quietMs: SETTLE_QUIET_MS, timeoutMs: 3_000 });
+		} else {
+			pane = captureTerminalTarget(target, { backend });
+		}
+		return json(res, 200, { target, pane, paneBefore, changed: pane !== paneBefore, activeCommand: activeTerminalCommand(target, backend) });
 	}
 	if (req.method === "POST" && path === "/terminal/session") {
 		const { createTerminalTarget, killTerminalTarget } = await import("./coding/terminal.js");
+		const { waitForPaneSettle } = await import("./coding/tmux.js");
 		const b = await readJson<{ action?: string; target?: string; backend?: string; name?: string; workDir?: string; command?: string }>(req);
 		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
 		if (b.action === "kill") {
@@ -415,6 +452,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		}
 		if (!backend) return json(res, 400, { error: "`backend` must be tmux, kitty, or iterm2." });
 		const target = createTerminalTarget({ backend, name: b.name, workDir: b.workDir, command: b.command });
+		// When the new target starts a command, wait until the pane quiesces (#481).
+		if (b.command && backend === "tmux" && !target.existed) {
+			await waitForPaneSettle(target.id, { quietMs: 750, timeoutMs: 8_000 });
+		}
 		return json(res, 200, { target });
 	}
 

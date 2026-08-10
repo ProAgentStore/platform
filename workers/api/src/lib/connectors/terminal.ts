@@ -94,7 +94,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Type a command line into a local terminal target and press Enter. WRITE: runs on the user's machine.",
+			"Type a command line into a local terminal target and press Enter. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react).",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -121,7 +121,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter. WRITE: runs on the user's machine. iTerm2 currently supports text only.",
+			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 currently supports text only.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -140,9 +140,10 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 				: String(input.keys ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 			if (input.text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
 			const target = requireTarget(input);
-			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/terminal/send", { target, backend: backend(input), text: input.text == null ? undefined : String(input.text), keys });
+			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/terminal/send", { target, backend: backend(input), text: input.text == null ? undefined : String(input.text), keys });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
-			return { content: res.pane ?? "Sent.", success: true };
+			const landed = res.changed === false ? " (pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
+			return { content: (res.pane ?? "Sent.") + landed, success: true };
 		},
 	},
 	{
@@ -168,7 +169,11 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			const b = backend(input);
 			if (!b) return { content: "`backend` must be tmux, kitty, or iterm2.", success: false };
 			const res = await callRunner<{ target?: unknown }>(r.conn, "/terminal/session", { action: "create", backend: b, name: input.name, workDir: input.workDir, command: input.command });
-			return { content: JSON.stringify(res.target ?? res, null, 2), success: true };
+			// When a startup command was given on tmux, the runner waited for the pane to quiesce
+			// before returning (#481), so "ready" is verified rather than assumed.
+			const targetData = res.target ?? res;
+			const readyNote = input.command && b === "tmux" ? " (startup command ran; pane settled)" : "";
+			return { content: JSON.stringify(targetData, null, 2) + readyNote, success: true };
 		},
 	},
 	{
