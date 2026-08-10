@@ -7431,6 +7431,27 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/instances/{instanceId}/pipelines/{name}:
+    get:
+      summary: Read back a single stored pipeline definition
+      operationId: getPipeline
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The stored pipeline definition, with its validity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  definition: { type: object, additionalProperties: true }
+                  valid: { type: boolean }
+                  error: { type: string, nullable: true, description: Validation message when valid is false. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
       summary: Attach (or replace) a pipeline definition
       description: The body IS the pipeline definition, rejected with 400 if it does not validate. Stored config is capped at 256KB.

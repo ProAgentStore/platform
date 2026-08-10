@@ -64,7 +64,7 @@ src/
     ├── base.ts           7 tools — the connector-tool gate, subscribe/cancel, chat
     ├── runtime.ts        7 tools — the `pags up` runtime + its task queue
     ├── knowledge.ts      10 tools — documents, files, vectors, memory
-    ├── observability.ts  6 tools — messages, activity, errors, trace, pipeline runs
+    ├── observability.ts  7 tools — messages, activity, errors, trace, pipeline runs + definition
     ├── board.ts          8 tools — the board, its columns, the per-ticket thread (#150)
     ├── settings.ts       11 tools — settings, name, instructions, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
@@ -78,7 +78,7 @@ src/
     └── coding.ts         system_status (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**130 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+**131 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
 inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 86 across
 `instance-tools/`. 112 are always registered; 18 are surface-gated.
 

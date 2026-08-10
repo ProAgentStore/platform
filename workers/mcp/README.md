@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**130 tool registrations.** 112 are always registered; 18 are gated to the console
+**131 tool registrations.** 113 are always registered; 18 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -349,6 +349,7 @@ sit outside its surface gate.
 | `list_errors` | Persisted platform failures (`scope: "all"` is admin-only) | — | | |
 | `instance_activity` | Append-only instance activity log | — | | |
 | `list_pipeline_runs` | Declarative-pipeline runs with counts | — | | |
+| `get_instance_pipeline` | Read back a single stored pipeline definition (with validity) | — | | |
 | `mcp_audit_log` | Recent MCP write/runtime/dry-run/denied events for this account | read | | |
 | `billing_status` | Free vs Pro, paywall enforcement | — | | |
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
