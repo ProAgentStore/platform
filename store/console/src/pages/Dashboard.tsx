@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import Page from "../components/Page";
+import LoadFailed from "../components/LoadFailed";
 import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
@@ -33,6 +34,10 @@ export default function Dashboard() {
 		}
 	}, []);
 
+	// A dashboard is read as a measurement, so a failed load showing the previous (or zero)
+	// figures is not a blank — it is a WRONG number presented with the same authority as a right
+	// one, and nothing on screen dates it (#291).
+	const [statsErr, setStatsErr] = useState("");
 	const loadDashboard = useCallback(async () => {
 		try {
 			const [creator, usage] = await Promise.all([
@@ -40,7 +45,10 @@ export default function Dashboard() {
 				api<Record<string, unknown>>("/v1/dashboard/usage"),
 			]);
 			setStats({ ...creator, ...usage });
-		} catch {}
+			setStatsErr("");
+		} catch (e) {
+			setStatsErr(e instanceof Error ? e.message : String(e));
+		}
 	}, []);
 
 	// Load agents + instances once on mount
@@ -150,7 +158,9 @@ export default function Dashboard() {
 			{tab === "dashboard" && (
 				<div>
 					<h2 className="text-lg font-semibold mb-4">Platform Dashboard</h2>
-					{!stats ? (
+					{statsErr ? (
+						<LoadFailed what="your stats" detail={statsErr} onRetry={loadDashboard} testId="dashboard-load-failed" />
+					) : !stats ? (
 						<p className="text-center py-8 text-muted">Loading stats...</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 mb-6">

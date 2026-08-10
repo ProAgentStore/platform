@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import Page from "../components/Page";
+import LoadFailed from "../components/LoadFailed";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Notification } from "../lib/types";
@@ -26,11 +27,18 @@ export default function Notifications() {
 	const [notifications, setNotifications] = useState<Notification[]>([]);
 	const [loading, setLoading] = useState(true);
 
+	// "No notifications" over a failed read is the empty state at its most confident: this page
+	// has no other content, so the whole screen becomes a single false statement — and it is the
+	// statement a user checks precisely when they are expecting something (#291).
+	const [loadErr, setLoadErr] = useState("");
 	const load = useCallback(async () => {
 		try {
 			const d = await api<{ notifications: Notification[] }>("/v1/notifications");
 			setNotifications(d.notifications || []);
-		} catch {}
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(e instanceof Error ? e.message : String(e));
+		}
 		setLoading(false);
 	}, []);
 
@@ -61,6 +69,8 @@ export default function Notifications() {
 
 			{loading ? (
 				<p className="text-center py-8 text-muted text-sm">Loading...</p>
+			) : loadErr ? (
+				<LoadFailed what="your notifications" detail={loadErr} onRetry={load} testId="notifications-load-failed" />
 			) : notifications.length === 0 ? (
 				<p className="text-center py-8 text-muted-soft text-sm">No notifications</p>
 			) : (

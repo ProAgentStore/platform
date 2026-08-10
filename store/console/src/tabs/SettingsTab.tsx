@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import PrefOverride from "../components/PrefOverride";
+import LoadFailed from "../components/LoadFailed";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
 import { api } from "@proagentstore/sdk/client";
@@ -95,19 +96,37 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 	const [connectorPolicy, setConnectorPolicy] = useState<InstanceConnectorPolicy[] | null>(null);
 	// Triggers moved to <TriggersSection/> (#16/#18/#19) — it owns its own state and loading.
 
-	useEffect(() => {
+	/**
+	 * Every read this tab needs, in one loader, with ONE failure report (#291).
+	 *
+	 * All eleven of these swallowed their error, and on a settings page that is a distinctive
+	 * kind of wrong: the state each one failed to fill is not blank, it is a DEFAULT. So a failed
+	 * voice-settings read did not render "unknown", it rendered the standard voice; a failed
+	 * connector-status read rendered "not connected". The user is shown a settings page that
+	 * describes a configuration nobody has — and the controls are live, so the next save writes
+	 * that fiction back.
+	 *
+	 * One accumulated banner rather than eleven inline error states, because they load together,
+	 * fail together (the usual cause is one dropped connection or an expired session), and the
+	 * useful action is identical for all of them. Naming WHICH parts failed is what keeps it from
+	 * being a vague "something went wrong" — it tells the user which controls on the page in front
+	 * of them they may not trust.
+	 */
+	const [loadFailures, setLoadFailures] = useState<string[]>([]);
+	const loadAll = useCallback(() => {
 		(async () => {
+			const failed: string[] = [];
 			try {
 				// Current display name — my/instances resolves displayName over the agent name.
 				const d = await api<{ instances?: Array<{ id: string; name: string }> }>("/v1/instances/my/instances");
 				const mine = (d.instances || []).find((i) => i.id === instanceId);
 				if (mine) setInstName(mine.name);
-			} catch {}
+			} catch { failed.push("your instance name"); }
 			try {
 				const d = await api<{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }>(`/v1/instances/${instanceId}/settings`);
 				setAgentSettings(d.settings || {});
 				if (d.fields?.length) setAgentFields(d.fields);
-			} catch {}
+			} catch { failed.push("agent settings"); }
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }>; hasOverride?: boolean }>(`/v1/instances/${instanceId}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
@@ -118,7 +137,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				setTrLanguages(d.languages || []);
 				setTrOverride(d.hasOverride === true);
 				setTrLoaded(true);
-			} catch {}
+			} catch { failed.push("translation settings"); }
 			try {
 				const d = await api<{ voiceSettings?: Record<string, unknown>; hasOverride?: boolean }>(`/v1/instances/${instanceId}/voice-settings`);
 				const vs = d.voiceSettings || {};
@@ -127,7 +146,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				// No per-field unpacking here any more: VoiceFields seeds itself from `value`, so
 				// this component only has to know WHICH object to hand it and whether it is an
 				// override. That is the whole benefit of sharing the controls with Preferences.
-			} catch {}
+			} catch { failed.push("voice settings"); }
 			// Is there an OpenAI key? Smart (AI) recognition silently falls back to
 			// browser dictation without one, so surface it explicitly.
 			try {
@@ -139,33 +158,36 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 			try {
 				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status");
 				setEmailStatus(s);
-			} catch {}
+			} catch { failed.push("the email connection"); }
 			try {
 				const s = await api<DriveStatus>("/v1/drive/status");
 				setDriveStatus(s);
-			} catch {}
+			} catch { failed.push("the Drive connection"); }
 			try {
 				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/drive/instances/${instanceId}/grants`);
 				setDriveGrants(d.grants || []);
-			} catch {}
+			} catch { failed.push("your Drive folders"); }
 			try {
 				const s = await api<WorkdriveStatus>("/v1/workdrive/status");
 				setWorkdriveStatus(s);
-			} catch {}
+			} catch { failed.push("the WorkDrive connection"); }
 			try {
 				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`);
 				setWorkdriveGrants(d.grants || []);
-			} catch {}
+			} catch { failed.push("your WorkDrive folders"); }
 			try {
 				const p = await api<{ connectors?: InstanceConnectorPolicy[] }>(`/v1/instances/${instanceId}/connectors`);
 				setConnectorPolicy(p.connectors || []);
-			} catch {}
+			} catch { failed.push("connector policy"); }
 			try {
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
 				setEmailPermission(st.permissions?.email === true);
-			} catch {}
+			} catch { failed.push("agent permissions"); }
+			setLoadFailures(failed);
 		})();
 	}, [instanceId]);
+
+	useEffect(() => { loadAll(); }, [loadAll]);
 
 	// Cloud connectors open OAuth in a popup; re-check when the user returns to this tab.
 	// (<RunnerPanel/> keeps its own focus listener for the same reason — a machine can connect,
@@ -383,6 +405,18 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 		// hard guard so no rigid-width descendant can ever make the whole page scroll
 		// sideways (the cards are all w-full, so one over-wide child would clip them all).
 		<div className="min-w-0 overflow-x-hidden">
+			{/* Named parts, not "something went wrong": this tells the user which of the controls
+			  * below them are showing a default rather than their own setting (#291). */}
+			{loadFailures.length > 0 && (
+				<div className="mb-3">
+					<LoadFailed
+						what={`${loadFailures.join(", ")} — the controls below may show defaults instead of your settings`}
+						onRetry={loadAll}
+						testId="settings-load-failed"
+						compact
+					/>
+				</div>
+			)}
 			{/* Instance name — distinguishes multiple instances of the same agent */}
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1" id="inst-name-label">Instance name</h3>

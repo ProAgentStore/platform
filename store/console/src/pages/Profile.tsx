@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import Page from "../components/Page";
+import LoadFailed from "../components/LoadFailed";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import { api, getToken } from "@proagentstore/sdk/client";
@@ -60,7 +61,15 @@ export default function Profile() {
 				const d = await api<{ fields: ProfileField[]; profile: Record<string, string> }>("/v1/profile");
 				setCpFields(d.fields || []);
 				setCpValues(d.profile || {});
-			} catch {}
+			} catch {
+				// IGNORABLE, and deliberately so. `cpFields` drives whether the Candidate Profile
+				// section renders AT ALL, so a failed read hides the section rather than showing an
+				// empty version of it — there is no false "you have no profile" state to correct,
+				// and no Save to arm, because the form itself is what did not render. The failure
+				// is already in the durable log via `api()`. Adding an error card here would put a
+				// job-application widget on the page of every user who has no apply agent, which
+				// the surrounding gate exists to prevent.
+			}
 		})();
 	}, []);
 
@@ -77,12 +86,20 @@ export default function Profile() {
 	}, []);
 
 	// Load API keys
+	// A failed key-status read rendered every provider as "no key stored" (#291) — which is not a
+	// blank, it is the state that prompts the user to paste a key they already have. Worse, this is
+	// the page they land on when BYOK is not working, so the wrong answer arrives exactly when it
+	// will be believed.
+	const [keysErr, setKeysErr] = useState("");
 	const loadKeys = useCallback(async () => {
 		setKeysLoading(true);
 		try {
 			const d = await api<{ providers: Provider[] }>("/v1/keys/status");
 			setProviders(d.providers || []);
-		} catch {}
+			setKeysErr("");
+		} catch (e) {
+			setKeysErr(e instanceof Error ? e.message : String(e));
+		}
 		setKeysLoading(false);
 	}, []);
 
@@ -282,7 +299,9 @@ export default function Profile() {
 				<div className="mb-6">
 					<h3 className="text-base font-semibold mb-3">API Keys</h3>
 					<p className="text-sm text-muted mb-3">Store your AI provider keys. Encrypted with AES-256-GCM.</p>
-					{keysLoading ? <p className="text-sm text-muted">Loading keys...</p> : (
+					{keysErr ? (
+						<LoadFailed what="your API keys" detail={keysErr} onRetry={loadKeys} testId="keys-load-failed" compact />
+					) : keysLoading ? <p className="text-sm text-muted">Loading keys...</p> : (
 						<div className="flex flex-col gap-2">
 							{providers.map(p => (
 								<div key={p.id} className="flex items-center gap-2 sm:gap-3 p-2.5 bg-paper border border-line rounded-lg">
