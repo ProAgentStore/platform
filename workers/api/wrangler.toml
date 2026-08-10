@@ -27,6 +27,9 @@ ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # Billing is intentionally disabled on PAGS for now; PAS owns the paid launch.
 # STRIPE_PRICE_ID = "price_1TsohPB11Tib1JCQ1fVbUG5q"
 # PAYWALL_ENFORCE = "1"
+# AI budget circuit breakers are OFF (observe-only) until paid launch — usage is metered but
+# never blocked. Uncomment to re-enable the daily $ + token account ceilings. See #485.
+# BUDGET_ENFORCE = "1"
 # Experimental (#103): browser connector registry tools (browser_navigate/snapshot/act).
 # Unset = inert (fail-closed). First-party/self-use ONLY — do NOT enable for third-party
 # creators until the browser trust model (#75). Uncomment to turn on.

@@ -263,6 +263,18 @@ export interface ReservationResult {
  * A zero-row update means someone else got there first — re-read to say WHY, rather than
  * reporting a generic failure for what is usually "the pool is spent".
  */
+/**
+ * Soft-launch switch (#485): the account daily circuit breakers only BLOCK when BUDGET_ENFORCE is
+ * "1"/"true". Default (unset) = observe-only — usage is still measured against the ceilings, but a
+ * run over them is never stopped. They are off because BYOK spend is only an estimate of the user's
+ * own bill, the token ceiling once silently stopped legit overnight Coder work, and the structural
+ * per-tree caps (delegations / depth, enforced in the atomic UPDATE below) already bound runaway
+ * recursion. Turn on at paid launch, when subscription-pool token spend becomes real platform cost.
+ */
+export function isBudgetEnforced(env: Env): boolean {
+	return env.BUDGET_ENFORCE === "1" || env.BUDGET_ENFORCE === "true";
+}
+
 export async function reserve(
 	env: Env,
 	userId: string,
@@ -288,7 +300,9 @@ export async function reserve(
 		accountUsageSince(env, userId, DAILY_WINDOW_HOURS),
 		resolveAccountCeilings(env, userId),
 	]);
-	if (window.chargedMicros >= ceilings.chargedMicrosCeiling) {
+	// SWITCHED OFF (observe-only) as of #485 — the two ceilings are computed so we still MEASURE
+	// distance-to-limit, but they only stop a run when isBudgetEnforced(env). Structural caps below stay.
+	if (isBudgetEnforced(env) && window.chargedMicros >= ceilings.chargedMicrosCeiling) {
 		return {
 			ok: false,
 			reason: "account_ceiling",
@@ -302,7 +316,7 @@ export async function reserve(
 				`than money. See Usage for the breakdown; it resets as older usage ages out. To raise this limit, ask your platform operator.`,
 		};
 	}
-	if (window.tokens >= ceilings.tokenCeiling) {
+	if (isBudgetEnforced(env) && window.tokens >= ceilings.tokenCeiling) {
 		return {
 			ok: false,
 			reason: "account_ceiling",

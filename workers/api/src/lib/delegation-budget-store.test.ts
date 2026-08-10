@@ -289,6 +289,10 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 	function envSpent(chargedMicros: number, tokens = 0) {
 		const writes: Write[] = [];
 		const env = {
+			// The account circuit breakers only BLOCK when enforcement is on (#485); these tests
+			// exercise the breaker logic itself, so they opt in. The observe-only default is covered
+			// by its own test below.
+			BUDGET_ENFORCE: "1",
 			DB: {
 				prepare(sql: string) {
 					return {
@@ -345,6 +349,17 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 		expect(r.ok).toBe(false);
 		expect(r.message).toMatch(/tokens/i);
 		expect(r.message).not.toMatch(/\$/); // a token limit is never quoted in dollars
+	});
+
+	it("observe-only by default (#485): a run OVER a ceiling is still admitted when BUDGET_ENFORCE is unset", async () => {
+		// The breakers are demoted to observe-only until paid launch — usage is measured against the
+		// ceiling but a run is never stopped. Same over-ceiling fixture as above, minus the opt-in flag.
+		const { env: enforced } = envSpent(DAILY_CEILING_MICROS);
+		const observeOnly = { ...(enforced as unknown as Record<string, unknown>), BUDGET_ENFORCE: undefined } as unknown as Env;
+		expect((await reserve(observeOnly, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
+		const { env: tokensEnforced } = envSpent(0, DAILY_TOKEN_CEILING);
+		const tokensObserve = { ...(tokensEnforced as unknown as Record<string, unknown>), BUDGET_ENFORCE: undefined } as unknown as Env;
+		expect((await reserve(tokensObserve, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
 	});
 
 	it("reports BOTH ceilings as account_ceiling, not as the pool being spent", async () => {

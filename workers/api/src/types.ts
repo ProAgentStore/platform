@@ -50,6 +50,10 @@ export interface Env {
 	/** "1"/"true" = require Pro for signed-in platform APIs. Unset = soft launch:
 	 *  billing works but no platform gate blocks anything. */
 	PAYWALL_ENFORCE?: string;
+	/** "1"/"true" = the account daily circuit breakers (charged $ + tokens) block over-ceiling
+	 *  runs. Unset (default) = observe-only: usage is metered but never stopped — see #485. Turn on
+	 *  at paid launch, when subscription-pool token spend becomes real platform cost. */
+	BUDGET_ENFORCE?: string;
 	/**
 	 * This deployment's OWN MCP server endpoint, e.g. `https://mcp.proagentstore.online/mcp` (#287).
 	 * Drives the first-party MCP preset in the console (lib/mcp-presets.ts) — resolved from

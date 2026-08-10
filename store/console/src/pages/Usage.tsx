@@ -1,8 +1,9 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Page from "../components/Page";
+import Button from "../components/Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { AlertTriangle, BarChart3, Info, RefreshCw } from "lucide-react";
+import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
@@ -228,6 +229,17 @@ export default function Usage() {
 			</p>
 			<Scope unmetered={unmetered} />
 
+			{/* Budget enforcement is intentionally OFF (observe-only) until paid launch — see #485.
+			    Visible on purpose so we get reminded it can be switched back on. */}
+			<div className="flex items-start gap-2 text-xs text-muted bg-panel border border-line rounded-lg px-3 py-2 mb-4">
+				<Info size={14} className="text-accent shrink-0 mt-0.5" />
+				<span>
+					<b>Budget limits are off (observe-only).</b> Usage is metered here but never blocks a run — the daily
+					spend/token circuit breakers are switched off until paid launch. Structural caps (loop, delegation depth)
+					still apply.
+				</span>
+			</div>
+
 			{/* Range selector */}
 			<div className="flex gap-1 mb-4">
 				{RANGES.map((r) => (
@@ -359,6 +371,9 @@ export default function Usage() {
 			) : (
 				<p className="text-center py-8 text-muted text-sm">Couldn’t load usage.</p>
 			)}
+
+			{/* Budget limits — always shown below the usage data regardless of range / empty state */}
+			<BudgetPanel />
 		</Page>
 	);
 }
@@ -475,5 +490,223 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 			<div className="text-2xs uppercase tracking-wide text-muted-soft">{label}</div>
 			<div className={`text-lg font-bold tabular-nums ${accent ? "text-accent" : ""}`}>{value}</div>
 		</div>
+	);
+}
+
+// ── Budget limits panel ─────────────────────────────────────────────────────
+
+interface BudgetData {
+	stored: { chargedMicrosCeiling: number | null; tokenCeiling: number | null };
+	effective: {
+		chargedMicrosCeiling: number;
+		chargedMicrosCeilingTier: "account" | "platform" | "env" | "default";
+		tokenCeiling: number;
+		tokenCeilingTier: "account" | "platform" | "env" | "default";
+	};
+	consumption: { chargedMicros: number; tokens: number };
+	remaining: { chargedMicros: number; tokens: number };
+	maxOverride: { chargedMicrosCeiling: number; tokenCeiling: number };
+}
+
+const TIER_LABEL: Record<string, string> = {
+	account: "Your override",
+	platform: "Platform default",
+	env: "Server config",
+	default: "Built-in default",
+};
+
+/** Gauge bar showing current consumption as a fraction of the ceiling. */
+function CeilingGauge({ consumed, ceiling }: { consumed: number; ceiling: number }) {
+	const pct = ceiling > 0 ? Math.min(100, (consumed / ceiling) * 100) : 0;
+	const warn = pct >= 80;
+	const tripped = pct >= 100;
+	// Use design-system semantic tokens: danger (≥100%), warning (≥80%), accent otherwise.
+	const barClass = tripped ? "bg-danger" : warn ? "bg-warning" : "bg-accent/70";
+	return (
+		<div className="h-2 bg-line/40 rounded-full overflow-hidden mt-1">
+			<div
+				className={`h-full rounded-full transition-all ${barClass}`}
+				style={{ width: `${Math.max(pct > 0 ? 1 : 0, pct)}%` }}
+			/>
+		</div>
+	);
+}
+
+/**
+ * Budget limits card — shows the 24h circuit-breaker ceilings alongside current
+ * rolling consumption, and lets the user raise or lower their own override.
+ *
+ * The ceil values are shown and edited in human-readable units: USD for charged
+ * spend, "M tokens" for the token ceiling. The conversion back to micros / raw
+ * counts happens on save.
+ *
+ * Null stored override = inheriting from the platform/env/default tier; the field
+ * shows the effective value with a "(inherited)" label.
+ */
+function BudgetPanel() {
+	const [data, setData] = useState<BudgetData | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	// Edit state — undefined = field not touched, null = clear override
+	const [editCharged, setEditCharged] = useState<string>("");
+	const [editTokens, setEditTokens] = useState<string>("");
+	// Whether the user has opened the edit section.
+	const [editing, setEditing] = useState(false);
+	const chargedRef = useRef<HTMLInputElement>(null);
+
+	const loadData = useCallback(async () => {
+		try {
+			const d = await api<BudgetData>("/v1/budget/limits");
+			setData(d);
+			// Populate edit fields from stored values (human-readable).
+			setEditCharged(d.stored.chargedMicrosCeiling !== null ? String(d.stored.chargedMicrosCeiling / 1_000_000) : "");
+			setEditTokens(d.stored.tokenCeiling !== null ? String(d.stored.tokenCeiling / 1_000_000) : "");
+		} catch {
+			// Keep last good data.
+		}
+		setLoading(false);
+	}, []);
+
+	useEffect(() => { void loadData(); }, [loadData]);
+
+	const save = async () => {
+		setSaving(true);
+		setError(null);
+		try {
+			const chargedUsd = editCharged.trim();
+			const tokensM = editTokens.trim();
+			const body: { chargedMicrosCeiling: number | null; tokenCeiling: number | null } = {
+				chargedMicrosCeiling: chargedUsd === "" ? null : Math.round(parseFloat(chargedUsd) * 1_000_000),
+				tokenCeiling: tokensM === "" ? null : Math.round(parseFloat(tokensM) * 1_000_000),
+			};
+			if (
+				(body.chargedMicrosCeiling !== null && (Number.isNaN(body.chargedMicrosCeiling) || body.chargedMicrosCeiling < 0)) ||
+				(body.tokenCeiling !== null && (Number.isNaN(body.tokenCeiling) || body.tokenCeiling < 0))
+			) {
+				setError("Enter a positive number or leave blank to inherit.");
+				setSaving(false);
+				return;
+			}
+			const d = await api<BudgetData>("/v1/budget/limits", { method: "PUT", body: JSON.stringify(body) });
+			setData(d);
+			setEditing(false);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Failed to save.");
+		}
+		setSaving(false);
+	};
+
+	if (loading) return null;
+
+	return (
+		<Card className="mt-6">
+			<div className="flex items-center gap-2 mb-3">
+				<Shield size={15} className="text-accent shrink-0" />
+				<h3 className="text-sm font-bold">Daily circuit breakers</h3>
+			</div>
+			<p className="text-xs text-muted mb-4">
+				Two independent ceilings protect against runaway spend. When either trips, new agent runs are refused
+				until it resets (rolling 24h window). <b>Charged spend</b> counts only calls billed to your own API
+				key or paid by the platform — subscription tokens are not dollars and are tracked separately.
+			</p>
+
+			{data && (
+				<div className="grid sm:grid-cols-2 gap-4 mb-4">
+					{/* Charged spend ceiling */}
+					<div>
+						<div className="flex justify-between items-baseline mb-0.5">
+							<span className="text-xs font-semibold">Charged spend / 24h</span>
+							<span className="text-2xs text-muted-soft">{TIER_LABEL[data.effective.chargedMicrosCeilingTier]}</span>
+						</div>
+						<div className="flex justify-between items-baseline text-xs text-muted">
+							<span>{usd(data.consumption.chargedMicros)} used</span>
+							<span className="tabular-nums">{usd(data.effective.chargedMicrosCeiling)} ceiling</span>
+						</div>
+						<CeilingGauge consumed={data.consumption.chargedMicros} ceiling={data.effective.chargedMicrosCeiling} />
+						<div className="text-2xs text-muted-soft mt-1">
+							{usd(data.remaining.chargedMicros)} remaining
+						</div>
+					</div>
+
+					{/* Token ceiling */}
+					<div>
+						<div className="flex justify-between items-baseline mb-0.5">
+							<span className="text-xs font-semibold">Tokens / 24h</span>
+							<span className="text-2xs text-muted-soft">{TIER_LABEL[data.effective.tokenCeilingTier]}</span>
+						</div>
+						<div className="flex justify-between items-baseline text-xs text-muted">
+							<span>{tok(data.consumption.tokens)} used</span>
+							<span className="tabular-nums">{tok(data.effective.tokenCeiling)} ceiling</span>
+						</div>
+						<CeilingGauge consumed={data.consumption.tokens} ceiling={data.effective.tokenCeiling} />
+						<div className="text-2xs text-muted-soft mt-1">
+							{tok(data.remaining.tokens)} remaining
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* Edit section */}
+			{!editing ? (
+				<Button
+					variant="secondary"
+					size="md"
+					onClick={() => { setEditing(true); setTimeout(() => chargedRef.current?.focus(), 50); }}
+				>
+					Adjust my limits
+				</Button>
+			) : (
+				<div className="border-t border-line pt-4 mt-2">
+					<p className="text-xs text-muted mb-3">
+						Enter your own ceiling or leave blank to inherit from the platform default. Leave blank to
+						clear your override. Max: {usd(data?.maxOverride.chargedMicrosCeiling ?? 10_000_000_000)} / {tok((data?.maxOverride.tokenCeiling ?? 100_000_000_000))}.
+					</p>
+					<div className="grid sm:grid-cols-2 gap-3 mb-3">
+						<div>
+							<label className="text-xs font-semibold block mb-1" htmlFor="budget-charged">
+								Charged spend ceiling (USD / 24h)
+							</label>
+							<input
+								ref={chargedRef}
+								id="budget-charged"
+								type="number"
+								min={0}
+								step={1}
+								placeholder={data ? `${(data.effective.chargedMicrosCeiling / 1_000_000).toFixed(0)} (inherited)` : ""}
+								value={editCharged}
+								onChange={(e) => setEditCharged(e.target.value)}
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-canvas focus:outline-none focus:border-accent"
+							/>
+						</div>
+						<div>
+							<label className="text-xs font-semibold block mb-1" htmlFor="budget-tokens">
+								Token ceiling (millions / 24h)
+							</label>
+							<input
+								id="budget-tokens"
+								type="number"
+								min={0}
+								step={1}
+								placeholder={data ? `${(data.effective.tokenCeiling / 1_000_000).toFixed(0)} (inherited)` : ""}
+								value={editTokens}
+								onChange={(e) => setEditTokens(e.target.value)}
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-canvas focus:outline-none focus:border-accent"
+							/>
+						</div>
+					</div>
+					{error && <p className="text-xs text-danger mb-2">{error}</p>}
+					<div className="flex gap-2">
+						<Button variant="primary" size="md" onClick={save} disabled={saving}>
+							{saving ? "Saving…" : "Save"}
+						</Button>
+						<Button variant="secondary" size="md" onClick={() => { setEditing(false); setError(null); }}>
+							Cancel
+						</Button>
+					</div>
+				</div>
+			)}
+		</Card>
 	);
 }
