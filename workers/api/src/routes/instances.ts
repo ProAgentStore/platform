@@ -16,7 +16,7 @@ import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
-import { registerTerminalBindingRoutes } from "./instances-terminal.js";
+import { registerConnectorBindingRoutes } from "./instances-terminal.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
@@ -907,10 +907,10 @@ registerBehaviourRoutes(instanceRoutes);
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);
-// The terminal-target binding (#402) — the subscriber's half of the terminal ceiling, the same
-// shape as the `/runner-node` pin above and mounted from its own module for the same reason the
-// others are: this file is already at its size pin.
-registerTerminalBindingRoutes(instanceRoutes);
+// The connector bindings (#402, #447) — the subscriber's half of a creator-declared ceiling
+// (`/terminal-target`, `/tmux-session`), the same shape as the `/runner-node` pin above and mounted
+// from its own module for the same reason the others are: this file is already at its size pin.
+registerConnectorBindingRoutes(instanceRoutes);
 // Deployment / build status for any instance — the Operator counterpart to the Coder Build Status
 // panel (#488). Mounted from its own module to keep this file at its size pin.
 registerDeployStatusRoutes(instanceRoutes);

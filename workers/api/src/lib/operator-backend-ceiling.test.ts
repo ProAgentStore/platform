@@ -89,12 +89,19 @@ describe("migration 0104 — the ceiling each operator declares", () => {
 
 	it("touches neither the generic Terminal Operator nor the tmux Operator", () => {
 		// `terminal-operator` must stay `many`: exercising the whole connector is its entire
-		// purpose and its description already says so. `tmux-operator` declares `tmux_*` tools,
-		// whose connector has no constraint vocabulary — a `terminal` ceiling on that row would be
-		// dropped by the sanitiser on the next write, i.e. config that reads as a ceiling and is not.
+		// purpose and its description already says so. `tmux-operator` declares `tmux_*` tools, so
+		// a `terminal` ceiling on that row governs a connector it does not use — config that reads
+		// as a ceiling and enforces nothing.
 		expect(DDL).not.toMatch(/slug = 'terminal-operator'/);
 		expect(DDL).not.toMatch(/slug = 'tmux-operator'/);
-		expect(CONNECTOR_CONSTRAINTS.tmux).toBeUndefined();
+		// When 0104 shipped, the reason was stronger: `tmux` had no constraint vocabulary at all,
+		// so the sanitiser dropped any such key on the next write. #447 removed that absence — the
+		// tmux vocabulary now exists — and this assertion is kept, pointed at the fact that still
+		// holds: it carries a BINDING only. There is no `backends` field for a terminal-shaped
+		// ceiling to land in, so 0104's decision to leave the row alone is still the right one, for
+		// a reason that survives the vocabulary existing.
+		expect(CONNECTOR_CONSTRAINTS.tmux).toBeDefined();
+		expect(CONNECTOR_CONSTRAINTS.tmux.backends).toBeUndefined();
 	});
 
 	it("declares no cardinality — these are backend test agents, not single-pane operators", () => {

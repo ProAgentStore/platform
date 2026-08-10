@@ -160,8 +160,21 @@ export interface BindingConstraintDef {
 	/**
 	 * The VALUE field the bound identity must sit inside, when it carries a `value:` prefix — so
 	 * "bind within the ceiling" is checked rather than assumed, wherever the binding is written.
+	 *
+	 * ABSENT for a connector that is single-valued BY CONSTRUCTION (`tmux`): there is no value
+	 * ceiling for the binding to sit inside, so the within-check, the prefix walk in
+	 * `narrowConstraintSpec` and `boundTargetRefusal` all correctly do nothing for it.
 	 */
 	withinField?: string;
+	/**
+	 * The `/v1/instances/{id}/<bindRoute>` path a subscriber writes this binding through.
+	 *
+	 * In the TABLE rather than in the route module, for the reason the rest of the vocabulary is:
+	 * the refusal a `single` agent gives when nothing is bound has to name the route that fixes it,
+	 * and a second connector made that string per-connector. `instances-terminal.ts` mounts from
+	 * this same field, and its contract test asserts the mounted paths against it.
+	 */
+	bindRoute: string;
 	/** Noun for the refusal message ("terminal target"). */
 	noun: string;
 }
@@ -182,11 +195,20 @@ const asText = (v: string[] | string | undefined): string => (typeof v === "stri
  * same discipline as steps, behaviour fields, stats sources and board actions, and for the same
  * reason: free-form rules would hand a creator a language the platform cannot reason about (#322).
  *
- * `terminal` is the first and, today, only entry. `terminal_list_targets` takes
+ * `terminal` was the first entry. `terminal_list_targets` takes
  * `backend: "all"|"tmux"|"kitty"|"iterm2"` and defaults to `all`, so a tmux-only agent cannot be
  * expressed by withholding a tool — the tool it needs is the one that also reaches iTerm2 (#402).
  * `terminal.test.ts` asserts these values against the tools' own JSON-Schema enums, so the two
  * cannot drift.
+ *
+ * `tmux` is the second, and it is the shape a VALUE ceiling cannot express (#447). #403 moved the
+ * one PUBLISHED Operator off the generic `terminal_*` six and onto the backend-exclusive `tmux_*`
+ * tools, which made it a tmux agent by construction — and, because this table is keyed by CONNECTOR
+ * id, simultaneously moved it onto a connector with no vocabulary at all. So the one agent with
+ * live instances was the one that could not be bound to a pane: `parseConstraintSpec` DROPS a key
+ * it has no vocabulary for, and a `tmux` declaration was therefore unwritable rather than merely
+ * unwritten. It carries a binding field and nothing else, because "which backend" is already
+ * answered by which tools exist.
  */
 export const CONNECTOR_CONSTRAINTS: Record<string, Record<string, ConstraintDef>> = {
 	terminal: {
@@ -206,7 +228,24 @@ export const CONNECTOR_CONSTRAINTS: Record<string, Record<string, ConstraintDef>
 			arg: "target",
 			bindField: "boundTarget",
 			withinField: "backends",
+			bindRoute: "terminal-target",
 			noun: "terminal target",
+		},
+	},
+	tmux: {
+		// No `values` field and no `withinField`, and both absences are the point (#447). The backend
+		// is tmux by construction, so there is nothing to narrow; a single-valued list covering the
+		// whole vocabulary is dropped by `parseConstraintSpec` anyway, and would read as a ceiling
+		// that exists while enforcing nothing. `arg: "session"` is the key all six session-addressing
+		// `tmux_*` tools take; `tmux_list_sessions` takes no arguments and is therefore ungated, by
+		// the same rule that leaves `terminal_list_targets` free — you cannot bind what you have not
+		// listed. `tmux.test.ts` asserts both halves against the tools' own schemas.
+		sessions: {
+			kind: "binding",
+			arg: "session",
+			bindField: "boundSession",
+			bindRoute: "tmux-session",
+			noun: "tmux session",
 		},
 	},
 };
@@ -563,7 +602,10 @@ function enforceBinding(
 	if (!bound) {
 		return {
 			ok: false,
-			refusal: `Refused by this agent's declared capability constraint ${because}: this agent drives exactly one ${def.noun} and this instance has none bound. Bind one first (\`PUT /v1/instances/{id}/terminal-target\`), then retry — \`${def.arg}\` cannot be chosen per call.`,
+			// The route comes from the vocabulary, not from a literal: a second connector (#447) made
+			// "bind one first" a per-connector instruction, and naming the wrong path is worse than
+			// naming none — it sends the reader to a route that governs another resource.
+			refusal: `Refused by this agent's declared capability constraint ${because}: this agent drives exactly one ${def.noun} and this instance has none bound. Bind one first (\`PUT /v1/instances/{id}/${def.bindRoute}\`), then retry — \`${def.arg}\` cannot be chosen per call.`,
 		};
 	}
 	const within = def.withinField ? vocab[def.withinField] : undefined;

@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { getRegistryTool, registryConnectorGroups, registryToolDefs, registryToolNameSet, registryTools, runRegistryTool } from "./tool-registry.js";
+import { CONNECTOR_CONSTRAINTS } from "./surface-options.js";
 import type { Env } from "../types.js";
 
 const envNoGithub = {} as unknown as Env; // githubAppConfigured() → false
+
+/**
+ * Env whose CONSTRAINT join finds the instance and declares no ceiling, so the fail-closed gate
+ * (#441) lets the call through to whatever it is actually testing. Needed by any connector that
+ * has a vocabulary — `terminal` since #402, and `tmux` since #447.
+ */
+const envLocatable = () =>
+	({
+		DB: {
+			prepare(sql: string) {
+				const constraintQuery = sql.includes("agent_instances");
+				return { bind() { return { first: async () => (constraintQuery ? { agent_config: "{}", instance_config: "{}" } : null) }; } };
+			},
+		},
+	}) as unknown as Env;
 
 /** Env whose consent lookup returns `granted` for every (instance,connector,write). */
 function envWithConsent(granted: boolean): Env {
@@ -112,7 +128,11 @@ describe("tmux connector", () => {
 	});
 
 	it("a READ tool with no runner connected → clear error, no throw", async () => {
-		const r = await runRegistryTool("tmux_list_sessions", { env: envNoGithub, userId: "u1", instanceId: "i1" }, {});
+		// `envLocatable`, not `envNoGithub`: since #447 gave `tmux` a constraint vocabulary this
+		// call reaches the ceiling lookup, which fails CLOSED on a DB it cannot read (#441). That
+		// refusal is correct but it is not what this test is about — the subject is the runner
+		// error, so the ceiling has to resolve and declare nothing for the call to get that far.
+		const r = await runRegistryTool("tmux_list_sessions", { env: envLocatable(), userId: "u1", instanceId: "i1" }, {});
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/runner|pags up/i);
 	});
@@ -270,10 +290,19 @@ describe("capability-constraint gate (#404)", () => {
 	});
 
 	it("costs nothing for a connector with no constraint vocabulary — no lookup at all", async () => {
-		// `env` here has NO DB. A tmux-connector tool reaching the gate would throw on it; instead
-		// it runs and fails on the missing runner, proving the lookup was skipped.
-		const r = await runRegistryTool("tmux_list_sessions", { env: {} as unknown as Env, userId: "u1", instanceId: "i1" }, {});
-		expect(r.content).toMatch(/runner|pags up/i);
+		// The exemplar is asserted, not assumed. This test used to use `tmux_list_sessions`, and
+		// #447 gave `tmux` a vocabulary — which turned the test from "the lookup is skipped" into
+		// "the lookup happens and throws on the missing DB" without changing a line of it. A test
+		// whose subject can silently stop being an example of the thing it tests is worth less than
+		// the property it claims, so the premise is now checked first.
+		expect(CONNECTOR_CONSTRAINTS["repo-local"]).toBeUndefined();
+		// `env` here has NO DB, so if the gate ran at all it would fail closed and say so in one of
+		// its two voices. Asserting their ABSENCE is the property directly — the call got past the
+		// gate — rather than via a proxy for it. The old form asserted the handler's own runner
+		// error, which coupled this test to whatever that one handler happens to do first.
+		const r = await runRegistryTool("repo_tree", { env: {} as unknown as Env, userId: "u1", instanceId: "i1" }, {});
+		expect(r.content).not.toMatch(/could not be read/i);
+		expect(r.content).not.toMatch(/could not be resolved|names no instance/i);
 	});
 
 	/**

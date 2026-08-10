@@ -374,7 +374,11 @@ describe("enforceConstraints — an out-of-scope argument is refused, naming the
 
 describe("the vocabulary table itself", () => {
 	it("declares terminal.backends and terminal.targets and nothing else — an extension point is reviewed, not inferred", () => {
-		expect(Object.keys(CONNECTOR_CONSTRAINTS)).toEqual(["terminal"]);
+		// `tmux` is the second connector (#447), and this list stays PINNED rather than open: the
+		// gate skips its lookup entirely for a connector absent from this table, so adding a key
+		// switches on a fail-closed enforcement path for every tool that connector owns. That is a
+		// reviewed decision, not an inference.
+		expect(Object.keys(CONNECTOR_CONSTRAINTS)).toEqual(["terminal", "tmux"]);
 		// Order is asserted because enforcement walks the table in it: a target naming a backend
 		// outside the ceiling must be refused as a BACKEND violation, which is the constraint that
 		// actually applies, not as "not the bound target".
@@ -544,5 +548,46 @@ describe("boundTargetRefusal — what a WRITE path owes the person typing", () =
 		expect(boundTargetRefusal("terminal", "targets", "tmux:main", { backends: ["tmux"] })).toBeNull();
 		expect(boundTargetRefusal("terminal", "targets", "main", { backends: ["tmux"] })).toBeNull();
 		expect(boundTargetRefusal("terminal", "targets", "iterm2:1:1:1", undefined)).toBeNull();
+	});
+});
+
+/**
+ * `tmux` — the second connector, and the shape a VALUE ceiling cannot express (#447).
+ *
+ * `parseConstraintSpec` returns `undefined` for a connector it has no vocabulary for, which is why
+ * a `tmux` declaration was UNWRITABLE rather than merely unwritten: #403 moved the one published
+ * Operator onto `tmux_*` tools, and this table is keyed by connector.
+ */
+describe("the tmux binding vocabulary (#447)", () => {
+	it("parses BOTH fields — the acceptance criterion, and `undefined` before the entry existed", () => {
+		expect(parseConstraintSpec("tmux", { sessions: "single", boundSession: "main" })).toEqual({
+			sessions: "single",
+			boundSession: "main",
+		});
+	});
+
+	it("carries a binding and nothing else — no value ceiling, because the backend is tmux by construction", () => {
+		expect(Object.keys(CONNECTOR_CONSTRAINTS.tmux)).toEqual(["sessions"]);
+		const sessions = CONNECTOR_CONSTRAINTS.tmux.sessions;
+		expect(sessions.kind).toBe("binding");
+		expect(sessions.kind === "binding" && sessions.arg).toBe("session");
+		expect(sessions.kind === "binding" && sessions.bindField).toBe("boundSession");
+		// No `withinField`: there is no value ceiling for the binding to sit inside, so the
+		// within-check and the prefix walk in `narrowConstraintSpec` correctly do nothing here.
+		expect(sessions.kind === "binding" && sessions.withinField).toBeUndefined();
+	});
+
+	it("keeps `many` unstored, so a stored ceiling always means NARROWER than the platform", () => {
+		expect(parseConstraintSpec("tmux", { sessions: "many" })).toBeUndefined();
+		expect(parseConstraintSpec("tmux", { sessions: "single" })).toEqual({ sessions: "single" });
+	});
+
+	it("names the route a subscriber binds through, so the refusal cannot point at another resource", () => {
+		// In the TABLE, not in the route module: `enforceBinding`'s "bind one first" message is
+		// per-connector now, and naming `/terminal-target` to a tmux agent is worse than naming none.
+		const terminal = CONNECTOR_CONSTRAINTS.terminal.targets;
+		const tmux = CONNECTOR_CONSTRAINTS.tmux.sessions;
+		expect(terminal.kind === "binding" && terminal.bindRoute).toBe("terminal-target");
+		expect(tmux.kind === "binding" && tmux.bindRoute).toBe("tmux-session");
 	});
 });

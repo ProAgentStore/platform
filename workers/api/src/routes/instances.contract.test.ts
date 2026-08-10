@@ -62,7 +62,8 @@ import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
-import { registerTerminalBindingRoutes } from "./instances-terminal.js";
+import { registerConnectorBindingRoutes } from "./instances-terminal.js";
+import { CONNECTOR_CONSTRAINTS } from "../lib/surface-options.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { instanceRoutes } from "./instances.js";
 
@@ -253,6 +254,8 @@ const ROUTES = [
 	"DELETE /:instanceId/files/multipart/:uploadId",
 	"GET /:instanceId/terminal-target",
 	"PUT /:instanceId/terminal-target",
+	"GET /:instanceId/tmux-session",
+	"PUT /:instanceId/tmux-session",
 	"GET /:instanceId/deploy-status",
 	"GET /:instanceId/deploy-history",
 	"PUT /:instanceId/deploy-status",
@@ -327,7 +330,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
-	"instances-terminal.ts": registerTerminalBindingRoutes,
+	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
 };
 
@@ -402,7 +405,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/deploy-history",
 		"PUT /:instanceId/deploy-status",
 	],
-	"instances-terminal.ts": ["GET /:instanceId/terminal-target", "PUT /:instanceId/terminal-target"],
+	"instances-terminal.ts": [
+		"GET /:instanceId/terminal-target",
+		"PUT /:instanceId/terminal-target",
+		"GET /:instanceId/tmux-session",
+		"PUT /:instanceId/tmux-session",
+	],
 	"instances-translation.ts": [
 		"GET /:instanceId/translation",
 		"PUT /:instanceId/translation",
@@ -534,6 +542,11 @@ const GATES: Record<string, [number, number]> = {
 	// stranger must not read WHICH pane someone else's agent drives, let alone rebind it.
 	"GET /:instanceId/terminal-target": [401, 404],
 	"PUT /:instanceId/terminal-target": [401, 404],
+	// The tmux-session binding (#447) — the same route pair for the connector the one PUBLISHED
+	// Operator actually runs on. Gated identically, and it has to be: which pane an agent may drive
+	// is exactly as much somebody else's business as which terminal.
+	"GET /:instanceId/tmux-session": [401, 404],
+	"PUT /:instanceId/tmux-session": [401, 404],
 	// Deployment / build status (#488). Owner-only: a stranger must not see which repo someone
 	// else's instance tracks or read their build history.
 	"GET /:instanceId/deploy-status": [401, 404],
@@ -628,5 +641,37 @@ describe("what a stranger gets from every route", () => {
 		const { app, env } = buildApp();
 		const list = await app.request("/v1/instances/my/instances", { headers: { Authorization: `Bearer ${stranger}` } }, env);
 		expect(await list.json()).toEqual({ instances: [] });
+	});
+});
+
+/**
+ * The binding routes are DERIVED from the vocabulary, so the table and the mounts cannot drift.
+ *
+ * `instances-terminal.ts` mounts `/terminal-target` and `/tmux-session` as literal strings on
+ * purpose — `scripts/openapi-coverage.mjs` finds routes by statically scanning for
+ * `router.get("/…")`, so a loop over the table would delete the whole surface from the drift check
+ * and turn its spec entries into phantoms. That literal is the cost, and this is what pays for it:
+ * every `bindRoute` in `CONNECTOR_CONSTRAINTS` must appear as a mounted GET and PUT.
+ *
+ * It matters because the refusal a `single` agent gives when nothing is bound is built from
+ * `bindRoute` (#447). A route renamed here and not there sends a user to a 404; a route renamed
+ * there and not here sends them to a path that governs a DIFFERENT connector's resource, which is
+ * worse — they would bind a terminal and wonder why their tmux agent still refuses.
+ */
+describe("connector bindings — every declared bindRoute is actually mounted", () => {
+	const bindRoutes = Object.entries(CONNECTOR_CONSTRAINTS).flatMap(([connector, fields]) =>
+		Object.entries(fields)
+			.filter(([, def]) => def.kind === "binding")
+			.map(([field, def]) => ({ connector, field, route: (def as { bindRoute: string }).bindRoute })),
+	);
+
+	it("covers both connectors that declare a binding, so this test cannot pass vacuously", () => {
+		expect(bindRoutes.map((b) => `${b.connector}.${b.field}`)).toEqual(["terminal.targets", "tmux.sessions"]);
+	});
+
+	it.each(bindRoutes)("mounts GET and PUT /:instanceId/$route for $connector.$field", ({ route }) => {
+		const mounted = surface().map(({ method, path }) => `${method} ${path}`);
+		expect(mounted).toContain(`GET /:instanceId/${route}`);
+		expect(mounted).toContain(`PUT /:instanceId/${route}`);
 	});
 });

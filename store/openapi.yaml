@@ -4651,6 +4651,74 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/tmux-session:
+    get:
+      summary: Read which single tmux session this instance drives
+      description: |
+        The tmux counterpart of `/terminal-target`, and the binding the one PUBLISHED Operator
+        needs: agents declaring the backend-exclusive `tmux_*` tools run on the `tmux` connector,
+        which had no constraint vocabulary until #447 — so a ceiling on them was not merely
+        undeclared, it was unwritable.
+
+        Two fields rather than three: there is no backend ceiling for a tmux binding to sit
+        inside, because the backend is tmux by construction. `sessions: "many"` (the default, and
+        both live instances today) means no binding is required.
+      operationId: getTmuxSession
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The bound session, and whether one is required
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { type: string, nullable: true }
+                  sessions: { type: string, enum: [single, many] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Bind (or clear) the one tmux session this instance drives
+      description: |
+        An empty or null `session` clears the binding.
+
+        Binding is not merely a console affordance: with `sessions: "single"` a tool call naming
+        any other session is refused at dispatch in `runRegistryTool`, and a call naming none is
+        filled in with the bound one. `tmux_run_command` is arbitrary shell on the owner's
+        machine, so "one pane, one job" is what stops a mis-selected target being a command on a
+        real machine.
+
+        `tmux_list_sessions` is never gated by this — it takes no `session` argument, and you
+        cannot bind what you have not listed.
+      operationId: setTmuxSession
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session:
+                  type: string
+                  nullable: true
+                  description: "A tmux session name, as reported by `tmux_list_sessions` (for example `main`)."
+      responses:
+        "200":
+          description: The stored binding, resolved the same way GET reports it
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { type: string, nullable: true }
+                  sessions: { type: string, enum: [single, many] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Deploy / build status (Operator agent counterpart to Coder Build Status) ─
 
   /v1/instances/{instanceId}/deploy-status:
