@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+	BLOCKED_CAPABILITY_REPEATS,
 	instructionKey,
+	isCapabilityBlocked,
 	isStuck,
 	MAX_ITERATIONS_CAP,
 	needsHuman,
 	nextStep,
 	NO_PROGRESS_REPEATS,
 	readAgentReply,
+	replyErrorClass,
 	sanitizeMaxIterations,
 	statusFor,
 	type LoopState,
@@ -141,6 +144,125 @@ describe("needsHuman / statusFor", () => {
 	it("maps escalation to needs_human, not failure — they are different things to a user", () => {
 		expect(statusFor("escalated")).toBe("needs_human");
 		expect(statusFor("budget")).toBe("failed");
+	});
+});
+
+describe("replyErrorClass (#473)", () => {
+	it("classifies permission errors", () => {
+		expect(replyErrorClass("403 Forbidden")).toBe("permission");
+		expect(replyErrorClass("Error: permission denied reading GitHub Actions")).toBe("permission");
+		expect(replyErrorClass("You are not authorized to access this resource")).toBe("permission");
+		expect(replyErrorClass("access denied")).toBe("permission");
+		expect(replyErrorClass("insufficient permissions to view workflow runs")).toBe("permission");
+	});
+
+	it("classifies not-found errors", () => {
+		expect(replyErrorClass("404 Not Found")).toBe("notfound");
+		expect(replyErrorClass("The repository does not exist or you don't have access")).toBe("notfound");
+		expect(replyErrorClass("could not find the requested resource")).toBe("notfound");
+	});
+
+	it("classifies auth errors", () => {
+		expect(replyErrorClass("401 invalid token")).toBe("auth");
+		expect(replyErrorClass("your token has expired, please reauthenticate")).toBe("auth");
+		expect(replyErrorClass("authentication failed: bad credentials")).toBe("auth");
+	});
+
+	it("classifies capability/feature errors", () => {
+		expect(replyErrorClass("this feature is not enabled for your account")).toBe("capability");
+		expect(replyErrorClass("GitHub Actions is not available on this plan")).toBe("capability");
+		expect(replyErrorClass("the tool is not configured")).toBe("capability");
+	});
+
+	it("returns null for a normal (non-error) reply", () => {
+		expect(replyErrorClass("I've listed the repositories. Here are the results.")).toBeNull();
+		expect(replyErrorClass("The tests passed successfully.")).toBeNull();
+		expect(replyErrorClass("")).toBeNull();
+	});
+
+	it("is case-insensitive", () => {
+		expect(replyErrorClass("PERMISSION DENIED")).toBe("permission");
+		expect(replyErrorClass("Not Found")).toBe("notfound");
+	});
+});
+
+describe("isCapabilityBlocked (#473)", () => {
+	it("is false when there is not enough history", () => {
+		expect(isCapabilityBlocked(["permission", "permission"])).toBe(false);
+	});
+
+	it("fires when the same error class repeats N times in a row", () => {
+		expect(isCapabilityBlocked(Array(BLOCKED_CAPABILITY_REPEATS).fill("permission"))).toBe(true);
+	});
+
+	it("does not fire on null (non-error) entries even if adjacent error classes match", () => {
+		expect(isCapabilityBlocked(["permission", null, "permission"])).toBe(false);
+	});
+
+	it("does not fire for different error classes", () => {
+		expect(isCapabilityBlocked(["permission", "notfound", "permission"])).toBe(false);
+	});
+
+	it("only looks at the tail so an early streak does not condemn a recovered run", () => {
+		// 3 permission errors early, then two successful replies, then 2 more — not yet N
+		const history: Array<string | null> = ["permission", "permission", "permission", null, null, "permission", "permission"];
+		expect(isCapabilityBlocked(history)).toBe(false);
+	});
+
+	it("never fires on null (non-error reply) as the repeating value", () => {
+		expect(isCapabilityBlocked([null, null, null])).toBe(false);
+	});
+});
+
+describe("nextStep with capability-blocked detection (#473)", () => {
+	it("escalates when the same error class appears N times in a row as agentReply", () => {
+		// Simulate N-1 previous permission errors in state, then one more in this reply
+		const errorHistory: Array<string | null> = Array(BLOCKED_CAPABILITY_REPEATS - 1).fill("permission");
+		const v = nextStep(
+			state({ recentErrorClasses: errorHistory }),
+			dec("continue", "try a different approach to read GitHub Actions"),
+			"Error: 403 Forbidden — you don't have permission to read workflow runs",
+		);
+		expect(v.continue).toBe(false);
+		expect(v.stopReason).toBe("escalated");
+		expect(v.message).toContain("permission");
+		expect(v.message).toContain("unavailable");
+	});
+
+	it("does not escalate when replies are a mix of error classes", () => {
+		const errorHistory: Array<string | null> = ["permission", "notfound"];
+		const v = nextStep(
+			state({ recentErrorClasses: errorHistory }),
+			dec("continue", "try again"),
+			"Error: 403 Forbidden",
+		);
+		// Only 1 'permission' at the tail — not yet BLOCKED_CAPABILITY_REPEATS
+		expect(v.continue).toBe(true);
+	});
+
+	it("does not escalate when a successful reply breaks the streak", () => {
+		const errorHistory: Array<string | null> = ["permission", "permission", null];
+		const v = nextStep(
+			state({ recentErrorClasses: errorHistory }),
+			dec("continue", "proceed"),
+			"Error: 403 Forbidden",
+		);
+		// null in the middle broke the streak; tail is [null, "permission"] — not blocked
+		expect(v.continue).toBe(true);
+	});
+
+	it("still honours terminal model decisions before the capability check", () => {
+		// Even if there are N permission errors, a model decision of 'done' wins.
+		const errorHistory: Array<string | null> = Array(BLOCKED_CAPABILITY_REPEATS - 1).fill("permission");
+		expect(nextStep(state({ recentErrorClasses: errorHistory }), dec("done"), "403 Forbidden").stopReason).toBe("done");
+		expect(nextStep(state({ recentErrorClasses: errorHistory }), dec("escalate"), "403 Forbidden").stopReason).toBe("escalated");
+		expect(nextStep(state({ recentErrorClasses: errorHistory }), dec("failed"), "403 Forbidden").stopReason).toBe("failed");
+	});
+
+	it("works with no recentErrorClasses in state (backward compat — no agentReply)", () => {
+		// Old callers that don't pass agentReply should continue to work as before.
+		const v = nextStep(state(), dec("continue", "run the tests"));
+		expect(v.continue).toBe(true);
 	});
 });
 

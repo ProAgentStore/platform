@@ -13,7 +13,7 @@
 // the pure policy in lib/agent-loop.ts.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { nextStep, instructionKey, needsHuman, readAgentReply, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
+import { nextStep, instructionKey, needsHuman, readAgentReply, replyErrorClass, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
 import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
@@ -55,6 +55,7 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 
 		const transcript: LoopTurn[] = [];
 		const recentInstructions: string[] = [];
+		const recentErrorClasses: Array<string | null> = [];
 		let instruction = objective;
 		let iteration = 0;
 		let stop: { reason: LoopStopReason; message: string } | null = null;
@@ -143,6 +144,9 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 
 			transcript.push({ role: "user", content: instruction }, { role: "assistant", content: reply });
 			recentInstructions.push(instructionKey(instruction));
+			// Track the error class of each reply so we can detect a structurally-blocked
+			// capability (same error class repeating) and escalate early (#473).
+			recentErrorClasses.push(replyErrorClass(reply));
 			await step.do(`progress-${iteration}`, () => recordIteration(this.env, runId, iteration));
 
 			// DECIDE — the same orchestrator path the HTTP route uses, so the two can't disagree.
@@ -179,8 +183,8 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 				});
 			}
 
-			const state: LoopState = { iteration, maxIterations, recentInstructions };
-			const verdict = nextStep(state, decision);
+			const state: LoopState = { iteration, maxIterations, recentInstructions, recentErrorClasses };
+			const verdict = nextStep(state, decision, reply);
 			if (!verdict.continue) {
 				stop = { reason: verdict.stopReason ?? "failed", message: verdict.message ?? "" };
 				break;

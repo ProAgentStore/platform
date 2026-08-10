@@ -26,11 +26,20 @@ export interface LoopState {
 	maxIterations: number;
 	/** Hashes of recent instructions, newest last — used to notice a stuck loop. */
 	recentInstructions: string[];
+	/**
+	 * Error-class labels from recent agent replies, newest last.
+	 * `null` entries mean a non-error reply. Used to detect a capability that is
+	 * structurally unavailable (e.g. no GitHub Actions permission) so the loop stops
+	 * burning iterations on it rather than rephrasing the same blocked request (#473).
+	 */
+	recentErrorClasses?: Array<string | null>;
 }
 
 export const MAX_ITERATIONS_CAP = 50;
 /** Identical instruction this many times in a row ⇒ the loop is not progressing. */
 export const NO_PROGRESS_REPEATS = 3;
+/** Same error class this many times in a row ⇒ the capability is blocked for this run. */
+export const BLOCKED_CAPABILITY_REPEATS = 3;
 
 export interface LoopVerdict {
 	/** Run another iteration? */
@@ -73,14 +82,63 @@ export function isStuck(recentInstructions: readonly string[]): boolean {
 }
 
 /**
+ * Classify an agent reply into a broad error class, or return null if it is not an error.
+ *
+ * The returned label is a stable string suitable for repetition-counting: we want "permission"
+ * for everything that means "you don't have access", "notfound" for missing resources, and so on.
+ * Precision matters less than stability — two replies that are the same flavour of failure must
+ * map to the same label so the repeat-counter fires.
+ *
+ * Pure + exported so it is unit-testable without any I/O.
+ */
+export function replyErrorClass(reply: string): string | null {
+	const r = (reply || "").toLowerCase();
+	// Structurally terminal: a permission the agent cannot obtain by retrying differently.
+	if (
+		/\b(403|forbidden|permission denied|not (authorized|permitted|allowed)|access denied|insufficient (permissions?|privilege|scope)|unauthorized)\b/.test(r)
+	) return "permission";
+	// Resource does not exist — rephrasing the request won't create it.
+	if (/\b(404|not found|no such|does not exist|could not find)\b/.test(r)) return "notfound";
+	// Feature / tool the agent simply doesn't have access to on this plan or configuration.
+	if (/\b(not (enabled|available|configured|supported)|feature (not|is not)|capability (not|is not)|plan (does not|doesn't)|unavailable)\b/.test(r)) return "capability";
+	// Auth failures that survive retries.
+	if (/\b(invalid (token|key|credentials?)|(?:token|session|key).{0,20}expired|expired.{0,20}(?:token|session|key)|authentication (failed|error)|401)\b/.test(r)) return "auth";
+	return null;
+}
+
+/**
+ * Has the same error class appeared consecutively enough times to conclude the capability is
+ * structurally blocked for this run?
+ *
+ * Null entries (non-error replies) break a streak, so a single successful step resets the clock.
+ * This is intentionally separate from `isStuck` (which tracks instruction hashes): an agent can
+ * rephrase the same request many ways — each a distinct instruction — while every reply is the
+ * same permission error. `isStuck` wouldn't fire; this does (#473).
+ */
+export function isCapabilityBlocked(recentErrorClasses: ReadonlyArray<string | null>): boolean {
+	if (recentErrorClasses.length < BLOCKED_CAPABILITY_REPEATS) return false;
+	const tail = recentErrorClasses.slice(-BLOCKED_CAPABILITY_REPEATS);
+	const first = tail[0];
+	return first !== null && tail.every((c) => c === first);
+}
+
+/**
  * Decide what the loop does next.
  *
  * Order matters and is deliberate: **terminal model decisions are honoured before the caps**, so a
  * run that genuinely finished on its last allowed iteration reports "done" rather than the
  * misleading "max_iterations". Budget is checked by the caller BEFORE the model runs (there is no
  * point paying for a decision you cannot act on), so it does not appear here.
+ *
+ * `agentReply` is the raw text the agent returned this iteration. When provided it is classified
+ * into an error-class label, appended to `state.recentErrorClasses`, and checked for a blocked
+ * capability — a structurally-impossible action the agent has been retrying in vain (#473).
  */
-export function nextStep(state: LoopState, decision: { decision: LoopDecision; nextInstruction: string; reason: string }): LoopVerdict {
+export function nextStep(
+	state: LoopState,
+	decision: { decision: LoopDecision; nextInstruction: string; reason: string },
+	agentReply?: string,
+): LoopVerdict {
 	if (decision.decision === "done") {
 		return { continue: false, stopReason: "done", message: decision.reason || "Objective met." };
 	}
@@ -111,6 +169,23 @@ export function nextStep(state: LoopState, decision: { decision: LoopDecision; n
 			message: `Stopped: the same instruction repeated ${NO_PROGRESS_REPEATS} times without progress.`,
 		};
 	}
+
+	// Capability-blocked check (#473): if the agent's reply has signalled the same category of
+	// structural error (permission, notfound, capability, auth) on each of the last N turns,
+	// the orchestrator should NOT keep trying — rephrasing a forbidden request won't un-forbid it.
+	// Escalate to a human instead so the missing permission/config can be addressed.
+	if (agentReply !== undefined) {
+		const errorClass = replyErrorClass(agentReply);
+		const history = [...(state.recentErrorClasses ?? []), errorClass];
+		if (isCapabilityBlocked(history)) {
+			return {
+				continue: false,
+				stopReason: "escalated",
+				message: `Stopped: the agent hit a "${errorClass}" error ${BLOCKED_CAPABILITY_REPEATS} times in a row — this capability appears unavailable. Check permissions or configuration and restart the loop.`,
+			};
+		}
+	}
+
 	return { continue: true, nextInstruction: instruction };
 }
 
