@@ -24,6 +24,8 @@ export interface LoopRunRow {
 	last_progress_at: number | null;
 	/** Supervisor instance that delegated this run (0090). Null when the owner started it. */
 	delegated_by: string | null;
+	/** Coding session this run drives (0116). Null for chat/pipeline runs. */
+	session_id: string | null;
 }
 
 export interface LoopRunView {
@@ -52,6 +54,14 @@ export interface LoopRunView {
 	 * misled the user.
 	 */
 	delegatedBy: string | null;
+	/**
+	 * The coding session this run drives (#465). Null for chat and pipeline drivers.
+	 *
+	 * Written once by `codingDriver` at run-create time, never updated. The `check_work` handler
+	 * reads it to reach the live `runState` via `/coding/capture`, so the run report can say
+	 * "the engine is working" instead of only "NOT stalled".
+	 */
+	sessionId: string | null;
 }
 
 export function toLoopRunView(row: LoopRunRow): LoopRunView {
@@ -70,6 +80,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		finishedAt: row.finished_at,
 		lastProgressAt: row.last_progress_at ?? null,
 		delegatedBy: row.delegated_by ?? null,
+		sessionId: row.session_id ?? null,
 	};
 }
 
@@ -85,11 +96,16 @@ export async function createLoopRun(
 		startedAt: number;
 		/** The supervisor that asked for this (`onBehalfOf`). Omit for a run its owner started. */
 		delegatedBy?: string | null;
+		/**
+		 * The coding session this run drives (#465). Omit for chat and pipeline drivers.
+		 * Written once; read by `check_work` to reach the live `runState` via `/coding/capture`.
+		 */
+		sessionId?: string | null;
 	},
 ): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8)`,
+		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9)`,
 	)
 		.bind(
 			input.runId,
@@ -100,6 +116,7 @@ export async function createLoopRun(
 			input.budgetId ?? null,
 			input.startedAt,
 			input.delegatedBy ?? null,
+			input.sessionId ?? null,
 		)
 		.run();
 }

@@ -19,6 +19,7 @@
 // "recent work" context block, so the two can never tell different stories about one run.
 import { formatInZone } from "./agent-clock.js";
 import type { LoopRunView } from "./agent-loop-store.js";
+import { type TerminalView } from "./terminal-label.js";
 
 /**
  * A run's wall-clock time, in the OWNER's zone, formatted here (#329).
@@ -89,12 +90,46 @@ export function isStalled(run: LoopRunView, now: number): boolean {
 const NOT_STALLED = `NOT stalled — a run counts as stalled only after ${Math.round(STALLED_AFTER_MS / 60_000)}m with no progress, and this one is inside that window`;
 
 /**
+ * The engine clause from a live terminal capture (#465).
+ *
+ * Pure so it is unit-testable without I/O. The ABSENCE of a clause (no session) is a real
+ * answer — never render "unknown" or blank for a non-coding run.
+ *
+ * The four cases mirror `describeTerminal`'s `TerminalKind`:
+ *   live-active  → the engine is visibly working right now
+ *   live-idle    → the engine is not producing output this turn
+ *   capture-failed → could not read the engine; the caller must NOT infer idle or done
+ *   runner-offline → the machine is offline; nothing is running
+ *   empty-pane / none / absent → omit the clause entirely
+ */
+export function engineClause(view: TerminalView | null | undefined): string | null {
+	if (!view) return null;
+	switch (view.kind) {
+		case "live-active":
+			return "engine: working (as of this turn)";
+		case "live-idle":
+			return "engine: idle — not producing output right now";
+		case "capture-failed":
+			return "engine: could not be read this turn — do NOT infer idle or finished";
+		case "runner-offline":
+			return "engine: the machine running it is offline";
+		default:
+			// empty-pane, none — not enough signal to make a claim either way
+			return null;
+	}
+}
+
+/**
  * One run, in the words the agent should use about it.
  *
  * The outcome is stated FIRST and unhedged. The whole point is that when the user asks "did that
  * actually happen?", the agent has a sentence it can quote instead of a belief it has to form.
+ *
+ * `engineView` is an optional pre-resolved terminal capture for a RUNNING coding run (#465).
+ * The caller (check_work handler) fetches it live so this function stays pure and its unit tests
+ * stay self-contained. Absent for non-coding runs, in which case no engine clause is rendered.
  */
-export function describeLoopRun(run: LoopRunView, now: number = Date.now(), timeZone?: string): string {
+export function describeLoopRun(run: LoopRunView, now: number = Date.now(), timeZone?: string, engineView?: TerminalView | null): string {
 	const parts: string[] = [];
 	const stalled = isStalled(run, now);
 	const status = stalled ? "running but STALLED (no progress reported recently — it may have died)" : run.status;
@@ -108,6 +143,12 @@ export function describeLoopRun(run: LoopRunView, now: number = Date.now(), time
 	const inStep = run.status === "running" ? ` (this one has been running ${ago(now - (run.lastProgressAt ?? run.startedAt)).replace(" ago", "")})` : "";
 	parts.push(`instruction ${run.iteration} of up to ${run.maxIterations}${inStep}`);
 	if (!stalled && run.status === "running") parts.push(NOT_STALLED);
+	// #465: the engine clause is only present for a running coding run with a resolved capture.
+	// Absent for non-coding runs and for completed/failed runs (the engine is no longer running).
+	if (run.status === "running") {
+		const clause = engineClause(engineView);
+		if (clause) parts.push(clause);
+	}
 	if (run.stopReason) parts.push(`stopped because: ${run.stopReason}`);
 	if (run.detail) parts.push(`result: ${run.detail}`);
 	parts.push(`started ${ago(now - run.startedAt)}${at(run.startedAt, timeZone)}`);
@@ -141,11 +182,19 @@ export interface WorkCheckContext {
 	 * existed — rather than a wall-clock in a zone nobody chose.
 	 */
 	timeZone?: string;
+	/**
+	 * Live terminal views for running coding runs, keyed by `runId` (#465).
+	 *
+	 * Resolved by the `check_work` handler via `/coding/capture` so `describeLoopRun` stays pure.
+	 * Absent (or missing a key) ⇒ no engine clause for that run, which is correct for non-coding
+	 * runs and for runs whose capture failed at the handler level.
+	 */
+	engineViews?: ReadonlyMap<string, TerminalView>;
 }
 
 /** One delegated run, named with the agent it was handed to so the supervisor can cite both. */
-function describeDelegatedRun(run: LoopRunView, now: number, timeZone?: string): string {
-	return `${describeLoopRun(run, now, timeZone)} · delegated to instance ${run.instanceId}`;
+function describeDelegatedRun(run: LoopRunView, now: number, timeZone?: string, engineViews?: ReadonlyMap<string, TerminalView>): string {
+	return `${describeLoopRun(run, now, timeZone, engineViews?.get(run.runId))} · delegated to instance ${run.instanceId}`;
 }
 
 /**
@@ -169,18 +218,19 @@ export function describeWorkCheck(
 	ctx: WorkCheckContext = {},
 ): string {
 	const delegated = ctx.delegated ?? [];
+	const ev = ctx.engineViews;
 	const sections: string[] = [];
 	if (runs.length) {
 		sections.push(
 			`${runs.length === 1 ? "The run" : `Your ${runs.length} most recent runs`} on this instance, newest first:\n` +
-				runs.map((r) => `- ${describeLoopRun(r, now, ctx.timeZone)}`).join("\n"),
+				runs.map((r) => `- ${describeLoopRun(r, now, ctx.timeZone, ev?.get(r.runId))}`).join("\n"),
 		);
 	}
 	if (delegated.length) {
 		sections.push(
 			`${delegated.length === 1 ? "One run" : `${delegated.length} runs`} YOU started by delegating to an agent you` +
 				" supervise, newest first. You started these — the work runs on them, and saying you did it is accurate:\n" +
-				delegated.map((r) => `- ${describeDelegatedRun(r, now, ctx.timeZone)}`).join("\n"),
+				delegated.map((r) => `- ${describeDelegatedRun(r, now, ctx.timeZone, ev)}`).join("\n"),
 		);
 	}
 	if (!sections.length) {

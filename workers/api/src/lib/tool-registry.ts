@@ -15,6 +15,8 @@ import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
 import { getLoopRun, listDelegatedRuns, listLoopRuns, type LoopRunView } from "./agent-loop-store.js";
 import { subordinateIdsOf } from "./supervision.js";
 import { describeWorkCheck } from "./work-report.js";
+import { describeTerminal, type TerminalView } from "./terminal-label.js";
+import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, relayConnected } from "./runner-client.js";
 import { capabilitiesForInstance, type ConnectorConstraintLookup, lookupConnectorConstraints } from "./agent-capabilities.js";
 import { CONNECTOR_CONSTRAINTS, enforceConstraints } from "./surface-options.js";
 import { openBudget } from "./delegation-budget-store.js";
@@ -42,6 +44,68 @@ import type { ConversationTransfer } from "./conversation-transfer.js";
  * Re-exported so `import type { ToolDef } from "./tool-registry.js"` keeps working.
  */
 export type { JsonSchema, RegistryTool, RegistryToolCtx, RegistryToolResult, ToolDef };
+
+/**
+ * Resolve live engine views for the running coding runs in a list (#465).
+ *
+ * For each run that is `status === "running"` AND has a `sessionId`, calls `/coding/capture`
+ * on the bound runner and wraps the result in `describeTerminal`. Capped at 3 sessions so a
+ * list of 5 runs cannot fan out into 5 parallel runner round-trips.
+ *
+ * Returns a map keyed by `runId`. Runs without a session (chat/pipeline drivers) and runs
+ * that are not `running` are absent from the map — their `describeLoopRun` call gets no
+ * engineView and renders no engine clause, which is the correct output.
+ *
+ * Never throws: a failed capture is represented as `capture-failed` in the TerminalView
+ * so the caller renders "could not be read this turn" rather than "idle" or "working".
+ */
+async function resolveEngineViews(
+	env: import("../types.js").Env,
+	instanceId: string,
+	userId: string,
+	runs: readonly LoopRunView[],
+): Promise<ReadonlyMap<string, TerminalView>> {
+	// Only running coding runs need a live capture.
+	const candidates = runs
+		.filter((r) => r.status === "running" && r.sessionId)
+		.slice(0, 3); // cap fan-out
+	if (!candidates.length) return new Map();
+
+	// Resolve the bound runner once for all candidates (they share the same instance).
+	const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
+	const runnerOnline = conn ? await relayConnected(env, instanceId, conn.runnerNode ?? null).catch(() => false) : false;
+
+	const views = new Map<string, TerminalView>();
+	await Promise.all(
+		candidates.map(async (run) => {
+			// sessionId is non-null here (filtered above).
+			const sessionId = run.sessionId!;
+			let snap: { pane?: string; alive?: boolean; runState?: string } | null = null;
+			if (runnerOnline && conn) {
+				snap = await callRunner<{ pane?: string; alive?: boolean; runState?: string }>(
+					conn,
+					"/coding/capture",
+					{ sessionId },
+					{ timeoutMs: READ_TIMEOUT_MS },
+				).catch(() => null);
+			}
+			views.set(
+				run.runId,
+				describeTerminal({
+					runnerOnline,
+					captureOk: snap !== null,
+					pane: snap?.pane?.replace(/\s+/g, " ").trim().slice(-1200) ?? null,
+					alive: snap?.alive ?? null,
+					runState: snap?.runState ?? null,
+					// No stored snapshot here — the purpose is the live verdict, not historical context.
+					lastSnapshot: null,
+					updatedAt: null,
+				}),
+			);
+		}),
+	);
+	return views;
+}
 
 /**
  * First-party registry tools that are NOT provided by a connector (base/standard/runtime
@@ -124,7 +188,8 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				if (!run || !(own || run.delegatedBy === ctx.instanceId)) {
 					return { content: `No run ${runId} belongs to you. Do not describe it as if it happened.`, success: false };
 				}
-				return { content: describeWorkCheck(own ? [run] : [], Date.now(), own ? { timeZone } : { delegated: [run], timeZone }), success: true };
+				const engineViews = own ? await resolveEngineViews(ctx.env, ctx.instanceId, ctx.userId, [run]) : undefined;
+				return { content: describeWorkCheck(own ? [run] : [], Date.now(), own ? { timeZone, engineViews } : { delegated: [run], timeZone }), success: true };
 			}
 			const [runs, delegatedRuns] = await Promise.all([
 				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 5),
@@ -139,7 +204,8 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const supervises =
 				runs.length + delegatedRuns.length === 0 &&
 				(await subordinateIdsOf(ctx.env, ctx.userId, ctx.instanceId).catch(() => [])).length > 0;
-			return { content: describeWorkCheck(runs, Date.now(), { delegated: delegatedRuns, supervises, timeZone }), success: true };
+			const engineViews = await resolveEngineViews(ctx.env, ctx.instanceId, ctx.userId, runs);
+			return { content: describeWorkCheck(runs, Date.now(), { delegated: delegatedRuns, supervises, timeZone, engineViews }), success: true };
 		},
 	},
 	{

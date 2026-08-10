@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, isStalled, recentWorkPrompt } from "./work-report.js";
+import { STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt } from "./work-report.js";
 import type { LoopRunView } from "./agent-loop-store.js";
+import type { TerminalView } from "./terminal-label.js";
 
 const NOW = 1_700_000_000_000;
 
@@ -20,8 +21,13 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		finishedAt: NOW - 30_000,
 		lastProgressAt: NOW - 40_000,
 		delegatedBy: null,
+		sessionId: null,
 		...over,
 	};
+}
+
+function tv(kind: TerminalView["kind"]): TerminalView {
+	return { kind, text: kind === "live-active" ? "some terminal output" : "" };
 }
 
 describe("run times in the owner's zone (#329)", () => {
@@ -196,6 +202,116 @@ describe("describeWorkCheck — the answer to 'did you actually do that?'", () =
 			expect(s).toContain("d1");
 			expect(s.indexOf("own-1")).toBeLessThan(s.indexOf("delegating"));
 		});
+	});
+});
+
+// ── #465 — engine liveness in the run report ──────────────────────────────────────────────────
+
+describe("engineClause (#465)", () => {
+	it("live-active → working", () => {
+		expect(engineClause(tv("live-active"))).toContain("working");
+	});
+
+	it("live-idle → idle, not working", () => {
+		const c = engineClause(tv("live-idle"));
+		expect(c).toContain("idle");
+		expect(c).not.toContain("working");
+	});
+
+	it("capture-failed → do NOT infer idle or finished", () => {
+		const c = engineClause(tv("capture-failed"));
+		expect(c).toMatch(/could not be read/i);
+		// The wording says "do NOT infer idle or finished" — the word "idle" appears in the
+		// negation, which is correct. What must NOT appear is a positive claim of idleness.
+		expect(c).toMatch(/do NOT infer/i);
+		expect(c).not.toContain("working");
+		expect(c).not.toMatch(/engine.*is idle/i);
+	});
+
+	it("runner-offline → machine is offline", () => {
+		const c = engineClause(tv("runner-offline"));
+		expect(c).toMatch(/offline/i);
+		expect(c).not.toContain("working");
+	});
+
+	it("empty-pane → null (not enough signal)", () => {
+		expect(engineClause(tv("empty-pane"))).toBeNull();
+	});
+
+	it("none → null", () => {
+		expect(engineClause(tv("none"))).toBeNull();
+	});
+
+	it("absent → null", () => {
+		expect(engineClause(null)).toBeNull();
+		expect(engineClause(undefined)).toBeNull();
+	});
+});
+
+describe("describeLoopRun engine clause (#465)", () => {
+	const coding = run({ status: "running", finishedAt: null, sessionId: "sess-1", lastProgressAt: NOW - 1000 });
+
+	it("live-active → 'engine: working' appears in a running coding run", () => {
+		const s = describeLoopRun(coding, NOW, undefined, tv("live-active"));
+		expect(s).toMatch(/engine.*working/i);
+	});
+
+	it("capture-failed → unreadable wording, never a positive idle or working claim", () => {
+		const s = describeLoopRun(coding, NOW, undefined, tv("capture-failed"));
+		expect(s).toMatch(/could not be read/i);
+		// The clause wording says "do NOT infer idle" — the word appears in the negation, not as a
+		// positive claim. What must NOT appear is "engine: idle" (the engineClause for live-idle).
+		expect(s).not.toMatch(/engine: idle/i);
+		expect(s).not.toMatch(/engine.*working/i);
+	});
+
+	it("runner-offline → offline wording, never 'working'", () => {
+		const s = describeLoopRun(coding, NOW, undefined, tv("runner-offline"));
+		expect(s).toMatch(/offline/i);
+		expect(s).not.toMatch(/engine.*working/i);
+	});
+
+	it("no engineView → no engine clause (non-coding or pending view)", () => {
+		// Existing test preserved verbatim: the positive claim must never come from lastProgressAt.
+		const s = describeLoopRun(coding, NOW);
+		expect(s).not.toMatch(/engine/i);
+	});
+
+	it("a completed run renders no engine clause even if a view is passed", () => {
+		// The engine is no longer running once the run is done.
+		const done = run({ status: "completed", sessionId: "sess-1" });
+		const s = describeLoopRun(done, NOW, undefined, tv("live-active"));
+		expect(s).not.toMatch(/engine/i);
+	});
+
+	it("a non-coding run (no sessionId) renders no engine clause", () => {
+		// chat/pipeline driver: sessionId is null, engineView will never be resolved for it.
+		const chat = run({ status: "running", finishedAt: null, sessionId: null, lastProgressAt: NOW - 1000 });
+		expect(describeLoopRun(chat, NOW)).not.toMatch(/engine/i);
+	});
+});
+
+describe("describeWorkCheck engine views (#465)", () => {
+	it("threads engineViews map into each run description", () => {
+		const r = run({ runId: "r1", status: "running", finishedAt: null, sessionId: "sess-1", lastProgressAt: NOW - 1000 });
+		const views = new Map([["r1", tv("live-active")]]);
+		const s = describeWorkCheck([r], NOW, { engineViews: views });
+		expect(s).toMatch(/engine.*working/i);
+	});
+
+	it("a missing key in engineViews → no engine clause for that run", () => {
+		const r = run({ runId: "r1", status: "running", finishedAt: null, sessionId: "sess-1", lastProgressAt: NOW - 1000 });
+		const s = describeWorkCheck([r], NOW, { engineViews: new Map() });
+		expect(s).not.toMatch(/engine/i);
+	});
+
+	it("capture-failed in engineViews → unreadable wording, never a positive idle claim", () => {
+		const r = run({ runId: "r1", status: "running", finishedAt: null, sessionId: "sess-1", lastProgressAt: NOW - 1000 });
+		const views = new Map([["r1", tv("capture-failed")]]);
+		const s = describeWorkCheck([r], NOW, { engineViews: views });
+		expect(s).toMatch(/could not be read/i);
+		// "do NOT infer idle" is the correct wording — must not render "engine: idle" as a claim.
+		expect(s).not.toMatch(/engine: idle/i);
 	});
 });
 

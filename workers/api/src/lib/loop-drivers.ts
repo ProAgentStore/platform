@@ -220,6 +220,9 @@ const codingDriver: LoopDriver = {
 				budgetId: input.budgetId,
 				startedAt: Date.now(),
 				delegatedBy: input.onBehalfOf ?? null,
+				// #465: link the run to its session so `check_work` can reach the live `runState`
+				// via `/coding/capture` and report "the engine is working" instead of only "NOT stalled".
+				sessionId: session.id,
 			});
 		} catch (e) {
 			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);
