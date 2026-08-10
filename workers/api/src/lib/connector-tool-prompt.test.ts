@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONSENT_RULE, connectorToolsPrompt, consentLabel, type PromptTool } from "./connector-tool-prompt.js";
+import { CONSENT_RULE, TERMINAL_CLI_PROTOCOL, connectorToolsPrompt, consentLabel, type PromptTool } from "./connector-tool-prompt.js";
 import { registryToolDefs, registryTools } from "./tool-registry.js";
 
 /** The four write tools from the reported instance, as the registry declares them. */
@@ -151,5 +151,35 @@ describe("connectorToolsPrompt shape", () => {
 		const prompt = connectorToolsPrompt(TERMINAL_WRITES, ["terminal"]);
 		expect(prompt).toContain("never tell the user to do it themselves");
 		expect(prompt).toContain("never route it through a terminal/CLI");
+	});
+});
+
+describe("#483 — TERMINAL_CLI_PROTOCOL injected for terminal/tmux agents", () => {
+	// The production incident: the Operator reported "up and ready" the instant claude launched,
+	// before the TUI painted, then silently dropped the first message because the pane was not
+	// at the CLI's input prompt. The three protocol rules close the three failure points.
+	it("is present in TERMINAL_CLI_PROTOCOL constant", () => {
+		expect(TERMINAL_CLI_PROTOCOL).toContain("WAIT FOR READY");
+		expect(TERMINAL_CLI_PROTOCOL).toContain("SUBMIT WITH ENTER");
+		expect(TERMINAL_CLI_PROTOCOL).toContain("CONFIRM IT LANDED");
+		expect(TERMINAL_CLI_PROTOCOL).toContain("tmux_send_message");
+		expect(TERMINAL_CLI_PROTOCOL).toContain("changed is false");
+	});
+
+	it("is injected into the CONNECTED TOOLS block for a terminal-connector agent", () => {
+		const prompt = connectorToolsPrompt([...TERMINAL_WRITES, TERMINAL_READ], ["terminal"]);
+		expect(prompt).toContain(TERMINAL_CLI_PROTOCOL);
+	});
+
+	it("is injected for a tmux-connector agent too", () => {
+		const tmuxTool: PromptTool = { name: "tmux_list_sessions", description: "List sessions.", connector: "tmux", scope: "read", jsonSchema: {} };
+		const prompt = connectorToolsPrompt([tmuxTool], []);
+		expect(prompt).toContain(TERMINAL_CLI_PROTOCOL);
+	});
+
+	it("is NOT injected for agents with only non-terminal tools (e.g. github)", () => {
+		const githubTool: PromptTool = { name: "github_create_issue", description: "Create issue.", connector: "github", scope: "write", jsonSchema: {} };
+		const prompt = connectorToolsPrompt([githubTool], ["github"]);
+		expect(prompt).not.toContain("INTERACTIVE CLI PROTOCOL");
 	});
 });

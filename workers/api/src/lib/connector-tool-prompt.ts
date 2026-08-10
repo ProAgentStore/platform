@@ -90,6 +90,37 @@ export const CONSENT_RULE =
 	" Settings → Connections — do not attempt the call and describe what it would have done.";
 
 /**
+ * Protocol for driving interactive CLIs (Claude Code, Codex, Grok, REPLs) through a terminal
+ * connector. Stated once here and injected into every agent that carries terminal/tmux tools so
+ * the rule is not rediscovered per-incident.
+ *
+ * The three rules correspond to the three distinct failure points seen in production (#483):
+ *   1. False "ready" — the CLI was launched but the TUI had not painted yet. The agent reported
+ *      "up and ready" and the user's first message was silently dropped.
+ *   2. Missing Enter — the text was sent but never submitted because `send_keys` was called with
+ *      text only, without a trailing Enter. `tmux_send_message` encodes the correct sequence.
+ *   3. No confirmation — after sending, the agent reported success without re-capturing the pane,
+ *      so it could not tell whether the message had actually landed.
+ *
+ * `tmux_send_message` (from #482) encodes the correct text+Enter+quiesce sequence, making the
+ * first two rules tool-enforced rather than prompt-only. The re-capture step remains prompt-only
+ * because the tool already returns the post-settle pane; the rule is about how to interpret the
+ * `changed` field rather than what to call.
+ */
+export const TERMINAL_CLI_PROTOCOL =
+	"\n\nINTERACTIVE CLI PROTOCOL — follow this every time you drive an interactive CLI" +
+	" (Claude Code, Codex, Grok, a REPL, or any program that paints its own input prompt):" +
+	"\n1. WAIT FOR READY: after launching a CLI, do NOT assume it is ready. Re-capture the pane" +
+	" until its own input prompt is visible (e.g. '>' or the CLI's cursor). Never report" +
+	" 'ready' or 'up' based on the launch call alone — the TUI takes time to paint." +
+	"\n2. SUBMIT WITH ENTER: to send a message or instruction to the CLI, use `tmux_send_message`" +
+	" (text + Enter in one atomic call). If that tool is not available, send the text first" +
+	" then call `tmux_send_keys` with keys:\"Enter\" — never send text without a following Enter." +
+	"\n3. CONFIRM IT LANDED: check the result's `changed` field. If changed is false, the input" +
+	" did not land — the CLI was not at its input prompt. Re-capture, wait, and resend." +
+	" Never report success when changed is false.";
+
+/**
  * The whole block, or "" when this agent has no connector tools.
  *
  * `grantedWriteConnectors` is the instance's consent rows, read at prompt-build time. Reading them
@@ -105,10 +136,12 @@ export function connectorToolsPrompt(tools: readonly PromptTool[], grantedWriteC
 		const verdict = writeConsentOf({ name: t.name, connector: t.connector, scope, description: t.description, jsonSchema: t.jsonSchema }, granted);
 		return `- ${t.name}${consentLabel(verdict, scope, t.connector)}: ${t.description}`;
 	});
+	const hasTerminalTools = tools.some((t) => t.connector === "terminal" || t.connector === "tmux");
 	return (
 		"\n\nCONNECTED TOOLS — external actions you can take DIRECTLY by calling the tool" +
 		" (never tell the user to do it themselves, and never route it through a terminal/CLI):\n" +
 		lines.join("\n") +
-		CONSENT_RULE
+		CONSENT_RULE +
+		(hasTerminalTools ? TERMINAL_CLI_PROTOCOL : "")
 	);
 }
