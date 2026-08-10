@@ -18,11 +18,56 @@ export interface VadState {
 	turnStart: number;
 	/** Has genuine speech (not room noise) been heard this turn? */
 	seen: boolean;
+	/**
+	 * Adaptive per-turn ambient noise floor, estimated from the MINIMUM level across the first
+	 * `NOISE_SAMPLE_FRAMES` frames. Speech onset must exceed `NOISE_ONSET_RATIO × noiseFloor`
+	 * (floored at `VOICE_FLOOR`) before `seen` is set. This prevents a steady HVAC/fan hum at
+	 * 0.10–0.15 RMS from registering as speech — the old fixed `VOICE_FLOOR = 0.1` was reachable
+	 * by room tone, setting `seen = true` so a speechless clip reached Whisper.
+	 *
+	 * Using MINIMUM rather than average: the minimum of N speech-inclusive frames reflects
+	 * brief within-speech dips and is typically well above zero, so `VOICE_FLOOR` remains the
+	 * effective floor (no regression). The minimum of pure steady ambient noise equals the
+	 * ambient level itself — which, when multiplied by `NOISE_ONSET_RATIO`, raises the bar.
+	 *
+	 * `-1` while still sampling (not yet computed); `VOICE_FLOOR` is the fallback until then.
+	 */
+	noiseFloor: number;
+	/** Running minimum across frames collected so far in the noise-estimation window. */
+	noiseMin: number;
+	/** Number of frames collected so far into the noise estimate. */
+	noiseFrames: number;
 }
 
 export function initVad(): VadState {
-	return { peak: 0, lastLoud: 0, turnStart: -1, seen: false };
+	return { peak: 0, lastLoud: 0, turnStart: -1, seen: false, noiseFloor: -1, noiseMin: Infinity, noiseFrames: 0 };
 }
+
+/** Number of frames sampled to estimate the per-turn ambient noise floor. The MINIMUM
+ *  level across these frames is used as the floor estimate. The adaptive onset check is
+ *  withheld until this window closes so ambient frames fill the estimate before onset
+ *  can fire. At 66ms/frame (LEVEL_THROTTLE_MS in use-voice.ts) this is ~330ms of sampling.
+ *  During that window, levels at or above `HIGH_SPEECH_THRESHOLD` will immediately trigger
+ *  onset as "user started speaking before the mic fully opened" — no regression for the
+ *  common pattern where the user speaks within 1-2 seconds of the chime. */
+export const NOISE_SAMPLE_FRAMES = 5;
+/** Speech onset must be at least this many times the measured noise floor before the VAD
+ *  treats the turn as "real speech started". At ratio 3: ambient at 0.08 → onset
+ *  threshold 0.24; quiet room at 0.02 → threshold 0.06, effective floor stays VOICE_FLOOR. */
+export const NOISE_ONSET_RATIO = 3;
+/**
+ * If the noise-floor minimum collected during the sampling window is at or above this
+ * level, the input is treated as speech that started before the window closed — the
+ * adaptive floor falls back to VOICE_FLOOR and onset fires normally. Without this
+ * fallback, a user who starts talking the instant the mic opens would be caught in the
+ * sampling window and fail the adaptive onset check (noiseFloor ≈ their own speech
+ * level → onset threshold = 3× speech level → speech never clears).
+ *
+ * 0.2 separates typical unambiguous speech peaks (~0.2–0.5) from ambient noise below
+ * VOICE_FLOOR (0.05–0.08) and the ambiguous HVAC/noisy-room zone (0.08–0.18, which the
+ * adaptive floor handles). Tuned so: ambient 0.12 → adaptive (fixed), speech 0.3 → VOICE_FLOOR.
+ */
+export const HIGH_SPEECH_THRESHOLD = 0.2;
 
 export interface VadConfig {
 	/** Quiet duration (ms) after which the turn ends. */
@@ -60,9 +105,16 @@ export const VOICE_FLOOR = 0.1;
  * `vadStep` already tracks this as `seen`, but it only runs in hands-free — tap-to-talk
  * deliberately disables the auto-VAD so it can't cut you off mid-thought, which left that mode
  * with no speech gate at all. This is the mode-independent check.
+ *
+ * @param peakLevel   Loudest mic level seen during the recording (0–1).
+ * @param noiseFloor  Per-turn adaptive noise floor from `VadState.noiseFloor`, or the fixed
+ *                    `VOICE_FLOOR` fallback when the VAD state is not available (e.g. tap-to-talk).
+ *                    The speech threshold is `max(VOICE_FLOOR, NOISE_ONSET_RATIO * noiseFloor)`,
+ *                    so a noisy room raises the bar while a quiet room still uses the fixed floor.
  */
-export function hadSpeech(peakLevel: number): boolean {
-	return peakLevel > VOICE_FLOOR;
+export function hadSpeech(peakLevel: number, noiseFloor = -1): boolean {
+	const adaptiveFloor = noiseFloor >= 0 ? Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * noiseFloor) : VOICE_FLOOR;
+	return peakLevel > adaptiveFloor;
 }
 
 /**
@@ -86,24 +138,73 @@ export function shouldAutoDetectEndOfTurn(f: {
  *  - `"end"`  — real speech finished (→ stop, transcribe, send)
  *  - `"idle"` — mic open but nothing said for `idleMs` (→ discard + recycle)
  *  - `null`   — keep listening
+ *
+ * Adaptive onset: the first `NOISE_SAMPLE_FRAMES` frames (before `seen` is ever set) are
+ * used to estimate the per-turn ambient noise floor. Speech onset (`seen`) is only
+ * triggered when the level exceeds `NOISE_ONSET_RATIO × noiseFloor` AND the peak-relative
+ * speaking check, so steady room noise cannot set `seen = true` and trigger a Whisper
+ * upload. The adaptive floor only gates ONSET — once speech has started, `lastLoud`
+ * updates follow the original peak-relative logic (unchanged behaviour post-onset).
  */
 export function vadStep(s: VadState, level: number, now: number, cfg: VadConfig): "end" | "idle" | null {
 	if (s.turnStart < 0) s.turnStart = now; // first frame of this listen
 	s.peak = Math.max(s.peak, level);
-	const heardVoice = s.peak > VOICE_FLOOR;
+
+	// ── Adaptive noise-floor estimation (pre-onset window only) ────────────────
+	// While speech has not yet been detected, collect ambient levels so we can set
+	// a per-turn onset threshold. Once `seen` is true the window is closed (the
+	// user is speaking and the floor has already been established).
+	if (!s.seen && s.noiseFrames < NOISE_SAMPLE_FRAMES) {
+		if (level < s.noiseMin) s.noiseMin = level;
+		s.noiseFrames += 1;
+		if (s.noiseFrames === NOISE_SAMPLE_FRAMES) {
+			// Use the minimum, not the average, so a brief within-speech dip doesn't
+			// inflate the floor. The minimum of pure room-tone frames = ambient level.
+			s.noiseFloor = s.noiseMin === Infinity ? 0 : s.noiseMin;
+		}
+	}
+
 	// Fraction of your peak that still counts as "speaking" — smaller = more forgiving.
 	const speakFrac = 0.35 / Math.max(0.4, cfg.sensitivity);
 	const speaking = level > s.peak * speakFrac;
-	if (heardVoice && speaking) {
-		s.lastLoud = now;
-		if (!s.seen) s.seen = true;
-	}
+
 	if (!s.seen) {
+		// ONSET GATE (adaptive): before the first real word is heard, require the
+		// instantaneous level to exceed NOISE_ONSET_RATIO × the measured noise floor
+		// (or VOICE_FLOOR when the floor hasn't been sampled yet). This prevents steady
+		// ambient sound — which CAN pass the peak-relative `speaking` check — from
+		// setting `seen = true` and letting a speechless clip reach Whisper.
+		//
+		// The onset check is withheld during the sampling window (first NOISE_SAMPLE_FRAMES
+		// frames) so ambient levels fill the estimate first. Exception: if the minimum
+		// collected so far is already at HIGH_SPEECH_THRESHOLD or above, the input is
+		// treated as speech that started before the mic was fully open — no regression for
+		// users who speak immediately on the listening chime.
+		const earlyHigh = s.noiseMin >= HIGH_SPEECH_THRESHOLD; // user was already speaking
+		if (s.noiseFrames >= NOISE_SAMPLE_FRAMES || earlyHigh) {
+			// When the minimum is high (speech started early), fall back to VOICE_FLOOR so
+			// the onset behaves exactly as before this change. Otherwise use the adaptive floor.
+			const onsetFloor = (earlyHigh || s.noiseFloor < 0)
+				? VOICE_FLOOR
+				: Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * s.noiseFloor);
+			if (level > onsetFloor && speaking) {
+				s.seen = true;
+				s.lastLoud = now;
+			}
+		}
 		// Nothing said yet — recycle the silent recorder after idleMs (no Whisper
 		// upload) so a long think before replying can't grow the buffer without bound.
 		if (now - s.turnStart > (cfg.idleMs ?? 15_000)) return "idle";
 		return null;
 	}
+
+	// ── Post-onset: original peak-relative logic (unchanged) ────────────────────
+	// heardVoice: is the PEAK above the voice floor? Always true once real speech has
+	// been seen (peak ratchets up, never drops). Keeps `lastLoud` updating through the
+	// speech tail so sensitivity changes don't truncate turns already in progress.
+	const heardVoice = s.peak > VOICE_FLOOR;
+	if (heardVoice && speaking) s.lastLoud = now;
+
 	if (now - s.lastLoud > cfg.silenceMs) return "end"; // a real pause
 	// Safety cap — applies even while still "speaking", so a stuck-loud mic (or a
 	// very long monologue) can never hang the turn forever.

@@ -425,6 +425,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// silent recording still reached Whisper (which invents a sentence from its
 				// vocabulary prompt rather than returning nothing).
 				sttRef.current?.noteLevel(level);
+				// Keep the STT's adaptive noise floor in sync with the VAD. Once the VAD has
+				// sampled enough frames (noiseFloor >= 0) push it into the STT so its onstop
+				// speech gate uses the per-turn floor rather than the fixed VOICE_FLOOR constant.
+				// This is what closes the noisy-room gap: room tone at 0.12 raises the threshold
+				// so the speechless clip is discarded before it reaches Whisper.
+				const vFloor = vadStateRef.current.noiseFloor;
+				if (sttRef.current && vFloor >= 0) sttRef.current._noiseFloor = vFloor;
 				// Throttle the React state update — 60fps re-renders the whole chat and lags.
 				if (now - lastLevelSetRef.current > LEVEL_THROTTLE_MS) { lastLevelSetRef.current = now; setAudioLevel(level); }
 				// Never let the mic-level VAD end (and transcribe) a turn while the agent is

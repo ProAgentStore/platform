@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, VOICE_FLOOR } from "./vad.js";
+import { initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, VOICE_FLOOR, NOISE_SAMPLE_FRAMES, NOISE_ONSET_RATIO, HIGH_SPEECH_THRESHOLD } from "./vad.js";
 
 const cfg = (o: Partial<VadConfig> = {}): VadConfig => ({ silenceMs: 1000, sensitivity: 1, ...o });
 
@@ -132,14 +132,88 @@ describe("hadSpeech — the mode-independent speech gate", () => {
 		expect(hadSpeech(0.2)).toBe(true);
 	});
 
-	it("agrees with the threshold vadStep already uses", () => {
+	it("agrees with the threshold vadStep already uses for unambiguous speech (high level)", () => {
 		// Two different silence gates with two different floors is how one mode ends up
 		// transcribing what the other correctly discards.
+		// With the adaptive onset window, a single frame of 0.3 (>= HIGH_SPEECH_THRESHOLD)
+		// triggers earlyHigh and onset fires via VOICE_FLOOR — same as hadSpeech(0.3) = true.
 		const s = initVad();
 		vadStep(s, 0.3, 1000, { silenceMs: 800, sensitivity: 1 });
-		expect(s.seen).toBe(hadSpeech(0.3));
+		expect(s.seen).toBe(hadSpeech(0.3)); // earlyHigh → onset at VOICE_FLOOR; hadSpeech(0.3)=true
+		// Quiet room noise stays quiet under VOICE_FLOOR — neither VAD nor hadSpeech trigger.
 		const q = initVad();
 		vadStep(q, 0.05, 1000, { silenceMs: 800, sensitivity: 1 });
-		expect(q.seen).toBe(hadSpeech(0.05));
+		expect(q.seen).toBe(hadSpeech(0.05)); // both false
+	});
+
+	it("raises the bar when a noise floor is provided (adaptive mode)", () => {
+		// Room noise at 0.08 → adaptive floor = max(0.1, 3 * 0.08) = 0.24.
+		// A 0.2 level that passes the fixed floor should NOT pass the adaptive one.
+		const roomNoise = 0.08;
+		const adaptiveFloor = Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * roomNoise); // 0.24
+		expect(hadSpeech(0.2, roomNoise)).toBe(false); // 0.2 < 0.24
+		expect(hadSpeech(adaptiveFloor + 0.01, roomNoise)).toBe(true); // just above
+	});
+
+	it("falls back to fixed VOICE_FLOOR when no noise floor is available (noiseFloor = -1)", () => {
+		// noiseFloor = -1 means the VAD hasn't sampled enough frames yet (e.g. tap-to-talk).
+		expect(hadSpeech(0.08, -1)).toBe(false); // below VOICE_FLOOR
+		expect(hadSpeech(0.15, -1)).toBe(true);  // above VOICE_FLOOR
+	});
+});
+
+describe("adaptive noise floor — #490 noisy-room onset gate", () => {
+	it("does NOT set seen when steady ambient noise above VOICE_FLOOR fills the sampling window", () => {
+		// The bug: constant level=0.12 (above VOICE_FLOOR=0.1) caused vadStep to set
+		// s.seen=true from room tone, letting a speechless clip reach Whisper. The fix:
+		// the first NOISE_SAMPLE_FRAMES frames establish noiseFloor≈0.12, and the onset
+		// threshold rises to max(0.1, 3*0.12)=0.36 — so 0.12 no longer triggers seen.
+		const s = initVad();
+		const ambientLevel = 0.12; // above VOICE_FLOOR, below onset with adaptive floor
+		for (let i = 0; i < NOISE_SAMPLE_FRAMES + 5; i++) {
+			vadStep(s, ambientLevel, i * 100, cfg());
+		}
+		expect(s.seen).toBe(false);
+		expect(s.noiseFloor).toBeCloseTo(ambientLevel, 5);
+	});
+
+	it("DOES set seen when a voice spike arrives after the sampling window closes", () => {
+		// After collecting NOISE_SAMPLE_FRAMES ambient frames at 0.12 (below HIGH_SPEECH_THRESHOLD),
+		// the window closes and the adaptive onset threshold is 0.36. A real voice at 0.40 then
+		// exceeds it and marks speech onset.
+		const s = initVad();
+		const ambient = 0.12;
+		// Fill the noise window exactly
+		for (let i = 0; i < NOISE_SAMPLE_FRAMES; i++) {
+			vadStep(s, ambient, i * 100, cfg());
+		}
+		expect(s.seen).toBe(false); // window just closed but 0.12 didn't clear the adaptive threshold
+		// Now a real voice spike arrives
+		vadStep(s, 0.40, NOISE_SAMPLE_FRAMES * 100, cfg());
+		expect(s.seen).toBe(true);
+	});
+
+	it("high-level speech from frame 0 (earlyHigh) fires onset without waiting for the window", () => {
+		// When the user starts talking the instant the mic opens (level >= HIGH_SPEECH_THRESHOLD
+		// on the very first frame), earlyHigh is true and onset is allowed immediately using
+		// VOICE_FLOOR — no regression for the common case.
+		const s = initVad();
+		vadStep(s, HIGH_SPEECH_THRESHOLD, 0, cfg());
+		expect(s.seen).toBe(true); // onset fired on first high-energy frame
+	});
+
+	it("accumulates the noise estimate only before speech onset (window closes when seen)", () => {
+		const s = initVad();
+		// Fill the window with ambient frames
+		for (let i = 0; i < NOISE_SAMPLE_FRAMES; i++) {
+			vadStep(s, 0.12, i * 100, cfg());
+		}
+		// Window is now closed; inject a voice spike to set onset
+		vadStep(s, 0.40, NOISE_SAMPLE_FRAMES * 100, cfg());
+		expect(s.seen).toBe(true);
+		const floorsAfterOnset = s.noiseFrames;
+		// Feeding more frames must NOT update the noise estimate (window is already closed)
+		vadStep(s, 0.12, (NOISE_SAMPLE_FRAMES + 1) * 100, cfg());
+		expect(s.noiseFrames).toBe(floorsAfterOnset); // unchanged after onset
 	});
 });

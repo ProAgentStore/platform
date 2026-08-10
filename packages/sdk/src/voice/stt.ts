@@ -10,6 +10,15 @@ import { hadSpeech } from "./vad.js";
 export const DEFAULT_STT_MODEL = "gpt-4o-transcribe";
 
 /**
+ * `no_speech_prob` threshold for discarding a whisper-1 transcription as silence.
+ * OpenAI's documented threshold for "probably no speech" is 0.6. When the model
+ * returns a value above this, it has low confidence that real speech was present —
+ * treat the transcript as a hallucination and emit "no-speech" instead.
+ * Only applies to the non-streaming path (whisper-1 with response_format=verbose_json).
+ */
+export const NO_SPEECH_PROB_THRESHOLD = 0.6;
+
+/**
  * Deadlines on a transcription request (#421).
  *
  * There were none — no `signal`, no `AbortController` anywhere in `voice/`, and none on the server
@@ -108,6 +117,14 @@ export class VoiceStt {
 	/** The last clip handed to transcription, kept so a failed attempt can be RETRIED with the same
 	 *  audio (#421) instead of asking the user to say it again. Cleared on a fresh recording. */
 	private _lastBlob: Blob | null = null;
+	/**
+	 * Per-turn adaptive ambient noise floor from the VAD (`VadState.noiseFloor`).
+	 * Set by the audio monitor loop once the noise-sampling window closes
+	 * (`vadStateRef.current.noiseFloor`). `-1` = not yet available, fall back to the fixed
+	 * `VOICE_FLOOR`. Used by the `onstop` speech gate to raise the `hadSpeech` threshold when
+	 * the room is noisy, so steady ambient sound never registers as a real clip.
+	 */
+	_noiseFloor = -1;
 
 	/** The recorder's mic stream (Whisper mode) so the audio meter can reuse it
 	 *  instead of opening a SECOND getUserMedia — a second capture mutes the recorder
@@ -301,6 +318,7 @@ export class VoiceStt {
 	private async _startRecording() {
 		this._discard = false;
 		this._peakLevel = 0;
+		this._noiseFloor = -1; // reset per-turn adaptive floor; VAD will populate it via the monitor loop
 		this._lastBlob = null; // a new turn — the previous clip is no longer what Retry means
 		try {
 			this._stream = await navigator.mediaDevices.getUserMedia({
@@ -335,9 +353,20 @@ export class VoiceStt {
 				// vocabulary prompt attached it continues the prompt and returns a fluent
 				// sentence built from those terms, which is then attributed to the user and (in
 				// hands-free) auto-sent. See hadSpeech() for the real transcript this produced.
-				// Skipped when nothing ever called noteLevel(), so a caller with no analyser
-				// keeps working rather than going silently deaf.
-				if (this._peakLevel > 0 && !hadSpeech(this._peakLevel)) {
+				//
+				// Adaptive floor: `_noiseFloor` is set from the VAD's per-turn noise estimate
+				// (populated after NOISE_SAMPLE_FRAMES frames). When available it raises the
+				// threshold above VOICE_FLOOR so steady room noise cannot fake a clip. When the
+				// analyser never ran (`_peakLevel === 0`) AND there is no Web Speech gate available
+				// to vouch for the turn, the clip is discarded — no energy data + no gate means
+				// we have no way to know whether speech happened. A caller with an analyser but
+				// no gate still has the adaptive-floor check as the primary defence.
+				if (this._peakLevel === 0) {
+					// No energy data at all. Discard rather than uploading an unknown clip.
+					this.onEnd();
+					return;
+				}
+				if (!hadSpeech(this._peakLevel, this._noiseFloor)) {
 					this.onEnd();
 					return;
 				}
@@ -367,17 +396,30 @@ export class VoiceStt {
 		form.append("file", blob, whisperFilename(blob.type));
 		form.append("model", this.model);
 		form.append("language", this.language.slice(0, 2));
+		// temperature=0 suppresses the random sampling that produces fluent-but-wrong
+		// hallucinations on silence. Both whisper-1 and gpt-4o-transcribe accept it.
+		form.append("temperature", "0");
 		// Vocabulary bias — nudges the model toward domain words (a developer's "bugs"
-		// isn't "bars"). Only sent when non-empty AND transcribing English: the term list
-		// is English prose, and Whisper's prompt hints the output language — pairing it
-		// with e.g. language=zh pulls a Chinese speaker's words toward English.
-		if (this.transcribePrompt && this.language.toLowerCase().startsWith("en"))
+		// isn't "bars"). Suppressed when the clip is low-energy (peak barely cleared the
+		// speech floor) so the model has no list to "continue" on near-silence — one of
+		// the two preconditions for the hallucination pattern in #490.
+		// Only sent for English: the term list is English, and Whisper's prompt hints its
+		// OUTPUT language — pairing it with e.g. language=zh pulls Chinese words to English.
+		const lowEnergy = !hadSpeech(this._peakLevel, this._noiseFloor);
+		if (!lowEnergy && this.transcribePrompt && this.language.toLowerCase().startsWith("en"))
 			form.append("prompt", this.transcribePrompt);
 		// Stream the transcript for a "live" feel — words land as they're recognised
 		// instead of one blob after a pause. whisper-1 ignores streaming, so only the
 		// gpt-4o-transcribe models get it; everything else takes the plain json path.
 		const streaming = this.model !== "whisper-1";
-		if (streaming) form.append("stream", "true");
+		if (streaming) {
+			form.append("stream", "true");
+		} else {
+			// For the non-streaming whisper-1 path: request verbose_json so the response
+			// includes `no_speech_prob`, which we use to discard silent transcriptions at
+			// the model level rather than relying solely on the energy gate.
+			form.append("response_format", "verbose_json");
+		}
 		// The deadline. An AbortController rather than `AbortSignal.timeout` because the second
 		// deadline has to REPLACE the first once headers arrive — a stream is allowed to take
 		// longer than a first byte — and because `timedOut` has to be readable from the catch, so a
@@ -416,6 +458,21 @@ export class VoiceStt {
 				return;
 			}
 			const data = await res.json();
+			// verbose_json (whisper-1) includes `no_speech_prob` at the top level and/or
+			// per segment. When the model signals low confidence that real speech was present,
+			// discard the transcript — it is almost certainly a hallucination.
+			const noSpeechProb: number | undefined =
+				typeof data.no_speech_prob === "number" ? data.no_speech_prob
+				: Array.isArray(data.segments) && data.segments.length > 0
+					? (data.segments as Array<{ no_speech_prob?: number }>).reduce(
+						(acc, seg) => Math.max(acc, typeof seg.no_speech_prob === "number" ? seg.no_speech_prob : 0),
+						0,
+					)
+					: undefined;
+			if (noSpeechProb !== undefined && noSpeechProb > NO_SPEECH_PROB_THRESHOLD) {
+				this.onError("no-speech");
+				return;
+			}
 			if (data.text?.trim()) {
 				// Hand the raw audio to the caller (to save for replay) BEFORE the result,
 				// so the turn id can be minted + uploaded alongside the sent message.
