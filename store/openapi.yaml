@@ -4529,6 +4529,53 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/terminal-session:
+    get:
+      summary: Read the last terminal session selected for this instance
+      description: |
+        The UI persists the subscriber's last-selected terminal session (`activeTerminalTarget`)
+        so it can be restored on page reload — the same pattern as `runner-node`. Returns null
+        when no session has been selected yet.
+      operationId: getTerminalSession
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The stored target (or null)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activeTerminalTarget: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Persist (or clear) the last-selected terminal session for this instance
+      description: An empty or null `activeTerminalTarget` clears the stored value.
+      operationId: setTerminalSession
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                activeTerminalTarget: { type: string, nullable: true }
+      responses:
+        "200":
+          description: The stored value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activeTerminalTarget: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/terminal-target:
     get:
       summary: Read which single terminal target this instance drives

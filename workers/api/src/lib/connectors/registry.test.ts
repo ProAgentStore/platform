@@ -151,6 +151,7 @@ describe("connector registry", () => {
 			"terminal_new_target",
 			"terminal_run_command",
 			"terminal_send_keys",
+			"terminal_send_message",
 		]);
 	});
 

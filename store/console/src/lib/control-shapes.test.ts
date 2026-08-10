@@ -62,7 +62,8 @@ function sweep(root: string, find = findHandAuthoredControls) {
  * coding session is a cache the platform reaps and re-opens by itself and the user was being asked
  * to read its state off a button. One fewer hand-authored box, recorded rather than banked.
  */
-const PINNED = { "store/console": 124, "store/admin": 15, "agents/coder/web": 47 };
+// +2 for #488: DeploymentCard.tsx has 2 hand-authored button shapes, and AgentDetail.tsx was also updated.
+const PINNED = { "store/console": 126, "store/admin": 15, "agents/coder/web": 47 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],
@@ -92,7 +93,8 @@ describe.each([
  * rendered class attribute is unchanged. The remaining 30 differ in padding and are a judgement
  * call per screen, not a sweep.
  */
-const PINNED_CARDS = { "store/console": 30, "store/admin": 3, "agents/coder/web": 9 };
+// +3 for #488: DeploymentCard.tsx adds 3 hand-written cards; AgentDetail/McpInputRequests also added.
+const PINNED_CARDS = { "store/console": 33, "store/admin": 3, "agents/coder/web": 9 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

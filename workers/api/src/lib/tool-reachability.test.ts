@@ -94,6 +94,11 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"The google_sheets connector is inert until the Sheets OAuth scope lands on the Google client; " +
 		"until then every call fails at consent, not at the tool.",
 	sheets_append: "Same as sheets_read — inert until the Sheets OAuth scope lands.",
+	terminal_send_message:
+		"The generic terminal connector is for creator-built agents that declare it. The first-party " +
+		"tmux Operator declares the backend-specific `tmux_send_message` instead (migration 0117, #482), " +
+		"which is the right tool for a tmux-only agent. No catalog agent has needed the generic form yet. " +
+		"Reachable the moment a creator declares it or a first-party agent has a reason to use it.",
 };
 
 // ── Leg 2's denominator: what any migration declares ─────────────────────────

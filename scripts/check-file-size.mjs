@@ -108,7 +108,10 @@ const PINS = {
 	// `diagnoseAttachment` and the only one with no adapter in front of it, so the next input the
 	// diagnosis grows has to be added here by hand. That is exactly how #468 happened at the other
 	// two sites, and the four lines are what a reader needs to not repeat it a fourth time.
-	"workers/api/src/routes/instances.ts": 952,
+	// +29 at #491: two terminal-session routes (GET + PUT) with their inline handlers and the
+	// `removeInstanceConfigKey` call — same pattern as runner-node, not splittable into a sub-module
+	// for two handlers. Growth is comment + two handler functions; the decision is sessionless.
+	"workers/api/src/routes/instances.ts": 981,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -668,7 +671,9 @@ const PINS = {
 	// of stored rounds into the transcript, and the `resumableNow()` closure both provider-failure
 	// exits hand to the error. Every DECISION is pure in lib/resumable-round.ts, where a split would
 	// have put them; what is left is closure over this function's own loop state and cannot move.
-	"workers/api/src/agent-think.ts": 1113,
+	// +21 at #482: terminal_send_message and tmux_send_message dispatch paths in the tool loop.
+	// Multi-step handler, same closure-over-loop-state argument: the call and the context are one.
+	"workers/api/src/agent-think.ts": 1134,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -794,7 +799,8 @@ const PINS = {
 	// +7 for #469 (the pin above and its note).
 	// +13 at #477: three new PINS entries (Usage.tsx, supervision.ts, tools.ts raise) + their reasons.
 	// +3 at #486: Usage.tsx raise + its note (the BudgetPanel observe-only notice) + this self-ref.
-	"scripts/check-file-size.mjs": 878,
+	// +6 at #491+#482: agent-think + instances raises + their notes + this self-ref.
+	"scripts/check-file-size.mjs": 884,
 };
 
 /**
