@@ -11,6 +11,7 @@ import { buttonClass } from "../lib/control-classes";
 import Button from "./Button";
 import Card from "./Card";
 import FilePreview, { type PreviewFile } from "./FilePreview";
+import LoadFailed from "./LoadFailed";
 
 interface FileItem {
 	id: string;
@@ -38,11 +39,17 @@ export default function FilesSection({ instanceId, active, refreshKey, jobs, onU
 	const [files, setFiles] = useState<FileItem[]>([]);
 	const [preview, setPreview] = useState<PreviewFile | null>(null);
 
+	// A failed list rendered "No files uploaded yet", which on a surface with an upload control
+	// beside it invites the user to re-upload files that are already there (#291).
+	const [loadErr, setLoadErr] = useState("");
 	const loadFiles = useCallback(async () => {
 		try {
 			const d = await api<{ files: FileItem[] }>(`/v1/instances/${instanceId}/files`);
 			setFiles(d.files || []);
-		} catch {}
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	useEffect(() => {
@@ -109,7 +116,9 @@ export default function FilesSection({ instanceId, active, refreshKey, jobs, onU
 				</div>
 			)}
 
-			{files.length === 0 ? (
+			{loadErr ? (
+				<LoadFailed what="your files" detail={loadErr} onRetry={loadFiles} testId="files-load-failed" />
+			) : files.length === 0 ? (
 				<p className="text-center py-4 text-muted-soft text-sm">No files uploaded yet.</p>
 			) : (
 				<div className="flex flex-col gap-2">

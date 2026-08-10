@@ -31,6 +31,16 @@ interface OpsMockOptions {
 	providers?: Array<Record<string, unknown>>;
 	/** `GET /v1/connectors` — see DEFAULT_CONNECTORS for why the default is not empty. */
 	connectors?: Array<Record<string, unknown>>;
+	/**
+	 * Force these API paths to fail with a 500 (#291).
+	 *
+	 * There was no way to express "this read failed" here, which is why the console could ship
+	 * ~37 loaders that rendered an empty success state on failure and pass every guard: the
+	 * fixture could only ever answer 200, so the failure branch had no representation in the one
+	 * suite that renders these pages. An exact-path list, not a pattern, so a spec states the one
+	 * request it is breaking and cannot silently break its neighbours as the fixture grows.
+	 */
+	failPaths?: string[];
 }
 
 /**
@@ -144,6 +154,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		if (path.startsWith("/v1/")) {
 			expect(route.request().headers().authorization).toBe(`Bearer ${TEST_TOKEN}`);
 		}
+		// Checked BEFORE every handler below, so a forced failure cannot be pre-empted by a
+		// route that happens to be matched earlier in the chain.
+		if (options.failPaths?.includes(path)) return json({ error: "boom" }, 500);
 		if (path === "/v1/auth/me" && method === "PUT") {
 			profileUpdates.push(route.request().postDataJSON());
 			return json({ success: true });
@@ -1188,6 +1201,65 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("open the deploy log for the api worker")).toBeVisible();
 		await page.getByRole("button", { name: "Heard live — show sent" }).click();
 		await expect(page.getByText("open the deploy log", { exact: true })).toBeVisible();
+	});
+
+	/**
+	 * A failed read must never render as an empty success state (#291).
+	 *
+	 * These three assert the property from the far side of the fix: not "the error appears", but
+	 * "the confident empty state does NOT". That distinction is the whole ticket — every one of
+	 * these surfaces already looked completely healthy on a failed load, which is why 37 of them
+	 * shipped and why a guard that only checks for the error text would still pass if someone
+	 * rendered both.
+	 */
+	test.describe("a read that failed says so (#291)", () => {
+		test("Rules & Tips withdraws the Save button rather than offering it over an empty box", async ({ page }) => {
+			// The data-loss case, and the reason this is an e2e test and not a unit one. The
+			// textarea initialises to "", so a failed GET rendered a blank editor beside a live
+			// Save: typing one rule and saving PUTs it over the standing rules the user could not
+			// see. The assertion that matters is the ABSENCE of the control.
+			await mockSignedInConsole(page, { failPaths: ["/v1/instances/inst-1/instructions"] });
+			await page.goto("/console/instances/inst-1/knowledge");
+			await page.getByRole("button", { name: "Rules & Tips" }).click();
+
+			await expect(page.getByTestId("rules-load-failed")).toBeVisible();
+			await expect(page.getByRole("button", { name: "Save instructions" })).toHaveCount(0);
+			await expect(page.getByLabel("Special Instructions — rules this agent must follow")).toHaveCount(0);
+		});
+
+		test("the same tab loads normally when the read succeeds — the guard is not just always-red", async ({ page }) => {
+			// The half that decides whether anyone trusts the test above.
+			await mockSignedInConsole(page);
+			await page.goto("/console/instances/inst-1/knowledge");
+			await page.getByRole("button", { name: "Rules & Tips" }).click();
+
+			await expect(page.getByRole("button", { name: "Save instructions" })).toBeVisible();
+			await expect(page.getByTestId("rules-load-failed")).toHaveCount(0);
+		});
+
+		test("Retry re-issues the request, so the error state is not a dead end", async ({ page }) => {
+			// An error with no way out of it just relocates the failure. Retry is load-bearing:
+			// the overwhelmingly common cause is one dropped request.
+			let calls = 0;
+			await mockSignedInConsole(page);
+			// Fail only the FIRST instructions read, then let it through.
+			await page.route(`${API}/v1/instances/inst-1/instructions`, async (route) => {
+				calls += 1;
+				if (calls === 1) {
+					return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
+				}
+				return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ instructions: "Use British English." }) });
+			});
+
+			await page.goto("/console/instances/inst-1/knowledge");
+			await page.getByRole("button", { name: "Rules & Tips" }).click();
+			await expect(page.getByTestId("rules-load-failed")).toBeVisible();
+
+			await page.getByTestId("rules-load-failed").getByRole("button", { name: "Retry" }).click();
+
+			await expect(page.getByTestId("rules-load-failed")).toHaveCount(0);
+			await expect(page.getByLabel("Special Instructions — rules this agent must follow")).toHaveValue("Use British English.");
+		});
 	});
 
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {

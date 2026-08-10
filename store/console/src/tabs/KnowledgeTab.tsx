@@ -5,6 +5,7 @@ import { useUploader } from "../lib/use-uploader";
 import { showsConnector } from "../lib/connectorState";
 import { buttonClass, cardClass } from "../lib/control-classes";
 import FilesSection from "../components/FilesSection";
+import LoadFailed from "../components/LoadFailed";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import MemorySection from "../components/MemorySection";
@@ -89,26 +90,50 @@ export default function KnowledgeTab({ instanceId }: Props) {
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
 	const [importingWorkdriveId, setImportingWorkdriveId] = useState<string | null>(null);
 
+	// Why each of these three loaders now records its failure (#291).
+	//
+	// The catch was never the whole defect — `api()` writes the durable error row before it
+	// throws, so the failure is recorded and readable over MCP `list_errors`. The defect is that
+	// the STATE never changed, so each list fell through to its empty rendering and told the user
+	// something about their account that was actually a fact about the request. "No credentials
+	// saved yet" is a claim; "this didn't load" is a report, and only one of them is true here.
+	//
+	// `instrErr` is the one that matters most, and it is not a display concern. See the Rules &
+	// Tips block below: a failed read left an EMPTY textarea next to a live Save, so the swallow
+	// did not merely hide the standing rules, it armed the control that overwrites them.
+	const [docsErr, setDocsErr] = useState("");
+	const [credErr, setCredErr] = useState("");
+	const [instrErr, setInstrErr] = useState("");
+
 	const loadDocs = useCallback(async () => {
 		try {
 			// The DO returns { documents: [...] } with full content.
 			const d = await api<{ documents?: KnowledgeDoc[]; knowledge?: KnowledgeDoc[] }>(`/v1/instances/${instanceId}/knowledge`);
 			setDocs(d.documents || d.knowledge || []);
-		} catch {}
+			setDocsErr("");
+		} catch (e) {
+			setDocsErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	const loadCredentials = useCallback(async () => {
 		try {
 			const d = await api<{ credentials: Credential[] }>(`/v1/instances/${instanceId}/credentials`);
 			setCredentials(d.credentials || []);
-		} catch {}
+			setCredErr("");
+		} catch (e) {
+			setCredErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	const loadInstructions = useCallback(async () => {
 		try {
 			const d = await api<{ instructions?: string }>(`/v1/instances/${instanceId}/instructions`);
 			setInstructions(d.instructions || "");
-		} catch {}
+			setInstrErr("");
+		} catch (e) {
+			setInstrErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	// Lazy-load: only fetch data for the active sub-tab (Files/Memory sections load themselves)
@@ -634,7 +659,13 @@ export default function KnowledgeTab({ instanceId }: Props) {
 							</Card>
 						)}
 
-						{docs.length === 0 ? (
+						{/* The empty state here is an INSTRUCTION ("click + New to write one"), which
+						  * is worse than a bare zero over a failed read: it tells someone whose
+						  * documents merely failed to load that the way forward is to start
+						  * writing them again. */}
+						{docsErr ? (
+							<LoadFailed what="your documents" detail={docsErr} onRetry={loadDocs} testId="documents-load-failed" />
+						) : docs.length === 0 ? (
 							<p className="text-center py-6 text-muted-soft text-sm">No documents yet. Click <b>+ New</b> to write one in Markdown.</p>
 						) : (
 							<div className="flex flex-col gap-2">
@@ -680,7 +711,12 @@ export default function KnowledgeTab({ instanceId }: Props) {
 				<div>
 					<h3 className="text-base font-bold mb-1">Credentials</h3>
 					<p className="text-xs text-muted mb-3">Logins & secrets the agent signs in with. Passwords are encrypted at rest.</p>
-					{credentials.length === 0 ? (
+					{/* "No credentials saved yet" over a failed read is the empty state answering a
+					  * question nobody asked — and on this list it invites the user to re-enter a
+					  * login they already have. */}
+					{credErr ? (
+						<LoadFailed what="your credentials" detail={credErr} onRetry={loadCredentials} testId="credentials-load-failed" />
+					) : credentials.length === 0 ? (
 						<p className="text-center py-4 text-muted-soft text-sm">No credentials saved yet.</p>
 					) : (
 						<div className="flex flex-col gap-2">
@@ -702,19 +738,45 @@ export default function KnowledgeTab({ instanceId }: Props) {
 					<p className="text-xs text-muted mb-2">
 						Rules this agent must follow. Injected at the top of the agent's prompt.
 					</p>
-					<textarea
-						value={instructions}
-						onChange={(e) => setInstructions(e.target.value)}
-						aria-label="Special Instructions — rules this agent must follow"
-						placeholder={`e.g.\n- Use British English.\n- Never run destructive commands without asking.`}
-						className="min-h-[130px] w-full mb-2"
-					/>
-					<div className="flex items-center gap-2">
-						<Button variant="primary" onClick={saveInstructions}>
-							Save instructions
-						</Button>
-						{instrStatus && <span className="text-xs text-muted">{instrStatus}</span>}
-					</div>
+					{/*
+					  * The editor is REPLACED on a failed read, not merely annotated (#291).
+					  *
+					  * This is the one site in the console where a swallowed read could cost data
+					  * rather than a glance. `instructions` initialises to "", so a failed GET
+					  * rendered an empty textarea — indistinguishable from an agent that has no
+					  * rules — directly above a live "Save instructions" button. Anyone who typed
+					  * one rule into what looked like a blank slate and saved would PUT that single
+					  * rule over the set they could not see.
+					  *
+					  * So showing the error beside the textarea would not be enough: the failure is
+					  * the armed control, and the fix is to take the control away until a read has
+					  * actually succeeded. Retry is the way back, which is why it is not just a
+					  * message.
+					  */}
+					{instrErr ? (
+						<LoadFailed
+							what="your rules"
+							detail={instrErr}
+							onRetry={loadInstructions}
+							testId="rules-load-failed"
+						/>
+					) : (
+						<>
+							<textarea
+								value={instructions}
+								onChange={(e) => setInstructions(e.target.value)}
+								aria-label="Special Instructions — rules this agent must follow"
+								placeholder={`e.g.\n- Use British English.\n- Never run destructive commands without asking.`}
+								className="min-h-[130px] w-full mb-2"
+							/>
+							<div className="flex items-center gap-2">
+								<Button variant="primary" onClick={saveInstructions}>
+									Save instructions
+								</Button>
+								{instrStatus && <span className="text-xs text-muted">{instrStatus}</span>}
+							</div>
+						</>
+					)}
 				</div>
 			)}
 

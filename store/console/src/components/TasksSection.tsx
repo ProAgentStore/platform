@@ -18,6 +18,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { AgentTaskEntry } from "../lib/types";
 import Button from "./Button";
 import Card from "./Card";
+import LoadFailed from "./LoadFailed";
 
 const STATUSES = ["pending", "in_progress", "blocked", "complete"] as const;
 
@@ -33,6 +34,11 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 	const [newTitle, setNewTitle] = useState("");
 	const [newDescription, setNewDescription] = useState("");
 
+	// The empty state here does not merely say "none" — it says "Nothing is being injected into
+	// the prompt from here", which is a claim about what the AGENT is currently doing. Asserting
+	// that over a failed read is the worst version of this bug (#291): someone debugging why their
+	// agent is behaving oddly is told, wrongly and with confidence, that this is not the cause.
+	const [loadErr, setLoadErr] = useState("");
 	const load = useCallback(async () => {
 		try {
 			const d = await api<{ tasks: AgentTaskEntry[]; limits?: typeof limits }>(
@@ -40,7 +46,10 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 			);
 			setTasks(d.tasks || []);
 			setLimits(d.limits || {});
-		} catch {}
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	useEffect(() => {
@@ -121,7 +130,9 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 				</Card>
 			)}
 
-			{tasks.length === 0 ? (
+			{loadErr ? (
+				<LoadFailed what="this agent's tasks" detail={loadErr} onRetry={load} testId="agent-tasks-load-failed" />
+			) : tasks.length === 0 ? (
 				<p className="text-center py-4 text-muted-soft text-sm">
 					No agent tasks. Nothing is being injected into the prompt from here.
 				</p>

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import Card from "./Card";
+import LoadFailed from "./LoadFailed";
 
 interface VectorSource {
 	sourceType: "knowledge" | "message" | "file" | "collection" | "repo";
@@ -54,12 +55,20 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 	const [showAll, setShowAll] = useState(false);
 	const [searchError, setSearchError] = useState("");
 
+	// This panel exists to answer "why didn't the agent know X" (#291's empty-state problem in its
+	// purest form): a failed stats read rendered zero sources and zero chunks, which is precisely
+	// the finding the user came here to confirm. It would have ended the investigation with the
+	// wrong answer.
+	const [loadErr, setLoadErr] = useState("");
 	const load = useCallback(async () => {
 		setLoading(true);
 		try {
 			const d = await api<VectorStats>(`/v1/instances/${instanceId}/vectors`);
 			setStats(d);
-		} catch {}
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(e instanceof Error ? e.message : String(e));
+		}
 		setLoading(false);
 	}, [instanceId]);
 
@@ -119,6 +128,8 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 					{/* Inventory */}
 					{loading && !stats ? (
 						<p className="text-center py-4 text-muted-soft text-sm">Loading…</p>
+					) : loadErr ? (
+						<LoadFailed what="the index" detail={loadErr} onRetry={load} testId="vectors-load-failed" />
 					) : !stats || stats.sources.length === 0 ? (
 						<p className="text-center py-4 text-muted-soft text-sm">Nothing indexed yet — add documents or upload files and they become searchable here.</p>
 					) : (

@@ -8,6 +8,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { MemoryEntry } from "../lib/types";
 import Button from "./Button";
 import Card from "./Card";
+import LoadFailed from "./LoadFailed";
 
 export default function MemorySection({ instanceId, active }: { instanceId: string; active: boolean }) {
 	const [memories, setMemories] = useState<MemoryEntry[]>([]);
@@ -19,11 +20,18 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 	const [newMemType, setNewMemType] = useState("knowledge");
 	const [newMemContent, setNewMemContent] = useState("");
 
+	// "No memories stored yet" over a failed read is a claim about the agent, not about the
+	// request — and on THIS list it is the misleading one, because an empty memory is a normal
+	// state for a new instance. Nothing distinguished the two (#291).
+	const [loadErr, setLoadErr] = useState("");
 	const loadMemory = useCallback(async () => {
 		try {
 			const d = await api<{ memory: MemoryEntry[] }>(`/v1/instances/${instanceId}/memory`);
 			setMemories(d.memory || []);
-		} catch {}
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	useEffect(() => {
@@ -94,7 +102,9 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 				</Card>
 			)}
 
-			{memories.length === 0 ? (
+			{loadErr ? (
+				<LoadFailed what="this agent's memory" detail={loadErr} onRetry={loadMemory} testId="memory-load-failed" />
+			) : memories.length === 0 ? (
 				<p className="text-center py-4 text-muted-soft text-sm">No memories stored yet.</p>
 			) : (
 				<div className="flex flex-col gap-2">
