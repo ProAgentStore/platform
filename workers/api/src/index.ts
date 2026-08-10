@@ -55,6 +55,7 @@ import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
 import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
 import { runStatsRollup } from "./lib/stats-rollup.js";
+import { sweepTerminalSnapshots } from "./lib/coding-timeline.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -248,6 +249,11 @@ export default {
 		// GAP in a chart, which is a visible and honest outcome, where a missed delivery loses work.
 		// `runStatsRollup` swallows + logs its own errors so it can never take the others down.
 		ctx.waitUntil(runStatsRollup(env));
+		// Prune excess `terminal` rows from `coding_timeline` (#466). Terminal snapshots are 99.5%
+		// of the table's bytes; without a cap one long idle session produces ~4.8 MB/hour forever.
+		// The dedup fix (same PR) stopped NEW excess rows; this sweep cleans up the historical ones.
+		// A missed tick is harmless — the table just stays a bit bigger. Swallows its own errors.
+		ctx.waitUntil(sweepTerminalSnapshots(env).catch(() => undefined));
 		// Notify on a finished deploy (#6). A fifth independent failure domain — it reaches an
 		// external API (GitHub), which is the most likely of these to be slow or rate-limited,
 		// and it must not be able to stop the trigger sweep or the pump from draining.

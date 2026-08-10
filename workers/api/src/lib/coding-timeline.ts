@@ -189,6 +189,96 @@ export async function lastTerminalRow(env: Env, sessionId: string): Promise<{ co
 }
 
 /**
+ * Prune excess `terminal` rows for one session — keep the newest {@link TERMINAL_KEEP_PER_SESSION},
+ * delete the rest in a bounded batch.
+ *
+ * WHY PER-SESSION CAP, NOT AGE CUTOFF (#466):
+ * Migration 0077 records the user promise: "I should see history forever — it should be from the DB."
+ * An age cutoff deletes the oldest rows, which is precisely the history users expect to persist.
+ * A per-session cap keeps the newest N rows and discards the BEGINNING of one very long session —
+ * a far smaller loss, because consecutive snapshots overlap nearly entirely (each is the same
+ * 8,000-char tail with minor scrollback additions), and `terminal-history.ts` stitches them anyway.
+ *
+ * ONLY `terminal` rows are pruned. Conversation rows (`chat_user`, `chat_assistant`, `command`,
+ * `brain`, `outcome`, `system`) total <2 MB/year across all sessions and are kept forever.
+ *
+ * Returns the number of rows deleted.
+ */
+export const TERMINAL_KEEP_PER_SESSION = 300; // ≈ 2.4 MB/session at 8 KB/row
+const TERMINAL_PRUNE_BATCH = 200; // max rows deleted per call — bounds one tick's DELETE cost
+
+export async function pruneTerminalSnapshots(
+	env: Env,
+	sessionId: string,
+	keep = TERMINAL_KEEP_PER_SESSION,
+	limit = TERMINAL_PRUNE_BATCH,
+): Promise<number> {
+	// Delete the oldest `terminal` rows for this session whose seq is lower than the
+	// Nth newest row's seq — i.e. everything outside the retention window. Bounded by
+	// `limit` so a single call can never be the expensive part of a cron tick.
+	//
+	// The correlated subquery `(SELECT seq … ORDER BY seq DESC LIMIT 1 OFFSET keep-1)`
+	// resolves to the seq of the row at position `keep` from the newest end; rows older
+	// than that are candidates. `idx_coding_timeline_session_type (session_id, type, seq)`
+	// makes both the inner and outer scans index-only.
+	const res = await env.DB.prepare(
+		`DELETE FROM coding_timeline
+		  WHERE rowid IN (
+		    SELECT rowid FROM coding_timeline
+		    WHERE session_id = ?1 AND type = 'terminal'
+		      AND seq < (
+		        SELECT seq FROM coding_timeline
+		        WHERE session_id = ?1 AND type = 'terminal'
+		        ORDER BY seq DESC LIMIT 1 OFFSET ?2
+		      )
+		    ORDER BY seq ASC
+		    LIMIT ?3
+		  )`,
+	)
+		.bind(sessionId, keep - 1, limit)
+		.run();
+	return res.meta?.changes ?? 0;
+}
+
+/**
+ * How many sessions with over-cap `terminal` rows a single cron tick inspects.
+ * Bounded so one tick can never own the whole backlog.
+ */
+const TERMINAL_SWEEP_SESSIONS = 20;
+
+/**
+ * Sweep sessions with more than {@link TERMINAL_KEEP_PER_SESSION} terminal rows,
+ * pruning each one in a bounded pass. Returns total rows deleted.
+ *
+ * Wired into the per-minute cron alongside the other independent sweeps. Swallows its
+ * own errors — a failed prune is a capacity nuisance, not data loss.
+ */
+export async function sweepTerminalSnapshots(env: Env): Promise<number> {
+	try {
+		// Find sessions that have exceeded the cap. Ordered by count DESC so the worst
+		// offenders are visited first. `idx_coding_timeline_session_type` covers the
+		// GROUP BY (session_id, type) efficiently.
+		const { results } = await env.DB.prepare(
+			`SELECT session_id FROM coding_timeline
+			  WHERE type = 'terminal'
+			  GROUP BY session_id
+			  HAVING COUNT(*) > ?1
+			  ORDER BY COUNT(*) DESC
+			  LIMIT ?2`,
+		)
+			.bind(TERMINAL_KEEP_PER_SESSION, TERMINAL_SWEEP_SESSIONS)
+			.all<{ session_id: string }>();
+		let deleted = 0;
+		for (const { session_id: sessionId } of results ?? []) {
+			deleted += await pruneTerminalSnapshots(env, sessionId);
+		}
+		return deleted;
+	} catch {
+		return 0;
+	}
+}
+
+/**
  * Render the recent timeline into a compact context block for the co-pilot
  * prompt — so it remembers the conversation, what the agent did, and outcomes.
  */

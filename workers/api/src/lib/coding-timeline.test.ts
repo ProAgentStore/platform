@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline } from "./coding-timeline.js";
+import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline, pruneTerminalSnapshots, sweepTerminalSnapshots, TERMINAL_KEEP_PER_SESSION } from "./coding-timeline.js";
 import type { Env } from "../types.js";
 
 interface Write { sql: string; args: unknown[] }
@@ -183,5 +183,172 @@ describe("loadRepoTimeline — history belongs to the REPO, not to a session (#2
 		expect(reads[0].args[3]).toBe(2000);
 		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1", limit: 0 });
 		expect(reads[1].args[3]).toBe(1);
+	});
+});
+
+describe("pruneTerminalSnapshots — keep newest N terminal rows, delete older ones (#466)", () => {
+	/** Mock D1 that records run() calls and returns `changes` for each. */
+	function pruneEnv(changes = 5): { env: Env; deletes: { sql: string; args: unknown[] }[] } {
+		const deletes: { sql: string; args: unknown[] }[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async run() {
+								deletes.push({ sql, args });
+								return { meta: { changes } };
+							},
+							async all() { return { results: [] }; },
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, deletes };
+	}
+
+	it("issues a DELETE scoped to the given session_id and type = 'terminal' only", async () => {
+		const { env, deletes } = pruneEnv();
+		await pruneTerminalSnapshots(env, "sess-1");
+		expect(deletes).toHaveLength(1);
+		const { sql, args } = deletes[0];
+		// Must be a DELETE — never touches non-terminal types
+		expect(sql.trim()).toContain("DELETE FROM coding_timeline");
+		expect(sql).toContain("type = 'terminal'");
+		// session_id bound as ?1
+		expect(args[0]).toBe("sess-1");
+		// keep-1 offset as ?2 — this is the index into ORDER BY seq DESC to find the cutoff
+		expect(args[1]).toBe(TERMINAL_KEEP_PER_SESSION - 1);
+	});
+
+	it("never mentions non-terminal types in the DELETE", async () => {
+		const { env, deletes } = pruneEnv();
+		await pruneTerminalSnapshots(env, "sess-1");
+		const { sql } = deletes[0];
+		// The retention sweep MUST be terminal-only.
+		// This is the acceptance criterion from #466: "never deletes chat_user/chat_assistant/…"
+		for (const forbidden of ["chat_user", "chat_assistant", "command", "brain", "outcome", "system"]) {
+			expect(sql).not.toContain(forbidden);
+		}
+	});
+
+	it("applies the caller-supplied keep and limit as bound parameters", async () => {
+		const { env, deletes } = pruneEnv();
+		await pruneTerminalSnapshots(env, "sess-2", 50, 10);
+		const { args } = deletes[0];
+		// ?2 = keep - 1 = 49 (the OFFSET into the newest-first list that marks the cutoff)
+		expect(args[1]).toBe(49);
+		// ?3 = limit = 10
+		expect(args[2]).toBe(10);
+	});
+
+	it("returns the number of rows deleted from meta.changes", async () => {
+		const { env } = pruneEnv(7);
+		expect(await pruneTerminalSnapshots(env, "sess-3")).toBe(7);
+	});
+
+	it("returns 0 when meta.changes is absent", async () => {
+		const DB = {
+			prepare(_sql: string) {
+				return {
+					bind() {
+						return {
+							async run() { return {}; }, // no meta
+							async all() { return { results: [] }; },
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		expect(await pruneTerminalSnapshots({ DB } as unknown as Env, "s")).toBe(0);
+	});
+});
+
+describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#466)", () => {
+	/** Mock: .all() returns sessions, .run() records deletes. */
+	function sweepEnv(sessionRows: { session_id: string }[]): { env: Env; dels: string[] } {
+		const dels: string[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind() {
+						return {
+							async all() {
+								// The GROUP BY / HAVING query — return the mocked session list
+								if (sql.includes("GROUP BY")) return { results: sessionRows };
+								return { results: [] };
+							},
+							async run() {
+								// Capture which session_id was passed to each DELETE
+								dels.push(sql);
+								return { meta: { changes: 1 } };
+							},
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, dels };
+	}
+
+	it("issues a DELETE for each session returned by the GROUP BY query", async () => {
+		const sessions = [{ session_id: "s1" }, { session_id: "s2" }];
+		const { env, dels } = sweepEnv(sessions);
+		const deleted = await sweepTerminalSnapshots(env);
+		// One DELETE per session
+		expect(dels).toHaveLength(2);
+		// Returns total changes (1 per session from the mock)
+		expect(deleted).toBe(2);
+	});
+
+	it("returns 0 and does not throw when no sessions exceed the cap", async () => {
+		const { env } = sweepEnv([]);
+		expect(await sweepTerminalSnapshots(env)).toBe(0);
+	});
+
+	it("GROUP BY query filters by type = 'terminal' and uses HAVING COUNT(*) > cap", async () => {
+		const reads: string[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind() {
+						return {
+							async all() {
+								reads.push(sql);
+								return { results: [] };
+							},
+							async run() { return { meta: { changes: 0 } }; },
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		await sweepTerminalSnapshots({ DB } as unknown as Env);
+		expect(reads).toHaveLength(1);
+		expect(reads[0]).toContain("type = 'terminal'");
+		expect(reads[0]).toContain("GROUP BY session_id");
+		expect(reads[0]).toContain("HAVING COUNT(*)");
+	});
+
+	it("returns 0 and swallows errors without throwing", async () => {
+		const DB = {
+			prepare() {
+				return {
+					bind() {
+						return {
+							async all() { throw new Error("D1 exploded"); },
+							async run() { throw new Error("D1 exploded"); },
+							async first() { throw new Error("D1 exploded"); },
+						};
+					},
+				};
+			},
+		};
+		expect(await sweepTerminalSnapshots({ DB } as unknown as Env)).toBe(0);
 	});
 });
