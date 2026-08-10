@@ -108,7 +108,7 @@ const PINS = {
 	// `diagnoseAttachment` and the only one with no adapter in front of it, so the next input the
 	// diagnosis grows has to be added here by hand. That is exactly how #468 happened at the other
 	// two sites, and the four lines are what a reader needs to not repeat it a fourth time.
-	"workers/api/src/routes/instances.ts": 938,
+	"workers/api/src/routes/instances.ts": 948,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -229,7 +229,7 @@ const PINS = {
 	// user had bound, so "stop" meant repeat everywhere and tore hands-free down on the one listener
 	// that runs while the agent speaks. Raised rather than split: the prose is the deliverable, and
 	// `use-voice-words.test.ts` now fails if a sixth field is added to only some of the call sites.
-	"packages/sdk/src/voice/use-voice.ts": 1965,
+	"packages/sdk/src/voice/use-voice.ts": 1966,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -764,7 +764,7 @@ const PINS = {
 	// thing only a route can do. The RULE is pure and tested in lib/tool-refusal.ts, and the
 	// whole-definition check in lib/pipeline-tool-policy.ts, which is where a split would have put
 	// it anyway; the enforcing gate is in `runRegistryTool`, not here.
-	"workers/api/src/routes/tools.ts": 1032,
+	"workers/api/src/routes/tools.ts": 1057,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter

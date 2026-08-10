@@ -202,7 +202,7 @@ toolRoutes.get("/:id/pipelines/:name", async (c) => {
 		/* malformed config */
 	}
 	const pipelines = (cfg.pipelines && typeof cfg.pipelines === "object" ? cfg.pipelines : {}) as Record<string, PipelineDef>;
-	if (!Object.prototype.hasOwnProperty.call(pipelines, name)) throw new HttpError(404, `Pipeline "${name}" not found`);
+	if (!Object.hasOwn(pipelines, name)) throw new HttpError(404, `Pipeline "${name}" not found`);
 	const def = pipelines[name];
 	const validationError = validatePipeline(def);
 	return c.json({

@@ -5,8 +5,20 @@
  * a negatively-jittered run fires before its slot, and advancing from the FIRE time instead
  * of the SLOT returns the same slot — minutes away instead of a period away.
  */
-import { describe, expect, it } from "vitest";
-import { advanceCron, applyJitter, nextRunAt } from "./cron-schedule.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { advanceCron, nextRunAt } from "./cron-schedule.js";
+
+// applyJitter floors the fire time at the wall clock (Date.now() + 60s). These tests pin slots to
+// fixed August dates, so once the real date passes a pinned slot the floor clamps the fire time and
+// the "within ±90 min of the slot" assertion breaks (the #412 test was wall-clock-dependent). Freeze
+// "now" to just before the slots so the arithmetic is deterministic regardless of the real date.
+beforeAll(() => {
+	vi.useFakeTimers();
+	vi.setSystemTime(new Date("2026-08-09T00:00:00.000Z"));
+});
+afterAll(() => {
+	vi.useRealTimers();
+});
 
 // ---------------------------------------------------------------------------
 // advanceCron — the slot-based period advance (#412)
