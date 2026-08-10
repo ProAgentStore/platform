@@ -1,3 +1,4 @@
+import path from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 
 /**
@@ -42,7 +43,28 @@ const UNIT_TESTS = [
 	"e2e/**/*.test.mjs",
 ];
 
+// SDK source aliases — keeps vitest from resolving @proagentstore/sdk/* against
+// the built dist/ output. Without this, a stale SDK build produces false test
+// failures (e.g. "isClaudeEngine is not a function") because the package
+// `exports` map points at ./dist, not ./src. The root tsconfig.json already
+// carries the same paths for tsc; this makes vitest's Vite resolver agree.
+// Mirrors the five subpaths declared in packages/sdk/package.json "exports". (#471)
+//
+// Array form (not object) so more-specific sub-paths are checked before the bare
+// "@proagentstore/sdk" entry (Vite tries aliases in order for array form).
+const SDK_ROOT = path.resolve(import.meta.dirname, "packages/sdk/src");
+const SDK_ALIASES = [
+	{ find: "@proagentstore/sdk/ui-react", replacement: path.join(SDK_ROOT, "ui-react.ts") },
+	{ find: "@proagentstore/sdk/ui", replacement: path.join(SDK_ROOT, "ui.ts") },
+	{ find: "@proagentstore/sdk/client", replacement: path.join(SDK_ROOT, "client.ts") },
+	{ find: "@proagentstore/sdk/hooks", replacement: path.join(SDK_ROOT, "hooks.ts") },
+	{ find: "@proagentstore/sdk", replacement: path.join(SDK_ROOT, "index.ts") },
+];
+
 export default defineConfig({
+	resolve: {
+		alias: SDK_ALIASES,
+	},
 	test: {
 		/**
 		 * Two projects (#253).
