@@ -117,3 +117,57 @@ describe("behaviour responses distinguish the creator's default from the subscri
 		expect(data.templateDefault).toEqual({});
 	});
 });
+
+/**
+ * Envelope-validation: an unwrapped body must never be a silent 200 no-op (#463).
+ *
+ * Three cases from the acceptance criteria:
+ * 1. Bare `{field: value}` → 400 (the fields were discarded, not applied).
+ * 2. Wrapped + unknown top-level keys → 200 with the field applied and the noise in `rejected`.
+ * 3. Empty body `{}` → 200 no-op (deliberate empty patch is a valid contract).
+ */
+describe("PUT /behaviour envelope validation (#463)", () => {
+	it("returns 400 for an unwrapped patch body, does not write", async () => {
+		const { app, env, writes } = testApp({ instanceBehaviour: { technicality: 70, emoji: true } });
+		const res = await call(app, env, "/v1/instances/inst-1/behaviour", {
+			method: "PUT",
+			body: JSON.stringify({ technicality: 0 }),
+		});
+
+		expect(res.status).toBe(400);
+		const data = await res.json<{ error: string }>();
+		expect(data.error).toMatch(/behaviour/);
+		// Must not have written — no DB write call
+		expect(writes).toHaveLength(0);
+	});
+
+	it("applies the wrapped field and reports unknown top-level keys in rejected", async () => {
+		const { app, env } = testApp({ agentBehaviour: { technicality: 80 } });
+		const res = await call(app, env, "/v1/instances/inst-1/behaviour", {
+			method: "PUT",
+			body: JSON.stringify({ behaviour: { technicality: 0 }, nonsense: 1 }),
+		});
+
+		expect(res.status).toBe(200);
+		const data = await res.json<{ behaviour: Record<string, unknown>; rejected: string[] }>();
+		// The field was actually applied
+		expect(data.behaviour.technicality).toBe(0);
+		// Unknown top-level key reported
+		expect(data.rejected).toContain("nonsense");
+	});
+
+	it("empty body returns 200 and changes nothing (deliberate no-op is valid)", async () => {
+		const { app, env } = testApp({ instanceBehaviour: { technicality: 70, emoji: true } });
+		const res = await call(app, env, "/v1/instances/inst-1/behaviour", {
+			method: "PUT",
+			body: JSON.stringify({}),
+		});
+
+		expect(res.status).toBe(200);
+		const data = await res.json<{ behaviour: Record<string, unknown>; rejected: string[] }>();
+		expect(data.rejected).toEqual([]);
+		// A no-op patch still writes (behaviour-store always patches) — the important thing is status 200
+		// and the behaviour unchanged.
+		expect(data.behaviour).toMatchObject({ technicality: 70, emoji: true });
+	});
+});

@@ -54,13 +54,27 @@ export function registerBehaviourRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { behaviour?: unknown };
+
+		// Reject a body that looks like an unwrapped patch (has own keys but no `behaviour` wrapper).
+		// A bare `{}` or an empty body is still a valid no-op — only flag it when there are keys that
+		// would be silently discarded. Rejections are REPORTED, not swallowed (#463).
+		const topLevelKeys = Object.keys(body);
+		if (!("behaviour" in body) && topLevelKeys.length > 0) {
+			return c.json({ error: 'Send {"behaviour": {…}} — top-level fields are ignored.' }, 400);
+		}
+
 		const patch = (body.behaviour ?? {}) as Record<string, unknown>;
+
+		// Any extra top-level keys beyond `behaviour` are unknown to this route — report them so
+		// the caller can distinguish "applied" from "ignored entirely" (#463).
+		const unknownTopLevel = topLevelKeys.filter((k) => k !== "behaviour");
 
 		// No allowlist: this is the owner editing their own agent in the UI, so guardrails are
 		// theirs to set. The allowlist exists for the agent's own tool (#224), not for the human.
 		// Returns the RESOLVED behaviour, matching GET — the console replaces its state with this,
 		// and an override-only reply made every creator-supplied default vanish from the page.
-		const { behaviour: next, rejected } = await patchBehaviour(c.env, instanceId, session.uid, patch);
+		const { behaviour: next, rejected: innerRejected } = await patchBehaviour(c.env, instanceId, session.uid, patch);
+		const rejected = [...unknownTopLevel, ...innerRejected];
 		const agentCfg = await readAgentConfig(c.env, instanceId);
 		// Rejections are reported, never swallowed — a half-applied patch that reports success is
 		// how a caller ends up believing it set something it did not.
