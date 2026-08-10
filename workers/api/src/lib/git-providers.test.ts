@@ -140,14 +140,28 @@ describe("the registry itself", () => {
 	});
 
 	it("declares what each host can actually be ASKED, one flag per surface", () => {
-		// The three flags move independently on purpose. GitLab reads issues and pipelines
-		// (`gitlab-api.ts`) but has no merge-request client, and a single `hosted:boolean` would
-		// have made turning the first two on assert the third.
+		// The three flags move independently on purpose. GitLab and Bitbucket read issues and
+		// pipelines (`gitlab-api.ts`, `bitbucket-api.ts`) but neither has a merge/pull-request
+		// client, and a single `hosted:boolean` would have made turning the first two on assert
+		// the third — which is exactly what phase 4 would have been forced to do here.
 		expect(gitProviderFor("github").supports).toEqual({ issues: true, builds: true, pulls: true });
 		expect(gitProviderFor("gitlab").supports).toEqual({ issues: true, builds: true, pulls: false });
-		for (const id of ["bitbucket", "other", "local"]) {
+		expect(gitProviderFor("bitbucket").supports).toEqual({ issues: true, builds: true, pulls: false });
+		for (const id of ["other", "local"]) {
 			expect(gitProviderFor(id).supports, id).toEqual({ issues: false, builds: false, pulls: false });
 		}
+	});
+
+	it("gives Bitbucket a vault credential — an ACCESS TOKEN, which is one opaque value", () => {
+		// This was deferred on the reasoning that an app password is a username + secret and the
+		// vault holds one opaque value per provider. True of app passwords; not true of a
+		// Repository/Workspace Access Token, which is a single string used as `x-token-auth:<tok>`
+		// in a clone URL and `Bearer <tok>` on the API. The username below is the whole reason it
+		// fits: it is a CONSTANT, not the other half of the credential.
+		const bb = gitProviderFor("bitbucket");
+		expect(bb.credential).toBe("vault-token");
+		expect(bb.vaultProvider).toBe("bitbucket");
+		expect(bb.gitUsername).toBe("x-token-auth");
 	});
 
 	it("supportsHostedFeature is the only read of the flags, and is not truthy-loose", () => {
@@ -179,9 +193,15 @@ describe("hostedFeatureUnavailable — an unavailable surface says WHY, honestly
 		expect(gl).not.toMatch(/yet/);
 		const gh = hostedFeatureUnavailable(gitProviderFor("github"), "issues");
 		expect(gh).toMatch(/owner\/name/);
-		// Bitbucket has no client at all — a different sentence, and it must not ask the owner to
-		// re-add a repo whose coordinate is already perfectly well recorded.
-		expect(hostedFeatureUnavailable(gitProviderFor("bitbucket"), "issues")).toMatch(/yet/);
+		// Bitbucket reads issues since phase 4, so its ISSUES sentence is now the missing-coordinate
+		// one — and its namespaces do not nest, so it asks for `owner/name`, not a project path.
+		const bb = hostedFeatureUnavailable(gitProviderFor("bitbucket"), "issues");
+		expect(bb).toMatch(/owner\/name/);
+		expect(bb).not.toMatch(/yet/);
+		// `other` is the host we genuinely cannot drive — and it must not ask the owner to re-add a
+		// repo whose coordinate is already perfectly well recorded.
+		expect(hostedFeatureUnavailable(gitProviderFor("other"), "issues")).toMatch(/no integration/);
+		expect(hostedFeatureUnavailable(gitProviderFor("bitbucket"), "pulls")).toMatch(/yet/);
 	});
 
 	it("still tells a local checkout the actionable thing", () => {

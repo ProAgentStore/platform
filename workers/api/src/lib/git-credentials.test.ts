@@ -90,14 +90,31 @@ describe("GitLab — the new provider, on its own grant model", () => {
 });
 
 describe("providers with no credential model", () => {
-	it("mints nothing for local, bitbucket or an unknown host", async () => {
-		// Bitbucket is DEFERRED (#221): its app password is a username + secret, and the vault
-		// holds one opaque value per provider. Wiring it anyway would 401 while looking configured.
-		for (const provider of ["local", "bitbucket", "other"]) {
+	it("mints nothing for local or an unknown host", async () => {
+		for (const provider of ["local", "other"]) {
 			expect(await resolveCloneCredential(env, "u1", { provider, repoSlug: "w/r", cloneUrl: "https://bitbucket.org/w/r.git" })).toBeNull();
 		}
 		expect(readConnectorRefreshToken).not.toHaveBeenCalled();
 		expect(installationTokenForOwner).not.toHaveBeenCalled();
+	});
+});
+
+describe("bitbucket — a vault token with its OWN git username", () => {
+	it("uses x-token-auth, not GitLab's oauth2 and not GitHub's x-access-token", async () => {
+		// The same secret in the wrong username is a 401, which is the entire reason the username
+		// is data in the provider table rather than the one string the runner used to hardcode.
+		readConnectorRefreshToken.mockResolvedValue("ATCTT-live");
+		const cred = await resolveCloneCredential(env, "u1", { provider: "bitbucket", repoSlug: "w/r", cloneUrl: "https://bitbucket.org/w/r.git" });
+		expect(cred).toEqual({ username: "x-token-auth", token: "ATCTT-live" });
+		expect(readConnectorRefreshToken).toHaveBeenCalledWith(env, "u1", "bitbucket", "Bitbucket");
+		expect(installationTokenForOwner).not.toHaveBeenCalled();
+	});
+
+	it("still refuses to send that token to a host Bitbucket does not own", async () => {
+		// The host check is provider-agnostic by construction, so turning Bitbucket's credential on
+		// must not open the exfiltration path `mayAttachCloneCredential` exists to close.
+		readConnectorRefreshToken.mockResolvedValue("ATCTT-live");
+		expect(await resolveCloneCredential(env, "u1", { provider: "bitbucket", repoSlug: "w/r", cloneUrl: "https://attacker.example/x.git" })).toBeNull();
 	});
 });
 

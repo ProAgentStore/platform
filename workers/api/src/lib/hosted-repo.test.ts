@@ -18,8 +18,14 @@ const gl = vi.hoisted(() => ({
 	readGitlabIssue: vi.fn(async () => null),
 	listGitlabPipelines: vi.fn(async () => [{ status: "completed", conclusion: "success" }]),
 }));
+const bb = vi.hoisted(() => ({
+	listBitbucketIssues: vi.fn(async () => [{ number: 7, title: "bb", state: "open", labels: [], comments: 0, updatedAt: "", url: "" }]),
+	readBitbucketIssue: vi.fn(async () => null),
+	listBitbucketPipelines: vi.fn(async () => [{ status: "completed", conclusion: "failure" }]),
+}));
 vi.mock("./github-issues.js", () => gh);
 vi.mock("./gitlab-api.js", () => gl);
+vi.mock("./bitbucket-api.js", () => bb);
 
 import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedBuilds, listHostedIssues } from "./hosted-repo.js";
 import { readGithubCache } from "./github-cache.js";
@@ -66,8 +72,10 @@ describe("hostedReadRefusal — three separate claims, not one", () => {
 		expect(known).toBeNull();
 		expect(unknown).toMatch(/project path/);
 		expect(unknown).not.toMatch(/yet/);
-		// And the other direction: coordinate perfectly well known, host we have no client for.
-		expect(hostedReadRefusal({ provider: "bitbucket", repoSlug: "team/thing" }, "issues")).toMatch(/yet/);
+		// And the other direction: coordinate perfectly well known, surface we have no client for.
+		expect(hostedReadRefusal({ provider: "bitbucket", repoSlug: "team/thing" }, "pulls")).toMatch(/yet/);
+		// …and a host we have no integration for at all, which is a third and different sentence.
+		expect(hostedReadRefusal({ provider: "other", repoSlug: "team/thing" }, "issues")).toMatch(/no integration/);
 	});
 
 	it("refuses a bare name with no separator, the guard the old expression had", () => {
@@ -97,13 +105,29 @@ describe("dispatch — the right client, and only the right client", () => {
 		expect(out[0].title).toBe("gl");
 	});
 
+	it("sends a Bitbucket repo to the Bitbucket client, and to neither of the others", async () => {
+		const out = await listHostedIssues(env, "u1", { provider: "bitbucket", repoSlug: "team/widget" });
+		expect(bb.listBitbucketIssues).toHaveBeenCalledTimes(1);
+		expect(gh.listIssues).not.toHaveBeenCalled();
+		expect(gl.listGitlabIssues).not.toHaveBeenCalled();
+		expect(out[0].title).toBe("bb");
+	});
+
 	it("calls NO client when the repo is refused", async () => {
 		// The refusal is checked before dispatch, so an unsupported host cannot spend a request
 		// to be told what the provider table already knows.
-		expect(await listHostedIssues(env, "u1", { provider: "bitbucket", repoSlug: "team/thing" })).toEqual([]);
+		expect(await listHostedIssues(env, "u1", { provider: "other", repoSlug: "team/thing" })).toEqual([]);
 		expect(await listHostedIssues(env, "u1", { provider: "local", workdir: "~/x" } as never)).toEqual([]);
 		expect(gh.listIssues).not.toHaveBeenCalled();
 		expect(gl.listGitlabIssues).not.toHaveBeenCalled();
+		expect(bb.listBitbucketIssues).not.toHaveBeenCalled();
+	});
+
+	it("turns a Bitbucket null into available:false, exactly as it does for GitLab", async () => {
+		bb.listBitbucketPipelines.mockResolvedValueOnce(null as never);
+		expect(await latestHostedBuild(env, "u1", { provider: "bitbucket", repoSlug: "t/w" })).toEqual({ available: false, run: null });
+		bb.listBitbucketPipelines.mockResolvedValueOnce([] as never);
+		expect(await latestHostedBuild(env, "u1", { provider: "bitbucket", repoSlug: "t/w" })).toEqual({ available: true, run: null });
 	});
 
 	it("turns a GitLab null (could not ask) into available:false, and [] into available:true", async () => {
@@ -116,7 +140,7 @@ describe("dispatch — the right client, and only the right client", () => {
 	});
 
 	it("canReadHosted agrees with hostedReadRefusal, so the panel and the routes cannot drift", () => {
-		for (const repo of [{ provider: "github", githubRepo: "a/b" }, { provider: "gitlab", repoSlug: "g/s/p" }, { provider: "local" }, { provider: "other", repoSlug: "x/y" }]) {
+		for (const repo of [{ provider: "github", githubRepo: "a/b" }, { provider: "gitlab", repoSlug: "g/s/p" }, { provider: "bitbucket", repoSlug: "t/w" }, { provider: "local" }, { provider: "other", repoSlug: "x/y" }]) {
 			for (const f of ["issues", "builds", "pulls"] as const) {
 				expect(canReadHosted(repo, f), `${repo.provider}/${f}`).toBe(hostedReadRefusal(repo, f) === null);
 			}

@@ -516,8 +516,38 @@ describe("GET /coding/repos/:id/issues — dispatched by provider, refused hones
 		expect(urls).toEqual([]);
 	});
 
-	it("refuses a BITBUCKET repo — a host with no client, said in those words", async () => {
-		const { status, body } = await get("/issues", { ...gitlabRepo, provider: "bitbucket", repo_slug: "team/thing" });
+	it("lists a BITBUCKET repo's issues — and that slug never reaches GitHub or GitLab", async () => {
+		// Phase 4 (#221). `team/widget` IS a well-formed `owner/repo`, so — unlike the nested GitLab
+		// path above — a leak here would not be caught by any shape check. It would build an
+		// authenticated request against a GitHub namespace of the same name that nobody asked about,
+		// which is why the negative assertion is the one that matters.
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			return new Response(JSON.stringify({ values: [{ id: 12, title: "Deploy step flakes", state: "new", kind: "bug", priority: "major", updated_on: "2026-08-08T00:00:00Z", links: { html: { href: "https://bitbucket.org/team/widget/issues/12" } } }] }), {
+				status: 200, headers: { "Content-Type": "application/json" },
+			});
+		}));
+		const { status, body } = await get("/issues", { ...gitlabRepo, provider: "bitbucket", repo_slug: "team/widget" });
+		expect(status).toBe(200);
+		expect(body.issues).toEqual([
+			// `kind` + `priority` become the labels, because Bitbucket has none — and `comments` is
+			// 0 because the payload carries no count at all, not because there are none.
+			{ number: 12, title: "Deploy step flakes", state: "open", labels: ["bug", "major"], comments: 0, updatedAt: "2026-08-08T00:00:00Z", url: "https://bitbucket.org/team/widget/issues/12" },
+		]);
+		expect(urls.some((u) => u.startsWith("https://api.bitbucket.org/2.0/repositories/team/widget/issues"))).toBe(true);
+		expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
+		expect(urls.some((u) => u.includes("gitlab.com"))).toBe(false);
+	});
+
+	it("refuses an UNINTEGRATED host — a real remote we simply cannot query, said in those words", async () => {
+		const { status, body } = await get("/issues", { ...gitlabRepo, provider: "other", repo_slug: "team/thing" });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/no integration/);
+		expect(urls).toEqual([]);
+	});
+
+	it("a BITBUCKET repo is still refused PULL REQUESTS — one flag moved, not three", async () => {
+		const { status, body } = await get("/pulls", { ...gitlabRepo, provider: "bitbucket", repo_slug: "team/widget" });
 		expect(status).toBe(400);
 		expect(body.error).toContain("Bitbucket");
 		expect(body.error).toMatch(/yet/);

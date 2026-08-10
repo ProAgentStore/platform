@@ -39,6 +39,7 @@ import { resolveGithubRead } from "./github-cache.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { listIssues, readIssue, type IssueDetail, type IssueSummary, type ListIssuesOpts } from "./github-issues.js";
 import { listGitlabIssues, listGitlabPipelines, readGitlabIssue } from "./gitlab-api.js";
+import { listBitbucketIssues, listBitbucketPipelines, readBitbucketIssue } from "./bitbucket-api.js";
 import { gitProviderFor, hostedFeatureUnavailable, supportsHostedFeature, type HostedFeature } from "./git-providers.js";
 import type { BuildRun } from "./build-history.js";
 import type { Env } from "../types.js";
@@ -94,7 +95,7 @@ export function canReadHosted(repo: HostedRepoRef, feature: HostedFeature): bool
 	return hostedReadRefusal(repo, feature) === null;
 }
 
-/** List the repo's issues. `[]` for anything unreadable — never throws (both clients degrade). */
+/** List the repo's issues. `[]` for anything unreadable — never throws (every client degrades). */
 export async function listHostedIssues(env: Env, userId: string, repo: HostedRepoRef, opts: ListIssuesOpts = {}): Promise<IssueSummary[]> {
 	if (!canReadHosted(repo, "issues")) return [];
 	const slug = hostedCoordinate(repo);
@@ -103,12 +104,21 @@ export async function listHostedIssues(env: Env, userId: string, repo: HostedRep
 			return listIssues(env, userId, slug, opts);
 		case "gitlab":
 			return listGitlabIssues(env, userId, slug, opts);
+		case "bitbucket":
+			return listBitbucketIssues(env, userId, slug, opts);
 		default:
 			return [];
 	}
 }
 
-/** Read one issue by the number a human sees (`iid` on GitLab). `null` when absent. */
+/**
+ * Read one issue by the number a human sees. `null` when absent.
+ *
+ * "The number a human sees" is doing work: it is `iid` on GitLab (whose `id` is a global
+ * counter) and `id` on Bitbucket (which has no second identifier at all). The two providers
+ * disagree about what `id` means, which is one of the reasons each client owns its own mapping
+ * instead of one being parameterised over the other.
+ */
 export async function readHostedIssue(env: Env, userId: string, repo: HostedRepoRef, number: number): Promise<IssueDetail | null> {
 	if (!canReadHosted(repo, "issues")) return null;
 	const slug = hostedCoordinate(repo);
@@ -117,6 +127,8 @@ export async function readHostedIssue(env: Env, userId: string, repo: HostedRepo
 			return readIssue(env, userId, slug, number);
 		case "gitlab":
 			return readGitlabIssue(env, userId, slug, number);
+		case "bitbucket":
+			return readBitbucketIssue(env, userId, slug, number);
 		default:
 			return null;
 	}
@@ -148,6 +160,11 @@ export async function latestHostedBuild(env: Env, userId: string, repo: HostedRe
 		}
 		case "gitlab": {
 			const runs = await listGitlabPipelines(env, userId, slug, { perPage: 1 });
+			if (!runs) return { available: false, run: null };
+			return { available: true, run: runs[0] ?? null };
+		}
+		case "bitbucket": {
+			const runs = await listBitbucketPipelines(env, userId, slug, { perPage: 1 });
 			if (!runs) return { available: false, run: null };
 			return { available: true, run: runs[0] ?? null };
 		}
@@ -197,6 +214,8 @@ export async function listHostedBuilds(env: Env, userId: string, repo: HostedRep
 		}
 		case "gitlab":
 			return listGitlabPipelines(env, userId, slug, { perPage: opts.perPage, page: opts.page });
+		case "bitbucket":
+			return listBitbucketPipelines(env, userId, slug, { perPage: opts.perPage, page: opts.page });
 		default:
 			return null;
 	}

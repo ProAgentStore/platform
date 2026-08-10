@@ -128,13 +128,26 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		label: "Bitbucket",
 		hosts: ["bitbucket.org", "www.bitbucket.org"],
 		gitUsername: "x-token-auth",
-		// DEFERRED: Bitbucket's credential is an app password (username + secret) or a
-		// workspace-scoped OAuth token. The vault is keyed `(user, provider)` and holds ONE
-		// opaque secret, so an app password has nowhere to put its username. Wiring it to the
-		// vault anyway would 401 on every private clone while looking configured — so
-		// Bitbucket is parsed and represented, and its private repos say so.
-		credential: "none",
-		supports: { issues: false, builds: false, pulls: false },
+		// This was DEFERRED, on the reasoning that Bitbucket's credential is an app password —
+		// a username AND a secret — while the vault is keyed `(user, provider)` and holds ONE
+		// opaque value, so wiring it would 401 on every private clone while looking configured.
+		//
+		// That reasoning was right about app passwords and wrong that they are the only option. A
+		// Repository / Project / Workspace **Access Token** is a single opaque string, used as
+		// `x-token-auth:<token>` in an https clone URL — exactly the `gitUsername` already
+		// declared above — and as `Authorization: Bearer` on the API. It fits the vault's shape
+		// without stretching it, so that is what PAGS takes; app passwords are deliberately NOT
+		// supported (`routes/keys.ts` says so where the token is pasted) and Atlassian is
+		// removing them anyway.
+		credential: "vault-token",
+		vaultProvider: "bitbucket",
+		// Issues and pipelines are LIVE (#221 phase 4, `lib/bitbucket-api.ts`) — read-only, over
+		// the same vault token the clone uses, with public repos readable unauthenticated. Pull
+		// requests are not: `lib/github-prs.ts` is a substantial client (checks, review state,
+		// mergeability, run correlation) and Bitbucket's PR API differs enough that claiming it
+		// from an untested mapping is the failure mode these three independent flags exist to
+		// prevent.
+		supports: { issues: true, builds: true, pulls: false },
 	},
 	{
 		id: "other",

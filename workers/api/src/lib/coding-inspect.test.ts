@@ -12,6 +12,14 @@ vi.mock("./gitlab-api.js", () => ({
 	listGitlabPipelines: vi.fn(async () => null),
 }));
 
+vi.mock("./bitbucket-api.js", () => ({
+	listBitbucketIssues: vi.fn(async (_env: unknown, _uid: string, slug: string) =>
+		slug === "team/widget" ? [{ number: 12, title: "Deploy step flakes", state: "open", labels: ["bug"], comments: 0, updatedAt: "", url: "b12" }] : [],
+	),
+	readBitbucketIssue: vi.fn(async () => null),
+	listBitbucketPipelines: vi.fn(async () => null),
+}));
+
 vi.mock("./github-issues.js", () => ({
 	listIssues: vi.fn(async (_env: unknown, _uid: string, repo: string) =>
 		repo === "acme/widget" ? [{ number: 7, title: "Broken login", state: "open", labels: ["bug"], comments: 1, updatedAt: "", url: "u7" }] : [],
@@ -125,11 +133,23 @@ describe("executeInspectTool", () => {
 		expect(out).toMatch(/#3: Pipeline flakes/);
 	});
 
-	it("a BITBUCKET repo is refused rather than answered emptily", async () => {
+	it("list_issues reads a BITBUCKET repo too — same dispatcher, same agreement", async () => {
+		// Phase 4 (#221). The half-migration to avoid is the one where a provider is added to the
+		// panel and not to the brain: the Issues tab would list this backlog while the Co-pilot,
+		// asked about the same repo, said there wasn't one.
+		const out = await executeInspectTool(
+			{ conn: {} as never, env: {} as never, userId: "u1", repo: { provider: "bitbucket", repoSlug: "team/widget" } },
+			{ name: "list_issues", arguments: {} },
+		);
+		expect(calls.length).toBe(0);
+		expect(out).toMatch(/#12: Deploy step flakes/);
+	});
+
+	it("a repo on an UNINTEGRATED host is refused rather than answered emptily", async () => {
 		// `[]` would read to the brain as "the backlog is empty", which is a confident false
 		// statement about a repo we simply have no client for.
 		const out = await executeInspectTool(
-			{ conn: {} as never, env: {} as never, userId: "u1", repo: { provider: "bitbucket", repoSlug: "team/thing" } },
+			{ conn: {} as never, env: {} as never, userId: "u1", repo: { provider: "other", repoSlug: "team/thing" } },
 			{ name: "list_issues", arguments: {} },
 		);
 		expect(out).toMatch(/needs a repo on a host PAGS can read/i);

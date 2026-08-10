@@ -137,6 +137,24 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "https://gitlab.com/-/user_settings/personal_access_tokens",
 	},
 	{
+		// The Coder's Bitbucket credential (user_api_keys provider "bitbucket"), read by
+		// lib/git-credentials.ts as the password half of an https clone URL and by
+		// lib/bitbucket-api.ts as an `Authorization: Bearer` on the REST API (#221 phase 4).
+		//
+		// It must be a **Repository / Project / Workspace Access Token** — one opaque string.
+		// An APP PASSWORD will not work here and is not a bug to be fixed: an app password is a
+		// username AND a secret, and this vault is keyed `(user, provider)` with a single opaque
+		// value, so there is nowhere to put the username. Atlassian is retiring app passwords in
+		// favour of these tokens regardless. keyPrefix is empty because Bitbucket's token format
+		// is not stable enough to reject on (see lib/key-shape.ts: rejecting an unfamiliar shape
+		// rots CLOSED). host:null — never proxied.
+		id: "bitbucket",
+		name: "Bitbucket (repo access token)",
+		host: null,
+		keyPrefix: "",
+		docsUrl: "https://support.atlassian.com/bitbucket-cloud/docs/repository-access-tokens/",
+	},
+	{
 		// Claude Code sign-in for the Coder engine: a long-lived OAuth token from
 		// `claude setup-token` (works with a Pro/Max subscription). host:null — this is
 		// NOT proxyable; it's injected as CLAUDE_CODE_OAUTH_TOKEN into the runner's
