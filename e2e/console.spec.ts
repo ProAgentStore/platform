@@ -2589,7 +2589,9 @@ test.describe("mobile — the Terminal tab on a tmux-only agent (#409)", () => {
 
 			// Rows survived a payload with no `backend` and no `id` — the trap.
 			await page.getByRole("button", { name: "Targets", exact: true }).click();
-			await expect(page.getByText("build")).toBeVisible();
+			// The "build" tmux session row is a button; scope to it so the #488 DeploymentCard's
+			// "Build Status" text (also matched by a bare getByText("build")) doesn't make this strict.
+			await expect(page.getByRole("button", { name: "build" })).toBeVisible();
 
 			const { wide, mainOv, escapes } = await measureOverflow(page);
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
