@@ -38,7 +38,7 @@ import { loopDriverFor } from "../lib/loop-drivers.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
-import { openBudget } from "../lib/delegation-budget-store.js";
+import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
 import type { TriggerAction } from "../lib/triggers.js";
 import type { Env } from "../types.js";
@@ -948,7 +948,9 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// already scoped to this caller and instance.
 	const repoId = typeof body.repoId === "string" && body.repoId.trim() ? body.repoId.trim() : undefined;
 
-	const maxIterations = sanitizeMaxIterations(body.maxIterations);
+	// Resolve the per-account loop-iterations ceiling before clamping the caller's request (#477).
+	const ceilings = await resolveAccountCeilings(c.env, session.uid);
+	const maxIterations = sanitizeMaxIterations(body.maxIterations, ceilings.loopMaxIterations);
 	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
 	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
 	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.

@@ -20,6 +20,7 @@ import {
 	type BudgetState,
 	type Micros,
 } from "./delegation-budget.js";
+import { MAX_ITERATIONS_CAP } from "./agent-loop.js";
 
 interface BudgetRow {
 	id: string;
@@ -103,6 +104,7 @@ interface BudgetLimitRow {
 	per_tree_cost_micros: number | null;
 	delegations: number | null;
 	max_depth: number | null;
+	loop_max_iterations: number | null;
 }
 
 interface EffectiveCeilings {
@@ -112,6 +114,8 @@ interface EffectiveCeilings {
 	perTreeCostMicros: number;
 	perTreeDelegations: number;
 	perTreeMaxDepth: number;
+	/** Maximum iterations a Loop run may perform (caps sanitizeMaxIterations). */
+	loopMaxIterations: number;
 }
 
 /**
@@ -134,7 +138,7 @@ export async function resolveAccountCeilings(
 	let platform: BudgetLimitRow | null = null;
 	try {
 		const rows = await env.DB.prepare(
-			`SELECT user_id, token_ceiling, charged_micros_ceiling, per_tree_cost_micros, delegations, max_depth
+			`SELECT user_id, token_ceiling, charged_micros_ceiling, per_tree_cost_micros, delegations, max_depth, loop_max_iterations
 			   FROM account_budget_limits
 			  WHERE user_id IN (?1, '__platform__')`,
 		)
@@ -172,6 +176,7 @@ export async function resolveAccountCeilings(
 		perTreeCostMicros: pick("per_tree_cost_micros", undefined, DEFAULT_LIMITS.costMicros, MAX_OVERRIDE_PER_TREE_MICROS),
 		perTreeDelegations: pick("delegations", undefined, DEFAULT_LIMITS.delegations, 10_000),
 		perTreeMaxDepth: pick("max_depth", undefined, DEFAULT_LIMITS.maxDepth, 20),
+		loopMaxIterations: pick("loop_max_iterations", undefined, MAX_ITERATIONS_CAP, 1_000),
 	};
 }
 

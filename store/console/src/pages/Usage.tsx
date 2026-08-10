@@ -496,16 +496,38 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 // ── Budget limits panel ─────────────────────────────────────────────────────
 
 interface BudgetData {
-	stored: { chargedMicrosCeiling: number | null; tokenCeiling: number | null };
+	stored: {
+		chargedMicrosCeiling: number | null;
+		tokenCeiling: number | null;
+		perTreeCostMicros: number | null;
+		perTreeDelegations: number | null;
+		perTreeMaxDepth: number | null;
+		loopMaxIterations: number | null;
+	};
 	effective: {
 		chargedMicrosCeiling: number;
 		chargedMicrosCeilingTier: "account" | "platform" | "env" | "default";
 		tokenCeiling: number;
 		tokenCeilingTier: "account" | "platform" | "env" | "default";
+		perTreeCostMicros: number;
+		perTreeCostMicrosTier: "account" | "platform" | "env" | "default";
+		perTreeDelegations: number;
+		perTreeDelegationsTier: "account" | "platform" | "env" | "default";
+		perTreeMaxDepth: number;
+		perTreeMaxDepthTier: "account" | "platform" | "env" | "default";
+		loopMaxIterations: number;
+		loopMaxIterationsTier: "account" | "platform" | "env" | "default";
 	};
 	consumption: { chargedMicros: number; tokens: number };
 	remaining: { chargedMicros: number; tokens: number };
-	maxOverride: { chargedMicrosCeiling: number; tokenCeiling: number };
+	maxOverride: {
+		chargedMicrosCeiling: number;
+		tokenCeiling: number;
+		perTreeCostMicros: number;
+		perTreeDelegations: number;
+		perTreeMaxDepth: number;
+		loopMaxIterations: number;
+	};
 }
 
 const TIER_LABEL: Record<string, string> = {
@@ -533,12 +555,8 @@ function CeilingGauge({ consumed, ceiling }: { consumed: number; ceiling: number
 }
 
 /**
- * Budget limits card — shows the 24h circuit-breaker ceilings alongside current
- * rolling consumption, and lets the user raise or lower their own override.
- *
- * The ceil values are shown and edited in human-readable units: USD for charged
- * spend, "M tokens" for the token ceiling. The conversion back to micros / raw
- * counts happens on save.
+ * Budget limits card — shows the 24h circuit-breaker ceilings + per-tree run knobs alongside
+ * current rolling consumption, and lets the user raise or lower their own overrides.
  *
  * Null stored override = inheriting from the platform/env/default tier; the field
  * shows the effective value with a "(inherited)" label.
@@ -548,21 +566,27 @@ function BudgetPanel() {
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-
-	// Edit state — undefined = field not touched, null = clear override
-	const [editCharged, setEditCharged] = useState<string>("");
-	const [editTokens, setEditTokens] = useState<string>("");
-	// Whether the user has opened the edit section.
 	const [editing, setEditing] = useState(false);
 	const chargedRef = useRef<HTMLInputElement>(null);
+
+	// Edit state — empty string = clear override (inherit)
+	const [editCharged, setEditCharged] = useState<string>("");
+	const [editTokens, setEditTokens] = useState<string>("");
+	const [editPerTreeCost, setEditPerTreeCost] = useState<string>("");
+	const [editPerTreeDelegations, setEditPerTreeDelegations] = useState<string>("");
+	const [editPerTreeDepth, setEditPerTreeDepth] = useState<string>("");
+	const [editLoopMaxIter, setEditLoopMaxIter] = useState<string>("");
 
 	const loadData = useCallback(async () => {
 		try {
 			const d = await api<BudgetData>("/v1/budget/limits");
 			setData(d);
-			// Populate edit fields from stored values (human-readable).
 			setEditCharged(d.stored.chargedMicrosCeiling !== null ? String(d.stored.chargedMicrosCeiling / 1_000_000) : "");
 			setEditTokens(d.stored.tokenCeiling !== null ? String(d.stored.tokenCeiling / 1_000_000) : "");
+			setEditPerTreeCost(d.stored.perTreeCostMicros !== null ? String(d.stored.perTreeCostMicros / 1_000_000) : "");
+			setEditPerTreeDelegations(d.stored.perTreeDelegations !== null ? String(d.stored.perTreeDelegations) : "");
+			setEditPerTreeDepth(d.stored.perTreeMaxDepth !== null ? String(d.stored.perTreeMaxDepth) : "");
+			setEditLoopMaxIter(d.stored.loopMaxIterations !== null ? String(d.stored.loopMaxIterations) : "");
 		} catch {
 			// Keep last good data.
 		}
@@ -575,20 +599,28 @@ function BudgetPanel() {
 		setSaving(true);
 		setError(null);
 		try {
-			const chargedUsd = editCharged.trim();
-			const tokensM = editTokens.trim();
-			const body: { chargedMicrosCeiling: number | null; tokenCeiling: number | null } = {
-				chargedMicrosCeiling: chargedUsd === "" ? null : Math.round(parseFloat(chargedUsd) * 1_000_000),
-				tokenCeiling: tokensM === "" ? null : Math.round(parseFloat(tokensM) * 1_000_000),
+			const parseUsd = (s: string) => s.trim() === "" ? null : Math.round(parseFloat(s.trim()) * 1_000_000);
+			const parseTokM = (s: string) => s.trim() === "" ? null : Math.round(parseFloat(s.trim()) * 1_000_000);
+			const parseInt_ = (s: string) => s.trim() === "" ? null : Math.floor(parseFloat(s.trim()));
+
+			const body = {
+				chargedMicrosCeiling: parseUsd(editCharged),
+				tokenCeiling: parseTokM(editTokens),
+				perTreeCostMicros: parseUsd(editPerTreeCost),
+				perTreeDelegations: parseInt_(editPerTreeDelegations),
+				perTreeMaxDepth: parseInt_(editPerTreeDepth),
+				loopMaxIterations: parseInt_(editLoopMaxIter),
 			};
-			if (
-				(body.chargedMicrosCeiling !== null && (Number.isNaN(body.chargedMicrosCeiling) || body.chargedMicrosCeiling < 0)) ||
-				(body.tokenCeiling !== null && (Number.isNaN(body.tokenCeiling) || body.tokenCeiling < 0))
-			) {
-				setError("Enter a positive number or leave blank to inherit.");
-				setSaving(false);
-				return;
+
+			// Client-side validation — reject NaN or negative inputs before a round trip.
+			for (const [k, v] of Object.entries(body)) {
+				if (v !== null && (Number.isNaN(v) || v < 0)) {
+					setError(`Enter a positive number for ${k} or leave blank to inherit.`);
+					setSaving(false);
+					return;
+				}
 			}
+
 			const d = await api<BudgetData>("/v1/budget/limits", { method: "PUT", body: JSON.stringify(body) });
 			setData(d);
 			setEditing(false);
@@ -604,51 +636,75 @@ function BudgetPanel() {
 		<Card className="mt-6">
 			<div className="flex items-center gap-2 mb-3">
 				<Shield size={15} className="text-accent shrink-0" />
-				<h3 className="text-sm font-bold">Daily circuit breakers</h3>
+				<h3 className="text-sm font-bold">Budget limits</h3>
 			</div>
 			<p className="text-xs text-muted mb-4">
-				Two independent ceilings protect against runaway spend. When either trips, new agent runs are refused
-				until it resets (rolling 24h window). <b>Charged spend</b> counts only calls billed to your own API
-				key or paid by the platform — subscription tokens are not dollars and are tracked separately.
+				Daily circuit breakers protect against runaway account spend. Per-tree limits cap what a single
+				autonomous run may do. All fields inherit from the platform default when left blank.
 			</p>
 
 			{data && (
-				<div className="grid sm:grid-cols-2 gap-4 mb-4">
-					{/* Charged spend ceiling */}
-					<div>
-						<div className="flex justify-between items-baseline mb-0.5">
-							<span className="text-xs font-semibold">Charged spend / 24h</span>
-							<span className="text-2xs text-muted-soft">{TIER_LABEL[data.effective.chargedMicrosCeilingTier]}</span>
+				<>
+					{/* ── Daily circuit breakers ───────────────────────────────────── */}
+					<div className="text-2xs uppercase tracking-wide text-muted-soft mb-2 font-semibold">Daily circuit breakers (rolling 24h)</div>
+					<div className="grid sm:grid-cols-2 gap-4 mb-4">
+						<div>
+							<div className="flex justify-between items-baseline mb-0.5">
+								<span className="text-xs font-semibold">Charged spend</span>
+								<span className="text-2xs text-muted-soft">{TIER_LABEL[data.effective.chargedMicrosCeilingTier]}</span>
+							</div>
+							<div className="flex justify-between items-baseline text-xs text-muted">
+								<span>{usd(data.consumption.chargedMicros)} used</span>
+								<span className="tabular-nums">{usd(data.effective.chargedMicrosCeiling)} ceiling</span>
+							</div>
+							<CeilingGauge consumed={data.consumption.chargedMicros} ceiling={data.effective.chargedMicrosCeiling} />
+							<div className="text-2xs text-muted-soft mt-1">{usd(data.remaining.chargedMicros)} remaining</div>
 						</div>
-						<div className="flex justify-between items-baseline text-xs text-muted">
-							<span>{usd(data.consumption.chargedMicros)} used</span>
-							<span className="tabular-nums">{usd(data.effective.chargedMicrosCeiling)} ceiling</span>
-						</div>
-						<CeilingGauge consumed={data.consumption.chargedMicros} ceiling={data.effective.chargedMicrosCeiling} />
-						<div className="text-2xs text-muted-soft mt-1">
-							{usd(data.remaining.chargedMicros)} remaining
+						<div>
+							<div className="flex justify-between items-baseline mb-0.5">
+								<span className="text-xs font-semibold">Tokens</span>
+								<span className="text-2xs text-muted-soft">{TIER_LABEL[data.effective.tokenCeilingTier]}</span>
+							</div>
+							<div className="flex justify-between items-baseline text-xs text-muted">
+								<span>{tok(data.consumption.tokens)} used</span>
+								<span className="tabular-nums">{tok(data.effective.tokenCeiling)} ceiling</span>
+							</div>
+							<CeilingGauge consumed={data.consumption.tokens} ceiling={data.effective.tokenCeiling} />
+							<div className="text-2xs text-muted-soft mt-1">{tok(data.remaining.tokens)} remaining</div>
 						</div>
 					</div>
 
-					{/* Token ceiling */}
-					<div>
-						<div className="flex justify-between items-baseline mb-0.5">
-							<span className="text-xs font-semibold">Tokens / 24h</span>
-							<span className="text-2xs text-muted-soft">{TIER_LABEL[data.effective.tokenCeilingTier]}</span>
-						</div>
-						<div className="flex justify-between items-baseline text-xs text-muted">
-							<span>{tok(data.consumption.tokens)} used</span>
-							<span className="tabular-nums">{tok(data.effective.tokenCeiling)} ceiling</span>
-						</div>
-						<CeilingGauge consumed={data.consumption.tokens} ceiling={data.effective.tokenCeiling} />
-						<div className="text-2xs text-muted-soft mt-1">
-							{tok(data.remaining.tokens)} remaining
-						</div>
+					{/* ── Per-tree run knobs ───────────────────────────────────────── */}
+					<div className="text-2xs uppercase tracking-wide text-muted-soft mb-2 font-semibold">Per-run limits (single delegation tree)</div>
+					<div className="grid sm:grid-cols-2 gap-4 mb-4">
+						<RunKnob
+							label="Spend budget"
+							value={usd(data.effective.perTreeCostMicros)}
+							tier={data.effective.perTreeCostMicrosTier}
+							note="Max a single tree may spend in AI calls."
+						/>
+						<RunKnob
+							label="Delegations"
+							value={String(data.effective.perTreeDelegations)}
+							tier={data.effective.perTreeDelegationsTier}
+							note="Max sub-tasks a tree may hand off to child agents."
+						/>
+						<RunKnob
+							label="Max depth"
+							value={String(data.effective.perTreeMaxDepth)}
+							tier={data.effective.perTreeMaxDepthTier}
+							note="How many supervisor hops deep a chain may go."
+						/>
+						<RunKnob
+							label="Loop max iterations"
+							value={String(data.effective.loopMaxIterations)}
+							tier={data.effective.loopMaxIterationsTier}
+							note="Max turns an autonomous Loop may run before stopping."
+						/>
 					</div>
-				</div>
+				</>
 			)}
 
-			{/* Edit section */}
 			{!editing ? (
 				<Button
 					variant="secondary"
@@ -660,10 +716,12 @@ function BudgetPanel() {
 			) : (
 				<div className="border-t border-line pt-4 mt-2">
 					<p className="text-xs text-muted mb-3">
-						Enter your own ceiling or leave blank to inherit from the platform default. Leave blank to
-						clear your override. Max: {usd(data?.maxOverride.chargedMicrosCeiling ?? 10_000_000_000)} / {tok((data?.maxOverride.tokenCeiling ?? 100_000_000_000))}.
+						Leave any field blank to inherit from the platform default. All values are clamped to the
+						platform maximum on save.
 					</p>
-					<div className="grid sm:grid-cols-2 gap-3 mb-3">
+
+					<div className="text-2xs uppercase tracking-wide text-muted-soft mb-2 font-semibold">Daily circuit breakers</div>
+					<div className="grid sm:grid-cols-2 gap-3 mb-4">
 						<div>
 							<label className="text-xs font-semibold block mb-1" htmlFor="budget-charged">
 								Charged spend ceiling (USD / 24h)
@@ -696,6 +754,71 @@ function BudgetPanel() {
 							/>
 						</div>
 					</div>
+
+					<div className="text-2xs uppercase tracking-wide text-muted-soft mb-2 font-semibold">Per-run limits</div>
+					<div className="grid sm:grid-cols-2 gap-3 mb-3">
+						<div>
+							<label className="text-xs font-semibold block mb-1" htmlFor="budget-pertree-cost">
+								Spend budget per run (USD)
+							</label>
+							<input
+								id="budget-pertree-cost"
+								type="number"
+								min={0}
+								step={1}
+								placeholder={data ? `${(data.effective.perTreeCostMicros / 1_000_000).toFixed(0)} (inherited)` : ""}
+								value={editPerTreeCost}
+								onChange={(e) => setEditPerTreeCost(e.target.value)}
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-panel focus:outline-none focus:border-accent"
+							/>
+						</div>
+						<div>
+							<label className="text-xs font-semibold block mb-1" htmlFor="budget-pertree-delegations">
+								Delegations per run
+							</label>
+							<input
+								id="budget-pertree-delegations"
+								type="number"
+								min={0}
+								step={1}
+								placeholder={data ? String(data.effective.perTreeDelegations) + " (inherited)" : ""}
+								value={editPerTreeDelegations}
+								onChange={(e) => setEditPerTreeDelegations(e.target.value)}
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-panel focus:outline-none focus:border-accent"
+							/>
+						</div>
+						<div>
+							<label className="text-xs font-semibold block mb-1" htmlFor="budget-pertree-depth">
+								Max delegation depth
+							</label>
+							<input
+								id="budget-pertree-depth"
+								type="number"
+								min={0}
+								step={1}
+								placeholder={data ? String(data.effective.perTreeMaxDepth) + " (inherited)" : ""}
+								value={editPerTreeDepth}
+								onChange={(e) => setEditPerTreeDepth(e.target.value)}
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-panel focus:outline-none focus:border-accent"
+							/>
+						</div>
+						<div>
+							<label className="text-xs font-semibold block mb-1" htmlFor="budget-loop-max-iter">
+								Loop max iterations
+							</label>
+							<input
+								id="budget-loop-max-iter"
+								type="number"
+								min={0}
+								step={1}
+								placeholder={data ? String(data.effective.loopMaxIterations) + " (inherited)" : ""}
+								value={editLoopMaxIter}
+								onChange={(e) => setEditLoopMaxIter(e.target.value)}
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-panel focus:outline-none focus:border-accent"
+							/>
+						</div>
+					</div>
+
 					{error && <p className="text-xs text-danger mb-2">{error}</p>}
 					<div className="flex gap-2">
 						<Button variant="primary" size="md" onClick={save} disabled={saving}>
@@ -708,5 +831,19 @@ function BudgetPanel() {
 				</div>
 			)}
 		</Card>
+	);
+}
+
+/** Display a single read-only run-knob with its tier label and a note. */
+function RunKnob({ label, value, tier, note }: { label: string; value: string; tier: string; note: string }) {
+	return (
+		<div>
+			<div className="flex justify-between items-baseline mb-0.5">
+				<span className="text-xs font-semibold">{label}</span>
+				<span className="text-2xs text-muted-soft">{TIER_LABEL[tier] ?? tier}</span>
+			</div>
+			<div className="text-sm font-bold tabular-nums">{value}</div>
+			<div className="text-2xs text-muted-soft mt-0.5">{note}</div>
+		</div>
 	);
 }

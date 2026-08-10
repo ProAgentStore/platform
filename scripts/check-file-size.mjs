@@ -764,7 +764,19 @@ const PINS = {
 	// thing only a route can do. The RULE is pure and tested in lib/tool-refusal.ts, and the
 	// whole-definition check in lib/pipeline-tool-policy.ts, which is where a split would have put
 	// it anyway; the enforcing gate is in `runRegistryTool`, not here.
-	"workers/api/src/routes/tools.ts": 1057,
+	// +2 at #477: `resolveAccountCeilings` imported and called in the loop route so the per-account
+	// loop-iterations ceiling is passed to `sanitizeMaxIterations`. One import, one await, one arg.
+	"workers/api/src/routes/tools.ts": 1059,
+	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
+	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
+	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
+	// so splitting it would put the two halves of the same user action in separate files.
+	"store/console/src/pages/Usage.tsx": 850,
+	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
+	// catch it because it was not tracked. Adding the entry to record the current state; the right
+	// split is the connector-level supervision vs. the agent-direction store, when this file grows
+	// again and the split has a natural seam.
+	"workers/api/src/lib/connectors/supervision.ts": 867,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -778,7 +790,8 @@ const PINS = {
 	// wants to be its own data module — see the paragraph above for the split when it is worth it.
 	// +5 for #468: the two pins above, and the note saying why they moved.
 	// +7 for #469 (the pin above and its note).
-	"scripts/check-file-size.mjs": 862,
+	// +13 at #477: three new PINS entries (Usage.tsx, supervision.ts, tools.ts raise) + their reasons.
+	"scripts/check-file-size.mjs": 875,
 };
 
 /**

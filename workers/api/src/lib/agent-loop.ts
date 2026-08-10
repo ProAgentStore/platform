@@ -51,10 +51,16 @@ export interface LoopVerdict {
 	message?: string;
 }
 
-/** Clamp a caller-supplied iteration cap into something a durable runner can honour. */
-export function sanitizeMaxIterations(raw: unknown): number {
+/**
+ * Clamp a caller-supplied iteration cap into something a durable runner can honour.
+ *
+ * `cap` is the per-account maximum resolved from account_budget_limits (issue #477).
+ * When omitted it falls back to the hard constant, so old call-sites are unaffected.
+ */
+export function sanitizeMaxIterations(raw: unknown, cap = MAX_ITERATIONS_CAP): number {
+	const effectiveCap = Math.max(1, Math.min(1_000, Math.floor(Number.isFinite(cap as number) ? (cap as number) : MAX_ITERATIONS_CAP)));
 	const n = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : 10;
-	return Math.max(1, Math.min(MAX_ITERATIONS_CAP, n));
+	return Math.max(1, Math.min(effectiveCap, n));
 }
 
 /** Cheap stable hash for instruction-repeat detection. Not security-sensitive. */

@@ -27,8 +27,8 @@ export function sanitizeDecideInput(raw: Partial<LoopDecideInput>): LoopDecideIn
 	return {
 		objective: String(raw.objective ?? "").slice(0, 2000),
 		messages: Array.isArray(raw.messages) ? raw.messages.slice(-20) : [],
-		iteration: Math.max(0, Math.min(50, Number(raw.iteration) || 0)),
-		maxIterations: Math.max(1, Math.min(50, Number(raw.maxIterations) || 10)),
+		iteration: Math.max(0, Math.min(1_000, Number(raw.iteration) || 0)),
+		maxIterations: Math.max(1, Math.min(1_000, Number(raw.maxIterations) || 10)),
 	};
 }
 
