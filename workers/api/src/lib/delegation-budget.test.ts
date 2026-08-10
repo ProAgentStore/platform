@@ -177,7 +177,8 @@ describe("account ceiling vs pool exhaustion — distinguishable, because they m
 		);
 		expect(store).toBeTruthy();
 		// The daily-ceiling refusal must NOT reuse the pool's reason.
-		const ceilingBlock = src.slice(src.indexOf("DAILY_CEILING_MICROS)"), src.indexOf("const res = await env.DB.prepare"));
+		// Anchor: from the first ceiling comparison to the pool UPDATE statement.
+		const ceilingBlock = src.slice(src.indexOf("ceilings.chargedMicrosCeiling)"), src.indexOf("const res = await env.DB.prepare"));
 		expect(ceilingBlock).toContain('reason: "account_ceiling"');
 		expect(ceilingBlock).not.toContain('reason: "cost_exhausted"');
 	});

@@ -8,6 +8,7 @@ import {
 	markExhausted,
 	raiseBudget,
 	reserve,
+	resolveAccountCeilings,
 	settle,
 } from "./delegation-budget-store.js";
 import type { Env } from "../types.js";
@@ -28,6 +29,11 @@ function buildEnv(opts: { changes?: number; row?: Record<string, unknown> | null
 						return {
 							async first() {
 								return opts.row === undefined ? null : opts.row;
+							},
+							// resolveAccountCeilings uses .all() for account_budget_limits.
+							// Return empty results so it falls through to the hard constants.
+							async all() {
+								return { results: [] };
 							},
 							async run() {
 								writes.push({ sql, args });
@@ -361,6 +367,7 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 									if (sql.includes("FROM ai_usage")) throw new Error("D1 down");
 									return openRow({ cost_micros_spent: 0 });
 								},
+								async all() { return { results: [] }; },
 								async run() { return { meta: { changes: 1 } }; },
 							};
 						},
@@ -369,5 +376,137 @@ describe("the account backstop — what a per-tree pool cannot see", () => {
 			},
 		} as unknown as Env;
 		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
+	});
+});
+
+// ── resolveAccountCeilings ────────────────────────────────────────────────────────────────────
+
+/** Build a minimal env whose account_budget_limits table returns the given rows. */
+function envWithLimitRows(
+	rows: Array<{ user_id: string } & Partial<{
+		token_ceiling: number | null;
+		charged_micros_ceiling: number | null;
+		per_tree_cost_micros: number | null;
+		delegations: number | null;
+		max_depth: number | null;
+	}>>,
+	envVars: Partial<Pick<Env, "ACCOUNT_DAILY_CHARGED_MICROS_CEILING" | "ACCOUNT_DAILY_TOKEN_CEILING">> = {},
+	throws = false,
+): Env {
+	return {
+		...envVars,
+		DB: {
+			prepare() {
+				return {
+					bind() {
+						return {
+							async all() {
+								if (throws) throw new Error("D1 down");
+								return { results: rows };
+							},
+						};
+					},
+				};
+			},
+		},
+	} as unknown as Env;
+}
+
+describe("resolveAccountCeilings — four-tier precedence", () => {
+	it("falls through to hard constants when the table is empty", async () => {
+		const c = await resolveAccountCeilings(envWithLimitRows([]), "u1");
+		expect(c.chargedMicrosCeiling).toBe(DAILY_CEILING_MICROS);
+		expect(c.tokenCeiling).toBe(DAILY_TOKEN_CEILING);
+		expect(c.perTreeCostMicros).toBe(DEFAULT_LIMITS.costMicros);
+		expect(c.perTreeDelegations).toBe(DEFAULT_LIMITS.delegations);
+		expect(c.perTreeMaxDepth).toBe(DEFAULT_LIMITS.maxDepth);
+	});
+
+	it("uses the env var at tier 3, above the hard constant", async () => {
+		const c = await resolveAccountCeilings(
+			envWithLimitRows([], { ACCOUNT_DAILY_CHARGED_MICROS_CEILING: "75000000", ACCOUNT_DAILY_TOKEN_CEILING: "300000000" }),
+			"u1",
+		);
+		expect(c.chargedMicrosCeiling).toBe(75_000_000);
+		expect(c.tokenCeiling).toBe(300_000_000);
+	});
+
+	it("platform-default row overrides the env var (tier 2 > tier 3)", async () => {
+		const c = await resolveAccountCeilings(
+			envWithLimitRows(
+				[{ user_id: "__platform__", charged_micros_ceiling: 100_000_000, token_ceiling: 500_000_000 }],
+				{ ACCOUNT_DAILY_CHARGED_MICROS_CEILING: "75000000" },
+			),
+			"u1",
+		);
+		expect(c.chargedMicrosCeiling).toBe(100_000_000);
+		expect(c.tokenCeiling).toBe(500_000_000);
+	});
+
+	it("per-account row overrides the platform default (tier 1 > tier 2)", async () => {
+		const c = await resolveAccountCeilings(
+			envWithLimitRows([
+				{ user_id: "__platform__", charged_micros_ceiling: 100_000_000 },
+				{ user_id: "u1", charged_micros_ceiling: 200_000_000 },
+			]),
+			"u1",
+		);
+		expect(c.chargedMicrosCeiling).toBe(200_000_000);
+	});
+
+	it("a NULL in a per-account row falls through to the next tier for that field", async () => {
+		// Per-account overrides token ceiling only; money ceiling comes from platform default.
+		const c = await resolveAccountCeilings(
+			envWithLimitRows([
+				{ user_id: "__platform__", charged_micros_ceiling: 80_000_000, token_ceiling: null },
+				{ user_id: "u1", charged_micros_ceiling: null, token_ceiling: 400_000_000 },
+			]),
+			"u1",
+		);
+		expect(c.chargedMicrosCeiling).toBe(80_000_000); // from platform row
+		expect(c.tokenCeiling).toBe(400_000_000);        // from per-account row
+	});
+
+	it("clamps an override to the maximum sane value", async () => {
+		const c = await resolveAccountCeilings(
+			envWithLimitRows([{ user_id: "u1", charged_micros_ceiling: 999_999_999_999_999 }]),
+			"u1",
+		);
+		// $10 000 / 24h cap
+		expect(c.chargedMicrosCeiling).toBe(10_000_000_000);
+	});
+
+	it("fails open on a D1 error, falling back to the hard constant", async () => {
+		const c = await resolveAccountCeilings(envWithLimitRows([], {}, true), "u1");
+		expect(c.chargedMicrosCeiling).toBe(DAILY_CEILING_MICROS);
+		expect(c.tokenCeiling).toBe(DAILY_TOKEN_CEILING);
+	});
+
+	it("reserve() reads the effective ceiling rather than the bare constant", async () => {
+		// Use envSpent to build an env with $60 of charged spend (above the $50 hard constant),
+		// but override the platform ceiling to $100 via env var.
+		// reserve() should be ADMITTED, not refused.
+		const env = {
+			ACCOUNT_DAILY_CHARGED_MICROS_CEILING: "100000000", // $100
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind() {
+							return {
+								async first() {
+									if (sql.includes("FROM ai_usage")) return { charged_micros: 60_000_000, tokens: 0 };
+									return openRow({ cost_micros_spent: 0 });
+								},
+								async all() { return { results: [] }; },
+								async run() { return { meta: { changes: 1 } }; },
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		const r = await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
+		// $60 < $100 ceiling → should be admitted
+		expect(r.ok).toBe(true);
 	});
 });

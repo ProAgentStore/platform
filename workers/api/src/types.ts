@@ -104,6 +104,19 @@ export interface Env {
 	 *  The API KEY is vault-stored (user_api_keys, provider "web-search"), never here.
 	 *  A per-call `cx` tool input overrides this default. */
 	WEB_SEARCH_CX?: string;
+	/**
+	 * Deploy-time fallback for the account-wide daily charged-spend circuit breaker
+	 * (issue #474, migration 0113). Slots in at tier 3 — below per-account and
+	 * platform-default D1 overrides, above the hard constant ($50 = 50_000_000).
+	 * Value in USD micros (1_000_000 = $1). Unset = hard constant governs.
+	 */
+	ACCOUNT_DAILY_CHARGED_MICROS_CEILING?: string;
+	/**
+	 * Deploy-time fallback for the account-wide daily token circuit breaker (issue #474,
+	 * migration 0113). Slots in at tier 3 — below per-account and platform-default D1
+	 * overrides, above the hard constant (250_000_000). Unset = hard constant governs.
+	 */
+	ACCOUNT_DAILY_TOKEN_CEILING?: string;
 }
 
 export interface SessionPayload {

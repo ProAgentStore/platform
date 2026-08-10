@@ -74,43 +74,106 @@ function toView(row: BudgetRow): BudgetView {
 const DERIVED_HEADROOM_RUNS = 25;
 
 /**
- * Account-wide ceiling over a rolling 24h, in USD micros — of CHARGED spend only.
+ * Hard-floor constants for the account-wide daily circuit breakers.
  *
- * The per-tree pool bounds ONE runaway. It cannot see a thousand small ones — each opens its own
- * budget, each stays inside it, and the account still bleeds. This is the backstop for that,
- * checked at admission so an exhausted account cannot open new work rather than being discovered
- * on a bill. Generous on purpose: it is a circuit breaker, not a quota.
+ * These are never changed at runtime — they are the bottom of the resolution stack:
+ *   1. per-account D1 row  (account_budget_limits WHERE user_id = <uid>)
+ *   2. platform-default D1 row  (account_budget_limits WHERE user_id = '__platform__')
+ *   3. env var  (ACCOUNT_DAILY_CHARGED_MICROS_CEILING / ACCOUNT_DAILY_TOKEN_CEILING)
+ *   4. these constants  ← always the safe fallback
  *
- * "Rather than being discovered on a bill" is the whole justification, and it is exactly what
- * #343 broke. The ledger's `cost_micros` is notional value on every row — tokens × list price —
- * and this summed all of it. A day of coding whose engine ran on the owner's Claude subscription
- * accrued $48.76 of value against a $50 money ceiling, and the next delegation was refused with
- * "the $50.00 daily spend limit has been hit". There was no bill to discover. The user opened the
- * Console usage page looking for the $50 and found nothing, because nothing had been spent.
- *
- * So it now reads `chargedMicros` — rows whose `payer` (migration 0092) is a real charge. The
- * denomination is the fix, not the threshold: raising $50 to $200 would have bought a few more
- * hours before the same wall, and the wall would still have been made of money nobody owed.
+ * Money ceiling: $50 / 24h of CHARGED spend only (see #343 — notional list-price value
+ * from subscription engines was counted before, triggering the breaker with no bill).
+ * Token ceiling: 250M / 24h, all tokens regardless of payer, because a runaway on a
+ * subscription key consumes tokens not dollars.
  */
 export const DAILY_CEILING_MICROS = 50_000_000; // $50 / 24h of CHARGED spend
-
-/**
- * Account-wide ceiling over the same rolling 24h, in TOKENS.
- *
- * The money ceiling stopped counting non-money, which would otherwise have left subscription and
- * unattributed engine work bounded by nothing at all — a runaway loop on a subscription engine
- * would never have tripped the account backstop. It is not unbounded; it is bounded in the unit it
- * actually consumes, which is also the unit a subscription's own allowance is denominated in
- * (a rolling 5h + weekly token window, per Anthropic's docs).
- *
- * Sized against the incident it is named for, deliberately far above it: the whole day in #343 was
- * 13.4M tokens of ordinary hard work. 250M is roughly eighteen such days compressed into one — a
- * shape no human working session has, which is what a circuit breaker is supposed to catch. All
- * tokens count, charged or not: consumption is consumption, and a runaway on an API key is the
- * same runaway.
- */
 export const DAILY_TOKEN_CEILING = 250_000_000;
 const DAILY_WINDOW_HOURS = 24;
+
+/** Maximum value an operator may store in account_budget_limits (sane cap, not unbounded). */
+const MAX_OVERRIDE_CHARGED_MICROS = 10_000_000_000; // $10 000 / 24h
+const MAX_OVERRIDE_TOKEN_CEILING = 100_000_000_000; // 100B tokens / 24h
+const MAX_OVERRIDE_PER_TREE_MICROS = 1_000_000_000; // $1 000 per tree
+
+interface BudgetLimitRow {
+	user_id: string;
+	token_ceiling: number | null;
+	charged_micros_ceiling: number | null;
+	per_tree_cost_micros: number | null;
+	delegations: number | null;
+	max_depth: number | null;
+}
+
+interface EffectiveCeilings {
+	chargedMicrosCeiling: number;
+	tokenCeiling: number;
+	/** The ceiling passed to sanitizeLimits in openBudget (per-tree). */
+	perTreeCostMicros: number;
+	perTreeDelegations: number;
+	perTreeMaxDepth: number;
+}
+
+/**
+ * Resolve the effective account-level ceilings for one user (issue #474, migration 0113).
+ *
+ * Resolution order (first non-null wins per field):
+ *   1. per-account D1 row
+ *   2. platform-default D1 row  (user_id = '__platform__')
+ *   3. env var
+ *   4. hard constant
+ *
+ * Fails open: any D1 error falls through to the env/constant tier. A D1 blip must not
+ * freeze every agent just because the ceiling table is momentarily unreachable.
+ */
+export async function resolveAccountCeilings(
+	env: Pick<Env, "DB" | "ACCOUNT_DAILY_CHARGED_MICROS_CEILING" | "ACCOUNT_DAILY_TOKEN_CEILING">,
+	userId: string,
+): Promise<EffectiveCeilings> {
+	let perAccount: BudgetLimitRow | null = null;
+	let platform: BudgetLimitRow | null = null;
+	try {
+		const rows = await env.DB.prepare(
+			`SELECT user_id, token_ceiling, charged_micros_ceiling, per_tree_cost_micros, delegations, max_depth
+			   FROM account_budget_limits
+			  WHERE user_id IN (?1, '__platform__')`,
+		)
+			.bind(userId)
+			.all<BudgetLimitRow>();
+		for (const r of rows.results ?? []) {
+			if (r.user_id === userId) perAccount = r;
+			else platform = r;
+		}
+	} catch {
+		// Table absent (migration not yet applied) or D1 blip — fall through to env/constant.
+	}
+
+	const pick = (
+		field: keyof Omit<BudgetLimitRow, "user_id">,
+		envVal: string | undefined,
+		hardConstant: number,
+		max: number,
+	): number => {
+		const raw =
+			(perAccount as BudgetLimitRow | null)?.[field] ??
+			(platform as BudgetLimitRow | null)?.[field] ??
+			null;
+		if (raw !== null && Number.isFinite(raw) && raw > 0) return Math.min(Math.floor(raw), max);
+		if (envVal !== undefined) {
+			const n = Number(envVal);
+			if (Number.isFinite(n) && n > 0) return Math.min(Math.floor(n), max);
+		}
+		return hardConstant;
+	};
+
+	return {
+		chargedMicrosCeiling: pick("charged_micros_ceiling", env.ACCOUNT_DAILY_CHARGED_MICROS_CEILING, DAILY_CEILING_MICROS, MAX_OVERRIDE_CHARGED_MICROS),
+		tokenCeiling: pick("token_ceiling", env.ACCOUNT_DAILY_TOKEN_CEILING, DAILY_TOKEN_CEILING, MAX_OVERRIDE_TOKEN_CEILING),
+		perTreeCostMicros: pick("per_tree_cost_micros", undefined, DEFAULT_LIMITS.costMicros, MAX_OVERRIDE_PER_TREE_MICROS),
+		perTreeDelegations: pick("delegations", undefined, DEFAULT_LIMITS.delegations, 10_000),
+		perTreeMaxDepth: pick("max_depth", undefined, DEFAULT_LIMITS.maxDepth, 20),
+	};
+}
 
 /**
  * Open a pool for a new delegation tree.
@@ -123,6 +186,9 @@ const DAILY_WINDOW_HOURS = 24;
  *
  * Limits are clamped to the ceiling either way — an agent asking for more than the maximum gets
  * the maximum, because raising a budget is a human action.
+ *
+ * The ceiling itself is now resolved from D1 (per-account → platform-default → env → constant)
+ * so an operator can raise the per-tree limit for power users without a deploy (#474).
  */
 export async function openBudget(
 	env: Env,
@@ -135,12 +201,17 @@ export async function openBudget(
 	// point is that a user whose real runs cost more than the placeholder is not cut off at it.
 	// A caller-supplied number is still clamped; it is just clamped to a ceiling informed by
 	// measurement rather than by a guess.
-	let ceiling = DEFAULT_LIMITS;
+	const accountCeilings = await resolveAccountCeilings(env, userId);
+	let ceiling: BudgetLimits = {
+		costMicros: accountCeilings.perTreeCostMicros,
+		delegations: accountCeilings.perTreeDelegations,
+		maxDepth: accountCeilings.perTreeMaxDepth,
+	};
 	let effective = requested;
 	const p95 = await spendPercentileMicros(env, userId, { percentile: 0.95 });
 	if (p95 !== null && p95 > 0) {
-		const derived = Math.max(DEFAULT_LIMITS.costMicros, p95 * DERIVED_HEADROOM_RUNS);
-		ceiling = { ...DEFAULT_LIMITS, costMicros: derived };
+		const derived = Math.max(ceiling.costMicros, p95 * DERIVED_HEADROOM_RUNS);
+		ceiling = { ...ceiling, costMicros: derived };
 		if (requested?.costMicros === undefined) effective = { ...requested, costMicros: derived };
 	}
 	const limits = sanitizeLimits(effective, ceiling);
@@ -210,8 +281,14 @@ export async function reserve(
 	// tree pool open for what is a transient account-level fact, and a second reason string would
 	// silently lose them that (they would markExhausted a pool with headroom left, the exact
 	// regression the reason code was introduced to fix).
-	const window = await accountUsageSince(env, userId, DAILY_WINDOW_HOURS);
-	if (window.chargedMicros >= DAILY_CEILING_MICROS) {
+	//
+	// Ceilings are resolved from D1 (per-account → platform-default → env → constant) so an
+	// operator can adjust them without a deploy (#474, migration 0113).
+	const [window, ceilings] = await Promise.all([
+		accountUsageSince(env, userId, DAILY_WINDOW_HOURS),
+		resolveAccountCeilings(env, userId),
+	]);
+	if (window.chargedMicros >= ceilings.chargedMicrosCeiling) {
 		return {
 			ok: false,
 			reason: "account_ceiling",
@@ -220,19 +297,19 @@ export async function reserve(
 			// the figure that tripped it was never on any bill.
 			message:
 				`Stopped: ${formatMicros(window.chargedMicros)} of charged AI spend in the last ${DAILY_WINDOW_HOURS}h across all your runs, ` +
-				`against a ${formatMicros(DAILY_CEILING_MICROS)} account circuit breaker. That counts only calls billed to your own provider ` +
+				`against a ${formatMicros(ceilings.chargedMicrosCeiling)} account circuit breaker. That counts only calls billed to your own provider ` +
 				`API key or paid by the platform — subscription and unattributed coding-engine usage is excluded, because it is tokens rather ` +
-				`than money. See Usage for the breakdown; it resets as older usage ages out.`,
+				`than money. See Usage for the breakdown; it resets as older usage ages out. To raise this limit, ask your platform operator.`,
 		};
 	}
-	if (window.tokens >= DAILY_TOKEN_CEILING) {
+	if (window.tokens >= ceilings.tokenCeiling) {
 		return {
 			ok: false,
 			reason: "account_ceiling",
 			message:
 				`Stopped: ${formatTokens(window.tokens)} tokens consumed in the last ${DAILY_WINDOW_HOURS}h across all your runs, against a ` +
-				`${formatTokens(DAILY_TOKEN_CEILING)} account circuit breaker. This one is in tokens, not dollars, because most coding-engine ` +
-				`work draws a subscription allowance rather than a bill. It resets as older usage ages out.`,
+				`${formatTokens(ceilings.tokenCeiling)} account circuit breaker. This one is in tokens, not dollars, because most coding-engine ` +
+				`work draws a subscription allowance rather than a bill. It resets as older usage ages out. To raise this limit, ask your platform operator.`,
 		};
 	}
 
