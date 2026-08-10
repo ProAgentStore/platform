@@ -123,6 +123,29 @@ function DailyChart({ daily, metric }: { daily: Day[]; metric: "cost" | "tokens"
 	);
 }
 
+/**
+ * Token display for a breakdown row.
+ *
+ * For rows with cache tokens (always present on engine rows; sometimes on chat/apply)
+ * we show the TOTAL that the cost figure was computed on — input + output + cache read
+ * + cache write — because dividing cost by only input+output gives a nonsense per-token
+ * rate (the "40x list price" symptom in #479). A small "+cache" badge makes the column
+ * header honest: the reader can see the number includes more than plain I/O.
+ */
+function TokenCell({ r }: { r: Bucket }) {
+	const cache = (r.cacheReadTokens ?? 0) + (r.cacheWriteTokens ?? 0);
+	const total = r.inputTokens + r.outputTokens + cache;
+	if (cache === 0) {
+		return <span className="w-20 text-right shrink-0 tabular-nums text-muted-soft text-xs">{tok(total)}</span>;
+	}
+	return (
+		<span className="w-20 text-right shrink-0 text-xs flex flex-col items-end leading-tight">
+			<span className="tabular-nums text-muted-soft">{tok(total)}</span>
+			<span className="text-2xs text-muted-soft/60">+cache</span>
+		</span>
+	);
+}
+
 /** Horizontal breakdown bars, biggest first, sized by cost (falls back to tokens when all-free). */
 function Breakdown({ rows, labelOf }: { rows: Bucket[]; labelOf: (b: Bucket) => string }) {
 	const useCost = rows.some((r) => r.costMicros > 0);
@@ -138,7 +161,7 @@ function Breakdown({ rows, labelOf }: { rows: Bucket[]; labelOf: (b: Bucket) => 
 						<div className="h-full bg-accent/70 rounded" style={{ width: `${Math.max(2, (val(r) / max) * 100)}%` }} />
 					</div>
 					<span className="w-16 text-right shrink-0 tabular-nums text-muted">{usd(r.costMicros)}</span>
-					<span className="w-14 text-right shrink-0 tabular-nums text-muted-soft text-xs">{tok(r.inputTokens + r.outputTokens)}</span>
+					<TokenCell r={r} />
 				</div>
 			))}
 		</div>
@@ -243,7 +266,10 @@ export default function Usage() {
 						    read this page as a bill, and then to enforce one. The full list value is
 						    still shown, one line down, where it cannot be mistaken for what is owed. */}
 						<Stat label="Est. billed" value={usd(totals.chargedCostMicros ?? totals.costMicros)} accent />
-						<Stat label="Total tokens" value={tok(totals.inputTokens + totals.outputTokens)} />
+						{/* Total tokens: include cache when present so the headline matches what cost
+						    was computed on. Engine rows include cache read/write in their cost_micros
+						    (#479), so showing only I/O here made "tokens" and "cost" irreconcilable. */}
+						<Stat label="Total tokens" value={tok(totals.inputTokens + totals.outputTokens + (totals.cacheReadTokens || 0) + (totals.cacheWriteTokens || 0))} />
 						<Stat label="Input · Output" value={`${tok(totals.inputTokens)} · ${tok(totals.outputTokens)}`} />
 						{/* Cache hit rate — read ÷ (input + read). The number that says whether prompt
 						    caching is actually working; a read costs a tenth of a fresh input token,
@@ -257,13 +283,13 @@ export default function Usage() {
 					</div>
 					<div className="text-xs text-muted-soft -mt-2 mb-4">
 						{cacheHitRate !== null && (
-							<>{totals.calls.toLocaleString()} AI calls · {tok(totals.cacheReadTokens || 0)} tokens served from cache at a tenth of the input price. </>
+							<>{totals.calls.toLocaleString()} AI calls · token total includes {tok(totals.cacheReadTokens || 0)} cache-read + {tok(totals.cacheWriteTokens || 0)} cache-write (counted separately because cache reads cost a tenth of a fresh input token). </>
 						)}
 						{/* The two figures are never added together, and this line is where that is
 						    said. Total list value is the answer to "what would this have cost on the
 						    API?" — a genuinely useful number, and not one anybody owes. */}
 						{totals.chargedCostMicros !== undefined && totals.chargedCostMicros !== totals.costMicros && (
-							<>{usd(totals.costMicros)} of list-price value in total, of which {usd(totals.chargedCostMicros)} is charged to someone.</>
+							<>{usd(totals.costMicros)} of list-price value in total (<b>value</b> = notional list price of all AI; <b>charged</b> = real payer money), of which {usd(totals.chargedCostMicros)} is charged to someone.</>
 						)}
 					</div>
 
@@ -312,12 +338,19 @@ export default function Usage() {
 							    Naming them apart in the legend is not enough — the reason has to be at
 							    the point of comparison, or "Coding (Pilot)" looks like the cost of
 							    coding. The fuller caveat lives in <Scope />; this is the one line that
-							    stops the two rows being misread as duplicates. */}
+							    stops the two rows being misread as duplicates.
+							    The costing-method note (#479): engine cost is CLI-reported and INCLUDES
+							    cache read/write tokens, so the per-token rate looks high when "Tokens"
+							    only showed I/O. The token column now shows total (I/O + cache) for rows
+							    that have cache data, with a "+cache" badge. The note below makes the
+							    two costing methods legible side by side. */}
 							{hasCodingUsage && (
 								<p className="text-xs text-muted-soft mt-3 pt-3 border-t border-line">
 									<b>Coding (Pilot)</b> is the cloud deciding what to tell the engine to do. <b>Coding engine</b> is the CLI
-									doing it, priced by the CLI at list rates — an estimate like the rest, and usually one nobody is charged.
-									Codex and Grok report nothing, so they appear here at all only via the Pilot.
+									doing it — cost is <b>CLI-reported (includes cache read/write tokens)</b>, which is why its token
+									count shows "+cache". All other rows are <b>list-price estimated</b> from the tokens the platform
+									counted. Both are estimates; neither is a bill.
+									{" "}Codex and Grok report nothing, so they appear here only via the Pilot.
 								</p>
 							)}
 						</Card>
