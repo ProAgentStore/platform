@@ -19,6 +19,7 @@ import {
 	resolveAccountCeilings,
 	DAILY_CEILING_MICROS,
 	DAILY_TOKEN_CEILING,
+	isBudgetEnforced,
 } from "../lib/delegation-budget-store.js";
 import { DEFAULT_LIMITS } from "../lib/delegation-budget.js";
 import { MAX_ITERATIONS_CAP } from "../lib/agent-loop.js";
@@ -106,6 +107,7 @@ function buildResponse(
 	ceilings: Awaited<ReturnType<typeof resolveAccountCeilings>>,
 	window: { chargedMicros: number; tokens: number },
 	env: Pick<Env, "ACCOUNT_DAILY_CHARGED_MICROS_CEILING" | "ACCOUNT_DAILY_TOKEN_CEILING">,
+	enforced: boolean,
 ) {
 	const chargedTier = resolveTier(
 		perAccountRow?.charged_micros_ceiling ?? null,
@@ -194,6 +196,11 @@ function buildResponse(
 			perTreeMaxDepth: MAX_PER_TREE_DEPTH,
 			loopMaxIterations: MAX_LOOP_ITERATIONS,
 		},
+		/**
+		 * Whether these ceilings are currently enforced. When false the limits are stored and
+		 * metered but never block a run (observe-only, see BUDGET_ENFORCE).
+		 */
+		enforced,
 	};
 }
 
@@ -214,7 +221,7 @@ budgetRoutes.get("/limits", async (c) => {
 		accountUsageSince(c.env, uid, 24),
 	]);
 
-	return c.json(buildResponse(perAccountRow, platformRow, ceilings, window, c.env));
+	return c.json(buildResponse(perAccountRow, platformRow, ceilings, window, c.env, isBudgetEnforced(c.env)));
 });
 
 /**
@@ -277,7 +284,7 @@ budgetRoutes.put("/limits", async (c) => {
 		accountUsageSince(c.env, uid, 24),
 	]);
 
-	return c.json(buildResponse(perAccountRow, platformRow, ceilings, window, c.env));
+	return c.json(buildResponse(perAccountRow, platformRow, ceilings, window, c.env, isBudgetEnforced(c.env)));
 });
 
 /** Parse a value as null (when absent/null) or a clamped positive integer. Throws 400 on bad input. */

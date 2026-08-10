@@ -8205,6 +8205,9 @@ paths:
                       perTreeDelegations: { type: integer }
                       perTreeMaxDepth: { type: integer }
                       loopMaxIterations: { type: integer }
+                  enforced:
+                    type: boolean
+                    description: "Whether these ceilings are currently enforced. When false the limits are stored and metered but never block a run (observe-only, see BUDGET_ENFORCE)."
         "401": { $ref: "#/components/responses/Unauthorized" }
     put:
       summary: Set account budget limits
@@ -8248,11 +8251,16 @@ paths:
                   description: "New Loop max-iterations cap, or null to inherit."
       responses:
         "200":
-          description: Re-resolved effective values after the write
+          description: Re-resolved effective values after the write (same shape as GET 200)
           content:
             application/json:
               schema:
                 type: object
+                description: Same shape as GET /v1/budget/limits 200 response.
+                properties:
+                  enforced:
+                    type: boolean
+                    description: "Whether these ceilings are currently enforced. When false the limits are stored and metered but never block a run (observe-only, see BUDGET_ENFORCE)."
                 additionalProperties: true
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }

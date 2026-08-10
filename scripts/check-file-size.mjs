@@ -771,7 +771,9 @@ const PINS = {
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
 	// so splitting it would put the two halves of the same user action in separate files.
-	"store/console/src/pages/Usage.tsx": 850,
+	// +12 at #486: BudgetPanel adds an observe-only notice (renders when enforced===false from the
+	// new API field), reflecting that daily circuit-breaker ceilings are stored but not yet enforced.
+	"store/console/src/pages/Usage.tsx": 862,
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
@@ -791,7 +793,8 @@ const PINS = {
 	// +5 for #468: the two pins above, and the note saying why they moved.
 	// +7 for #469 (the pin above and its note).
 	// +13 at #477: three new PINS entries (Usage.tsx, supervision.ts, tools.ts raise) + their reasons.
-	"scripts/check-file-size.mjs": 875,
+	// +3 at #486: Usage.tsx raise + its note (the BudgetPanel observe-only notice) + this self-ref.
+	"scripts/check-file-size.mjs": 878,
 };
 
 /**

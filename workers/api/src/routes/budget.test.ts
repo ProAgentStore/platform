@@ -301,3 +301,42 @@ describe("PUT /v1/budget/limits", () => {
 		expect(rows.get("user-1")?.charged_micros_ceiling).toBe(55_000_000);
 	});
 });
+
+// ─── Enforcement state ─────────────────────────────────────────────────────
+
+describe("enforcement state (enforced field)", () => {
+	it("GET returns enforced:false when BUDGET_ENFORCE is absent", async () => {
+		const { app, env } = testApp();
+		// env has no BUDGET_ENFORCE set (undefined by default in testApp).
+		const res = await req(app, env, "GET");
+		expect(res.status).toBe(200);
+		const data = await res.json<{ enforced: boolean }>();
+		expect(data.enforced).toBe(false);
+	});
+
+	it("GET returns enforced:true when BUDGET_ENFORCE is '1'", async () => {
+		const { app, env } = testApp();
+		(env as unknown as Record<string, unknown>).BUDGET_ENFORCE = "1";
+		const res = await req(app, env, "GET");
+		expect(res.status).toBe(200);
+		const data = await res.json<{ enforced: boolean }>();
+		expect(data.enforced).toBe(true);
+	});
+
+	it("PUT returns enforced:false when BUDGET_ENFORCE is absent", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "PUT", { chargedMicrosCeiling: 100_000_000 });
+		expect(res.status).toBe(200);
+		const data = await res.json<{ enforced: boolean }>();
+		expect(data.enforced).toBe(false);
+	});
+
+	it("PUT returns enforced:true when BUDGET_ENFORCE is '1'", async () => {
+		const { app, env } = testApp();
+		(env as unknown as Record<string, unknown>).BUDGET_ENFORCE = "1";
+		const res = await req(app, env, "PUT", { chargedMicrosCeiling: 100_000_000 });
+		expect(res.status).toBe(200);
+		const data = await res.json<{ enforced: boolean }>();
+		expect(data.enforced).toBe(true);
+	});
+});

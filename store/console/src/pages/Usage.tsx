@@ -528,6 +528,8 @@ interface BudgetData {
 		perTreeMaxDepth: number;
 		loopMaxIterations: number;
 	};
+	/** Whether the daily circuit breakers are currently enforced. False = observe-only (BUDGET_ENFORCE off). */
+	enforced: boolean;
 }
 
 const TIER_LABEL: Record<string, string> = {
@@ -642,6 +644,16 @@ function BudgetPanel() {
 				Daily circuit breakers protect against runaway account spend. Per-tree limits cap what a single
 				autonomous run may do. All fields inherit from the platform default when left blank.
 			</p>
+
+			{data && !data.enforced && (
+				<div className="flex items-start gap-2 text-xs text-muted bg-panel border border-line rounded-lg px-3 py-2 mb-4">
+					<Info size={13} className="text-accent shrink-0 mt-0.5" />
+					<span>
+						<b>Observe-only — not currently enforced.</b> Daily spend and token ceilings are metered but
+						never block a run. Per-run structural caps still apply.
+					</span>
+				</div>
+			)}
 
 			{data && (
 				<>
