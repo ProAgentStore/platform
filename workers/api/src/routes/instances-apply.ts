@@ -13,7 +13,7 @@ import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { deriveFromUrl } from "../lib/board.js";
 import { logError } from "../lib/error-log.js";
 import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
-import { patchInstanceConfig } from "../lib/instance-config.js";
+import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
 export class ApplyError extends Error {
@@ -439,6 +439,8 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 				coverNote: typeof body.coverNote === "string" ? body.coverNote : typeof body.cover_note === "string" ? body.cover_note : undefined,
 				dryRun: body.dryRun === true || body.dry_run === true,
 			});
+			// Bump last_activity_at — starting an apply run is a real user-driven event.
+			void touchInstanceActivity(c.env, instanceId, session.uid);
 			return c.json({ workflowId, taskId, status: "running", url }, 202);
 		} catch (e) {
 			if (e instanceof ApplyError) return c.json({ error: e.message }, e.status === 502 ? 502 : 400);

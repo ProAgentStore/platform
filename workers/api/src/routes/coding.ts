@@ -37,7 +37,7 @@ import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-ses
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
-import { patchInstanceConfig } from "../lib/instance-config.js";
+import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
 import { registerPullRoutes } from "./coding-pulls.js";
@@ -186,6 +186,8 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// resume the session they just ended — the one the user is trying to get away from.
 	const continuity = await continuityForNewSession(c.env, instanceId, uid, repoId, clientType, { forceFresh: body.fresh === true });
 	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom });
+	// Bump last_activity_at — starting a coding session is a real user-driven event.
+	void touchInstanceActivity(c.env, instanceId, uid);
 	return c.json({ session, runnerConnected: started.conn != null, resumed: started.resumed, continuity }, 201);
 });
 

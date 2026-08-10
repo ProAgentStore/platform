@@ -60,6 +60,20 @@ export async function patchInstanceConfig(
 	return (res.meta?.changes ?? 0) > 0;
 }
 
+/**
+ * Bump `last_activity_at` to now — call this after any real user-driven event
+ * (chat, task create, apply start, coding session start). Fire-and-forget: a
+ * transient failure must not surface as a request error.
+ */
+export async function touchInstanceActivity(env: Env, instanceId: string, userId: string): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE agent_instances SET last_activity_at = datetime('now') WHERE id = ?1 AND user_id = ?2`,
+	)
+		.bind(instanceId, userId)
+		.run()
+		.catch(() => undefined);
+}
+
 /** Remove `config.<key>` entirely, leaving every other key untouched. */
 export async function removeInstanceConfigKey(
 	env: Env,

@@ -23,6 +23,7 @@ import {
 import { executeTriggerAction } from "../lib/triggers.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { readInstanceConfig } from "./instances-apply.js";
+import { touchInstanceActivity } from "../lib/instance-config.js";
 import {
 	callRuntime,
 	clearFinishedRuntimeTasks,
@@ -207,6 +208,8 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (res.ok) {
 			await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
 			await mirrorTaskLifecycleEvents(c.env, instanceId, session.uid, payload, "created");
+			// Bump last_activity_at — a new task is a real user-driven event.
+			void touchInstanceActivity(c.env, instanceId, session.uid);
 		}
 		return c.json(payload, runtimeStatus(res, 202));
 	});

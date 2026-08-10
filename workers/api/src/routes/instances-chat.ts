@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { logEvent } from "../lib/events.js";
+import { touchInstanceActivity } from "../lib/instance-config.js";
 import { isCredentialsError, runLoopDecide } from "../lib/loop-orchestrator.js";
 import { attachGlossesToMessages } from "./instances-translation.js";
 import {
@@ -101,6 +102,9 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
 			if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: tools.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1 });
 			await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 2 });
+			// Bump last_activity_at — chat is the primary signal for "used recently".
+			// Fire-and-forget: a write failure must not surface as a request error.
+			void touchInstanceActivity(c.env, instanceId, session.uid);
 			await deleteMirroredRuntimeTask(
 				c.env,
 				instanceId,

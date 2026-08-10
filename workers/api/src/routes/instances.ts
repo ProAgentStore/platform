@@ -283,20 +283,24 @@ instanceRoutes.get("/my/instances", async (c) => {
 	const session = await requireUser(c);
 	const includeCanceled = ["1", "true", "yes"].includes((c.req.query("includeCanceled") ?? "").toLowerCase());
 	const { results } = await c.env.DB.prepare(
-		`SELECT i.id, i.agent_id, i.status, i.created_at, i.config AS instance_config,
+		`SELECT i.id, i.agent_id, i.status, i.created_at, i.last_activity_at, i.config AS instance_config,
             a.name, a.slug, a.description, a.category, a.icon, a.icon_bg, a.config
      FROM agent_instances i
      JOIN agents a ON a.id = i.agent_id
      WHERE i.user_id = ?1${includeCanceled ? "" : " AND i.status != 'canceled'"}
-     ORDER BY i.updated_at DESC`,
+     ORDER BY COALESCE(i.last_activity_at, i.updated_at) DESC`,
 	)
 		.bind(session.uid)
 		.all<Record<string, unknown>>();
-	// Attach the resolved capability descriptor so the console renders surfaces
-	// from a declared registry, not by branching on agent slug/category. `config`
-	// (which may hold secrets/internal settings) is dropped from the response.
+	// Attach a LIGHTWEIGHT capability descriptor — surfaces, runtime, workflow are
+	// all a list consumer needs to route/display. The heavy per-agent blobs
+	// (boardColumns: up to 10 objects, settingsSchema: up to 12 fields with option
+	// arrays) are omitted here and remain fetchable per-instance via
+	// GET /v1/agents/:id/settings-schema and GET /v1/instances/:id/settings.
+	//
+	// `config` (which may hold secrets/internal settings) is dropped from the response.
 	const instances = (results ?? []).map((r) => {
-		const { config, instance_config, ...rest } = r;
+		const { config, instance_config, last_activity_at, ...rest } = r;
 		// A user-set (or auto-numbered) per-instance display name overrides the agent
 		// name — how two instances of the same agent stay distinguishable.
 		let displayName: string | undefined;
@@ -304,12 +308,18 @@ instanceRoutes.get("/my/instances", async (c) => {
 			const cfg = instance_config ? (JSON.parse(instance_config as string) as Record<string, unknown>) : {};
 			if (typeof cfg.displayName === "string" && cfg.displayName.trim()) displayName = cfg.displayName.trim();
 		} catch { /* malformed config — keep the agent name */ }
+		// Full capabilities (with boardColumns + settingsSchema) cost ~83 KB for 28
+		// instances. The list only needs the routing fields; heavy config lives on the
+		// per-instance/per-agent detail routes.
+		const fullCaps = agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }, c.env);
+		const { boardColumns: _bc, settingsSchema: _ss, ...lightCaps } = fullCaps;
 		return {
 			...rest,
 			...(displayName ? { name: displayName, agentName: r.name } : {}),
+			lastActivityAt: last_activity_at ?? null,
 			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
 			// console renders tabs from, so it is the path that must consult it.
-			capabilities: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }, c.env),
+			capabilities: lightCaps,
 		};
 	});
 	return c.json({ instances });
