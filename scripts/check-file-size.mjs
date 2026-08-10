@@ -449,7 +449,18 @@ const PINS = {
 	// Anyone tidying `flex-1 basis-0` away as redundant re-creates the defect, and the comment is
 	// the only thing between them and it. The measurements are in the `#431` block in
 	// e2e/console.spec.ts, which now asserts the one-line invariant rather than only recording it.
-	"agents/coder/web/src/CodingTab.tsx": 1314,
+	// +19 for #291: three writes on this tab reported success they had not earned — the work-mode
+	// PUT, the session `start` POST and the clear-history DELETE each `catch {}`-ed and left the
+	// optimistic UI standing, so the toggle showed a mode the server refused, a session with no
+	// Engine looked like an Engine that had not spoken, and an emptied pane meant nothing. What
+	// they now need is a revert, an error slot and a system line apiece. The SENTENCES were pulled
+	// out to ./coding-write-failures.ts (with tests) precisely so this pin would move as little as
+	// possible, which is why it is 19 and not 27; what is left is per-site state and render, and
+	// moving that would mean a component whose only job is to hold one string. Raised rather than
+	// split because the alternative to these lines is the silence they replace: this tab's whole
+	// defect class is that an optimistic update is indistinguishable from a confirmed one, and
+	// every line here exists to make one of the three distinguishable.
+	"agents/coder/web/src/CodingTab.tsx": 1333,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -803,7 +814,10 @@ const PINS = {
 	// +3 at #486: Usage.tsx raise + its note (the BudgetPanel observe-only notice) + this self-ref.
 	// +6 at #491+#482: agent-think + instances raises + their notes + this self-ref.
 	// +3 at #492: InstanceDetail raise + its note + this self-ref (one extra for the self-ref updating the count).
-	"scripts/check-file-size.mjs": 887,
+	// +12 at #291: the CodingTab raise carries an unusually long reason because the triage IS the
+	// deliverable on that issue — it has to record which three writes were silent and why the
+	// sentences moved to a sibling module rather than the pin moving further. Plus this self-ref.
+	"scripts/check-file-size.mjs": 901,
 };
 
 /**

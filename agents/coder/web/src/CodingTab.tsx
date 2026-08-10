@@ -15,6 +15,7 @@ import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
 import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import { useTerminalScrollback } from "./use-terminal-scrollback";
+import { clearHistoryFailureNotice, sessionAttachFailureNotice, workModeSaveFailureNotice } from "./coding-write-failures";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
@@ -147,9 +148,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		return () => { live = false; };
 	}, [instanceId, historyRepoId]);
 
+	// A swallowed save left the toggle showing a mode the server never took (#291). Put it back
+	// and say so — see ./coding-write-failures for why that is the whole fix.
+	const [workModeMsg, setWorkModeMsg] = useState("");
 	const setWorkMode = (mode: "direct" | "issues") => {
+		const previous = workMode;
 		setWorkModeState(mode);
-		api(`/v1/instances/${instanceId}/coding/work-mode`, { method: "PUT", body: JSON.stringify({ workMode: mode }) }).catch(() => {});
+		setWorkModeMsg("");
+		api(`/v1/instances/${instanceId}/coding/work-mode`, { method: "PUT", body: JSON.stringify({ workMode: mode }) }).catch((e) => {
+			setWorkModeState(previous);
+			setWorkModeMsg(workModeSaveFailureNotice(e));
+		});
 	};
 
 	// Loop — a watcher over a server-driven run since #374. (`syncHistory` went with the browser
@@ -420,10 +429,14 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		setView(copilot ? "summary" : "terminal");
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding/${session.id}`, { replace: true });
-		// Ensure session is live
+		// Ensure session is live. A swallowed refusal made "no engine" look like "engine is quiet"
+		// (#291) — see ./coding-write-failures.
+		let startErr = "";
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
-		} catch {}
+		} catch (e) {
+			startErr = sessionAttachFailureNotice(e);
+		}
 		// Two reads, not one `?full=1` (#432). That read shipped the session's ENTIRE typed
 		// timeline — every 8000-char terminal snapshot — so the client could keep the last one and
 		// discard the rest. The chat is unpaged (it always was); the terminal takes the newest
@@ -431,7 +444,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		openTerm(session.id);
 		try {
 			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
-			setSummaryHistory(chatMessagesFrom(d));
+			const history = chatMessagesFrom(d);
+			// The Co-pilot is the default view, so a terminal-only notice would be invisible to
+			// most of the people it is for.
+			setSummaryHistory(startErr ? [...history, { role: "system", content: startErr }] : history);
 		} catch (e) {
 			console.error("[coding] timeline load failed:", e);
 		}
@@ -570,10 +586,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	};
 
+	// The local empty is a CLAIM about the server; only make it once the server agrees (#291).
 	const clearChat = async () => {
 		if (!openSession || !confirm("Clear co-pilot chat history?")) return;
-		try { await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`, { method: "DELETE" }); } catch {}
-		setSummaryHistory([]);
+		try {
+			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`, { method: "DELETE" });
+			setSummaryHistory([]);
+		} catch (e) {
+			setSummaryHistory((prev) => [...prev, { role: "system", content: clearHistoryFailureNotice(e) }]);
+		}
 	};
 
 	const addRepo = async () => {
@@ -1097,6 +1118,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
 						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
 						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
+					</div>
+				)}
+				{workModeMsg && (
+					<div data-testid="work-mode-error" className="bg-danger-soft border border-danger-line text-danger rounded-lg p-2.5 m-2 text-xs font-semibold">
+						{workModeMsg}
 					</div>
 				)}
 				{copilot && view === "summary" && (

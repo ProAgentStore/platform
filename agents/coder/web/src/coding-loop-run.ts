@@ -94,3 +94,26 @@ export function loopStartNotice({ driver, objective, maxIterations }: LoopStart)
 export function loopStartFailureNotice(err: unknown): string {
 	return `Couldn't start the loop: ${err instanceof Error ? err.message : String(err)}`;
 }
+
+/**
+ * Stop was pressed while the start was still in flight, and the cancel that was supposed to undo
+ * it FAILED (#291).
+ *
+ * This is the one ending in `startWith` that had no words, because its error was swallowed. The
+ * sequence is: the POST returns a real run, the user has meanwhile pressed Stop, so the code
+ * cancels the run it just created — the comment there says why in as many words, that flipping a
+ * local flag instead "would leave it driving the engine with nothing watching it". The cancel IS
+ * that mitigation, so swallowing its failure produces precisely the state the mitigation exists to
+ * prevent, and produces it silently: `runId` is never set, the watcher never starts, the Stop
+ * button and the iteration counter never appear — while a Pilot edits the repo and spends the
+ * user's tokens against an objective they withdrew.
+ *
+ * So the failure is not "the stop didn't take". It is that the run becomes UNREACHABLE from the
+ * only screen that can stop it. The caller's answer is therefore to adopt the run back into the
+ * watcher rather than return, and this is the line that explains why a loop the user cancelled is
+ * on screen and still running.
+ */
+export function loopRaceCancelFailureNotice(err: unknown): string {
+	const detail = err instanceof Error ? err.message : String(err);
+	return `You pressed Stop while the loop was starting, and it couldn't be cancelled — it's running. ${detail}\n\nIt's being watched again below, so press Stop to try once more.`.trim();
+}

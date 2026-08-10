@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	issueWasHandled,
 	loopOutcomeNotice,
+	loopRaceCancelFailureNotice,
 	loopRunEnded,
 	loopStartFailureNotice,
 	loopStartNotice,
@@ -102,5 +103,37 @@ describe("loopStartFailureNotice", () => {
 			"already being worked on",
 		);
 		expect(loopStartFailureNotice("boom")).toContain("boom");
+	});
+});
+
+/**
+ * The Stop-during-start race (#291).
+ *
+ * `startWith` cancels the run it just created when Stop was pressed mid-flight, and the reason is
+ * written above that call: flipping a local flag instead "would leave it driving the engine with
+ * nothing watching it". The cancel's failure was swallowed, so the branch produced the exact state
+ * its own comment forbids. These assert the two halves of the fix that a future edit could quietly
+ * undo — that the notice is not silent, and that it does not claim the run stopped.
+ */
+describe("loopRaceCancelFailureNotice", () => {
+	it("says the loop is still RUNNING — never that it stopped", () => {
+		// The wrong fix here is a reassuring string. The user pressed Stop, so every instinct is to
+		// confirm it; but the run survived, and telling them otherwise is the silent swallow with
+		// extra steps. It must contradict their expectation, because reality does.
+		const msg = loopRaceCancelFailureNotice(new Error("503 upstream"));
+		expect(msg).toMatch(/couldn't be cancelled|running/i);
+		expect(msg).not.toMatch(/\bstopped\b|\bcancelled the loop\b/i);
+	});
+
+	it("carries the failure detail and points at the Stop that is now back on screen", () => {
+		// The caller re-adopts the run into the watcher, which is what puts Stop back. The notice
+		// has to say so, or "it's running" is a dead end rather than an instruction.
+		const msg = loopRaceCancelFailureNotice(new Error("503 upstream"));
+		expect(msg).toContain("503 upstream");
+		expect(msg).toMatch(/press stop/i);
+	});
+
+	it("handles a non-Error rejection without printing [object Object]", () => {
+		expect(loopRaceCancelFailureNotice("network down")).toContain("network down");
 	});
 });

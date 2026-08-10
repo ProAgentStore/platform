@@ -395,10 +395,19 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 								setSelected(key);
 								setView("output");
 								// Persist the chosen session so it survives page refresh (#491).
+								// A dropped PUT used to be silent (#291), which is the worst
+								// shape for THIS write: `userPinnedRef` is set above, so the
+								// choice visibly sticks for the rest of the session and only
+								// comes undone on the refresh it was made to survive — the user
+								// learns it failed at the one moment they cannot connect it to
+								// anything they did. Say it now, while the tap is the last thing
+								// that happened.
 								void api(`/v1/instances/${instanceId}/terminal-session`, {
 									method: "PUT",
 									body: JSON.stringify({ activeTerminalTarget: key }),
-								}).catch(() => {});
+								}).catch((e) => {
+									setError(`Couldn't remember ${key} as your ${noun} — it will reset when you reload. ${e instanceof Error ? e.message : String(e)}`);
+								});
 							}}
 								className={`w-full text-left px-2 py-2 rounded-lg border transition-colors ${selected === targetKey(s) ? "border-accent bg-accent-soft" : "border-transparent hover:border-line hover:bg-panel"}`}
 							>

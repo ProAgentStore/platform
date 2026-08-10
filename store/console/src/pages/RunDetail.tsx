@@ -151,6 +151,9 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanceId: string; taskId: string; kind: string; onResume: () => void; onClose: () => void }) {
 	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
 	const [connErr, setConnErr] = useState("");
+	// A failed End, kept separate from `connErr`: that one only renders in place of a missing
+	// frame, and an End typically fails while the frame is arriving perfectly well.
+	const [endErr, setEndErr] = useState("");
 	const imgRef = useRef<HTMLImageElement>(null);
 	const boxRef = useRef<HTMLDivElement>(null);
 	const lastMove = useRef(0);
@@ -239,7 +242,27 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 		else send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
 		setTimeout(poll, 150);
 	};
-	const endTakeover = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/end`, { method: "POST" }).catch(() => {}); onClose(); };
+	/**
+	 * End the takeover — the only control here whose failure is not self-evident on the next frame.
+	 *
+	 * It used to `.catch(() => {})` and then `onClose()` unconditionally (#291), so a failed End
+	 * looked identical to a successful one: the overlay went away. But ending a takeover is what
+	 * hands control back, and the run is PAUSED waiting for exactly that — so the swallow left the
+	 * agent's browser still in takeover, the run still blocked, and the person who was going to
+	 * unblock it now looking at a screen that says they already did. Nothing else would tell them.
+	 *
+	 * So the overlay stays open on failure. It is the only place the End button exists, and closing
+	 * over an error would remove the retry along with the message.
+	 */
+	const endTakeover = async () => {
+		setEndErr("");
+		try {
+			await api(`/v1/instances/${instanceId}/takeover/${taskId}/end`, { method: "POST" });
+			onClose();
+		} catch (e) {
+			setEndErr(`Couldn't end the takeover — the agent still has the browser. ${e instanceof Error ? e.message : String(e)}`);
+		}
+	};
 
 	// Full-screen, non-scrolling overlay: a fixed toolbar + the live frame filling the rest.
 	return (
@@ -261,6 +284,11 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 					<button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">Close ✕</button>
 				</div>
 			</div>
+			{endErr && (
+				<div data-testid="takeover-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">
+					{endErr}
+				</div>
+			)}
 			<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
 				{frame ? (
 					// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.

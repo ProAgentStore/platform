@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import {
 	issueWasHandled,
 	loopOutcomeNotice,
+	loopRaceCancelFailureNotice,
 	loopRunEnded,
 	loopStartFailureNotice,
 	loopStartNotice,
@@ -170,7 +171,20 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 			// Stop pressed while the start was in flight. The run EXISTS now, so flipping a local
 			// flag would leave it driving the engine with nothing watching it — cancel it instead.
 			if (!loopOnRef.current) {
-				await api(`/v1/instances/${instanceId}/loop/${run.runId}/cancel`, { method: "POST" }).catch(() => {});
+				try {
+					await api(`/v1/instances/${instanceId}/loop/${run.runId}/cancel`, { method: "POST" });
+				} catch (e) {
+					// The cancel is the ENTIRE mitigation for the sentence above, and its failure
+					// used to be swallowed (#291) — so the branch written to avoid an unwatched run
+					// created one. Adopt the run instead: it is real and it is driving the engine,
+					// so put it back under the watcher, which restores the counter and the Stop
+					// button. `stop()` takes the same position for the same reason.
+					setLoopOn(true);
+					loopOnRef.current = true;
+					setRunId(run.runId);
+					runIdRef.current = run.runId;
+					emitSystem(loopRaceCancelFailureNotice(e));
+				}
 				return;
 			}
 			emitSystem(loopStartNotice({ driver: run.driver, objective: obj, maxIterations: loopMaxRef.current }));
