@@ -21,6 +21,8 @@ describe("parsing a dispatch table", () => {
 			"\treturn this.handleGetMessages(url);",
 			'if (path.match(/^\\/files\\/[^/]+$/) && request.method === "DELETE")',
 			"\treturn this.withEngine((e) => storageRoutes.deleteFile(e, path));",
+			'if (path === "/knowledge" && request.method === "GET")',
+			"\treturn getKnowledge(this.knowledgeCtx());",
 			'// if (path === "/ghost" && request.method === "GET") return this.handleGhost(url);',
 			'if (path.startsWith("/memory/") && request.method === "DELETE") {',
 			"\treturn this.handleDeleteMemory(path);",
@@ -33,6 +35,9 @@ describe("parsing a dispatch table", () => {
 		expect(arms.map((a) => [a.method, a.handler])).toEqual([
 			["GET", "this.handleGetMessages"],
 			["DELETE", "storageRoutes.deleteFile"],
+			// The dependency it is HANDED (`this.knowledgeCtx()`) is not the handler. Reading it as
+			// one reports the whole knowledge surface as taking no query parameters.
+			["GET", "getKnowledge"],
 			["DELETE", "this.handleDeleteMemory"],
 		]);
 	});

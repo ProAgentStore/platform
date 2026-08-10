@@ -66,8 +66,21 @@ export interface DoRouteArm {
 	matches(path: string): boolean;
 }
 
-/** Names that appear first on a return line without being the handler. */
-const NOT_A_HANDLER = new Set(["json", "decodeURIComponent", "encodeURIComponent", "String", "Number", "await"]);
+/**
+ * Names that appear on a return line without being the handler: response helpers, coercions,
+ * and the string methods used to carve an id out of the path.
+ */
+const NOT_A_HANDLER = new Set([
+	"json",
+	"decodeURIComponent",
+	"encodeURIComponent",
+	"String",
+	"Number",
+	"await",
+	"slice",
+	"split",
+	"match",
+]);
 
 /**
  * Every `if (path …) return …` arm of the DO's dispatch chain, in source order — which is
@@ -100,15 +113,21 @@ export function parseDoRouteTable(src: LexedSource): DoRouteArm[] {
 	return arms;
 }
 
-/** The handler named by a `return …` line, or null when the arm answers inline. */
+/**
+ * The handler named by a `return …` line, or null when the arm answers inline.
+ *
+ * The FIRST call on the line wins, which is the rule the arms are actually written to:
+ * `return getKnowledge(this.knowledgeCtx())` dispatches to `getKnowledge` and merely passes it a
+ * dependency. Preferring a dotted call instead — the first cut — read that arm as dispatching to
+ * `this.knowledgeCtx`, a function with no URL in it, which would have reported every knowledge
+ * route as taking no parameters. `withEngine` is skipped as the wrapper it is, so the handler
+ * inside it is the next call along.
+ */
 function handlerOf(returnLine: string): string | null {
-	// `withEngine` is a wrapper — the handler is the call INSIDE it.
-	const wrapped = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)\(/.exec(returnLine.replace(/this\.withEngine\(/, ""));
-	if (wrapped && wrapped[1] !== "this") return `${wrapped[1]}.${wrapped[2]}`;
-	const method = /this\.([A-Za-z_]\w*)\(/.exec(returnLine);
-	if (method && method[1] !== "withEngine") return `this.${method[1]}`;
-	for (const call of returnLine.matchAll(/(?:^|[\s(=>])([A-Za-z_]\w*)\(/g)) {
-		if (!NOT_A_HANDLER.has(call[1])) return call[1];
+	for (const call of returnLine.matchAll(/(?:([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)\(/g)) {
+		const [, owner, name] = call;
+		if (name === "withEngine" || NOT_A_HANDLER.has(name)) continue;
+		return owner ? `${owner}.${name}` : name;
 	}
 	return null;
 }
