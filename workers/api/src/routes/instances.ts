@@ -17,6 +17,7 @@ import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerTerminalBindingRoutes } from "./instances-terminal.js";
+import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
@@ -881,6 +882,9 @@ registerFileUploadRoutes(instanceRoutes);
 // shape as the `/runner-node` pin above and mounted from its own module for the same reason the
 // others are: this file is already at its size pin.
 registerTerminalBindingRoutes(instanceRoutes);
+// Deployment / build status for any instance — the Operator counterpart to the Coder Build Status
+// panel (#488). Mounted from its own module to keep this file at its size pin.
+registerDeployStatusRoutes(instanceRoutes);
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {

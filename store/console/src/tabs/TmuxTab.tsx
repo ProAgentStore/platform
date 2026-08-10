@@ -5,6 +5,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Clipboard, Keyboard, List, Loader2, Play, Plus, RefreshCw, SlidersHorizontal, SquareTerminal, Terminal, Trash2 } from "lucide-react";
 import { tmuxBusy } from "../lib/pollBusy";
+import DeploymentCard from "../components/DeploymentCard";
 import {
 	captureArgs,
 	createArgs,
@@ -321,6 +322,7 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 	};
 
 	return (
+		<>
 		<div className="flex-1 min-h-0 flex flex-col bg-paper">
 			{/*
 			 * Phone view switch (#370). Below `lg` the grid collapses to one column and all eight
@@ -486,5 +488,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 				</section>
 			</div>
 		</div>
+		<div className="shrink-0 border-t border-line">
+			<DeploymentCard instanceId={instanceId} />
+		</div>
+		</>
 	);
 }

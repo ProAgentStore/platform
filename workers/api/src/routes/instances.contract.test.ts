@@ -61,6 +61,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerTerminalBindingRoutes } from "./instances-terminal.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { instanceRoutes } from "./instances.js";
@@ -250,6 +251,9 @@ const ROUTES = [
 	"DELETE /:instanceId/files/multipart/:uploadId",
 	"GET /:instanceId/terminal-target",
 	"PUT /:instanceId/terminal-target",
+	"GET /:instanceId/deploy-status",
+	"GET /:instanceId/deploy-history",
+	"PUT /:instanceId/deploy-status",
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
@@ -320,6 +324,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-files.ts": registerFileUploadRoutes,
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
+	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-terminal.ts": registerTerminalBindingRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
 };
@@ -389,6 +394,11 @@ const OWNERSHIP: Record<string, string[]> = {
 		"DELETE /:instanceId/tasks/:taskId",
 		"POST /:instanceId/tasks/:taskId/cancel",
 		"GET /:instanceId/task-events",
+	],
+	"instances-deploy.ts": [
+		"GET /:instanceId/deploy-status",
+		"GET /:instanceId/deploy-history",
+		"PUT /:instanceId/deploy-status",
 	],
 	"instances-terminal.ts": ["GET /:instanceId/terminal-target", "PUT /:instanceId/terminal-target"],
 	"instances-translation.ts": [
@@ -517,6 +527,11 @@ const GATES: Record<string, [number, number]> = {
 	// stranger must not read WHICH pane someone else's agent drives, let alone rebind it.
 	"GET /:instanceId/terminal-target": [401, 404],
 	"PUT /:instanceId/terminal-target": [401, 404],
+	// Deployment / build status (#488). Owner-only: a stranger must not see which repo someone
+	// else's instance tracks or read their build history.
+	"GET /:instanceId/deploy-status": [401, 404],
+	"GET /:instanceId/deploy-history": [401, 404],
+	"PUT /:instanceId/deploy-status": [401, 404],
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],

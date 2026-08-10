@@ -4604,6 +4604,126 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ── Deploy / build status (Operator agent counterpart to Coder Build Status) ─
+
+  /v1/instances/{instanceId}/deploy-status:
+    get:
+      summary: Latest GitHub Actions run for the instance's configured repo
+      description: |
+        Returns the latest workflow run for the GitHub repo stored in `config.githubRepo` on
+        the instance. The shape mirrors the per-agent `/v1/agents/{id}/deploy` response so the
+        console can use the same badge and link components. Degrades gracefully: when no repo is
+        configured, `{ repo: null }` is returned; when the GitHub App is not installed or the
+        repo is private and inaccessible, `{ repo, error }` is returned.
+
+        Intended for the Operator agent's Deployment card (polling ≤ 25 s while in-flight,
+        ≥ 120 s when settled). The Coder agent uses the richer coding-surface variants; this
+        route is the lightweight alternative for non-coding agents that only need a status panel.
+      operationId: getInstanceDeployStatus
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Latest run (or null repo when unconfigured)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repo: { type: string, nullable: true, description: "owner/repo slug, or null when not set" }
+                  run:
+                    type: object
+                    nullable: true
+                    description: Latest GitHub Actions workflow run, or null when unavailable
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      status: { type: string, enum: [queued, in_progress, completed] }
+                      conclusion: { type: string, nullable: true }
+                      branch: { type: string }
+                      sha: { type: string }
+                      url: { type: string }
+                      createdAt: { type: string, format: date-time }
+                      updatedAt: { type: string, format: date-time }
+                  error: { type: string, nullable: true, description: "Human-readable reason when the run could not be fetched" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Set (or clear) the GitHub repo for this instance's deploy status
+      description: |
+        Stores `owner/repo` in `config.githubRepo`. Pass `{ repo: "" }` or `{ repo: null }` to
+        clear. Validated against the `owner/repo` format before saving.
+      operationId: setInstanceDeployStatus
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repo: { type: string, nullable: true, description: "owner/repo slug to track, or empty/null to clear" }
+      responses:
+        "200":
+          description: Saved repo slug (or null when cleared)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repo: { type: string, nullable: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/deploy-history:
+    get:
+      summary: Paginated GitHub Actions run history for the instance's configured repo
+      description: |
+        Lists recent workflow runs for the repo stored in `config.githubRepo`. The `repo` query
+        parameter is optional and, when supplied, must match the stored config (validated
+        server-side). Caller supplies `perPage` (1–100, default 15). Useful for the Operator
+        agent's "View history" accordion.
+      operationId: getInstanceDeployHistory
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: repo
+          in: query
+          required: false
+          schema: { type: string }
+          description: "owner/repo slug — must match what is stored in config.githubRepo"
+        - name: perPage
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 15 }
+      responses:
+        "200":
+          description: Run list (may be empty when the repo has no runs)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        status: { type: string }
+                        conclusion: { type: string, nullable: true }
+                        branch: { type: string }
+                        sha: { type: string }
+                        url: { type: string }
+                        createdAt: { type: string, format: date-time }
+                        updatedAt: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Voice ─────────────────────────────────────────────────────────────────
 
   /v1/instances/{instanceId}/voice-settings:

@@ -108,7 +108,7 @@ const PINS = {
 	// `diagnoseAttachment` and the only one with no adapter in front of it, so the next input the
 	// diagnosis grows has to be added here by hand. That is exactly how #468 happened at the other
 	// two sites, and the four lines are what a reader needs to not repeat it a fourth time.
-	"workers/api/src/routes/instances.ts": 948,
+	"workers/api/src/routes/instances.ts": 952,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
