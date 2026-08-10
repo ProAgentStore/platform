@@ -510,6 +510,35 @@ instanceRoutes.put("/:instanceId/runner-node", async (c) => {
 	return c.json({ runnerNode: node || null });
 });
 
+/** Read which terminal session was last selected in the UI for this instance (#491). */
+instanceRoutes.get("/:instanceId/terminal-session", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, session.uid)
+		.first<{ config: string | null }>();
+	let target: string | null = null;
+	try {
+		const cfg = JSON.parse(row?.config || "{}") as { activeTerminalTarget?: unknown };
+		target = typeof cfg.activeTerminalTarget === "string" && cfg.activeTerminalTarget ? cfg.activeTerminalTarget : null;
+	} catch { /* stay null */ }
+	return c.json({ activeTerminalTarget: target });
+});
+
+/** Persist (or clear) the last-selected terminal session for this instance (#491).
+ *  Mirrors the `runnerNode` pattern — a per-instance pin written to config and read back on mount. */
+instanceRoutes.put("/:instanceId/terminal-session", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { activeTerminalTarget?: unknown };
+	const target = typeof body.activeTerminalTarget === "string" ? body.activeTerminalTarget.trim().slice(0, 200) : "";
+	if (target) await patchInstanceConfig(c.env, instanceId, session.uid, "activeTerminalTarget", target);
+	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "activeTerminalTarget");
+	return c.json({ activeTerminalTarget: target || null });
+});
+
 /** Heartbeat from user/CLI after checking the browser runtime is online. */
 instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const session = await requireUser(c);

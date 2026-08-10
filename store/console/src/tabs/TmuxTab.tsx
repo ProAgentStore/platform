@@ -125,8 +125,19 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 
 	const loadToolPolicy = useCallback(async () => {
 		try {
-			const data = await api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools?allowed=true`);
-			setAllowedTools(new Set((data.tools || []).map((t) => t.name)));
+			// Fetch tool policy and persisted session selection in parallel (#491).
+			const [policyData, sessionData] = await Promise.all([
+				api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools?allowed=true`),
+				api<{ activeTerminalTarget?: string | null }>(`/v1/instances/${instanceId}/terminal-session`).catch(() => null),
+			]);
+			setAllowedTools(new Set((policyData.tools || []).map((t) => t.name)));
+			// Seed `selected` with the server-persisted target so the first `refreshTargets` poll
+			// sees it as `current` and keeps it (via the `userPinned` branch of nextSelection).
+			const saved = sessionData?.activeTerminalTarget;
+			if (saved) {
+				setSelected(saved);
+				userPinnedRef.current = true;
+			}
 		} catch {
 			setAllowedTools(new Set());
 		}
@@ -378,7 +389,17 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 								// Picking a target on a phone is asking for its output, so go there.
 								// Setting userPinnedRef before the state update means the next poll
 								// will not auto-jump away from this explicit choice (#487).
-								onClick={() => { userPinnedRef.current = true; setSelected(targetKey(s)); setView("output"); }}
+								onClick={() => {
+								const key = targetKey(s);
+								userPinnedRef.current = true;
+								setSelected(key);
+								setView("output");
+								// Persist the chosen session so it survives page refresh (#491).
+								void api(`/v1/instances/${instanceId}/terminal-session`, {
+									method: "PUT",
+									body: JSON.stringify({ activeTerminalTarget: key }),
+								}).catch(() => {});
+							}}
 								className={`w-full text-left px-2 py-2 rounded-lg border transition-colors ${selected === targetKey(s) ? "border-accent bg-accent-soft" : "border-transparent hover:border-line hover:bg-panel"}`}
 							>
 								<div className="flex items-center justify-between gap-2 min-w-0">

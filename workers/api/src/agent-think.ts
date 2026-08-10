@@ -603,6 +603,27 @@ export async function runAgentThink(opts: {
 				.filter((r) => r.scope === "write")
 				.map((r) => r.connector);
 			systemPrompt += connectorToolsPrompt(connectorTools, grantedWrite);
+
+			// If this agent has tmux tools and the owner has selected a preferred session, tell
+			// the agent which one to default to (#491). The owner sets it by clicking a session in
+			// the Terminal tab; it is persisted as config.activeTerminalTarget ("tmux:<name>").
+			// When the user's request doesn't name a session explicitly, use this one — it is the
+			// session the owner considers "current". Strip the "tmux:" prefix before passing to the
+			// tool: tmux_* tools take a bare session name, not the "backend:name" key form.
+			const hasTmuxTools = connectorTools.some((t) => t.name.startsWith("tmux_"));
+			const activeTerminalTarget =
+				typeof instanceCfg.activeTerminalTarget === "string" && instanceCfg.activeTerminalTarget
+					? instanceCfg.activeTerminalTarget
+					: null;
+			if (hasTmuxTools && activeTerminalTarget) {
+				const sessionName = activeTerminalTarget.startsWith("tmux:")
+					? activeTerminalTarget.slice("tmux:".length)
+					: activeTerminalTarget;
+				systemPrompt +=
+					`\n\nDEFAULT TERMINAL SESSION: The owner's last-selected session is "${sessionName}".` +
+					` When asked to check, read, or drive a terminal without naming a specific session, use "${sessionName}" as the session parameter.` +
+					` If it no longer appears in tmux_list_sessions, say so and ask which session to use instead.`;
+			}
 		}
 	}
 
