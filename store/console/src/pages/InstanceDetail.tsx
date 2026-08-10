@@ -991,6 +991,7 @@ function InstancePage() {
 	};
 
 	const isApply = surfaces.includes("apply");
+	const isRepo = surfaces.includes("repo");
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
 	// `surfaceCaps` is stable by content (see above); `customSurfaces` is another `… || []`, so it
 	// is joined for the same reason. The suppression sits HERE, not beside the dep array: the
@@ -1475,6 +1476,8 @@ function InstancePage() {
 					const body = active.render({
 						instanceId: id,
 						isApply,
+						isCoding,
+						isRepo,
 						sessionId: urlSessionId,
 						boardColumns: instance?.capabilities?.boardColumns,
 						settingsSchema: instance?.capabilities?.settingsSchema,

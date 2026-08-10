@@ -387,7 +387,9 @@ const PINS = {
 	// feature that returned the newest page every time went unnoticed. The rule itself is in
 	// lib/messagePaging.ts with its tests; what is here is the three lines of wiring plus the
 	// comments naming the UUID cursor that could never have worked.
-	"store/console/src/pages/InstanceDetail.tsx": 1496,
+	// +3 at #492: `isRepo` const beside `isApply`, and `isCoding`+`isRepo` passed in `active.render()`.
+	// Both booleans feed the Settings tab's "Where things live" card only; no behaviour change elsewhere.
+	"store/console/src/pages/InstanceDetail.tsx": 1499,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -800,7 +802,8 @@ const PINS = {
 	// +13 at #477: three new PINS entries (Usage.tsx, supervision.ts, tools.ts raise) + their reasons.
 	// +3 at #486: Usage.tsx raise + its note (the BudgetPanel observe-only notice) + this self-ref.
 	// +6 at #491+#482: agent-think + instances raises + their notes + this self-ref.
-	"scripts/check-file-size.mjs": 884,
+	// +3 at #492: InstanceDetail raise + its note + this self-ref (one extra for the self-ref updating the count).
+	"scripts/check-file-size.mjs": 887,
 };
 
 /**

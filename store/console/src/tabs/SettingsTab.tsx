@@ -19,6 +19,10 @@ import Card from "../components/Card";
 interface Props {
 	instanceId: string;
 	isApply: boolean;
+	/** True when the agent declares the `coding` surface — adds a repo pointer to "Where things live". */
+	isCoding?: boolean;
+	/** True when the agent declares the `repo` surface — adds a repo pointer to "Where things live". */
+	isRepo?: boolean;
 	/** The agent's declared subscriber settings (from capabilities). */
 	settingsSchema?: SettingsField[];
 	onUnsubscribe: () => void;
@@ -47,7 +51,7 @@ interface WorkdriveStatus {
 	reach?: ConnectorReach;
 }
 
-export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, settingsSchema, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	// Agent-declared settings: the schema prop is the fast path; the GET also returns
 	// `fields` so the form never depends on a stale instance-list cache.
@@ -494,6 +498,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<ul className="text-sm text-muted leading-relaxed pl-4 list-disc">
 					{isApply && <li><b>Resume</b> & documents → Knowledge → Documents</li>}
 					{isApply && <li><b>Job application details</b> & preferences → Profile</li>}
+					{isCoding && <li><b>Repository</b> → configure it in the Coding tab</li>}
+					{isRepo && <li><b>Repository</b> → add it in the Repo tab</li>}
 					<li><b>Rules / special instructions</b> → Knowledge → Rules & Tips</li>
 					<li><b>Logins & secrets</b> → Knowledge → Credentials</li>
 				</ul>

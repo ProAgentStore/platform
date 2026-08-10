@@ -45,6 +45,10 @@ export type SurfaceId =
 export interface SurfaceContext {
 	instanceId: string;
 	isApply: boolean;
+	/** True when the agent declares the `coding` surface — used by Settings to point users at the Coding tab. */
+	isCoding?: boolean;
+	/** True when the agent declares the `repo` surface — used by Settings to point users at the Repo tab. */
+	isRepo?: boolean;
 	sessionId?: string;
 	/** The agent's declared board columns (server resolves a per-surface default). */
 	boardColumns?: BoardColumn[];
@@ -276,8 +280,8 @@ export const SURFACES: SurfaceDef[] = [
 		icon: "⚙",
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, isApply, settingsSchema, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} isApply={isApply} settingsSchema={settingsSchema} onUnsubscribe={onUnsubscribe} />
+		render: ({ instanceId, isApply, isCoding, isRepo, settingsSchema, onUnsubscribe }) => (
+			<SettingsTab instanceId={instanceId} isApply={isApply} isCoding={isCoding} isRepo={isRepo} settingsSchema={settingsSchema} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 ];
