@@ -34,20 +34,21 @@ beforeEach(() => {
 describe("terminal connector — registration", () => {
 	it("registers generic terminal tools with correct scopes", () => {
 		const names = registryToolNameSet();
-		for (const n of ["terminal_list_targets", "terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_new_target", "terminal_kill_target"]) {
+		for (const n of ["terminal_list_targets", "terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_send_message", "terminal_new_target", "terminal_kill_target"]) {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("terminal_list_targets")?.scope).toBe("read");
 		expect(getRegistryTool("terminal_capture")?.scope).toBe("read");
 		expect(getRegistryTool("terminal_run_command")?.scope).toBe("write");
 		expect(getRegistryTool("terminal_send_keys")?.scope).toBe("write");
+		expect(getRegistryTool("terminal_send_message")?.scope).toBe("write");
 		expect(getRegistryTool("terminal_new_target")?.scope).toBe("write");
 		expect(getRegistryTool("terminal_kill_target")?.scope).toBe("write");
 	});
 
 	it("groups terminal tools under the terminal connector", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "terminal");
-		expect(grp?.tools).toEqual(expect.arrayContaining(["terminal_list_targets", "terminal_run_command"]));
+		expect(grp?.tools).toEqual(expect.arrayContaining(["terminal_list_targets", "terminal_run_command", "terminal_send_message"]));
 	});
 
 	it("the constraint vocabulary matches the tools' own schemas — two lists that must not drift", () => {
@@ -57,7 +58,7 @@ describe("terminal connector — registration", () => {
 		const def = CONNECTOR_CONSTRAINTS.terminal.backends;
 		expect(getRegistryTool("terminal_list_targets")?.jsonSchema.properties.backend.enum).toEqual([def.wildcard, ...def.values]);
 		expect(getRegistryTool("terminal_new_target")?.jsonSchema.properties.backend.enum).toEqual([...def.values]);
-		for (const name of ["terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_kill_target"]) {
+		for (const name of ["terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_send_message", "terminal_kill_target"]) {
 			expect(getRegistryTool(name)?.jsonSchema.properties.backend.enum, name).toEqual([...def.values]);
 		}
 		// And the argument it governs is one every terminal tool actually takes.
@@ -97,6 +98,28 @@ describe("terminal connector — runner dispatch", () => {
 
 	it("rejects empty writes before touching the runner", async () => {
 		const r = await tool("terminal_run_command").handler(ctx(), { target: "tmux:main", command: "  " });
+		expect(r.success).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("send_message types text + Enter via /terminal/send and returns the post-settle pane", async () => {
+		callRunner.mockResolvedValue({ pane: "output\n", paneBefore: "> ", changed: true });
+		const r = await tool("terminal_send_message").handler(ctx(), { target: "tmux:main", message: "explain this" });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/send", { target: "tmux:main", backend: undefined, text: "explain this", keys: ["Enter"] });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("output\n");
+	});
+
+	it("send_message returns success:false and a warning when changed=false (CLI not ready)", async () => {
+		callRunner.mockResolvedValue({ pane: "> waiting", paneBefore: "> waiting", changed: false });
+		const r = await tool("terminal_send_message").handler(ctx(), { target: "tmux:main", message: "hello" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/pane did not change/);
+		expect(r.content).toMatch(/input prompt/);
+	});
+
+	it("send_message rejects an empty message without calling the runner", async () => {
+		const r = await tool("terminal_send_message").handler(ctx(), { target: "tmux:main", message: "" });
 		expect(r.success).toBe(false);
 		expect(callRunner).not.toHaveBeenCalled();
 	});

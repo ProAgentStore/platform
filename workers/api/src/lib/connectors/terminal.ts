@@ -121,7 +121,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		description:
-			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 currently supports text only.",
+			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 currently supports text only. To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `terminal_send_message` instead.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -144,6 +144,45 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
 			const landed = res.changed === false ? " (pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
 			return { content: (res.pane ?? "Sent.") + landed, success: true };
+		},
+	},
+	{
+		name: "terminal_send_message",
+		tier: "connector",
+		connector: "terminal",
+		scope: "write",
+		description:
+			"Send a message to an interactive CLI running in a local terminal target and submit it (types the text, presses Enter, waits for the pane to quiesce, and confirms the input landed). WRITE: runs on the user's machine. Use this — not `terminal_send_keys` — whenever you want to submit a message or command to a running CLI like Claude Code, Codex, or a REPL. Returns `changed: false` with an explicit warning when the pane did not react (CLI not yet at its input prompt — retry after a short wait).",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				target: { type: "string", description: "Terminal target, e.g. `tmux:main`, `kitty:3`, or `iterm2:1:1:1`." },
+				backend: BACKEND_PROP,
+				message: { type: "string", description: "Text to type and submit (sent as-is, then Enter)." },
+			},
+			required: ["target", "message"],
+		},
+		handler: async (ctx, input) => {
+			const r = await resolveRunner(ctx);
+			if ("error" in r) return { content: r.error, success: false };
+			const message = String(input.message ?? "");
+			if (!message) return { content: "A `message` is required.", success: false };
+			const target = requireTarget(input);
+			// Send the text then Enter as a single atomic operation: the runner handles
+			// text + keys in one /terminal/send call and waits for the pane to quiesce (#481).
+			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(
+				r.conn,
+				"/terminal/send",
+				{ target, backend: backend(input), text: message, keys: ["Enter"] },
+			);
+			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
+			if (res.changed === false) {
+				return {
+					content: (res.pane ?? "") + " (pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					success: false,
+				};
+			}
+			return { content: res.pane ?? "Message sent.", success: true };
 		},
 	},
 	{

@@ -108,7 +108,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		description:
-			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for answering a running CLI's prompt (e.g. an interactive Claude/Codex session), pressing Escape/Enter, or sending Ctrl keys. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be at its input prompt yet). Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\".",
+			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be at its input prompt yet). Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\". To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `tmux_send_message` instead.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -129,6 +129,44 @@ export const TMUX_TOOLS: ToolDef[] = [
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
 			const landed = res.changed === false ? " (pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
 			return { content: (res.pane ?? `Sent to ${session}.`) + landed, success: true };
+		},
+	},
+	{
+		name: "tmux_send_message",
+		tier: "connector",
+		connector: "tmux",
+		scope: "write",
+		description:
+			"Send a message to an interactive CLI running in a tmux session and submit it (types the text, presses Enter, waits for the pane to quiesce, and confirms the input landed). WRITE: runs on the user's machine. Use this — not `tmux_send_keys` — whenever you want to submit a message or command to a running CLI like Claude Code, Codex, or a REPL. Returns `changed: false` with an explicit warning when the pane did not react (CLI not yet at its input prompt — retry after a short wait).",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				session: { type: "string", description: "The tmux session name (from tmux_list_sessions)." },
+				message: { type: "string", description: "Text to type and submit (sent as-is, then Enter)." },
+			},
+			required: ["session", "message"],
+		},
+		handler: async (ctx, input) => {
+			const r = await resolveRunner(ctx);
+			if ("error" in r) return { content: r.error, success: false };
+			const session = requireSession(input);
+			const message = String(input.message ?? "");
+			if (!message) return { content: "A `message` is required.", success: false };
+			// Send the text then Enter as a single atomic operation: the runner handles
+			// text + keys in one /tmux/send call and waits for the pane to quiesce (#481).
+			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(
+				r.conn,
+				"/tmux/send",
+				{ session, text: message, keys: ["Enter"] },
+			);
+			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
+			if (res.changed === false) {
+				return {
+					content: (res.pane ?? "") + " (pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					success: false,
+				};
+			}
+			return { content: res.pane ?? "Message sent.", success: true };
 		},
 	},
 	{

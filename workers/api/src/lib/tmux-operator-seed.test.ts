@@ -3,6 +3,10 @@
  * backend-exclusive `tmux_*` tools instead of the generic `terminal_*` ones, which default to
  * `backend: "all"` and had it reading the owner's iTerm2 windows.
  *
+ * Migration 0117 (#482) adds `tmux_send_message` so the model can submit a message to an
+ * interactive CLI atomically (text + Enter + settle + confirm), without composing two separate
+ * send_keys calls.
+ *
  * That claim is only true while three things hold, none of which a SQL file can state:
  *
  *   1. every declared name is really a tool on the registry's `tmux` connector — a typo does not
@@ -25,10 +29,17 @@ import { registryConnectorGroups } from "./tool-registry.js";
 import { toolNamesFor } from "../agent-do-tools.js";
 
 const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0099_tmux_operator_backend_exclusive_tools.sql", import.meta.url)), "utf8");
+const SQL_0117 = readFileSync(fileURLToPath(new URL("../../migrations/0117_tmux_operator_send_message_tool.sql", import.meta.url)), "utf8");
 const SEED_0072 = readFileSync(fileURLToPath(new URL("../../migrations/0072_seed_tmux_operator_agent.sql", import.meta.url)), "utf8");
 
 /** The tool list 0099 writes into `$.capabilities.tools`. */
-const DECLARED: string[] = JSON.parse(/json\('(\[[\s\S]*?\])'\)/.exec(SQL)?.[1] ?? "[]");
+const DECLARED_0099: string[] = JSON.parse(/json\('(\[[\s\S]*?\])'\)/.exec(SQL)?.[1] ?? "[]");
+
+/**
+ * The effective tool list after 0117 adds tmux_send_message (#482).
+ * 0117 replaces the full array (same pattern as 0099), so the final state is what it writes.
+ */
+const DECLARED: string[] = JSON.parse(/json\('(\[[\s\S]*?\])'\)/.exec(SQL_0117)?.[1] ?? "[]");
 
 /** The connector tool names, from the registry itself rather than restated here. */
 const groups = registryConnectorGroups();
@@ -36,8 +47,8 @@ const TMUX_TOOLS = groups.find((g) => g.connector === "tmux")?.tools ?? [];
 const TERMINAL_TOOLS = groups.find((g) => g.connector === "terminal")?.tools ?? [];
 
 /**
- * The row as it will stand after 0099: 0072/0073 set surfaces + runtime and this migration
- * replaces only the tool list, so this is the resolved capability the runtime will see.
+ * The row as it will stand after 0117: 0072/0073 set surfaces + runtime; 0099 set the initial
+ * tmux-only tool list; 0117 adds tmux_send_message. This is the resolved capability the runtime sees.
  */
 const CAPS = agentCapabilities({
 	slug: "tmux-operator",
@@ -47,11 +58,32 @@ const CAPS = agentCapabilities({
 
 describe("migration 0099 — the tmux Operator's declared tools (#403)", () => {
 	it("declares the six tmux tools the issue names", () => {
+		expect(DECLARED_0099).toEqual([
+			"tmux_list_sessions",
+			"tmux_capture_pane",
+			"tmux_run_command",
+			"tmux_send_keys",
+			"tmux_new_session",
+			"tmux_kill_session",
+		]);
+	});
+
+	it("keeps the write decision the owner already made (consent migration)", () => {
+		// Consent is keyed by connector, so changing connector silently revokes it. 0073 carried
+		// tmux → terminal; this carries it back, scoped to this agent's instances.
+		expect(SQL).toMatch(/INSERT OR IGNORE INTO instance_connector_consent/);
+		expect(SQL).toMatch(/a\.slug = 'tmux-operator'/);
+	});
+});
+
+describe("migration 0117 — adds tmux_send_message to the tmux Operator (#482)", () => {
+	it("declares the seven tmux tools (six from 0099 plus tmux_send_message)", () => {
 		expect(DECLARED).toEqual([
 			"tmux_list_sessions",
 			"tmux_capture_pane",
 			"tmux_run_command",
 			"tmux_send_keys",
+			"tmux_send_message",
 			"tmux_new_session",
 			"tmux_kill_session",
 		]);
@@ -75,20 +107,13 @@ describe("migration 0099 — the tmux Operator's declared tools (#403)", () => {
 		expect(CAPS.tools).toEqual(DECLARED);
 	});
 
-	it("actually reaches the model: toolNamesFor grants all six and no terminal_*", () => {
+	it("actually reaches the model: toolNamesFor grants all seven and no terminal_*", () => {
 		// The gate that decides what the agent may run. A declared name outside
 		// CREATOR_SELECTABLE_TOOLS is dropped here without a word, so the migration would look
 		// applied and change nothing.
 		const granted = toolNamesFor(CAPS);
 		for (const name of DECLARED) expect(granted.has(name)).toBe(true);
 		for (const name of TERMINAL_TOOLS) expect(granted.has(name)).toBe(false);
-	});
-
-	it("keeps the write decision the owner already made", () => {
-		// Consent is keyed by connector, so changing connector silently revokes it. 0073 carried
-		// tmux → terminal; this carries it back, scoped to this agent's instances.
-		expect(SQL).toMatch(/INSERT OR IGNORE INTO instance_connector_consent/);
-		expect(SQL).toMatch(/a\.slug = 'tmux-operator'/);
 	});
 });
 

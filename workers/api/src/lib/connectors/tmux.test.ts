@@ -35,23 +35,24 @@ beforeEach(() => {
 });
 
 describe("tmux connector — registration", () => {
-	it("registers all 6 tools with correct scopes (list/capture read; run/send/new/kill write)", () => {
+	it("registers all 7 tools with correct scopes (list/capture read; run/send/send-message/new/kill write)", () => {
 		const names = registryToolNameSet();
-		for (const n of ["tmux_list_sessions", "tmux_capture_pane", "tmux_run_command", "tmux_send_keys", "tmux_new_session", "tmux_kill_session"]) {
+		for (const n of ["tmux_list_sessions", "tmux_capture_pane", "tmux_run_command", "tmux_send_keys", "tmux_send_message", "tmux_new_session", "tmux_kill_session"]) {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("tmux_list_sessions")?.scope).toBe("read");
 		expect(getRegistryTool("tmux_capture_pane")?.scope).toBe("read");
 		expect(getRegistryTool("tmux_run_command")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_send_keys")?.scope).toBe("write");
+		expect(getRegistryTool("tmux_send_message")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_new_session")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_kill_session")?.scope).toBe("write");
 	});
 
-	it("groups the 6 tools under the tmux connector for the catalog", () => {
+	it("groups the 7 tools under the tmux connector for the catalog", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "tmux");
 		expect(grp?.tools).toEqual(
-			expect.arrayContaining(["tmux_list_sessions", "tmux_capture_pane", "tmux_run_command", "tmux_send_keys", "tmux_new_session", "tmux_kill_session"]),
+			expect.arrayContaining(["tmux_list_sessions", "tmux_capture_pane", "tmux_run_command", "tmux_send_keys", "tmux_send_message", "tmux_new_session", "tmux_kill_session"]),
 		);
 	});
 });
@@ -111,6 +112,28 @@ describe("tmux connector — dispatch to the runner", () => {
 
 	it("send_keys rejects when neither text nor keys is provided", async () => {
 		const r = await tool("tmux_send_keys").handler(ctx(), { session: "main" });
+		expect(r.success).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("send_message types text + Enter via /tmux/send and returns the post-settle pane", async () => {
+		callRunner.mockResolvedValue({ pane: ">\n", paneBefore: "> ", changed: true });
+		const r = await tool("tmux_send_message").handler(ctx(), { session: "main", message: "hello" });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/tmux/send", { session: "main", text: "hello", keys: ["Enter"] });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain(">\n");
+	});
+
+	it("send_message returns success:false and a warning when the pane did not change (CLI not ready)", async () => {
+		callRunner.mockResolvedValue({ pane: "> idle", paneBefore: "> idle", changed: false });
+		const r = await tool("tmux_send_message").handler(ctx(), { session: "main", message: "hello" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/pane did not change/);
+		expect(r.content).toMatch(/input prompt/);
+	});
+
+	it("send_message rejects an empty message without calling the runner", async () => {
+		const r = await tool("tmux_send_message").handler(ctx(), { session: "main", message: "" });
 		expect(r.success).toBe(false);
 		expect(callRunner).not.toHaveBeenCalled();
 	});
