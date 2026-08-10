@@ -8063,6 +8063,94 @@ paths:
                         label: { type: string }
                         node: { type: string, description: Which of the machine's names it points at. }
 
+  # ── Budget ────────────────────────────────────────────────────────────────
+
+  /v1/budget/limits:
+    get:
+      summary: Get account budget limits
+      description: |
+        Returns the caller's effective daily circuit-breaker ceilings (resolved through a 4-tier
+        stack: per-account D1 row → platform-default D1 row → env var → hard constant), their
+        current 24-hour rolling consumption, distance-to-limit, and which tier each ceiling
+        was resolved from.
+      operationId: getBudgetLimits
+      tags: [Usage]
+      responses:
+        "200":
+          description: Effective ceilings, consumption, and remaining headroom
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stored:
+                    type: object
+                    description: The values the caller has stored per-account (null = inheriting from a lower tier).
+                    properties:
+                      chargedMicrosCeiling: { type: integer, nullable: true, description: "Per-account override for the 24h charged-spend ceiling, in USD micros (1 000 000 = $1). Null = inherit." }
+                      tokenCeiling: { type: integer, nullable: true, description: "Per-account override for the 24h token ceiling. Null = inherit." }
+                  effective:
+                    type: object
+                    description: The ceiling actually in force after resolution.
+                    properties:
+                      chargedMicrosCeiling: { type: integer, description: "Effective 24h charged-spend ceiling in USD micros." }
+                      chargedMicrosCeilingTier: { type: string, enum: [account, platform, env, default], description: "Which tier this ceiling was resolved from." }
+                      tokenCeiling: { type: integer, description: "Effective 24h token ceiling." }
+                      tokenCeilingTier: { type: string, enum: [account, platform, env, default], description: "Which tier this ceiling was resolved from." }
+                  consumption:
+                    type: object
+                    description: Rolling 24h usage.
+                    properties:
+                      chargedMicros: { type: integer, description: "Charged spend in the last 24h, in USD micros." }
+                      tokens: { type: integer, description: "All tokens consumed in the last 24h (charged or not)." }
+                  remaining:
+                    type: object
+                    description: Headroom before the ceiling is hit (clamped to 0 if already over).
+                    properties:
+                      chargedMicros: { type: integer }
+                      tokens: { type: integer }
+                  maxOverride:
+                    type: object
+                    description: The maximum value a caller may store via PUT (for client-side clamping).
+                    properties:
+                      chargedMicrosCeiling: { type: integer }
+                      tokenCeiling: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      summary: Set account budget limits
+      description: |
+        Upserts the caller's row in `account_budget_limits`. `null` or absent fields clear the
+        per-account override for that field so it inherits from the next tier. Both null = row
+        deleted (full inherit). Values are clamped to the maximum override (see `maxOverride` in
+        the GET response). Returns the same shape as GET with the newly resolved effective values.
+      operationId: putBudgetLimits
+      tags: [Usage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                chargedMicrosCeiling:
+                  type: integer
+                  nullable: true
+                  description: "New 24h charged-spend ceiling in USD micros, or null to inherit."
+                tokenCeiling:
+                  type: integer
+                  nullable: true
+                  description: "New 24h token ceiling, or null to inherit."
+      responses:
+        "200":
+          description: Re-resolved effective values after the write
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   # ── Usage ─────────────────────────────────────────────────────────────────
 
   /v1/usage:
