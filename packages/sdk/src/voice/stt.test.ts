@@ -271,7 +271,7 @@ describe("silent / near-silent clip speech gate (#490)", () => {
 		vi.stubGlobal("localStorage", { getItem: () => "test-token" });
 		vi.stubGlobal("fetch", vi.fn((...args) => { fetchCalls.push(args); return Promise.resolve({ ok: true, body: null, json: async () => ({ text: "" }), text: async () => "" }); }));
 
-		const { stt, results, ends } = makeGatedStt({ peakLevel: 0 });
+		const { stt, results } = makeGatedStt({ peakLevel: 0 });
 		// Drive onstop manually via the private transcribeWhisper — but the energy gate
 		// in onstop is BEFORE this, so we verify by testing that with _peakLevel=0
 		// the hadSpeech path discards before fetch. Since _transcribeWhisper is what
@@ -299,7 +299,7 @@ describe("silent / near-silent clip speech gate (#490)", () => {
 		vi.stubGlobal("localStorage", { getItem: () => "test-token" });
 		vi.stubGlobal("fetch", vi.fn((...args) => { fetchCalls.push(args); return Promise.resolve({ ok: true, body: null, json: async () => ({ text: "" }), text: async () => "" }); }));
 
-		const { stt, results } = makeGatedStt({ peakLevel: 0.02 });
+		const { results } = makeGatedStt({ peakLevel: 0.02 });
 		// Confirm the gate state: _peakLevel > 0, but hadSpeech(0.02, -1) is false (< VOICE_FLOOR).
 		// The onstop handler skips _transcribeWhisper → no fetch, no result.
 		// We drive this by calling _transcribeWhisper directly to confirm fetch works when called,
