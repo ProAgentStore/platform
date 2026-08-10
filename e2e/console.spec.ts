@@ -3406,19 +3406,20 @@ test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)",
 			await expect(pill).toHaveText(/Speaking/, { timeout: 15_000 });
 			await expectMuteReachable(page, "speaking");
 
-			// ── muted, entered from speaking ─────────────────────────────────────────────────
-			// M2 as the user meets it: this press must silence BOTH directions. Until #388 the
-			// button's own branch was a copy of `muteFromCommand` missing its `tts.cancel()`, so
-			// the mic closed, the agent kept talking, and the pill stayed on "Speaking" — which is
-			// how this assertion found it. The phase moving to "Muted" IS the cancellation.
+			// ── mute pressed while speaking (mic-only, #470) ─────────────────────────────────
+			// After #470 mute is MIC-ONLY: pressing Mute mid-sentence must NOT silence the agent —
+			// TTS keeps running (the stop-speech keyword, not mute, is what interrupts speech), so
+			// the pill correctly stays "Speaking". The press still registered — the control flips to
+			// offer Unmute (M1/M4). This block used to assert the pill went to "Muted", which was the
+			// old "mute cancels TTS" behavior (ADR 0001 M2), retired by #470.
 			await page.getByTitle(/^Mute the mic/).click();
-			await expect(pill, "muting an agent that keeps talking is not mute (ADR 0001 M2)").toHaveText(/Muted/, { timeout: 15_000 });
-			await expectMuteReachable(page, "muted");
-			// The same control, now offering the other direction — a session that can be entered
-			// and not left is M1 with the sign flipped.
-			await expect(page.getByTitle(/^Unmute the mic/), "muted: nothing on screen offers unmute (ADR 0001 M4)").toBeVisible();
+			// The mute registered even though the agent keeps talking: the unmute affordance appears…
+			await expect(page.getByTitle(/^Unmute the mic/), "mute did not register while the agent was speaking (ADR 0001 M1/M4, #470)").toBeVisible({ timeout: 15_000 });
+			// …and, crucially, the agent was NOT silenced — the phase still reports the ongoing speech.
+			await expect(pill, "mute silenced the agent instead of only the mic — mute is mic-only (ADR 0001 M2, #470)").toHaveText(/Speaking/);
+			await expectMuteReachable(page, "muted while speaking");
 			await page.getByTitle(/^Unmute the mic/).click();
-			await expect(pill).not.toHaveText(/Muted/, { timeout: 15_000 });
+			await expect(page.getByTitle(/^Mute the mic/), "unmute did not restore the mute control (ADR 0001 M4)").toBeVisible({ timeout: 15_000 });
 
 			// ── processing (the agent is thinking) ───────────────────────────────────────────
 			// Last, because it is the one phase driven by a 10s server poll rather than a click,
