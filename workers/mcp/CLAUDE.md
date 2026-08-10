@@ -69,7 +69,7 @@ src/
     ├── settings.ts       11 tools — settings, name, instructions, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
     ├── composition.ts    8 tools — supervision (#183), connections (#182), loops
-    ├── account.ts        5 tools — billing, usage, keys, email, profile
+    ├── account.ts        7 tools — billing, usage, keys, email, profile, budget limits
     ├── connectors.ts     4 tools — connector status and folder grants
     ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
     │   ── surface-gated ──
@@ -78,9 +78,9 @@ src/
     └── coding.ts         system_status (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**131 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
-inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 86 across
-`instance-tools/`. 112 are always registered; 18 are surface-gated.
+**133 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 88 across
+`instance-tools/`. 114 are always registered; 18 are surface-gated (apply=4, repo=3, coding=11+3).
 
 `base.ts` was 1871 lines and 67 of those 86 tools until #305 — the file a tool landed in
 when nobody decided where it went, and the largest in the repo. The nine ungated groups

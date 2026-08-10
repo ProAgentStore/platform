@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**131 tool registrations.** 113 are always registered; 18 are gated to the console
+**133 tool registrations.** 115 are always registered; 18 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -355,6 +355,8 @@ sit outside its surface gate.
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |
 | `email_status` | Gmail configured/connected | — | | |
+| `get_budget_limits` | Effective daily AI-spend ceilings, which tier each came from, 24h consumption, and distance to limit | — | | |
+| `set_budget_limits` | Patch per-account daily ceilings (token count + charged micros); null = inherit from platform; returns re-resolved effective limits | write | yes | |
 
 ### Tools with no dry run
 

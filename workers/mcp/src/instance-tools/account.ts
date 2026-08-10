@@ -103,4 +103,54 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			return jsonText(data);
 		},
 	);
+
+	server.tool(
+		"get_budget_limits",
+		"Read your AI-spend circuit breakers: effective daily ceilings (charged micros + token count), which tier each was resolved from (account / platform / env / default), current rolling 24h consumption, and distance to limit. Use this before raising or lowering limits with set_budget_limits.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/budget/limits", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_budget_limits",
+		"Patch your per-account AI-spend circuit breakers. Pass null for a field to inherit from the platform default. Values are clamped server-side to the platform maximum ($10 000 / 100B tokens per 24h). Returns the re-resolved effective limits after the write — same shape as get_budget_limits. Read get_budget_limits first to see the current state.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			token_ceiling: z.number().nullable().optional().describe("Daily token ceiling. null inherits from the platform default."),
+			charged_micros_ceiling: z.number().nullable().optional().describe("Daily charged-cost ceiling in micros (1 000 000 = $1). null inherits."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, token_ceiling, charged_micros_ceiling, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { token_ceiling: token_ceiling ?? null, charged_micros_ceiling: charged_micros_ceiling ?? null };
+			const denied = await requirePermission(safetyFor(token), "write", "set_budget_limits", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_budget_limits", "update account AI budget limits", input, {
+					endpoint: "/v1/budget/limits",
+					method: "PUT",
+					body: { tokenCeiling: input.token_ceiling, chargedMicrosCeiling: input.charged_micros_ceiling },
+				});
+			}
+			const data = await authedCall(
+				"/v1/budget/limits",
+				sessionToken,
+				{
+					method: "PUT",
+					body: JSON.stringify({ tokenCeiling: input.token_ceiling, chargedMicrosCeiling: input.charged_micros_ceiling }),
+				},
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_budget_limits", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
 }

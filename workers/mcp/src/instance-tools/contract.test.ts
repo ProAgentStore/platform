@@ -211,6 +211,8 @@ const TABLE: Record<string, Row> = {
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
 	billing_status: ["account", "none", null, null, "token"],
+	get_budget_limits: ["account", "none", null, null, "token"],
+	set_budget_limits: ["account", "write", null, "envelope", "charged_micros_ceiling,dry_run,token,token_ceiling"],
 	call_instance_tool: ["base", "write", null, null, "input,instance_id,token,tool"],
 	cancel_instance: ["base", "destructive", "cancel_instance", "envelope", "confirm,dry_run,instance_id,token"],
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
