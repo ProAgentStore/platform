@@ -7,6 +7,7 @@ import {
 	withClaimedNames,
 	withDeclinedNames,
 	withName,
+	withUnclaimedName,
 } from "./machine.js";
 
 const ID = "2f1c8a90-0e2b-4b6a-9a2b-3c4d5e6f7081";
@@ -109,6 +110,46 @@ describe("withDeclinedNames", () => {
 		for (let i = 0; i < MAX_DECLINED + 10; i++) identity = withDeclinedNames(identity, [`host-${i}`]);
 		expect(identity.declined).toHaveLength(MAX_DECLINED);
 		expect(identity.declined?.at(-1)).toBe(`host-${MAX_DECLINED + 9}`);
+	});
+});
+
+describe("withUnclaimedName", () => {
+	// The inverse of `withClaimedNames` (#467): removing a wrong claim must also record it in
+	// `declined` so the #460 first-run prompt does not re-offer it at the next `pags up`.
+	it("removes the name from the claimed list", () => {
+		const identity = { id: ID, names: ["Mac", "old-hostname"], declined: [] };
+		const result = withUnclaimedName(identity, "old-hostname");
+		expect(result.names).toEqual(["Mac"]);
+	});
+
+	it("adds the removed name to declined so it is not re-offered", () => {
+		const identity = { id: ID, names: ["Mac", "old-hostname"], declined: [] };
+		const result = withUnclaimedName(identity, "old-hostname");
+		expect(result.declined).toContain("old-hostname");
+	});
+
+	it("is a no-op on names the machine does not claim (name stays out, still added to declined)", () => {
+		const identity = { id: ID, names: ["Mac"], declined: [] };
+		const result = withUnclaimedName(identity, "other-machine");
+		expect(result.names).toEqual(["Mac"]);
+		expect(result.declined).toContain("other-machine");
+	});
+
+	it("does not duplicate an existing decline entry", () => {
+		const identity = { id: ID, names: ["Mac", "old"], declined: ["old"] };
+		const result = withUnclaimedName(identity, "old");
+		expect(result.declined.filter((n) => n === "old")).toHaveLength(1);
+	});
+
+	it("preserves the machine id", () => {
+		const identity = { id: ID, names: ["Mac", "old"], declined: [] };
+		expect(withUnclaimedName(identity, "old").id).toBe(ID);
+	});
+
+	it("bounds the declined list", () => {
+		const identity = { id: ID, names: Array.from({ length: 5 }, (_, i) => `host-${i}`), declined: Array.from({ length: MAX_DECLINED }, (_, i) => `d${i}`) };
+		const result = withUnclaimedName(identity, "host-4");
+		expect(result.declined.length).toBeLessThanOrEqual(MAX_DECLINED);
 	});
 });
 

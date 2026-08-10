@@ -165,11 +165,11 @@ describe("relativeAge / describeCandidate", () => {
 });
 
 describe("renderCandidates", () => {
-	it("states the consequence and that it cannot be undone", () => {
+	it("states the consequence and how to undo a wrong claim (#467)", () => {
 		const text = renderCandidates([node({ node: "old-host", agentCount: 16 })], Date.parse("2026-08-08T12:00:00Z")).join("\n");
 		expect(text).toContain("1) old-host");
 		expect(text).toContain("merges its agents, pins and sessions onto this machine");
-		expect(text).toContain("cannot be undone");
+		expect(text).toContain("unclaim");
 	});
 });
 

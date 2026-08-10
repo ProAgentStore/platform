@@ -8063,6 +8063,75 @@ paths:
                         label: { type: string }
                         node: { type: string, description: Which of the machine's names it points at. }
 
+  /v1/terminals/nodes/{node}/claim:
+    delete:
+      summary: Un-claim a machine name
+      description: |
+        Remove the machine-identity stamp (`machine_id`) from all `instance_runtime_nodes` rows
+        for `runner_node = <node>` that carry the caller's machine id. This is the inverse of
+        `claimMachineNames` (#467).
+
+        The body must include `machineId` — the caller's stable machine id from `machine.json`.
+        The write is scoped to `(user_id, runner_node, machine_id)` so it can only ever un-say
+        something the caller's own machine said; rows claimed by a different machine are unchanged.
+
+        The CLI counterpart (`pags machines unclaim <name>`) calls this AND removes the name from
+        `machine.json` and adds it to `declined`, so the next `pags up` does not re-stamp it — a
+        server-only un-claim would be silently reversed within one restart.
+
+        Refused (409) while the node is connected (the next heartbeat would re-stamp) or while
+        a pin or open session routes only through this name as an alias of the machine identity.
+        A direct pin to `runner_node` is NOT refused — the row stays, only the id link changes.
+      operationId: unclaimTerminalNode
+      tags: [Terminals]
+      parameters:
+        - { name: node, in: path, required: true, description: The node name to un-claim., schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [machineId]
+              properties:
+                machineId:
+                  type: string
+                  description: The caller's stable machine id (from `machine.json`). Scopes the write to rows this machine claimed.
+      responses:
+        "200":
+          description: Un-claimed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unclaimed: { type: string, description: The node name whose claim was removed. }
+                  rowsUpdated: { type: integer, description: How many rows had their machine_id set to NULL. }
+        "400": { description: "Missing or invalid machineId" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No machine is registered under that name }
+        "409":
+          description: |
+            Cannot un-claim right now. `reason` is `not-owned` (the rows do not carry this
+            machine's id), `connected` (it would re-register immediately), `pinned`, or `sessions`
+            (something routes only through this alias).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  reason: { type: string, enum: [not-owned, connected, pinned, sessions] }
+                  blockers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string, enum: [pin, session] }
+                        id: { type: string }
+                        label: { type: string }
+                        node: { type: string }
+
   # ── Budget ────────────────────────────────────────────────────────────────
 
   /v1/budget/limits:

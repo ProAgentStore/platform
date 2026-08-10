@@ -249,7 +249,7 @@ export function renderCandidates(candidates: readonly NodeSummary[], nowMs: numb
 	});
 	lines.push("");
 	lines.push("Selecting a name merges its agents, pins and sessions onto this machine.");
-	lines.push("Pick only names THIS machine has used — a claim cannot be undone from the CLI.");
+	lines.push("Pick only names THIS machine has used — use `pags machines unclaim <name>` to undo a wrong claim.");
 	return lines;
 }
 

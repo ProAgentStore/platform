@@ -124,6 +124,26 @@ export function withClaimedNames(identity: MachineIdentity, claimed: readonly st
 }
 
 /**
+ * Remove a name from this machine's claimed list and add it to `declined` (#467).
+ *
+ * This is the inverse of `withClaimedNames`. A removed name is moved to `declined` so the
+ * #460 first-run prompt does not offer it straight back — without that, the next `pags up`
+ * would re-stamp the rows and silently undo the un-claim.
+ *
+ * The current hostname (`names[0]`) is the name the machine is actively registering under; it
+ * CANNOT be unclaimed from the local file, because the next register will just re-add it via
+ * `withName`. The caller is responsible for rejecting that case.
+ */
+export function withUnclaimedName(identity: MachineIdentity, name: string): MachineIdentity {
+	const unclaim = name.trim();
+	if (!unclaim) return identity;
+	const names = identity.names.filter((n) => n !== unclaim);
+	const declined = [...(identity.declined ?? [])];
+	if (!declined.includes(unclaim)) declined.push(unclaim);
+	return { id: identity.id, names, declined: declined.slice(-MAX_DECLINED) };
+}
+
+/**
  * Record names the user was offered and did NOT claim (#460), so the offer is made once.
  *
  * A name this machine already answers to is never recorded as declined: `names` is the authority,

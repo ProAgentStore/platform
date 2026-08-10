@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diagnoseForget, groupTerminalNodes } from "./terminals.js";
+import { diagnoseForget, diagnoseUnclaim, groupTerminalNodes } from "./terminals.js";
 
 const nodeRow = (over: Partial<Parameters<typeof groupTerminalNodes>[0][number]> = {}) => ({
 	instance_id: "i1", runner_node: "macbook", placement: "local", runner_version: "0.4.16",
@@ -282,5 +282,46 @@ describe("diagnoseForget (#393 — forgetting must not orphan what points here)"
 			{ kind: "pin", id: "i1", label: "Heartfull", node: "Mac" },
 		]);
 		expect(v.ok === false && v.reason).toBe("pinned");
+	});
+});
+
+describe("diagnoseUnclaim (#467 — un-claiming must not strand what routes only through this alias)", () => {
+	it("allows un-claiming a name nothing else depends on", () => {
+		expect(diagnoseUnclaim(false, [])).toEqual({ ok: true });
+	});
+
+	it("refuses when the machine is connected (next heartbeat would re-stamp)", () => {
+		const v = diagnoseUnclaim(true, []);
+		expect(v.ok).toBe(false);
+		if (v.ok) return;
+		expect(v.reason).toBe("connected");
+		expect(v.message).toContain("pags up");
+	});
+
+	it("refuses when a pin would be stranded by the identity disappearing, and names it", () => {
+		const v = diagnoseUnclaim(false, [{ kind: "pin", id: "i1", label: "My Coder", node: "RLs-MacBook-Air.local" }]);
+		expect(v.ok).toBe(false);
+		if (v.ok) return;
+		expect(v.reason).toBe("pinned");
+		expect(v.message).toContain("My Coder");
+		expect(v.message).toContain("RLs-MacBook-Air.local");
+	});
+
+	it("refuses when an open session would be stranded", () => {
+		const v = diagnoseUnclaim(false, [{ kind: "session", id: "s1", label: "pags/platform", node: "Mac" }]);
+		expect(v.ok).toBe(false);
+		if (v.ok) return;
+		expect(v.reason).toBe("sessions");
+		expect(v.message).toContain("pags/platform");
+	});
+
+	it("reports connected first, pins second, sessions third", () => {
+		const v = diagnoseUnclaim(true, [{ kind: "session", id: "s1", label: "repo", node: "Mac" }]);
+		expect(v.ok === false && v.reason).toBe("connected");
+		const v2 = diagnoseUnclaim(false, [
+			{ kind: "session", id: "s1", label: "repo", node: "Mac" },
+			{ kind: "pin", id: "i1", label: "Heartfull", node: "Mac" },
+		]);
+		expect(v2.ok === false && v2.reason).toBe("pinned");
 	});
 });

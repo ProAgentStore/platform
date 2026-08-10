@@ -1,4 +1,5 @@
-// `pags machines` — see what PAGS thinks your machines are, and claim a name this one has used.
+// `pags machines` — see what PAGS thinks your machines are, claim a name this one has used,
+// and un-claim a name it should not have (#467).
 //
 // The first-run prompt in `pags up` (#460) is the remedy that finds the user; this is the one they
 // can be TOLD about. It is not a substitute — the whole defect is that the remedy was invisible —
@@ -13,7 +14,8 @@ import {
 	type NodeSummary,
 	resolveClaimByName,
 } from "../machine-claim.js";
-import { loadMachineIdentity, machineFilePath, saveMachineIdentity, withClaimedNames } from "../machine.js";
+import { loadMachineIdentity, machineFilePath, saveMachineIdentity, withClaimedNames, withUnclaimedName } from "../machine.js";
+import { apiPathSegment, pagsApiBase, requestPags } from "./runner/http.js";
 
 const API_BASE = "https://api.proagentstore.online";
 
@@ -45,6 +47,7 @@ const listCommand = new Command("list")
 		}
 		writeLine("");
 		writeLine("  Claim a name this machine has used before:  pags machines claim <name>");
+		writeLine("  Remove a wrong claim:                       pags machines unclaim <name>");
 		writeLine("");
 	});
 
@@ -74,7 +77,69 @@ const claimCommand = new Command("claim")
 		writeLine(`  ✓ Claimed ${claim.join(", ")}. Restart \`pags up\` to merge them onto this machine.`);
 	});
 
+const unclaimCommand = new Command("unclaim")
+	.description("Remove a mistaken machine name claim from this machine (#467)")
+	.argument("<name...>", "Node name(s) to un-claim, as shown by `pags machines list`")
+	.action(async (names: string[]) => {
+		const session = requireSession();
+		const identity = loadMachineIdentity();
+		if (!identity.id) {
+			writeError("This machine has no id — `~/.config/proagentstore/` is not writable, so the claim record cannot be found.");
+			process.exit(1);
+		}
+
+		let anyFailed = false;
+		for (const raw of names) {
+			const name = raw.trim();
+			if (!name) continue;
+
+			// Safety: the current hostname is the name this machine is actively registering under.
+			// Removing it from machine.json would make the next `pags up` re-add it (via `withName`),
+			// so the local half of the un-claim cannot be kept. The server half would also be re-stamped
+			// on the next register. Refuse loudly rather than appear to work and silently revert.
+			if (name === identity.names[0]) {
+				writeError(`  ✗ ${name}: this is the machine's CURRENT hostname. You cannot un-claim the name it is actively registering under — stop \`pags up\` and rename the machine first.`);
+				anyFailed = true;
+				continue;
+			}
+
+			if (!identity.names.includes(name)) {
+				writeError(`  ✗ ${name}: this machine does not claim that name.`);
+				anyFailed = true;
+				continue;
+			}
+
+			// Call the server. The server also enforces all the safety checks (connected, blockers).
+			try {
+				await requestPags<{ unclaimed: string; rowsUpdated: number }>(
+					"DELETE",
+					`/v1/terminals/nodes/${apiPathSegment(name)}/claim`,
+					{ pagsToken: session.token, apiBase: pagsApiBase() },
+					{ machineId: identity.id },
+				);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				writeError(`  ✗ ${name}: ${msg}`);
+				anyFailed = true;
+				continue;
+			}
+
+			// Update the local file: remove the name, add it to declined so the #460 first-run
+			// prompt does not re-offer it on the next `pags up`.
+			const updated = withUnclaimedName(identity, name);
+			if (!saveMachineIdentity(updated)) {
+				writeError(`  ✗ Server un-claimed ${name} but could not update ${machineFilePath()} — the next \`pags up\` may re-stamp it. Edit that file by hand and remove "${name}" from the names array.`);
+				anyFailed = true;
+				continue;
+			}
+			writeLine(`  ✓ ${name} — un-claimed on server and removed from ${machineFilePath()}.`);
+		}
+
+		if (anyFailed) process.exit(1);
+	});
+
 export const machinesCommand = new Command("machines")
 	.description("Show and claim the machine names ProAgentStore has for this account")
 	.addCommand(listCommand, { isDefault: true })
-	.addCommand(claimCommand);
+	.addCommand(claimCommand)
+	.addCommand(unclaimCommand);

@@ -287,6 +287,7 @@ export interface ForgetBlocker {
 }
 
 export type ForgetVerdict = { ok: true } | { ok: false; reason: "connected" | "pinned" | "sessions"; message: string };
+export type UnclaimVerdict = { ok: true } | { ok: false; reason: "not-owned" | "connected" | "pinned" | "sessions"; message: string };
 
 /**
  * May this machine be forgotten? Pure, because every arm of it is a refusal a user will read.
@@ -317,6 +318,32 @@ export function diagnoseForget(connected: boolean, blockers: readonly ForgetBloc
 	const sessions = blockers.filter((b) => b.kind === "session");
 	if (sessions.length) {
 		return { ok: false, reason: "sessions", message: `${sessions.length} coding session${sessions.length === 1 ? " is" : "s are"} still open on this machine (${sessions.map((s) => s.label).join(", ")}). End ${sessions.length === 1 ? "it" : "them"} first.` };
+	}
+	return { ok: true };
+}
+
+/**
+ * May this name's machine claim be removed? Pure, because every arm of it is a refusal a user
+ * will read.
+ *
+ * Un-claiming NULLs `machine_id` on the rows for this `runner_node`. That is safe UNLESS a pin
+ * or open session routes ONLY through this name as an alias of the machine identity: specifically
+ * when nulling it would remove the last identified row for this machine id, making `aliasNodesFor`
+ * return nothing for any pin on another name of the same machine.
+ *
+ * A CONNECTED machine is refused: it is registering right now and would re-stamp the row
+ * within the heartbeat, making the un-claim appear to work and then silently revert.
+ */
+export function diagnoseUnclaim(connected: boolean, blockers: readonly ForgetBlocker[]): UnclaimVerdict {
+	if (connected) return { ok: false, reason: "connected", message: "This machine is connected right now — stop `pags up` on it first, or it will re-stamp the claim immediately." };
+	const pins = blockers.filter((b) => b.kind === "pin");
+	if (pins.length) {
+		const names = pins.map((p) => `${p.label} (pinned to ${p.node})`).join(", ");
+		return { ok: false, reason: "pinned", message: `${pins.length} agent${pins.length === 1 ? " is" : "s are"} reachable only through this name: ${names}. Repoint ${pins.length === 1 ? "it" : "them"} on the agent's Settings tab first — removing the claim would leave ${pins.length === 1 ? "it" : "them"} pinned to a name nothing can resolve.` };
+	}
+	const sessions = blockers.filter((b) => b.kind === "session");
+	if (sessions.length) {
+		return { ok: false, reason: "sessions", message: `${sessions.length} coding session${sessions.length === 1 ? " is" : "s are"} still open on this machine and only reachable through this name (${sessions.map((s) => s.label).join(", ")}). End ${sessions.length === 1 ? "it" : "them"} first.` };
 	}
 	return { ok: true };
 }
@@ -439,4 +466,109 @@ terminalRoutes.delete("/nodes/:node", async (c) => {
 		removed += res.meta?.changes ?? 0;
 	}
 	return c.json({ forgotten: [...names], registrationsRemoved: removed });
+});
+
+/**
+ * Un-claim a machine name: NULL the `machine_id` on rows for `runner_node = <node>` that carry
+ * the caller's machine id — the inverse of `claimMachineNames` (#467).
+ *
+ * Scoped to the caller's `machineId` (body) so it can only un-say what THIS machine said.
+ * A row claimed by a different machine is left unchanged and the response says so.
+ *
+ * Refused while the machine is connected (the next heartbeat re-stamps) or while a pin or open
+ * session routes ONLY through this name as an alias: when nulling it removes the last identified
+ * row for this machine id, `aliasNodesFor` returns nothing and any pin on another name breaks.
+ *
+ * The CLI counterpart (`pags machines unclaim`) also removes the name from `machine.json` and
+ * adds it to `declined` — a server-only un-claim is re-stamped on the next `pags up`.
+ */
+terminalRoutes.delete("/nodes/:node/claim", async (c) => {
+	const session = await requireUser(c);
+	const uid = session.uid;
+	const target = normalizeRunnerNode(c.req.param("node"));
+	if (!target) return c.json({ error: "Invalid node name." }, 400);
+
+	const rawBody = await c.req.json<Record<string, unknown>>().catch(() => ({})) as Record<string, unknown>;
+	const callerMachineId = normalizeMachineId(rawBody.machineId);
+	if (!callerMachineId) return c.json({ error: "machineId is required (your machine's stable id from machine.json)." }, 400);
+
+	// Rows for the named node.
+	const nodeRows = (await c.env.DB.prepare(
+		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2",
+	).bind(uid, target).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+
+	if (!nodeRows.length) return c.json({ error: "No machine is registered under that name." }, 404);
+
+	// At least one row must carry this caller's machineId; otherwise they cannot un-claim it.
+	const ownedRows = nodeRows.filter((r) => normalizeMachineId(r.machine_id) === callerMachineId);
+	if (!ownedRows.length) {
+		return c.json({ error: `The name "${target}" is not claimed by your machine (${callerMachineId}). Only the machine that made the claim can remove it.`, reason: "not-owned" }, 409);
+	}
+
+	// All rows for this user — needed to check if the machine id would disappear entirely.
+	const allRows = (await c.env.DB.prepare(
+		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1",
+	).bind(uid).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+
+	// Names of this machine that would STILL carry the identity after un-claiming `target`.
+	const remainingIdentifiedNames = new Set(
+		allRows
+			.filter((r) => normalizeRunnerNode(r.runner_node) !== target && normalizeMachineId(r.machine_id) === callerMachineId)
+			.map((r) => normalizeRunnerNode(r.runner_node))
+			.filter(Boolean),
+	);
+	// All names this machine answers to (including `target`).
+	const allMachineNames = new Set(
+		allRows
+			.filter((r) => normalizeMachineId(r.machine_id) === callerMachineId)
+			.map((r) => normalizeRunnerNode(r.runner_node))
+			.filter(Boolean),
+	);
+	allMachineNames.add(target);
+
+	// The identity disappears if no other row carries this machineId.
+	const identityDisappears = remainingIdentifiedNames.size === 0;
+
+	const blockers: ForgetBlocker[] = [];
+	if (identityDisappears) {
+		// Any pin or open session on ANOTHER name of this machine would break: `aliasNodesFor`
+		// would find no rows with this id, so the identity cannot route anything.
+		// A pin directly naming `target` is not a blocker — the row stays, only the id link changes.
+		const instances = (await c.env.DB.prepare(
+			`SELECT i.id, i.config, a.name AS agent_name, a.slug AS agent_slug
+			 FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id
+			 WHERE i.user_id = ?1`,
+		).bind(uid).all<{ id: string; config: string | null; agent_name: string | null; agent_slug: string | null }>()).results ?? [];
+		for (const i of instances) {
+			const pin = parseBoundRunnerNode(i.config);
+			if (!pin || !allMachineNames.has(pin) || pin === target) continue;
+			blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin });
+		}
+
+		const openSessions = (await c.env.DB.prepare(
+			`SELECT s.id, s.runner_node, s.status, r.name AS repo_name
+			 FROM coding_sessions s LEFT JOIN coding_repos r ON r.id = s.repo_id
+			 WHERE s.user_id = ?1 AND s.status IN ('active', 'suspended') AND s.runner_node IS NOT NULL`,
+		).bind(uid).all<{ id: string; runner_node: string | null; status: string; repo_name: string | null }>()).results ?? [];
+		for (const s of openSessions) {
+			const node = normalizeRunnerNode(s.runner_node);
+			if (!node || !allMachineNames.has(node) || node === target) continue;
+			blockers.push({ kind: "session", id: s.id, label: s.repo_name || s.id, node });
+		}
+	}
+
+	// Live check: refuse if this node is connected (the next heartbeat would re-stamp).
+	const probeIds = [...new Set(nodeRows.map((r) => r.instance_id))].slice(0, 25);
+	const probes = await Promise.all(probeIds.map((id) => relayConnected(c.env, id, target).catch(() => false)));
+	const connected = probes.some(Boolean);
+
+	const verdict = diagnoseUnclaim(connected, blockers);
+	if (!verdict.ok) return c.json({ error: verdict.message, reason: verdict.reason, blockers }, 409);
+
+	// NULL the machine_id on rows for this node that belong to this machine.
+	const res = await c.env.DB.prepare(
+		"UPDATE instance_runtime_nodes SET machine_id = NULL, updated_at = datetime('now') WHERE user_id = ?1 AND runner_node = ?2 AND machine_id = ?3",
+	).bind(uid, target, callerMachineId).run();
+
+	return c.json({ unclaimed: target, rowsUpdated: res.meta?.changes ?? 0 });
 });
