@@ -677,7 +677,7 @@ function BudgetPanel() {
 								placeholder={data ? `${(data.effective.chargedMicrosCeiling / 1_000_000).toFixed(0)} (inherited)` : ""}
 								value={editCharged}
 								onChange={(e) => setEditCharged(e.target.value)}
-								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-canvas focus:outline-none focus:border-accent"
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-panel focus:outline-none focus:border-accent"
 							/>
 						</div>
 						<div>
@@ -692,7 +692,7 @@ function BudgetPanel() {
 								placeholder={data ? `${(data.effective.tokenCeiling / 1_000_000).toFixed(0)} (inherited)` : ""}
 								value={editTokens}
 								onChange={(e) => setEditTokens(e.target.value)}
-								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-canvas focus:outline-none focus:border-accent"
+								className="w-full text-sm px-3 py-1.5 rounded-lg border border-line bg-panel focus:outline-none focus:border-accent"
 							/>
 						</div>
 					</div>
