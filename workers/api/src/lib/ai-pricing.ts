@@ -22,6 +22,7 @@ export const PRICES: Record<string, ModelPrice> = {
 	// Anthropic (claude-sonnet-4-6 is the default the Anthropic path always uses)
 	"claude-sonnet-4-6": { inputPerM: 3, outputPerM: 15 },
 	"claude-sonnet-4": { inputPerM: 3, outputPerM: 15 },
+	"claude-opus-5": { inputPerM: 5, outputPerM: 25 },
 	"claude-opus-4": { inputPerM: 15, outputPerM: 75 },
 	"claude-haiku-4": { inputPerM: 1, outputPerM: 5 },
 	"claude-3-5-haiku": { inputPerM: 0.8, outputPerM: 4 },
@@ -39,18 +40,37 @@ export const DEFAULT_PRICE: ModelPrice = { inputPerM: 3, outputPerM: 15 };
  * Collapse a raw model id to a PRICES key. Handles version/date suffixes
  * (`claude-sonnet-4-6-20260101`), provider prefixes (`anthropic/…`), and the
  * `@cf/…` Workers-AI namespace (all mapped to the `cf` ~free bucket).
+ *
+ * When there is no exact prefix match (e.g. `claude-opus-6` not yet in the
+ * table), falls forward to the highest-numbered known key in the SAME family
+ * (`claude-opus-*`) so the next model version is order-of-magnitude correct
+ * without a code change, rather than silently falling to Sonnet DEFAULT_PRICE.
  */
 export function normalizeModel(model: string | null | undefined): string {
 	const m = (model || "").toLowerCase().trim();
 	if (!m) return "claude-sonnet-4-6";
 	if (m.startsWith("@cf/") || m.includes("workers-ai")) return "cf";
 	const bare = m.replace(/^anthropic\//, "");
-	// Longest-prefix match against known keys (so `claude-sonnet-4-6-2026…` → `claude-sonnet-4-6`).
+	// 1. Longest-prefix match against known keys (so `claude-sonnet-4-6-2026…` → `claude-sonnet-4-6`).
 	let best = "";
 	for (const key of Object.keys(PRICES)) {
 		if (bare.startsWith(key) && key.length > best.length) best = key;
 	}
-	return best || bare;
+	if (best) return best;
+	// 2. Family fallback: if no prefix matched, extract the model family prefix
+	// (`claude-opus-`, `claude-sonnet-`, `claude-haiku-`) and return the last
+	// known key in that family (highest number = nearest model).
+	const familyMatch = bare.match(/^(claude-(?:opus|sonnet|haiku)-)/);
+	if (familyMatch) {
+		const family = familyMatch[1];
+		const familyKeys = Object.keys(PRICES).filter((k) => k.startsWith(family));
+		if (familyKeys.length > 0) {
+			// Sort ascending (lexicographic is fine for versioned names) and take the last.
+			familyKeys.sort();
+			return familyKeys[familyKeys.length - 1];
+		}
+	}
+	return bare;
 }
 
 export function priceFor(model: string | null | undefined): ModelPrice {

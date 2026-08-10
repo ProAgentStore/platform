@@ -17,6 +17,15 @@ describe("normalizeModel", () => {
 		expect(normalizeModel("")).toBe("claude-sonnet-4-6");
 		expect(normalizeModel(null)).toBe("claude-sonnet-4-6");
 	});
+	it("falls forward to the newest known opus key for any unknown claude-opus-* id", () => {
+		// claude-opus-6 is not in PRICES; should resolve to the latest opus entry, not sonnet.
+		const result = normalizeModel("claude-opus-6");
+		expect(result).toMatch(/^claude-opus-/);
+		expect(result).not.toMatch(/^claude-sonnet-/);
+	});
+	it("returns opus-5 price for claude-opus-5 (explicit entry)", () => {
+		expect(normalizeModel("claude-opus-5")).toBe("claude-opus-5");
+	});
 });
 
 describe("priceFor", () => {
@@ -28,6 +37,17 @@ describe("priceFor", () => {
 	});
 	it("falls back to DEFAULT_PRICE for an unknown model", () => {
 		expect(priceFor("some-new-model-9000")).toBe(DEFAULT_PRICE);
+	});
+	it("prices claude-opus-5 at $5/$25 per MTok (not Sonnet rates)", () => {
+		expect(priceFor("claude-opus-5")).toEqual({ inputPerM: 5, outputPerM: 25 });
+	});
+	it("an unknown claude-opus-* does NOT price at Sonnet rates ($3/$15)", () => {
+		// Any future claude-opus-N should fall forward to the opus family, not the sonnet default.
+		const p = priceFor("claude-opus-6");
+		expect(p.inputPerM).not.toBe(3);
+		expect(p.outputPerM).not.toBe(15);
+		// It should resolve to an opus-family price (currently $5/$25 from claude-opus-5).
+		expect(p.inputPerM).toBeGreaterThanOrEqual(5);
 	});
 });
 
