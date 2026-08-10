@@ -188,3 +188,170 @@ describe("classifySubordinateConnectivity", () => {
 		expect(c.message).not.toContain("machine: ");
 	});
 });
+
+// #484 — budget dimension. Runner connectivity and account ceiling are independent.
+describe("classifySubordinateConnectivity — budget dimension (#484)", () => {
+	// A ceiling well above any spend: "budget is clear".
+	const clearBudget = {
+		chargedMicros: 1_000_000, // $1
+		chargedMicrosCeiling: 50_000_000, // $50
+		tokens: 1_000_000,
+		tokenCeiling: 250_000_000,
+		budgetEnforced: false,
+		windowOldestAt: "2026-08-09T10:00:00",
+	};
+	// A ceiling that has been reached.
+	const trippedBudget = {
+		chargedMicros: 50_000_000, // $50 — at the ceiling
+		chargedMicrosCeiling: 50_000_000,
+		tokens: 1_000_000,
+		tokenCeiling: 250_000_000,
+		budgetEnforced: false,
+		windowOldestAt: "2026-08-09T10:00:00",
+	};
+	const trippedTokenBudget = {
+		chargedMicros: 1_000_000,
+		chargedMicrosCeiling: 50_000_000,
+		tokens: 250_000_000, // at the ceiling
+		tokenCeiling: 250_000_000,
+		budgetEnforced: false,
+		windowOldestAt: "2026-08-09T10:00:00",
+	};
+
+	it("attaches a budget field when budgetFacts are supplied", () => {
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: clearBudget,
+		});
+		expect(c.budget).toBeDefined();
+		expect(c.budget?.chargedMicros).toBe(1_000_000);
+		expect(c.budget?.ceilingTripped).toBe(false);
+	});
+
+	it("omits budget when no budgetFacts are supplied (backward-compatible)", () => {
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+		});
+		expect(c.budget).toBeUndefined();
+	});
+
+	it("sets ceilingTripped=true when charged spend hits the ceiling", () => {
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: trippedBudget,
+		});
+		expect(c.budget?.ceilingTripped).toBe(true);
+	});
+
+	it("sets ceilingTripped=true when token count hits the ceiling", () => {
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: trippedTokenBudget,
+		});
+		expect(c.budget?.ceilingTripped).toBe(true);
+	});
+
+	it("does NOT lower canWork when enforcement is off, even when ceiling is tripped", () => {
+		// THE key invariant from #485: observe-only is the default. A tripped ceiling must
+		// never block delegation unless BUDGET_ENFORCE is on. Lowering canWork here would
+		// reintroduce exactly the blocking that #485 removed.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: { ...trippedBudget, budgetEnforced: false },
+		});
+		expect(c.canWork).toBe(true);
+		expect(c.budget?.ceilingTripped).toBe(true);
+		expect(c.budget?.budgetEnforced).toBe(false);
+	});
+
+	it("lowers canWork when enforcement is on and ceiling is tripped", () => {
+		// When BUDGET_ENFORCE=true, the ceiling is a hard gate. A supervisor that sees
+		// canWork:true must be able to trust it — so a tripped ceiling that blocks reserve()
+		// must also be visible here, not only discovered when the first loop step fails.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: { ...trippedBudget, budgetEnforced: true },
+		});
+		expect(c.canWork).toBe(false);
+		expect(c.budget?.ceilingTripped).toBe(true);
+		expect(c.budget?.budgetEnforced).toBe(true);
+		// Message must explain why and not suggest starting a runner.
+		expect(c.message).toMatch(/ceiling/i);
+		expect(c.message).not.toMatch(/pags up/i);
+	});
+
+	it("keeps canWork true when ceiling is not tripped and enforcement is on", () => {
+		// A clear ceiling under enforcement must not gate anything — the flag alone must not block.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: { ...clearBudget, budgetEnforced: true },
+		});
+		expect(c.canWork).toBe(true);
+		expect(c.budget?.ceilingTripped).toBe(false);
+	});
+
+	it("runner-connected subordinate: tripped ceiling with enforcement lowers canWork", () => {
+		// The runner path: connected AND ceiling tripped AND enforcement on → canWork false.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: true,
+			hasRuntimeRow: true,
+			relayConnected: true,
+			node: "macbook",
+			now: NOW,
+			budgetFacts: { ...trippedBudget, budgetEnforced: true },
+		});
+		expect(c.state).toBe("attached"); // runner IS connected
+		expect(c.canWork).toBe(false); // but budget blocks
+		expect(c.budget?.ceilingTripped).toBe(true);
+		expect(c.message).toMatch(/ceiling/i);
+	});
+
+	it("runner-connected subordinate: tripped ceiling without enforcement keeps canWork", () => {
+		// Enforcement off → the runner verdict alone decides canWork. Budget is advisory.
+		const c = classifySubordinateConnectivity({
+			requiresRunner: true,
+			hasRuntimeRow: true,
+			relayConnected: true,
+			node: "macbook",
+			now: NOW,
+			budgetFacts: { ...trippedBudget, budgetEnforced: false },
+		});
+		expect(c.state).toBe("attached");
+		expect(c.canWork).toBe(true); // enforcement off → runner wins
+		expect(c.budget?.ceilingTripped).toBe(true);
+	});
+
+	it("surfaces windowOldestAt in the budget field for reset timing", () => {
+		const c = classifySubordinateConnectivity({
+			requiresRunner: false,
+			hasRuntimeRow: false,
+			relayConnected: false,
+			now: NOW,
+			budgetFacts: { ...trippedBudget, budgetEnforced: true, windowOldestAt: "2026-08-09T10:00:00" },
+		});
+		expect(c.budget?.windowOldestAt).toBe("2026-08-09T10:00:00");
+		// The message should mention when headroom returns.
+		expect(c.message).toContain("2026-08-09T10:00:00");
+	});
+});

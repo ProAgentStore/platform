@@ -38,9 +38,12 @@ import {
 import { logError } from "../error-log.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
-import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
+import { classifySubordinateConnectivity, type BudgetFacts } from "../subordinate-connectivity.js";
 import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
 import { CONFIG_LEGEND, objectiveConflict, resolveSubordinateConfig, type SubordinateConfig } from "../subordinate-config.js";
+import { isBudgetEnforced, resolveAccountCeilings, DAILY_CEILING_MICROS, DAILY_TOKEN_CEILING } from "../delegation-budget-store.js";
+import { accountUsageSince } from "../usage.js";
+import { formatTokens } from "../delegation-budget.js";
 import type { SettingsField } from "../agent-capabilities.js";
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 
@@ -323,7 +326,33 @@ async function observeSubordinates(
 			});
 			return fallback;
 		};
-	const [work, runs, facts, acts] = await Promise.all([
+	// #484: account budget — one read per status call, shared across all subordinates.
+	// Fails open: a D1 blip must not hide the roster from a supervisor who just needs to know
+	// who is online. The budget field is advisory unless enforcement is on.
+	const budgetFactsPromise: Promise<BudgetFacts> = (async () => {
+		const [window, ceilings, oldestRow] = await Promise.all([
+			accountUsageSince(ctx.env, userId, 24).catch(() => ({ chargedMicros: 0, tokens: 0 })),
+			resolveAccountCeilings(ctx.env, userId).catch(() => ({
+				chargedMicrosCeiling: DAILY_CEILING_MICROS,
+				tokenCeiling: DAILY_TOKEN_CEILING,
+				perTreeCostMicros: 5_000_000,
+				perTreeDelegations: 50,
+				perTreeMaxDepth: 4,
+			})),
+			ctx.env.DB.prepare(
+				`SELECT MIN(created_at) AS oldest FROM ai_usage WHERE user_id = ?1 AND created_at >= datetime('now', '-24 hours')`,
+			).bind(userId).first<{ oldest: string | null }>().catch(() => null),
+		]);
+		return {
+			chargedMicros: window.chargedMicros,
+			chargedMicrosCeiling: ceilings.chargedMicrosCeiling,
+			tokens: window.tokens,
+			tokenCeiling: ceilings.tokenCeiling,
+			budgetEnforced: isBudgetEnforced(ctx.env),
+			windowOldestAt: oldestRow?.oldest ?? null,
+		};
+	})();
+	const [work, runs, facts, acts, budgetFacts] = await Promise.all([
 		recentWorkForInstances(ctx.env, userId, ids, limit).catch(degrade("work", [] as WorkItem[])),
 		recentRunsForInstances(ctx.env, userId, ids).catch(degrade("runs", [] as RunItem[])),
 		runtimeConnectivityMany(ctx.env, userId, ids).catch(degrade("connectivity", new Map<string, RuntimeFacts>())),
@@ -337,6 +366,7 @@ async function observeSubordinates(
 		// construction — an ordinary run produces none — so this only bites the pathological case,
 		// and in that case the newest few already say what is happening.
 		recentActsForInstances(ctx.env, userId, ids, MAX_ACTS_PER_SUBORDINATE).catch(degrade("acts", [] as ActItem[])),
+		budgetFactsPromise.catch(degrade("budget", null as BudgetFacts | null)),
 	]);
 	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
 	// Connectivity is attached HERE rather than inside `summarizeSubordinates` because it is a
@@ -354,6 +384,9 @@ async function observeSubordinates(
 				classifySubordinateConnectivity({
 					requiresRunner: src?.requiresRunner ?? false,
 					...(f ?? EMPTY_RUNTIME_FACTS),
+					// #484: budget dimension — shared across all subordinates (one account read).
+					// Absent when the read failed so old-path callers stay unaffected.
+					...(budgetFacts ? { budgetFacts } : {}),
 				}),
 			] as const;
 		}),
@@ -594,6 +627,51 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			const asked = String(input.instanceId ?? "");
 			const target = resolveSubordinate(await subordinateSummaries(ctx), asked);
 			if (!target.ok) return { content: target.message, success: false };
+			// #484: pre-flight budget check. When enforcement is on, check the account ceiling
+			// BEFORE starting the workflow — surfacing the numbers now is cheaper and more
+			// actionable than having the first loop iteration fail with a budget refusal.
+			// When enforcement is OFF this is observe-only and we proceed even if the ceiling
+			// is tripped (the run will start and the first reserve() will be a no-op block).
+			if (isBudgetEnforced(ctx.env)) {
+				const userId = ctx.userId ?? "";
+				const [window, ceilings] = await Promise.all([
+					accountUsageSince(ctx.env, userId, 24).catch(() => ({ chargedMicros: 0, tokens: 0 })),
+					resolveAccountCeilings(ctx.env, userId).catch(() => null),
+				]);
+				if (ceilings) {
+					if (window.chargedMicros >= ceilings.chargedMicrosCeiling) {
+						// Oldest entry in the window — tells the supervisor when headroom returns.
+						const oldest = await ctx.env.DB.prepare(
+							`SELECT MIN(created_at) AS oldest FROM ai_usage WHERE user_id = ?1 AND created_at >= datetime('now', '-24 hours')`,
+						).bind(userId).first<{ oldest: string | null }>().catch(() => null);
+						const resetHint = oldest?.oldest
+							? ` Oldest usage entry in the window: ${oldest.oldest} — headroom returns as entries age past the 24h mark.`
+							: " Headroom returns as usage entries age past the 24-hour mark.";
+						return {
+							content:
+								`Cannot delegate: the account's daily charged-spend ceiling has been reached ` +
+								`($${(window.chargedMicros / 1_000_000).toFixed(2)} of $${(ceilings.chargedMicrosCeiling / 1_000_000).toFixed(2)} used in the last 24h).` +
+								resetHint,
+							success: false,
+						};
+					}
+					if (window.tokens >= ceilings.tokenCeiling) {
+						const oldest = await ctx.env.DB.prepare(
+							`SELECT MIN(created_at) AS oldest FROM ai_usage WHERE user_id = ?1 AND created_at >= datetime('now', '-24 hours')`,
+						).bind(userId).first<{ oldest: string | null }>().catch(() => null);
+						const resetHint = oldest?.oldest
+							? ` Oldest usage entry in the window: ${oldest.oldest} — headroom returns as entries age past the 24h mark.`
+							: " Headroom returns as usage entries age past the 24-hour mark.";
+						return {
+							content:
+								`Cannot delegate: the account's daily token ceiling has been reached ` +
+								`(${formatTokens(window.tokens)} of ${formatTokens(ceilings.tokenCeiling)} tokens used in the last 24h).` +
+								resetHint,
+							success: false,
+						};
+					}
+				}
+			}
 			const res = await delegateToInstance(ctx.env, {
 				userId: ctx.userId ?? "",
 				supervisorInstanceId: ctx.instanceId ?? "",
