@@ -194,6 +194,16 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 		return () => { document.body.style.overflow = prev; };
 	}, []);
 
+	/**
+	 * IGNORABLE (#291), and this is the clearest case in the console.
+	 *
+	 * These are individual remote-input events — a mouse move every 90ms, a keystroke, a wheel
+	 * tick — and the ~2fps frame poll IS the feedback: a click that did not land is visible as a
+	 * page that did not change, immediately and without being told. An error state per event would
+	 * be both unreadable at this rate and less informative than the screen the user is already
+	 * watching. `endTakeover` above is the opposite case and is handled there, because ending is
+	 * the one action here whose result the frame cannot show.
+	 */
 	const send = useCallback((body: Record<string, unknown>) =>
 		api(`/v1/instances/${instanceId}/takeover/${taskId}/input`, { method: "POST", body: JSON.stringify(body) }).catch(() => {}), [instanceId, taskId]);
 

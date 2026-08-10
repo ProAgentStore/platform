@@ -372,7 +372,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// the history — it is the same growing transcript — so it is stitched on, and when
 			// there is neither the empty state says WHICH of the four causes applies.
 			applyCapture(d);
-		} catch {}
+		} catch {
+			// IGNORABLE (#291): a 1.5s poll. Keeping the last good pane is the CORRECT response to
+			// one dropped read — the terminal contents did not change because we failed to fetch
+			// them — and the next tick either succeeds or the runner-offline banner explains the
+			// silence. An error state per failed tick would flash faster than it can be read.
+		}
 	}, [instanceId, openSession, applyCapture]);
 
 	// State of the currently-open session — the terminal poll's busy signal AND the header badge
@@ -400,7 +405,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// Only when there is something: an empty answer here means a failed/racing read, and
 			// replacing a live thread with [] would blank the conversation mid-session.
 			if (entries.length > 0) setSummaryHistory(entries);
-		} catch {}
+		} catch {
+			// IGNORABLE (#291): a 4.5s poll whose only job is to ADD newly-arrived turns. The line
+			// above is the real guard — this poll may never shrink the thread — so a failed read
+			// leaves the conversation exactly as the user last saw it, which is the truth.
+		}
 	}, [instanceId, openSession]);
 
 	useTieredPolling(pollSummary, { activeMs: 4500, passiveMs: 20000 }, terminalBusy, copilot && !!openSession && view === "summary");
@@ -749,7 +758,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		try {
 			const d = await api<{ issue?: { body?: string } }>(`/v1/instances/${instanceId}/coding/repos/${repo.id}/issues/${issue.number}`);
 			body = d.issue?.body ? `\n\n${d.issue.body}` : "";
-		} catch {}
+		} catch {
+			// IGNORABLE (#291): the body ENRICHES an objective that is already complete without it
+			// ("Fix issue #12: <title>"), and this flow is approve-first — the objective lands in
+			// an input the user reviews and sends. A missing body is visible in the box they are
+			// about to read, so the UI already shows what was and was not fetched.
+		}
 		const objective = `Fix issue #${issue.number}: ${issue.title}${body}`;
 		await openRepoSession(repo.id);
 

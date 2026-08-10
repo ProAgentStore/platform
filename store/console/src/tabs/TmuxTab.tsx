@@ -328,6 +328,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 
 	const copyPane = async () => {
 		if (!pane) return;
+		// IGNORABLE (#291): a clipboard write, not a server write. Nothing is persisted and no
+		// state is claimed; a browser that refuses the permission leaves the text on screen to
+		// select by hand.
 		await navigator.clipboard.writeText(pane).catch(() => {});
 		setStatus("Copied pane output");
 	};

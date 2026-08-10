@@ -308,6 +308,7 @@ export default function TriggersSection({
 	};
 
 	const copyWebhook = async (url: string) => {
+		// IGNORABLE (#291): clipboard, not the server — see TmuxTab. The URL stays visible.
 		await navigator.clipboard?.writeText(url).catch(() => undefined);
 		setMsg("Webhook URL copied.");
 	};

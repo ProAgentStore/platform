@@ -586,6 +586,10 @@ function InstancePage() {
 		// and it would be the one row in the thread with no time on it (#336).
 		setMessages((prev) => [...prev, { role: "system", content, createdAt: new Date().toISOString() }]);
 		if (id && persist) {
+			// IGNORABLE (#291): the line is already in `messages` (set synchronously above), so the
+			// user has read it. This is persistence only, and the same recursion argument as the
+			// Coder's `emitSystem` applies — the report of a failed system message would be a
+			// system message. See agents/coder/web/src/use-coding-loop.ts.
 			api(`/v1/instances/${id}/system-message`, {
 				method: "POST",
 				body: JSON.stringify({ content }),

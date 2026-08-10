@@ -51,7 +51,12 @@ export default function Layout() {
 		try {
 			const d = await api<{ unreadCount?: number }>("/v1/notifications?unread=true&limit=1");
 			setUnreadCount(d.unreadCount || 0);
-		} catch {}
+		} catch {
+			// IGNORABLE (#291): a bell badge is an at-a-glance hint, not a record, and it re-loads.
+			// The Notifications page it points at now reports its OWN read failure, so the place
+			// where a missing count would actually mislead someone is covered — putting an error
+			// state in the global header for it would follow the user onto every screen.
+		}
 	}, [user]);
 
 	useEffect(() => { loadBadge(); }, [loadBadge]);

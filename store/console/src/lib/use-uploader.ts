@@ -213,6 +213,11 @@ export function useUploader(instanceId: string | undefined, onDone: () => void) 
 		const session = loadSession(localId);
 		if (session && instanceId) {
 			// Best-effort: free the stored parts in R2.
+			// IGNORABLE (#291): a best-effort abort of an upload the user has ALREADY abandoned.
+			// There is no state to correct — the upload is gone from the UI either way — and R2
+			// expires an incomplete multipart on its own, so a failed abort costs storage that
+			// cleans itself up, not correctness. Surfacing it would report a failure to cancel
+			// something the user has stopped caring about.
 			void authedJson(`/v1/instances/${instanceId}/files/multipart/${encodeURIComponent(session.uploadId)}?key=${encodeURIComponent(session.key)}`, { method: "DELETE" }).catch(() => {});
 		}
 		clearSession(localId);

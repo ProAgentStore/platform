@@ -64,7 +64,13 @@ export function useGloss(instanceId: string | undefined, tab: string, messages: 
 				setTargetTag(d.translation?.targetTag || "en-US");
 				setWordTap(d.translation?.wordTap !== false);
 				setFontSize(d.translation?.fontSize || "medium");
-			} catch {}
+			} catch {
+				// IGNORABLE (#291): this read only decides whether an OPTIONAL layer (under-message
+				// translation + transliteration) is drawn. Failing closed leaves the chat exactly as
+				// it is without the gloss — every message is still fully readable in its original
+				// form — so nothing is hidden and nothing false is asserted. An error banner over a
+				// chat because an accessory could not be configured would be worse than the absence.
+			}
 		})();
 	}, [instanceId, tab]);
 

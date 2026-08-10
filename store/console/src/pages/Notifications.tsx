@@ -50,6 +50,8 @@ export default function Notifications() {
 	};
 
 	const markRead = async (id: string) => {
+		// IGNORABLE (#291): see ConversationContext — a failed mark-read re-appears on the next
+		// poll instead of persisting a lie, and the notification has already been read by the human.
 		await api(`/v1/notifications/${id}/read`, { method: "POST" }).catch(() => {});
 	};
 

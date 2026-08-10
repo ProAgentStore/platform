@@ -56,6 +56,12 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	const emitSystem = (content: string) => {
 		onMessageRef.current({ role: "system", content });
 		if (sessionId) {
+			// IGNORABLE (#291): the UI already has the line — `onMessageRef` above put it in the
+			// thread synchronously, which is the half the user reads. This POST only makes it
+			// survive a reload, and reporting its failure would mean emitting a SECOND system
+			// message about the first one failing to persist, which would itself be a system
+			// message that might not persist. The notice is a narration of work reported
+			// elsewhere, never the only record that the work happened.
 			api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/system-message`, {
 				method: "POST",
 				body: JSON.stringify({ content }),

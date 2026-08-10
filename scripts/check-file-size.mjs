@@ -389,7 +389,11 @@ const PINS = {
 	// comments naming the UUID cursor that could never have worked.
 	// +3 at #492: `isRepo` const beside `isApply`, and `isCoding`+`isRepo` passed in `active.render()`.
 	// Both booleans feed the Settings tab's "Where things live" card only; no behaviour change elsewhere.
-	"store/console/src/pages/InstanceDetail.tsx": 1499,
+	// +4 at #291, all prose: the system-message persistence POST stays swallowed, and the note
+	// says why — the line is already in `messages` synchronously, so the user has read it, and
+	// reporting a failed system message would require emitting a second system message that
+	// might equally fail. That recursion is the reason, and it is not visible from the code.
+	"store/console/src/pages/InstanceDetail.tsx": 1503,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -460,7 +464,15 @@ const PINS = {
 	// split because the alternative to these lines is the silence they replace: this tab's whole
 	// defect class is that an optimistic update is indistinguishable from a confirmed one, and
 	// every line here exists to make one of the three distinguishable.
-	"agents/coder/web/src/CodingTab.tsx": 1333,
+	// +14 at #291 (second pass), and all fourteen are prose. Three reads on this tab stay
+	// swallowed ON PURPOSE — two polls (1.5s terminal, 4.5s summary) and the issue-body
+	// enrichment — and the comments say why each is the correct behaviour rather than an
+	// oversight: keeping the last good pane IS the truthful response to a dropped poll, since
+	// the terminal did not change because we failed to read it. Without the note the obvious
+	// "consistency" edit is to give them error states, which would flash faster than they can
+	// be read and would blank a live thread. #291's third criterion is exactly this: the
+	// remaining silences are only reviewable if each one states its reason.
+	"agents/coder/web/src/CodingTab.tsx": 1347,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -817,7 +829,11 @@ const PINS = {
 	// +12 at #291: the CodingTab raise carries an unusually long reason because the triage IS the
 	// deliverable on that issue — it has to record which three writes were silent and why the
 	// sentences moved to a sibling module rather than the pin moving further. Plus this self-ref.
-	"scripts/check-file-size.mjs": 901,
+	// +14 at #291 (second pass): the CodingTab and InstanceDetail raises above, both of which
+	// are pure comment prose recording why a swallow is CORRECT — plus this self-ref. The
+	// ledger growing to hold "why this silence is right" is the same growth as "why this file
+	// is bigger"; both are reasons, which is the only thing this list is allowed to accumulate.
+	"scripts/check-file-size.mjs": 917,
 };
 
 /**

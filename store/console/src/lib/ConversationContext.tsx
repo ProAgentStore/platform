@@ -205,6 +205,10 @@ export function useConversationSwitch() {
 			// Fire and forget: failing to clear a notice costs one repeat visit, whereas awaiting
 			// it would put a round trip between the command and the move.
 			for (const id of pick.notificationIds) {
+				// IGNORABLE (#291): marking a notification read is a convenience, and its failure is
+				// self-correcting — the bell badge re-polls, so an unread that failed to clear
+				// simply reappears rather than misleading anyone. The user has already SEEN the
+				// notification, which is the thing that mattered.
 				void api(`/v1/notifications/${id}/read`, { method: "POST" }).catch(() => {});
 			}
 			switchTo(pick, { mode: from.mode, reason: pick.reason });
