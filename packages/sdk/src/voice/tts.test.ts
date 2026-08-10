@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanForSpeech, VoiceTts } from "./tts.js";
+import { cleanForSpeech, playAudioBufferSource, PLAYBACK_WATCHDOG_SLACK_MS, VoiceTts, type AudioSourceLike } from "./tts.js";
 
 describe("cleanForSpeech", () => {
 	it("leaves plain prose untouched", () => {
@@ -292,5 +292,88 @@ describe("VoiceTts OpenAI playback — iOS AudioContext recovery", () => {
 		expect(resume).toHaveBeenCalled();
 		expect(decodeAudioData).not.toHaveBeenCalled(); // never got a running context
 		expect(synthSpeak).toHaveBeenCalled(); // used the browser voice
+	});
+});
+
+describe("playAudioBufferSource — always resolves", () => {
+	afterEach(() => { vi.useRealTimers(); });
+
+	/** A stub AudioBufferSourceNode that fires onended immediately on start(). */
+	const makeSource = (): AudioSourceLike & { start: ReturnType<typeof vi.fn> } => ({
+		onended: null,
+		onerror: null,
+		start: vi.fn(function (this: AudioSourceLike) { this.onended?.(new Event("ended")); }),
+	});
+
+	it("resolves when onended fires", async () => {
+		const source = makeSource();
+		await expect(playAudioBufferSource(source, 1)).resolves.toBeUndefined();
+		expect(source.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("resolves when onerror fires (node failure) instead of hanging", async () => {
+		const source: AudioSourceLike = {
+			onended: null,
+			onerror: null,
+			// simulate a node that fires onerror, not onended
+			start: vi.fn(function (this: AudioSourceLike) { this.onerror?.(new Event("error")); }),
+		};
+		await expect(playAudioBufferSource(source, 1)).resolves.toBeUndefined();
+	});
+
+	it("resolves via the watchdog when neither onended nor onerror fires (the wedge bug)", async () => {
+		vi.useFakeTimers();
+		const source: AudioSourceLike = {
+			onended: null,
+			onerror: null,
+			// node never fires either callback
+			start: vi.fn(),
+		};
+		const audioDurationS = 2;
+		const promise = playAudioBufferSource(source, audioDurationS);
+		// should NOT have resolved yet
+		let resolved = false;
+		void promise.then(() => { resolved = true; });
+		await vi.runAllTimersAsync();
+		expect(resolved).toBe(true);
+	});
+
+	it("watchdog fires after audioDuration + slack, not before", async () => {
+		vi.useFakeTimers();
+		const source: AudioSourceLike = {
+			onended: null,
+			onerror: null,
+			start: vi.fn(),
+		};
+		const audioDurationS = 3;
+		const promise = playAudioBufferSource(source, audioDurationS);
+		let resolved = false;
+		void promise.then(() => { resolved = true; });
+
+		// advance to just before the watchdog should fire
+		await vi.advanceTimersByTimeAsync(audioDurationS * 1_000 + PLAYBACK_WATCHDOG_SLACK_MS - 1);
+		expect(resolved).toBe(false);
+
+		// one more ms — watchdog fires
+		await vi.advanceTimersByTimeAsync(1);
+		expect(resolved).toBe(true);
+	});
+
+	it("does not double-resolve when onended fires before the watchdog", async () => {
+		vi.useFakeTimers();
+		let resolveCount = 0;
+		const source: AudioSourceLike = {
+			onended: null,
+			onerror: null,
+			start: vi.fn(function (this: AudioSourceLike) { this.onended?.(new Event("ended")); }),
+		};
+		const p = playAudioBufferSource(source, 5);
+		void p.then(() => { resolveCount++; });
+
+		// Let onended fire immediately
+		await Promise.resolve();
+		// Advance past the watchdog window — should not call resolve again
+		await vi.runAllTimersAsync();
+		expect(resolveCount).toBe(1);
 	});
 });

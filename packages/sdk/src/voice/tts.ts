@@ -120,6 +120,51 @@ function sharedAudioCtx(): AudioContext {
 	return _sharedCtx;
 }
 
+/**
+ * Exported for unit tests only — do not call from outside tts.ts.
+ *
+ * Wraps an `AudioBufferSourceNode` playback in a promise that ALWAYS resolves, even when:
+ * - `onerror` fires instead of `onended` (the node failed to play back the audio), or
+ * - the node stalls and neither callback ever fires (the "speaking · tap to stop" hang).
+ *
+ * The watchdog fires after `audioDurationS * 1000 + PLAYBACK_WATCHDOG_SLACK_MS`, which gives a
+ * generous buffer beyond the clip's own duration without letting a stalled node wedge hands-free
+ * indefinitely.
+ *
+ * `AudioBufferSourceNode.onerror` is not in the TypeScript DOM types (it is a runtime-only
+ * property on some implementations), so the parameter is typed as a minimal interface rather
+ * than `Pick<AudioBufferSourceNode, …>`.
+ */
+export const PLAYBACK_WATCHDOG_SLACK_MS = 5_000;
+
+export interface AudioSourceLike {
+	onended: ((ev: Event) => void) | null;
+	// `onerror` is absent from TypeScript's AudioScheduledSourceNode types but exists at runtime
+	// on some browsers (iOS Safari). We wire it here to avoid the silent hang described above.
+	onerror: ((ev: Event) => void) | null;
+	start(): void;
+}
+
+export function playAudioBufferSource(source: AudioSourceLike, audioDurationS: number): Promise<void> {
+	return new Promise<void>((resolve) => {
+		let done = false;
+		const finish = (_ev?: Event) => { if (!done) { done = true; clearTimeout(id); resolve(); } };
+
+		// Normal path: the node finished playing.
+		source.onended = finish;
+		// Error path: the node failed (e.g. AudioBufferSourceNode.onerror on iOS, or a
+		// decoding glitch) — resolving (not rejecting) lets the caller decide what to do
+		// (fall back to the browser voice, log, etc.).
+		source.onerror = finish;
+		// Watchdog: if neither callback ever fires (the stall that wedges hands-free on
+		// "Speaking · tap to stop"), resolve after the clip's expected duration plus slack.
+		const watchdogMs = Math.ceil(audioDurationS * 1_000) + PLAYBACK_WATCHDOG_SLACK_MS;
+		const id = setTimeout(finish, watchdogMs);
+
+		source.start();
+	});
+}
+
 export class VoiceTts {
 	provider: string;
 	apiKey: string;
@@ -336,10 +381,9 @@ export class VoiceTts {
 			source.buffer = audioBuf;
 			source.connect(ctx.destination);
 			this._currentSource = source;
-			await new Promise<void>((resolve) => {
-				source.onended = () => resolve();
-				source.start();
-			});
+			// AudioBufferSourceNode.onerror is absent from the TS DOM types but exists at
+			// runtime on iOS Safari. The cast lets us wire it in playAudioBufferSource.
+			await playAudioBufferSource(source as unknown as AudioSourceLike, audioBuf.duration);
 			this._currentSource = null;
 		} catch (e) {
 			reportClientError("voice-tts", `OpenAI TTS failed: ${e instanceof Error ? e.message : String(e)} — using browser voice`);
