@@ -1,4 +1,5 @@
 import type { Env } from "../types.js";
+import { normalizeRunnerNode } from "./runtime-nodes.js";
 import { isValidJsonPathKey, jsonPath } from "./sql.js";
 
 /**
@@ -127,6 +128,34 @@ export function parseConfigBlob(raw: string | null | undefined): Record<string, 
 	} catch {
 		return {};
 	}
+}
+
+/**
+ * The ONLY two `agent_instances.config` keys `GET /v1/instances/my/instances` may carry (#500).
+ *
+ * That route drops `config` wholesale because it "may hold secrets/internal settings", and that
+ * reason is still good. But the runner's "leave an agent pinned to another machine alone" check
+ * reads `inst.config?.runnerNode` off exactly this response (`membership.ts:32`), so dropping the
+ * blob made that check dead code on every machine, always: `pin` was `undefined` for every
+ * instance, so every runner attached every agent — including ones the user had pinned elsewhere,
+ * which is how one laptop ended up holding relay sockets for agents bound to another.
+ *
+ * A WHITELIST is what fixes that without re-opening the leak. Returning the blob minus a denylist
+ * would mean every key added to config later ships to the client by default; here a new key has
+ * to be named to travel, and the route-level test pins the response to these keys and no others.
+ */
+export interface InstanceListView {
+	/** A user-set (or auto-numbered) per-instance display name — overrides the agent name. */
+	displayName: string | null;
+	/** `config.runnerNode`: the machine this instance is pinned to. Empty (= automatic) is null. */
+	runnerNode: string | null;
+}
+
+/** Parse the list-safe view of an instance config. Malformed JSON reads as "nothing set". */
+export function instanceListView(raw: string | null | undefined): InstanceListView {
+	const cfg = parseConfigBlob(raw);
+	const displayName = typeof cfg.displayName === "string" ? cfg.displayName.trim() : "";
+	return { displayName: displayName || null, runnerNode: normalizeRunnerNode(cfg.runnerNode) || null };
 }
 
 interface ConfigRow {

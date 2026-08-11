@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidConfigKey, patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
+import { instanceListView, isValidConfigKey, patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
 import type { Env } from "../types.js";
 
 /** Captures the SQL + bindings so the shape of the statement is assertable without a DB. */
@@ -109,6 +109,37 @@ describe("isValidConfigKey", () => {
 		for (const k of ["settings", "behaviour", "board", "translation", "disabledTools", "codingEngines", "specialInstructions", "pipelines", "runnerNode"]) {
 			expect(isValidConfigKey(k)).toBe(true);
 		}
+	});
+});
+
+// ── The list view (#500): a whitelist, so a later config key cannot ship by accident ──
+describe("instanceListView", () => {
+	it("carries the runner-node pin — the field `pags up` filters membership on", () => {
+		expect(instanceListView(JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" })).runnerNode)
+			.toBe("RLs-MacBook-Air.local");
+	});
+
+	it("reports an unpinned instance as null, so the response omits `config` entirely", () => {
+		expect(instanceListView("{}").runnerNode).toBeNull();
+		expect(instanceListView(JSON.stringify({ runnerNode: "  " })).runnerNode).toBeNull();
+		expect(instanceListView(null).runnerNode).toBeNull();
+	});
+
+	it("returns ONLY the two whitelisted keys — a secret in the blob has no way out", () => {
+		const view = instanceListView(JSON.stringify({
+			displayName: " My Coder ",
+			runnerNode: "mac-mini",
+			credentials: { password: "hunter2" },
+			settings: { target_language: "zh" },
+			specialInstructions: "never say this out loud",
+		}));
+		expect(Object.keys(view).sort()).toEqual(["displayName", "runnerNode"]);
+		expect(view.displayName).toBe("My Coder");
+		expect(JSON.stringify(view)).not.toContain("hunter2");
+	});
+
+	it("treats a malformed blob as nothing set rather than throwing", () => {
+		expect(instanceListView("{not json")).toEqual({ displayName: null, runnerNode: null });
 	});
 });
 

@@ -310,6 +310,44 @@ describe("GET /v1/instances/my/instances (integration)", () => {
 		expect(body.instances[0].agentName).toBe("Coder"); // original agent name preserved
 	});
 
+	// #500: `pags up`'s "leave an agent pinned to another machine alone" check reads
+	// `inst.config?.runnerNode` off THIS response. The blob was dropped whole, so the pin was
+	// undefined on every instance on every machine and every runner attached every agent. The
+	// CLI's own unit test passed both ways because it fed the pure function a shape the route
+	// had never sent — so the assertion that means anything is this one, at the route.
+	it("carries the runner-node pin for a pinned instance — and no other config key", async () => {
+		const rows = [{
+			id: "inst-1", agent_id: "a1", status: "active", created_at: "",
+			instance_config: JSON.stringify({
+				runnerNode: "RLs-MacBook-Air.local",
+				specialInstructions: "private rules",
+				settings: { token: "sk-should-never-ship" },
+			}),
+			name: "Coder", slug: "coder", description: "", category: "code", icon: "", icon_bg: "", config: "{}",
+		}];
+		const { app, env } = buildApp({ myInstances: rows });
+		const res = await get(app, env, "/v1/instances/my/instances", await tokenFor("u1"));
+		const text = await res.text();
+		const body = JSON.parse(text) as { instances: Array<{ config?: Record<string, unknown> }> };
+		expect(body.instances[0].config).toEqual({ runnerNode: "RLs-MacBook-Air.local" });
+		// These keys and no others — a denylist would ship each new config key by default.
+		expect(Object.keys(body.instances[0].config ?? {})).toEqual(["runnerNode"]);
+		expect(text).not.toContain("sk-should-never-ship");
+		expect(text).not.toContain("private rules");
+	});
+
+	it("omits `config` entirely when the instance is not pinned", async () => {
+		const rows = [{
+			id: "inst-1", agent_id: "a1", status: "active", created_at: "",
+			instance_config: JSON.stringify({ displayName: "Unpinned" }),
+			name: "Coder", slug: "coder", description: "", category: "code", icon: "", icon_bg: "", config: "{}",
+		}];
+		const { app, env } = buildApp({ myInstances: rows });
+		const res = await get(app, env, "/v1/instances/my/instances", await tokenFor("u1"));
+		const body = await res.json() as { instances: Array<Record<string, unknown>> };
+		expect("config" in body.instances[0]).toBe(false);
+	});
+
 	// #67: cancelling was the only non-destructive way to retire a duplicate instance, but this
 	// list returned canceled rows anyway — so the console nav, MCP's instance resolution and
 	// `pags up` all kept offering an instance the user had already retired.

@@ -61,7 +61,7 @@ export {
 import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment } from "../lib/runtime-attachment.js";
-import { patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
+import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -299,16 +299,13 @@ instanceRoutes.get("/my/instances", async (c) => {
 	// arrays) are omitted here and remain fetchable per-instance via
 	// GET /v1/agents/:id/settings-schema and GET /v1/instances/:id/settings.
 	//
-	// `config` (which may hold secrets/internal settings) is dropped from the response.
+	// `config` (which may hold secrets/internal settings) is dropped from the response — all of
+	// it except the two keys `instanceListView` whitelists: the display name (how two instances
+	// of one agent stay distinguishable) and the runner-node PIN, which `pags up` filters its
+	// membership on and could not see while the whole blob was dropped (#500).
 	const instances = (results ?? []).map((r) => {
 		const { config, instance_config, last_activity_at, ...rest } = r;
-		// A user-set (or auto-numbered) per-instance display name overrides the agent
-		// name — how two instances of the same agent stay distinguishable.
-		let displayName: string | undefined;
-		try {
-			const cfg = instance_config ? (JSON.parse(instance_config as string) as Record<string, unknown>) : {};
-			if (typeof cfg.displayName === "string" && cfg.displayName.trim()) displayName = cfg.displayName.trim();
-		} catch { /* malformed config — keep the agent name */ }
+		const view = instanceListView(instance_config as string | null);
 		// Full capabilities (with boardColumns + settingsSchema) cost ~83 KB for 28
 		// instances. The list only needs the routing fields; heavy config lives on the
 		// per-instance/per-agent detail routes.
@@ -316,7 +313,10 @@ instanceRoutes.get("/my/instances", async (c) => {
 		const { boardColumns: _bc, settingsSchema: _ss, ...lightCaps } = fullCaps;
 		return {
 			...rest,
-			...(displayName ? { name: displayName, agentName: r.name } : {}),
+			...(view.displayName ? { name: view.displayName, agentName: r.name } : {}),
+			// Present ONLY when pinned, so an unpinned instance answers with no `config` key at
+			// all and the shipped runner's `inst.config?.runnerNode` reads undefined as before.
+			...(view.runnerNode ? { config: { runnerNode: view.runnerNode } } : {}),
 			lastActivityAt: last_activity_at ?? null,
 			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
 			// console renders tabs from, so it is the path that must consult it.
