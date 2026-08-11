@@ -25,7 +25,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { agentCapabilities, sanitizeToolList } from "./agent-capabilities.js";
 import { lintAgentClaims } from "./agent-claims-lint.js";
-import { registryConnectorGroups } from "./tool-registry.js";
+import { registryConnectorGroups, registryTools } from "./tool-registry.js";
+import { TOOL_LIST_CLOSED, connectorToolsPrompt, type PromptTool } from "./connector-tool-prompt.js";
 import { toolNamesFor } from "../agent-do-tools.js";
 
 const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0099_tmux_operator_backend_exclusive_tools.sql", import.meta.url)), "utf8");
@@ -114,6 +115,38 @@ describe("migration 0117 — adds tmux_send_message to the tmux Operator (#482)"
 		const granted = toolNamesFor(CAPS);
 		for (const name of DECLARED) expect(granted.has(name)).toBe(true);
 		for (const name of TERMINAL_TOOLS) expect(granted.has(name)).toBe(false);
+	});
+});
+
+describe("#493 — the block the LIVE Operator receives closes its own tool list", () => {
+	/**
+	 * Acceptance, end-to-end against the real seed: the tool names come from migration 0117, the
+	 * schemas and descriptions from the real registry, and the block from the real prompt builder.
+	 * A fixture would have proved the sentence exists; this proves it reaches the agent that asked
+	 * its owner for a repo name it could not have used.
+	 */
+	const operatorTools: PromptTool[] = registryTools()
+		.filter((t) => toolNamesFor(CAPS).has(t.name) && t.connector)
+		.map((t) => ({ name: t.name, description: t.description, connector: t.connector, scope: t.scope, jsonSchema: t.jsonSchema }));
+	const block = connectorToolsPrompt(operatorTools, ["terminal", "tmux"]);
+
+	it("has no github tool to list — the premise of the whole ticket", () => {
+		// Asserted here rather than assumed, because the fix is a sentence about an ABSENCE. If a
+		// later migration grants the Operator read-only GitHub (the issue's separate step 2, the
+		// owner's call), this test is where that decision becomes visible instead of silently
+		// making the guard below vacuous.
+		expect(operatorTools.map((t) => t.name).filter((n) => n.startsWith("github_"))).toEqual([]);
+		expect(operatorTools.length).toBeGreaterThan(0);
+	});
+
+	it("tells it the list is complete, so an unlisted system cannot be offered", () => {
+		expect(block).toContain(TOOL_LIST_CLOSED);
+		expect(block).toContain("This list is COMPLETE");
+	});
+
+	it("forbids asking for the repo name, which is what it actually did four times", () => {
+		expect(block).toContain("Never ask for a detail");
+		expect(block).toContain("never promise a lookup you have not made");
 	});
 });
 

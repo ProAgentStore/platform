@@ -90,6 +90,55 @@ export const CONSENT_RULE =
 	" Settings → Connections — do not attempt the call and describe what it would have done.";
 
 /**
+ * The list is CLOSED (#493).
+ *
+ * ── What happened
+ *
+ * An owner asked a tmux Operator four times for the open GitHub issues. It has seven tools, all
+ * `tmux_*`, and no `github_*` at any scope. It answered: "Can you tell me the GitHub organisation
+ * or repo name so I can pull up the issues right now?" — was given the repo — and asked for it
+ * again. It never had a tool that could pull up an issue, with or without the name.
+ *
+ * ── Why
+ *
+ * Nothing said the list was exhaustive. `CONSENT_RULE` above is entirely about tools the agent
+ * HAS; the block header describes what is listed and says nothing about what is not. Meanwhile
+ * `selfDescriptionPrompt` closes the console TAB list with an explicit NEVER ("if a tab is not in
+ * that list, it does not exist for you"). One enumeration in the prompt is closed and the other is
+ * not, so the model reads the open one as illustrative — and under an owner insisting three times
+ * that the capability exists, the plainest available reading is "I must be missing a parameter".
+ * So it asked for one.
+ *
+ * ── The claim, and the one it is deliberately NOT making
+ *
+ * "You have no way to reach it" would be FALSE, and the issue proposed it. `fetch_url` is in BASE
+ * (`agent-do-tools.ts`), and BASE is seeded even under a declared `capabilities.tools` allowlist,
+ * so every agent can fetch a public URL — a public repo's issues included. Closing the list on an
+ * absolute the platform cannot honour would install exactly the class of false statement this
+ * fixes. What IS true, and sufficient: nothing outside this list has a DEDICATED tool, so the
+ * offer to look it up is a promise about a call that cannot be made. Hence the last clause, which
+ * is the operative one — a general-purpose attempt has to happen in the same reply and be
+ * reported, rather than announced for a turn that never comes.
+ *
+ * ── Why it says not to send the owner to Settings
+ *
+ * It sits next to a rule that ends by pointing at console → Settings → Connections, which is the
+ * right remedy for a listed tool whose consent is not granted and the wrong one here: a subscriber
+ * can DISABLE tools (`config.disabledTools`) but cannot add one — `toolNamesFor` resolves the set
+ * from the agent's definition. "Ask your owner to connect GitHub in Settings" is the same wasted
+ * errand as the original, by a different route.
+ */
+export const TOOL_LIST_CLOSED =
+	"\n\nThis list is COMPLETE: it names every external system you are connected to. A system that is" +
+	" NOT on it — a code host, an issue tracker, a chat platform, a database — is one you have no tool" +
+	" for. Say so plainly and name what you do have instead; do NOT send the owner to Settings for it," +
+	" because this toolset is fixed by the agent's definition and is not a switch they can flip." +
+	" Never ask for a detail (a repo, an org, an account, a URL) that only a tool absent from this list" +
+	" could use, and never offer to look something up in a system that is not listed. If you mean to" +
+	" try a general-purpose tool you DO hold, call it in the SAME reply and report what it returned —" +
+	" never promise a lookup you have not made.";
+
+/**
  * Protocol for driving interactive CLIs (Claude Code, Codex, Grok, REPLs) through a terminal
  * connector. Stated once here and injected into every agent that carries terminal/tmux tools so
  * the rule is not rediscovered per-incident.
@@ -142,6 +191,10 @@ export function connectorToolsPrompt(tools: readonly PromptTool[], grantedWriteC
 		" (never tell the user to do it themselves, and never route it through a terminal/CLI):\n" +
 		lines.join("\n") +
 		CONSENT_RULE +
+		// After CONSENT_RULE, not before: the two cover disjoint cases and each names its own
+		// trigger ("a line DOES say consent is not granted" vs "a system NOT on it"), but the
+		// closure is the stronger statement and reads as one only at the end of the enumeration.
+		TOOL_LIST_CLOSED +
 		(hasTerminalTools ? TERMINAL_CLI_PROTOCOL : "")
 	);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONSENT_RULE, TERMINAL_CLI_PROTOCOL, connectorToolsPrompt, consentLabel, type PromptTool } from "./connector-tool-prompt.js";
+import { CONSENT_RULE, TERMINAL_CLI_PROTOCOL, TOOL_LIST_CLOSED, connectorToolsPrompt, consentLabel, type PromptTool } from "./connector-tool-prompt.js";
 import { registryToolDefs, registryTools } from "./tool-registry.js";
 
 /** The four write tools from the reported instance, as the registry declares them. */
@@ -151,6 +151,64 @@ describe("connectorToolsPrompt shape", () => {
 		const prompt = connectorToolsPrompt(TERMINAL_WRITES, ["terminal"]);
 		expect(prompt).toContain("never tell the user to do it themselves");
 		expect(prompt).toContain("never route it through a terminal/CLI");
+	});
+});
+
+describe("#493 — the tool list is CLOSED, so an absent system cannot be offered", () => {
+	// The production incident: a tmux Operator with seven `tmux_*` tools and no `github_*` at any
+	// scope was asked four times for the open GitHub issues, and answered "tell me the repo name so
+	// I can pull up the issues right now". It was given the repo. It asked again. Nothing in the
+	// prompt had ever said the list it was reading was the whole list.
+	it("states the list is complete", () => {
+		expect(TOOL_LIST_CLOSED).toContain("COMPLETE");
+		expect(TOOL_LIST_CLOSED).toContain("every external system you are connected to");
+	});
+
+	it("forbids the exact move that wasted three turns — asking for a detail only a missing tool could use", () => {
+		expect(TOOL_LIST_CLOSED).toContain("Never ask for a detail");
+		expect(TOOL_LIST_CLOSED).toMatch(/a repo, an org, an account, a URL/);
+		expect(TOOL_LIST_CLOSED).toContain("never offer to look something up in a system that is not listed");
+	});
+
+	it("forbids the promise itself, which is the part that survives every other guard", () => {
+		// #395/#398/#406 and `invented-results.ts` all police an invented RESULT. This was a
+		// promise about a FUTURE call, which none of them can see: there was no result to strip.
+		expect(TOOL_LIST_CLOSED).toContain("never promise a lookup you have not made");
+		expect(TOOL_LIST_CLOSED).toContain("call it in the SAME reply and report what it returned");
+	});
+
+	it("does NOT claim the agent has no way at all to reach an unlisted system", () => {
+		// The issue proposed "you have no way to reach it". That is false: `fetch_url` is in BASE
+		// and BASE is seeded even under a declared `capabilities.tools` allowlist, so every agent
+		// can fetch a public URL. Closing the list on an absolute the platform cannot honour would
+		// install the very class of false statement this ticket is about. The true, sufficient
+		// claim is the narrower one: no DEDICATED tool.
+		expect(TOOL_LIST_CLOSED).toContain("you have no tool for");
+		expect(TOOL_LIST_CLOSED).not.toMatch(/no way to reach/i);
+		expect(TOOL_LIST_CLOSED).toContain("a general-purpose tool you DO hold");
+	});
+
+	it("does not send the owner to Settings for a tool that is not there to be switched on", () => {
+		// It sits next to CONSENT_RULE, which ends by pointing at Settings → Connections. That is
+		// right for a LISTED tool whose consent is ungranted and wrong here: a subscriber can
+		// disable a tool but cannot add one, so "ask your owner to connect GitHub" is the same
+		// dead errand as the original by a different route.
+		expect(TOOL_LIST_CLOSED).toContain("do NOT send the owner to Settings");
+		expect(TOOL_LIST_CLOSED).toContain("fixed by the agent's definition");
+	});
+
+	it("is injected into every CONNECTED TOOLS block, granted or not", () => {
+		expect(connectorToolsPrompt(TERMINAL_WRITES, ["terminal"])).toContain(TOOL_LIST_CLOSED);
+		expect(connectorToolsPrompt(TERMINAL_WRITES, [])).toContain(TOOL_LIST_CLOSED);
+		expect(connectorToolsPrompt([TERMINAL_READ], [])).toContain(TOOL_LIST_CLOSED);
+	});
+
+	it("closes the tool list the way selfDescriptionPrompt already closes the TAB list", () => {
+		// The asymmetry IS the mechanism: one enumeration in the prompt carried an explicit NEVER
+		// and the other carried nothing, so the model read the open one as illustrative.
+		const prompt = connectorToolsPrompt([TERMINAL_READ], []);
+		expect(prompt).toMatch(/NOT on it/);
+		expect(prompt).toMatch(/no tool for/);
 	});
 });
 
