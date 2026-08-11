@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import LoadFailed from "./LoadFailed";
 import McpConnections from "./McpConnections";
 import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
 import { consentChip, listedTools, type ToolPolicyEntry, toolScopeSummary, writeConnectors } from "../lib/toolPolicy";
@@ -37,23 +38,42 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 	// edits them is <McpConnections/> (#266); this component only owns the list, because the
 	// connector checkboxes above have to reflect what granting a server did.
 	const [mcpGrants, setMcpGrants] = useState<McpGrant[]>([]);
+	// Why these two reads are the worst possible place for a silent fallback (#291).
+	//
+	// Every panel below is GATED on what they return, so a dropped request does not render an
+	// empty list — it removes the permission surface altogether. `toolPolicy.length > 0` hides the
+	// tool switches, `writeConnectors([])` hides the write-consent checkboxes, and the user is left
+	// on a Settings tab that quietly says this agent can do nothing and has been granted nothing.
+	// The consent half is the sharper edge: an unchecked box is a claim that the agent CANNOT act
+	// as you, and that claim is the whole reason the gate exists (#90).
+	//
+	// The two stay independent — MCP grants failing must not take the tool switches with them — but
+	// they share one notice, because a user meeting two versions of the same sentence learns
+	// nothing from the second.
+	const [loadErr, setLoadErr] = useState("");
 
-	useEffect(() => {
-		(async () => {
-			try {
-				const [toolsRes, consentRes] = await Promise.all([
-					api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools`),
-					api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
-				]);
-				setToolPolicy(toolsRes.tools || []);
-				setGranted((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
-			} catch {}
-			try {
-				const d = await api<{ grants?: McpGrant[] }>(`/v1/instances/${instanceId}/mcp/consent`);
-				setMcpGrants(d.grants || []);
-			} catch {}
-		})();
+	const load = useCallback(async () => {
+		setLoadErr("");
+		const fail = (e: unknown) => setLoadErr(e instanceof Error ? e.message : String(e));
+		try {
+			const [toolsRes, consentRes] = await Promise.all([
+				api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools`),
+				api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
+			]);
+			setToolPolicy(toolsRes.tools || []);
+			setGranted((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
+		} catch (e) {
+			fail(e);
+		}
+		try {
+			const d = await api<{ grants?: McpGrant[] }>(`/v1/instances/${instanceId}/mcp/consent`);
+			setMcpGrants(d.grants || []);
+		} catch (e) {
+			fail(e);
+		}
 	}, [instanceId]);
+
+	useEffect(() => { void load(); }, [load]);
 
 	// Switch one tool off/on for this instance (optimistic; reverts on failure).
 	const toggleTool = async (name: string, enabled: boolean) => {
@@ -86,6 +106,11 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 
 	return (
 		<>
+			{loadErr && (
+				<div className="mb-3">
+					<LoadFailed compact what="this agent's permissions" detail={loadErr} onRetry={() => void load()} testId="tool-permissions-load-failed" />
+				</div>
+			)}
 			{/* Tools — the full, honest answer to "what can this agent do?". Shows what it MAY run
 			    and what it may not, with the reason, so "read-only" is verifiable rather than
 			    asserted. Toggling here changes the agent's real capability: a tool switched off is

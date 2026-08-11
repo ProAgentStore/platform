@@ -1237,6 +1237,34 @@ test.describe("ProAgentStore Console smoke", () => {
 			await expect(page.getByTestId("rules-load-failed")).toHaveCount(0);
 		});
 
+		test("the agent editor withdraws Personality/Goal/Welcome rather than offering Save over three blanks", async ({ page }) => {
+			// The same defect as Rules & Tips, on the creator side and one degree worse: those three
+			// textareas are fed by GET /state, and `saveSettings` PUTs all three back on every save.
+			// A dropped read rendered them empty next to a live "Save All Settings", so pressing it
+			// would have written "" over the personality, goal and welcome message of a PUBLISHED
+			// agent — other people's subscriptions included. The assertion is the ABSENCE of the
+			// editor and the DISABLING of the control, not the presence of an error.
+			await mockSignedInConsole(page, { failPaths: ["/v1/agents/agent-1/state"] });
+			await page.goto("/console/agents/agent-1");
+			// The tab is component state, not a route segment — `/settings` in the URL renders Chat.
+			await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+			await expect(page.getByTestId("agent-state-load-failed")).toBeVisible();
+			await expect(page.getByText("Personality", { exact: true })).toHaveCount(0);
+			await expect(page.getByText("Welcome Message", { exact: true })).toHaveCount(0);
+			await expect(page.getByRole("button", { name: "Save All Settings" })).toBeDisabled();
+		});
+
+		test("the agent editor loads normally when /state answers — the guard is not just always-red", async ({ page }) => {
+			await mockSignedInConsole(page);
+			await page.goto("/console/agents/agent-1");
+			await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+			await expect(page.getByText("Personality", { exact: true })).toBeVisible();
+			await expect(page.getByRole("button", { name: "Save All Settings" })).toBeEnabled();
+			await expect(page.getByTestId("agent-state-load-failed")).toHaveCount(0);
+		});
+
 		test("Retry re-issues the request, so the error state is not a dead end", async ({ page }) => {
 			// An error with no way out of it just relocates the failure. Retry is load-bearing:
 			// the overwhelmingly common cause is one dropped request.

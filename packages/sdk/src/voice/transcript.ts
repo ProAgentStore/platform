@@ -69,7 +69,13 @@ export function finalizeTranscript(state: TranscriptState, raw: string): Transcr
 		try {
 			const j = JSON.parse(raw.trim()) as { text?: string };
 			if (typeof j.text === "string") result = j.text.trim();
-		} catch {}
+		} catch {
+			// Ignorable BY CONSTRUCTION (#291): this parse is the salvage attempt, not the path.
+			// `raw` is normally SSE frames, so throwing here is the expected case, and the two
+			// lines below already produce the honest outcome — a mid-stream error if there was
+			// one, else the soft `no-speech` sentinel. Reporting it would file a row on every
+			// successful streaming turn.
+		}
 	}
 	if (result) return { kind: "result", text: result };
 	if (state.streamErr) return { kind: "error", message: `Whisper error: ${state.streamErr.slice(0, 300)}` };

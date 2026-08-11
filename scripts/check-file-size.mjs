@@ -232,7 +232,16 @@ const PINS = {
 	// user had bound, so "stop" meant repeat everywhere and tore hands-free down on the one listener
 	// that runs while the agent speaks. Raised rather than split: the prose is the deliverable, and
 	// `use-voice-words.test.ts` now fails if a sixth field is added to only some of the call sites.
-	"packages/sdk/src/voice/use-voice.ts": 1973,
+	// +44 at #291 (third pass), and 36 of them are comment: the seven `catch {}` sites in this file
+	// were the last untriaged block on that issue, and criterion 3 asks each surviving silence to
+	// state why it is right. Six are right — `stt.start()` never rejects because both start paths
+	// route to `onError`; `tts.ts` reports and falls back before it gives up; the config catch is
+	// the revalidate half of stale-while-revalidate. Naming that IS the deliverable, because the
+	// obvious "fix" (an error state per swallow) would file the same event twice, less accurately.
+	// The seventh was not right and now reports: a failed audio monitor silently disables the VAD,
+	// which is survivable only because `maxDictationMs` ends the turn — a mechanism nobody could
+	// see from the empty braces.
+	"packages/sdk/src/voice/use-voice.ts": 2017,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -472,7 +481,17 @@ const PINS = {
 	// "consistency" edit is to give them error states, which would flash faster than they can
 	// be read and would blank a live thread. #291's third criterion is exactly this: the
 	// remaining silences are only reviewable if each one states its reason.
-	"agents/coder/web/src/CodingTab.tsx": 1347,
+	// +20 at #291 (third pass), and note it is the OPPOSITE half of the paragraph above. That one
+	// records why three POLLS are correctly silent — they re-run in seconds, so an error state
+	// would flash faster than it could be read. `loadCoding` is the mount read behind them, and
+	// its silence was the harmful kind: repos, sessions and engines all come from that one call,
+	// so a dropped request renders a working four-repo agent as one that has never been pointed
+	// at a repository, complete with a live "Add a repo" form. The two are not inconsistent —
+	// they are the same rule applied to a fallback that can be mistaken for an answer and to one
+	// that cannot. Raised rather than split: the added lines are one state slot, one banner and
+	// the reason, and the seam this file actually wants (the landing view vs the session view)
+	// is #305's, not something to take under a bug fix.
+	"agents/coder/web/src/CodingTab.tsx": 1367,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -706,7 +725,14 @@ const PINS = {
 	// the three outcomes it has to keep distinct are all in lib/deployment-prompt.ts with their own
 	// tests. What is left is the call, which needs this function's `instanceCfg`, `userId`,
 	// `turnStartedAt` and `ownerTimeZone` and so cannot be lifted out with them.
-	"workers/api/src/agent-think.ts": 1142,
+	// +17 at #291 (third pass). The two `catch {}` here were the "2 of 3 are real" the issue's own
+	// re-count named, and the fix could not be a log line: omitting a prompt block is not neutral,
+	// because the model then answers "I don't see any repositories" — a confident claim about the
+	// account produced by a DO read that failed. Both catches now append the block anyway, marked
+	// UNAVAILABLE, reusing the exact vocabulary the terminal grounding rules already use for an
+	// unreadable pane. Raised rather than split: the added lines are two prompt strings and the
+	// reason they are strings, and they need this function's `systemPrompt` accumulator.
+	"workers/api/src/agent-think.ts": 1158,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -812,6 +838,17 @@ const PINS = {
 	// +12 at #486: BudgetPanel adds an observe-only notice (renders when enforced===false from the
 	// new API field), reflecting that daily circuit-breaker ceilings are stored but not yet enforced.
 	"store/console/src/pages/Usage.tsx": 862,
+	// First entry at #291, crossing 800 by 5 lines. Recorded rather than squeezed, because the
+	// alternative on offer was deleting the paragraph that says why the change exists — and the
+	// change is the one that stops a dropped GET from arming "Save All Settings" over an empty
+	// Personality / Goal / Welcome Message on a PUBLISHED agent. Compressing an explanation to
+	// stay under a threshold is how a guard starts producing worse code than it prevents.
+	//
+	// The seam, when someone takes it (#305): this file is two screens. Everything from
+	// `AgentBuilder` down — buildPlan / execute / the plan editor, ~110 lines — is the "describe
+	// an agent and have the model scaffold it" wizard, and it shares only `navigate` with the
+	// seven-tab editor above it. Splitting there takes this back under LIMIT without a pin.
+	"store/console/src/pages/AgentDetail.tsx": 805,
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
@@ -844,7 +881,13 @@ const PINS = {
 	// +11 at #494: the agent-think raise above, whose reason has to record what DID move out
 	// (wording, timestamp, timeout, the three lookup outcomes) so the next reader can tell a
 	// six-line call site from a file nobody split — plus this self-ref.
-	"scripts/check-file-size.mjs": 928,
+	// +11 more at #291 (third pass): the CodingTab raise above and its reason.
+	// +18 more at #291 (third pass): the use-voice and agent-think raises above, and their reasons.
+	// +12 at #291 (third pass): AgentDetail's FIRST entry above, whose reason has to carry both the
+	// decision (3 lines over, recorded rather than squeezed) and the seam the next person should
+	// take — plus this self-ref. Naming the seam is the part that stops a pin from becoming
+	// permanent: an entry that says only "it got bigger" is a number, and this list is a ledger.
+	"scripts/check-file-size.mjs": 971,
 };
 
 /**

@@ -221,6 +221,14 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// mount) so build status shows for repos run from a local path. No-op when offline.
 	const detectAttemptedRef = useRef<Set<string>>(new Set());
 
+	// A dropped read here does not render an empty list, it renders a DIFFERENT AGENT (#291).
+	// `repos`, `sessions` and `engines` all come from this one call: no repos gives the
+	// add-a-repo empty state, no sessions makes every repo read as idle, no engines blanks the
+	// CLI picker. Swallowed, one failed request told a user with four repos and a running Claude
+	// Code that this agent had never been pointed at anything — and handed them a live "Add a
+	// repo" form to fix it with. The poll clears the notice as soon as a request succeeds.
+	const [loadErr, setLoadErr] = useState("");
+
 	const loadCoding = useCallback(async () => {
 		try {
 			const [repoData, sessionData, engineData, presetData] = await Promise.all([
@@ -257,7 +265,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					if (fresh?.recheck) setRepoRecheck(fresh.recheck);
 				}
 			}
-		} catch {}
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(e instanceof Error ? e.message : String(e));
+		}
 	}, [instanceId]);
 
 	useEffect(() => {
@@ -1238,6 +1249,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					</button>
 				</div>
 			</div>
+			{loadErr && (
+				<div data-testid="coding-load-failed" className="bg-danger-soft border border-danger-line text-danger rounded-lg p-2.5 mx-2 mt-2 sm:mx-4 text-xs flex items-center gap-2 flex-wrap">
+					<span className="font-semibold">Couldn't load this agent's repos and sessions.</span>
+					<span className="text-muted break-words">{loadErr}</span>
+					{/* A text link, not a box: this package's button vocabulary is #366's remaining
+					    work, and a fourteenth hand-drawn control is not what an error banner owes. */}
+					<button type="button" onClick={() => void loadCoding()} className="underline font-semibold">Retry</button>
+				</div>
+			)}
 			{landingView === "repos" ? (
 				<ReposList
 					singleRepo={singleRepo}

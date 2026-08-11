@@ -64,6 +64,13 @@ export default function ReposList({
 	const ttsRef = useRef<VoiceTts | null>(null);
 	const playGenRef = useRef(0);
 	const [audio, setAudio] = useState<{ id: string; phase: "loading" | "playing" } | null>(null);
+	// Both halves of Play used to fail into the same no-op the SUCCESS path uses (#291): a dropped
+	// timeline read left `text` empty and took the "no assistant message yet — nothing to play"
+	// branch, and a TTS failure just cleared the spinner. Either way the button flickered and
+	// nothing spoke, which reads as "this repo has said nothing" — a claim about the session made
+	// out of a request that never answered. Named per repo so a failure on one row cannot label
+	// another, and cleared on the next press.
+	const [playErr, setPlayErr] = useState<{ id: string; text: string } | null>(null);
 	useEffect(() => () => { ttsRef.current?.cancel(); }, []); // stop on unmount
 
 	// Prefer the live session; fall back to any (e.g. ended) session for the repo.
@@ -76,13 +83,19 @@ export default function ReposList({
 		const myGen = ++playGenRef.current; // supersede any in-flight/playing repo
 		ttsRef.current?.cancel();
 		setAudio({ id: repo.id, phase: "loading" });
+		setPlayErr(null);
 		let text = "";
 		try {
 			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
 			const msgs = (d.chat || d.timeline || []).filter((e) => e.type === "chat_assistant");
 			const last = msgs[msgs.length - 1];
 			text = (last?.content || last?.text || "").trim();
-		} catch {}
+		} catch (e) {
+			if (playGenRef.current !== myGen) return;
+			setPlayErr({ id: repo.id, text: `Couldn't read this session: ${e instanceof Error ? e.message : String(e)}` });
+			setAudio(null);
+			return;
+		}
 		if (playGenRef.current !== myGen) return; // another repo took over during the fetch
 		if (!text) { setAudio(null); return; } // no assistant message yet — nothing to play
 		setAudio({ id: repo.id, phase: "playing" });
@@ -95,7 +108,9 @@ export default function ReposList({
 			if (playGenRef.current !== myGen) return;
 			await tts.unlock(); // iOS: prime inside the click gesture
 			await tts.speak(text); // resolves when playback ends
-		} catch {}
+		} catch (e) {
+			if (playGenRef.current === myGen) setPlayErr({ id: repo.id, text: `Couldn't play it: ${e instanceof Error ? e.message : String(e)}` });
+		}
 		if (playGenRef.current === myGen) setAudio(null); // finished/failed (not superseded)
 	};
 
@@ -182,6 +197,9 @@ export default function ReposList({
 						<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
 					</div>
 				</div>
+				{playErr?.id === r.id && (
+					<p data-testid={`repo-play-failed-${r.id}`} className="mt-2 text-xs text-danger break-words">{playErr.text}</p>
+				)}
 				{unusable && (
 					<div data-testid={`repo-unusable-${r.id}`} className="mt-2 bg-danger-soft border border-danger-line text-danger rounded-lg p-2 text-xs">
 						{/* The server's own sentence — it names the path and the condition, and it is the

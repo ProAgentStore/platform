@@ -104,6 +104,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 	const [docsErr, setDocsErr] = useState("");
 	const [credErr, setCredErr] = useState("");
 	const [instrErr, setInstrErr] = useState("");
+	const [connectorErr, setConnectorErr] = useState("");
 
 	const loadDocs = useCallback(async () => {
 		try {
@@ -143,33 +144,35 @@ export default function KnowledgeTab({ instanceId }: Props) {
 		else if (subTab === "rules") loadInstructions();
 	}, [subTab, loadDocs, loadCredentials, loadInstructions]);
 
-	useEffect(() => {
-		if (subTab !== "docs") return;
-		(async () => {
-			try {
-				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
-				setDriveStatus(s);
-			} catch {}
-			try {
-				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/drive/instances/${instanceId}/grants`);
-				const grants = d.grants || [];
-				setDriveGrants(grants);
-				setDriveGrantId((current) => current || grants[0]?.id || "");
-				setDriveFolderId((current) => current || grants[0]?.resourceId || "");
-			} catch {}
-			try {
-				const s = await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status");
-				setWorkdriveStatus(s);
-			} catch {}
-			try {
-				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`);
-				const grants = d.grants || [];
-				setWorkdriveGrants(grants);
-				setWorkdriveGrantId((current) => current || grants[0]?.id || "");
-				setWorkdriveRef((current) => current || grants[0]?.resourceId || "");
-			} catch {}
-		})();
-	}, [subTab, instanceId]);
+	// The four connector probes, and why swallowing THESE is worse than an empty list (#291).
+	//
+	// A dropped status read does not render an empty state — by #353's rule that an unconfigured
+	// connector is not offered, it DELETES the "+ Drive" button, so the user reads "this deployment
+	// has no Drive" off a request that never answered and has nothing on screen to retry. That is
+	// why the notice sits in the toolbar, where the missing button would have been. A dropped
+	// grants read is the Rules & Tips shape instead: "grant this agent a folder in Settings",
+	// printed at someone who already did. Each probe stands alone — Drive being down must not take
+	// WorkDrive's button with it.
+	const loadConnectors = useCallback(async () => {
+		const probe = async (run: () => Promise<void>) => { try { await run(); } catch (e) { setConnectorErr(e instanceof Error ? e.message : String(e)); } };
+		setConnectorErr("");
+		await probe(async () => setDriveStatus(await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status")));
+		await probe(async () => {
+			const grants = (await api<{ grants?: ConnectorGrant[] }>(`/v1/drive/instances/${instanceId}/grants`)).grants || [];
+			setDriveGrants(grants);
+			setDriveGrantId((current) => current || grants[0]?.id || "");
+			setDriveFolderId((current) => current || grants[0]?.resourceId || "");
+		});
+		await probe(async () => setWorkdriveStatus(await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status")));
+		await probe(async () => {
+			const grants = (await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`)).grants || [];
+			setWorkdriveGrants(grants);
+			setWorkdriveGrantId((current) => current || grants[0]?.id || "");
+			setWorkdriveRef((current) => current || grants[0]?.resourceId || "");
+		});
+	}, [instanceId]);
+
+	useEffect(() => { if (subTab === "docs") void loadConnectors(); }, [subTab, loadConnectors]);
 
 	const openNew = () => { setOpenId("__new__"); setEditing(true); setEditTitle(""); setEditContent(""); setPreview(false); setShowUrl(false); };
 	const openView = (d: KnowledgeDoc) => { setOpenId(d.id); setEditing(false); setPreview(false); };
@@ -527,6 +530,8 @@ export default function KnowledgeTab({ instanceId }: Props) {
 							</div>
 						</div>
 
+						{connectorErr && <div className="mb-3"><LoadFailed compact what="your import connectors" detail={connectorErr} onRetry={() => void loadConnectors()} testId="connectors-load-failed" /></div>}
+
 						{showUrl && (
 							<Card className="mb-3">
 								<input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} aria-label="URL to import into the knowledge base" placeholder="https://..." className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
@@ -542,7 +547,9 @@ export default function KnowledgeTab({ instanceId }: Props) {
 							<Card className="mb-3">
 								{driveStatus?.connected ? (
 									<>
-										{driveGrants.length === 0 ? (
+										{connectorErr ? (
+											<LoadFailed compact what="this agent's Drive folders" detail={connectorErr} onRetry={() => void loadConnectors()} />
+										) : driveGrants.length === 0 ? (
 											<p className="text-sm text-muted">Grant this agent access to a Google Drive folder in Settings before importing Drive files.</p>
 										) : (
 										<div className="flex gap-2 mb-2 flex-wrap">
@@ -604,7 +611,9 @@ export default function KnowledgeTab({ instanceId }: Props) {
 							<Card className="mb-3">
 								{workdriveStatus?.connected ? (
 									<>
-										{workdriveGrants.length === 0 ? (
+										{connectorErr ? (
+											<LoadFailed compact what="this agent's WorkDrive folders" detail={connectorErr} onRetry={() => void loadConnectors()} />
+										) : workdriveGrants.length === 0 ? (
 											<p className="text-sm text-muted">Grant this agent access to a Zoho WorkDrive folder in Settings before importing WorkDrive files.</p>
 										) : (
 										<div className="flex gap-2 mb-2 flex-wrap">

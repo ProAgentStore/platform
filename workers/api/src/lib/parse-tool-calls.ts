@@ -64,6 +64,12 @@ export function parseToolCallsFromText(
 			calls.push({ name, arguments: args });
 			spans.push([start, end + 1]);
 		} catch {
+			// Ignorable BY CONSTRUCTION, and the only correct behaviour here (#291). This is a
+			// SCANNER: it walks every `{` in the model's prose and asks "was that JSON?". A throw
+			// is the answer "no" for the overwhelming majority of braces in an ordinary reply, so
+			// reporting it would file a row per sentence. The span is simply not added to `spans`,
+			// which leaves the text where it was — the honest outcome, since a fragment that did
+			// not parse is not a tool call and must stay visible to the reader.
 		}
 	}
 	return { calls, text: removeSpans(text, spans) };

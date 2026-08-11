@@ -57,7 +57,12 @@ export function unlockSpeechSynthesis(): void {
 			u.volume = 0;
 			window.speechSynthesis.speak(u);
 		}
-	} catch {}
+	} catch {
+		// Ignorable, and the ONLY correct response (#291): this is a best-effort prime, and the
+		// utterance it silences is a volume-0 space. If the browser refuses it, the later real
+		// `speak()` still runs and reports its own failure through `voice-tts` — so surfacing
+		// anything here would be a second, earlier, less accurate report of the same problem.
+	}
 }
 
 // Short tones via Web Audio — no external files.
@@ -84,7 +89,12 @@ function playTone(freq: number, dur: number, volume = 0.15) {
 		osc.connect(gain).connect(ctx.destination);
 		osc.start();
 		osc.stop(ctx.currentTime + dur);
-	} catch {}
+	} catch {
+		// Ignorable: a chime is a courtesy, not a channel. Every state it decorates is also on
+		// screen in the status pill, so a browser that will not open an oscillator loses a sound
+		// and no information — and this runs on every mic open, so reporting it would flood the
+		// durable log with one row per turn for a condition that changes nothing (#291).
+	}
 }
 
 /** Rising two-tone: "your turn" — the mic just opened. */

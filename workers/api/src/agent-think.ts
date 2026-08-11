@@ -490,7 +490,15 @@ export async function runAgentThink(opts: {
 				systemPrompt += indexedReposPrompt(selfModel, plainSpeech);
 			}
 		}
-	} catch {}
+	} catch {
+		// Omitting this block is NOT the neutral outcome (#291). It is the one thing that makes
+		// the agent's repo awareness authoritative, and without it the model answers "I don't see
+		// any repositories" — a confident claim about the account, manufactured from a DO read
+		// that failed. Said in the same vocabulary the terminal block below uses for exactly this
+		// problem: an unreadable thing is reported as unreadable, never as absent.
+		systemPrompt +=
+			"\n\n## Indexed repositories\nUNAVAILABLE this turn — the repository index could not be read. Do NOT conclude that nothing is indexed, and do NOT answer from memory: say plainly that you could not check.";
+	}
 
 	// Coding repos & sessions context (Coder instances). Inject the live registry so the Chat tab
 	// can actually answer "what's happening in repo X" instead of the old "I don't see any repos".
@@ -563,7 +571,15 @@ export async function runAgentThink(opts: {
 					// about, which is how far to trust a terminal snapshot.
 					"\nGROUNDING: only state something about the code or the session if a terminal line above actually shows it. Never assert that code 'already exists', 'is already implemented', 'wasn't changed', or 'nothing happened' unless you can see the evidence — a negative claim is a claim too. If you cannot see current state (idle/unavailable/empty/offline), say so plainly, rather than guessing.";
 			}
-		} catch {}
+		} catch {
+			// Same reason as the indexed-repo block above, and sharper here: this agent HAS repos
+			// (`hasCodingContext` is true or we would not be inside), so a swallowed lookup makes a
+			// Coder answer "I don't see any repos" about repositories it is attached to. The block
+			// three lines up already tells the model how to treat an unreadable terminal; a failure
+			// to read the registry at all deserves the same sentence rather than silence (#291).
+			systemPrompt +=
+				"\n\n## Attached repositories\nUNAVAILABLE this turn — the repo and session registry could not be read. You ARE attached to repositories; their names and live state simply could not be fetched. Do NOT say you have no repos, and do NOT describe any session state.";
+		}
 	}
 
 	// The repo the subscriber saved in the console Deployment card, and its latest build (#494).

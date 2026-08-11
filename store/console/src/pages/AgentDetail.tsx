@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Button from "../components/Button";
+import LoadFailed from "../components/LoadFailed";
 import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -172,6 +173,19 @@ export default function AgentDetail() {
 		}
 	};
 
+	// The DO-state GET fills Personality, Goal and Welcome Message and `saveSettings` PUTs all three
+	// straight back, so a swallowed read rendered three EMPTY textareas beside a live "Save All
+	// Settings": it did not hide the agent's character, it armed the control that erases it, on a
+	// published agent other people subscribe to. Same shape as Knowledge → Rules & Tips, and fixed
+	// the same way — replace the editor, do not annotate it (#291).
+	const [stateErr, setStateErr] = useState("");
+	// One slot for the tab loaders: one tab renders at a time, and a second phrasing of "this didn't
+	// load" teaches nobody anything. Each carries its own noun so the sentence names what is missing.
+	const [dataErr, setDataErr] = useState<{ what: string; detail: string } | null>(null);
+	// `useCallback` with no deps so it is stable: it is a dependency of six loaders below, and an
+	// identity that changes every render would re-run all six on every render.
+	const failData = useCallback((what: string, e: unknown) => setDataErr({ what, detail: e instanceof Error ? e.message : String(e) }), []);
+
 	const loadAgent = useCallback(async () => {
 		if (!id) return;
 		try {
@@ -187,8 +201,8 @@ export default function AgentDetail() {
 				const state = await api<Record<string, unknown>>(`/v1/agents/${a.id}/state`);
 				setSPersonality(String(state.personality || ""));
 				setSGoal(String(state.goal || ""));
-				setSWelcome(String(state.welcomeMessage || ""));
-			} catch {}
+				setSWelcome(String(state.welcomeMessage || "")); setStateErr("");
+			} catch (e) { setStateErr(e instanceof Error ? e.message : String(e)); }
 		} catch (e) {
 			console.error(e);
 		}
@@ -202,10 +216,8 @@ export default function AgentDetail() {
 		try {
 			const d = await api<{ messages: Message[] }>(`/v1/agents/${id}/messages`);
 			setMessages(d.messages || []);
-		} catch {}
-	}, [id]);
-
-	useEffect(() => { loadMessages(); }, [loadMessages]);
+		} catch (e) { failData("this conversation", e); }
+	}, [id, failData]);
 	useEffect(() => {
 		const messageCount = messages.length;
 		if (messageCount >= 0 && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
@@ -229,33 +241,36 @@ export default function AgentDetail() {
 	// Knowledge
 	const loadKnowledge = useCallback(async () => {
 		if (!id) return;
-		try { const d = await api<{ documents: KnowledgeDoc[] }>(`/v1/agents/${id}/knowledge`); setDocs(d.documents || []); } catch {}
-	}, [id]);
+		try { const d = await api<{ documents: KnowledgeDoc[] }>(`/v1/agents/${id}/knowledge`); setDocs(d.documents || []); } catch (e) { failData("this agent's documents", e); }
+	}, [id, failData]);
 	const loadMemory = useCallback(async () => {
 		if (!id) return;
-		try { const d = await api<{ memory: MemoryEntry[] }>(`/v1/agents/${id}/memory`); setMemories(d.memory || []); } catch {}
-	}, [id]);
+		try { const d = await api<{ memory: MemoryEntry[] }>(`/v1/agents/${id}/memory`); setMemories(d.memory || []); } catch (e) { failData("this agent's memory", e); }
+	}, [id, failData]);
 	const loadTasks = useCallback(async () => {
 		if (!id) return;
-		try { const d = await api<{ tasks: { id: string; title: string; status: string; description?: string }[] }>(`/v1/agents/${id}/tasks`); setTasks(d.tasks || []); } catch {}
-	}, [id]);
+		try { const d = await api<{ tasks: { id: string; title: string; status: string; description?: string }[] }>(`/v1/agents/${id}/tasks`); setTasks(d.tasks || []); } catch (e) { failData("this agent's tasks", e); }
+	}, [id, failData]);
 	const loadAnalytics = useCallback(async () => {
 		if (!id) return;
-		try { const d = await api<Record<string, unknown>>(`/v1/agents/${id}/analytics`); setAnalytics(d); } catch {}
-	}, [id]);
+		try { const d = await api<Record<string, unknown>>(`/v1/agents/${id}/analytics`); setAnalytics(d); } catch (e) { failData("this agent's analytics", e); }
+	}, [id, failData]);
 	const loadVersions = useCallback(async () => {
 		if (!id) return;
-		try { const d = await api<{ versions: { id: string; version_num: number; description: string; created_at: string }[] }>(`/v1/agents/${id}/versions`); setVersions(d.versions || []); } catch {}
-	}, [id]);
+		try { const d = await api<{ versions: { id: string; version_num: number; description: string; created_at: string }[] }>(`/v1/agents/${id}/versions`); setVersions(d.versions || []); } catch (e) { failData("this agent's version history", e); }
+	}, [id, failData]);
 
-	// Lazy-load: only fetch data for the active tab
-	useEffect(() => {
-		if (tab === "knowledge") loadKnowledge();
+	// Lazy-load per tab. Named rather than inline so the notice below has something to retry (#291).
+	const reloadTab = useCallback(() => {
+		setDataErr(null);
+		if (tab === "chat") loadMessages();
+		else if (tab === "knowledge") loadKnowledge();
 		else if (tab === "memory") loadMemory();
 		else if (tab === "tasks") loadTasks();
 		else if (tab === "analytics") loadAnalytics();
 		else if (tab === "settings") { loadVersions(); loadSurfaces(); loadSettingsSchema(); }
-	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions, loadSurfaces, loadSettingsSchema]);
+	}, [tab, loadMessages, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions, loadSurfaces, loadSettingsSchema]);
+	useEffect(() => { reloadTab(); }, [reloadTab]);
 
 	const saveSettings = async () => {
 		if (!id) return;
@@ -331,6 +346,7 @@ export default function AgentDetail() {
 				))}
 			</div>
 
+			{dataErr && <div className="mb-3"><LoadFailed compact what={dataErr.what} detail={dataErr.detail} onRetry={reloadTab} testId="agent-data-load-failed" /></div>}
 			{/* Chat */}
 			{tab === "chat" && (
 				<div className="flex flex-col" style={{ height: "calc(100dvh - 320px)", minHeight: 300 }}>
@@ -414,11 +430,13 @@ export default function AgentDetail() {
 							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Category</span><select value={sCat} onChange={e => setSCat(e.target.value)}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></label>
 						</div>
 						<label className="mt-3 flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Description</span><textarea value={sDesc} onChange={e => setSDesc(e.target.value)} /></label>
+						{stateErr ? <div className="mt-3"><LoadFailed compact what="this agent's personality, goal and welcome message" detail={stateErr} onRetry={() => void loadAgent()} testId="agent-state-load-failed" /></div> : <>
 						<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
 							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Personality</span><textarea value={sPersonality} onChange={e => setSPersonality(e.target.value)} /></label>
 							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Goal</span><textarea value={sGoal} onChange={e => setSGoal(e.target.value)} /></label>
 						</div>
 						<label className="mt-3 flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Welcome Message</span><input value={sWelcome} onChange={e => setSWelcome(e.target.value)} /></label>
+						</>}
 					</div>
 
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
@@ -551,7 +569,7 @@ export default function AgentDetail() {
 					</div>
 
 					<div className="flex gap-2 flex-wrap">
-						<Button variant="primary" size="lg" onClick={saveSettings}>Save All Settings</Button>
+						<Button variant="primary" size="lg" onClick={saveSettings} disabled={!!stateErr} title={stateErr ? "Personality, goal and welcome message didn't load — saving now would overwrite them with blanks." : undefined}>Save All Settings</Button>
 						<Button size="lg" onClick={exportAgent}>Export JSON</Button>
 						<Button size="lg" onClick={saveVersion}>Save Version</Button>
 						<Button variant="danger" size="lg" onClick={deleteAgent}>Delete Agent</Button>

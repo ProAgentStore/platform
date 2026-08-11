@@ -371,3 +371,34 @@ describe("cross-round dedup — a read repeats only when something CHANGED", () 
 		])).toEqual(["ran", "ran", "refused"]);
 	});
 });
+
+describe("a repo lookup that fails says so in the prompt, instead of vanishing (#291)", () => {
+	// The two swallows this file had were the "2 of 3 are real" #291's re-count named, and the
+	// reason they were real is specific to a prompt builder: omitting a block is not the neutral
+	// outcome. The `## Indexed repositories` and `## Attached repositories` blocks are the ONLY
+	// thing making the agent's repo awareness authoritative, so a dropped DO/D1 read did not
+	// produce a vaguer answer — it produced a confident wrong one, "I don't see any repositories",
+	// about an account that has several. That is the same class as a list falling back to `[]`,
+	// one layer further in, and it is why the fix is a prompt line rather than a log row.
+	it("has no bare catch left in the file", () => {
+		// The whole shape, over the RAW source: a comment inside the braces is what criterion 3
+		// asks for, and `stripCommentsAndLiterals` would blank it and make an annotated catch
+		// indistinguishable from an empty one.
+		expect(THINKER).not.toMatch(/catch\s*(?:\([a-zA-Z_$][\w$]*\))?\s*\{\s*\}/);
+	});
+
+	it("marks the block UNAVAILABLE rather than dropping it", () => {
+		// Two catches, two blocks, and both must still emit a heading — a reader who greps for
+		// "## Indexed repositories" in the prompt has to find it whether the read worked or not.
+		expect(matchLines(THINKER, /## Indexed repositories\\nUNAVAILABLE this turn/)).toHaveLength(1);
+		expect(matchLines(THINKER, /## Attached repositories\\nUNAVAILABLE this turn/)).toHaveLength(1);
+	});
+
+	it("forbids the negative claim explicitly, because a negative claim is a claim", () => {
+		// The file already teaches this for an unreadable terminal pane ("Never upgrade a stale,
+		// idle, or unavailable terminal into a claim about the current code"). Saying only
+		// "unavailable" without it leaves the model free to helpfully conclude the absence.
+		expect(THINKER).toMatch(/Do NOT conclude that nothing is indexed/);
+		expect(THINKER).toMatch(/Do NOT say you have no repos/);
+	});
+});

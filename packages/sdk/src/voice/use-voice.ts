@@ -477,7 +477,20 @@ export function useVoice(instanceId: string | undefined, opts: {
 				analyserRef.current.raf = requestAnimationFrame(tick);
 			};
 			analyserRef.current = { ctx, analyser, source, stream, ownsStream, raf: requestAnimationFrame(tick) };
-		} catch {}
+		} catch (e) {
+			// Ignorable only because of a mechanism worth naming, or this becomes a user-facing
+			// error the next time someone reads it (#291). What is lost is the VAD, so a hands-free
+			// Whisper turn does not end when the user stops talking — DEGRADED, not wrong:
+			// `startListening` arms `maxDictationMs` immediately after this call and that cap ends
+			// the turn. Realistically only `new AudioContext()` throws (in Whisper mode the stream
+			// is the recorder's own; a denied mic surfaces through `stt.onError`), and browsers cap
+			// contexts at ~6 — a resource condition worth SEEING even though the turn completes.
+			// One fixed string: `reportClientError` de-dups on source+message and hands-free
+			// reopens the mic every turn.
+			reportClientError("voice", "audio monitor failed to start — end-of-turn falls back to the max-dictation cap", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
 	}, [stopAudioMonitor, readGuard, gateSnapshot, dictate, clearVoiceText]);
 
 	const onSendRef = useRef(opts.onSend);
@@ -542,7 +555,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (heard && dictationDiverged(heard, text)) {
 			console.warn("[voice] transcript lost content", { heard, final: text });
 			let debug = false;
-			try { debug = typeof localStorage !== "undefined" && !!localStorage.getItem("pags:voice-debug"); } catch {}
+			try {
+				debug = typeof localStorage !== "undefined" && !!localStorage.getItem("pags:voice-debug");
+			} catch {
+				// Ignorable: Safari private mode throws on `localStorage`. Off is the safe default —
+				// the branch it guards is a diagnostic that must not reach the log unasked (#291).
+			}
 			if (debug) reportClientError("voice-transcript", "final transcript dropped content heard live", { heard, final: text });
 		}
 		// The two gates a transcript must clear (noise, then language) and whether this turn has a
@@ -769,7 +787,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 					}
 				}, maxDictationMsRef.current);
 			}
-		} catch {}
+		} catch {
+			// Ignorable: every failure reachable here is already reported by whatever saw it (#291).
+			// `stt.start()` never rejects — `_startBrowser` and `_startRecording` both route their
+			// own failures, including "Mic access denied", to `onError`, which the whole failure
+			// apparatus in this file hangs off; `micOn` stays false so the control does not lie.
+			// `startAudioMonitor` and `playListeningChime` carry their own catches. What is left is
+			// an unexpected DOM throw with no better response than leaving the mic closed.
+		}
 	}, [startAudioMonitor, stopAudioMonitor, readGuard, clearVoiceText]);
 
 	// Speak text on demand (e.g. tap a message/translation to hear it), regardless of
@@ -801,7 +826,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 			await tts.unlock();
 			// Optional per-utterance language (e.g. a translation spoken in ITS language).
 			await tts.speak(text, lang ? { lang } : {});
-		} catch {}
+		} catch {
+			// Ignorable: `tts.ts` reports all of its own failure modes to `voice-tts` (no synthesis,
+			// an OpenAI non-200, an empty body, a blocked AudioContext) and falls back to the
+			// browser voice first. A report here would be the same event, filed less accurately;
+			// `setSpeaking(false)` below restores the UI (#291).
+		}
 		if (speakGenRef.current !== myGen) return; // superseded — the newer tap owns the state
 		setSpeaking(false);
 		speakEndedAtRef.current = Date.now(); // arm the echo-tail guard, like speakAndResume
@@ -828,7 +858,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		try {
 			const tts = await ensureTts();
 			await tts.speak(text);
-		} catch {}
+		} catch {
+			// Ignorable for the same reason as the word-tap path above: `tts.ts` owns the reporting
+			// and the fallback, and `setSpeaking(false)` below puts the UI back. Auto-speak also
+			// only READS a reply that is already on screen (#291).
+		}
 		setSpeaking(false);
 		speakEndedAtRef.current = Date.now();
 		// Now the agent is done — allow the mic to reopen. Only auto-resume in
@@ -1358,7 +1392,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// settings screen at the moment they tap the mic.
 		try {
 			applyConfig(await getVoiceConfig(instanceId, { refresh: "background" }));
-		} catch {}
+		} catch {
+			// Ignorable: the REVALIDATE half of stale-while-revalidate. The cached config is already
+			// applied, so a failure keeps the previous settings for one more turn rather than
+			// producing a wrong answer, and `getVoiceConfig` files its own `voice-config` row (#291).
+		}
 		// Fresh session — re-arm interim keyword detection (covers the case where a command
 		// muted/stopped the mic before its final result ever arrived to reset the latch).
 		handledUtteranceRef.current = false;
@@ -1623,7 +1661,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// These three MUST stay here, synchronously inside the user gesture: iOS/Safari only
 		// grants audio output from a gesture, and an AudioContext that is "suspended" OR
 		// "interrupted" (Siri, a call, another app) has to be resumed before it will play.
-		try { getAudioCtx().resume(); } catch {}
+		try {
+			getAudioCtx().resume();
+		} catch {
+			// Ignorable: a context the browser will not resume costs a chime; the TTS path resumes
+			// again before speaking and reports `voice-tts` if it still cannot. Must stay
+			// synchronous inside the gesture, so it could not await a report anyway (#291).
+		}
 		unlockSpeechSynthesis(); // prime TTS on this tap so replies can speak (iOS/Safari)
 		// Warm the TTS audio context inside the gesture too — the OpenAI-voice path
 		// needs a running AudioContext, else the reply is silent (hands-free "no sound").
