@@ -178,6 +178,21 @@ tags:
       reports what it ran — on a raw Codex/Grok session the observed-act half sees nothing, and
       the run note says so.
 
+      **Standing policies.** `PUT …/coding/repos/{repoId}` also accepts `policies`, a map from a
+      closed registry of invariants to `off` | `observe` | `act`. Unknown names and modes are
+      **refused (400), never dropped** — a policy that silently never applies is
+      indistinguishable from one that is holding. `repo.tree_clean` (default `observe`) reports
+      uncommitted work; `repo.on_default_branch` (default `off`) reports a checkout parked off
+      its configured branch. They are evaluated at the end of a coding run and raise a
+      `needs_human` board card naming the policy that raised it. `act` is accepted only for
+      `repo.on_default_branch`, whose remediation is a single fixed argv on the runner
+      (`git checkout <declared branch>`) on a CLEAN tree only; the card then names the branch it
+      came from and the command that undoes it, and the act is logged to `GET …/trace` as
+      `policy.act`. `act` on `repo.tree_clean` is refused with a reason: it has no actuator, by
+      decision. Promotion to `act` is a human action on this route — no agent tool reaches it —
+      and needs CLI ≥ 0.4.48 on the machine, below which the policy reports that it asked and
+      was not answered rather than reporting success.
+
 components:
   securitySchemes:
     bearerAuth:

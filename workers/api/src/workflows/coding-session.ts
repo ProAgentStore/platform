@@ -16,8 +16,8 @@ import { isRunnerGone, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, t
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
-import { evaluateRepoPolicies } from "../lib/repo-policies.js";
-import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
+import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
+import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline } from "../lib/coding-timeline.js";
@@ -667,34 +667,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// assumed by this function, and that the card says which policy raised it — the stable
 			// card ids are unchanged, so cards already open in production still close.
 			//
+			// A policy the OWNER promoted to `act` is also restored here, by a fixed argv on the
+			// runner — never by handing the Engine a goal, which would close the vocabulary at the
+			// name of the policy and leave it open at the hands. One verb exists (switch a CLEAN
+			// checkout back to its declared branch); the card says what was done and how to undo it,
+			// and nothing here can commit, push or discard. `lib/repo-policy-act.ts`.
+			//
 			// Read BEFORE the session is closed below, so the runner can resolve the workdir from
 			// the live session (the only way to see a managed clone dir).
 			await step.do("repo-state-end", async () => {
-				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
-				if (!repo) return null;
-				// Unknown ≠ clean. A null state still evaluates, because a policy the repo has
-				// STOPPED claiming must have its card closed whether or not the machine answered.
-				const state = await readRepoWorkingState(conn, { repo, sessionId }).catch(() => null);
-				const findings = evaluateRepoPolicies({
-					repoId,
-					repoLabel: goal.repo,
-					declared: repo.policies,
-					state,
-					configuredBranch: branch ?? null,
-				});
-				const now = new Date().toISOString();
-				for (const f of findings) {
-					if (f.status === "violated" && f.card) {
-						await upsertWorkCard(env, {
-							instanceId,
-							userId,
-							id: f.cardId,
-							task: { id: f.cardId, ...f.card, status: "needs_human", policy: f.policy, createdAt: now, updatedAt: now },
-						});
-					} else if (f.status === "held" || f.status === "unclaimed") {
-						await closeWorkCards(env, instanceId, userId, [f.cardId], "completed");
-					}
-				}
+				await enforceRepoPolicies(env, { conn, instanceId, userId, repoId, repoLabel: goal.repo, sessionId });
 				return null;
 			});
 			// The CLOSING drain (#294), before anything can tear the session down.

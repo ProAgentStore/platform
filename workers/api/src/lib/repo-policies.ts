@@ -10,21 +10,50 @@
  * is guaranteed by the vocabulary being closed HERE, at a table with no free-text member, and — in
  * this slice — by there being no actuator at all.
  *
- * ── What this slice deliberately does NOT do, and why
+ * ── Acting: one policy, one verb, and the other policy declined outright
  *
- * **It does not act.** `RepoPolicyMode` has no `"act"` member: it is ABSENT, not gated, so no
- * setting, prompt or objective can reach one. The two assessments on #322 both landed there for
- * the same reason — the only actuators that exist are a general coding Engine running
- * `claude --dangerously-skip-permissions` on the owner's own machine, and delegating "commit the
- * working tree" to one closes the vocabulary at the NAME of the policy and leaves it wide open at
- * the hands. An acting slice needs a fixed-argv write surface on the runner, which is a CLI
- * release, and it has to earn the promotion with a period of accurate observation first.
+ * `act` is a mode, and it is a mode a policy only gets if it declares an ACTUATOR — a fixed argv on
+ * the runner (`packages/browser-runner/src/coding/repo-write.ts`), never a goal handed to an Engine.
+ * That distinction is the entire safety argument the observe half made: delegating "put the repo
+ * right" to `claude --dangerously-skip-permissions` closes the vocabulary at the NAME of the policy
+ * and leaves it wide open at the hands.
  *
- * **It does not schedule.** Evaluation happens at the end of a coding run, which is the moment the
+ * So exactly one policy can act:
+ *
+ *   `repo.on_default_branch`  →  `git checkout <declared branch>`, ONLY on a clean tree. It moves a
+ *                                pointer, destroys nothing, and the undo — `git checkout <the
+ *                                branch you were on>` — is printed on the card. The clean-tree
+ *                                precondition is not a nicety: git carries uncommitted changes
+ *                                ACROSS a checkout, so acting on a dirty tree would relocate
+ *                                somebody's work onto the target branch, which is #276's harm
+ *                                reached from the other direction. Dirty → refuse and say so.
+ *
+ *   `repo.tree_clean`         →  NO actuator, and therefore `act` is REFUSED for it at the door
+ *                                (`sanitizeRepoPolicies`). Not deferred — declined. An unattended
+ *                                `add -A` runs over a tree that is unreviewed BY CONSTRUCTION (if
+ *                                anyone had reviewed it, it would not be dirty) and sweeps in files
+ *                                git was never told about. Committing to a policy branch was
+ *                                considered and rejected: it still decides that unreviewed work is
+ *                                now a commit, and the human who has to undo it has to find it
+ *                                first. It observes, which is genuinely useful, and stops there.
+ *
+ * Every mode defaults exactly where the observe half left it: nothing is promoted to `act` by the
+ * acting slice, on any repo. A human turns one on, per repo, per policy — and the ONLY way to do
+ * that is `PUT /v1/instances/:id/coding/repos/:repoId`, which no agent tool reaches (asserted in
+ * `security-invariants.test.ts`, because a policy is the one thing that acts with nobody present:
+ * an agent able to promote one converts a single prompt injection into a standing capability).
+ *
+ * **It still does not schedule.** Evaluation happens at the end of a coding run, which is the moment the
  * state actually changed and the only moment a live runner is guaranteed. No second scheduler, no
  * second claim, no second retry ladder — and specifically no reuse of the delivery outbox, whose
  * `[60, 300, 900, 3600, 10800]s` ladder would replay a 09:00 observation at 12:00 against a repo
  * that has since changed. A policy that misses a tick re-observes next tick and never replays.
+ *
+ * That is also why a refused or failed remediation is NOT suppressed on the next tick. A "tick"
+ * here is the end of another run — a fresh observation of a repo something has just worked in, not
+ * a timer re-firing on stale state — and the attempt costs one local git call and no model spend,
+ * so it draws on no budget an interactive delegation needs. Suppressing it would hide an invariant
+ * that still does not hold.
  *
  * **It does not re-verify the checkout's path.** That is #440 (a transport failure stored as the
  * repo's state, plus `clone_checked_at`), and duplicating it here would put two writers on
@@ -45,10 +74,20 @@ import { dirtyClause, offTrunkClause, type RepoWorkingState } from "./repo-obser
 export type RepoPolicyId = "repo.tree_clean" | "repo.on_default_branch";
 
 /**
- * `observe` reports; there is no `act`. See the header — its absence is the safety property, so
- * this union must not grow one without the runner write surface that would make it honest.
+ * `observe` reports; `act` also restores. `act` is only ACCEPTED for a policy that declares an
+ * actuator below — for the others it is refused at the door, which is what keeps the vocabulary
+ * closed at the hands rather than at the name.
  */
-export type RepoPolicyMode = "off" | "observe";
+export type RepoPolicyMode = "off" | "observe" | "act";
+
+/** The closed set of things an actuator may do. One member, and a second is a code review. */
+export type RepoPolicyVerb = "switch_branch";
+
+export interface RepoPolicyActuator {
+	verb: RepoPolicyVerb;
+	/** How the action is named to a human, before it happens and on the card afterwards. */
+	label: string;
+}
 
 export interface RepoPolicyDef {
 	id: RepoPolicyId;
@@ -68,6 +107,11 @@ export interface RepoPolicyDef {
 	fallback: RepoPolicyMode;
 	/** Board card `type` for a violation of this policy. */
 	cardType: string;
+	/**
+	 * The fixed-argv remediation this policy may run in `act`, or `null` — which makes `act`
+	 * unacceptable for it. Null is a DECISION, not a gap: see the header on `tree_clean`.
+	 */
+	actuator: RepoPolicyActuator | null;
 }
 
 export const REPO_POLICIES: readonly RepoPolicyDef[] = [
@@ -77,6 +121,9 @@ export const REPO_POLICIES: readonly RepoPolicyDef[] = [
 		invariant: "this checkout carries no uncommitted work between runs",
 		fallback: "observe",
 		cardType: "coding.uncommitted",
+		// Declined, not unimplemented. There is no way to clear a working tree that does not decide,
+		// unattended, that somebody's unreviewed diff is now a commit — or worse, is now gone.
+		actuator: null,
 	},
 	{
 		id: "repo.on_default_branch",
@@ -84,6 +131,7 @@ export const REPO_POLICIES: readonly RepoPolicyDef[] = [
 		invariant: "this checkout is left on its configured branch, or the trunk when it has none",
 		fallback: "off",
 		cardType: "coding.off_branch",
+		actuator: { verb: "switch_branch", label: "switch the checkout back to its declared branch" },
 	},
 ];
 
@@ -96,7 +144,7 @@ export function repoPolicyDef(id: string): RepoPolicyDef | null {
 /** What a repo has declared. A policy absent from the record falls back to its table default. */
 export type DeclaredRepoPolicies = Partial<Record<RepoPolicyId, RepoPolicyMode>>;
 
-const MODES: readonly RepoPolicyMode[] = ["off", "observe"];
+const MODES: readonly RepoPolicyMode[] = ["off", "observe", "act"];
 
 /**
  * Validate a caller-supplied declaration.
@@ -113,8 +161,14 @@ export function sanitizeRepoPolicies(raw: unknown): { ok: true; value: DeclaredR
 	for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
 		const def = BY_ID.get(k);
 		if (!def) return { ok: false, error: `unknown policy \`${k}\` — known policies: ${REPO_POLICIES.map((p) => p.id).join(", ")}` };
-		if (typeof v !== "string" || !MODES.includes(v as RepoPolicyMode)) {
-			return { ok: false, error: `policy \`${k}\` must be one of: ${MODES.join(", ")}` };
+		const modes = def.actuator ? MODES : MODES.filter((m) => m !== "act");
+		if (typeof v !== "string" || !modes.includes(v as RepoPolicyMode)) {
+			// A policy with no actuator says WHY rather than just listing what it takes: "act is not
+			// in the list" reads as unimplemented, and this one is declined.
+			const why = def.actuator
+				? ""
+				: ` — \`${def.id}\` has no actuator: there is no way to satisfy it that does not decide, unattended, what happens to unreviewed work`;
+			return { ok: false, error: `policy \`${k}\` must be one of: ${modes.join(", ")}${why}` };
 		}
 		out[def.id] = v as RepoPolicyMode;
 	}
@@ -133,8 +187,13 @@ export function parseRepoPolicies(raw: string | null | undefined): DeclaredRepoP
 }
 
 export function resolveRepoPolicyMode(declared: DeclaredRepoPolicies | null | undefined, id: RepoPolicyId): RepoPolicyMode {
-	const explicit = declared?.[id];
-	return explicit ?? (BY_ID.get(id)?.fallback ?? "off");
+	const def = BY_ID.get(id);
+	const mode = declared?.[id] ?? def?.fallback ?? "off";
+	// Belt and braces for a row written when a policy DID have an actuator that has since been
+	// withdrawn: it degrades to observing rather than acting on a verb that no longer exists. The
+	// sanitizer already refuses this at the door; this is the READER refusing it too.
+	if (mode === "act" && !def?.actuator) return "observe";
+	return mode;
 }
 
 /**
@@ -159,12 +218,28 @@ export type RepoPolicyStatus =
 	/** The repo does not claim this invariant. */
 	| "unclaimed";
 
+/** What the actuator should be asked to do. The ONLY thing that may reach the runner's write verb. */
+export interface RepoPolicyRemediation {
+	verb: RepoPolicyVerb;
+	/** The branch to return to. Always explicit — never inferred, never created. */
+	branch: string;
+}
+
 export interface RepoPolicyFinding {
 	policy: RepoPolicyId;
 	status: RepoPolicyStatus;
 	cardId: string;
 	/** The card to raise. Present only for `violated`. */
 	card: { type: string; title: string; subtitle?: string; description: string } | null;
+	/** The resolved mode this finding was judged under. `act` here is a human's per-repo decision. */
+	mode: RepoPolicyMode;
+	/**
+	 * Present ONLY when: the repo declared `act`, the invariant is violated, and every precondition
+	 * holds. Its absence on an `act` policy is never silent — `refusal` says why.
+	 */
+	remediation: RepoPolicyRemediation | null;
+	/** Why an `act` policy is not acting on this violation. Carried onto the card. */
+	refusal: string | null;
 }
 
 export interface RepoPolicyInput {
@@ -189,26 +264,34 @@ const MAX_DESCRIPTION = 300;
  */
 export function evaluateRepoPolicies(input: RepoPolicyInput): RepoPolicyFinding[] {
 	const { repoId, repoLabel, declared, state, configuredBranch } = input;
-	// Whether the BRANCH fact has an owner decides where it is reported, below.
-	const branchClaimed = resolveRepoPolicyMode(declared, "repo.on_default_branch") === "observe";
-	return REPO_POLICIES.map((def) => {
+	// Whether the BRANCH fact has an OWNER decides where it is reported, below. `!== "off"` rather
+	// than `=== "observe"`: acting on an invariant claims it at least as hard as watching it, and
+	// reading this as unclaimed would print the branch clause on both cards.
+	const branchClaimed = resolveRepoPolicyMode(declared, "repo.on_default_branch") !== "off";
+	return REPO_POLICIES.map((def): RepoPolicyFinding => {
 		const cardId = repoPolicyCardId(def.id, repoId);
-		const base = { policy: def.id, cardId, card: null } as const;
-		if (resolveRepoPolicyMode(declared, def.id) === "off") return { ...base, status: "unclaimed" };
+		const mode = resolveRepoPolicyMode(declared, def.id);
+		const base = { policy: def.id, cardId, card: null, mode, remediation: null, refusal: null } as const;
+		if (mode === "off") return { ...base, status: "unclaimed" };
 		if (!state) return { ...base, status: "unknown" };
 
 		if (def.id === "repo.on_default_branch") {
 			const clause = offTrunkClause(state, configuredBranch);
 			if (!clause) return { ...base, status: "held" };
 			const expected = (configuredBranch || "").trim() || "the trunk";
+			// Decided from the observation in HAND, never from a stored verdict (#440): a repo can be
+			// marked broken by a dropped WebSocket, and an actuator that trusted such a row would act
+			// on a transport failure. `state` here is a fresh read or it is null, which is `unknown`
+			// above and never reaches this line.
+			const plan = mode === "act" ? branchRemediation(state, configuredBranch) : { remediation: null, refusal: null };
 			return {
-				policy: def.id,
+				...base,
 				status: "violated",
-				cardId,
+				...plan,
 				card: card(def, {
 					title: `${repoLabel} is not on ${expected}`,
 					subtitle: state.branch ? `on ${state.branch}` : undefined,
-					sentence: `This checkout is ${clause}.`,
+					sentence: `This checkout is ${clause}.${plan.refusal ? ` Not switched: ${plan.refusal}.` : ""}`,
 				}),
 			};
 		}
@@ -222,9 +305,8 @@ export function evaluateRepoPolicies(input: RepoPolicyInput): RepoPolicyFinding[
 		const branchClause = branchClaimed ? null : offTrunkClause(state, configuredBranch);
 		const sentence = `This checkout is ${[branchClause, clause].filter(Boolean).join("; ")}.`;
 		return {
-			policy: def.id,
+			...base,
 			status: "violated",
-			cardId,
 			card: card(def, {
 				title: `Uncommitted work in ${repoLabel}`,
 				subtitle: state.branch ? `on ${state.branch}` : undefined,
@@ -232,6 +314,39 @@ export function evaluateRepoPolicies(input: RepoPolicyInput): RepoPolicyFinding[
 			}),
 		};
 	});
+}
+
+/**
+ * Will the branch policy act on THIS observation, and if not, why not? Pure.
+ *
+ * Two refusals, and both are the honest answer rather than a smaller action:
+ *
+ * - **No declared branch.** `offTrunkClause` calls a repo off-trunk when it is on neither `main` nor
+ *   `master`, which is enough to REPORT but not enough to ACT: the cloud does not know which of the
+ *   two this checkout has, and picking one would be inventing the target. So `act` needs the repo's
+ *   branch field set. It is reported, so the fix is one edit away rather than a policy that silently
+ *   never fires.
+ * - **A dirty tree.** git carries uncommitted changes across a checkout, so switching here would
+ *   move somebody's work onto the target branch. Refuse — never stash (repo-global, across
+ *   worktrees), never commit (unreviewed by construction), never discard.
+ *
+ * The machine checks the same precondition again for itself (`repo-write.ts`). That is not
+ * belt-and-braces for its own sake: the observation the cloud judges on is seconds old by the time
+ * the write lands, and the tree can have changed in between.
+ */
+export function branchRemediation(
+	state: RepoWorkingState,
+	configuredBranch: string | null,
+): { remediation: RepoPolicyRemediation | null; refusal: string | null } {
+	const target = (configuredBranch || "").trim();
+	if (!target) {
+		return { remediation: null, refusal: "this repo declares no branch, so there is no unambiguous one to return to" };
+	}
+	if (state.dirty) {
+		const n = state.changedFiles;
+		return { remediation: null, refusal: `${n} uncommitted file${n === 1 ? "" : "s"} would be carried onto \`${target}\`` };
+	}
+	return { remediation: { verb: "switch_branch", branch: target }, refusal: null };
 }
 
 /**

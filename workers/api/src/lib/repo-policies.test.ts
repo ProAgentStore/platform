@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { dirtyClause, offTrunkClause, type RepoWorkingState } from "./repo-observation.js";
 import {
@@ -23,16 +25,42 @@ function find(findings: ReturnType<typeof evaluateRepoPolicies>, id: RepoPolicyI
 }
 
 describe("the vocabulary is closed", () => {
-	it("has no `act` mode — the safety property is that it is ABSENT, not gated", () => {
-		// If this ever fails, an actuator was added. It needs a fixed-argv runner write surface and
-		// an explicit per-repo human promotion, not a new enum member.
-		const modes = new Set<string>();
-		for (const p of REPO_POLICIES) modes.add(p.fallback);
-		expect(modes.has("act")).toBe(false);
-		expect(sanitizeRepoPolicies({ "repo.tree_clean": "act" })).toEqual({
-			ok: false,
-			error: "policy `repo.tree_clean` must be one of: off, observe",
+	it("no policy ACTS by default — the acting half changes nothing on any repo until a human says so", () => {
+		// The deploy-day property. `act` now exists, so this is the test that has to hold instead of
+		// "there is no act": a fallback of `act` would promote every repo in the fleet at once.
+		for (const p of REPO_POLICIES) expect(p.fallback).not.toBe("act");
+	});
+
+	it("refuses `act` for a policy with no actuator — declined, not unimplemented", () => {
+		// tree_clean is the policy the ticket wanted most and the one that cannot act: an unattended
+		// `add -A` runs over a tree that is unreviewed BY CONSTRUCTION. The refusal says so, because
+		// "act is not in the list" reads as a gap somebody should close.
+		const res = sanitizeRepoPolicies({ "repo.tree_clean": "act" });
+		expect(res.ok).toBe(false);
+		if (!res.ok) {
+			expect(res.error).toContain("must be one of: off, observe");
+			expect(res.error).toContain("has no actuator");
+		}
+		expect(REPO_POLICIES.find((p) => p.id === "repo.tree_clean")?.actuator).toBeNull();
+	});
+
+	it("a policy that CAN act reaches exactly one verb", () => {
+		// The safety property moved from "there is no act" to "act is closed at the HANDS": the verb
+		// maps to a fixed argv on the runner (packages/browser-runner/src/coding/repo-write.ts), not
+		// to a goal handed to a general coding Engine.
+		const acting = REPO_POLICIES.filter((p) => p.actuator);
+		expect(acting.map((p) => p.id)).toEqual(["repo.on_default_branch"]);
+		expect(acting.map((p) => p.actuator?.verb)).toEqual(["switch_branch"]);
+		expect(sanitizeRepoPolicies({ "repo.on_default_branch": "act" })).toEqual({
+			ok: true,
+			value: { "repo.on_default_branch": "act" },
 		});
+	});
+
+	it("a stored `act` on a policy whose actuator was withdrawn degrades to observing", () => {
+		// The reader refuses it too, not only the writer: a row written by a build where a policy
+		// COULD act must not keep acting on a verb that no longer exists.
+		expect(resolveRepoPolicyMode({ "repo.tree_clean": "act" }, "repo.tree_clean")).toBe("observe");
 	});
 
 	it("refuses an unknown policy instead of silently dropping it", () => {
@@ -200,6 +228,52 @@ describe("evaluate", () => {
 		expect(f.card?.description).toContain("(standing policy `repo.tree_clean`)");
 	});
 
+	it("an OBSERVING violation plans nothing — no mode but `act` may produce a remediation", () => {
+		const f = find(evaluateRepoPolicies({ ...base, configuredBranch: "main", declared: { "repo.on_default_branch": "observe" }, state: offTrunkClean }), "repo.on_default_branch");
+		expect(f.status).toBe("violated");
+		expect(f.remediation).toBeNull();
+		expect(f.refusal).toBeNull();
+	});
+
+	it("plans the switch when the repo declared `act`, the tree is clean and a branch is declared", () => {
+		const f = find(evaluateRepoPolicies({ ...base, configuredBranch: "main", declared: { "repo.on_default_branch": "act" }, state: offTrunkClean }), "repo.on_default_branch");
+		expect(f.mode).toBe("act");
+		expect(f.remediation).toEqual({ verb: "switch_branch", branch: "main" });
+	});
+
+	it("REFUSES to act on a dirty tree, and the card says why", () => {
+		// git carries uncommitted changes across a checkout, so acting here relocates work somebody
+		// left deliberately (#276) onto the target branch — the same harm, reached the other way.
+		const f = find(evaluateRepoPolicies({ ...base, configuredBranch: "main", declared: { "repo.on_default_branch": "act" }, state: offTrunkDirty }), "repo.on_default_branch");
+		expect(f.remediation).toBeNull();
+		expect(f.refusal).toContain("3 uncommitted files would be carried onto `main`");
+		expect(f.card?.description).toContain("Not switched:");
+	});
+
+	it("REFUSES to act when the repo declares no branch — a target is never inferred", () => {
+		// Off-trunk is decided against main/master when nothing is configured. That is enough to
+		// REPORT and not enough to ACT: the cloud does not know which of the two this checkout has,
+		// and picking one is inventing the target — the false-premise failure #440 is about.
+		const f = find(evaluateRepoPolicies({ ...base, configuredBranch: null, declared: { "repo.on_default_branch": "act" }, state: offTrunkClean }), "repo.on_default_branch");
+		expect(f.remediation).toBeNull();
+		expect(f.refusal).toContain("declares no branch");
+	});
+
+	it("never plans anything on an UNOBSERVED repo — a transport failure cannot move a branch", () => {
+		// `state: null` is what a dropped socket looks like. #440 stored one of those as the repo's
+		// own verdict for five days; an actuator that acted on a stale row would act on a lie.
+		const f = find(evaluateRepoPolicies({ ...base, configuredBranch: "main", declared: { "repo.on_default_branch": "act" }, state: null }), "repo.on_default_branch");
+		expect(f.status).toBe("unknown");
+		expect(f.remediation).toBeNull();
+	});
+
+	it("an ACTING branch policy owns the branch fact, exactly as an observing one does", () => {
+		// `!== "off"`, not `=== "observe"`: promoting to act must not make the dirty card start
+		// repeating the branch clause, which would read as two problems.
+		const findings = evaluateRepoPolicies({ ...base, configuredBranch: "main", declared: { "repo.on_default_branch": "act" }, state: offTrunkDirty });
+		expect(find(findings, "repo.tree_clean").card?.description).not.toContain("on branch");
+	});
+
 	it("returns a finding for every policy in the registry", () => {
 		const findings = evaluateRepoPolicies({ ...base, declared: undefined, state: clean });
 		expect(findings.map((f) => f.policy).sort()).toEqual(REPO_POLICIES.map((p) => p.id).sort());
@@ -218,5 +292,53 @@ describe("the clauses stay the ones #276 wrote", () => {
 
 	it("still states that nothing will discard the work", () => {
 		expect(dirtyClause(dirty)).toContain("it will NOT be discarded");
+	});
+});
+
+/**
+ * WHO MAY PROMOTE A POLICY TO `act` — asserted over the SOURCE, because it is an absence.
+ *
+ * A policy is the one thing on this platform that acts with nobody present, so an agent able to
+ * create or promote one converts a single prompt injection into a STANDING capability. #322 states
+ * the rule: promotion is an explicit human action, per policy per repo, and never a value an agent
+ * can write. Today that holds because exactly one route accepts the field and no agent-facing
+ * surface calls it — which is invisible, and would be silently undone by one new MCP tool.
+ *
+ * The offender sets are compared EXACTLY rather than "⊆ allowed", the shape `security-invariants.ts`
+ * uses: removing a caller fails the guard too, so the list can only change deliberately.
+ */
+describe("promotion is a human action", () => {
+	const API = new URL("../", import.meta.url).pathname; // workers/api/src
+	const MCP = new URL("../../../mcp/src/", import.meta.url).pathname;
+
+	function walk(dir: string): string[] {
+		const out: string[] = [];
+		for (const entry of readdirSync(dir)) {
+			const p = join(dir, entry);
+			if (statSync(p).isDirectory()) out.push(...walk(p));
+			else if (p.endsWith(".ts") && !p.endsWith(".test.ts") && !p.endsWith(".d.ts")) out.push(p);
+		}
+		return out;
+	}
+
+	it("exactly one route accepts a policy declaration", () => {
+		const callers = walk(API)
+			.filter((p) => readFileSync(p, "utf-8").includes("sanitizeRepoPolicies"))
+			.map((p) => p.slice(API.length))
+			.sort();
+		expect(callers).toEqual(["lib/repo-policies.ts", "routes/coding-repos.ts"]);
+	});
+
+	it("no MCP tool can reach the route that accepts one", () => {
+		// The MCP worker talks to the API over HTTP, so the guard is on the PATH it names. Both known
+		// references are the collection (list repos / add a repo); the promotion route is the
+		// per-repo `PUT …/coding/repos/:repoId`, which nothing here may construct.
+		const paths = new Set<string>();
+		for (const p of walk(MCP)) {
+			for (const m of readFileSync(p, "utf-8").matchAll(/["'`]([^"'`]*coding\/repos[^"'`]*)["'`]/g)) paths.add(m[1]);
+		}
+		// Spelled by concatenation so the literal is not itself a template placeholder — biome reads
+		// `${…}` inside a plain string as a mistake, and here it is the exact text being asserted.
+		expect([...paths].sort()).toEqual([`/v1/instances/$\{instance_id}/coding/repos`]);
 	});
 });
