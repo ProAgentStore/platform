@@ -94,7 +94,11 @@ function sweep(root: string, find = findHandAuthoredControls) {
 //    screen where someone types a legal name or a salary because the agent refused to guess. The
 //    vocabulary has no step above `lg`, and inventing one for three controls is the table-describing-
 //    one-call-site failure §3 warns about.
-const PINNED = { "store/console": 69, "store/admin": 15, "agents/coder/web": 47 };
+//
+// 69 → 54: `AgentDetail`'s 15, all of them ordinary. Its four remaining `<button>` elements draw no
+// box at all (the tab bar's `border-b-2` arms, two text-only `Remove` links, two `&larr; Back`
+// links), so this file is finished as far as this guard can see.
+const PINNED = { "store/console": 54, "store/admin": 15, "agents/coder/web": 47 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

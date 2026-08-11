@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import Button from "../components/Button";
 import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -345,7 +346,7 @@ export default function AgentDetail() {
 					</div>
 					<div className="flex gap-1.5 pt-3 border-t border-line shrink-0">
 						<input aria-label="Message this agent" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendMessage(); }} placeholder="Send a message..." className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm" />
-						<button type="button" onClick={sendMessage} className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover">Send</button>
+						<Button variant="primary" size="lg" onClick={sendMessage}>Send</Button>
 					</div>
 				</div>
 			)}
@@ -468,7 +469,7 @@ export default function AgentDetail() {
 							</label>
 						</div>
 						<div className="flex gap-2 mt-3">
-							<button type="button" onClick={saveCapabilities} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save capabilities</button>
+							<Button variant="primary" onClick={saveCapabilities}>Save capabilities</Button>
 						</div>
 					</div>
 
@@ -501,8 +502,8 @@ export default function AgentDetail() {
 							{surfaces.length === 0 && <div className="text-xs text-muted-soft">No custom surfaces yet — add one to ship your own UI.</div>}
 						</div>
 						<div className="flex gap-2 mt-3">
-							<button type="button" disabled={!surfacesEnabled} onClick={() => setSurfaces(cs => [...cs, { clientId: localRowId(), id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold disabled:opacity-40">+ Add surface</button>
-							<button type="button" disabled={!surfacesEnabled} onClick={saveSurfaces} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Save surfaces</button>
+							<Button disabled={!surfacesEnabled} onClick={() => setSurfaces(cs => [...cs, { clientId: localRowId(), id: "", label: "", bundleUrl: "" }])}>+ Add surface</Button>
+							<Button variant="primary" disabled={!surfacesEnabled} onClick={saveSurfaces}>Save surfaces</Button>
 						</div>
 					</div>
 
@@ -544,16 +545,16 @@ export default function AgentDetail() {
 							{sFields.length === 0 && <div className="text-xs text-muted-soft">No subscriber settings yet — add a field to give subscribers typed configuration.</div>}
 						</div>
 						<div className="flex gap-2 mt-3">
-							<button type="button" onClick={() => setSFields(fs => [...fs, { clientId: localRowId(), id: "", label: "", type: "select", description: "", optionsText: "", defaultValue: "", voiceLanguage: false }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add field</button>
-							<button type="button" onClick={saveSettingsSchema} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save settings</button>
+							<Button onClick={() => setSFields(fs => [...fs, { clientId: localRowId(), id: "", label: "", type: "select", description: "", optionsText: "", defaultValue: "", voiceLanguage: false }])}>+ Add field</Button>
+							<Button variant="primary" onClick={saveSettingsSchema}>Save settings</Button>
 						</div>
 					</div>
 
 					<div className="flex gap-2 flex-wrap">
-						<button type="button" onClick={saveSettings} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover">Save All Settings</button>
-						<button type="button" onClick={exportAgent} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Export JSON</button>
-						<button type="button" onClick={saveVersion} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Save Version</button>
-						<button type="button" onClick={deleteAgent} className="text-sm px-3 py-2 rounded-xl bg-danger text-white font-semibold hover:opacity-90">Delete Agent</button>
+						<Button variant="primary" size="lg" onClick={saveSettings}>Save All Settings</Button>
+						<Button size="lg" onClick={exportAgent}>Export JSON</Button>
+						<Button size="lg" onClick={saveVersion}>Save Version</Button>
+						<Button variant="danger" size="lg" onClick={deleteAgent}>Delete Agent</Button>
 					</div>
 
 					{/* Versions */}
@@ -568,11 +569,11 @@ export default function AgentDetail() {
 											<span className="text-sm text-muted ml-2">{v.description}</span>
 											<span className="text-xs text-muted-soft ml-2">{new Date(v.created_at).toLocaleString()}</span>
 										</div>
-										<button type="button" onClick={async () => {
+										<Button size="sm" onClick={async () => {
 											if (!confirm(`Rollback to v${v.version_num}?`)) return;
 											await api(`/v1/agents/${id}/versions/${v.id}/rollback`, { method: "POST" });
 											loadAgent();
-										}} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold">Rollback</button>
+										}}>Rollback</Button>
 									</div>
 								))}
 							</div>
@@ -704,8 +705,8 @@ function CreateAgent() {
 					className="min-h-[120px]"
 				/>
 				<div className="flex gap-2 mt-4">
-					<button type="button" onClick={buildPlan} disabled={planning} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover disabled:opacity-60">{planning ? "Planning..." : "Plan Agent"}</button>
-					<button type="button" onClick={() => navigate("/agents")} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Cancel</button>
+					<Button variant="primary" size="lg" onClick={buildPlan} disabled={planning}>{planning ? "Planning..." : "Plan Agent"}</Button>
+					<Button size="lg" onClick={() => navigate("/agents")}>Cancel</Button>
 				</div>
 				{error && <div className="text-danger text-sm mt-2">{error}</div>}
 			</div>
@@ -775,8 +776,8 @@ function CreateAgent() {
 					)}
 
 					<div className="flex gap-2 mt-5">
-						<button type="button" onClick={execute} disabled={executing} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover disabled:opacity-60">{executing ? "Creating..." : "Approve and Create"}</button>
-						<button type="button" onClick={() => setPlan(null)} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Revise prompt</button>
+						<Button variant="primary" size="lg" onClick={execute} disabled={executing}>{executing ? "Creating..." : "Approve and Create"}</Button>
+						<Button size="lg" onClick={() => setPlan(null)}>Revise prompt</Button>
 					</div>
 				</div>
 			)}
