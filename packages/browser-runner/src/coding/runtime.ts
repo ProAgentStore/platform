@@ -7,6 +7,7 @@ import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
+import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 
 /**
@@ -125,7 +126,11 @@ export class CodingRuntime {
 	 *  read-only code-inspection endpoints exist, so the cloud offers the grounding tools
 	 *  (older runners omit it → the cloud degrades to terminal-only). */
 	static capabilities(): string[] {
-		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect"];
+		// `coding.repo-write` announces the ONE write verb (#322). Advertised rather than probed, so
+		// a reader of the registration can see which machines can restore a branch invariant; the
+		// cloud still never trusts it, because an older runner simply 404s and the policy reports
+		// that it asked and was not answered.
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write"];
 	}
 
 	/**
@@ -151,6 +156,16 @@ export class CodingRuntime {
 	/** Run a whitelisted read-only git command in the session's repo. */
 	git(input: { sessionId?: string; workDir?: string; cmd: GitCmd; path?: string; n?: number }) {
 		return runRepoGit(this.resolveWorkDir(input), input.cmd, { path: input.path, n: input.n });
+	}
+
+	/**
+	 * The ONE write the platform may make in a checkout by itself (#322) — put it back on a branch
+	 * it declared, or refuse. See `repo-write.ts`: fixed argv, clean tree required, nothing in the
+	 * `checkout .`/`reset`/`clean`/`stash` family exists to be reached.
+	 */
+	gitWrite(input: { sessionId?: string; workDir?: string; cmd: GitWriteCmd; branch: string }) {
+		if (input.cmd !== "switch-branch") throw new InspectError(`unsupported git write command: ${String(input.cmd)}`);
+		return switchRepoBranch(this.resolveWorkDir(input), input.branch);
 	}
 
 	/** Bounded recursive file tree of the session's repo (names/type/size only). */
