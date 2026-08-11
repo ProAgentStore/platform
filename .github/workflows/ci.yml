@@ -74,6 +74,15 @@ jobs:
         # strings, so a guard reading the built stylesheet is defeated by a doc comment
         # (#368's broken rules came back from its own postmortem that way).
         run: node scripts/check-design-tokens.mjs
+      - name: Guard bare catch blocks (#291)
+        # Not "no empty catches" — most of this repo's swallows are RIGHT, and a gate that
+        # demanded each one log something would file a second, less accurate report of an
+        # event the module below already filed properly. What it demands is that the
+        # decision be VISIBLE: a comment inside the braces satisfies it. Every tree is at
+        # zero except packages/browser-runner, pinned at 2 because it belonged to another
+        # session while #291's triage ran — gate where the tree is clean, ratchet where it
+        # is not, the same rule the lint step below follows.
+        run: node scripts/check-bare-catch.mjs
       - name: Guard heavy-test isolation (#253)
         # Keeps real-browser / real-socket tests inside the `integration` project, which
         # is where they get a budget sized for real I/O instead of vitest's 5s default.
