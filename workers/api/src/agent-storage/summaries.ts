@@ -95,6 +95,27 @@ export function withSummaries<TBase extends AgentStorageBaseCtor & GConstructorW
 				.slice(0, 8_000);
 
 			const summaryModel = model.startsWith("@cf/") ? model : SUMMARY_CF_MODEL;
+			// The extraction instruction excludes the platform's OWN resolved state as a class (#495).
+			//
+			// The original asked for "key facts about the user … decisions made, and information
+			// shared", which does not distinguish a durable fact about the user from a reading of the
+			// platform's momentary state. Four of one live instance's six extracted facts were the
+			// latter: "Write access to terminal connector is not enabled" (false 84 seconds later, and
+			// still injected four days on), "tmux sessions exist five" (false within the hour), a
+			// failed session creation, and a session start. The first of those was read back by the
+			// agent and turned into a refusal to attempt a call it was permitted to make.
+			//
+			// Stated as a CLASS, not a list of banned phrases. The class has a definition that does
+			// not rot: it is precisely the state the platform re-reads and re-states authoritatively
+			// on every turn (connected tools and their consent, runner/session status, settings,
+			// deployment), so persisting any of it is redundant when written and false when it
+			// changes. A phrase blocklist would be right about these four and silently wrong about
+			// the fifth kind nobody has seen.
+			//
+			// This is the PRODUCTION half and it is probabilistic — a model instruction is not a
+			// guarantee. The half that is deterministic is at the reader: lib/memory-prompt.ts dates
+			// every summary-derived entry and subordinates it to live state, so one that gets through
+			// anyway loses a contradiction instead of winning a coin flip.
 			try {
 				const result = (await this.ai.run(summaryModel as Parameters<Ai["run"]>[0], {
 					messages: [
@@ -105,7 +126,9 @@ export function withSummaries<TBase extends AgentStorageBaseCtor & GConstructorW
   "summary": "2-3 sentence summary of what was discussed and decided",
   "facts": [{"subject":"...", "predicate":"...", "object":"...", "confidence": 0.9}]
 }
-Extract key facts about the user, their preferences, decisions made, and information shared. Only include facts with high confidence.`,
+Extract key facts about the user, their preferences, decisions made, and information shared. Only include facts with high confidence.
+A fact here becomes PERMANENT and is repeated to the agent on every future turn, so extract only what will still be true next month unless the user changes it.
+NEVER extract the platform's own state, as a class: whether a tool, permission, connector or feature is enabled, granted, blocked or unavailable; whether a runner, session, service or machine is connected, running, idle or offline; how many sessions, files, records or repositories exist; or whether a particular tool call or attempt succeeded or failed. Every one of those is re-read live and re-stated to the agent authoritatively on each turn, so a snapshot of one is redundant the moment it is written and false the moment it changes.`,
 						},
 						{ role: "user", content: transcript },
 					],

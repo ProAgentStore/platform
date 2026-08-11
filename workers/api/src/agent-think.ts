@@ -12,6 +12,7 @@ import { directionRosterFor } from "./lib/supervision.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { connectorToolsPrompt } from "./lib/connector-tool-prompt.js";
 import { deploymentContext } from "./lib/deployment-prompt.js";
+import { memoryPrompt } from "./lib/memory-prompt.js";
 import { listConsents } from "./lib/connector-consent.js";
 import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
 import { parseAccountPreferences } from "./lib/preferences.js";
@@ -235,6 +236,9 @@ export async function runAgentThink(opts: {
 		}
 	} catch { /* skip silently */ }
 
+	// Moved up from beside `clockPrompt`: the memory block dates its entries in this zone (#495).
+	const ownerTimeZone = parseAccountPreferences(ownerPreferences).timezone;
+
 	// Behaviour (#223) — the subscriber's declared character, replacing three hardcoded
 	// heuristics further down (the technical/plain guess, the no-step-by-step rule, and the
 	// 2-sentence cap). Sparse: an agent that has configured nothing resolves to `{}` and every
@@ -294,14 +298,10 @@ export async function runAgentThink(opts: {
 	if (ragContext) systemPrompt += `\n\n${fenceUntrusted(ragContext, "documents/URLs/repos/webhooks")}`;
 
 	if (memory.length > 0) {
-		systemPrompt += "\n\n## Your Memory\n";
-		systemPrompt +=
-			"To change a fact below, write_memory to its EXACT key; never add a new key for a fact that already has one. " +
-			"Entries marked (user-set) were set directly by the user — never overwrite or delete them unless the user explicitly asks.\n";
-		for (const m of memory) {
-			const userSet = m.source === "user" ? " (user-set)" : "";
-			systemPrompt += `- [${m.type}] ${m.key}${userSet}: ${m.content}\n`;
-		}
+		// Provenance and AGE for every summary-derived entry (#495): one instance carried a false
+		// "write access is not enabled" in the same prompt as "[write — consent GRANTED]", with no
+		// date on either to break the tie. Why, and the wording, in lib/memory-prompt.ts.
+		systemPrompt += memoryPrompt(memory, { now: turnStartedAt, timeZone: ownerTimeZone });
 		// Self-heal the entries written before there was anywhere else to put them (#226). These
 		// exist on live agents and can't be reached by a D1 migration — memory lives in the DO — so
 		// the agent moves its own, once, the next time it is asked about them. A user-set stray is
@@ -375,7 +375,7 @@ export async function runAgentThink(opts: {
 	// different claim from the one the reader hears, not merely a different format. The zone comes
 	// from the owner's account preferences, already in hand from the join above; UNSET is honest and
 	// keeps the block in UTC rather than inventing a locale. See `lib/agent-clock.ts`.
-	const ownerTimeZone = parseAccountPreferences(ownerPreferences).timezone;
+	// (`ownerTimeZone` is resolved with the config read above — earlier blocks need it too.)
 	systemPrompt += clockPrompt(turnStartedAt, ownerTimeZone);
 
 	// The voice channel the agent is heard through and does not own (#340). Unconditional: voice is a

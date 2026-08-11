@@ -158,6 +158,33 @@ describe("the subscriber's configured repo reaches the agent (#494)", () => {
 	});
 });
 
+describe("memory is rendered with its provenance and age (#495)", () => {
+	// The instance carried "Write access to terminal connector is not enabled" — false 84 seconds
+	// after it was written, still injected four days later — in the same prompt as
+	// "[write — consent GRANTED, you may call this]". The old inline loop emitted
+	// `- [type] key: content` with a `(user-set)` marker and NO date, so two contradictory claims
+	// arrived on equal terms.
+	it("builds the block from the shared renderer, not an inline loop", () => {
+		expect(findCalls(THINKER_CODE, "memoryPrompt")).toHaveLength(1);
+		// The pre-fix line, which is what a later edit would most naturally reintroduce. Over the
+		// RAW file deliberately: `stripCommentsAndLiterals` blanks string BODIES, so
+		// `m.source === "user" ? " (user-set)" : ""` strips to `m.source === "    " ? …` and the
+		// assertion would pass against the stripped source even with the old loop still present.
+		expect(THINKER).not.toMatch(/m\.source === "user" \? " \(user-set\)" : ""/);
+	});
+
+	it("passes the turn's clock and the owner's zone, so the age is stated not computed", () => {
+		expect(matchLines(THINKER_CODE, /memoryPrompt\(memory, \{ now: turnStartedAt, timeZone: ownerTimeZone/)).toHaveLength(1);
+	});
+
+	it("still self-heals stray behaviour keys afterwards (#226)", () => {
+		// behaviourStrayPrompt stayed at the call site rather than moving into the renderer: it is a
+		// one-time migration for entries written before the Behaviour tab existed, not a statement
+		// about provenance. Dropping it while moving the loop would be a silent regression.
+		expect(findCalls(THINKER_CODE, "behaviourStrayPrompt")).toHaveLength(1);
+	});
+});
+
 // ── #398: a tool result arrives as the PLATFORM's block, never as the model's prose ──
 //
 // The loop used to append `{role:"assistant", content:"I called tools:\n…"}` and never append the
