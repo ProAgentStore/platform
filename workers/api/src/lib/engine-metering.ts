@@ -84,6 +84,12 @@ export function normalizePaneCommand(raw: string | null | undefined): string {
 	if (!s) return "";
 	const first = s.split(/\s+/)[0] ?? "";
 	const base = first.split("/").pop() ?? "";
+	// A pure version number is not a program name (#498). Claude Code rewrites its argv, so
+	// `#{pane_current_command}` answered `2.1.226` for a pane running it — and the trace then read
+	// "pane running 2.1.226", naming a version as if it were a program. Returning "" routes it to
+	// the honest branch instead: the pane's command could not be read. The runner now asks the
+	// process tree for the real `comm` first, so this is the residue, not the common case.
+	if (/^v?\d+(\.\d+)+$/.test(base)) return "";
 	return base.toLowerCase().slice(0, 60);
 }
 
@@ -215,7 +221,9 @@ export async function recordUnmeteredEngineActivity(
 		context: {
 			driver: obs.driver,
 			target: obs.target,
-			// The command as READ, plus the fact of whether it could be read at all.
+			// The command as READ, plus the fact of whether it could be read at all. The two can
+			// disagree — a runner that reported a value carrying no NAME (a rewritten argv, #498)
+			// is `readable: true` with a null command, which is exactly what happened.
 			paneCommand: normalizePaneCommand(obs.activeCommand) || null,
 			paneCommandReadable: obs.activeCommand != null,
 			aiCli,

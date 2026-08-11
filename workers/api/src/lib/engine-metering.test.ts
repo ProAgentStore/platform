@@ -235,3 +235,38 @@ describe("unmeteredUsageSummary", () => {
 		expect(await unmeteredUsageSummary(env, "u1", { rangeDays: 7 })).toEqual(emptyUnmeteredSummary(7));
 	});
 });
+
+// ── #498: a rewritten argv is not a program name ────────────────────────────
+//
+// Measured: `#{pane_current_command}` answered `2.1.226` (Claude Code's version) for a pane whose
+// process `comm` was `claude`, so `isAiCli` was false and `aiCliDrives` stayed 0 across a week of
+// driving it. The runner now asks the process tree for the real name; this half makes sure the
+// residue — a value that carries no name at all — is reported as unreadable rather than named.
+describe("a version string is not a command (#498)", () => {
+	it("normalizes to nothing, so nothing claims it is a program", () => {
+		expect(normalizePaneCommand("2.1.226")).toBe("");
+		expect(normalizePaneCommand("v0.4.45")).toBe("");
+		expect(normalizePaneCommand("/opt/homebrew/bin/2.1.226")).toBe("");
+	});
+
+	it("is not mistaken for an AI CLI, and does not become one either", () => {
+		expect(isAiCli("2.1.226")).toBe(false);
+		expect(isAiCli("claude")).toBe(true); // what the runner's fallback now reports instead
+	});
+
+	it("says the command could not be READ instead of naming a version", () => {
+		const sentence = describeUnmetered({ driver: "terminal", target: "tmux:heartfull-tmux", activeCommand: "2.1.226" });
+		expect(sentence).toContain("could not be read");
+		expect(sentence).not.toContain("2.1.226");
+	});
+
+	it("with the fallback in place, the specific sentence finally fires", () => {
+		const sentence = describeUnmetered({ driver: "terminal", target: "tmux:heartfull-tmux", activeCommand: "claude" });
+		expect(sentence).toBe("Drove claude in tmux:heartfull-tmux — its token spend is NOT measured and is missing from your usage total.");
+	});
+
+	it("still distinguishes an unreadable pane from one running an ordinary program", () => {
+		expect(normalizePaneCommand("node")).toBe("node");
+		expect(describeUnmetered({ driver: "terminal", target: "tmux:x", activeCommand: "node" })).toContain("pane running node");
+	});
+});

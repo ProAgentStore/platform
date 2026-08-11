@@ -88,7 +88,14 @@ export function activeTerminalCommand(target: string, backend?: TerminalBackend)
 		switch (t.backend) {
 			case "tmux": {
 				const out = tmuxExec(["display-message", "-p", "-t", t.id, "#{pane_current_command}"]).trim();
-				return out || null;
+				// `#{pane_current_command}` reads the pane process's argv, and Claude Code rewrites
+				// its own — measured on this platform's flagship case, tmux answered `2.1.226` (the
+				// version) for a pane whose process `comm` was `claude`. So `aiCliDrives` was 0 for a
+				// week of driving Claude Code through a tmux Operator. `comm` is the executable name
+				// and no title rewrite touches it, so ask the process tree when the argv is not a
+				// name (#498). Only then: a pane reporting `zsh` genuinely has nothing in the
+				// foreground, and promoting a background child would be an invention.
+				return resolvePaneCommand(out, () => paneDescendantComms(t.id));
 			}
 			case "kitty":
 				return kittyForegroundCommand(t.id);
@@ -99,6 +106,98 @@ export function activeTerminalCommand(target: string, backend?: TerminalBackend)
 		}
 	} catch {
 		return null;
+	}
+}
+
+/** Shell names that mean "the pane is at a prompt", not "this program is running". */
+const SHELL_NAMES = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "login", "screen", "tmux"]);
+
+/** A program name is a bare token. A version (`2.1.226`) and a sentence are both NOT one. */
+export function looksLikeCommandName(raw: string): boolean {
+	const value = String(raw ?? "").trim();
+	if (!value || value.length > 60) return false;
+	if (/^v?\d+(\.\d+)+$/.test(value)) return false; // a version string is not a program name
+	return /^[A-Za-z_][\w.@+-]*$/.test(value);
+}
+
+/**
+ * What the pane is running, given what tmux SAID and a way to ask the process tree (#498).
+ *
+ * Pure so the measured fixture — tmux says `2.1.226`, the pane's child `comm` is `claude` — is a
+ * unit test rather than a story. Keeps tmux's answer whenever it is a name: that is the fast path,
+ * it costs no extra exec, and the descendant walk can only ever be a second-best guess.
+ */
+export function resolvePaneCommand(reported: string, listDescendantComms: () => string[]): string | null {
+	const value = String(reported ?? "").trim();
+	if (looksLikeCommandName(value)) return value;
+	// The probe is best-effort by construction: `pgrep`/`ps` availability differs by platform, and
+	// a missing one must degrade to what tmux said, not lose it.
+	let descendants: string[] = [];
+	try {
+		descendants = listDescendantComms();
+	} catch {
+		descendants = [];
+	}
+	for (const raw of descendants) {
+		const name = (String(raw ?? "").trim().split("/").pop() ?? "").trim();
+		if (!looksLikeCommandName(name)) continue;
+		if (SHELL_NAMES.has(name.toLowerCase())) continue;
+		return name;
+	}
+	// Nothing better found: hand back exactly what tmux said. The cloud decides what an
+	// unreadable value means; this module does not invent a name it did not read.
+	return value || null;
+}
+
+/** Bounded, so a probe on a path a Loop drives continuously can never become the slow part. */
+const PROBE_TIMEOUT_MS = 1_000;
+
+/** `comm` for the pane's descendant processes, nearest first. `[]` on any failure. */
+function paneDescendantComms(paneId: string): string[] {
+	let pid = "";
+	try {
+		pid = tmuxExec(["display-message", "-p", "-t", paneId, "#{pane_pid}"], PROBE_TIMEOUT_MS).trim();
+	} catch {
+		return [];
+	}
+	if (!/^\d+$/.test(pid)) return [];
+	const found: string[] = [];
+	let frontier = [pid];
+	// Two levels is enough for `zsh → claude` and for one wrapper in between, and it bounds the
+	// work: `pgrep`/`ps` availability differs by platform, so every step degrades to today's
+	// answer rather than throwing (the runner is macOS/Linux; kitty and iTerm2 are untouched).
+	for (let depth = 0; depth < 2 && frontier.length > 0; depth++) {
+		const children = childPids(frontier);
+		if (children.length === 0) break;
+		found.push(...commsFor(children));
+		frontier = children;
+	}
+	return found;
+}
+
+function childPids(parents: string[]): string[] {
+	try {
+		const out = execFileSync("pgrep", ["-P", parents.join(",")], {
+			encoding: "utf8",
+			timeout: PROBE_TIMEOUT_MS,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		return out.split("\n").map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).slice(0, 16);
+	} catch {
+		return []; // pgrep exits non-zero when nothing matches — that is an answer, not an error
+	}
+}
+
+function commsFor(pids: string[]): string[] {
+	try {
+		const out = execFileSync("ps", ["-o", "comm=", "-p", pids.join(",")], {
+			encoding: "utf8",
+			timeout: PROBE_TIMEOUT_MS,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		return out.split("\n").map((s) => s.trim()).filter(Boolean);
+	} catch {
+		return [];
 	}
 }
 
