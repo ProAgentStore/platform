@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { ChevronDown, ChevronUp, Plus, Repeat, Trash2 } from "lucide-react";
+import Button from "../components/Button";
 import Card from "../components/Card";
 import {
 	MAX_LOOP_PRESETS,
@@ -109,35 +110,33 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 										aria-label="Preset label"
 										className="flex-1 min-w-0 text-sm font-semibold bg-paper border border-line rounded-lg px-2.5 py-1.5"
 									/>
-									<button
-										type="button"
+									<Button
+										size="icon"
 										onClick={() => setList((l) => movePreset(l, p.id, -1))}
 										disabled={i === 0}
 										title="Move up"
 										aria-label={`Move ${p.label || "preset"} up`}
-										className="p-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent disabled:opacity-30"
 									>
 										<ChevronUp size={13} />
-									</button>
-									<button
-										type="button"
+									</Button>
+									<Button
+										size="icon"
 										onClick={() => setList((l) => movePreset(l, p.id, 1))}
 										disabled={i === list.length - 1}
 										title="Move down"
 										aria-label={`Move ${p.label || "preset"} down`}
-										className="p-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent disabled:opacity-30"
 									>
 										<ChevronDown size={13} />
-									</button>
-									<button
-										type="button"
+									</Button>
+									<Button
+										variant="danger"
+										size="icon"
 										onClick={() => setList((l) => removePreset(l, p.id))}
 										title="Remove"
 										aria-label={`Remove ${p.label || "preset"}`}
-										className="p-1.5 rounded-lg border border-line text-danger hover:bg-danger-soft"
 									>
 										<Trash2 size={13} />
-									</button>
+									</Button>
 								</div>
 								<textarea
 									value={p.objective}
@@ -152,33 +151,28 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 					</div>
 
 					<div className="flex flex-wrap items-center gap-2 mt-3">
-						<button
-							type="button"
+						<Button
 							onClick={() => setList((l) => addPreset(l))}
 							disabled={list.length >= MAX_LOOP_PRESETS}
-							className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold flex items-center gap-1 disabled:opacity-40"
 						>
 							<Plus size={13} /> Add preset
-						</button>
-						<button
-							type="button"
+						</Button>
+						<Button
+							variant="primary"
 							onClick={() => void persist(saveablePresets(list))}
 							disabled={busy || !dirty}
-							className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40"
 						>
 							{busy ? "Saving…" : "Save presets"}
-						</button>
+						</Button>
 						{/* Only when there IS an override of your own — a reset that resets to what you are
 						    already looking at is the confusion #232 removed elsewhere. */}
 						{canResetPresets(source) && (
-							<button
-								type="button"
+							<Button
 								onClick={() => void persist([])}
 								disabled={busy}
-								className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold"
 							>
 								Reset to defaults
-							</button>
+							</Button>
 						)}
 						{incomplete > 0 && (
 							<span className="text-xs text-warning">

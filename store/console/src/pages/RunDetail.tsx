@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from "react";
+import Button from "../components/Button";
 import Page from "../components/Page";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
@@ -134,7 +135,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 					placeholder="Why did you decide this?"
 					className="flex-1 min-w-0 bg-paper border border-line rounded-lg px-3 py-2 text-sm text-ink"
 				/>
-				<button type="button" disabled={asking || !draft.trim()} onClick={ask} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm disabled:opacity-40 shrink-0">Ask</button>
+				<Button variant="primary" size="lg" disabled={asking || !draft.trim()} onClick={ask} className="shrink-0">Ask</Button>
 			</div>
 		</Card>
 	);
@@ -470,7 +471,7 @@ export default function RunDetail() {
 				<div className="bg-panel border border-line rounded-xl p-6 text-center">
 					<h1 className="text-lg font-bold mb-1">This run is no longer here</h1>
 					<p className="text-sm text-muted mb-4">It was deleted, or it belongs to an agent you no longer have. Anything the notification was asking for has been resolved or removed.</p>
-					<button type="button" onClick={() => navigate(`/instances/${instanceId}/board`)} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm">Open the Board</button>
+					<Button variant="primary" size="lg" onClick={() => navigate(`/instances/${instanceId}/board`)}>Open the Board</Button>
 				</div>
 			</Page>
 		);
@@ -482,9 +483,9 @@ export default function RunDetail() {
 				<button type="button" onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent">
 					<ArrowLeft size={15} /> Back
 				</button>
-				<button type="button" onClick={remove} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-danger-soft text-danger font-semibold hover:bg-danger-soft">
+				<Button variant="danger" size="lg" onClick={remove}>
 					<Trash2 size={14} /> Delete
-				</button>
+				</Button>
 			</div>
 
 			<div className="mb-4">

@@ -259,13 +259,28 @@ card-shaped button with a selected state, and an icon button drawn over content 
 scrim. Those stay hand-written and are counted (§5).
 
 **How much of the remaining count that accounts for, measured** so the pin is not misread as a
-to-do list of equal items. Of the console's 124 hand-authored buttons: 23 are card-shaped, 11 sit
-below the smallest step's type size (dense board chips at `text-2xs`), 5 are pills, 2 are segmented
-arms, 2 are overlaid, 1 is a fixed-size icon — call it a third that the vocabulary excludes on
-purpose. The other ~84 are ordinary buttons that have simply not been migrated. Both halves are in
-the same number today, and separating them is per-screen work: the Board's chips look migratable
-and are not, because `size="sm"` would raise their type step and change the radius in the densest
-rows in the app.
+to-do list of equal items. When the console stood at 124 hand-authored buttons: 23 were card-shaped,
+11 sat below the smallest step's type size (dense board chips at `text-2xs`), 5 were pills, 2 were
+segmented arms, 2 were overlaid, 1 was a fixed-size icon — call it a third that the vocabulary
+excludes on purpose. The ~84 ordinary ones were simply unmigrated, and separating the halves is
+per-screen work: the Board's chips look migratable and are not, because `size="sm"` would raise
+their type step and change the radius in the densest rows in the app.
+
+**The console is now at 69**, and the excluded third is most of what is left — `BoardTab` (18),
+`AgentDetail` (15) and `InstanceDetail` (11) hold three quarters of it. When migrating the rest:
+
+- **Preserve the rendered type step; collapse padding and radius.** `text-sm` → `size="lg"`,
+  `text-xs` → `md` or `sm` by padding. Mapping every `px-3 py-1.5` onto `md` regardless would shrink
+  14px labels to 12px under cover of a shape sweep — a legibility change wearing a refactor's
+  clothes. §2 already settled the type scale and both steps are Tailwind defaults, so neither is
+  drift; the drift this ticket measured is padding and radius.
+- **A destructive control takes `variant="danger"`, not a muted button with a red hover.** Six sites
+  changed this way (Disconnect, Delete trigger, Kill session, Remove key, Unsubscribe, Delete run).
+  A control that only looks destructive once the pointer is already on it is telling you too late.
+- **A control inside a tinted banner is not automatically a `variant`.** `LoadFailed`'s Retry draws
+  `border-danger-line` on a `bg-danger-soft` fill; `danger` draws `border-line`, which is correct on
+  a panel and washed out on red. Left hand-written on purpose, in one component that renders at
+  twelve call sites.
 
 Mobile: form controls are forced to `font-size: 16px; min-height: 44px` below 640px (`index.css`).
 Both numbers are deliberate — 16px is the threshold below which iOS Safari zooms the viewport on

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Button from "../components/Button";
 import Page from "../components/Page";
 import LoadFailed from "../components/LoadFailed";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -72,7 +73,7 @@ export default function Dashboard() {
 				<div>
 					<div className="flex justify-between items-center mb-4">
 						<h2 className="text-lg font-semibold">Agents you've built</h2>
-						<button type="button" onClick={() => navigate("/agents/new")} className="text-sm px-3 py-1.5 rounded-xl bg-accent text-white font-semibold hover:bg-accent-hover active:scale-[0.97] transition-all">+ New Agent</button>
+						<Button variant="primary" size="lg" onClick={() => navigate("/agents/new")} className="active:scale-[0.97]">+ New Agent</Button>
 					</div>
 					{loading ? (
 						<p className="text-center py-8 text-muted">Loading agents...</p>
@@ -102,7 +103,7 @@ export default function Dashboard() {
 				<div>
 					<div className="flex justify-between items-center mb-4">
 						<h2 className="text-lg font-semibold">Agents you've subscribed to</h2>
-						<button type="button" onClick={() => navigate("/browse")} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-all">Browse agents</button>
+						<Button size="lg" onClick={() => navigate("/browse")}>Browse agents</Button>
 					</div>
 					{loading ? (
 						<p className="text-center py-8 text-muted">Loading instances...</p>

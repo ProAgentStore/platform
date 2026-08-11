@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { LineChart, Plus, RefreshCw } from "lucide-react";
+import Button from "../components/Button";
 import StatsCard from "../components/StatsCard";
 import { historyNote, throughDayNote, windowLabel } from "../lib/stats-format";
 import type { StatsCardKind, StatsRejection, StatsResponse, StatsSourceInfo, StatsSourcesResponse } from "../lib/stats-types";
@@ -139,13 +140,9 @@ export default function StatsTab({ instanceId }: { instanceId: string }) {
 						does not count.
 					</p>
 				</div>
-				<button
-					type="button"
-					onClick={() => setNonce((n) => n + 1)}
-					className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent shrink-0"
-				>
+				<Button onClick={() => setNonce((n) => n + 1)} className="shrink-0">
 					<RefreshCw size={13} /> Refresh
-				</button>
+				</Button>
 			</div>
 
 			{/* One page-level window — never one per card. */}
@@ -220,15 +217,13 @@ export default function StatsTab({ instanceId }: { instanceId: string }) {
 					<AddCard sources={sources} busy={busy} onCancel={() => setAdding(false)} onAdd={(card) => void patch([{ id: card.id, card }]).then(() => setAdding(false))} />
 				) : (
 					cards.length > 0 && (
-						<button
-							type="button"
+						<Button
 							disabled={atLimit}
 							onClick={() => setAdding(true)}
-							className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent disabled:opacity-40"
 							title={atLimit ? `You already have the maximum of ${maxCards} cards.` : undefined}
 						>
 							<Plus size={13} /> {atLimit ? `Maximum ${maxCards} cards` : "Add a card"}
-						</button>
+						</Button>
 					)
 				))}
 		</div>
@@ -256,13 +251,9 @@ function EmptyState({ onAdd, canAdd }: { onAdd: () => void; canAdd: boolean }) {
 				itself.
 			</p>
 			{canAdd && (
-				<button
-					type="button"
-					onClick={onAdd}
-					className="mt-3 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-accent text-accent font-semibold"
-				>
+				<Button variant="primary" onClick={onAdd} className="mt-3">
 					<Plus size={13} /> Add a card
-				</button>
+				</Button>
 			)}
 		</div>
 	);
@@ -379,8 +370,8 @@ function AddCard({
 			))}
 
 			<div className="flex gap-2">
-				<button
-					type="button"
+				<Button
+					variant="primary"
 					disabled={busy || !title.trim() || missing.length > 0}
 					onClick={() =>
 						onAdd({
@@ -394,13 +385,10 @@ function AddCard({
 							params: Object.fromEntries(Object.entries(params).filter(([, v]) => v.trim() !== "")),
 						})
 					}
-					className="text-xs px-3 py-1.5 rounded-lg border border-accent bg-accent-soft text-accent font-semibold disabled:opacity-40"
 				>
 					Add card
-				</button>
-				<button type="button" onClick={onCancel} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">
-					Cancel
-				</button>
+				</Button>
+				<Button onClick={onCancel}>Cancel</Button>
 				{missing.length > 0 && <span className="text-xs text-muted-soft self-center">Needs {missing.map((m) => m.label).join(", ")}</span>}
 			</div>
 		</Card>

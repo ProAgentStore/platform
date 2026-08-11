@@ -218,9 +218,9 @@ export default function Usage() {
 					<BarChart3 size={20} className="text-accent" />
 					<h1 className="font-display text-xl font-bold">Usage</h1>
 				</div>
-				<button type="button" onClick={load} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">
+				<Button onClick={load}>
 					<RefreshCw size={13} /> Refresh
-				</button>
+				</Button>
 			</div>
 			<p className="text-sm text-muted mb-2">
 				Token usage across all your agents. Every dollar figure here is <b>estimated from published list

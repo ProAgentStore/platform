@@ -63,7 +63,38 @@ function sweep(root: string, find = findHandAuthoredControls) {
  * to read its state off a button. One fewer hand-authored box, recorded rather than banked.
  */
 // +2 for #488: DeploymentCard.tsx has 2 hand-authored button shapes, and AgentDetail.tsx was also updated.
-const PINNED = { "store/console": 126, "store/admin": 15, "agents/coder/web": 47 };
+//
+// 126 → 69 at #366's third pass. 57 sites across 16 files — AccountConnections, Notifications,
+// TriggersSection, TmuxTab, StatsTab, Profile, RunDetail, LoopPresetsSection, DataTab, Dashboard,
+// Terminals, Usage, SettingsTab, ActivityTab, IndexingTab, LoopRunsSection, DeploymentCard.
+//
+// ── The rule this pass followed, stated so the next one is not a coin toss
+//
+// **The rendered type step is preserved; padding and radius collapse.** A call site at `text-sm`
+// becomes `size="lg"` (also `text-sm`), one at `text-xs` becomes `md` or `sm` by its padding.
+// The alternative — map every `px-3 py-1.5` to `md` regardless — would have shrunk a dozen
+// 14px labels to 12px under cover of a shape sweep, which is a legibility change wearing a
+// refactor's clothes. #390 already settled the type scale and both steps are Tailwind defaults,
+// so nothing here is drift; the drift this ticket measured is in padding and radius, and that is
+// what moved. `rounded-xl` and bare `rounded` on a control both became `rounded-lg`.
+//
+// ── What was deliberately left, and why, so 69 is not read as 69 identical to-dos
+//
+// Beyond the classes DESIGN-SYSTEM.md §3 already excludes (card-shaped, pills, segmented arms,
+// overlaid, fixed-size icons), three judgements were made by hand:
+//
+//  - **`LoadFailed`'s Retry** sits INSIDE a `bg-danger-soft` banner and draws `border-danger-line`.
+//    `variant="danger"` draws `border-line`, which is the right border on a panel and a washed-out
+//    one on a red fill. One shared component, twelve rendered call sites, so it is the wrong place
+//    to take a contrast risk for a shape.
+//  - **Login's two provider buttons** are a matched pair and one of them is Google's mandated white
+//    button. Migrating only the GitHub half would break the pairing that is the whole point of the
+//    screen.
+//  - **RunDetail's needs-input Send / Take over / Resume** are `text-base` on purpose — that is the
+//    screen where someone types a legal name or a salary because the agent refused to guess. The
+//    vocabulary has no step above `lg`, and inventing one for three controls is the table-describing-
+//    one-call-site failure §3 warns about.
+const PINNED = { "store/console": 69, "store/admin": 15, "agents/coder/web": 47 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

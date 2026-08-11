@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import Button from "../components/Button";
 import { statusBadgeClass } from "../lib/statusBadge";
 
 // Spreadsheet + board view over an agent's structured collections:
@@ -284,19 +285,13 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						{rows.length} of {records.length}
 					</span>
 
-					<button
-						type="button"
-						onClick={() => setShowControls((s) => !s)}
-						className="border border-line rounded px-2 py-1 text-xs ml-auto"
-					>
+					<Button size="sm" onClick={() => setShowControls((s) => !s)} className="ml-auto">
 						{showControls ? "Hide controls ▲" : "Controls ▾"}
-					</button>
+					</Button>
 					</>
 					)}
 					{surface === "runs" && (
-						<button type="button" onClick={loadRuns} className="border border-line rounded px-2 py-1 text-xs ml-auto">
-							Refresh
-						</button>
+						<Button size="sm" onClick={loadRuns} className="ml-auto">Refresh</Button>
 					)}
 				</div>
 
@@ -328,9 +323,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						))}
 
 						<div className="relative">
-							<button type="button" onClick={() => setShowCols((s) => !s)} className="border border-line rounded px-2 py-1 text-xs">
-								Columns ▾
-							</button>
+							<Button size="sm" onClick={() => setShowCols((s) => !s)}>Columns ▾</Button>
 							{showCols && (
 								<div className="absolute z-10 mt-1 bg-panel border border-line rounded shadow p-2 max-h-64 overflow-auto text-xs">
 									{baseColumns.map((c) => (
@@ -353,19 +346,16 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							)}
 						</div>
 
-						<button type="button" onClick={exportCsv} className="border border-line rounded px-2 py-1 text-xs">
-							CSV
-						</button>
-						<button
-							type="button"
+						<Button size="sm" onClick={exportCsv}>CSV</Button>
+						<Button
+							size="sm"
 							onClick={() => {
 								loadCollections();
 								if (selected) loadRecords(selected);
 							}}
-							className="border border-line rounded px-2 py-1 text-xs"
 						>
 							Refresh
-						</button>
+						</Button>
 					</div>
 				)}
 			</div>

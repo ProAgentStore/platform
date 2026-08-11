@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
+import Button from "../components/Button";
 import Card from "../components/Card";
 
 /**
@@ -128,15 +129,15 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 						<div className="flex items-start justify-between gap-2">
 							<span className="text-sm min-w-0 truncate" title={r.objective}>{r.objective}</span>
 							{ctl.phase !== "ended" ? (
-								<button
-									type="button"
+								<Button
+									size="sm"
 									disabled={busy || !ctl.canStop}
 									onClick={() => stop(r.runId)}
 									title={ctl.hint ?? undefined}
-									className="text-xs px-2 py-1 rounded-lg border border-line hover:bg-paper whitespace-nowrap disabled:opacity-40"
+									className="whitespace-nowrap"
 								>
 									{ctl.actionLabel}
-								</button>
+								</Button>
 							) : (
 								<span className={`text-xs font-semibold whitespace-nowrap ${TONE[r.status] ?? "text-muted"}`}>
 									{REASON_LABEL[r.stopReason ?? ""] ?? r.status}

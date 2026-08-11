@@ -15,6 +15,7 @@ import {
 // One zone list for the whole console (#345) — a trigger's schedule and the account preference
 // must offer the same vocabulary, or a zone you can schedule in is one you cannot set as yours.
 import { timeZoneOptions } from "../lib/accountTimezone";
+import Button from "../components/Button";
 import Card from "../components/Card";
 import {
 	eventHeadline,
@@ -541,7 +542,7 @@ export default function TriggersSection({
 				</ul>
 			) : null}
 
-			<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold mb-4">Add trigger</button>
+			<Button variant="primary" onClick={createTrigger} className="mb-4">Add trigger</Button>
 
 			<div className="flex flex-col gap-2">
 				{triggers.length === 0 ? (
@@ -578,11 +579,11 @@ export default function TriggersSection({
 									{!health && trigger.lastError && <div className="text-xs text-danger mt-1">{trigger.lastError}</div>}
 								</div>
 								<div className="flex gap-2 shrink-0 flex-wrap justify-end">
-									<button type="button" onClick={() => toggleHistory(trigger.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">
+									<Button size="sm" onClick={() => toggleHistory(trigger.id)}>
 										{openHistory === trigger.id ? "Hide history" : "History"}
-									</button>
-									<button type="button" onClick={() => runTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Run now</button>
-									<button type="button" onClick={() => deleteTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-danger hover:border-danger font-semibold">Delete</button>
+									</Button>
+									<Button size="sm" onClick={() => runTrigger(trigger)}>Run now</Button>
+									<Button size="sm" variant="danger" onClick={() => deleteTrigger(trigger)}>Delete</Button>
 								</div>
 							</div>
 
@@ -591,7 +592,7 @@ export default function TriggersSection({
 									{/* Read-only, but still a focusable field a screen reader lands on — and the
 									    only thing identifying it is the Copy button beside it. */}
 									<input readOnly aria-label={`Webhook URL for ${trigger.name}`} value={trigger.webhookUrl} className="flex-1 min-w-0 text-xs bg-panel border border-line rounded px-2 py-1.5 font-mono" />
-									<button type="button" onClick={() => copyWebhook(trigger.webhookUrl || "")} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Copy</button>
+									<Button size="sm" onClick={() => copyWebhook(trigger.webhookUrl || "")}>Copy</Button>
 								</div>
 							)}
 

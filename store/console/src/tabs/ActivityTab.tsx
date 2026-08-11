@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatTime } from "@proagentstore/sdk/ui";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import Button from "../components/Button";
 import { activityBusy } from "../lib/pollBusy";
 
 // The agent's activity log as a readable, live timeline — everything it DID (tool
@@ -79,13 +80,7 @@ export default function ActivityTab({ instanceId }: { instanceId: string }) {
 						{events.length} event{events.length !== 1 ? "s" : ""} · everything the agent did, newest first
 					</div>
 				</div>
-				<button
-					type="button"
-					onClick={load}
-					className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold"
-				>
-					Refresh
-				</button>
+				<Button onClick={load}>Refresh</Button>
 			</div>
 
 			{error && (

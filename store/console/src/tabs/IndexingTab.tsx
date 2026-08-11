@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatDateTime } from "@proagentstore/sdk/ui";
+import Button from "../components/Button";
 import type { KnowledgeDoc } from "../lib/types";
 
 type SourceType = "knowledge" | "message" | "file" | "collection" | "repo";
@@ -249,14 +250,7 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 						Track what is searchable by this agent, what is still pending, and recent Drive or WorkDrive sync results.
 					</p>
 				</div>
-				<button
-					type="button"
-					onClick={load}
-					disabled={loading}
-					className="text-xs px-3 py-2 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50"
-				>
-					{loading ? "Refreshing..." : "Refresh"}
-				</button>
+				<Button onClick={load} disabled={loading}>{loading ? "Refreshing..." : "Refresh"}</Button>
 			</div>
 
 			{msg && <div className="mb-4 text-xs text-warning bg-warning-soft border border-warning-line rounded-lg px-3 py-2">{msg}</div>}

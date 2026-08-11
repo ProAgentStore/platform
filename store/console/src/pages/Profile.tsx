@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Button from "../components/Button";
 import Page from "../components/Page";
 import LoadFailed from "../components/LoadFailed";
 import { useNavigate } from "react-router-dom";
@@ -159,7 +160,7 @@ export default function Profile() {
 		<Page>
 			<div className="flex justify-between items-center mb-6">
 				<h1 className="font-display text-xl font-bold">Profile</h1>
-				<button type="button" onClick={() => navigate(-1)} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold">&larr; Back</button>
+				<Button size="lg" onClick={() => navigate(-1)}>&larr; Back</Button>
 			</div>
 
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-6">
@@ -222,7 +223,7 @@ export default function Profile() {
 							<span className="text-xs text-muted font-semibold">Slack Webhook</span>
 							<input value={slack} onChange={e => setSlack(e.target.value)} placeholder="https://hooks.slack.com/..." />
 						</label>
-						<button type="button" onClick={saveProfile} className="self-start text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold">Save Profile</button>
+						<Button variant="primary" size="lg" onClick={saveProfile} className="self-start">Save Profile</Button>
 					</div>
 				</div>
 
@@ -258,7 +259,7 @@ export default function Profile() {
 							</>
 						)}
 						<div className="flex items-center gap-2 mt-3">
-							<button type="button" onClick={saveProfileDetails} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold">Save Profile</button>
+							<Button variant="primary" size="lg" onClick={saveProfileDetails}>Save Profile</Button>
 							{cpStatus && <span className="text-xs text-muted">{cpStatus}</span>}
 						</div>
 						{/* Voice commands used to live here too, writing a global setting through a
@@ -280,8 +281,8 @@ export default function Profile() {
 						<span className="bg-paper border border-line rounded-md px-2.5 py-1.5 font-mono text-xs text-muted max-w-[220px] min-w-0 flex-1 truncate">
 							{tokenVisible && token ? token : token ? `${token.slice(0, 12)}...` : "Not signed in"}
 						</span>
-						<button type="button" onClick={() => { if (token) navigator.clipboard.writeText(token); }} className="text-xs px-2 py-1 border border-line rounded text-muted">Copy</button>
-						<button type="button" onClick={() => setTokenVisible(!tokenVisible)} className="text-xs px-2 py-1 border border-line rounded text-muted">{tokenVisible ? "Hide" : "Show"}</button>
+						<Button size="sm" onClick={() => { if (token) navigator.clipboard.writeText(token); }}>Copy</Button>
+						<Button size="sm" onClick={() => setTokenVisible(!tokenVisible)}>{tokenVisible ? "Hide" : "Show"}</Button>
 					</div>
 				</div>
 
@@ -310,9 +311,9 @@ export default function Profile() {
 									<span className="text-sm font-medium flex-1 min-w-0 truncate">{p.name}</span>
 									<span className={`text-xs ${p.hasKey ? "text-success" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>
 									{p.hasKey ? (
-										<button type="button" onClick={() => removeKey(p.id, p.name)} className="text-xs px-2 py-1 rounded border border-line text-muted">Remove</button>
+										<Button size="sm" variant="danger" onClick={() => removeKey(p.id, p.name)}>Remove</Button>
 									) : (
-										<button type="button" onClick={() => addKey(p.id, p.name)} className="text-xs px-2 py-1 rounded bg-accent text-white font-bold">Add Key</button>
+										<Button size="sm" variant="primary" onClick={() => addKey(p.id, p.name)}>Add Key</Button>
 									)}
 								</div>
 							))}
@@ -322,7 +323,7 @@ export default function Profile() {
 
 				{/* Sign out */}
 				<div className="mt-4">
-					<button type="button" onClick={() => { signOut(); navigate("/"); }} className="bg-danger text-white text-sm px-4 py-2 rounded-xl font-semibold hover:opacity-90">Sign Out</button>
+					<Button variant="danger" size="lg" onClick={() => { signOut(); navigate("/"); }}>Sign Out</Button>
 				</div>
 			</div>
 		</Page>

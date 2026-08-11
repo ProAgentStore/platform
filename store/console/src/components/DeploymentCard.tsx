@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle, ArrowLeft, ChevronRight, Settings2 } from "lucide-react";
+import Button from "./Button";
 
 // ── Shared types mirrored from coder-web (no cross-package import) ──────────
 
@@ -215,14 +216,9 @@ function ConfigureForm({ instanceId, current, onSaved }: {
 					className="font-mono flex-1"
 					disabled={saving}
 				/>
-				<button
-					type="button"
-					onClick={save}
-					disabled={saving}
-					className="px-3 py-1.5 rounded-lg bg-accent text-white text-sm disabled:opacity-50"
-				>
+				<Button variant="primary" size="lg" onClick={save} disabled={saving}>
 					{saving ? <Loader2 size={14} className="animate-spin" /> : "Save"}
-				</button>
+				</Button>
 			</div>
 			{error && <p className="text-xs text-danger mt-1.5">{error}</p>}
 		</div>

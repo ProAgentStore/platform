@@ -5,6 +5,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Clipboard, Keyboard, List, Loader2, Play, Plus, RefreshCw, SlidersHorizontal, SquareTerminal, Terminal, Trash2 } from "lucide-react";
 import { tmuxBusy } from "../lib/pollBusy";
+import Button from "../components/Button";
 import DeploymentCard from "../components/DeploymentCard";
 import {
 	captureArgs,
@@ -377,9 +378,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 							<Terminal size={16} className="text-accent shrink-0" />
 							<h2 className="text-sm font-bold truncate">Terminal</h2>
 						</div>
-							<button type="button" onClick={refreshTargets} title={`Refresh ${noun}s`} aria-label={`Refresh ${noun}s`} className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-50" disabled={loadingList || !family}>
+							<Button size="icon" onClick={refreshTargets} title={`Refresh ${noun}s`} aria-label={`Refresh ${noun}s`} disabled={loadingList || !family}>
 							<RefreshCw size={14} className={loadingList ? "animate-spin" : ""} />
-						</button>
+						</Button>
 					</div>
 					<div className="overflow-y-auto min-h-0 chat-scroll p-2 space-y-1">
 						{targets.length === 0 && (
@@ -438,15 +439,15 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 							</div>
 						</div>
 						<div className="flex items-center gap-1.5">
-							<button type="button" onClick={() => capture()} disabled={!selected || loadingPane || !canCapture} title={canCapture ? "Capture pane" : `Not available: this agent has no ${family?.capture ?? "capture"} tool`} aria-label="Capture pane" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<Button size="icon" onClick={() => capture()} disabled={!selected || loadingPane || !canCapture} title={canCapture ? "Capture pane" : `Not available: this agent has no ${family?.capture ?? "capture"} tool`} aria-label="Capture pane">
 								{loadingPane ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-							</button>
-							<button type="button" onClick={copyPane} disabled={!pane} title="Copy pane output" aria-label="Copy pane output" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							</Button>
+							<Button size="icon" onClick={copyPane} disabled={!pane} title="Copy pane output" aria-label="Copy pane output">
 								<Clipboard size={14} />
-							</button>
-								<button type="button" onClick={killSession} disabled={!selected || !writes.kill} title={writes.kill ? `Kill ${noun}` : `Grant ${family?.connector ?? "terminal"} kill access in Settings`} aria-label={`Kill ${noun}`} className="p-1.5 rounded-lg border border-line text-muted hover:text-danger hover:border-danger disabled:opacity-40">
+							</Button>
+								<Button variant="danger" size="icon" onClick={killSession} disabled={!selected || !writes.kill} title={writes.kill ? `Kill ${noun}` : `Grant ${family?.connector ?? "terminal"} kill access in Settings`} aria-label={`Kill ${noun}`}>
 								<Trash2 size={14} />
-							</button>
+							</Button>
 						</div>
 					</div>
 
@@ -486,9 +487,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 										disabled={!selected || !writes.run}
 								className="font-mono"
 							/>
-								<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !writes.run} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
+								<Button variant="primary" onClick={runCommand} disabled={!selected || !command.trim() || !writes.run} title="Run command" aria-label="Run command">
 								<Play size={15} />
-							</button>
+							</Button>
 						</div>
 					</div>
 
@@ -498,9 +499,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 						<div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_11rem_auto] gap-2">
 									<input value={sendText} onChange={(e) => setSendText(e.target.value)} aria-label="Text to send" placeholder="Text to send" disabled={!selected || !writes.sendKeys} className="font-mono" />
 									<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} aria-label="Keys to send" placeholder="Keys, e.g. Enter" disabled={!selected || !writes.sendKeys} className="font-mono" />
-								<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !writes.sendKeys} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+								<Button onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !writes.sendKeys} title="Send keys" aria-label="Send keys">
 								<Keyboard size={15} />
-							</button>
+							</Button>
 						</div>
 						<div className={backends.length > 1 ? CREATE_GRID_WITH_BACKEND : CREATE_GRID_ONE_BACKEND}>
 							{/* Only when there is a choice. A backend-exclusive family has exactly one, so the
@@ -513,9 +514,9 @@ export default function TmuxTab({ instanceId, runner }: Props) {
 									<input value={newSession} onChange={(e) => setNewSession(e.target.value)} aria-label={`${noun[0].toUpperCase()}${noun.slice(1)} name`} placeholder="Name" disabled={!writes.create} className="font-mono" />
 									<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} aria-label="Working directory" placeholder="Working directory" disabled={!writes.create} className="font-mono" />
 									<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} aria-label="Startup command" placeholder="Startup command" disabled={!writes.create} className="font-mono" />
-								<button type="button" onClick={createSession} disabled={!newSession.trim() || !writes.create} title={`Create ${noun}`} aria-label={`Create ${noun}`} className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+								<Button onClick={createSession} disabled={!newSession.trim() || !writes.create} title={`Create ${noun}`} aria-label={`Create ${noun}`}>
 								<Plus size={15} />
-							</button>
+							</Button>
 						</div>
 					</div>
 				</section>

@@ -15,6 +15,7 @@ import ToolPermissions from "../components/ToolPermissions";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
+import Button from "../components/Button";
 import Card from "../components/Card";
 
 interface Props {
@@ -433,7 +434,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 						maxLength={60}
 						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 w-full sm:w-72"
 					/>
-					<button type="button" onClick={saveInstName} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
+					<Button variant="primary" onClick={saveInstName}>Save</Button>
 					{instNameMsg && <span className="text-xs text-muted">{instNameMsg}</span>}
 				</div>
 			</Card>
@@ -511,13 +512,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 					Tidy up the board. These only clear your view of finished items.
 				</p>
 				<div className="flex gap-2 flex-wrap">
-					<button
-						type="button"
-						onClick={clearFinished}
-						className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold"
-					>
-						Clear finished tasks
-					</button>
+					<Button onClick={clearFinished}>Clear finished tasks</Button>
 				</div>
 				{maintMsg && <div className="text-sm text-muted mt-2">{maintMsg}</div>}
 			</Card>
@@ -669,13 +664,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				<p className="text-sm text-muted mb-3">
 					Stop using this agent. Your data stays unless you clear it above.
 				</p>
-				<button
-					type="button"
-					onClick={unsubscribe}
-					className="text-xs px-3 py-1.5 rounded-lg border border-danger text-danger font-bold hover:bg-danger-soft"
-				>
-					Unsubscribe from this agent
-				</button>
+				<Button variant="danger" onClick={unsubscribe}>Unsubscribe from this agent</Button>
 			</Card>
 		</div>
 	);

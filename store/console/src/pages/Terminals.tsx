@@ -86,9 +86,9 @@ export default function Terminals() {
 					<Terminal size={20} className="text-accent" />
 					<h1 className="font-display text-xl font-bold">Terminals</h1>
 				</div>
-				<button type="button" onClick={load} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">
+				<Button onClick={load}>
 					<RefreshCw size={13} /> Refresh
-				</button>
+				</Button>
 			</div>
 			<p className="text-sm text-muted mb-4">Every machine running <code className="text-accent">pags up</code> under your account — across all your agents.</p>
 

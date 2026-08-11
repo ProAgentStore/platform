@@ -8,6 +8,7 @@ import {
 	type ConnectorEntry,
 } from "../lib/accountConnections";
 import type { ConnectorReach } from "../lib/connectorState";
+import Button from "./Button";
 import Card from "./Card";
 
 /**
@@ -154,13 +155,9 @@ export default function AccountConnections() {
 						Links your GitHub username so the Coder can show build status and reach your repos.
 					</p>
 				</div>
-				<button
-					type="button"
-					onClick={connectGithub}
-					className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold shrink-0"
-				>
+				<Button onClick={connectGithub} className="shrink-0">
 					{githubLinked ? "Reconnect" : "Connect GitHub"}
-				</button>
+				</Button>
 			</div>
 			{githubMsg && <p className="text-xs text-success mb-3 -mt-1">{githubMsg}</p>}
 
@@ -190,17 +187,17 @@ export default function AccountConnections() {
 								<div className="flex gap-2 shrink-0">
 									{/* Reconnect exists so an expired token is not a reason to disconnect — now
 									    that disconnect revokes grants, that round trip is destructive. */}
-									<button type="button" onClick={() => connect(entry)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
-										Reconnect
-									</button>
-									<button type="button" onClick={() => disconnect(entry)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-danger hover:text-danger font-bold">
-										Disconnect
-									</button>
+									<Button onClick={() => connect(entry)}>Reconnect</Button>
+									{/* `danger` rather than the muted button with a red hover it used to be: this
+									    control revokes grants everywhere and does not give them back, which the
+									    paragraph above says out loud. A destructive action that only looks
+									    destructive once the pointer is already on it is telling you too late. */}
+									<Button variant="danger" onClick={() => disconnect(entry)}>Disconnect</Button>
 								</div>
 							) : (
-								<button type="button" onClick={() => connect(entry)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold shrink-0">
+								<Button onClick={() => connect(entry)} className="shrink-0">
 									Connect {entry.label}
-								</button>
+								</Button>
 							)}
 						</div>
 					))}

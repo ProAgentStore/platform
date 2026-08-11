@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Button from "../components/Button";
 import Page from "../components/Page";
 import LoadFailed from "../components/LoadFailed";
 import { Link, useNavigate } from "react-router-dom";
@@ -62,9 +63,7 @@ export default function Notifications() {
 					<button type="button" onClick={() => navigate(-1)} className="text-sm text-muted hover:text-ink">&larr;</button>
 					<h1 className="font-display text-xl font-bold">Notifications</h1>
 				</div>
-				<button type="button" onClick={markAllRead} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">
-					Mark all read
-				</button>
+				<Button onClick={markAllRead}>Mark all read</Button>
 			</div>
 
 			<AlertsCard />
@@ -190,13 +189,13 @@ function AlertsCard() {
 			    only control that re-runs the subscribe, and replacing it with "send a test alert"
 			    left the user pressing the one button that cannot fix what is wrong. */}
 			{perm === "granted" && !failed ? (
-				<button type="button" onClick={onTest} disabled={busy} className="px-4 py-2 rounded-lg border border-line text-sm font-semibold text-ink hover:border-accent disabled:opacity-50 shrink-0">
+				<Button size="lg" onClick={onTest} disabled={busy} className="shrink-0">
 					{tested ? "Sent ✓ (switch tabs to see it)" : busy ? "Sending…" : "Send a test alert"}
-				</button>
+				</Button>
 			) : perm !== "denied" ? (
-				<button type="button" onClick={onEnable} disabled={busy} className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-bold disabled:opacity-50 shrink-0">
+				<Button variant="primary" size="lg" onClick={onEnable} disabled={busy} className="shrink-0">
 					{busy ? "Enabling…" : failed ? "Try again" : "Enable alerts"}
-				</button>
+				</Button>
 			) : null}
 		</div>
 	);
