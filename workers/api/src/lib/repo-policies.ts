@@ -39,9 +39,10 @@
  *
  * Every mode defaults exactly where the observe half left it: nothing is promoted to `act` by the
  * acting slice, on any repo. A human turns one on, per repo, per policy — and the ONLY way to do
- * that is `PUT /v1/instances/:id/coding/repos/:repoId`, which no agent tool reaches (asserted in
- * `security-invariants.test.ts`, because a policy is the one thing that acts with nobody present:
- * an agent able to promote one converts a single prompt injection into a standing capability).
+ * that is `PUT /v1/instances/:id/coding/repos/:repoId`, which no agent tool reaches — asserted over
+ * the source in `repo-policies.test.ts` ("promotion is a human action"), because a policy is the one
+ * thing that acts with nobody present: an agent able to promote one converts a single prompt
+ * injection into a standing capability.
  *
  * **It still does not schedule.** Evaluation happens at the end of a coding run, which is the moment the
  * state actually changed and the only moment a live runner is guaranteed. No second scheduler, no
