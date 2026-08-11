@@ -4,6 +4,7 @@ import { requireSession } from "./login.js";
 import { maybeClaimMachineNames } from "../machine-claim.js";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
+import { parseStatusLine } from "./runner/status-line.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -51,9 +52,13 @@ export const upCommand = new Command("up")
 			tunnel: "offline",
 			tunnelUrl: "",
 			registration: "pending",
+			heartbeat: "ok",
 			lastEvent: "Fetching instances...",
 			taskCount: 0,
 			version: CLI_VERSION,
+			// What "a few seconds" is measured against: a state that never resolves was described
+			// as taking a few seconds, indefinitely, because nothing counted (#497).
+			startedAt: Date.now(),
 		};
 
 		clearScreen();
@@ -153,6 +158,29 @@ export const upCommand = new Command("up")
 				logs.push(trimmed);
 				if (logs.length > 200) logs.shift();
 
+				// The child STATES its product-level facts; everything below is prose (#497).
+				// Registration and the heartbeat used to be inferred from relay wording, which is
+				// how a machine that registered nothing still showed a green ProAgentStore light.
+				const status = parseStatusLine(trimmed);
+				if (status) {
+					if (status.registration) {
+						state.registration = status.registration === "ok" ? "registered" : "failed";
+						state.lastEvent = status.registration === "ok"
+							? `Registered with PAGS — ${status.agents ?? "all"} agents ready`
+							: `PAGS registration ${status.registration}${status.agents ? ` (${status.agents} agents)` : ""}${status.reason ? `: ${status.reason}` : ""}`;
+					}
+					if (status.heartbeat) {
+						// Its OWN state. Borrowing registration's is what turned a 30s heartbeat
+						// blip into a permanent "not registered", with no line able to clear it.
+						state.heartbeat = status.heartbeat === "ok" ? "ok" : "failing";
+						state.lastEvent = status.heartbeat === "ok"
+							? "Heartbeat recovered — this machine reads as online again"
+							: `Heartbeat failing${status.reason ? `: ${status.reason}` : ""} — the console will show this machine offline`;
+					}
+					printStatus(state);
+					continue;
+				}
+
 				if (trimmed.includes("Relay connected:")) {
 					state.tunnel = "online";
 					state.tunnelUrl = "WebSocket relay";
@@ -163,7 +191,6 @@ export const upCommand = new Command("up")
 				if (trimmed.includes("WebSocket relay")) {
 					state.tunnel = "online";
 					state.tunnelUrl = "WebSocket relay";
-					state.registration = "registered";
 					state.lastEvent = "Connected via WebSocket relay";
 					printStatus(state);
 					continue;
@@ -175,21 +202,17 @@ export const upCommand = new Command("up")
 					printStatus(state);
 					continue;
 				}
-				if (trimmed.includes("Runtime registered") || trimmed.includes("CONNECTED")) {
-					state.registration = "registered";
-					state.lastEvent = "Registered with PAGS — ready for tasks";
+				// A relay conflict is the one failure with a one-command remedy, and it matched
+				// NOTHING here: the old branch tested for "Another machine", a string nothing in
+				// the repo ever printed, while the CLI's real line ("Relay conflict: …") contains
+				// neither "error" nor "failed" and so missed the catch-all below too (#497).
+				if (trimmed.includes("Relay conflict:")) {
+					state.lastEvent = "Another runner holds this agent — run `pags up --force` here to take it over";
 					printStatus(state);
 					continue;
 				}
-				if (trimmed.includes("Another machine")) {
-					state.registration = "failed";
-					state.lastEvent = trimmed.slice(0, 80);
-					printStatus(state);
-					continue;
-				}
-				if (trimmed.includes("fetch failed")) {
-					state.registration = "failed";
-					state.lastEvent = "PAGS registration failed";
+				if (trimmed.includes("Relay conflict cleared:")) {
+					state.lastEvent = "Relay conflict cleared — reattaching";
 					printStatus(state);
 					continue;
 				}

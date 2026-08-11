@@ -68,6 +68,24 @@ export function diffMembership(
 	};
 }
 
+/**
+ * Does a socket that just opened have to (re)register the runtime? (#497)
+ *
+ * `registerRuntime` was called at startup and when discovery ATTACHED a new instance, and nowhere
+ * else — `openRelaySocket` never touched it. So the socket, the one thing here that retries, came
+ * back after a laptop woke and the runtime registration did not: a live relay, no
+ * `instance_runtime_nodes` row for this machine, and `resumeSessionsForNode` (which lives inside
+ * that route) never running, so this machine's own suspended coding sessions stayed suspended.
+ *
+ * Two cases, one rule. A RECONNECT always re-registers — that is the wake path, and the upsert is
+ * idempotent. A FIRST open re-registers only when the earlier attempt failed, which is the other
+ * half of the same bug: a register that lost a race with the network coming up ("fetch failed" at
+ * boot) was caught, logged, and never retried by anything.
+ */
+export function shouldRegisterOnOpen(reconnect: boolean, alreadyRegistered: boolean): boolean {
+	return reconnect || !alreadyRegistered;
+}
+
 /** A short, stable label for log lines: enough to recognise, short enough to scan. */
 export function instanceLabel(inst: { id: string; name?: string }): string {
 	const short = `${inst.id.slice(0, 8)}…`;

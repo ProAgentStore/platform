@@ -7,6 +7,7 @@
  * which sends a message on the WebSocket and awaits the runner's response.
  */
 import { DurableObject } from "cloudflare:workers";
+import { RunnerLiveness } from "./lib/relay-liveness.js";
 import type { Env } from "./types.js";
 
 interface PendingRequest {
@@ -47,6 +48,8 @@ function closeWithReason(code: number, reason: string): Response {
 
 export class RelayDO extends DurableObject<Env> {
 	private pending = new Map<string, PendingRequest>();
+	/** Ping/pong bookkeeping — the difference between "a socket is listed" and "a runner is there". */
+	private liveness = new RunnerLiveness();
 
 	/**
 	 * HTTP router.  Three endpoints:
@@ -66,20 +69,21 @@ export class RelayDO extends DurableObject<Env> {
 
 	// ── WebSocket lifecycle (hibernation API) ────────────────────────────
 
-	private handleConnect(request: Request): Response {
+	private async handleConnect(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const force = url.searchParams.get("force") === "1";
 
 		const existing = this.ctx.getWebSockets("runner");
 
-		// If another runner is connected, reject unless forced
+		// If another runner is connected, reject unless forced.
+		//
+		// "Connected" means it ANSWERED (#497). The old test — `send` did not throw — passes for a
+		// peer that has stopped existing at the application layer, which is exactly what a slept
+		// laptop is: measured in production, a SIGSTOPped holder kept its slot and forced 4409 for
+		// ~5 minutes, while a hard-killed one never conflicted at all. Since the CLI treats a 4409
+		// as terminal for the life of the process, that window cost the machine its whole run.
 		if (existing.length > 0 && !force) {
-			// Verify the existing socket is actually alive
-			let alive = false;
-			for (const ws of existing) {
-				try { ws.send("ping"); alive = true; break; } catch { /* dead */ }
-			}
-			if (alive) {
+			if (await this.liveness.probe(existing)) {
 				// Accept, then close with an application code + reason. A rejected UPGRADE reaches
 				// the client as close code 1006 with no body, so the CLI's only diagnostic branch
 				// (4401/1008 — codes nothing ever sent) never fired and the actionable
@@ -107,8 +111,9 @@ export class RelayDO extends DurableObject<Env> {
 	async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const text = typeof message === "string" ? message : new TextDecoder().decode(message);
 
-		// Ignore pings
-		if (text === "pong") return;
+		// A pong is not noise — it is the ONLY evidence that the peer holding this slot still
+		// exists (#497). Dropping it here is what let a frozen runner look alive.
+		if (text === "pong") { this.liveness.pong(); return; }
 
 		let parsed: CommandResponse;
 		try {
@@ -139,20 +144,17 @@ export class RelayDO extends DurableObject<Env> {
 
 	private handleStatus(): Response {
 		const sockets = this.ctx.getWebSockets("runner");
-		// A socket in the list may be half-closed (server kept the reference but
-		// the client went away between heartbeats). Try a cheap send to detect it.
-		let connected = false;
-		for (const ws of sockets) {
-			try {
-				ws.send("ping");
-				connected = true;
-				break;
-			} catch {
-				// Dead socket — clean up
-				try { ws.close(1000, "stale"); } catch { /* already closed */ }
-			}
-		}
-		return Response.json({ connected });
+		// A socket in the list may be half-closed (server kept the reference but the client went
+		// away between heartbeats), or open to a peer that is frozen and will never answer again.
+		//
+		// This asks WITHOUT waiting: it pings now and judges on the previous round trip (#497).
+		// `relayConnected` runs in a per-node loop on every tool-call resolution path and on the
+		// chat context builder, so a 1.5s pong wait per offline node would add seconds to every
+		// agent turn. The cost of not waiting is that the first call after a peer freezes still
+		// answers "connected"; the next one tells the truth, instead of the ~5 minutes of
+		// "connected: true" measured against a SIGSTOPped holder in production.
+		// A socket the send cannot even reach is closed inside the probe, as it was here before.
+		return Response.json({ connected: this.liveness.observe(sockets) });
 	}
 
 	private async handleCommand(request: Request): Promise<Response> {

@@ -4,7 +4,8 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION } from "./process.js";
-import { diffMembership, instanceLabel, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 
 /**
@@ -34,7 +35,12 @@ export async function connectViaRelay(
 	// Register the runtime (needed for the status badge / getRunnerConn)
 	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
 	const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
-	const registerRuntime = async (id: string) => {
+	// Which instances currently hold a runtime registration from THIS machine. Tracked, not
+	// assumed: a register that failed at startup used to be lost forever (nothing retried it),
+	// and the pane still printed a tick because the success line was unconditional (#497).
+	const registered = new Set<string>();
+	let lastRegisterError = "";
+	const registerRuntime = async (id: string, forceClaim = force): Promise<boolean> => {
 		try {
 			await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
 				endpointUrl: localUrl,
@@ -45,12 +51,23 @@ export async function connectViaRelay(
 				runnerNode,
 				machineId: machine.id,
 				machineNames: machine.names,
-				force,
+				force: forceClaim,
 			});
+			registered.add(id);
+			return true;
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
+			registered.delete(id);
+			lastRegisterError = msg;
 			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
+			return false;
 		}
+	};
+	/** Tell the parent TUI what registration actually stands at — see status-line.ts. */
+	const reportRegistration = () => {
+		const agents = `${registered.size}/${instanceIds.length}`;
+		const state = registered.size === instanceIds.length ? "ok" : registered.size === 0 ? "fail" : "partial";
+		writeLine(formatStatusLine({ registration: state, agents, reason: state === "ok" ? undefined : lastRegisterError }));
 	};
 	for (const id of instanceIds) await registerRuntime(id);
 
@@ -69,10 +86,36 @@ export async function connectViaRelay(
 			requestPags<{ token: string }>("POST", `/v1/relay/${apiPathSegment(id)}/token`, { ...opts, pagsToken }, {}).then((r) => r.token);
 		attached.set(
 			id,
-			openRelaySocket(id, apiBase, mintToken, localUrl, runnerToken, force, (conflicted) => {
-				blocked.add(conflicted);
-				attached.delete(conflicted);
-			}),
+			openRelaySocket(
+				id,
+				apiBase,
+				mintToken,
+				localUrl,
+				runnerToken,
+				force,
+				(conflicted) => {
+					blocked.add(conflicted);
+					attached.delete(conflicted);
+				},
+				// Registration rides the RECONNECT, which is the whole wake case (#497). The socket
+				// retries with backoff; `POST …/runtime` did not, so after a sleep the machine had a
+				// live relay and no runtime row — and `resumeSessionsForNode`, which lives inside that
+				// route, never ran either, so its own suspended coding sessions stayed suspended. The
+				// upsert is idempotent, so re-registering on every reconnect is safe. The first open
+				// is skipped when the register already succeeded above (or in the discovery pass),
+				// and taken when it did not — which is how a register lost to a boot-time
+				// `fetch failed` finally gets a second chance.
+				async (openedId, reconnect) => {
+					if (!shouldRegisterOnOpen(reconnect, registered.has(openedId))) return;
+					// A reconnect REFRESHES the row; it does not re-claim. `--force` suspends coding
+					// sessions owned by other machines, and that is a one-time act the user asked for
+					// at startup — a network blip must not repeat it on every socket that comes back.
+					// `resumeSessionsForNode`, the half this machine needs after a wake, runs either
+					// way (`routes/instances.ts:365`, outside the force branch).
+					await registerRuntime(openedId, reconnect ? false : force);
+					reportRegistration();
+				},
+			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
 	};
@@ -87,7 +130,12 @@ export async function connectViaRelay(
 
 	for (const id of instanceIds) attach(id, "");
 
-	writeLine("Runtime registered with PAGS ✓");
+	// Was "Runtime registered with PAGS ✓", printed after the register loop whether or not a
+	// single register had succeeded — and the TUI turned that string into the green light (#497).
+	reportRegistration();
+	writeLine(registered.size === instanceIds.length
+		? `Runtime registered with PAGS ✓ (${registered.size}/${instanceIds.length} agents)`
+		: `Runtime registration incomplete: ${registered.size}/${instanceIds.length} agents — retried on each relay (re)connect.`);
 	writeLine("");
 	writeLine("═══════════════════════════════════════════════");
 	writeLine(`  ✅ CONNECTED — WebSocket relay · ${hostname()}`);
@@ -120,9 +168,14 @@ export async function connectViaRelay(
 			}
 			if (failure && !heartbeatFailing) {
 				heartbeatFailing = true;
+				// The status line is what the pane reads. Before it existed, this message's
+				// `fetch failed` was matched as a REGISTRATION failure — so a 30-second heartbeat
+				// blip put a permanent ✗ next to "ProAgentStore" for a machine that was fine.
+				writeLine(formatStatusLine({ heartbeat: "fail", reason: failure }));
 				writeError(`Heartbeat failed: ${failure} — the console will show this machine as OFFLINE until it recovers. The relay itself is still connected; don't run \`pags up --force\` elsewhere.`);
 			} else if (!failure && heartbeatFailing) {
 				heartbeatFailing = false;
+				writeLine(formatStatusLine({ heartbeat: "ok" }));
 				writeLine("Heartbeat recovered — this machine reads as online again.");
 			}
 			heartbeat();
@@ -134,6 +187,32 @@ export async function connectViaRelay(
 	if (watchInstances) startDiscovery();
 
 	/**
+	 * Let go of a conflict that has ended (#497).
+	 *
+	 * `blocked` had an `add` and no `delete`, which contradicted its own comment ("clearing the
+	 * block … lets the next pass attach") and made ONE 4409 permanent for the life of the process.
+	 * That is the difference between an agent that comes back on its own and one that comes back
+	 * when a human notices and restarts the CLI — and the conflict does end by itself: a holder
+	 * that exits takes its socket with it, and an abandoned socket is evicted server-side.
+	 *
+	 * One cheap status GET per blocked id per pass — not a reconnect. #237 was about a socket
+	 * retrying a permanent conflict every 30s and logging it forever; this neither opens a socket
+	 * nor logs unless something changed.
+	 */
+	async function clearFinishedConflicts(): Promise<void> {
+		for (const id of [...blocked]) {
+			const free = await requestPags<{ connected?: boolean }>(
+				"GET",
+				`/v1/relay/${apiPathSegment(id)}/status`,
+				{ ...opts, pagsToken },
+			).then((r) => r.connected === false).catch(() => false);
+			if (!free) continue;
+			blocked.delete(id);
+			writeLine(`Relay conflict cleared: ${id.slice(0, 8)}… — the other runner is gone; reattaching.`);
+		}
+	}
+
+	/**
 	 * Poll for membership changes. Deliberately polling, not server push: a brand-new instance
 	 * has no socket for the server to push over, so the first version of this cannot be
 	 * realtime (#83 tracks the push path). 20s is under the console's own status refresh, so
@@ -143,6 +222,7 @@ export async function connectViaRelay(
 		const tick = () => {
 			const timer = setTimeout(async () => {
 				try {
+					await clearFinishedConflicts();
 					const res = await requestPags<{ instances?: DiscoverableInstance[] }>(
 						"GET",
 						"/v1/instances/my/instances",
@@ -192,10 +272,14 @@ export function openRelaySocket(
 	 *  can never succeed while that runner holds it, so the caller stops re-attaching rather
 	 *  than turning a permanent conflict into an endless reconnect log (#229). */
 	onConflict?: (instanceId: string) => void,
+	/** Called on every successful open, with whether this open is a RE-connect. The socket is the
+	 *  only thing here that retries, so anything that must survive a wake has to ride it (#497). */
+	onOpen?: (instanceId: string, reconnect: boolean) => void | Promise<void>,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
 	let closed = false;
+	let opened = false;
 	let socket: WebSocket | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -229,7 +313,12 @@ export function openRelaySocket(
 
 		ws.onopen = () => {
 			backoffMs = 1000;
+			const reconnect = opened;
+			opened = true;
 			writeLine(`Relay connected: ${instanceId.slice(0, 8)}…`);
+			// Fire-and-forget: a failing re-registration must not take the socket down with it —
+			// it is retried on the next reconnect, and reported through the status line meanwhile.
+			void Promise.resolve(onOpen?.(instanceId, reconnect)).catch(() => undefined);
 		};
 
 		ws.onmessage = async (event) => {

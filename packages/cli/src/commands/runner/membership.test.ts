@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffMembership, instanceLabel, isEligible, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, isEligible, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -105,5 +105,25 @@ describe("scoped runs stay scoped", () => {
 		const d = diffMembership(["scoped"], scopedOnly, NODE);
 		expect(d.attach).toEqual([]);
 		expect(d.detach).toEqual([]);
+	});
+});
+
+/**
+ * #497: the socket is the only thing here that retries, so the registration has to ride it.
+ * Both halves of the rule are pinned — an implementation that "simplifies" this to "register on
+ * every open" doubles every startup's writes, and one that registers only on the first open puts
+ * the wake bug straight back.
+ */
+describe("shouldRegisterOnOpen", () => {
+	it("a RECONNECT always re-registers — the wake case", () => {
+		expect(shouldRegisterOnOpen(true, true)).toBe(true);
+		expect(shouldRegisterOnOpen(true, false)).toBe(true);
+	});
+
+	it("a first open re-registers only when the earlier attempt failed", () => {
+		// Startup (or the discovery pass) already registered this one: don't write it twice.
+		expect(shouldRegisterOnOpen(false, true)).toBe(false);
+		// `fetch failed` at boot, caught and logged and never retried — this is the second chance.
+		expect(shouldRegisterOnOpen(false, false)).toBe(true);
 	});
 });
