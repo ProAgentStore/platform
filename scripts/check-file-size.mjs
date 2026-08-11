@@ -698,7 +698,15 @@ const PINS = {
 	// have put them; what is left is closure over this function's own loop state and cannot move.
 	// +21 at #482: terminal_send_message and tmux_send_message dispatch paths in the tool loop.
 	// Multi-step handler, same closure-over-loop-state argument: the call and the context are one.
-	"workers/api/src/agent-think.ts": 1134,
+	// +8 at #494 — one import and a six-line call site, which is the whole of the change that lives
+	// here. `config.githubRepo` had exactly one reader (`instances-deploy.ts`, for the console), so
+	// an Operator asked which repository it worked on answered from memory, and answered "was it
+	// deployed?" from a scraped terminal pane while GitHub Actions held a green run. Every part
+	// that could move did: the wording, the owner's-zone timestamp, the 3s bound on the lookup and
+	// the three outcomes it has to keep distinct are all in lib/deployment-prompt.ts with their own
+	// tests. What is left is the call, which needs this function's `instanceCfg`, `userId`,
+	// `turnStartedAt` and `ownerTimeZone` and so cannot be lifted out with them.
+	"workers/api/src/agent-think.ts": 1142,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -833,7 +841,10 @@ const PINS = {
 	// are pure comment prose recording why a swallow is CORRECT — plus this self-ref. The
 	// ledger growing to hold "why this silence is right" is the same growth as "why this file
 	// is bigger"; both are reasons, which is the only thing this list is allowed to accumulate.
-	"scripts/check-file-size.mjs": 917,
+	// +11 at #494: the agent-think raise above, whose reason has to record what DID move out
+	// (wording, timestamp, timeout, the three lookup outcomes) so the next reader can tell a
+	// six-line call site from a file nobody split — plus this self-ref.
+	"scripts/check-file-size.mjs": 928,
 };
 
 /**

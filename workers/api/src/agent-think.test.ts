@@ -133,6 +133,31 @@ describe("connector tools are described with the instance's real consent (#399)"
 	});
 });
 
+describe("the subscriber's configured repo reaches the agent (#494)", () => {
+	// The whole ticket, as one measurement: `grep -c githubRepo agent-think.ts` returned 0. The
+	// repo had exactly one reader (`instances-deploy.ts`, for the console), so an Operator asked
+	// which repository it worked on answered from memory and got it wrong, and asked twice more for
+	// a value its owner had already saved. This is #255's rule — console-only state is invisible to
+	// the agent — and #488 added the third store to break it.
+	it("builds the block from the shared module, not inline", () => {
+		expect(findCalls(THINKER_CODE, "deploymentContext")).toHaveLength(1);
+	});
+
+	it("passes the instance config, which is where the console wrote the repo", () => {
+		// The reader has to be on the INSTANCE config specifically: the value is per-subscriber
+		// (`patchInstanceConfig(... "githubRepo" ...)`), so reading the agent template's config
+		// would resolve to nothing for every real instance and look wired.
+		expect(matchLines(THINKER_CODE, /deploymentContext\(env, userId, instanceCfg,/)).toHaveLength(1);
+	});
+
+	it("hands it the turn's clock and the owner's zone, so the build's age is stated not computed", () => {
+		// A build line without an age is read as "now", which is how a 13-hour-old success became
+		// the answer to "was it deployed?". #329's rule: format the absolute time here rather than
+		// letting the model convert it.
+		expect(matchLines(THINKER_CODE, /deploymentContext\([^)]*now: turnStartedAt, timeZone: ownerTimeZone/)).toHaveLength(1);
+	});
+});
+
 // ── #398: a tool result arrives as the PLATFORM's block, never as the model's prose ──
 //
 // The loop used to append `{role:"assistant", content:"I called tools:\n…"}` and never append the

@@ -21,6 +21,10 @@
  */
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+// The `owner/repo` test lives with the prompt that STATES the repo (#494), not here, so the route
+// that stores the value and the agent that announces it cannot disagree about what counts as
+// configured — an agent naming a repo this route refuses to poll is the same defect inverted.
+import { isValidGithubRepo } from "../lib/deployment-prompt.js";
 import { latestHostedBuild, listHostedBuilds } from "../lib/hosted-repo.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import type { Env } from "../types.js";
@@ -30,13 +34,6 @@ interface InstanceRow {
 	id: string;
 	user_id: string;
 	config: string | null;
-}
-
-/** Validate that a candidate string looks like `owner/repo` (at least one `/` with non-empty parts). */
-function isValidGithubRepo(s: unknown): s is string {
-	if (typeof s !== "string") return false;
-	const parts = s.trim().split("/");
-	return parts.length >= 2 && parts.every((p) => p.length > 0);
 }
 
 /**

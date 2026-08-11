@@ -11,6 +11,7 @@ import { renderDirections } from "./lib/agent-direction.js";
 import { directionRosterFor } from "./lib/supervision.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { connectorToolsPrompt } from "./lib/connector-tool-prompt.js";
+import { deploymentContext } from "./lib/deployment-prompt.js";
 import { listConsents } from "./lib/connector-consent.js";
 import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
 import { parseAccountPreferences } from "./lib/preferences.js";
@@ -564,6 +565,13 @@ export async function runAgentThink(opts: {
 			}
 		} catch {}
 	}
+
+	// The repo the subscriber saved in the console Deployment card, and its latest build (#494).
+	// Console-only state is invisible to the agent otherwise (#255's rule, reproduced by #488):
+	// an Operator answered "which repo?" from memory and "was it deployed?" from a scraped pane
+	// while the platform held both. Wording, timeout and the three lookup outcomes are in the
+	// module, which never throws.
+	systemPrompt += await deploymentContext(env, userId, instanceCfg, { now: turnStartedAt, timeZone: ownerTimeZone });
 
 	// #100: a non-tool-capable model silently drops ALL tools (memory, collections, fetch_url,
 	// …). If this agent has tools available, upgrade to a tool-capable model for THIS turn
