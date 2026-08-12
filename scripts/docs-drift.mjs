@@ -21,8 +21,29 @@
  *   4. removed identity     the runtime docs no longer claim the FAGS runtime plane
  *   5. MCP tool surface     README's tool table == the tools actually registered
  *   6. MCP tool count       every "N tools" claim == workers/mcp/src/tool-count.ts
- *   7. docs links           every /docs/<slug>/ URL resolves to a real page
- *   8. API surface          delegates to scripts/openapi-coverage.mjs (#209)
+ *   7. confirm gates        every documented `confirm` value == a requireConfirmation site
+ *   8. docs links           every /docs/<slug>/ URL resolves to a real page
+ *   9. API surface          delegates to scripts/openapi-coverage.mjs (#209)
+ *
+ * ── Every check states its denominator (#555, and #559's proposed ADR 0002)
+ *
+ * Check 6 shipped with a success line reading "135 registered == constant == every doc
+ * claim" over a hand-written list of THREE paths. The served marketing site was in none of
+ * the input sets, so https://proagentstore.online/about/ told every prospective user the
+ * MCP server had "~67 tools" while `/health` served 135 — understating the product by 68
+ * tools, past the one guard whose job was that comparison, in a green build.
+ *
+ * The rule taken from that, applied to every check here:
+ *
+ *   - the input set is ASSERTED, not assumed. `docFiles()` and `servedHtmlFiles()` fail
+ *     when they collect implausibly little, because "found nothing" and "found nothing
+ *     wrong" print the same tick.
+ *   - a file this script expects a claim from must PRODUCE one. Grepping prose has two
+ *     failure modes and only one of them is loud: `\d+ tools` does not match "135 MCP
+ *     tools", so an honest rewrite would otherwise retire the check on that file in
+ *     silence. See scripts/lib/doc-claims.mjs.
+ *   - a listed path that does not exist is a failure, never a skip.
+ *   - every ✓ line names how many files it read.
  *
  * Run: `node scripts/docs-drift.mjs`  (or `pnpm docs:drift`)
  */
@@ -31,6 +52,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	diffConfirm,
+	findToolCountClaims,
+	parseConfirmBullets,
+	parseConfirmCallSites,
+	parseConfirmProse,
+	parseConfirmTable,
+} from "./lib/doc-claims.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const p = (...s) => resolve(ROOT, ...s);
@@ -41,6 +70,19 @@ const failures = [];
 const notes = [];
 const fail = (check, message) => failures.push({ check, message });
 const ok = (message) => notes.push(message);
+
+/** An input set this script cannot collect is not a clean tree — it is a check that has
+ *  stopped running. Same construction as scripts/check-design-tokens.mjs:97-101, and for
+ *  the same reason: the number a guard prints is trusted, so it must be a measurement. */
+const requireInputs = (what, got, floor, why) => {
+	if (got >= floor) return;
+	console.error(
+		`✗ ${what}: collected ${got}, expected at least ${floor}.\n  ${why}\n` +
+			"  This guard would pass by checking nothing. Fix the collector — do not lower the floor\n" +
+			"  to make today's number pass.",
+	);
+	process.exit(1);
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Inputs
@@ -72,6 +114,40 @@ function docFiles() {
 			}
 		}
 	}
+	requireInputs(
+		"docFiles()",
+		files.length,
+		20,
+		"platform-docs alone holds ten pages, and every worker and package carries a README.",
+	);
+	return files;
+}
+
+/** The marketing site as it is SERVED. `workers/host/build.js` inlines each of these into
+ *  `pages.ts`, so what is here is what a visitor reads — and none of it was in any input
+ *  set until #555, which is why /about could carry a number nothing compared to anything.
+ *
+ *  `store/docs` is excluded because it is generated from platform-docs (already covered,
+ *  and absent in a fresh checkout); `dist` is Vite output for the console and admin SPAs,
+ *  whose source is .tsx. */
+function servedHtmlFiles() {
+	const files = [];
+	const walk = (dir) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (["docs", "dist", "node_modules"].includes(entry.name)) continue;
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) walk(full);
+			else if (entry.name.endsWith(".html")) files.push(full);
+		}
+	};
+	walk(p("store"));
+	requireInputs(
+		"servedHtmlFiles()",
+		files.length,
+		8,
+		"store/ carries the homepage, about, get-started, skills, agent detail, developer profile,\n" +
+			"  changelog, 404 and the app/* legal pages — a walk that finds fewer has lost a directory.",
+	);
 	return files;
 }
 
@@ -94,28 +170,46 @@ function fencedLines(src) {
 /** Every `server.tool("name", …)` registration in the MCP worker, plus how many live in
  *  each source file — the module layout in workers/mcp/CLAUDE.md quotes the per-file
  *  numbers, and they rot exactly like the total does. */
-function mcpTools() {
-	const names = new Set();
-	const perFile = new Map();
+function mcpSourceFiles() {
+	const files = [];
 	const walk = (dir) => {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			const full = join(dir, entry.name);
-			if (entry.isDirectory()) {
-				walk(full);
-				continue;
-			}
-			if (!/\.ts$/.test(entry.name) || /\.test\.ts$/.test(entry.name)) continue;
-			let n = 0;
-			for (const m of read(full).matchAll(
-				/(?:^|[^\w.])(?:this\.)?server\.tool\(\s*"([a-z0-9_]+)"/g,
-			)) {
-				names.add(m[1]);
-				n++;
-			}
-			if (n) perFile.set(entry.name, n);
+			if (entry.isDirectory()) walk(full);
+			else if (/\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) files.push(full);
 		}
 	};
 	walk(p("workers/mcp/src"));
+	requireInputs(
+		"mcpSourceFiles()",
+		files.length,
+		10,
+		"workers/mcp/src holds index.ts, safety.ts and a dozen instance-tools modules.",
+	);
+	return files;
+}
+
+const MCP_SOURCES = mcpSourceFiles();
+
+function mcpTools() {
+	const names = new Set();
+	const perFile = new Map();
+	for (const full of MCP_SOURCES) {
+		let n = 0;
+		for (const m of read(full).matchAll(
+			/(?:^|[^\w.])(?:this\.)?server\.tool\(\s*"([a-z0-9_]+)"/g,
+		)) {
+			names.add(m[1]);
+			n++;
+		}
+		if (n) perFile.set(full.split(sep).pop(), n);
+	}
+	requireInputs(
+		"mcpTools()",
+		names.size,
+		50,
+		"`server.tool(` is how every tool is registered; matching none means the shape moved.",
+	);
 	return { names, perFile };
 }
 
@@ -154,7 +248,9 @@ if (!nav) {
 				"  or delete the file if it was superseded.",
 		);
 	}
-	if (!missing.length && !orphans.length) ok(`nav ↔ sources: ${nav.length} pages, both directions`);
+	if (!missing.length && !orphans.length) {
+		ok(`nav ↔ sources: ${nav.length} nav entries vs ${sources.length} source pages, both directions`);
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +264,7 @@ if (!nav) {
 			.split("\n")
 			.filter(Boolean);
 	} catch {
-		ok("generated docs: skipped (git not available)");
+		ok("generated docs: 0 files read — git not available, so this check did NOT run");
 	}
 	if (tracked) {
 		if (tracked.length) {
@@ -181,7 +277,7 @@ if (!nav) {
 					"  platform-docs/mcp.md has had for weeks. `git rm -r --cached store/docs`.",
 			);
 		} else {
-			ok("generated docs: store/docs correctly untracked");
+			ok(`generated docs: git tracks ${tracked.length} file(s) under store/docs`);
 		}
 	}
 }
@@ -211,21 +307,41 @@ const IDENTITY_SCOPE = ["platform-docs/", "store/llms"];
 {
 	const cmdHits = [];
 	const idHits = [];
-	for (const file of docFiles()) {
+	const docs = docFiles();
+	let fenced = 0;
+	let idFiles = 0;
+	for (const file of docs) {
 		const src = read(file);
 		const name = rel(file);
-		for (const { line, n } of fencedLines(src)) {
+		const fences = fencedLines(src);
+		fenced += fences.length;
+		for (const { line, n } of fences) {
 			for (const { token, why } of REMOVED_COMMANDS) {
 				if (line.includes(token)) cmdHits.push({ name, n, token, why, line: line.trim() });
 			}
 		}
 		if (!IDENTITY_SCOPE.some((prefix) => name.startsWith(prefix))) continue;
+		idFiles++;
 		src.split("\n").forEach((line, i) => {
 			for (const { token, why } of REMOVED_IDENTITY) {
 				if (line.includes(token)) idHits.push({ name, n: i + 1, token, why, line: line.trim() });
 			}
 		});
 	}
+	// A fenced-line count of zero means fencedLines() stopped recognising a fence, at which
+	// point "no code block teaches --tunnel" is true of no code blocks at all.
+	requireInputs(
+		"fenced code lines",
+		fenced,
+		200,
+		"Every runtime doc in platform-docs opens with a shell block; the docs are full of them.",
+	);
+	requireInputs(
+		"identity-scoped docs",
+		idFiles,
+		3,
+		`IDENTITY_SCOPE (${IDENTITY_SCOPE.join(", ")}) matched no file — the paths moved.`,
+	);
 	if (cmdHits.length) {
 		fail(
 			"removed-commands",
@@ -235,7 +351,10 @@ const IDENTITY_SCOPE = ["platform-docs/", "store/llms"];
 					.join("\n"),
 		);
 	} else {
-		ok(`removed commands: ${REMOVED_COMMANDS.length} tokens absent from every code block`);
+		ok(
+			`removed commands: ${REMOVED_COMMANDS.length} tokens absent from ${fenced} fenced line(s) ` +
+				`in ${docs.length} doc file(s)`,
+		);
 	}
 	if (idHits.length) {
 		fail(
@@ -244,7 +363,10 @@ const IDENTITY_SCOPE = ["platform-docs/", "store/llms"];
 				idHits.map((h) => `    ${h.name}:${h.n}  ${h.token} — ${h.why}`).join("\n"),
 		);
 	} else {
-		ok("removed identity: no FAGS runtime-plane claim in platform-docs or llms files");
+		ok(
+			`removed identity: ${REMOVED_IDENTITY.length} tokens absent from ${idFiles} ` +
+				"platform-docs/llms file(s)",
+		);
 	}
 }
 
@@ -277,7 +399,10 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 		);
 	}
 	if (!undocumented.length && !phantom.length) {
-		ok(`MCP tool table: ${registered.size} registered, ${documented.size} documented, exact match`);
+		ok(
+			`MCP tool table: ${registered.size} registered across ${MCP_SOURCES.length} source(s) == ` +
+				`${documented.size} documented rows in workers/mcp/README.md, exact match`,
+		);
 	}
 }
 
@@ -301,34 +426,62 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 		);
 	}
 
-	// Every "N tools" / "N tool registrations" claim in the docs must be that number.
-	// Only files that state the TOTAL belong here — workers/mcp/CLAUDE.md quotes per-file
-	// counts in its module layout, which are checked separately below.
-	const claimFiles = [
-		p("platform-docs/mcp.md"),
-		p("store/llms-full.txt"),
-		p("workers/mcp/README.md"),
-	].filter(existsSync);
+	// Every "N tools" / "N tool registrations" claim must be that number — swept across the
+	// WHOLE trusted surface (docFiles + the served marketing HTML), not a hand-written list.
+	// The list was three paths and the sweep is now ~90 files; #555's defect was on the one
+	// page a prospective user reads, which was in neither the list nor docFiles().
+	//
+	// One file is exempt, and only because it is checked HARDER elsewhere:
+	// workers/mcp/CLAUDE.md quotes per-file counts in its module layout (checked below,
+	// against the real registrations) plus deliberate historical statements ("67 of those
+	// 86 tools until #305"). Sweeping it would fire on the prose that explains the rule.
+	const SUBSET_CLAIMS = ["workers/mcp/CLAUDE.md"];
+
+	// Files that MUST state the total. The other half of the denominator: a claim that is
+	// deleted, or rephrased past the regex ("135 MCP tools" does not match), otherwise
+	// retires the check on that file and reads exactly like agreement.
+	const MUST_CLAIM = [
+		"platform-docs/mcp.md",
+		"store/llms-full.txt",
+		"workers/mcp/README.md",
+		"store/about/index.html",
+	];
+
+	const sweep = [...docFiles(), ...servedHtmlFiles()];
 	const badClaims = [];
-	for (const file of claimFiles) {
-		read(file)
-			.split("\n")
-			.forEach((line, i) => {
-				for (const m of line.matchAll(/\b(\d+)\s+tools?\b|\b(\d+)\s+tool registrations?\b/g)) {
-					const n = Number(m[1] ?? m[2]);
-					if (declared !== null && n !== declared) {
-						badClaims.push({ name: rel(file), n: i + 1, claimed: n, line: line.trim() });
-					}
-				}
-			});
+	const claimsPerFile = new Map();
+	for (const file of sweep) {
+		const name = rel(file);
+		if (SUBSET_CLAIMS.includes(name)) continue;
+		const claims = findToolCountClaims(read(file));
+		claimsPerFile.set(name, claims.length);
+		for (const c of claims) {
+			if (declared !== null && c.claimed !== declared) {
+				badClaims.push({ name, ...c });
+			}
+		}
 	}
 	if (badClaims.length) {
 		fail(
 			"mcp-count",
-			`${badClaims.length} doc claim(s) disagree with MCP_TOOL_COUNT (${declared}):\n` +
+			`${badClaims.length} doc claim(s) disagree with MCP_TOOL_COUNT (${declared}), ` +
+				`out of ${sweep.length} file(s) swept:\n` +
 				badClaims
 					.map((b) => `    ${b.name}:${b.n}  says ${b.claimed}\n      ${b.line.slice(0, 120)}`)
 					.join("\n"),
+		);
+	}
+
+	const silent = MUST_CLAIM.filter((name) => !claimsPerFile.get(name));
+	if (silent.length) {
+		fail(
+			"mcp-count",
+			`${silent.length} file(s) are listed as stating the MCP tool total and no longer do:\n` +
+				silent.map((name) => `    ${name}`).join("\n") +
+				"\n  Either the file is not in the swept set (check docFiles/servedHtmlFiles), or the\n" +
+				'  sentence was rephrased past `N tools` — "135 MCP tools" does not match. A claim that\n' +
+				"  stops being visible to this check is how /about drifted 68 tools out (#555). Restore\n" +
+				"  the phrasing, or remove the file from MUST_CLAIM as a decision.",
 		);
 	}
 
@@ -387,25 +540,135 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 	}
 
 	if (!failures.some((f) => f.check === "mcp-count")) {
+		const total = [...claimsPerFile.values()].reduce((a, b) => a + b, 0);
 		ok(
-			`MCP tool count: ${registered.size} registered == constant == every doc claim ` +
-				`(+ ${registeredPerFile.size} per-file counts)`,
+			`MCP tool count: ${registered.size} registered == constant == ${total} claim(s) ` +
+				`across ${claimsPerFile.size} file(s) swept (${MUST_CLAIM.length} required to state it, ` +
+				`${SUBSET_CLAIMS.length} exempt) + ${registeredPerFile.size} per-file counts`,
 		);
 	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. /docs/<slug>/ links resolve
+// 7. confirm gates — three documents transcribe one list; compare each to the CODE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `requireConfirmation(…, "tool", confirm, "expected", …)` is the only thing that makes a
+ * tool confirm-gated. Three surfaces restate that list by hand and nothing compared any of
+ * them to the call sites, so `store/llms.txt` and `store/llms-full.txt` both said "Twelve
+ * tools … eleven use their own name" while the code gated THIRTEEN — `delete_supervision`
+ * missing from both (#555). The two llms files are the LLM-facing ones, i.e. the reader
+ * that cannot ask.
+ *
+ * Each parser reports its own denominator, because "documents nothing" and "documents
+ * everything correctly" are otherwise the same result.
+ */
+{
+	const sites = parseConfirmCallSites(
+		MCP_SOURCES.filter((f) => !f.endsWith(`${sep}safety.ts`)).map((f) => ({
+			name: rel(f),
+			src: read(f),
+		})),
+	);
+	requireInputs(
+		"confirm call sites",
+		sites.size,
+		10,
+		"`requireConfirmation(` is the gate itself; matching none means the helper was renamed.",
+	);
+	const known = new Set(sites.keys());
+
+	/** @type {{name: string, tools: Map<string,string>, found: number, how: string}[]} */
+	const surfaces = [];
+	{
+		const f = "platform-docs/mcp.md";
+		const tools = parseConfirmBullets(read(p(f)));
+		surfaces.push({ name: f, tools, found: tools.size, how: "`tool`: `confirm: \"value\"` bullets" });
+	}
+	{
+		const f = "workers/mcp/README.md";
+		const { tools, tables } = parseConfirmTable(read(p(f)));
+		surfaces.push({ name: f, tools, found: tables, how: "the Confirm column of its tool tables" });
+	}
+	for (const f of ["store/llms.txt", "store/llms-full.txt"]) {
+		const { tools, stated, lines } = parseConfirmProse(read(p(f)), known);
+		const ownName = [...sites].filter(([t, v]) => v.expected === t).length;
+		surfaces.push({ name: f, tools, found: lines, how: "its confirm sentence" });
+		if (lines && (stated[0] !== sites.size || stated[1] !== ownName)) {
+			fail(
+				"confirm-gates",
+				`${f}'s confirm sentence states ${stated[0] ?? "?"}/${stated[1] ?? "?"}; the code gates ` +
+					`${sites.size} tools, ${ownName} of them by their own name.\n` +
+					"  The counts are written as words on purpose — digits there would collide with the\n" +
+					"  MCP tool-total check above.",
+			);
+		}
+	}
+
+	for (const s of surfaces) {
+		if (!s.found) {
+			fail(
+				"confirm-gates",
+				`${s.name}: found no confirm declarations by reading ${s.how}.\n` +
+					"  Either the list was deleted or its shape moved. This check would otherwise pass by\n" +
+					"  comparing an empty set to the code and reporting agreement.",
+			);
+			continue;
+		}
+		const { missing, phantom, wrong } = diffConfirm(sites, s.tools);
+		if (missing.length) {
+			fail(
+				"confirm-gates",
+				`${s.name} omits ${missing.length} confirm-gated tool(s): ${missing.join(", ")}.\n` +
+					missing.map((t) => `    gated at ${sites.get(t).at}`).join("\n") +
+					"\n  An agent reading this will call the tool without `confirm` and be refused.",
+			);
+		}
+		if (phantom.length) {
+			fail(
+				"confirm-gates",
+				`${s.name} documents ${phantom.length} confirm gate(s) that no call site declares: ${phantom.join(", ")}.`,
+			);
+		}
+		if (wrong.length) {
+			fail(
+				"confirm-gates",
+				`${s.name} gives the wrong confirm value for ${wrong.length} tool(s):\n` +
+					wrong
+						.map((w) => `    ${w.tool}: says "${w.documented}", the code compares "${w.actual}"`)
+						.join("\n") +
+					"\n  Compared with `===`, so a documented value that is one character off never works.",
+			);
+		}
+	}
+
+	if (!failures.some((f) => f.check === "confirm-gates")) {
+		ok(
+			`confirm gates: ${sites.size} requireConfirmation site(s) == every list in ` +
+				`${surfaces.length} file(s) (${MCP_SOURCES.length} MCP sources read)`,
+		);
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. /docs/<slug>/ links resolve
 // ─────────────────────────────────────────────────────────────────────────────
 
 if (nav) {
 	const slugs = new Set(nav.map((n) => (n === "index.md" ? "" : n.replace(/\.md$/, ""))));
 	const broken = [];
-	for (const file of docFiles()) {
+	// The served HTML is in scope here too: a /docs/ link on the marketing site is exactly
+	// as broken to a visitor, and unlike the removed-command check this one is a URL match
+	// with no fence semantics to get wrong.
+	const linkFiles = [...docFiles(), ...servedHtmlFiles()];
+	let links = 0;
+	for (const file of linkFiles) {
 		read(file)
 			.split("\n")
 			.forEach((line, i) => {
 				for (const m of line.matchAll(/proagentstore\.online\/docs\/([a-z0-9-]*)\/?/g)) {
+					links++;
 					if (!slugs.has(m[1])) {
 						broken.push({ name: rel(file), n: i + 1, slug: m[1] });
 					}
@@ -419,7 +682,10 @@ if (nav) {
 				broken.map((b) => `    ${b.name}:${b.n}  /docs/${b.slug}/`).join("\n"),
 		);
 	} else {
-		ok("docs links: every /docs/<slug>/ reference resolves to a nav page");
+		ok(
+			`docs links: ${links} /docs/<slug>/ reference(s) across ${linkFiles.length} file(s) resolve ` +
+				`to ${slugs.size} nav page(s)`,
+		);
 	}
 }
 
