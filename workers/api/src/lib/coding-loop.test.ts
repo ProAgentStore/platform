@@ -171,6 +171,101 @@ describe("runCodingLoop", () => {
 		expect(r.steps).toBeLessThan(5);
 	});
 
+	it("never drives an empty instruction into the engine, and tells the brain nothing was sent (#504)", async () => {
+		const seen: string[][] = [];
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const sent: string[] = [];
+		const events: Array<[string, string]> = [];
+		const decisions: CodingDecision[] = [
+			{ action: { kind: "message", text: "" }, truncated: true },
+			{ action: { kind: "message", text: "run the tests" } },
+			{ finish: { status: "done", detail: "green" } },
+		];
+		let i = 0;
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async (a) => {
+				sent.push(a.kind === "message" ? a.text : a.kind);
+				return idle;
+			},
+			decide: async (p) => {
+				seen.push([...p.actionLog]);
+				return decisions[Math.min(i++, decisions.length - 1)];
+			},
+			onEvent: (type, message) => {
+				events.push([type, message]);
+			},
+		};
+		const r = await runCodingLoop(deps, GOAL);
+		// The empty one never reached the engine; the real instruction did.
+		expect(sent).toEqual(["run the tests"]);
+		// The brain is told, in the step log it already reads, and told WHICH failure it was.
+		expect(seen[1][0]).toMatch(/^empty instruction not sent \(it was cut off at the model's output limit/);
+		// And the owner is told: the run used to show a blank instruction line instead.
+		expect(events.some(([t]) => t === "empty")).toBe(true);
+		expect(r.outcome).toBe("done");
+	});
+
+	it("distinguishes an empty instruction from a truncated one in what it tells the brain", async () => {
+		const seen: string[][] = [];
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const decisions: CodingDecision[] = [
+			{ action: { kind: "message", text: "   " } },
+			{ finish: { status: "done", detail: "ok" } },
+		];
+		let i = 0;
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async () => idle,
+			decide: async (p) => {
+				seen.push([...p.actionLog]);
+				return decisions[Math.min(i++, decisions.length - 1)];
+			},
+		};
+		await runCodingLoop(deps, GOAL);
+		expect(seen[1][0]).toMatch(/the brain returned an instruction with no text/);
+	});
+
+	it("stops after three empty instructions in a row rather than spending the step budget on them", async () => {
+		const { deps, sent } = harness([{ action: { kind: "message", text: "" } }]);
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(sent).toEqual([]);
+		expect(r.outcome).toBe("failed");
+		expect(r.detail).toMatch(/3 empty instructions in a row/);
+		expect(r.steps).toBeLessThan(5);
+	});
+
+	it("resets the empty-instruction count when an instruction actually goes out", async () => {
+		// The run this came from recovered repeatedly, so an empty that is followed by a real
+		// instruction must not accumulate toward the limit — otherwise the fix kills working runs.
+		const decisions: CodingDecision[] = [
+			{ action: { kind: "message", text: "" } },
+			{ action: { kind: "message", text: "step one" } },
+			{ action: { kind: "message", text: "" } },
+			{ action: { kind: "message", text: "step two" } },
+			{ action: { kind: "message", text: "" } },
+			{ action: { kind: "message", text: "step three" } },
+			{ finish: { status: "done", detail: "ok" } },
+		];
+		let i = 0;
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const sent: string[] = [];
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async (a) => {
+				sent.push(a.kind === "message" ? a.text : a.kind);
+				return idle;
+			},
+			decide: async () => decisions[Math.min(i++, decisions.length - 1)],
+		};
+		const r = await runCodingLoop(deps, GOAL);
+		expect(sent).toEqual(["step one", "step two", "step three"]);
+		expect(r.outcome).toBe("done");
+	});
+
 	it("carries a stop reason out of a halt, so a policy halt is not mistaken for the Stop button", async () => {
 		const { deps } = harness([{ action: { kind: "message", text: "x" } }], {
 			cancelled: true,

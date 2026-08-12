@@ -22,7 +22,22 @@
  * displayed as though it were the whole answer. The platform knows it is incomplete, so it says so
  * and fails the turn instead. Same reasoning for a `tool_use` whose accumulated arguments do not
  * parse — a half-built call is worse than no call, because the loop would act on it.
+ *
+ * ── The third case, added by #504
+ *
+ * A `tool_use` that accumulated ZERO argument fragments took the other branch: `input = {}`, handed
+ * back as a well-formed call. That is not always wrong — a tool with an empty input schema
+ * (`tool-registry.ts:216` declares one) genuinely produces no `input_json_delta` — so this cannot
+ * blanket-throw the way the unparseable case does. It is wrong in exactly one identifiable
+ * situation: the provider ALSO said it stopped at `max_tokens`, i.e. the message was cut off, and a
+ * call with no arguments under a cut-off message is the same half-built call by another route. The
+ * Pilot drove eleven empty instructions into a live coding engine that way (#504).
+ *
+ * `stop_reason` arrives after every `content_block_stop`, so the judgement can only be made in
+ * `finish()` — which is why the emptiness is RECORDED at block close and ruled on at the end.
  */
+
+import { hitOutputCap } from "./reply-truncation.js";
 
 /** A stream that did not deliver a well-formed message. Distinct so the caller can label it. */
 export class AnthropicStreamError extends Error {
@@ -96,6 +111,15 @@ export class AnthropicStreamAssembler {
 	/** Accumulated `input_json_delta` text per block index; a tool's arguments arrive as fragments. */
 	private readonly partialJson = new Map<number, string>();
 	private readonly usageAcc: Record<string, number> = {};
+	/**
+	 * Tool blocks that closed having accumulated no arguments at all, by name.
+	 *
+	 * Recorded rather than judged, because whether it is a fault depends on `stop_reason`, which
+	 * has not arrived yet. See the header note.
+	 */
+	private readonly argumentlessTools: string[] = [];
+	/** Tool blocks that started and never closed — a call the stream stopped describing halfway. */
+	private readonly openTools = new Map<number, string>();
 	private stopReason: string | undefined;
 	/** `message_stop` seen — the ONLY evidence that the reply is whole. */
 	private complete = false;
@@ -122,7 +146,10 @@ export class AnthropicStreamAssembler {
 				if (index === undefined || !block || typeof block !== "object") break;
 				const started: AnthropicContentBlock = { ...block };
 				if (started.type === "text" && typeof started.text !== "string") started.text = "";
-				if (started.type === "tool_use") this.partialJson.set(index, "");
+				if (started.type === "tool_use") {
+					this.partialJson.set(index, "");
+					this.openTools.set(index, typeof started.name === "string" ? started.name : "?");
+				}
 				this.blocks.set(index, started);
 				break;
 			}
@@ -150,9 +177,11 @@ export class AnthropicStreamAssembler {
 				if (index === undefined) break;
 				const block = this.blocks.get(index);
 				if (block?.type === "tool_use") {
+					this.openTools.delete(index);
 					const raw = (this.partialJson.get(index) ?? "").trim();
 					if (!raw) {
 						block.input = {};
+						this.argumentlessTools.push(typeof block.name === "string" ? block.name : "?");
 					} else {
 						try {
 							block.input = JSON.parse(raw);
@@ -200,6 +229,21 @@ export class AnthropicStreamAssembler {
 	finish(): AnthropicMessageBody {
 		if (!this.complete) {
 			throw new AnthropicStreamError("the reply ended mid-stream, so it is not the whole answer");
+		}
+		// A tool block that never closed is a call the stream stopped describing halfway — its
+		// arguments are whatever fragments happened to arrive, which is the unparseable case with the
+		// error hidden. Checked first because it is unambiguous, whatever the stop reason says.
+		const openTool = [...this.openTools.values()][0];
+		if (openTool !== undefined) {
+			throw new AnthropicStreamError(`the arguments for tool \`${openTool}\` never finished arriving`);
+		}
+		// #504: no arguments AND the provider says it ran out of room. Either half alone is fine — a
+		// no-argument tool is legitimate, and a truncated prose reply is #397's business — but
+		// together they describe a call whose arguments were cut off before the first fragment.
+		if (hitOutputCap(this.stopReason) && this.argumentlessTools.length > 0) {
+			throw new AnthropicStreamError(
+				`the reply hit the output limit before the arguments for tool \`${this.argumentlessTools[0]}\` arrived, so the call is incomplete`,
+			);
 		}
 		const content = [...this.blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
 		return { content, usage: this.usageAcc, ...(this.stopReason ? { stop_reason: this.stopReason } : {}) };

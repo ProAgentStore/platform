@@ -519,6 +519,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// the brain adapts after one refusal and the owner never learns a merge is waiting
 					// on them. Ungated by loopRunId — it is a policy decision, however the run started.
 					if (type === "refused") await postToChat(`**Merge authority** — instruction not sent to the engine: ${message}`);
+				// Same rule for the other reason an instruction is withheld (#504). Without it the
+				// fix would be invisible where the defect was visible: the owner used to see eleven
+				// blank "**Loop → engine**" lines, and silence in their place is not an improvement
+				// — it is the same run with one fewer clue.
+				if (type === "empty") await postToChat(`**Loop** — ${message}`);
 					// Only for a loop the OWNER started (or a supervisor delegated) — a session the
 					// human is driving by hand already shows every keystroke in the terminal, and
 					// echoing it into chat would be noise about work they are watching happen.

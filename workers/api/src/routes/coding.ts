@@ -518,6 +518,14 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		);
 	}
 	const action: CodingActionKind = { kind: "message", text: String(body.text ?? "") };
+	// An empty instruction is not deliverable either (#504), for the same reason a keystroke isn't:
+	// `session.input("")` writes an empty user turn to the engine's stdin, which flips the pane to
+	// "thinking" and answers 200 with a snapshot — indistinguishable from having sent something. The
+	// Pilot is guarded in `runCodingLoop`; this is the other door into `/coding/act`, and MCP's
+	// `coding_session_message` passes its argument straight through it.
+	if (!action.text.trim()) {
+		throw new HttpError(400, "An instruction can't be empty — send the text you want the engine to act on.");
+	}
 	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	// `chat:true` = sent from the Agent chat (relay my words to Claude on my behalf),
 	// so persist it as a chat turn (survives reload) — not just the raw command log.

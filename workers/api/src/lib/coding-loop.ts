@@ -1,4 +1,5 @@
 import { runUserWorkersAi } from "./user-ai.js";
+import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
@@ -74,6 +75,15 @@ export interface CodingDecision {
 	/** A value only the user can provide (ask-and-hold). */
 	needsInput?: { field: string; why?: string };
 	usage?: { input: number; output: number };
+	/**
+	 * The provider stopped this decision at its output cap (#504).
+	 *
+	 * `stopReason` reached this path with #397 and was thrown away here — its only reader was the
+	 * chat path — so "the brain was cut off mid-instruction" and "the brain said nothing" arrived
+	 * looking identical. They call for different words to the owner and different next steps, so
+	 * the fact is carried rather than re-inferred from the shape of an empty reply.
+	 */
+	truncated?: boolean;
 }
 
 export interface CodingResult {
@@ -105,11 +115,23 @@ export interface CodingDeps {
  */
 const MAX_REFUSALS = 3;
 
+/**
+ * How many empty instructions in a row end the run (#504).
+ *
+ * CONSECUTIVE, and reset by any instruction that is actually sent, because the production run this
+ * comes from recovered on its own: eleven of nineteen steps were empty, but the brain went back to
+ * a short instruction each time it was told nothing had been sent. Three in a row is the point at
+ * which it is not recovering, and stopping there costs a named failure instead of the 4.6 minutes
+ * of engine turns and BYOK decisions that run spent driving "" into a live coding CLI.
+ */
+const MAX_EMPTY_INSTRUCTIONS = 3;
+
 export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number } = {}): Promise<CodingResult> {
 	const maxSteps = opts.maxSteps ?? 30;
 	const transcript: string[] = [];
 	const actionLog: string[] = [];
 	let refusals = 0;
+	let emptyInstructions = 0;
 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
@@ -144,6 +166,41 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// No action and no terminal verdict → treat prose as a stuck signal.
 			return { outcome: "stuck", detail: decision.thought ?? "no action chosen", steps: step, transcript };
 		}
+
+		// AN INSTRUCTION WITH NO WORDS IS NOT AN INSTRUCTION (#504). It was driven into the engine
+		// anyway — `session.input("")` writes an empty user turn to Claude Code's stdin, the pane
+		// flips to "thinking", and the loop then waits out a turn that was asked nothing. The owner
+		// watching the Assistant tab read eleven "**Loop → engine** (step N): message:" lines with
+		// nothing after them.
+		//
+		// Handled HERE, not in `toDecision`, because the invariant is about `deps.act` and this is the
+		// only place every decider passes through — the workflow wraps `decide` in a budget
+		// reservation, and a guard inside the Claude-backed mapper would not cover it.
+		//
+		// Fed back through `actionLog` exactly as a merge refusal is: the loop already talks to itself
+		// through the step log the next decision renders, and the brain demonstrably reacts to it. The
+		// note names the remedy (be shorter) because the leading hypothesis for the empties is an
+		// instruction truncated at the output cap.
+		if (decision.action.kind === "message" && !decision.action.text.trim()) {
+			emptyInstructions++;
+			const why = decision.truncated
+				? "it was cut off at the model's output limit before any text arrived"
+				: "the brain returned an instruction with no text";
+			const note = `empty instruction not sent (${why}) — send a SHORTER, self-contained instruction`;
+			actionLog.push(note);
+			transcript.push(note);
+			await deps.onEvent?.("empty", note);
+			if (emptyInstructions >= MAX_EMPTY_INSTRUCTIONS) {
+				return {
+					outcome: "failed",
+					detail: `The orchestrator produced ${emptyInstructions} empty instructions in a row (${why}). Nothing was sent to the engine — try again with a narrower objective.`,
+					steps: step,
+					transcript,
+				};
+			}
+			continue;
+		}
+		emptyInstructions = 0;
 
 		// MERGE AUTHORITY (#314): the orchestrator's own instruction is screened before it reaches
 		// the Engine. This is the layer that would have stopped run 73ffc073 — its objective said
@@ -196,6 +253,22 @@ function describe(a: CodingActionKind): string {
 }
 
 // ── The Claude-backed decision (the actual "brain") ─────────────────────────
+
+/**
+ * Output ceiling for one Pilot decision (#504).
+ *
+ * This call inherited `runAnthropic`'s 1024-token fallback — the number #397's own docstring says
+ * is "picked for nothing in particular" and lists every other caller as having replaced. The Pilot
+ * is a caller that legitimately writes long: a `send_message` argument routinely carries a shell
+ * script or a multi-file plan, and a tool call cut off at the cap is the empty instruction this
+ * issue is about.
+ *
+ * 2048 tokens ≈ 8,000 characters of instruction, which fits a script comfortably, and
+ * `generationBudgetMs(2048)` is 88s — inside both `AI_TOTAL_TIMEOUT_MS` (180s) and the decide
+ * step's 3-minute Workflow timeout, which 4096 (156s) would leave almost no margin under. The
+ * ceiling is the one that is affordable to WAIT for, not the largest one the model would accept.
+ */
+const PILOT_MAX_TOKENS = 2048;
 
 const CODING_TOOLS = [
 	{
@@ -273,11 +346,26 @@ export async function decideCodingAction(
 			{ role: "user", content: userMsg },
 		],
 		tools: CODING_TOOLS,
-	}, usageCtx)) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
+		maxTokens: PILOT_MAX_TOKENS,
+	}, usageCtx)) as {
+		response?: string;
+		tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
+		usage?: { input: number; output: number };
+		stopReason?: string;
+	};
 
+	const truncated = hitOutputCap(res.stopReason);
 	const call = res.tool_calls?.[0];
-	if (!call) return { thought: res.response, stuck: { why: res.response || "no action chosen" }, usage: res.usage };
-	return { ...toDecision(call), usage: res.usage, thought: res.response };
+	if (!call) {
+		// The two endings that used to read identically. "No action chosen" is a brain that replied
+		// in prose; a cap stop is a brain whose tool call did not fit, which is a different problem
+		// with a different remedy, and the owner is told which one happened.
+		const why = truncated
+			? "The decision was cut off at the model's output limit before it named an action."
+			: res.response || "no action chosen";
+		return { thought: res.response, stuck: { why }, usage: res.usage, truncated };
+	}
+	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated };
 }
 
 function toDecision(call: { name: string; arguments: Record<string, unknown> }): CodingDecision {

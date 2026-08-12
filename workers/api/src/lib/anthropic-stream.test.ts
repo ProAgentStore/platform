@@ -98,6 +98,8 @@ describe("AnthropicStreamAssembler", () => {
 	});
 
 	it("gives a tool call with no argument deltas an empty object, not a broken one", () => {
+		// Still true when the message ENDED cleanly: a tool with an empty input schema really does
+		// produce no `input_json_delta`, so this branch cannot be a blanket failure (#504).
 		const body = assembleAnthropicStream([
 			{ type: "message_start", message: { usage: {} } },
 			{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "get_tasks", input: {} } },
@@ -105,6 +107,48 @@ describe("AnthropicStreamAssembler", () => {
 			{ type: "message_stop" },
 		]);
 		expect(body.content[0].input).toEqual({});
+	});
+
+	it("refuses a tool call with no arguments when the reply hit the output cap (#504)", () => {
+		// The eleven empty Loop instructions: a `send_message` whose arguments never started
+		// arriving, handed back as a well-formed call and driven into a live coding engine as "".
+		// A zero-argument call is only trustworthy when the provider says the message finished.
+		expect(() =>
+			assembleAnthropicStream([
+				{ type: "message_start", message: { usage: {} } },
+				{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "send_message", input: {} } },
+				{ type: "content_block_stop", index: 0 },
+				{ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 2048 } },
+				{ type: "message_stop" },
+			]),
+		).toThrow(/send_message/);
+	});
+
+	it("accepts a fully-formed tool call even when the reply hit the output cap", () => {
+		// The cap alone must not fail a call: the arguments arrived, so the call is whole and the
+		// stop reason is the caller's business (#397), not this module's.
+		const body = assembleAnthropicStream([
+			{ type: "message_start", message: { usage: {} } },
+			{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "send_message", input: {} } },
+			{ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"text":"run the tests"}' } },
+			{ type: "content_block_stop", index: 0 },
+			{ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: {} },
+			{ type: "message_stop" },
+		]);
+		expect(body.content[0].input).toEqual({ text: "run the tests" });
+		expect(body.stop_reason).toBe("max_tokens");
+	});
+
+	it("refuses a tool block that never closed, whatever the stop reason says", () => {
+		expect(() =>
+			assembleAnthropicStream([
+				{ type: "message_start", message: { usage: {} } },
+				{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "send_message", input: {} } },
+				{ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"text":"half' } },
+				{ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: {} },
+				{ type: "message_stop" },
+			]),
+		).toThrow(/never finished arriving/);
 	});
 
 	it("refuses a tool call whose arguments arrived incomplete", () => {

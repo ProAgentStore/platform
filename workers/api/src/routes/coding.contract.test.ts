@@ -757,6 +757,18 @@ describe("POST …/message and the keystroke that was never delivered (#448)", (
 		expect(sent.map((s) => s.path)).toEqual(["/coding/act"]);
 		expect(sent[0].body.action).toEqual({ kind: "message", text: "run the tests" });
 	});
+
+	it("answers a blank instruction with 400 and never touches the runner (#504)", async () => {
+		// The same shape as the keystroke: `session.input("")` writes an empty user turn to the
+		// engine's stdin, the pane flips to "thinking", and the route answers 200 with a snapshot
+		// that looks exactly like a delivered instruction. MCP's `coding_session_message` hands its
+		// argument to this route unchecked, so the refusal belongs here.
+		for (const body of [{ text: "" }, { text: "   " }, {}]) {
+			const { status, sent } = await send(body);
+			expect(status).toBe(400);
+			expect(sent).toEqual([]);
+		}
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
