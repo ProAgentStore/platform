@@ -32,6 +32,7 @@ import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invente
 import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
+import { templatePreviewNote, withholdConstrainedConnectorTools, type TemplatePreviewCapabilities } from "./lib/template-preview-tools.js";
 import { capToolResult, toolLogLine } from "./lib/tool-result-cap.js";
 import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
@@ -59,21 +60,25 @@ import type { Env } from "./types.js";
  * (see `/init` at subscribe) — join to its template agent; fall back to the agent row
  * for a template preview DO. Any failure returns the default (full toolset), never
  * fewer — a lookup miss must not silently strip an agent's tools.
+ *
+ * WHICH join matched is returned, not discarded (#517): the second one IS the agent-template
+ * surface, where a constrained connector's tools are refused by decision on every call, so they
+ * are withheld there rather than offered and explained. lib/template-preview-tools.ts.
  */
-async function resolveAgentCapabilities(env: Env, id: string): Promise<AgentCapabilities> {
+async function resolveAgentCapabilities(env: Env, id: string): Promise<TemplatePreviewCapabilities> {
 	try {
 		const inst = await env.DB.prepare(
 			"SELECT a.slug AS slug, a.category AS category, a.config AS config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1",
 		).bind(id).first<{ slug: string | null; category: string | null; config: string | null }>();
-		if (inst) return agentCapabilities(inst);
+		if (inst) return { capabilities: agentCapabilities(inst), previewWithheld: [] };
 		const agent = await env.DB.prepare(
 			"SELECT slug, category, config FROM agents WHERE id = ?1",
 		).bind(id).first<{ slug: string | null; category: string | null; config: string | null }>();
-		if (agent) return agentCapabilities(agent);
+		if (agent) return withholdConstrainedConnectorTools(agentCapabilities(agent));
 	} catch {
 		/* fall through to the permissive default */
 	}
-	return agentCapabilities({});
+	return { capabilities: agentCapabilities({}), previewWithheld: [] };
 }
 
 /**
@@ -205,7 +210,7 @@ export async function runAgentThink(opts: {
 
 	// Authoritative capabilities → gate tools to what this agent type can actually use
 	// (e.g. a Coder never gets search_knowledge, so it can't hallucinate an empty index).
-	const capabilities = await resolveAgentCapabilities(env, state.agentId);
+	const { capabilities, previewWithheld } = await resolveAgentCapabilities(env, state.agentId);
 
 	// Subscriber instance config (typed settings values + Rules & Tips). state.agentId
 	// is the INSTANCE id for instance DOs; a template/preview DO has no row → stays
@@ -663,6 +668,9 @@ export async function runAgentThink(opts: {
 					` If it no longer appears in tmux_list_sessions, say so and ask which session to use instead.`;
 			}
 		}
+		// After the list, because it says what is NOT in it. Empty string unless this turn is an
+		// agent-template preview of a constrained connector, whose tools were withheld above (#517).
+		systemPrompt += templatePreviewNote(previewWithheld);
 	}
 
 	// `codingContext`/`styleReminder`/`plainSpeech` come from the ONE `resolveResponseStyle` hoisted

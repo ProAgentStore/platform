@@ -760,7 +760,20 @@ const PINS = {
 	// stops seeing that. Moving prompt prose into a module was considered and rejected for the
 	// same reason the block above gives: these lines need this function's `systemPrompt`
 	// accumulator, and a paragraph in a helper is a paragraph nobody reads next to its siblings.
-	"workers/api/src/agent-think.ts": 1172,
+	// +8 at #517, of which three are code: `resolveAgentCapabilities` returns WHICH of its two
+	// joins matched instead of discarding it, and the second one IS the agent-template surface —
+	// where every tool of a connector in `CONNECTOR_CONSTRAINTS` is refused by decision (#441,
+	// `docs/capability-constraints.md`), so they are withheld there rather than offered and then
+	// explained. A prompt rule had already been tried and measured: 5/5 replies invented a console
+	// path before it, 4/14 after, because `listConsents` is keyed by instance id and returns
+	// nothing here, so every write tool rendered "consent NOT granted" and CONSENT_RULE licensed
+	// the false remedy. Raised rather than split because the three lines ARE the seam: the surface
+	// is only knowable where the two queries are, and it has to reach the one `capabilities` object
+	// every downstream gate already reads. Everything that can be pure is — the filter, the empty
+	// case that must not fall through to FULL, and the sentence that replaces what was withheld —
+	// in lib/template-preview-tools.ts with its tests, which pin the no-op for every other agent by
+	// reference equality rather than by inspection.
+	"workers/api/src/agent-think.ts": 1180,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -927,7 +940,10 @@ const PINS = {
 	// longer than the growth it explains — because the interesting part is what was refused, not
 	// what was added: collapsing three call sites onto single lines would have cleared the ratchet
 	// and made the file worse. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1011,
+	// +15 at #517: the agent-think raise above — three lines of code that carry WHICH join matched
+	// out of `resolveAgentCapabilities` — and a reason longer than the growth, because the part
+	// worth reading is the measurement that rejected the cheaper fix. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1027,
 };
 
 /**
