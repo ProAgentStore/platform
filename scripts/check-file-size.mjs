@@ -408,7 +408,11 @@ const PINS = {
 	// a static array, which is how the Index panel stayed reachable after the Indexing tab was
 	// hidden. The seam here is unchanged and still the right one: this file is the shell, and the
 	// next split is the chat/voice state it owns inline, not the surface plumbing.
-	"store/console/src/pages/InstanceDetail.tsx": 1504,
+	// 1504 → 1477 at #514: `CopyButton` left this file for `components/MessageActions.tsx`, which
+	// is where the message-corner cluster now lives together with the reason there are two layouts
+	// of it. Banked rather than left as headroom — the seam named above (this file is the shell)
+	// only stays true if the pieces that leave it stay gone.
+	"store/console/src/pages/InstanceDetail.tsx": 1477,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -903,7 +907,9 @@ const PINS = {
 	// growth was recorded rather than squeezed out — plus this self-ref.
 	// +8 at #514: the agent-do raise above (a trace id on both messages of a turn) and its reason,
 	// plus this self-ref.
-	"scripts/check-file-size.mjs": 987,
+	// +6 more at #514: the InstanceDetail entry above is now a LOWERING with its reason, banking
+	// the lines `CopyButton` took with it — plus this self-ref.
+	"scripts/check-file-size.mjs": 993,
 };
 
 /**

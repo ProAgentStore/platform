@@ -41,6 +41,8 @@ interface OpsMockOptions {
 	 * request it is breaking and cannot silently break its neighbours as the fixture grows.
 	 */
 	failPaths?: string[];
+	/** `GET /v1/feedback` — the owner's recorded complaints (#514). */
+	feedback?: Array<Record<string, unknown>>;
 }
 
 /**
@@ -137,6 +139,8 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	let voiceOverrideCleared = false;
 	const builderPlans: unknown[] = [];
 	const builderExecutes: unknown[] = [];
+	const feedbackPosts: unknown[] = [];
+	const feedbackPatches: Array<{ id: string; body: unknown }> = [];
 
 	await page.route(`${API}/**`, async (route) => {
 		const url = new URL(route.request().url());
@@ -686,6 +690,24 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false });
 		}
 		if (path === "/v1/instances/inst-1/translation") return json({ translation: { enabled: false, target: "English" }, languages: [], hasOverride: false });
+		// In-session feedback (#514). POST is the capture path the console must reach with NO
+		// model involved; the recorded bodies are what a spec asserts the anchors on.
+		if (path === "/v1/feedback") {
+			if (method === "POST") {
+				feedbackPosts.push(route.request().postDataJSON());
+				return json({ ok: true, feedback: { id: "fb-new" } }, 201);
+			}
+			const rows = (options.feedback ?? []).filter((r) => {
+				const wanted = url.searchParams.get("instance_id");
+				return !wanted || r.instance_id === wanted;
+			});
+			return json({ count: rows.length, feedback: rows });
+		}
+		if (path.startsWith("/v1/feedback/")) {
+			const id = path.slice("/v1/feedback/".length);
+			if (method === "PATCH") feedbackPatches.push({ id, body: route.request().postDataJSON() });
+			return json({ ok: true });
+		}
 		if (path === "/v1/dashboard/creator") return json({ totalAgents: 1, totalSubscribers: 0, totalUsage: 0, agents: [] });
 		if (path === "/v1/dashboard/usage") return json({ activeInstances: 1, dailyUsage: [] });
 
@@ -736,6 +758,12 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		},
 		get builderExecutes() {
 			return builderExecutes;
+		},
+		get feedbackPosts() {
+			return feedbackPosts;
+		},
+		get feedbackPatches() {
+			return feedbackPatches;
 		},
 	};
 }
@@ -3826,6 +3854,20 @@ test.describe("mobile — the Pulls panel (#401)", () => {
  * cannot otherwise reach AND turn this guard green. So the run asserts opacity before it asserts
  * clearance, and the desktop case is asserted the other way round, as its own test.
  *
+ * ── What #514 changed, and why the guard had to be re-derived rather than re-run
+ *
+ * A THIRD control (Report a problem) needs `right-14` and 68px reserved. Measured here, in this
+ * engine, at this width: with `pr-20` the everyday current-year stamp WRAPS to two lines
+ * (`headerH` 32px) — spending the exact allowance #426's conditional year had just bought. So
+ * below `sm` the three controls collapse into ONE overflow button in the same corner, keeping
+ * `pr-12`, and become labelled 44px rows in a sheet.
+ *
+ * That makes "find the Copy button and measure it" the wrong question at 320px: both layouts are
+ * in the DOM (`hidden sm:contents` / `sm:hidden`), so a query by aria-label finds a
+ * `display:none` element whose rect is all zeros and whose computed opacity is 1 — a guard that
+ * would pass while measuring nothing. Every action control therefore carries `data-msg-action`,
+ * and what is measured is whatever is actually PAINTED at that width, counted first.
+ *
  * ── Why the fixture carries a message from last year
  *
  * The year is now conditional (#426 fix 2, `formatDateTime`), so the everyday stamp is the short
@@ -3837,21 +3879,23 @@ test.describe("mobile — the Pulls panel (#401)", () => {
  * `mobile — ` puts this block in the WebKit project (#384). The report was measured in WebKit at
  * 320 and 390, and that is the engine every phone runs.
  */
-test.describe("mobile — Copy and Delete clear the message timestamp (#426)", () => {
+test.describe("mobile — the message actions clear the timestamp (#426, #514)", () => {
 	const THIS_YEAR = new Date().getFullYear();
 	const LAST_YEAR = THIS_YEAR - 1;
 	/** Mid-year and LOCAL, so the rendered year cannot flip under a runner east or west of UTC. */
 	const stamp = (year: number) => new Date(year, 6, 8, 14, 12).toISOString();
 
 	const MESSAGES = [
-		{ id: "m1", role: "user", content: "Deploy the api worker", createdAt: stamp(THIS_YEAR) },
-		{ id: "m2", role: "assistant", content: "Done — the worker is live.", createdAt: stamp(THIS_YEAR) },
+		// The user turn carries the voice provenance a real one does (#514/#510–#512): the audio key
+		// and what the recognizer HEARD, which differs from what was sent.
+		{ id: "m1", role: "user", content: "Deploy the api worker", createdAt: stamp(THIS_YEAR), traceId: "trace-1", audioKey: "voice-1", dictation: "deploy the API worker" },
+		{ id: "m2", role: "assistant", content: "Done — the worker is live.", createdAt: stamp(THIS_YEAR), traceId: "trace-1" },
 		{ id: "m3", role: "user", content: "What did we ship back then?", createdAt: stamp(LAST_YEAR) },
 		{ id: "m4", role: "assistant", content: "That turn is old enough to still carry its year.", createdAt: stamp(LAST_YEAR) },
 	];
 
 	async function openChat(page: Page) {
-		await mockSignedInConsole(page);
+		const ops = await mockSignedInConsole(page);
 		await page.route("**/v1/instances/inst-1/messages*", (route) =>
 			route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ messages: MESSAGES }) }),
 		);
@@ -3860,11 +3904,16 @@ test.describe("mobile — Copy and Delete clear the message timestamp (#426)", (
 		// measurement over one is the hollow guard this file has shipped before.
 		await expect(page.locator("[data-chat-bubble]")).toHaveCount(MESSAGES.length);
 		await expect(page.locator("[data-msg-stamp]")).toHaveCount(MESSAGES.length);
+		return ops;
 	}
 
 	/**
-	 * Per bubble, per action button: how many pixels of the timestamp that button covers, whether
-	 * the button is actually painted, and how tall the header row ended up.
+	 * Per bubble, per action control that is actually ON SCREEN: how many pixels of the timestamp
+	 * it covers, whether it is painted, and how tall the header row ended up.
+	 *
+	 * "On screen" is a measured property (non-zero box), not an assumption. Both the phone layout
+	 * and the pointer layout are in the DOM at every width; the one that is not current is
+	 * `display:none` and reports a zero rect while still answering a selector.
 	 */
 	async function measureStamps(page: Page) {
 		return page.evaluate(() => {
@@ -3875,14 +3924,13 @@ test.describe("mobile — Copy and Delete clear the message timestamp (#426)", (
 				const header = stampEl.parentElement as HTMLElement;
 				const s = stampEl.getBoundingClientRect();
 				const label = header.firstElementChild?.getBoundingClientRect();
-				for (const sel of ['[aria-label="Copy message"]', '[aria-label="Delete this turn"]']) {
-					const btn = bubble.querySelector(sel) as HTMLElement | null;
-					if (!btn) continue;
+				for (const btn of Array.from(bubble.querySelectorAll("[data-msg-action]")) as HTMLElement[]) {
 					const b = btn.getBoundingClientRect();
+					if (b.width === 0 || b.height === 0) continue; // the other breakpoint's layout
 					const w = Math.min(b.right, s.right) - Math.max(b.left, s.left);
 					const h = Math.min(b.bottom, s.bottom) - Math.max(b.top, s.top);
 					rows.push({
-						button: sel,
+						button: btn.getAttribute("data-msg-action") || "?",
 						overlapPx: w > 0 && h > 0 ? Math.round(w) : 0,
 						painted: Number.parseFloat(getComputedStyle(btn).opacity) > 0.01,
 						text: (stampEl.textContent || "").trim(),
@@ -3896,14 +3944,18 @@ test.describe("mobile — Copy and Delete clear the message timestamp (#426)", (
 	}
 
 	for (const width of [320, 390]) {
-		test(`no pixel of the timestamp is under Copy or Delete at ${width}px`, async ({ page }) => {
+		test(`no pixel of the timestamp is under an action control at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await openChat(page);
 
 			const rows = await measureStamps(page);
-			// Four bubbles × two buttons. A short count means a control stopped rendering and the
-			// measurement below is about nothing.
-			expect(rows.length, "not every bubble rendered both action buttons").toBe(MESSAGES.length * 2);
+			// One painted control per bubble — the overflow trigger — and it is the ONLY one, which
+			// is the property that keeps `pr-12` sufficient. A short count means a control stopped
+			// rendering and the measurement below is about nothing; a long one means the phone
+			// layout grew a second icon and the reservation is stale again.
+			expect(rows.map((r) => r.button), `the phone layout is not exactly one control per bubble at ${width}px`).toEqual(
+				Array.from({ length: MESSAGES.length }, () => "more"),
+			);
 
 			// Visible FIRST: zero overlap on an invisible button is the desktop state, not a fix.
 			const hidden = rows.filter((r) => !r.painted).map((r) => r.button);
@@ -3964,6 +4016,64 @@ test.describe("mobile — Copy and Delete clear the message timestamp (#426)", (
 		expect(padding, "the mobile corner reservation leaked into the desktop layout").toEqual(padding.map(() => "0px"));
 		const copy = page.getByRole("button", { name: "Copy message" }).first();
 		expect(await copy.evaluate((el) => getComputedStyle(el).opacity), "the desktop buttons stopped being hover-only").toBe("0");
+	});
+
+	/**
+	 * The phone sheet the collapse produced (#514), measured rather than described.
+	 *
+	 * What #342 and #389 bought must survive the change: a delete that cannot be tapped by
+	 * accident because a neighbour overlaps it, and targets a thumb can hit. In a vertical sheet
+	 * the first is structural — nothing overlaps — and the second is asserted here in pixels.
+	 */
+	test("mobile — the overflow sheet offers all three actions at 44px each", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		await openChat(page);
+
+		await page.getByRole("button", { name: "Message actions" }).nth(1).click();
+		const menu = page.getByRole("menu");
+		await expect(menu).toBeVisible();
+		for (const name of ["Copy message", "Report a problem", "Delete this turn"]) {
+			const row = menu.getByRole("menuitem", { name });
+			await expect(row, `${name} is missing from the sheet`).toBeVisible();
+			const box = await row.boundingBox();
+			expect(Math.round(box?.height ?? 0), `${name} is under the 44px target #389 bought`).toBeGreaterThanOrEqual(44);
+		}
+	});
+
+	/**
+	 * The acceptance criterion, end to end: a click, a sentence, one row — carrying the anchors
+	 * that make the complained-about turn addressable. NO MODEL IS MOCKED because none is
+	 * involved; the whole point of the UI path is that it cannot fail for the reason being
+	 * reported (#503, #504).
+	 */
+	test("mobile — reporting a problem posts the turn's anchors, its neighbour and its voice", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		const ops = await openChat(page);
+
+		// The ASSISTANT turn of the first exchange — the one a complaint is normally about.
+		await page.getByRole("button", { name: "Message actions" }).nth(1).click();
+		await page.getByRole("menuitem", { name: "Report a problem" }).click();
+		await page.getByLabel("What went wrong").fill("It says it deployed but the run never started.");
+		await page.getByRole("button", { name: "Save feedback" }).click();
+
+		await expect.poll(() => (ops.feedbackPosts as unknown[]).length, { message: "no feedback row was posted" }).toBe(1);
+		const posted = (ops.feedbackPosts as Array<Record<string, unknown>>)[0];
+		expect(posted).toMatchObject({
+			instanceId: "inst-1",
+			body: "It says it deployed but the run never started.",
+			surface: "chat",
+			sentiment: "bad",
+			// The pointer that makes `agent_trace(trace_id=…)` the caller's next call.
+			traceId: "trace-1",
+			messageId: "m2",
+			targetRole: "assistant",
+			targetText: "Done — the worker is live.",
+			// …and the turn BEFORE it, which is what #505 was built from.
+			promptText: "Deploy the api worker",
+		});
+		// Voice provenance travels even though the assistant turn has none of its own: the
+		// mishearing is one turn earlier, and `voiceFrom` says so rather than leaving it implied.
+		expect(posted.context).toMatchObject({ audioKey: "voice-1", dictation: "deploy the API worker", voiceFrom: "prompt" });
 	});
 });
 

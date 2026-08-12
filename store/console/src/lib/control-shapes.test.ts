@@ -98,7 +98,14 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // 69 → 54: `AgentDetail`'s 15, all of them ordinary. Its four remaining `<button>` elements draw no
 // box at all (the tab bar's `border-b-2` arms, two text-only `Remove` links, two `&larr; Back`
 // links), so this file is finished as far as this guard can see.
-const PINNED = { "store/console": 54, "store/admin": 15, "agents/coder/web": 47 };
+// 54 → 56 at #514: the two new OVERLAID corner icons — Report a problem on a message bubble, and
+// the phone overflow control that now holds all three actions. They are the Copy/Delete idiom
+// already in this count and not `<Button size="icon">`: they are absolutely positioned ON message
+// text and carry a `bg-black/40` scrim so a 16px glyph stays legible over any content, and
+// `Button`'s className passthrough is position-only — colour handed in there does not reliably
+// win, which is the trap its own docstring names. The composer they open uses `<Button>` for all
+// four of its ordinary controls, so what is banked here is exactly the overlay pair.
+const PINNED = { "store/console": 56, "store/admin": 15, "agents/coder/web": 47 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

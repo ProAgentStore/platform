@@ -11,7 +11,7 @@ import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import PlaybackIcon from "../components/PlaybackIcon";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus, resolveComposer } from "@proagentstore/sdk/hooks";
-import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
+import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { useConversation, useConversationSwitch } from "../lib/ConversationContext";
 import { parseChatTransfer, type ChatTransfer } from "../lib/transfer";
@@ -24,7 +24,7 @@ import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
 import SpokenMessage from "../components/SpokenMessage";
 import SystemMessage from "../components/SystemMessage";
-import DeleteTurnButton from "../components/DeleteTurnButton";
+import MessageActions from "../components/MessageActions";
 import FabricatedNotice from "../components/FabricatedNotice";
 import McpInputRequests from "../components/McpInputRequests";
 import { useScrapLastTurn } from "../lib/deleteTurn";
@@ -36,35 +36,6 @@ import { chatExportPayload } from "../lib/chatExport";
 import { composerPlaceholder, shouldShowComposer } from "../lib/composer";
 import { stampTitle } from "../lib/messageStamp";
 import { useAccountTimeZone } from "../lib/accountTimezone";
-
-/**
- * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
- * (no hover there); hover-revealed from `sm` up. Shows a green check for 1.5s after copying.
- */
-function CopyButton({ text }: { text: string }) {
-	const [copied, setCopied] = useState(false);
-	return (
-		<button
-			type="button"
-			onClick={(e) => {
-				e.stopPropagation();
-				navigator.clipboard.writeText(text).then(() => {
-					setCopied(true);
-					setTimeout(() => setCopied(false), 1500);
-				}).catch(() => {});
-			}}
-			onDoubleClick={(e) => e.stopPropagation()}
-			title={copied ? "Copied" : "Copy"}
-			aria-label="Copy message"
-			// 24×24 clears WCAG 2.5.8; `tap-target` adds 44px of vertical reach on top, which is
-			// the axis a thumb misses on a scrolling thread (#389). See DeleteTurnButton for why
-			// the expansion is not horizontal.
-			className="tap-target absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
-		>
-			{copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
-		</button>
-	);
-}
 
 // A built-in SurfaceId or a custom (agent-published) surface id.
 type Tab = string;
@@ -1142,10 +1113,12 @@ function InstancePage() {
 													: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
-										<CopyButton text={m.content} />
-										{/* #342: one turn, not one line — the server resolves the span and returns
-										    the ids it removed, and those are what leave the thread here. */}
-										{id && <DeleteTurnButton instanceId={id} message={m} messages={messages} runActive={loopOn} onStopRun={() => void stopLoop()} onDeleted={dropMessages} />}
+										{/* Copy, Report a problem and Delete this turn — three hover icons from `sm`
+										    up, ONE overflow control below it. #342: a delete is one turn, not one
+										    line, and the server resolves the span. #514: the complaint goes on the
+										    turn it is about and takes the turn before it. Why the two layouts, and
+										    the WebKit measurement that forced them, are in MessageActions.tsx. */}
+										{id && <MessageActions instanceId={id} message={m} messages={messages} index={i} agentSlug={instance?.slug} runActive={loopOn} onStopRun={() => void stopLoop()} onDeleted={dropMessages} />}
 										{/* The replay button held an 11px icon and nothing else, so it WAS 11×11 — the
 										    smallest control in the app, on the thread a hands-free user reaches for when
 										    voice has gone wrong. `min-w-6` + `tap-target` make it 24 wide by 44 tall
