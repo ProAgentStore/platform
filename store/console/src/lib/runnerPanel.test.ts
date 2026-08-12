@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agoShort, machinesToShow, machineTile, type NodeDetail, pinnedWarning, runnerReading } from "./runnerPanel";
+import { agoShort, type Machine, machinesToShow, machineTile, type NodeDetail, pinnedWarning, runnerReading } from "./runnerPanel";
 
 const INST = "inst-1";
 
@@ -116,6 +116,147 @@ describe("machinesToShow", () => {
 				expect(reading.online).toBe(tile.tone === "attached");
 			}
 		}
+	});
+
+	// The tile the sweep above could not reach: a machine ALREADY on the Terminals list, which is
+	// every tile on a normal account. `machinesToShow` returned that list untouched, so the merge
+	// the module promises happened for the synthesised tile and nothing else (#531).
+	it("folds /runner-node's reading into a machine Terminals already lists", () => {
+		// Terminals has not yet seen the socket this agent opened; /runner-node has.
+		const machines: Machine[] = [{ node: "laptop", connected: false, instances: [{ instanceId: INST, connected: false }] }];
+		const detail: NodeDetail[] = [{ node: "laptop", connected: true, nodeOnline: true }];
+		const tile = machineTile(machinesToShow(machines, "laptop", INST, detail)[0], INST, "laptop");
+		expect(tile.tone).toBe("attached");
+		// And the reverse read: Terminals saw it, /runner-node's probe had not landed.
+		const lagging: NodeDetail[] = [{ node: "laptop", connected: false, nodeOnline: false }];
+		const seen: Machine[] = [{ node: "laptop", connected: true, instances: [{ instanceId: INST, connected: true }] }];
+		expect(machineTile(machinesToShow(seen, "laptop", INST, lagging)[0], INST, "laptop").tone).toBe("attached");
+	});
+
+	// #379/#393 must survive the pin becoming load-bearing. A hostname moves under a machine, so a
+	// pin can name the right MACHINE under a dead NAME — and routing already resolves through it.
+	it("keeps a renamed machine attached, and does not draw it twice", () => {
+		const machines: Machine[] = [{ node: "Mac", aka: ["RLs-MacBook-Air.local"], connected: true, instances: [{ instanceId: INST, connected: true }] }];
+		const detail: NodeDetail[] = [
+			{ node: "Mac", connected: true, nodeOnline: true },
+			{ node: "RLs-MacBook-Air.local", connected: false, nodeOnline: false },
+		];
+		const tiles = machinesToShow(machines, "RLs-MacBook-Air.local", INST, detail);
+		// ONE tile. Synthesising the retired name drew a grey "Offline · Pinned" next to a green
+		// "Attached · Pinned" — two tiles, one machine, opposite claims.
+		expect(tiles.map((t) => t.node)).toEqual(["Mac"]);
+		const tile = machineTile(tiles[0], INST, "RLs-MacBook-Air.local");
+		expect(tile.tone).toBe("attached");
+		expect(tile.pinned).toBe(true);
+	});
+
+	it("takes the server's resolvedNode as proof of the same machine when Terminals has not folded", () => {
+		// No `aka` here: the fold needs a persisted machine id and Terminals' rows may not carry one.
+		// `/runner-node` holds that id and reports where the pin lands, so the tile trusts it rather
+		// than telling a working agent it is not attached.
+		const m: Machine = { node: "Mac", connected: true, instances: [{ instanceId: INST, connected: true }] };
+		expect(machineTile(m, INST, "RLs-MacBook-Air.local", "Mac").tone).toBe("attached");
+		// Without that proof it is the honest, routing-accurate answer: nothing resolves the pin.
+		expect(machineTile(m, INST, "RLs-MacBook-Air.local").tone).toBe("connected");
+	});
+});
+
+/**
+ * The whole input space, so a fourth reading cannot re-introduce the divergence (#531).
+ *
+ * pinned-here / pinned-elsewhere / unpinned × socket / no socket × machine up / down × listed by
+ * Terminals or not. The invariants asserted for EVERY tile of every combination:
+ *
+ *   1. "Attached" is said only where the routing puts work — never for a machine the pin excludes.
+ *   2. The status line and the tiles agree: an Offline card contains no attached tile.
+ *   3. For the pinned tile, the tone and the warning under the grid stay two renderings of one
+ *      answer (the invariant the old sweep held for the synthesised tile alone).
+ */
+describe("machinesToShow + machineTile — connectivity is never reported as routing (#531)", () => {
+	const LIVE = "laptop";
+	const OTHER = "desktop";
+
+	for (const pin of [LIVE, OTHER, ""]) {
+		for (const socket of [true, false]) {
+			for (const machineUp of [true, false]) {
+				for (const listed of [true, false]) {
+					const label = `pin=${pin || "(none)"} socket=${socket} machineUp=${machineUp} listed=${listed}`;
+					it(`says the true thing — ${label}`, () => {
+						// Terminals' reading of the machine that holds (or does not hold) the socket.
+						const machines: Machine[] = listed
+							? [{ node: LIVE, connected: machineUp || socket, instances: [{ instanceId: INST, connected: socket }] }]
+							: [];
+						// /runner-node's reading of the same machine, plus the pinned one when it is
+						// elsewhere — exactly what the route returns (`available` ∪ the pin).
+						const detail: NodeDetail[] = [
+							{ node: LIVE, connected: socket, nodeOnline: machineUp || socket },
+							...(pin === OTHER ? [{ node: OTHER, connected: false, nodeOnline: false }] : []),
+						];
+						// What `getBoundRunnerConn` would do: pinned ⇒ that machine only; unpinned ⇒
+						// whichever machine holds a live socket. This is the ONLY definition of
+						// "attached" the card is allowed to render.
+						const routed = pin === OTHER ? false : socket;
+						const runtimeInfo = { relay: { connected: routed, runnerNode: routed ? LIVE : null } };
+
+						const tiles = machinesToShow(machines, pin, INST, detail).map((m) => machineTile(m, INST, pin));
+						const reading = runnerReading(runtimeInfo, detail, pin);
+
+						for (const t of tiles) {
+							// 1. The word and the tone are one decision.
+							expect(t.statusText.includes("Attached")).toBe(t.tone === "attached");
+							// …and a tile only claims it when work reaches that machine.
+							if (t.tone === "attached") expect(pin === "" || t.node === pin).toBe(true);
+							// A machine the pin excludes says which fact it is reporting, and where the
+							// work went instead — a reader must not have to infer it from a colour.
+							if (t.tone === "connected") {
+								expect(t.node).not.toBe(pin);
+								expect(t.statusText).toContain("Connected");
+								expect(t.statusText).toContain(pin);
+							}
+						}
+
+						// 2. #531 itself: "Status: Offline" one line above a green "Attached" tile.
+						if (!reading.online) expect(tiles.filter((t) => t.tone === "attached")).toEqual([]);
+						expect(reading.online).toBe(routed);
+
+						// 3. The pinned tile still never contradicts the warning under the grid.
+						const pinnedTile = tiles.find((t) => t.pinned);
+						if (pin) {
+							expect(pinnedTile?.node).toBe(pin);
+							const warning = pinnedWarning(pin, detail);
+							if (warning === null) expect(pinnedTile?.tone).toBe("attached");
+							if (warning === "not_attached") expect(pinnedTile?.tone).toBe("online");
+							if (warning === "offline") expect(pinnedTile?.tone).toBe("offline");
+						} else {
+							expect(pinnedTile).toBeUndefined();
+						}
+					});
+				}
+			}
+		}
+	}
+
+	// The reported screen, asserted as one statement (#531 AC5). Non-vacuous by construction: the
+	// same fixture through the OLD rule produced "Attached · online" for `desktop`.
+	it("cannot render Offline and Attached for the same instance at once", () => {
+		const machines: Machine[] = [
+			{ node: OTHER, connected: true, instances: [{ instanceId: INST, connected: true }] },
+			{ node: LIVE, connected: false, instances: [{ instanceId: INST, connected: false }] },
+		];
+		const detail: NodeDetail[] = [
+			{ node: OTHER, connected: true, nodeOnline: true },
+			{ node: LIVE, connected: false, nodeOnline: false },
+		];
+		// Pinned to `laptop`, which is dead; `desktop` holds this agent's socket.
+		const tiles = machinesToShow(machines, LIVE, INST, detail).map((m) => machineTile(m, INST, LIVE));
+		const reading = runnerReading({ relay: { connected: false, runnerNode: null } }, detail, LIVE);
+
+		expect(reading.online).toBe(false); // the card's status line reads "Offline"
+		expect(tiles.map((t) => t.statusText).join(" | ")).not.toContain("Attached");
+		const desktop = tiles.find((t) => t.node === OTHER);
+		expect(desktop?.tone).toBe("connected");
+		expect(desktop?.statusText).toBe("Connected · this agent runs on laptop");
+		expect(pinnedWarning(LIVE, detail)).toBe("offline");
 	});
 });
 

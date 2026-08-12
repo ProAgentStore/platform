@@ -84,6 +84,25 @@ describe("groupTerminalNodes", () => {
 		expect(nodes[0].instances[0].bound).toBe(false);
 	});
 
+	// `bound:false` answers two different questions with one word, and the console has to tell them
+	// apart: an UNPINNED agent routes to whichever machine holds a live socket, so a connected chip
+	// is a chip work reaches; a PINNED-ELSEWHERE agent is connected here and routes nowhere near it
+	// (`getBoundRunnerConn` never falls through). The name travels so the page can say where (#531).
+	it("carries the pin itself, so 'no pin' is distinguishable from 'pinned elsewhere'", () => {
+		const nodes = groupTerminalNodes([
+			nodeRow({ runner_node: "macbook", instance_config: JSON.stringify({ runnerNode: "macbook" }) }),
+			nodeRow({ runner_node: "desktop", instance_id: "i2", instance_config: JSON.stringify({ runnerNode: "macbook" }) }),
+			nodeRow({ runner_node: "desktop", instance_id: "i3", instance_config: null }),
+		], []);
+		const mac = nodes.find((n) => n.node === "macbook")!;
+		const desk = nodes.find((n) => n.node === "desktop")!;
+		expect(mac.instances[0]).toMatchObject({ bound: true, pinnedNode: "macbook" });
+		// Served by `desktop`, pinned to `macbook` — connected here, routed there.
+		expect(desk.instances.find((i) => i.instanceId === "i2")).toMatchObject({ bound: false, pinnedNode: "macbook" });
+		// Unpinned: `bound:false` for the opposite reason, and nothing to name.
+		expect(desk.instances.find((i) => i.instanceId === "i3")).toMatchObject({ bound: false, pinnedNode: null });
+	});
+
 	it("skips rows with an empty runner_node", () => {
 		expect(groupTerminalNodes([nodeRow({ runner_node: "" })], [])).toHaveLength(0);
 	});
@@ -154,6 +173,10 @@ describe("groupTerminalNodes — one machine, several names (#393)", () => {
 		expect(nodes).toHaveLength(1);
 		expect(nodes[0].instances).toHaveLength(1);
 		expect(nodes[0].instances[0].bound).toBe(true);
+		// The raw pin still names the retired hostname — `bound` is what resolves it, and the
+		// console reads `pinnedNode` only when `bound` is false, so a renamed machine is never
+		// described as one the agent runs somewhere else (#531 must not undo #379/#393).
+		expect(nodes[0].instances[0].pinnedNode).toBe("RLs-MacBook-Air.local");
 	});
 
 	it("does not mark an instance bound to a DIFFERENT machine", () => {

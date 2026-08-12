@@ -7,9 +7,9 @@ import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
-import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
+import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff } from "lucide-react";
 
-interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean }
+interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean; pinnedNode?: string | null }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
 interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
 
@@ -26,6 +26,24 @@ function ago(iso: string | null): string {
 
 const sessionTone = (status: string) =>
 	status === "active" ? "text-success" : status === "suspended" ? "text-amber-400" : "text-muted-soft";
+
+/**
+ * The two facts a green dot used to run together (#531).
+ *
+ *   "routed"   — this agent holds a socket here AND its runner calls arrive here.
+ *   "stranded" — it holds a socket here and the pin sends its work to another machine, so nothing
+ *                of this agent's runs on this one however alive the dot looks.
+ *   "off"      — no socket here.
+ *
+ * Routing is `getBoundRunnerConn`: a pin is authoritative and never falls through, so a pin
+ * elsewhere excludes this machine outright. UNPINNED is the case a boolean could not express —
+ * routing then follows whichever machine holds a live socket, so a connected chip IS a routed one,
+ * which is why `pinnedNode` (the name, or null) travels rather than a second flag.
+ */
+function instanceRouting(i: TerminalInstance): "routed" | "stranded" | "off" {
+	if (!i.connected) return "off";
+	return i.bound || !i.pinnedNode ? "routed" : "stranded";
+}
 
 export default function Terminals() {
 	const navigate = useNavigate();
@@ -150,16 +168,39 @@ export default function Terminals() {
 								<div className="px-4 py-2 text-xs text-danger border-b border-line/60">{forgetError[n.node]}</div>
 							)}
 
-							{/* Agents served by this machine. A 📌 marks agents PINNED to run here. */}
+							{/* Agents served by this machine. A 📌 marks agents PINNED to run here; a struck-
+							    through pin marks one that is CONNECTED here and pinned somewhere else, so
+							    nothing of it runs on this machine (#531). Both used to wear the same green
+							    dot, so a machine an agent never reaches looked exactly like the machine it
+							    runs on — which is the claim the agent's own Runner card was contradicting
+							    one page over. */}
 							<div className="px-4 py-2.5 flex flex-wrap gap-1.5 border-b border-line/60">
 								<span className="text-2xs uppercase tracking-wide text-muted-soft self-center mr-1">Agents</span>
-								{n.instances.map((i) => (
-									<Link key={i.instanceId} to={`/instances/${i.instanceId}`} title={i.bound ? "Pinned to run on this machine" : "Served by this machine"} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border no-underline transition-colors ${i.bound ? "border-accent/50 bg-accent-soft text-ink" : "border-line text-ink hover:border-accent"}`}>
-										<Circle size={7} className={i.connected ? "fill-success text-success" : "fill-muted-soft text-muted-soft"} />
-										<Bot size={12} className="text-muted" />{i.name}
-										{i.bound && <Pin size={10} className="text-accent" />}
-									</Link>
-								))}
+								{n.instances.map((i) => {
+									const routing = instanceRouting(i);
+									return (
+										<Link key={i.instanceId} to={`/instances/${i.instanceId}`}
+											title={routing === "stranded"
+												? `Connected here, but this agent is pinned to ${i.pinnedNode} — its work runs there, not on this machine.`
+												: i.bound ? "Pinned to run on this machine" : "Served by this machine"}
+											className={`flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs px-2 py-1 rounded-lg border no-underline transition-colors max-w-full min-w-0 ${i.bound ? "border-accent/50 bg-accent-soft text-ink" : "border-line text-ink hover:border-accent"}`}>
+											<Circle size={7} className={`shrink-0 ${routing === "routed" ? "fill-success text-success" : routing === "stranded" ? "fill-warning text-warning" : "fill-muted-soft text-muted-soft"}`} />
+											<Bot size={12} className="text-muted shrink-0" /><span className="truncate min-w-0">{i.name}</span>
+											{i.bound && <Pin size={10} className="text-accent shrink-0" />}
+											{/* Said out loud, not only in a `title`: a phone has no hover, and this is
+											    the one chip whose colour alone would be read as "all good".
+											    `basis-full` gives it its OWN line inside the chip — sharing one line
+											    with the agent name truncated BOTH at 320px, and an agent you cannot
+											    name is a worse chip than a taller one. */}
+											{routing === "stranded" && (
+												<span className="basis-full flex items-center gap-1 text-2xs text-warning min-w-0">
+													<PinOff size={10} className="shrink-0" />
+													<span className="truncate min-w-0">runs on {i.pinnedNode}</span>
+												</span>
+											)}
+										</Link>
+									);
+								})}
 							</div>
 
 							{/* Coding sessions on this machine */}

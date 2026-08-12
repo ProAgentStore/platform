@@ -4745,3 +4745,113 @@ test.describe("mobile — the Co-pilot Copy button clears the timestamp (#445)",
 		}
 	});
 });
+
+/**
+ * The Runner card cannot say "Offline" and "Attached" about the same agent (#531).
+ *
+ * The report was *"why does it say runner offline if in settings the node is online"* — and both
+ * sentences were on screen at once, in one card. With the agent pinned to a machine that is down
+ * and a live socket on a second machine, the status line read `Status: Offline` (pin-aware,
+ * correct) while the "Runs on" grid painted the second machine green and labelled it
+ * "Attached · online". `machineTile` derived a claim about ROUTING from `instances[].connected`,
+ * which is a bare pin-blind `relayConnected` probe — and routing is pin-authoritative
+ * (`getBoundRunnerConn` never falls through), so nothing of that agent's ran there at all.
+ *
+ * The durable guard is the pure sweep in `store/console/src/lib/runnerPanel.test.ts`, which
+ * enumerates pin × socket × machine-up × listed-by-Terminals. This renders the same state, because
+ * the defect WAS a screen: the two sentences have to be measured together, in the DOM, at the
+ * widths a phone uses. Neither `/v1/terminals/nodes` nor `/v1/instances/:id/runner-node` was
+ * mocked anywhere in this file, so the grid had never rendered a tile in an e2e run at all — the
+ * routes are registered HERE rather than in the shared fixture so the mobile sweeps keep measuring
+ * the page they measured before, and this block measures the one they could not.
+ *
+ * `mobile — ` prefix so it runs under WebKit as well as Chromium (#384): the new label carries a
+ * hostname, which is one unbreakable token on a 320px tile.
+ */
+test.describe("mobile — the Runner card separates connected from attached (#531)", () => {
+	const PIN = "Sergeys-Mac-mini.local";
+	const LIVE = "RLs-MacBook-Air.local";
+
+	/** Pinned to a machine that is down; a second machine holds this agent's live socket. */
+	async function openRunnerCard(page: Page, width: number) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page);
+		// Registered AFTER the fixture, so they win over its unhandled-route 500.
+		await page.route("**/v1/instances/inst-1/runtime/status", (route) => route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				runtime: { instanceId: "inst-1", status: "offline", runnerNode: PIN },
+				relay: { connected: false, runnerNode: PIN, live: false },
+				attachment: {
+					state: "pinned-machine-offline",
+					message: `This agent is pinned to ${PIN}, which isn't connected. ${LIVE} is connected — set "Runs on" to ${LIVE} (or Automatic).`,
+					remedy: null,
+				},
+			}),
+		}));
+		await page.route("**/v1/instances/inst-1/runner-node", (route) => route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				runnerNode: PIN,
+				nodes: [LIVE, PIN],
+				// Both `connected` flags here are pin-blind socket probes — that is the whole point.
+				nodesDetail: [
+					{ node: LIVE, connected: true, nodeOnline: true },
+					{ node: PIN, connected: false, nodeOnline: false },
+				],
+				resolvedNode: null,
+			}),
+		}));
+		await page.route("**/v1/terminals/nodes", (route) => route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				nodes: [{
+					node: LIVE, machineId: "machine-aaaa1111", aka: [], identityHint: null, placement: "local",
+					runnerVersion: "0.4.40", lastSeenAt: "2026-08-12T07:44:00Z", connected: true,
+					instances: [{ instanceId: "inst-1", name: "Job Application Assistant", agentSlug: "job-application-assistant", status: "active", connected: true, bound: false, pinnedNode: PIN, runtime: "browser" }],
+					sessions: [],
+				}],
+			}),
+		}));
+		await page.goto("/console/instances/inst-1/settings");
+		await page.waitForLoadState("networkidle");
+		await page.waitForTimeout(400);
+	}
+
+	for (const width of [320, 390]) {
+		test(`no tile claims attachment the pin excludes at ${width}px`, async ({ page }) => {
+			await openRunnerCard(page, width);
+
+			// NON-VACUITY. The grid has to have rendered BOTH machines, or "no tile says Attached"
+			// is a statement about an empty page — the hollow-fixture pass this file has been caught
+			// by before (#235, #333). Split by `aria-pressed` rather than by text, because the live
+			// machine's own label NAMES the pinned one, which is the whole point of it.
+			const tiles = page.getByTestId("runner-machine-tile");
+			await expect(tiles).toHaveCount(2);
+			const pinnedTile = tiles.and(page.locator('[aria-pressed="true"]'));
+			const liveTile = tiles.and(page.locator('[aria-pressed="false"]'));
+			await expect(pinnedTile).toHaveCount(1);
+			await expect(pinnedTile).toContainText(PIN);
+			await expect(liveTile).toHaveCount(1);
+			await expect(liveTile).toContainText(LIVE);
+
+			// The status line, which was always right.
+			await expect(page.getByText("Offline", { exact: true }).first()).toBeVisible();
+
+			// The machine that holds the socket says which fact that is, and where the work went.
+			await expect(liveTile).toContainText(`Connected · this agent runs on ${PIN}`);
+			// …and nothing on the card claims attachment while the card says Offline.
+			expect(await page.evaluate(() => document.body.innerText)).not.toContain("Attached");
+
+			// The new label is a hostname, so it is the token most likely to leave the tile.
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+			expect(mainOv).toBeLessThanOrEqual(1);
+			expect(docOv).toBeLessThanOrEqual(1);
+		});
+	}
+});

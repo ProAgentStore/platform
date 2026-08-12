@@ -159,22 +159,38 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 				) : (
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 						{tiles.map((m) => {
-							const t = machineTile(m, instanceId, runnerNode);
+							const t = machineTile(m, instanceId, runnerNode, resolvedNode);
 							return (
 								<button
 									key={t.node}
 									type="button"
+									// Named so a spec can COUNT the tiles. "no tile says Attached" over a grid
+									// that rendered nothing is the hollow-fixture pass, and this grid had never
+									// rendered a tile in an e2e run before #531.
+									data-testid="runner-machine-tile"
 									onClick={() => save(t.node)}
 									aria-pressed={t.pinned}
-									title={t.pinned ? "This agent is bound to this machine" : "Bind this agent to this machine"}
+									title={
+										t.pinned
+											? "This agent is bound to this machine"
+											// The one tile that needs a sentence rather than a phrase: it IS connected, and
+											// that is exactly why "nothing runs here" is surprising (#531).
+											: t.tone === "connected"
+												? `This machine holds a live runner for this agent, but the agent is bound to ${runnerNode} — its work runs there. Click to move it here.`
+												: "Bind this agent to this machine"
+									}
 									className={`text-left rounded-xl border p-3 transition-colors ${t.pinned ? "border-accent bg-accent-soft" : "border-line bg-paper hover:border-accent/60"}`}
 								>
 									<div className="flex items-center gap-2 min-w-0">
-										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-success" : t.tone === "online" ? "bg-amber-500" : "bg-muted-soft"}`} />
+										{/* Green is reserved for "work runs here". A machine that is up but serving this
+										    agent nothing — whether it never attached, or the pin excludes it — is amber. */}
+										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-success" : t.tone === "offline" ? "bg-muted-soft" : "bg-amber-500"}`} />
 										<span className="font-semibold text-sm truncate">{t.node}</span>
 										{t.pinned && <span className="ml-auto shrink-0 text-2xs font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
 									</div>
-									<div className={`text-2xs mt-1 ${t.tone === "attached" ? "text-success" : t.tone === "online" ? "text-amber-500" : "text-muted-soft"}`}>{t.statusText}</div>
+									{/* `break-words`: this line now carries a machine NAME, and a hostname is one
+									    unbreakable token — at 320px `Sergeys-Mac-mini.local` is wider than the tile. */}
+									<div className={`text-2xs mt-1 break-words ${t.tone === "attached" ? "text-success" : t.tone === "offline" ? "text-muted-soft" : "text-amber-500"}`}>{t.statusText}</div>
 									<div className="text-2xs text-muted-soft mt-0.5">{t.meta}</div>
 									{/* The names this machine used to answer to (#393). Shown rather than swallowed:
 									    pins, relay names and session rows are all still keyed by hostname, so this

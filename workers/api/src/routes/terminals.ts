@@ -51,10 +51,29 @@ export interface TerminalInstance {
 	name: string;
 	agentSlug: string | null;
 	status: string;
+	/**
+	 * This instance holds a live relay socket on this machine. CONNECTIVITY, not routing — the
+	 * probe behind it (`relayConnected`) knows nothing about the pin, so on its own it cannot say
+	 * whether anything of this agent's actually runs here (#531). Pair it with `bound`/`pinnedNode`.
+	 */
 	connected: boolean;
 	/** True when this instance is PINNED to run on this machine (config.runnerNode). A
 	 *  bound instance routes its runner calls here even when another node is also connected. */
 	bound: boolean;
+	/**
+	 * The hostname this instance is pinned to, or null when it is unpinned (#531).
+	 *
+	 * `bound:false` conflates two states a reader has to be able to tell apart: an UNPINNED agent
+	 * routes to whichever machine holds a live socket (`getLiveRunnerConn`), so a connected chip is
+	 * a chip work reaches; a PINNED-ELSEWHERE agent is connected here and routes nowhere near it,
+	 * because `getBoundRunnerConn` treats the pin as authoritative and never falls through. The
+	 * name travels rather than a second boolean because the useful sentence names where it went.
+	 *
+	 * Raw, not alias-resolved: `bound` already answers "does the pin mean THIS machine" under every
+	 * name it has used (#379/#393), so a pin left on a retired hostname of this machine sets
+	 * `bound:true` and this string is never read.
+	 */
+	pinnedNode: string | null;
 	/** The runner runtime this agent uses ("coding" | "browser"). Runner-less agents
 	 *  (runtime:null — chat/RAG/connector) are excluded from the list entirely. */
 	runtime: "browser" | "coding";
@@ -227,7 +246,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 			// of its names. A pin left on a hostname the machine has stopped using still routes
 			// here (`aliasNodesFor`), so rendering it as unbound would contradict what happens.
 			const pin = parseBoundRunnerNode(r.instance_config);
-			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound: !!pin && pin === r.runner_node, runtime });
+			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound: !!pin && pin === r.runner_node, pinnedNode: pin || null, runtime });
 		}
 	}
 
@@ -377,6 +396,11 @@ terminalRoutes.get("/nodes", async (c) => {
 
 	// Live status: a machine is connected if ANY of its (instance,node) relays holds a socket.
 	// One check per instance the node serves (bounded), all in parallel.
+	//
+	// Deliberately pin-blind, and it stays that way: this is a PLATFORM view of machines across
+	// every agent, and "is there a socket here" is the question it exists to answer. What it must
+	// not do is let a reader take the answer for routing — so the pin rides along per instance
+	// (`pinnedNode`) and the console says which of the two facts it is showing (#531).
 	await Promise.all(nodes.map(async (n) => {
 		const checks = await Promise.all(n.instances.slice(0, 25).map((i) => relayConnected(c.env, i.instanceId, n.node).catch(() => false)));
 		n.instances.forEach((i, idx) => { i.connected = checks[idx] ?? false; });
