@@ -6,7 +6,7 @@ import type { EngineActRecord } from "./engine-acts.js";
 import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
-import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
+import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoTree, runRepoGit } from "./inspect.js";
 import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 
@@ -166,6 +166,17 @@ export class CodingRuntime {
 	gitWrite(input: { sessionId?: string; workDir?: string; cmd: GitWriteCmd; branch: string }) {
 		if (input.cmd !== "switch-branch") throw new InspectError(`unsupported git write command: ${String(input.cmd)}`);
 		return switchRepoBranch(this.resolveWorkDir(input), input.branch);
+	}
+
+	/**
+	 * Find something in the repo — by file CONTENT or by file NAME (#508).
+	 *
+	 * The one capability the read-only inspection surface never had. Without it, locating a file
+	 * meant walking `tree` by hand, and a path deeper than the tree's four-level cap was not
+	 * reachable in any number of calls that did not already know the answer.
+	 */
+	search(input: { sessionId?: string; workDir?: string; pattern: string; path?: string; mode?: RepoSearchMode; maxResults?: number }) {
+		return repoSearch(this.resolveWorkDir(input), input);
 	}
 
 	/** Bounded recursive file tree of the session's repo (names/type/size only). */

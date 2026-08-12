@@ -237,6 +237,18 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
+	// Find a file by content or by name (#508). A SEPARATE endpoint rather than another `/coding/git`
+	// command on purpose: an older runner answers an unknown path with a 404, which the cloud reads
+	// unambiguously as "this machine is too old" — an unknown `cmd` would arrive as a 400 that reads
+	// identically to a real search failure.
+	if (req.method === "POST" && path === "/coding/search") {
+		const b = await readJson<{ sessionId?: string; workDir?: string; pattern: string; path?: string; mode?: "content" | "path"; maxResults?: number }>(req);
+		try {
+			return json(res, 200, runner.coding.search(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	if (req.method === "POST" && path === "/coding/git") {
 		const b = await readJson<{ sessionId?: string; workDir?: string; cmd: "status" | "diff" | "diff-stat" | "log" | "ls-files"; path?: string; n?: number }>(req);
 		try {

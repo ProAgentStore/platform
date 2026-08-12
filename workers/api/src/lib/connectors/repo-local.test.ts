@@ -12,7 +12,7 @@ vi.mock("../runner-client.js", () => ({
 	READ_TIMEOUT_MS: 30_000,
 }));
 
-import { REPO_LOCAL_TOOLS, repoPathForInstance } from "./repo-local.js";
+import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoPathForInstance } from "./repo-local.js";
 import { CONNECTORS } from "./registry.js";
 import { getRegistryTool, registryToolNameSet } from "../tool-registry.js";
 import type { Env } from "../../types.js";
@@ -46,9 +46,9 @@ beforeEach(() => {
 });
 
 describe("repo-local — registration", () => {
-	it("registers all 4 tools, every one read-scoped", () => {
+	it("registers all 6 tools, every one read-scoped", () => {
 		const names = registryToolNameSet();
-		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote"]) {
+		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "repo_find", "repo_grep"]) {
 			expect(names.has(n)).toBe(true);
 			expect(getRegistryTool(n)?.scope).toBe("read");
 			expect(getRegistryTool(n)?.connector).toBe("repo-local");
@@ -166,7 +166,9 @@ describe("repo-local — tool behaviour", () => {
 	});
 
 	it("repo_git passes a whitelisted command through with its path/n options", async () => {
-		callRunner.mockResolvedValue({ cmd: "git log", output: "abc123 fix thing" });
+		// `pathApplied` is what a CURRENT runner reports (#508). Without it the tool correctly
+		// appends the "your machine ignored the filter" note, which is a different test below.
+		callRunner.mockResolvedValue({ cmd: "git log", output: "abc123 fix thing", pathApplied: true });
 		const r = await tool("repo_git").handler(ctx(), { cmd: "log", n: 5, path: "src" });
 		expect(callRunner).toHaveBeenCalledWith(
 			FAKE_CONN,
@@ -283,5 +285,127 @@ describe("repo-local — an empty answer is diagnosed, not shrugged at (#405)", 
 		const r = await tool("repo_tree").handler(ctx(), {});
 		expect(r.success).toBe(true);
 		expect(callRunner.mock.calls.some((c: unknown[]) => c[1] === "/coding/repo-check")).toBe(false);
+	});
+});
+
+describe("finding a file — the capability the connector never had (#508)", () => {
+	// Measured, Heartfull 2026-08-11 22:28: 18 tool calls in ONE turn, five of them repo_tree, and
+	// three failed reads — two of which passed a DIRECTORY to repo_read_file. There was no grep, no
+	// filename match and no content match anywhere in the connector or the runner, so locating a
+	// file meant walking the tree by hand and guessing when it ran out.
+
+	it("repo_find asks the runner for a path search and lists what it got", async () => {
+		callRunner.mockResolvedValue({ matches: [{ path: "admin/lib/features/events/ui/pages/event_form_dialog.dart" }], shown: 1, total: 1, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "event_form" });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("event_form_dialog.dart");
+		const [, path, body] = callRunner.mock.calls[0];
+		expect(path).toBe("/coding/search");
+		expect(body).toMatchObject({ pattern: "event_form", mode: "path" });
+	});
+
+	it("repo_grep asks for a CONTENT search and renders file:line: text", async () => {
+		callRunner.mockResolvedValue({ matches: [{ path: "src/a.ts", line: 42, text: "class EventFormDialog {}" }], shown: 1, total: 1, truncated: false });
+		const r = await tool("repo_grep").handler(ctx(), { pattern: "EventFormDialog" });
+		expect(r.content).toContain("src/a.ts:42: class EventFormDialog {}");
+		expect(callRunner.mock.calls[0][2]).toMatchObject({ mode: "content" });
+	});
+
+	it("says how much of the list it is NOT showing, rather than slicing bytes off the end", async () => {
+		// #503 is how a byte cap fails: the model gets an arbitrary prefix and no statement that a
+		// list was cut, so it concludes it has seen everything.
+		callRunner.mockResolvedValue({ matches: [{ path: "a.ts" }], shown: 1, total: 812, truncated: true });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "a" });
+		expect(r.content).toContain("showing 1 of 812");
+		expect(r.content).toContain("narrow with");
+	});
+
+	it("an empty result is a plain, honest answer — not an error", async () => {
+		callRunner.mockResolvedValue({ matches: [], shown: 0, total: 0, truncated: false });
+		const r = await tool("repo_grep").handler(ctx(), { pattern: "nope" });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("no match");
+	});
+
+	it("requires a pattern rather than searching for everything", async () => {
+		const r = await tool("repo_find").handler(ctx(), { pattern: "  " });
+		expect(r.success).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("tells the owner his runner is too old instead of surfacing a raw 404", async () => {
+		// The runner ships inside the published CLI, so this endpoint reaches a machine only after
+		// a version bump and a CI publish. An older machine 404s, and a raw
+		// "Runner /coding/search → 404" is a message nobody can act on.
+		callRunner.mockRejectedValue(new Error("Runner /coding/search → 404: not found"));
+		const r = await tool("repo_find").handler(ctx(), { pattern: "x" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain(REPO_SEARCH_MIN_CLI);
+		expect(r.content).toContain("npm i -g @proagentstore/cli");
+	});
+
+	it("does NOT blame the CLI version for a real failure", async () => {
+		// The half that keeps the message trustworthy: if every error said "upgrade", the one that
+		// means it would be ignored.
+		callRunner.mockRejectedValue(new Error("Runner /coding/search → 500: boom"));
+		await expect(tool("repo_find").handler(ctx(), { pattern: "x" })).rejects.toThrow(/500/);
+	});
+});
+
+describe("a depth stop and a dropped path are both VISIBLE now (#508)", () => {
+	it("marks the folders repo_tree did not walk, and says the listing stopped", async () => {
+		// The mechanism: `truncated` was set by the ENTRY cap only, so a directory stopped by the
+		// DEPTH cap rendered exactly like an empty one — and the model read the leaf as the file it
+		// was after and called repo_read_file on a directory.
+		callRunner.mockResolvedValue({
+			entries: [
+				{ path: "admin/lib/features/events", type: "dir", deeper: true },
+				{ path: "admin/lib/main.dart", type: "file", size: 10 },
+			],
+			truncated: false,
+			truncatedByDepth: true,
+		});
+		const r = await tool("repo_tree").handler(ctx(), {});
+		expect(r.content).toContain("contents NOT listed");
+		expect(r.content).toContain("call repo_tree with path=admin/lib/features/events");
+		expect(r.content).toContain("they are not empty");
+	});
+
+	it("adds no note when nothing was cut", async () => {
+		callRunner.mockResolvedValue({ entries: [{ path: "a.ts", type: "file" }], truncated: false, truncatedByDepth: false });
+		const r = await tool("repo_tree").handler(ctx(), {});
+		expect(r.content).not.toContain("NOT listed");
+		expect(r.content).not.toContain("truncated");
+	});
+
+	it("states the depth ceiling and the search tools in the tool description", async () => {
+		// Step 1 of the fix, and the only step that works on the runner the owner has TODAY: the
+		// schema advertised `maxDepth` with no ceiling, so a model asking for 10 silently got 4.
+		const d = tool("repo_tree");
+		expect(d.description).toContain("repo_find");
+		expect(JSON.stringify(d.jsonSchema)).toContain("maximum 4");
+		expect(d.description).toMatch(/never treat such a folder as empty/i);
+	});
+
+	it("warns when the machine's runner silently ignored `path` on repo_git", async () => {
+		// An older runner returns no `pathApplied` at all. The output is then the WHOLE repository
+		// while the caller asked for one folder — before this it was relayed as a correct answer.
+		callRunner.mockResolvedValue({ cmd: "ls-files", output: "a.ts\nb.ts\n" });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "ls-files", path: "src" });
+		expect(r.content).toContain("ignored the `path` filter");
+		expect(r.content).toContain("WHOLE repository");
+	});
+
+	it("stays quiet on a current runner, including when it reports the path was the repo root", async () => {
+		// `pathApplied:false` from a NEW runner means the requested path resolved to the root, where
+		// the whole repo IS the right answer. Only an ABSENT field means "your machine is old".
+		callRunner.mockResolvedValue({ cmd: "ls-files", output: "a.ts\n", pathApplied: true });
+		expect((await tool("repo_git").handler(ctx(), { cmd: "ls-files", path: "src" })).content).not.toContain("ignored");
+		callRunner.mockResolvedValue({ cmd: "ls-files", output: "a.ts\n", pathApplied: false });
+		expect((await tool("repo_git").handler(ctx(), { cmd: "ls-files", path: "." })).content).not.toContain("ignored");
+	});
+
+	it("says `path` applies to every command, because now it does", async () => {
+		expect(JSON.stringify(tool("repo_git").jsonSchema)).toContain("Applies to every command");
 	});
 });

@@ -417,7 +417,7 @@ describe("0108 — the Lead can propose a direction, the Repo Coder can read CI 
 		// regains a second way to drive its engine (#154/#209).
 		const last = effectiveWholeCapabilities("coder-repo");
 		expect(last?.file, "the pin below names the migration that must be re-checked when it moves").toBe(
-			"0120_coder_issue_mutation_tools.sql",
+			"0121_repo_search_tools.sql",
 		);
 		const caps = last?.caps as { surfaceOptions?: { coding?: Record<string, unknown> } };
 		expect(caps.surfaceOptions?.coding).toEqual({ repos: "single", drive: false, copilot: false });
@@ -667,5 +667,56 @@ describe("0120 — an agent that can OPEN an issue can follow it up (#507)", () 
 	it("grants the issue writes to nobody else — repo-chat stays knowledge-only", () => {
 		const { tools } = effectiveDeclared("repo-chat");
 		expect(tools.filter((n) => n.startsWith("github_"))).toEqual([]);
+	});
+});
+
+
+describe("0121 — the Repo Coder can FIND a file (#508)", () => {
+	it("declares the two search tools on both repo-local agents", () => {
+		// `capabilities.tools` is an AUTHORITATIVE allowlist, so a connector tool no agent names is
+		// a tool no agent has — silently. Without this migration `repo_find` and `repo_grep` would
+		// ship complete and unreachable, which is the exact class #444 built its guard for.
+		for (const slug of ["coder-repo", "local-repo-chat"]) {
+			const { tools } = effectiveDeclared(slug);
+			expect(tools, `${slug} repo_find`).toContain("repo_find");
+			expect(tools, `${slug} repo_grep`).toContain("repo_grep");
+		}
+	});
+
+	it("keeps every tool 0120 granted — a whole-object set drops what it does not restate", () => {
+		// The trap 0108 wrote down after 0107 lost `set_direction` exactly this way, and the reason
+		// the pin above exists. 0121 is another whole-object set over coder-repo.
+		const repo = effectiveDeclared("coder-repo").tools;
+		for (const n of [
+			"repo_tree", "repo_read_file", "repo_git", "repo_remote",
+			"github_list_issues", "github_read_issue", "github_create_issue",
+			"github_list_pulls", "github_read_pull", "github_workflow_runs",
+			"github_comment_issue", "github_update_issue",
+		]) {
+			expect(repo, n).toContain(n);
+		}
+		// local-repo-chat keeps its original four (0066), which are its whole surface.
+		const chat = effectiveDeclared("local-repo-chat").tools;
+		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote"]) expect(chat, n).toContain(n);
+	});
+
+	it("does NOT give them to the agents that reach code through an Engine instead", () => {
+		// `coder` and `coder-lead` declare no repo_* tool at all — they do not use this connector,
+		// so a search tool with no companion read tools would be noise in their prompt.
+		for (const slug of ["coder", "coder-lead"]) {
+			const { tools } = effectiveDeclared(slug);
+			expect(tools, slug).not.toContain("repo_find");
+			expect(tools, slug).not.toContain("repo_grep");
+		}
+	});
+
+	it("passes the validator the create/update routes apply, like every seeded object", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0121_repo_search_tools.sql"), "utf8");
+		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
+		expect(objs.length, "0121 no longer re-sets two whole capabilities objects").toBe(2);
+		for (const m of objs) {
+			const caps = JSON.parse(m[1]) as Record<string, unknown>;
+			expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+		}
 	});
 });
