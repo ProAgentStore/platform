@@ -474,3 +474,67 @@ describe("declared board vocabularies are fully claimed by the canonical buckete
 		}
 	});
 });
+
+describe("0119 — the Lead can FILE an issue, not just read one (#506)", () => {
+	// The Lead was asked to file a GitHub issue, said it could not, fell back to `delegate_goal`,
+	// and — when that failed for an unrelated reason (the repo's single-flight) — wrote the bug
+	// report into `write_memory` with a promise to file it later. Nothing enforces such a promise.
+	// Production agreed with the agent: `github_create_issue` read `not_declared` on that instance.
+	//
+	// Worth stating once, because it is why THIS file carries the assertion and not
+	// `tool-reachability.test.ts`: that guard's question is "does SOME agent declare this tool",
+	// and `coder-repo` declares `github_create_issue`, so it was green throughout. A per-agent gap
+	// is invisible to a catalog-wide denominator.
+	it("the Lead declares github_create_issue, and toolNamesFor therefore grants it", async () => {
+		const { toolNamesFor } = await import("../agent-do-tools.js");
+		const { tools } = effectiveDeclared("coder-lead");
+		expect(tools).toContain("github_create_issue");
+		// Declaration is necessary, not sufficient — a name outside CREATOR_SELECTABLE_TOOLS is
+		// declared and still invisible. Same second leg as 0107/0108.
+		expect(toolNamesFor({ surfaces: [], runtime: null, workflow: null, tools } as never).has("github_create_issue")).toBe(true);
+	});
+
+	it("keeps everything the Lead could already do — 0119 restates the whole object", () => {
+		// The realistic way this migration goes wrong. 0107 restated this exact object and lost
+		// `set_direction`; no tools assertion elsewhere would have noticed.
+		const { tools } = effectiveDeclared("coder-lead");
+		for (const n of [
+			"list_subordinates",
+			"subordinate_status",
+			"delegate_goal",
+			"check_delegation",
+			"github_list_issues",
+			"github_read_issue",
+			"github_list_pulls",
+			"github_read_pull",
+			"transfer_conversation",
+			"set_direction",
+		]) {
+			expect(tools, n).toContain(n);
+		}
+	});
+
+	it("the Lead stays cloud-only — filing an issue is not a reason to grow a runtime", () => {
+		// A whole-object set can drop or change `runtime`/`workflow`/`surfaces` as easily as a tool
+		// name, and the Lead having neither is what makes it a delegator rather than a doer.
+		const last = effectiveWholeCapabilities("coder-lead");
+		expect(last?.caps.runtime, `${last?.file} gave the Lead a runtime`).toBeNull();
+		expect(last?.caps.workflow, `${last?.file} gave the Lead a workflow`).toBeNull();
+		expect(last?.caps.surfaces, `${last?.file} gave the Lead a console surface`).toEqual([]);
+	});
+
+	it("passes the validator the create/update routes apply, like every seeded object", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0119_coder_lead_file_issues.sql"), "utf8");
+		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
+		expect(objs.length, "0119 no longer re-sets a whole capabilities object").toBe(1);
+		const caps = JSON.parse(objs[0][1]) as Record<string, unknown>;
+		expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+	});
+
+	it("touches only coder-lead — no other agent gains a GitHub write by this migration", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0119_coder_lead_file_issues.sql"), "utf8");
+		expect(sql).toContain("WHERE slug = 'coder-lead'");
+		expect(sql).not.toMatch(/slug\s+IN\s*\(/i);
+		expect([...sql.matchAll(/WHERE slug = '/g)].length).toBe(1);
+	});
+});
