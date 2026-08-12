@@ -3,7 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
-interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null }
+// `context` is the FIRST occurrence's sample and `last_context` the most recent one, on a row that
+// collapsed repeats into itself (#538). Rendering only `context` under a `47×` count is how a
+// reader mistakes an hours-old measurement for the latest — which is what happened on 2026-08-12.
+interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null; last_context?: string | null; repeat_count?: number | null; last_seen_at?: string | null }
 interface Signature { key: string; source: string; sample: string; pattern: string; count: number; users: number; firstSeen: string; lastSeen: string; lastStatus: number | null; lastId: string }
 
 const RANGES = [{ v: "1", l: "24h" }, { v: "7", l: "7d" }, { v: "30", l: "30d" }, { v: "", l: "All" }];
@@ -125,17 +128,37 @@ export default function Errors() {
 function FeedRow({ e }: { e: RawErr }) {
 	const [open, setOpen] = useState(false);
 	const toggle = () => setOpen(!open);
+	const repeats = e.repeat_count ?? 1;
 	return (
 		<div className="border-b border-line/50 pb-1.5">
 			<button type="button" className="w-full text-left flex gap-2 text-xs text-muted cursor-pointer" onClick={toggle}>
 				<span>{e.created_at?.slice(5, 16)}</span>
 				<span className="text-accent">{e.source}</span>
 				{e.status != null && <span className={statusColor(e.status)}>{e.status}</span>}
+				{repeats > 1 && <span className="font-semibold text-ink">{repeats}× to {e.last_seen_at?.slice(5, 16)}</span>}
 				{e.user_id && <span className="truncate max-w-[140px]">{e.user_id}</span>}
 			</button>
 			<button type="button" className="w-full text-left break-words text-sm cursor-pointer" onClick={toggle}>{e.message}</button>
-			{open && e.context && <ContextBlock context={e.context} />}
+			{open && <Contexts e={e} />}
 		</div>
+	);
+}
+
+/**
+ * Both ends of a collapsed row, each labelled with WHICH occurrence it measured (#538).
+ *
+ * The count is not decoration: a `47×` row's `context` describes the occurrence that opened the
+ * bucket, possibly an hour before the one being investigated. Unlabelled, that reads as "the
+ * error's numbers" and a burst gets diagnosed from a single stale sample.
+ */
+function Contexts({ e }: { e: RawErr }) {
+	const repeats = e.repeat_count ?? 1;
+	if (!e.context && !e.last_context) return null;
+	return (
+		<>
+			{e.context && <ContextBlock label={repeats > 1 ? `First of ${repeats} · ${e.created_at?.slice(5, 16)}` : "Context"} context={e.context} />}
+			{e.last_context && <ContextBlock label={`Latest · ${e.last_seen_at?.slice(5, 16) ?? "most recent"}`} context={e.last_context} />}
+		</>
 	);
 }
 
@@ -173,7 +196,7 @@ function SignatureDrawer({ sig, qs, onClose }: { sig: Signature; qs: string; onC
 									{e.user_id && <span className="truncate max-w-[160px]">{e.user_id}</span>}
 								</div>
 								<div className="break-words mb-1">{e.message}</div>
-								{e.context && <ContextBlock context={e.context} />}
+								<Contexts e={e} />
 							</div>
 						))}
 					</div>
@@ -183,8 +206,13 @@ function SignatureDrawer({ sig, qs, onClose }: { sig: Signature; qs: string; onC
 	);
 }
 
-function ContextBlock({ context }: { context: string }) {
+function ContextBlock({ context, label }: { context: string; label?: string }) {
 	let pretty = context;
 	try { pretty = JSON.stringify(JSON.parse(context), null, 2); } catch { /* raw */ }
-	return <pre className="text-xs bg-paper border border-line rounded p-2 mt-1 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto font-mono text-muted">{pretty}</pre>;
+	return (
+		<div className="mt-1">
+			{label && <div className="text-2xs uppercase tracking-wide text-muted-soft">{label}</div>}
+			<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto font-mono text-muted">{pretty}</pre>
+		</div>
+	);
 }

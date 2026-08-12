@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listErrors, logError } from "./error-log.js";
+import { realSchemaD1 } from "./d1-sqlite.js";
+import { listErrors, logError, type ErrorRow } from "./error-log.js";
 import type { Env } from "../types.js";
 
 /**
@@ -275,5 +276,99 @@ describe("listErrors", () => {
 		await listErrors(env, { userId: "u1", source: "auth" });
 		expect(queries[0]).toContain("user_id = ?1");
 		expect(queries[0]).toContain("source = ?2");
+	});
+});
+
+/**
+ * The collapse, run against the REAL schema (#538).
+ *
+ * The stubs above answer "what SQL was issued". That is exactly the question this bug hid behind:
+ * the UPDATE was issued, it did change a row, and it still discarded ten of eleven measurements.
+ * The only assertion that could have caught it reads the surviving ROW back, so these execute the
+ * statements against the schema `workers/api/migrations` actually builds.
+ */
+describe("logError — a collapsed row keeps the first AND the latest sample (#538)", () => {
+	/** The row measured in production on 2026-08-12: 11 occurrences, one `frames` reading. */
+	const voice = {
+		source: "client:voice",
+		message: "voice turn discarded at end-of-turn — the live gate heard no words",
+		userId: "u1",
+	};
+	const rowsOf = (d1: ReturnType<typeof realSchemaD1>) =>
+		d1.sqlite.prepare("SELECT * FROM error_log").all() as unknown as ErrorRow[];
+
+	it("11 occurrences with drifting measurements keep BOTH ends, not 11 copies of the first", async () => {
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			for (let i = 0; i < 11; i++) {
+				await logError(env, { ...voice, context: { peakLevel: 0.664 - i / 100, frames: 244 + i, gateAlive: true } });
+			}
+			const rows = rowsOf(d1);
+			// Still ONE row: the burst protection #423 bought is untouched.
+			expect(rows).toHaveLength(1);
+			expect(rows[0].repeat_count).toBe(11);
+			// `context` is the occurrence that opened the bucket…
+			expect(JSON.parse(rows[0].context!)).toMatchObject({ peakLevel: 0.664, frames: 244 });
+			// …and the eleventh-and-last is no longer invisible.
+			const latest = JSON.parse(rows[0].last_context!) as { peakLevel: number; frames: number };
+			expect(latest.frames).toBe(254);
+			expect(latest.peakLevel).toBeCloseTo(0.564, 10);
+			// The point of the issue, stated as an assertion: whatever survived is not silently
+			// the first sample wearing the latest timestamp.
+			expect(rows[0].last_context).not.toBe(rows[0].context);
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("a row standing for ONE occurrence has no last_context, so a reader can tell the two apart", async () => {
+		// Criterion 2: a reader must never mistake a stale sample for the latest. `last_context IS
+		// NULL` is the row saying "there has only been one, and `context` is it".
+		const d1 = realSchemaD1();
+		try {
+			await logError({ DB: d1.DB } as unknown as Env, { ...voice, context: { peakLevel: 0.4 } });
+			const rows = rowsOf(d1);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].repeat_count).toBe(1);
+			expect(rows[0].last_context).toBeNull();
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("a newer build's fields reach the row even when it folds into an older one", async () => {
+		// #538 criterion 3, for the rows that CAN still fold — a server-side source carries no
+		// build, so #539's identity split does not apply to it. `gateSawWords` was added by #535
+		// hours after the rows it needed to appear on already existed; under the old UPDATE it
+		// would have read as "the field was never deployed".
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { source: "coding:session", message: "run died", context: { gateAlive: true } });
+			await logError(env, { source: "coding:session", message: "run died", context: { gateAlive: true, gateSawWords: true } });
+			const rows = rowsOf(d1);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].context).not.toContain("gateSawWords");
+			expect(JSON.parse(rows[0].last_context!)).toMatchObject({ gateSawWords: true });
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("listErrors returns the latest sample alongside the first", async () => {
+		// The column is worthless if the reader every consumer goes through (GET /v1/errors, MCP
+		// list_errors, the admin feed) does not select it.
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { ...voice, context: { peakLevel: 0.1 } });
+			await logError(env, { ...voice, context: { peakLevel: 0.9 } });
+			const [row] = await listErrors(env, { userId: "u1" });
+			expect(JSON.parse(row.context!)).toEqual({ peakLevel: 0.1 });
+			expect(JSON.parse(row.last_context!)).toEqual({ peakLevel: 0.9 });
+		} finally {
+			d1.close();
+		}
 	});
 });

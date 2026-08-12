@@ -3,7 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
-interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null }
+// `context` is the FIRST occurrence in a collapsed row, `last_context` the most recent (#538).
+interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null; last_context?: string | null; repeat_count?: number | null; last_seen_at?: string | null }
 interface Signature { key: string; source: string; sample: string; pattern: string; count: number; users: number; firstSeen: string; lastSeen: string; lastStatus: number | null; lastId: string }
 
 const statusColor = (s: number | null) => (s == null ? "text-muted" : s >= 500 ? "text-danger" : s >= 400 ? "text-warning" : "text-muted");
@@ -99,26 +100,36 @@ export default function ErrorSignature() {
 
 function OccurrenceRow({ e }: { e: RawErr }) {
 	const [open, setOpen] = useState(false);
+	const repeats = e.repeat_count ?? 1;
 	return (
 		<div className="bg-panel border border-line rounded-xl p-3 text-sm">
 			<div className="flex gap-2 text-xs text-muted mb-1">
 				<span>{e.created_at?.slice(0, 16)}</span>
 				{e.status != null && <span className={statusColor(e.status)}>{e.status}</span>}
+				{repeats > 1 && <span className="font-semibold text-ink">{repeats}× to {e.last_seen_at?.slice(0, 16)}</span>}
 				{e.user_id && <span className="truncate max-w-[160px]">{e.user_id}</span>}
 			</div>
 			<div className="break-words mb-1">{e.message}</div>
-			{e.context && (
+			{(e.context || e.last_context) && (
 				<>
 					<button type="button" onClick={() => setOpen(!open)} className="text-xs text-accent hover:underline">{open ? "Hide" : "Show"} context</button>
-					{open && <ContextBlock context={e.context} />}
+					{/* Labelled by occurrence: a collapsed row's `context` is the sample that opened the
+					    bucket, not the one being investigated (#538). */}
+					{open && e.context && <ContextBlock label={repeats > 1 ? `First of ${repeats}` : "Context"} context={e.context} />}
+					{open && e.last_context && <ContextBlock label="Latest occurrence" context={e.last_context} />}
 				</>
 			)}
 		</div>
 	);
 }
 
-function ContextBlock({ context }: { context: string }) {
+function ContextBlock({ context, label }: { context: string; label?: string }) {
 	let pretty = context;
 	try { pretty = JSON.stringify(JSON.parse(context), null, 2); } catch { /* raw */ }
-	return <pre className="text-xs bg-paper border border-line rounded p-2 mt-1 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto font-mono text-muted">{pretty}</pre>;
+	return (
+		<div className="mt-1">
+			{label && <div className="text-2xs uppercase tracking-wide text-muted-soft">{label}</div>}
+			<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto font-mono text-muted">{pretty}</pre>
+		</div>
+	);
 }

@@ -1,0 +1,28 @@
+-- A collapsed error row keeps the LATEST occurrence's context too (#538).
+--
+-- `collapseRepeat` (0103, #424) folds an identical failure into the row already recording it and
+-- bumps `repeat_count` + `last_seen_at`. It never touched `context`, so occurrences 2..N were
+-- counted and time-stamped and every measurement they carried was discarded. Measured 2026-08-12:
+-- one voice row stood for 11 discarded turns and carried a single `frames:244` reading. The other
+-- ten samples were measured by the client, accepted by the API, and dropped by that UPDATE. The
+-- diagnosis held only because the first sample happened to be unambiguous, and the questions that
+-- actually mattered — did the peak vary? was the gate dead throughout? — were unanswerable from a
+-- log that had physically recorded the answers.
+--
+-- `context` KEEPS its meaning: the first occurrence in the bucket. So no existing row is rewritten
+-- and no existing reader becomes wrong. `last_context` is the most recent occurrence, NULL until a
+-- second one lands — which is also how a reader tells a row that stands for one occurrence from a
+-- row that stands for eleven.
+--
+-- ── Why not collapse on the context as well
+--
+-- Because for the sources that actually repeat, the context IS a per-occurrence measurement:
+-- `captureDiagnostics` (packages/sdk/src/voice/vad.ts) emits `peakLevel`, `noiseFloor`, `frames`
+-- — floats that differ every turn. Putting that in the collapse key degenerates to one row per
+-- occurrence, which is exactly the flood #423 put 1809 rows of into this table. The build id
+-- (0125) is the opposite case and belongs in the key: it is constant for a tab, so it can add at
+-- most one bucket per deployed build.
+--
+-- Row volume is UNCHANGED by this migration: the same rows, one extra column on the repeated ones,
+-- bounded by the same 4000-character cap and the same 30-day retention sweep.
+ALTER TABLE error_log ADD COLUMN last_context TEXT;

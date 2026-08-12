@@ -54,19 +54,47 @@ export interface ErrorLogInput {
  * flood was 1809 rows of one distinct message, so exact matching is enough for the case that
  * motivated this.)
  *
+ * ## The absorbed occurrence's CONTEXT survives (#538)
+ *
+ * `context` is the FIRST occurrence's and stays that way; `last_context` is overwritten with the
+ * one being absorbed. Before this the UPDATE set only the counter and the timestamp, so a row
+ * reading `repeat_count: 11` carried ONE sample and eleven measurements had been taken, sent,
+ * accepted and then thrown away — the log was the only witness and it was quietly editing its own
+ * testimony. Keeping both ends is what makes "was it like this every time?" answerable, and it is
+ * the question a repeat count raises by existing.
+ *
+ * The context is deliberately NOT part of the identity above. For the sources that actually
+ * repeat, the context is a per-occurrence measurement (`peakLevel`, `frames`, …), so keying on it
+ * would mean never collapsing anything — reinstating #423's flood in the name of fixing it.
+ *
  * Returns true when an existing row absorbed the occurrence.
  */
-async function collapseRepeat(env: Env, e: ErrorLogInput, level: ErrorLevel, message: string, source: string): Promise<boolean> {
+async function collapseRepeat(
+	env: Env,
+	e: ErrorLogInput,
+	level: ErrorLevel,
+	message: string,
+	source: string,
+	context: string | null,
+): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE error_log
-		    SET repeat_count = repeat_count + 1, last_seen_at = datetime('now')
+		    SET repeat_count = repeat_count + 1, last_seen_at = datetime('now'), last_context = ?7
 		  WHERE id = (SELECT id FROM error_log
 		               WHERE source = ?1 AND message = ?2 AND level = ?3
 		                 AND status IS ?4 AND user_id IS ?5
 		                 AND created_at >= ?6
 		               ORDER BY created_at DESC LIMIT 1)`,
 	)
-		.bind(source, message, level, typeof e.status === "number" ? e.status : null, e.userId ?? null, sqlTime(Date.now() - COLLAPSE_WINDOW_MS))
+		.bind(
+			source,
+			message,
+			level,
+			typeof e.status === "number" ? e.status : null,
+			e.userId ?? null,
+			sqlTime(Date.now() - COLLAPSE_WINDOW_MS),
+			context,
+		)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }
@@ -80,6 +108,10 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 		const level: ErrorLevel = e.level === "warn" ? "warn" : "error";
 		const source = String(e.source).slice(0, 64);
 		const message = String(e.message ?? "").slice(0, 2000) || "(no message)";
+		// Serialized ONCE: the same bytes go to the INSERT's `context` (a new row's first
+		// occurrence) or to the UPDATE's `last_context` (an absorbed one's latest). Two
+		// stringify calls would be two chances for the two columns to mean different things.
+		const context = e.context ? JSON.stringify(e.context).slice(0, 4000) : null;
 		// A repeat is absorbed by the row already recording it AND does not mirror into the trace:
 		// #423 flooded `agent_events` with 1811 error events for the same reason it flooded this
 		// table, so collapsing only one of the two would leave the other unreadable.
@@ -89,7 +121,7 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 		// the failure mode if that assumption is ever wrong is total silence in the one component
 		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
 		// than no row.
-		if (await collapseRepeat(env, e, level, message, source).catch(() => false)) return;
+		if (await collapseRepeat(env, e, level, message, source, context).catch(() => false)) return;
 		await env.DB.prepare(
 			"INSERT INTO error_log (id, user_id, source, status, message, context, level, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
 		)
@@ -99,7 +131,7 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 				source,
 				typeof e.status === "number" ? e.status : null,
 				message,
-				e.context ? JSON.stringify(e.context).slice(0, 4000) : null,
+				context,
 				level,
 			)
 			.run();
@@ -148,7 +180,20 @@ export interface ErrorRow {
 	source: string;
 	status: number | null;
 	message: string;
+	/**
+	 * The FIRST occurrence's context — the one that opened this bucket, not the latest (#538).
+	 * When `repeat_count > 1`, read {@link ErrorRow.last_context} for the most recent sample.
+	 */
 	context: string | null;
+	/**
+	 * The MOST RECENT occurrence's context, once a second one has been absorbed (#538).
+	 *
+	 * Null means the row stands for a single occurrence — or that it was collapsed before
+	 * migration 0124. Never "the same as `context`, omitted": an occurrence that repeats
+	 * identically still writes its own bytes here, so equal columns is a measured statement that
+	 * nothing drifted rather than an absence someone has to interpret.
+	 */
+	last_context?: string | null;
 	/** `error` (a bug) or `warn` (recorded, not counted). See {@link ErrorLevel}. */
 	level?: ErrorLevel | null;
 	/** Occurrences this row stands for — 1 unless repeats were collapsed into it. */
@@ -165,7 +210,8 @@ export interface ErrorRow {
  * that finished hours ago. `COALESCE` covers a row written before migration 0103 backfilled it —
  * without it a NULL sorts LAST under `DESC` in SQLite, which is invisibility rather than staleness.
  */
-export const ERROR_COLUMNS = "id, created_at, user_id, source, status, message, context, level, repeat_count, last_seen_at";
+export const ERROR_COLUMNS =
+	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at";
 export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 
 /** Read recent errors — for one user, or all (admin). Newest first. */
