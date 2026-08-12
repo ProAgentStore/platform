@@ -42,6 +42,28 @@ export interface ErrorLogInput {
 	level?: ErrorLevel;
 	/** Structured extras: host, path, provider, instanceId, taskId, … */
 	context?: Record<string, unknown>;
+	/**
+	 * The build that produced this row (#539) — a short commit sha for a deployed browser bundle,
+	 * `dev` for one built on a developer's machine, `unset` for a client that declares nothing.
+	 *
+	 * Absent for server-side callers: the API Worker does not stamp its own build (it has no build
+	 * var), so NULL here reads as "written by the server, or by a bundle predating #539".
+	 */
+	build?: string | null;
+}
+
+/**
+ * The build id as it is allowed into the log — or undefined (#539).
+ *
+ * This value reaches a WHERE clause and a UI, and it arrives from an unauthenticated POST body, so
+ * it is narrowed to the shape a build id actually has. Not for injection (the SQL is
+ * parameterized), but because an attacker who can write 2000 arbitrary characters into the collapse
+ * key can defeat the collapse — which is the flood #423 filled this table with, on demand.
+ */
+export function sanitizeBuildId(raw: unknown): string | undefined {
+	if (typeof raw !== "string") return undefined;
+	const clean = raw.trim().replace(/[^A-Za-z0-9._-]/g, "").slice(0, 64);
+	return clean || undefined;
 }
 
 /**
@@ -67,6 +89,17 @@ export interface ErrorLogInput {
  * repeat, the context is a per-occurrence measurement (`peakLevel`, `frames`, …), so keying on it
  * would mean never collapsing anything — reinstating #423's flood in the name of fixing it.
  *
+ * ## The BUILD is part of the identity (#539)
+ *
+ * Two builds can never share a row. A post-fix occurrence folding into a pre-fix bucket is the one
+ * case where "is this still happening?" has a different answer from "is there a row?", and it is
+ * the case that cost a full re-investigation on 2026-08-12. Keeping the build in `context` instead
+ * would have been eaten by the very collapse this clause fixes — #538 keeps the latest sample, but
+ * a reader looking at a row's identity would still see one bucket spanning a deploy.
+ *
+ * Safe for volume in a way the context is not: a build id is constant for a tab, so it adds at
+ * most one bucket per signature per deployed build.
+ *
  * Returns true when an existing row absorbed the occurrence.
  */
 async function collapseRepeat(
@@ -76,6 +109,7 @@ async function collapseRepeat(
 	message: string,
 	source: string,
 	context: string | null,
+	build: string | null,
 ): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE error_log
@@ -83,7 +117,7 @@ async function collapseRepeat(
 		  WHERE id = (SELECT id FROM error_log
 		               WHERE source = ?1 AND message = ?2 AND level = ?3
 		                 AND status IS ?4 AND user_id IS ?5
-		                 AND created_at >= ?6
+		                 AND created_at >= ?6 AND build IS ?8
 		               ORDER BY created_at DESC LIMIT 1)`,
 	)
 		.bind(
@@ -94,6 +128,7 @@ async function collapseRepeat(
 			e.userId ?? null,
 			sqlTime(Date.now() - COLLAPSE_WINDOW_MS),
 			context,
+			build,
 		)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
@@ -112,6 +147,7 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 		// occurrence) or to the UPDATE's `last_context` (an absorbed one's latest). Two
 		// stringify calls would be two chances for the two columns to mean different things.
 		const context = e.context ? JSON.stringify(e.context).slice(0, 4000) : null;
+		const build = sanitizeBuildId(e.build) ?? null;
 		// A repeat is absorbed by the row already recording it AND does not mirror into the trace:
 		// #423 flooded `agent_events` with 1811 error events for the same reason it flooded this
 		// table, so collapsing only one of the two would leave the other unreadable.
@@ -121,9 +157,9 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 		// the failure mode if that assumption is ever wrong is total silence in the one component
 		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
 		// than no row.
-		if (await collapseRepeat(env, e, level, message, source, context).catch(() => false)) return;
+		if (await collapseRepeat(env, e, level, message, source, context, build).catch(() => false)) return;
 		await env.DB.prepare(
-			"INSERT INTO error_log (id, user_id, source, status, message, context, level, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
 		)
 			.bind(
 				crypto.randomUUID(),
@@ -133,6 +169,7 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 				message,
 				context,
 				level,
+				build,
 			)
 			.run();
 		// Mirror into the unified trace so failures appear inline in agent_trace next to
@@ -200,6 +237,14 @@ export interface ErrorRow {
 	repeat_count?: number | null;
 	/** Most recent occurrence. Null only on a row written before migration 0103. */
 	last_seen_at?: string | null;
+	/**
+	 * The build that wrote this row (#539) — a short sha, `dev`, or `unset`.
+	 *
+	 * Part of the collapse identity, so this is the build of EVERY occurrence the row stands for,
+	 * not just the first. Null on a server-side row (the Worker does not stamp its own build) or
+	 * on one written by a browser bundle predating #539.
+	 */
+	build?: string | null;
 }
 
 /**
@@ -211,7 +256,7 @@ export interface ErrorRow {
  * without it a NULL sorts LAST under `DESC` in SQLite, which is invisibility rather than staleness.
  */
 export const ERROR_COLUMNS =
-	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at";
+	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at, build";
 export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 
 /** Read recent errors — for one user, or all (admin). Newest first. */

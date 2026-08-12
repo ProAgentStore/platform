@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1 } from "./d1-sqlite.js";
-import { listErrors, logError, type ErrorRow } from "./error-log.js";
+import { listErrors, logError, sanitizeBuildId, type ErrorRow } from "./error-log.js";
 import type { Env } from "../types.js";
 
 /**
@@ -370,5 +370,104 @@ describe("logError — a collapsed row keeps the first AND the latest sample (#5
 		} finally {
 			d1.close();
 		}
+	});
+});
+
+/**
+ * The build id, in the row and in the collapse identity (#539).
+ *
+ * Criterion 2 of the issue names this as the part that must not be skipped: a build living only in
+ * `context` is dropped the moment a post-fix occurrence folds into a pre-fix bucket, which is
+ * precisely the row a reader is interrogating when they ask whether a deploy landed.
+ */
+describe("logError — two builds never share a row (#539)", () => {
+	const voice = { source: "client:voice", message: "voice turn discarded at end-of-turn", userId: "u1" };
+	const rowsOf = (d1: ReturnType<typeof realSchemaD1>) =>
+		d1.sqlite.prepare("SELECT * FROM error_log ORDER BY build").all() as unknown as ErrorRow[];
+
+	it("the same failure from a pre-fix and a post-fix bundle produces TWO rows", async () => {
+		// The 2026-08-12 shape: the tab kept reporting after the fix deployed. One bucket would have
+		// read as "the fix did not work"; two rows say "one bundle stopped and another did not".
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { ...voice, build: "9fb7cd6ab123" });
+			await logError(env, { ...voice, build: "9fb7cd6ab123" });
+			await logError(env, { ...voice, build: "a1fe58bcd456" });
+			const rows = rowsOf(d1);
+			expect(rows.map((r) => [r.build, r.repeat_count])).toEqual([
+				["9fb7cd6ab123", 2],
+				["a1fe58bcd456", 1],
+			]);
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("a build-carrying occurrence does not fold into a row that has none", async () => {
+		// The migration boundary itself: rows written before #539 have `build IS NULL`, and a
+		// browser that has since reloaded reports one. `build IS ?8` is what keeps `IS NULL` from
+		// silently matching every new occurrence for the rest of the hour.
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, voice);
+			await logError(env, { ...voice, build: "a1fe58bcd456" });
+			// `ORDER BY build` sorts NULL first in SQLite — the pre-#539 row, then the reloaded tab's.
+			expect(rowsOf(d1).map((r) => r.build)).toEqual([null, "a1fe58bcd456"]);
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("keeps collapsing repeats from ONE build, so the flood protection survives", async () => {
+		// The whole risk of widening a collapse key is that it stops collapsing. A build is constant
+		// for a tab, so 40 occurrences from one bundle are still one row.
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			for (let i = 0; i < 40; i++) await logError(env, { ...voice, build: "dev" });
+			const rows = rowsOf(d1);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].repeat_count).toBe(40);
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("listErrors returns the build, so it is readable without decoding context", async () => {
+		// Criterion 3. `list_errors` (MCP) and the admin feed both read through these columns.
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { ...voice, build: "a1fe58bcd456" });
+			const [row] = await listErrors(env, { userId: "u1" });
+			expect(row.build).toBe("a1fe58bcd456");
+			// And it is NOT smuggled into context, where #538's collapse would have eaten it.
+			expect(row.context).toBeNull();
+		} finally {
+			d1.close();
+		}
+	});
+});
+
+describe("sanitizeBuildId", () => {
+	it("keeps a sha, a dev marker and an unset marker", () => {
+		expect(sanitizeBuildId("a1fe58bcd456")).toBe("a1fe58bcd456");
+		expect(sanitizeBuildId("dev")).toBe("dev");
+		expect(sanitizeBuildId("unset")).toBe("unset");
+		expect(sanitizeBuildId("v1.2.3-rc.1")).toBe("v1.2.3-rc.1");
+	});
+
+	it("drops anything that is not a build id", () => {
+		// The value arrives on an UNAUTHENTICATED POST and lands in a WHERE clause. The risk is not
+		// injection (the statement is parameterized) — it is that a caller who can write arbitrary
+		// bytes into the collapse key can make every occurrence unique and reinstate #423's flood.
+		expect(sanitizeBuildId(undefined)).toBeUndefined();
+		expect(sanitizeBuildId(null)).toBeUndefined();
+		expect(sanitizeBuildId(42)).toBeUndefined();
+		expect(sanitizeBuildId("   ")).toBeUndefined();
+		expect(sanitizeBuildId("' OR 1=1 --")).toBe("OR11--");
+		expect(sanitizeBuildId("x".repeat(200))).toHaveLength(64);
 	});
 });

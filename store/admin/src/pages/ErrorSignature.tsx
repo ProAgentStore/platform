@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
 // `context` is the FIRST occurrence in a collapsed row, `last_context` the most recent (#538).
-interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null; last_context?: string | null; repeat_count?: number | null; last_seen_at?: string | null }
+interface RawErr { id: string; created_at: string; user_id: string | null; source: string; status: number | null; message: string; context: string | null; last_context?: string | null; repeat_count?: number | null; last_seen_at?: string | null; build?: string | null }
 interface Signature { key: string; source: string; sample: string; pattern: string; count: number; users: number; firstSeen: string; lastSeen: string; lastStatus: number | null; lastId: string }
 
 const statusColor = (s: number | null) => (s == null ? "text-muted" : s >= 500 ? "text-danger" : s >= 400 ? "text-warning" : "text-muted");
@@ -107,6 +107,8 @@ function OccurrenceRow({ e }: { e: RawErr }) {
 				<span>{e.created_at?.slice(0, 16)}</span>
 				{e.status != null && <span className={statusColor(e.status)}>{e.status}</span>}
 				{repeats > 1 && <span className="font-semibold text-ink">{repeats}× to {e.last_seen_at?.slice(0, 16)}</span>}
+				{/* The build that reported it (#539); part of the row's collapse identity. */}
+				{e.build && <span className="font-mono text-muted-soft">{e.build}</span>}
 				{e.user_id && <span className="truncate max-w-[160px]">{e.user_id}</span>}
 			</div>
 			<div className="break-words mb-1">{e.message}</div>

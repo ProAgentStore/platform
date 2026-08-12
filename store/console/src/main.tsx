@@ -1,8 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { isConnectivityError, reportClientError } from "@proagentstore/sdk/client";
+import { isConnectivityError, reportClientError, setClientBuild } from "@proagentstore/sdk/client";
 import App from "./App";
 import "./index.css";
+
+// FIRST, before any handler below can fire: every error this bundle reports names the build that
+// produced it (#539). Without it a row from a tab that was opened before a deploy is
+// indistinguishable from the same failure recurring after one — which on 2026-08-12 read as "the
+// fix did not work" twice and cost a full re-investigation of a bug that was already deployed.
+setClientBuild(__BUILD__);
 
 // Full observability: mirror uncaught browser errors + unhandled promise rejections
 // into the durable server error log so they're visible via MCP list_errors, not just

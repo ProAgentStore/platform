@@ -13,9 +13,51 @@ beforeEach(() => {
 	(globalThis as unknown as { fetch: unknown }).fetch = vi.fn().mockResolvedValue({ ok: true });
 });
 
-import { api, isConnectivityError, reportClientError, setToken } from "./client.js";
+import { api, clientBuild, isConnectivityError, reportClientError, setClientBuild, setToken } from "./client.js";
 
 const mockFetch = () => (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+
+describe("the reported build (#539)", () => {
+	// Every test in this file shares one module instance, so the build set here leaks into the
+	// ones after it. Pin it back to the shipped default rather than leaving the last value set.
+	beforeEach(() => setClientBuild(null));
+
+	it("reports `unset` until an app declares one — never an empty string", () => {
+		// An empty string, or a missing field, is indistinguishable from a bundle that predates
+		// this reporting entirely. `unset` says "this bundle can report a build and was not told
+		// one", which is a different bug from "this tab is running last week's JavaScript".
+		expect(clientBuild()).toBe("unset");
+		reportClientError("voice", "no-build-declared");
+		const [, init] = mockFetch().mock.calls[0] as [string, RequestInit];
+		expect(JSON.parse(init.body as string).build).toBe("unset");
+	});
+
+	it("sends the declared build TOP-LEVEL, not inside context", () => {
+		// Top-level because it joins the row's collapse identity server-side. A build id in
+		// `context` is dropped the moment a post-fix occurrence folds into a pre-fix row — the
+		// exact case it exists to expose.
+		setClientBuild("a1fe58bcd456");
+		reportClientError("voice", "with-a-build", { peakLevel: 0.6 });
+		const [, init] = mockFetch().mock.calls[0] as [string, RequestInit];
+		const body = JSON.parse(init.body as string);
+		expect(body.build).toBe("a1fe58bcd456");
+		expect(body.context).toEqual({ peakLevel: 0.6 });
+	});
+
+	it("keeps `dev` — the honest answer off CI, where there is no sha", () => {
+		setClientBuild("dev");
+		expect(clientBuild()).toBe("dev");
+	});
+
+	it("falls back to `unset` for a value that is not a build id", () => {
+		setClientBuild("   ");
+		expect(clientBuild()).toBe("unset");
+		setClientBuild("a1fe58b\nOR 1=1");
+		expect(clientBuild()).toBe("a1fe58bOR11");
+		setClientBuild("x".repeat(200));
+		expect(clientBuild()).toHaveLength(64);
+	});
+});
 
 describe("reportClientError", () => {
 	// This test previously asserted the OPPOSITE — "does nothing when signed out (nothing to

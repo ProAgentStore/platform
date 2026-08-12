@@ -1,7 +1,7 @@
 /** GET /v1/errors — read back the durable error log (see lib/error-log.ts). */
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { listErrors, logError } from "../lib/error-log.js";
+import { listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
 import type { Env } from "../types.js";
 
 export const errorRoutes = new Hono<{ Bindings: Env }>();
@@ -42,6 +42,10 @@ errorRoutes.post("/client", async (c) => {
 		// carries no status and is a real error. Letting the client name its own level would make
 		// the field meaningless the first time a caller passed the wrong one.
 		level: status !== undefined && status >= 400 && status < 500 ? "warn" : "error",
+		// The bundle that reported it (#539). Trusted the way a User-Agent is: it identifies the
+		// build for a diagnosis, it authorizes nothing, and it is narrowed to a build id's shape
+		// before it reaches the collapse key. Absent = a bundle that predates this field.
+		build: sanitizeBuildId(body.build),
 		message,
 		context: body.context && typeof body.context === "object" ? (body.context as Record<string, unknown>) : undefined,
 	});

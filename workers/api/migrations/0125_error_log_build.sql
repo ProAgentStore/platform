@@ -1,0 +1,34 @@
+-- Which BUILD wrote this error row (#539).
+--
+-- On 2026-08-12 a voice bug was diagnosed, fixed and deployed at 09:31:47Z, and the owner then
+-- reported it still happening — twice, the second time 27 minutes after the deploy. Both rounds
+-- were one never-reloaded tab running pre-fix JavaScript. Establishing that took a full
+-- re-investigation: a provenance check on the served bundle, a `git show` against the pre-fix
+-- source, and a reachability proof that the fixed code CANNOT emit that message string.
+--
+-- That last step is the only reason it was answerable, and it was luck: the fix happened to remove
+-- the message's reachability. Any fix that keeps its message text produces a row indistinguishable
+-- from an unfixed bug, and nothing in this table said which build wrote it.
+--
+-- ── Why a column, and why it joins the collapse identity
+--
+-- A build id living in `context` would be dropped by `collapseRepeat` on exactly the rows where it
+-- matters most — a post-fix occurrence folding into a pre-fix bucket. #538 fixed half of that by
+-- keeping the latest sample; this fixes the other half by making two builds unable to share a row
+-- at all. A bucket now means "this failure, from this build", which is the unit a reader is
+-- actually asking about when they ask whether a fix landed.
+--
+-- A column rather than a JSON field so `list_errors` and the admin feed show it without anyone
+-- decoding `context` by hand.
+--
+-- ── Volume
+--
+-- The build is CONSTANT for a tab: it changes only when a deploy is followed by a reload. So it
+-- adds at most one bucket per signature per deployed build — the opposite of the context, which is
+-- a per-occurrence measurement and is deliberately kept OUT of the key (see 0124).
+--
+-- NULL means the row was written by the server (which does not stamp its own build — the API
+-- Worker has no build var, and that is a separate change) or by a browser bundle predating this.
+-- A client that declares nothing sends the literal 'unset', which is how a stale bundle and a
+-- silent one stay distinguishable.
+ALTER TABLE error_log ADD COLUMN build TEXT;

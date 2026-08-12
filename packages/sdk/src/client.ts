@@ -30,6 +30,35 @@ export function setToken(t: string | null) {
 }
 
 /**
+ * The build this bundle was made from, as reported on every client error row (#539).
+ *
+ * `unset` until an app declares itself — deliberately a WORD, not an empty string and not a
+ * plausible-looking id. Three states, all honest and none mistakable for a commit sha:
+ *
+ *   • a short sha  — a bundle built by CI, i.e. something deployed
+ *   • `dev`        — built on a developer's machine, where there is no sha to report
+ *   • `unset`      — a bundle that never declared one (and NULL server-side means a bundle
+ *                    predating this field entirely, which is itself the answer to "is this tab
+ *                    running old JavaScript?")
+ *
+ * Declared by the app rather than inlined here on purpose: this module ships as compiled `dist`
+ * and is consumed by whatever bundles it, so a build-time `define` reaching in would be a
+ * different mechanism per consumer. `setClientBuild` is one mechanism, and it is testable.
+ */
+let _build = "unset";
+
+/** Declare the build this bundle was made from. Call it once, at the app entry, before render. */
+export function setClientBuild(id: string | null | undefined): void {
+	const clean = typeof id === "string" ? id.trim().replace(/[^A-Za-z0-9._-]/g, "").slice(0, 64) : "";
+	_build = clean || "unset";
+}
+
+/** The build id this bundle reports — see {@link setClientBuild}. */
+export function clientBuild(): string {
+	return _build;
+}
+
+/**
  * Best-effort client-error reporter → the durable server error log, so browser
  * failures (voice errors, unhandled exceptions, failed calls) are visible via
  * GET /v1/errors and MCP list_errors — not just the user's DevTools console.
@@ -56,7 +85,10 @@ export function reportClientError(source: string, message: string, context?: Rec
 			method: "POST",
 			keepalive: true,
 			headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: JSON.stringify({ source: String(source).slice(0, 40), message: String(message).slice(0, 2000), status, context }),
+			// `build` is top-level, not folded into `context`: it is part of the row's collapse
+			// identity server-side (#539), and a build id living only in `context` is exactly what
+			// a fold discards. It also has to be readable in `list_errors` without decoding JSON.
+			body: JSON.stringify({ source: String(source).slice(0, 40), message: String(message).slice(0, 2000), status, context, build: _build }),
 		}).catch(() => {});
 	} catch { /* reporting must never throw */ }
 }

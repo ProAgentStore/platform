@@ -834,6 +834,43 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(res.headers()["cache-control"], "workers/host serves CONSOLE_HEADERS (no-store) for /console/ — the fixture must agree").toBe("no-store");
 	});
 
+	/**
+	 * The build id, proved through the REAL bundle (#539).
+	 *
+	 * The chain is three links in three packages — `define: { __BUILD__ }` in
+	 * `store/console/vite.config.ts`, `setClientBuild(__BUILD__)` in `main.tsx`, and the payload
+	 * `packages/sdk/src/client.ts` POSTs — and a unit test can hold at most one of them. Removing
+	 * the `define` does not fail a unit test; it fails HERE, because this runs against the bundle
+	 * `console-server.mjs` actually built.
+	 *
+	 * The trigger is the real global handler `main.tsx` installs, so this exercises the shipping
+	 * reporting path rather than a test-only entry point. Every request to the API is intercepted:
+	 * that endpoint is production's durable error log, and an e2e run must never write to it.
+	 */
+	test("a client error row names the build that produced it (#539)", async ({ page }) => {
+		const reports: Array<Record<string, unknown>> = [];
+		await page.route(`${API}/**`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+		await page.route(`${API}/v1/errors/client`, async (route) => {
+			reports.push(JSON.parse(route.request().postData() || "{}") as Record<string, unknown>);
+			await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+		});
+
+		await page.goto("/console/");
+		await expect(page.getByRole("heading", { name: "Creator Console" })).toBeVisible();
+		await page.evaluate(() => {
+			window.dispatchEvent(new ErrorEvent("error", { message: "e2e build probe", error: new Error("e2e build probe") }));
+		});
+
+		await expect.poll(() => reports.length, { message: "the global error handler must report to /v1/errors/client" }).toBeGreaterThan(0);
+		const build = reports[0].build;
+		// A commit sha when CI built it (GITHUB_SHA, short), `dev` when a developer did. Never an
+		// empty string, and never `unset` — `unset` is the SDK's default and means the app forgot
+		// to declare itself, which is the wiring this test exists to catch.
+		expect(typeof build, "the report carries a top-level build, not one buried in context").toBe("string");
+		expect(build).not.toBe("unset");
+		expect(String(build)).toMatch(/^(dev|[0-9a-f]{7,64})$/);
+	});
+
 	test("signed-in creator console shows agents grid", async ({ page }) => {
 		await mockSignedInConsole(page, {
 			agents: [
