@@ -13,6 +13,7 @@ import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
 import Terminals from "./pages/Terminals";
 import Usage from "./pages/Usage";
+import Feedback from "./pages/Feedback";
 import Preferences from "./pages/Preferences";
 import RunDetail from "./pages/RunDetail";
 import { resolveDefaultRoute } from "./lib/lastRoute";
@@ -55,6 +56,7 @@ function AuthGate() {
 				<Route path="tools" element={<Dashboard />} />
 				<Route path="terminals" element={<Terminals />} />
 				<Route path="usage" element={<Usage />} />
+				<Route path="feedback" element={<Feedback />} />
 				<Route path="preferences" element={<Preferences />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />

@@ -4078,6 +4078,101 @@ test.describe("mobile — the message actions clear the timestamp (#426, #514)",
 });
 
 /**
+ * The feedback READ surface (#514) — the half that turns collection into "file the tickets better".
+ *
+ * Two properties, both of which the issue names as the point of the feature:
+ *
+ *   – the tab exists on EVERY agent, including one that declares `surfaces: []`. Gating it on
+ *     capabilities would hide it exactly where a new agent type most needs it, and #509 (landed the
+ *     day before) is the freshly-paid-for lesson about surfaces buried one level down.
+ *   – a row gets you to the conversation AND to what the agent actually ran. Without those two it
+ *     is a suggestion box; with them it is the manual sequence that produced #503–#505, minus the
+ *     archaeology.
+ */
+test.describe("feedback is readable per agent and across the account (#514)", () => {
+	const ROW = {
+		id: "fb-1",
+		ts: Date.parse("2026-08-11T01:57:59.126Z"),
+		created_at: "2026-08-11 01:58:00",
+		instance_id: "inst-1",
+		author: "user",
+		surface: "chat",
+		sentiment: "bad",
+		body: "It said it deployed but the run never started.",
+		trace_id: "trace-1",
+		message_id: "m2",
+		session_id: null,
+		timeline_seq: null,
+		target_role: "assistant",
+		target_text: "Done — the worker is live.",
+		target_at: "2026-08-11T01:57:59.126Z",
+		prompt_text: "Deploy the api worker",
+		context: JSON.stringify({ audioKey: "voice-1", dictation: "deploy the API worker", voiceFrom: "prompt" }),
+		status: "open",
+		issue_url: null,
+		updated_at: "2026-08-11 01:58:00",
+	};
+
+	test("the tab is on an agent that declares no surfaces at all, and shows the evidence", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			// `surfaces: []` — the Coder Lead's shape. Every OTHER tab this agent gets is universal
+			// too, which is exactly why a capability gate here would have been invisible until the
+			// first agent type that needed it had none.
+			instances: [{ id: "inst-1", name: "Coder Lead", slug: "coder-lead", category: "code", capabilities: { surfaces: [] } }],
+			feedback: [ROW],
+		});
+		await page.route("**/v1/instances/inst-1/trace**", (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					events: [
+						{ id: "e1", ts: 1, source: "chat", level: "info", event: "chat.in", message: "Deploy the api worker" },
+						{ id: "e2", ts: 2, source: "chat", level: "info", event: "tool.call", message: "deploy_repo(repo=api)" },
+						{ id: "e3", ts: 3, source: "chat", level: "warn", event: "chat.invented_result", message: "claimed a tool result nothing produced" },
+					],
+				}),
+			}),
+		);
+
+		await page.goto("/console/instances/inst-1/feedback");
+		await expect(page.getByText("It said it deployed but the run never started.")).toBeVisible();
+
+		await page.getByRole("button", { name: "Expand this feedback" }).click();
+		// Both halves of the snapshot: the message, and the turn before it (#505's evidence).
+		await expect(page.getByText("Done — the worker is live.")).toBeVisible();
+		await expect(page.getByText("Deploy the api worker").first()).toBeVisible();
+		await expect(page.getByText(/the recognizer heard/)).toBeVisible();
+
+		// …and the pointer half: what the agent actually ran on that turn, including the warn-level
+		// row that #514 step 1 stopped orphaning.
+		await page.getByRole("button", { name: "Show what it ran" }).click();
+		await expect(page.getByText("tool.call")).toBeVisible();
+		await expect(page.getByText("chat.invented_result")).toBeVisible();
+		await expect(page.getByRole("link", { name: "Open the conversation" })).toHaveAttribute("href", /\/instances\/inst-1/);
+	});
+
+	test("the account-wide page triages: filing one records the issue it became", async ({ page }) => {
+		const ops = await mockSignedInConsole(page, {
+			instances: [{ id: "inst-1", name: "Coder Lead", slug: "coder-lead", category: "code", capabilities: { surfaces: [] } }],
+			feedback: [ROW],
+		});
+		await page.goto("/console/feedback");
+		await expect(page.getByText("It said it deployed but the run never started.")).toBeVisible();
+		// The agent is named, because on this page the question is "which of them was this about".
+		await expect(page.getByText("Coder Lead")).toBeVisible();
+
+		await page.getByRole("button", { name: "Expand this feedback" }).click();
+		await page.getByLabel("Feedback status").selectOption("filed");
+		await expect.poll(() => (ops.feedbackPatches as unknown[]).length, { message: "the status change was not sent" }).toBe(1);
+		expect((ops.feedbackPatches as Array<{ id: string; body: Record<string, unknown> }>)[0]).toMatchObject({
+			id: "fb-1",
+			body: { status: "filed" },
+		});
+	});
+});
+
+/**
  * The single-repo Coder's Terminal · Issues · Pulls · Builds row, on a phone, in WebKit (#431).
  *
  * `CodingTab.tsx`'s solo `tab()` helper rendered `<Icon size={13} /> {label}` with NO responsive

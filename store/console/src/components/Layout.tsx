@@ -7,7 +7,7 @@ import ConversationPill from "./ConversationPill";
 import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal } from "lucide-react";
+import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
@@ -18,6 +18,10 @@ const navItems = [
 	{ to: "/instances", label: "Instances", icon: Server },
 	{ to: "/terminals", label: "Terminals", icon: Terminal },
 	{ to: "/usage", label: "Usage", icon: Gauge },
+	// Everything flagged, across every agent (#514). Beside Usage because it is the same kind of
+	// question — "what is this costing me" / "what is still wrong with it" — asked of the whole
+	// account rather than of one agent, which is what the per-instance Feedback tab is for.
+	{ to: "/feedback", label: "Feedback", icon: Flag },
 	{ to: "/dashboard", label: "Stats", icon: BarChart3 },
 	{ to: "/tools", label: "Tools", icon: Wrench },
 	// How YOU speak, hear and read — across every agent (#211). Deliberately NOT on Profile:

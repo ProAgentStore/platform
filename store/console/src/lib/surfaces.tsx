@@ -4,6 +4,7 @@ import ActivityTab from "../tabs/ActivityTab";
 import BehaviourTab from "../tabs/BehaviourTab";
 import BoardTab from "../tabs/BoardTab";
 import DataTab from "../tabs/DataTab";
+import FeedbackTab from "../tabs/FeedbackTab";
 import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
@@ -38,6 +39,7 @@ export type SurfaceId =
 	| "indexing"
 	| "knowledge"
 	| "behaviour"
+	| "feedback"
 	| "data"
 	| "settings";
 
@@ -290,6 +292,19 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId }) => <BehaviourTab instanceId={instanceId} />,
+	},
+	{
+		id: "feedback",
+		label: "Feedback",
+		icon: "🚩",
+		// Universal, like Behaviour and Stats, and for a reason specific to this surface: EVERY
+		// agent can be complained about, so gating it on `capabilities.surfaces` would hide it
+		// exactly where a new agent type most needs it. A tab rather than a sub-tab of Knowledge or
+		// Activity because #509 is the freshly-paid-for lesson that a surface one level inside a
+		// composite is a surface nobody finds.
+		show: () => true,
+		scroll: true,
+		render: ({ instanceId }) => <FeedbackTab instanceId={instanceId} />,
 	},
 	{
 		id: "indexing",
