@@ -994,3 +994,64 @@ describe("remove_repo — a failed removal must not be reported as one (#325)", 
 		expect(h.auditEvents().some((e) => e.tool === "remove_repo" && e.action === "completed")).toBe(true);
 	});
 });
+
+describe("set_budget_limits — a patch must not clear what it does not name (#501)", () => {
+	// The tool called itself a patch and sent `?? null` for every argument the caller left out,
+	// into a route that was a full replace. "Raise my token ceiling" therefore also wiped the
+	// per-tree limits and the Loop iteration cap the owner had set in the console — and deleted
+	// the row entirely when both of its two fields were null.
+	it("sends ONLY the fields the caller supplied", async () => {
+		const h = setup();
+		await h.tools.get("set_budget_limits")!.handler({ token_ceiling: 300_000_000 });
+
+		const call = h.fetchStub.calls.find((c) => c.url.includes("/v1/budget/limits") && c.method === "PUT");
+		expect(call).toBeDefined();
+		expect(JSON.parse(call?.body ?? "{}")).toEqual({ tokenCeiling: 300_000_000 });
+	});
+
+	it("forwards an explicit null as a clear, and keeps the other five absent", async () => {
+		const h = setup();
+		await h.tools.get("set_budget_limits")!.handler({ token_ceiling: null });
+
+		const call = h.fetchStub.calls.find((c) => c.url.includes("/v1/budget/limits") && c.method === "PUT");
+		expect(JSON.parse(call?.body ?? "{}")).toEqual({ tokenCeiling: null });
+	});
+
+	it("can set the four per-tree/loop fields #477 added", async () => {
+		const h = setup();
+		await h.tools.get("set_budget_limits")!.handler({
+			per_tree_cost_micros: 9_000_000,
+			per_tree_delegations: 77,
+			per_tree_max_depth: 6,
+			loop_max_iterations: 200,
+		});
+
+		const call = h.fetchStub.calls.find((c) => c.url.includes("/v1/budget/limits") && c.method === "PUT");
+		expect(JSON.parse(call?.body ?? "{}")).toEqual({
+			perTreeCostMicros: 9_000_000,
+			perTreeDelegations: 77,
+			perTreeMaxDepth: 6,
+			loopMaxIterations: 200,
+		});
+	});
+
+	it("dry_run previews the real body and names what it will leave alone", async () => {
+		const h = setup();
+		const res = await h.tools.get("set_budget_limits")!.handler({ token_ceiling: 1_000, dry_run: true });
+
+		expect(h.fetchStub.calls.length).toBe(0);
+		const preview = JSON.parse(res.content[0].text) as {
+			dryRun: boolean;
+			wouldDo: { body: Record<string, unknown>; unchanged: string[] };
+		};
+		expect(preview.dryRun).toBe(true);
+		expect(preview.wouldDo.body).toEqual({ tokenCeiling: 1_000 });
+		expect(preview.wouldDo.unchanged).toEqual([
+			"chargedMicrosCeiling",
+			"perTreeCostMicros",
+			"perTreeDelegations",
+			"perTreeMaxDepth",
+			"loopMaxIterations",
+		]);
+	});
+});

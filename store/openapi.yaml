@@ -8462,12 +8462,17 @@ paths:
                     description: "Whether these ceilings are currently enforced. When false the limits are stored and metered but never block a run (observe-only, see BUDGET_ENFORCE)."
         "401": { $ref: "#/components/responses/Unauthorized" }
     put:
-      summary: Set account budget limits
+      summary: Patch account budget limits
       description: |
-        Upserts the caller's row in `account_budget_limits`. `null` or absent fields clear the
-        per-account override for that field so it inherits from the next tier. All null = row
-        deleted (full inherit). Values are clamped to the maximum override (see `maxOverride` in
-        the GET response). Returns the same shape as GET with the newly resolved effective values.
+        Patches the caller's row in `account_budget_limits`. A field **absent** from the body keeps
+        its stored value; a field present as **`null`** clears the per-account override so it
+        inherits from the next tier. When all six resolve to null the row is deleted (full
+        inherit) — which is what the console's six-control form does when every box is blank.
+        Values are clamped to the maximum override (see `maxOverride` in the GET response).
+        Returns the same shape as GET with the newly resolved effective values.
+
+        Absent used to mean "clear" as well, which made any partial writer destructive: MCP
+        `set_budget_limits` sent two of the six fields and silently reverted the rest (#501).
       operationId: putBudgetLimits
       tags: [Usage]
       requestBody:
@@ -8480,27 +8485,27 @@ paths:
                 chargedMicrosCeiling:
                   type: integer
                   nullable: true
-                  description: "New 24h charged-spend ceiling in USD micros, or null to inherit."
+                  description: "New 24h charged-spend ceiling in USD micros. null clears the override (inherit); omit to leave unchanged."
                 tokenCeiling:
                   type: integer
                   nullable: true
-                  description: "New 24h token ceiling, or null to inherit."
+                  description: "New 24h token ceiling. null clears the override; omit to leave unchanged."
                 perTreeCostMicros:
                   type: integer
                   nullable: true
-                  description: "New per-tree spend budget in USD micros, or null to inherit."
+                  description: "New per-tree spend budget in USD micros. null clears the override; omit to leave unchanged."
                 perTreeDelegations:
                   type: integer
                   nullable: true
-                  description: "New max delegations per tree, or null to inherit."
+                  description: "New max delegations per tree. null clears the override; omit to leave unchanged."
                 perTreeMaxDepth:
                   type: integer
                   nullable: true
-                  description: "New max delegation depth, or null to inherit."
+                  description: "New max delegation depth. null clears the override; omit to leave unchanged."
                 loopMaxIterations:
                   type: integer
                   nullable: true
-                  description: "New Loop max-iterations cap, or null to inherit."
+                  description: "New Loop max-iterations cap. null clears the override; omit to leave unchanged."
       responses:
         "200":
           description: Re-resolved effective values after the write (same shape as GET 200)

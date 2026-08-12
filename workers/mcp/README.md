@@ -358,7 +358,7 @@ sit outside its surface gate.
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |
 | `email_status` | Gmail configured/connected | — | | |
 | `get_budget_limits` | Effective daily AI-spend ceilings, which tier each came from, 24h consumption, and distance to limit | — | | |
-| `set_budget_limits` | Patch per-account daily ceilings (token count + charged micros); null = inherit from platform; returns re-resolved effective limits | write | yes | |
+| `set_budget_limits` | Patch per-account budget limits — the two daily ceilings plus the four per-tree/loop knobs; omitted fields keep their stored value, null clears an override; returns re-resolved effective limits | write | yes | |
 
 ### Tools with no dry run
 

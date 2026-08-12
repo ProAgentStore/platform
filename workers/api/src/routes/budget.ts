@@ -3,7 +3,7 @@
  *
  * Two routes:
  *   GET  /v1/budget/limits — effective ceilings, 24h rolling consumption, tier source
- *   PUT  /v1/budget/limits — upsert the caller's row in account_budget_limits
+ *   PUT  /v1/budget/limits — patch the caller's row in account_budget_limits
  *
  * The resolution stack (four tiers, first non-null wins):
  *   1. per-account D1 row  (account_budget_limits WHERE user_id = <uid>)
@@ -11,7 +11,8 @@
  *   3. env var  (ACCOUNT_DAILY_CHARGED_MICROS_CEILING / ACCOUNT_DAILY_TOKEN_CEILING)
  *   4. hard constant  (DAILY_CEILING_MICROS / DAILY_TOKEN_CEILING / DEFAULT_LIMITS / MAX_ITERATIONS_CAP)
  *
- * `NULL` / absent fields on PUT → inherit (remove the per-account override).
+ * PUT is a PATCH: a field present as `null` clears the per-account override (inherit); a field
+ * absent from the body is left exactly as stored (#501).
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
@@ -44,6 +45,26 @@ interface BudgetLimitRow {
 	max_depth: number | null;
 	loop_max_iterations: number | null;
 }
+
+/**
+ * Every settable column of `account_budget_limits`, with the JSON field that writes it and the
+ * maximum a caller may store.
+ *
+ * One table, because there are three places that must agree about this set — the PUT handler, the
+ * console form, and MCP `set_budget_limits` — and when they disagreed the narrowest one won by
+ * clearing what it did not know about (#501). `budget.test.ts` holds this list to the migrations
+ * and to the MCP tool's own copy, so a seventh column cannot land in only one of them.
+ */
+export const BUDGET_LIMIT_FIELDS = [
+	{ column: "charged_micros_ceiling", field: "chargedMicrosCeiling", max: MAX_CHARGED_MICROS },
+	{ column: "token_ceiling", field: "tokenCeiling", max: MAX_TOKEN_CEILING },
+	{ column: "per_tree_cost_micros", field: "perTreeCostMicros", max: MAX_PER_TREE_MICROS },
+	{ column: "delegations", field: "perTreeDelegations", max: MAX_PER_TREE_DELEGATIONS },
+	{ column: "max_depth", field: "perTreeMaxDepth", max: MAX_PER_TREE_DEPTH },
+	{ column: "loop_max_iterations", field: "loopMaxIterations", max: MAX_LOOP_ITERATIONS },
+] as const satisfies readonly { column: keyof BudgetLimitRow; field: string; max: number }[];
+
+type BudgetLimitColumn = (typeof BUDGET_LIMIT_FIELDS)[number]["column"];
 
 /** Tier label for each resolved ceiling. */
 type CeilingTier = "account" | "platform" | "env" | "default";
@@ -227,8 +248,20 @@ budgetRoutes.get("/limits", async (c) => {
 /**
  * PUT /v1/budget/limits
  *
- * Upserts the caller's row in account_budget_limits.
- * NULL / absent = inherit from the next tier down (removes the per-account override).
+ * Patches the caller's row in account_budget_limits.
+ *
+ * Patch semantics, matching the convention `PUT /v1/instances/:id/behaviour` already established
+ * in this codebase (`applyBehaviourPatch`): a field ABSENT from the body is left as stored; a field
+ * present as `null` clears the per-account override so it inherits from the next tier. All six
+ * resolving to null = the row is deleted (full inherit).
+ *
+ * This used to be a full replace, where absent also meant "clear". It read as coherent because the
+ * console renders and submits all six controls — but a narrower client wiped what it did not know
+ * about: MCP `set_budget_limits` sent two of six fields and silently reverted per-tree limits and
+ * the Loop iteration cap the owner had configured (#501). "Absent = leave alone" is the only
+ * semantics under which a partial writer is safe, and it costs the console nothing because a
+ * full-document PUT is a patch that happens to name every field.
+ *
  * Values are clamped to MAX_OVERRIDE_* on the way in.
  *
  * Returns the same shape as GET — re-resolved effective values after the write.
@@ -243,18 +276,23 @@ budgetRoutes.put("/limits", async (c) => {
 	} catch {
 		throw new HttpError(400, "Request body must be JSON.");
 	}
+	if (!body || typeof body !== "object" || Array.isArray(body)) {
+		throw new HttpError(400, "Request body must be a JSON object.");
+	}
 
-	// Extract and clamp values. null/undefined → NULL (inherit).
-	const chargedMicrosCeiling = nullOrClamp(body.chargedMicrosCeiling, MAX_CHARGED_MICROS, "chargedMicrosCeiling");
-	const tokenCeiling = nullOrClamp(body.tokenCeiling, MAX_TOKEN_CEILING, "tokenCeiling");
-	const perTreeCostMicros = nullOrClamp(body.perTreeCostMicros, MAX_PER_TREE_MICROS, "perTreeCostMicros");
-	const perTreeDelegations = nullOrClamp(body.perTreeDelegations, MAX_PER_TREE_DELEGATIONS, "perTreeDelegations");
-	const perTreeMaxDepth = nullOrClamp(body.perTreeMaxDepth, MAX_PER_TREE_DEPTH, "perTreeMaxDepth");
-	const loopMaxIterations = nullOrClamp(body.loopMaxIterations, MAX_LOOP_ITERATIONS, "loopMaxIterations");
+	// The pre-write row is what an absent field falls back to. Read it before the upsert.
+	const before = (await readLimitRows(c.env.DB, uid)).perAccountRow;
+
+	/** Absent → keep what is stored. Present (including an explicit null) → set or clear. */
+	const next = Object.fromEntries(
+		BUDGET_LIMIT_FIELDS.map(({ column, field, max }) => [
+			column,
+			field in body ? nullOrClamp(body[field], max, field) : (before?.[column] ?? null),
+		]),
+	) as Record<BudgetLimitColumn, number | null>;
 
 	// All null = delete the row (fully inheriting from platform/env/constant).
-	const allNull = [chargedMicrosCeiling, tokenCeiling, perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations]
-		.every((v) => v === null);
+	const allNull = Object.values(next).every((v) => v === null);
 
 	if (allNull) {
 		await c.env.DB.prepare("DELETE FROM account_budget_limits WHERE user_id = ?1")
@@ -273,7 +311,15 @@ budgetRoutes.put("/limits", async (c) => {
 			   max_depth              = excluded.max_depth,
 			   loop_max_iterations    = excluded.loop_max_iterations`,
 		)
-			.bind(uid, tokenCeiling, chargedMicrosCeiling, perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations)
+			.bind(
+				uid,
+				next.token_ceiling,
+				next.charged_micros_ceiling,
+				next.per_tree_cost_micros,
+				next.delegations,
+				next.max_depth,
+				next.loop_max_iterations,
+			)
 			.run();
 	}
 
@@ -287,7 +333,7 @@ budgetRoutes.put("/limits", async (c) => {
 	return c.json(buildResponse(perAccountRow, platformRow, ceilings, window, c.env, isBudgetEnforced(c.env)));
 });
 
-/** Parse a value as null (when absent/null) or a clamped positive integer. Throws 400 on bad input. */
+/** Parse an explicitly-supplied value as null (clear) or a clamped positive integer. Throws 400 on bad input. */
 function nullOrClamp(raw: unknown, max: number, field: string): number | null {
 	if (raw === null || raw === undefined) return null;
 	const n = Number(raw);

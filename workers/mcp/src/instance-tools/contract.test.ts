@@ -212,7 +212,15 @@ const TABLE: Record<string, Row> = {
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
 	billing_status: ["account", "none", null, null, "token"],
 	get_budget_limits: ["account", "none", null, null, "token"],
-	set_budget_limits: ["account", "write", null, "envelope", "charged_micros_ceiling,dry_run,token,token_ceiling"],
+	set_budget_limits: [
+		"account",
+		"write",
+		null,
+		"envelope",
+		// All six columns of account_budget_limits (#501) — a field this tool cannot name is a
+		// field an MCP caller cannot set, and used to be one it silently cleared.
+		"charged_micros_ceiling,dry_run,loop_max_iterations,per_tree_cost_micros,per_tree_delegations,per_tree_max_depth,token,token_ceiling",
+	],
 	call_instance_tool: ["base", "write", null, null, "input,instance_id,token,tool"],
 	cancel_instance: ["base", "destructive", "cancel_instance", "envelope", "confirm,dry_run,instance_id,token"],
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],

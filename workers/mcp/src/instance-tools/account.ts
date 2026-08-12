@@ -120,37 +120,68 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"set_budget_limits",
-		"Patch your per-account AI-spend circuit breakers. Pass null for a field to inherit from the platform default. Values are clamped server-side to the platform maximum ($10 000 / 100B tokens per 24h). Returns the re-resolved effective limits after the write — same shape as get_budget_limits. Read get_budget_limits first to see the current state.",
+		"Patch your per-account AI-spend limits — the two daily circuit breakers and the four per-tree run knobs. Only the fields you pass are changed; anything you omit keeps its stored value. Pass null for a field to clear that override so it inherits from the platform default. Values are clamped server-side to the platform maximum ($10 000 / 100B tokens per 24h). Returns the re-resolved effective limits after the write — same shape as get_budget_limits. Read get_budget_limits first to see the current state.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			token_ceiling: z.number().nullable().optional().describe("Daily token ceiling. null inherits from the platform default."),
-			charged_micros_ceiling: z.number().nullable().optional().describe("Daily charged-cost ceiling in micros (1 000 000 = $1). null inherits."),
+			token_ceiling: z.number().nullable().optional().describe("Daily token ceiling. null clears the override (inherit); omit to leave unchanged."),
+			charged_micros_ceiling: z.number().nullable().optional().describe("Daily charged-cost ceiling in micros (1 000 000 = $1). null clears the override; omit to leave unchanged."),
+			per_tree_cost_micros: z.number().nullable().optional().describe("Spend budget for one autonomous run tree, in micros. null clears the override; omit to leave unchanged."),
+			per_tree_delegations: z.number().nullable().optional().describe("Max delegations in one run tree. null clears the override; omit to leave unchanged."),
+			per_tree_max_depth: z.number().nullable().optional().describe("Max delegation depth in one run tree. null clears the override; omit to leave unchanged."),
+			loop_max_iterations: z.number().nullable().optional().describe("Cap on Loop iterations. null clears the override; omit to leave unchanged."),
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, token_ceiling, charged_micros_ceiling, dry_run }) => {
-			const sessionToken = tokenFor(token);
+		async (args) => {
+			const sessionToken = tokenFor(args.token);
 			if (!sessionToken) return authRequired();
-			const input = { token_ceiling: token_ceiling ?? null, charged_micros_ceiling: charged_micros_ceiling ?? null };
-			const denied = await requirePermission(safetyFor(token), "write", "set_budget_limits", input);
+
+			/**
+			 * Send ONLY the fields the caller actually supplied.
+			 *
+			 * This tool used to send all four of its arguments coerced through `?? null`, i.e. an
+			 * explicit null for anything the caller left out — and the route was a full replace, so
+			 * "raise my token ceiling" also wiped the per-tree limits and the Loop iteration cap the
+			 * owner had set in the console, and deleted the row outright when both its fields were
+			 * null (#501). The route now patches (absent = leave alone), which only helps if the
+			 * client stops manufacturing absent fields as nulls.
+			 */
+			const body: Record<string, number | null> = {};
+			for (const [arg, field] of BUDGET_LIMIT_FIELDS) {
+				const value = args[arg];
+				if (value !== undefined) body[field] = value;
+			}
+
+			const denied = await requirePermission(safetyFor(args.token), "write", "set_budget_limits", body);
 			if (denied) return denied;
-			if (dry_run) {
-				return dryRun(safetyFor(token), "set_budget_limits", "update account AI budget limits", input, {
+			if (args.dry_run) {
+				return dryRun(safetyFor(args.token), "set_budget_limits", "update account AI budget limits", body, {
 					endpoint: "/v1/budget/limits",
 					method: "PUT",
-					body: { tokenCeiling: input.token_ceiling, chargedMicrosCeiling: input.charged_micros_ceiling },
+					body,
+					unchanged: BUDGET_LIMIT_FIELDS.map(([, field]) => field).filter((f) => !(f in body)),
 				});
 			}
-			const data = await authedCall(
-				"/v1/budget/limits",
-				sessionToken,
-				{
-					method: "PUT",
-					body: JSON.stringify({ tokenCeiling: input.token_ceiling, chargedMicrosCeiling: input.charged_micros_ceiling }),
-				},
-				env,
-			);
-			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_budget_limits", action: "completed", input, result: { ok: true } });
+			const data = await authedCall("/v1/budget/limits", sessionToken, { method: "PUT", body: JSON.stringify(body) }, env);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(args.token), { tool: "set_budget_limits", action: "completed", input: body, result: { ok: true } });
+			}
 			return jsonText(data);
 		},
 	);
 }
+
+/**
+ * Every column of `account_budget_limits`, as [tool argument, API field].
+ *
+ * Kept complete on purpose: a field this tool does not expose is a field an MCP caller cannot set
+ * — and, before #501, one it silently cleared. `budget.test.ts` in the API worker reads this list
+ * back out of the source and fails when the route grows a field the tool has not caught up with.
+ */
+const BUDGET_LIMIT_FIELDS = [
+	["token_ceiling", "tokenCeiling"],
+	["charged_micros_ceiling", "chargedMicrosCeiling"],
+	["per_tree_cost_micros", "perTreeCostMicros"],
+	["per_tree_delegations", "perTreeDelegations"],
+	["per_tree_max_depth", "perTreeMaxDepth"],
+	["loop_max_iterations", "loopMaxIterations"],
+] as const;

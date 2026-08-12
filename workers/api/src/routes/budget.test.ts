@@ -8,11 +8,13 @@
  *   – The resolved effective value reflects the write immediately
  *   – Owner scoping: the row is keyed to the caller's uid, not any caller-supplied id
  */
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
-import { budgetRoutes } from "./budget.js";
+import { BUDGET_LIMIT_FIELDS, budgetRoutes } from "./budget.js";
 import type { Env } from "../types.js";
 
 const TEST_SECRET = "test-secret";
@@ -22,7 +24,21 @@ const DAILY_TOKEN_CEILING = 250_000_000; // 250M tokens
 const MAX_CHARGED_MICROS = 10_000_000_000;
 const MAX_TOKEN_CEILING = 100_000_000_000;
 
-type RowStore = Map<string, { token_ceiling: number | null; charged_micros_ceiling: number | null }>;
+/**
+ * The stored row. All six columns, not just the two daily ceilings — the fake used to keep only
+ * `token_ceiling` and `charged_micros_ceiling`, which is exactly the blind spot #501 lived in: a
+ * write that wiped the per-tree columns was invisible to every assertion here.
+ */
+interface StoredRow {
+	token_ceiling?: number | null;
+	charged_micros_ceiling?: number | null;
+	per_tree_cost_micros?: number | null;
+	delegations?: number | null;
+	max_depth?: number | null;
+	loop_max_iterations?: number | null;
+}
+
+type RowStore = Map<string, StoredRow>;
 
 /**
  * Build a test app backed by an in-memory row store for account_budget_limits and
@@ -59,7 +75,7 @@ function testApp(opts: {
 								// SELECT for account_budget_limits — returns the user row + platform row (if present).
 								if (s.startsWith("SELECT") && s.includes("account_budget_limits")) {
 									const uid = String(args[0]);
-									const results: Array<{ user_id: string; token_ceiling: number | null; charged_micros_ceiling: number | null }> = [];
+									const results: Array<{ user_id: string } & StoredRow> = [];
 									const userRow = rows.get(uid);
 									if (userRow) results.push({ user_id: uid, ...userRow });
 									const platRow = rows.get("__platform__");
@@ -89,9 +105,14 @@ function testApp(opts: {
 								// INSERT OR REPLACE / ON CONFLICT.
 								if (s.startsWith("INSERT") && s.includes("account_budget_limits")) {
 									const uid = String(args[0]);
+									// Bind order mirrors the column list in the route's upsert.
 									rows.set(uid, {
 										token_ceiling: args[1] as number | null,
 										charged_micros_ceiling: args[2] as number | null,
+										per_tree_cost_micros: args[3] as number | null,
+										delegations: args[4] as number | null,
+										max_depth: args[5] as number | null,
+										loop_max_iterations: args[6] as number | null,
 									});
 									return { success: true };
 								}
@@ -299,6 +320,153 @@ describe("PUT /v1/budget/limits", () => {
 		// user-2 is unaffected.
 		expect(rows.has("user-2")).toBe(false);
 		expect(rows.get("user-1")?.charged_micros_ceiling).toBe(55_000_000);
+	});
+});
+
+// ─── Patch semantics (#501) ────────────────────────────────────────────────
+
+/**
+ * The defect: PUT was a full replace, so a client that knew about two of the six fields cleared
+ * the other four by staying silent about them. These tests pin the semantics the `behaviour` route
+ * already uses — absent = leave alone, explicit null = clear.
+ */
+describe("PUT /v1/budget/limits — patch semantics", () => {
+	const configured = (): RowStore =>
+		new Map([[
+			"user-1",
+			{
+				charged_micros_ceiling: 40_000_000,
+				token_ceiling: 200_000_000,
+				per_tree_cost_micros: 9_000_000,
+				delegations: 77,
+				max_depth: 6,
+				loop_max_iterations: 200,
+			},
+		]]);
+
+	it("a field absent from the body keeps its stored value", async () => {
+		const rows = configured();
+		const { app, env } = testApp({ rows });
+		const res = await req(app, env, "PUT", { tokenCeiling: 300_000_000 });
+		expect(res.status).toBe(200);
+		const row = rows.get("user-1");
+		expect(row?.token_ceiling).toBe(300_000_000);
+		// The four fields this caller never mentioned survive untouched.
+		expect(row?.per_tree_cost_micros).toBe(9_000_000);
+		expect(row?.delegations).toBe(77);
+		expect(row?.max_depth).toBe(6);
+		expect(row?.loop_max_iterations).toBe(200);
+		expect(row?.charged_micros_ceiling).toBe(40_000_000);
+	});
+
+	it("re-resolves the untouched fields from the account tier, not the default", async () => {
+		const { app, env } = testApp({ rows: configured() });
+		const res = await req(app, env, "PUT", { tokenCeiling: 300_000_000 });
+		const data = await res.json<{
+			stored: { loopMaxIterations: number | null };
+			effective: { loopMaxIterationsTier: string; perTreeDelegationsTier: string };
+		}>();
+		expect(data.stored.loopMaxIterations).toBe(200);
+		expect(data.effective.loopMaxIterationsTier).toBe("account");
+		expect(data.effective.perTreeDelegationsTier).toBe("account");
+	});
+
+	it("an explicit null clears only that field and does NOT delete the row", async () => {
+		const rows = configured();
+		const { app, env } = testApp({ rows });
+		const res = await req(app, env, "PUT", { tokenCeiling: null });
+		expect(res.status).toBe(200);
+		expect(rows.has("user-1")).toBe(true);
+		expect(rows.get("user-1")?.token_ceiling).toBeNull();
+		expect(rows.get("user-1")?.loop_max_iterations).toBe(200);
+		const data = await res.json<{ effective: { tokenCeilingTier: string; loopMaxIterationsTier: string } }>();
+		expect(data.effective.tokenCeilingTier).toBe("default");
+		expect(data.effective.loopMaxIterationsTier).toBe("account");
+	});
+
+	it("an empty body is a no-op, not a wipe", async () => {
+		const rows = configured();
+		const { app, env } = testApp({ rows });
+		const res = await req(app, env, "PUT", {});
+		expect(res.status).toBe(200);
+		expect(rows.get("user-1")).toEqual({
+			charged_micros_ceiling: 40_000_000,
+			token_ceiling: 200_000_000,
+			per_tree_cost_micros: 9_000_000,
+			delegations: 77,
+			max_depth: 6,
+			loop_max_iterations: 200,
+		});
+	});
+
+	it("the console's six-field submit still fully replaces (all explicit nulls delete the row)", async () => {
+		const rows = configured();
+		const { app, env } = testApp({ rows });
+		const res = await req(app, env, "PUT", {
+			chargedMicrosCeiling: null,
+			tokenCeiling: null,
+			perTreeCostMicros: null,
+			perTreeDelegations: null,
+			perTreeMaxDepth: null,
+			loopMaxIterations: null,
+		});
+		expect(res.status).toBe(200);
+		expect(rows.has("user-1")).toBe(false);
+	});
+
+	it("rejects a non-object body", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "PUT", [1, 2, 3]);
+		expect(res.status).toBe(400);
+	});
+});
+
+// ─── Field coverage (#501) ─────────────────────────────────────────────────
+
+/**
+ * The invariant that stops this recurring: the route, the migrations and the MCP tool must know
+ * about the same six columns. #501 happened because MCP knew about two. A seventh column added to
+ * one place and not the others fails here.
+ */
+describe("account_budget_limits field coverage", () => {
+	const settable = (sql: string): string[] => {
+		const cols: string[] = [];
+		const create = sql.match(/CREATE TABLE IF NOT EXISTS account_budget_limits \(([\s\S]*?)\n\)/);
+		if (create) {
+			for (const line of create[1].split("\n")) {
+				const m = line.trim().match(/^([a-z_]+)\s+INTEGER/);
+				if (m) cols.push(m[1]);
+			}
+		}
+		for (const m of sql.matchAll(/ALTER TABLE account_budget_limits ADD COLUMN ([a-z_]+)\s+INTEGER/g)) {
+			cols.push(m[1]);
+		}
+		return cols;
+	};
+
+	const migrationsSql = readdirSync(join(import.meta.dirname, "../../migrations"))
+		.filter((f) => f.endsWith(".sql"))
+		.map((f) => readFileSync(join(import.meta.dirname, "../../migrations", f), "utf8"))
+		.join("\n");
+
+	it("BUDGET_LIMIT_FIELDS covers every settable column in the migrations", () => {
+		const columns = settable(migrationsSql);
+		expect(columns.length).toBeGreaterThan(0);
+		expect([...columns].sort()).toEqual([...BUDGET_LIMIT_FIELDS.map((f) => f.column)].sort());
+	});
+
+	it("MCP set_budget_limits exposes every field the route accepts", () => {
+		// The MCP worker is a separate deployable and cannot import from here, so it keeps its own
+		// copy of the list. This reads that copy back out of the source rather than trusting it.
+		const src = readFileSync(join(import.meta.dirname, "../../../mcp/src/instance-tools/account.ts"), "utf8");
+		const table = src.match(/const BUDGET_LIMIT_FIELDS = \[([\s\S]*?)\] as const;/);
+		expect(table).not.toBeNull();
+		const exposed = [...(table?.[1] ?? "").matchAll(/\["([a-z_]+)", "([A-Za-z]+)"\]/g)].map((m) => m[2]);
+		expect([...exposed].sort()).toEqual([...BUDGET_LIMIT_FIELDS.map((f) => f.field)].sort());
+		// And each one is a real argument on the tool, not just a line in the table.
+		for (const m of (table?.[1] ?? "").matchAll(/\["([a-z_]+)", "[A-Za-z]+"\]/g)) {
+			expect(src).toContain(`${m[1]}: z.number().nullable().optional()`);
+		}
 	});
 });
 
