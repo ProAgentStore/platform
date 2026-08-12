@@ -178,6 +178,91 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 	});
 });
 
+describe("the coding driver refuses a checkout the platform has already condemned (#548)", () => {
+	const brokenRepo = {
+		id: "r1",
+		name: "dev/aipa",
+		instance_id: "i1",
+		user_id: "u1",
+		workdir: "~/dev/aipa",
+		clone_status: "needs_attention",
+		clone_error: "The configured checkout `/Users/serge-ivo/dev/aipa` has files but is not inside a git working tree — it is a plain folder, not a clone of a repository.",
+	};
+
+	it("409s with the folder verdict, and opens NOTHING", async () => {
+		// The measured failure: three `git pull` runs admitted onto a folder with no `.git`, each
+		// burning ~15 minutes of BYOK reasoning against an engine exiting 1 every turn, ending in
+		// "stuck not resolved in time" — while D1 held `clone_error` naming the folder and the word
+		// "git" the entire time. The assertion that matters is not the wording but the absence: no
+		// Pilot, no session row, no `agent_loop_runs` row, no budget pool.
+		const { env, sql, created } = stubEnv({ repos: [brokenRepo], session: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		if (!out.ok) {
+			expect(out.status).toBe(409);
+			expect(out.error).toContain("/Users/serge-ivo/dev/aipa");
+			expect(out.error).toMatch(/git working tree/);
+		}
+		expect(created).toHaveLength(0);
+		expect(sql.some((q) => q.includes("INSERT INTO agent_loop_runs"))).toBe(false);
+		expect(sql.some((q) => q.includes("INSERT INTO coding_sessions"))).toBe(false);
+	});
+
+	it("does NOT prescribe `pags up` for a problem `pags up` cannot fix", async () => {
+		// #468/#530, twice fixed and reachable again here: the connectivity refusal
+		// (`noSessionMessage`) is tuned for a missing runner, and a Lead relaying it for a broken
+		// folder sends its owner to a terminal. This refusal is deliberately NOT routed through it.
+		const { env } = stubEnv({ repos: [brokenRepo], session: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).not.toMatch(/pags up/);
+	});
+
+	it("refuses even when a session is already live on that repo", async () => {
+		// The incident's session reported `alive:true, ready:true, runState:"idle"`. Gating only
+		// the OPENING of a new session would have admitted all three runs.
+		const { env, created } = stubEnv({ repos: [brokenRepo], session: { id: "s1", client_type: "codex", status: "active" } });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		expect(created).toHaveLength(0);
+	});
+
+	it("still starts on `unknown` — an unlooked-at path is not a condemned one", async () => {
+		// The regression this guards: an offline laptop, or one that has never been up while the
+		// console was open, must not stop every run. Only `needs_attention` — a verdict a machine
+		// actually produced — blocks.
+		const { env, created } = stubEnv({
+			repos: [{ id: "r1", name: "dev/aipa", instance_id: "i1", user_id: "u1", clone_status: "unknown" }],
+			session: { id: "s1", client_type: "claude", status: "active" },
+		});
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created[0].binding).toBe("CODING_SESSION");
+	});
+
+	it("still starts on a stale `error`, which is a transport failure and not a filesystem verdict", async () => {
+		// #440: `clone_status = "error"` carried "No runner connected — run `pags up`" on a healthy
+		// 18-entry checkout for five days. Rows written before that fix still exist.
+		const { env, created } = stubEnv({
+			repos: [{ id: "r1", name: "pas/platform", instance_id: "i1", user_id: "u1", clone_status: "error", clone_error: "No runner connected — run `pags up`" }],
+			session: { id: "s1", client_type: "claude", status: "active" },
+		});
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created[0].binding).toBe("CODING_SESSION");
+	});
+
+	it("reports the RUNNER when the machine is off, even on a condemned repo", async () => {
+		// Ordering, asserted. A `needs_attention` verdict can be days old; with the machine down
+		// the runner diagnosis is both truer and more actionable, and leading with the folder would
+		// send the owner to inspect a laptop that is shut.
+		const { env } = stubEnv({ repos: [brokenRepo], session: null, runnerOnline: false });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).not.toMatch(/git working tree/);
+	});
+});
+
 describe("pickLoopRepo — WHICH engine an objective reaches (#374)", () => {
 	const repos = [{ id: "r1" }, { id: "r2" }, { id: "r3" }];
 

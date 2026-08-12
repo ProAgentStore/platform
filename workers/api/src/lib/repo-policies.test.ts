@@ -151,6 +151,22 @@ describe("evaluate", () => {
 		expect(f.card).toBeNull();
 	});
 
+	it("a folder that is not a git work tree is UNKNOWN, never held (#548)", () => {
+		// Reachable only since #548 stopped collapsing "git said this is not a repository" into the
+		// same `null` a dropped socket produces. That state has `branch: null, dirty: false`, so
+		// BOTH clauses below return null and every policy would score `held` — a claim of
+		// COMPLIANCE about a repository that is not there, and a card silently closed by a folder
+		// with no `.git` in it.
+		const findings = evaluateRepoPolicies({
+			...base,
+			declared: { "repo.on_default_branch": "observe" },
+			state: { branch: null, dirty: false, changedFiles: 0, notAGitRepo: true },
+		});
+		expect(find(findings, "repo.tree_clean").status).toBe("unknown");
+		expect(find(findings, "repo.on_default_branch").status).toBe("unknown");
+		expect(find(findings, "repo.tree_clean").card).toBeNull();
+	});
+
 	it("an unobserved repo is UNKNOWN, never held — the card is left exactly as it is", () => {
 		// The rule inherited verbatim from repo-state.ts: an absent report says nothing. A machine
 		// that is off must not be able to close a card by failing to answer.

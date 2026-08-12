@@ -23,7 +23,7 @@ import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from
 // standing policies arrived (#322), so that one definition of each serves both the supervisor note
 // below and a policy that claims a single invariant. Re-exported here because this is where every
 // existing reader imports `RepoWorkingState` from.
-import { dirtyClause, offTrunkClause, type RepoWorkingState } from "./repo-observation.js";
+import { dirtyClause, notAGitRepoClause, notAGitRepoState, offTrunkClause, type RepoWorkingState } from "./repo-observation.js";
 export type { RepoWorkingState } from "./repo-observation.js";
 import { getActiveSessionForRepo, listRepos } from "./coding-store.js";
 import type { CodingRepo } from "./coding-types.js";
@@ -107,9 +107,28 @@ function parseBranchHeader(header: string): string | null {
  * running `git checkout .`.
  */
 export function describeRepoState(state: RepoWorkingState, opts: { configuredBranch?: string | null } = {}): string | null {
+	// Exclusive, not composed (#548): a path with no `.git` has no branch to be off and no diff to
+	// protect, so the other two clauses can only describe a repository that is not there.
+	const notARepo = notAGitRepoClause(state);
+	if (notARepo) return `This checkout is ${notARepo}.`;
 	const parts = [offTrunkClause(state, opts.configuredBranch), dirtyClause(state)].filter((p): p is string => Boolean(p));
 	if (!parts.length) return null;
 	return `This checkout is ${parts.join("; ")}.`;
+}
+
+/**
+ * Did git itself say "this is not a repository"? (#548)
+ *
+ * A string match across a release boundary, which is the same shape as `isRunnerUnreachable` and
+ * `relayFailureIsDisconnect` and for the same reason: the runner is published separately from the
+ * cloud, and the only channel it has for this fact is the message. Two spellings are matched
+ * because there are two producers — the runner's own pre-flight (`runRepoGit` throws
+ * `not a git repo` when `.git` is absent) and git's own `fatal: not a git repository`, which is
+ * what a present-but-broken `.git` yields. A miss degrades to `null`, i.e. the behaviour before
+ * this existed, so a wording change on the runner costs a diagnosis and never invents one.
+ */
+export function saysNotAGitRepo(text: unknown): boolean {
+	return /not a git repo/i.test(typeof text === "string" ? text : text instanceof Error ? text.message : "");
 }
 
 /**
@@ -130,8 +149,18 @@ export async function readRepoWorkingState(
 		cmd: "status" as const,
 	};
 	if (!body.sessionId && !body.workDir) return null;
-	const res = await callRunner<{ output?: string; error?: string }>(conn, "/coding/git", body, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
-	if (!res || typeof res.output !== "string" || res.error) return null;
+	// The failure is INSPECTED rather than swallowed (#548). `.catch(() => null)` collapsed two
+	// different facts into one: "the runner did not answer" (genuinely unknown, and null is right)
+	// and "git answered that this is not a repository" (a definite verdict, and the single most
+	// useful sentence anyone could have been told). In the reported incident the second arrived
+	// three times and reached nobody — the Pilot got no `stateNote`, the run got no diagnosis, and
+	// the owner got "stuck not resolved in time" fifteen minutes later.
+	const res = await callRunner<{ output?: string; error?: string }>(conn, "/coding/git", body, { timeoutMs: READ_TIMEOUT_MS }).catch(
+		(e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }) as { output?: string; error?: string },
+	);
+	if (!res || typeof res.output !== "string" || res.error) {
+		return saysNotAGitRepo(res?.error) ? notAGitRepoState() : null;
+	}
 	return parseGitShortStatus(res.output);
 }
 

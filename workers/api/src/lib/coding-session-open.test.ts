@@ -396,3 +396,79 @@ describe("a transport failure is never stored as the repo's state (#440)", () =>
 		expect(!res.ok && res.startError).not.toMatch(/Monday/);
 	});
 });
+
+describe("a successful spawn is not a look at the checkout (#548)", () => {
+	// The mirror of #440, four lines above its guard in the same function. `/coding/start`
+	// succeeding means the runner could chdir into the path and was willing to spawn a command —
+	// which a plain folder with no `.git` satisfies perfectly — and the old code took that as proof
+	// enough to write `clone_status = "ready", clone_error = null`. So the run's own first act
+	// ERASED the verdict that should have stopped it: `~/dev/aipa` carried `needs_attention` and
+	// #405's sentence, and starting a session replaced them with `ready`.
+	//
+	// `checkWorkdirVia` is NOT mocked here: it is the real function over the mocked `callRunner`,
+	// so what is asserted is the whole path from the runner's answer to the row.
+	beforeEach(() => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+	});
+
+	/** `/coding/start` succeeds; `/coding/repo-check` answers whatever the test says. */
+	const runnerAnswering = (check: unknown) =>
+		vi.mocked(runner.callRunner).mockImplementation((async (_c: unknown, path: string) =>
+			path === "/coding/repo-check" ? check : { ok: true }) as never);
+
+	it("does NOT promote a condemned folder to `ready` just because the engine launched in it", async () => {
+		runnerAnswering({ checked: true, path: "/Users/x/dev/fws", exists: true, isDirectory: true, entryCount: 1, insideWorkTree: false, gitChecked: true });
+		await ensureActiveSession(env, "inst", "u", repo);
+		const statuses = vi.mocked(store.updateRepoClone).mock.calls.map((c) => c[2].cloneStatus);
+		expect(statuses).not.toContain("ready");
+	});
+
+	it("stores the verdict the machine actually gave, with the relayable sentence", async () => {
+		runnerAnswering({ checked: true, path: "/Users/x/dev/fws", exists: true, isDirectory: true, entryCount: 1, insideWorkTree: false, gitChecked: true });
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", {
+			cloneStatus: "needs_attention",
+			cloneError: expect.stringContaining("not inside a git working tree"),
+			checkedNow: true,
+		});
+	});
+
+	it("writes `ready` when the machine says the checkout IS a work tree", async () => {
+		// Not a blanket "stop writing": a healthy repo must still be recorded healthy, and stamped
+		// fresh — otherwise a correct `ready` becomes indistinguishable from one nobody has
+		// re-confirmed since Monday (#440's whole point in adding the column).
+		runnerAnswering({ checked: true, path: "/Users/x/dev/fws", exists: true, isDirectory: true, entryCount: 12, insideWorkTree: true, gitChecked: true });
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", { cloneStatus: "ready", cloneError: null, checkedNow: true });
+	});
+
+	it("writes NOTHING when the machine cannot answer the check", async () => {
+		// A `pags up` older than `/coding/repo-check` answers `{error:"Not found"}`. Condemning on
+		// that would break every repo on a machine the moment the API shipped ahead of the CLI —
+		// which is exactly why `cloneStatusForVerdict` returns null for `unverified`.
+		runnerAnswering({ error: "Not found" });
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.updateRepoClone).not.toHaveBeenCalled();
+	});
+
+	it("still calls a MANAGED CLONE ready without probing, because the clone itself is the look", async () => {
+		// No `workdir` → nothing local to check, and `/coding/start` is what cloned it. Asking
+		// `/coding/repo-check` about a managed dir whose path D1 never learns would answer about
+		// nothing.
+		const cloned = { ...repo, workdir: undefined, cloneUrl: "https://github.com/o/r.git" };
+		vi.mocked(runner.callRunner).mockResolvedValue({ ok: true } as never);
+		await ensureActiveSession(env, "inst", "u", cloned);
+		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", { cloneStatus: "ready", cloneError: null });
+		expect(vi.mocked(runner.callRunner).mock.calls.some((c) => c[1] === "/coding/repo-check")).toBe(false);
+	});
+
+	it("a failed probe does not fail an open that already worked", async () => {
+		vi.mocked(runner.callRunner).mockImplementation((async (_c: unknown, path: string) => {
+			if (path === "/coding/repo-check") throw new Error("relay exploded");
+			return { ok: true };
+		}) as never);
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: true, opened: true });
+	});
+});

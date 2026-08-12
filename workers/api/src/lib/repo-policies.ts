@@ -275,6 +275,12 @@ export function evaluateRepoPolicies(input: RepoPolicyInput): RepoPolicyFinding[
 		const base = { policy: def.id, cardId, card: null, mode, remediation: null, refusal: null } as const;
 		if (mode === "off") return { ...base, status: "unclaimed" };
 		if (!state) return { ...base, status: "unknown" };
+		// A folder with no `.git` can neither satisfy nor violate a git invariant (#548). Both
+		// clauses below return null for it — no branch to be off, no diff to protect — which would
+		// score every policy `held`, i.e. a claim of COMPLIANCE about a repository that is not
+		// there. That is precisely the false positive `unknown` exists to prevent, and it only
+		// became reachable when this state stopped arriving as `null`.
+		if (state.notAGitRepo) return { ...base, status: "unknown" };
 
 		if (def.id === "repo.on_default_branch") {
 			const clause = offTrunkClause(state, configuredBranch);

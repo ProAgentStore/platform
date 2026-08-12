@@ -23,6 +23,7 @@ import { sanitizeMaxIterations } from "./agent-loop.js";
 import { delegationTaskRecord } from "./delegation.js";
 import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
 import { ensureActiveSession } from "./coding-session-open.js";
+import { admitRepoForRun } from "./coding-repo-admission.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
@@ -173,6 +174,26 @@ const codingDriver: LoopDriver = {
 		if (!connectivity.canWork) {
 			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity }) };
 		}
+
+		// Is the CHECKOUT usable? (#548)
+		//
+		// The fourth admission check, and the one that was missing: a machine being reachable says
+		// nothing about the folder on it. `~/dev/aipa` has no `.git`, the row said so
+		// (`needs_attention`, written by a probe that actually looked), and three `git pull` runs
+		// were admitted onto it anyway — 45 minutes and nine BYOK decisions to arrive at "stuck not
+		// resolved in time", while the platform held the sentence "not inside a git working tree"
+		// in D1 the whole time.
+		//
+		// AFTER connectivity, deliberately. With the machine off, a `needs_attention` verdict may
+		// be days stale and the runner diagnosis is both truer and more actionable; leading with
+		// the repo verdict there would send an owner to inspect a folder on a laptop that is shut.
+		// With the machine up, the verdict IS the live blocker and is said first.
+		//
+		// The gate is on the RUN, not on the session. The incident's session was `alive: true` —
+		// reattached, reused and useless — so gating only the OPENING of a new session would have
+		// admitted all three of those runs.
+		const admission = admitRepoForRun(repo);
+		if (!admission.ok) return { ok: false, status: 409, error: admission.message };
 
 		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the
 		// Pilot ended the session its own driver required, so the second goal always 409'd — and

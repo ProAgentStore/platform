@@ -9,6 +9,7 @@
 import { callRunner, getBoundRunnerConn, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
+import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
@@ -51,6 +52,56 @@ export interface StartOnRunnerResult {
 	 * field as false is not an assumption — it is the behaviour.
 	 */
 	resumed: boolean;
+}
+
+/**
+ * What a SUCCESSFUL launch is allowed to say about the checkout (#548).
+ *
+ * This used to be an unconditional `clone_status = "ready", clone_error = null`, four lines above
+ * the comment that states the opposite invariant:
+ *
+ *   // A REPO'S STATE IS ONLY EVER WRITTEN BY SOMETHING THAT LOOKED AT THE REPO (#440).
+ *
+ * Nothing had looked. `POST /coding/start` succeeding means the runner could chdir into the path
+ * and was willing to spawn a command there — which a plain folder with no `.git` satisfies
+ * perfectly. So a run's own first act was to ERASE the verdict that should have stopped it:
+ * `~/dev/aipa` carried `needs_attention` plus #405's exact sentence, and starting a session
+ * replaced it with `ready`. `ready`, per #405, is the word that makes an agent invent code.
+ *
+ * #440 closed the false-`error` direction (a dropped WebSocket recorded as the repo's state; the
+ * `isRunnerUnreachable` guard in the catch below is that fix). This is its mirror: a start must
+ * not PROMOTE a bad row any more than a disconnect may demote a good one. `cloneStatusForVerdict`
+ * already encodes the shared half — it returns `null` for `unverified`, so a machine that could
+ * not answer changes nothing in either direction.
+ *
+ * A MANAGED CLONE (no `workdir`) keeps the old unconditional `ready`, and that is not an
+ * exception to the rule: `/coding/start` clones it, so something did look, and it is the clone
+ * itself that succeeded. There is no local path to probe and `/coding/repo-check` would be asked
+ * about a directory D1 has never learned the name of.
+ *
+ * Never throws: this is bookkeeping after a launch that already worked, and a failed probe must
+ * not turn a live session into a failed open.
+ */
+async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo): Promise<void> {
+	if (!repo.workdir) {
+		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null }).catch(() => undefined);
+		return;
+	}
+	const verdict = await checkWorkdirVia(conn, repo.workdir).catch(() => null);
+	if (!verdict) return;
+	const status = cloneStatusForVerdict(verdict);
+	// `unverified` → null → no write, exactly as at list time. The connection answering the START
+	// does not guarantee it answers a `/coding/repo-check` (an older `pags up` has no such
+	// endpoint), and a CLI skew must not condemn a healthy repo.
+	if (!status) return;
+	await updateRepoClone(env, repo.id, {
+		cloneStatus: status,
+		cloneError: verdict.detail || null,
+		// A machine gave a definite verdict just now — this is precisely what #440's freshness
+		// column is for, and the reason a correct `ready` written here is distinguishable from one
+		// nobody has re-confirmed since Monday.
+		checkedNow: true,
+	}).catch(() => undefined);
 }
 
 /**
@@ -126,7 +177,7 @@ export async function startSessionOnRunner(
 			resumeFrom: opts?.resumeFrom || undefined,
 			env: engineEnv,
 		});
-		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
+		await recordStartVerdict(env, conn, repo);
 		return { conn, resumed: started?.resumed === true };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { describeRepoState, parseGitShortStatus } from "./repo-state.js";
+import { describeRepoState, parseGitShortStatus, saysNotAGitRepo } from "./repo-state.js";
+import { notAGitRepoState } from "./repo-observation.js";
 
 describe("parseGitShortStatus (#276)", () => {
 	it("reads the branch out of the `--branch` header and counts the changed files", () => {
@@ -90,5 +91,45 @@ describe("describeRepoState (#276)", () => {
 		const note = describeRepoState({ branch: null, dirty: true, changedFiles: 2 });
 		expect(note).toContain("2 uncommitted files");
 		expect(note).not.toContain("trunk");
+	});
+});
+
+describe("`git said no` is a different fact from `the runner said nothing` (#548)", () => {
+	it("saysNotAGitRepo matches the runner's own refusal", () => {
+		// `runRepoGit` throws `InspectError("not a git repo")` when `.git` is absent, which the
+		// relay returns as a 400 and `callRunner` raises as `Runner /coding/git → 400: {...}`.
+		expect(saysNotAGitRepo('Runner /coding/git → 400: {"error":"not a git repo"}')).toBe(true);
+		expect(saysNotAGitRepo(new Error("not a git repo"))).toBe(true);
+	});
+
+	it("saysNotAGitRepo matches git's own wording, for a present-but-broken .git", () => {
+		expect(saysNotAGitRepo("fatal: not a git repository (or any of the parent directories): .git")).toBe(true);
+	});
+
+	it("saysNotAGitRepo does NOT match a disconnect, which is genuinely unknown", () => {
+		// The whole distinction. A machine that could not answer says nothing about the path on it,
+		// and reporting "not a repository" from a dropped socket is the #440 mistake in a new place.
+		expect(saysNotAGitRepo("No runner connected — the relay has no live socket for this agent.")).toBe(false);
+		expect(saysNotAGitRepo("Runner disconnected")).toBe(false);
+		expect(saysNotAGitRepo(undefined)).toBe(false);
+		expect(saysNotAGitRepo(null)).toBe(false);
+	});
+
+	it("describeRepoState carries the verdict into the sentence the Pilot is given", () => {
+		// The channel already existed and was already injected (`stateNote`, workflows/
+		// coding-session.ts) — `readRepoWorkingState` returning null for BOTH facts is what left it
+		// empty. In the reported incident this sentence would have replaced fifteen minutes of
+		// "stuck not resolved in time".
+		const note = describeRepoState(notAGitRepoState());
+		expect(note).toContain("no `.git`");
+		expect(note).toMatch(/git working tree/);
+	});
+
+	it("the not-a-repo clause REPLACES the other two rather than composing with them", () => {
+		// A path with no `.git` has no branch to be off and no diff to protect, so composing would
+		// describe a repository that is not there.
+		const note = describeRepoState(notAGitRepoState(), { configuredBranch: "main" });
+		expect(note).not.toMatch(/uncommitted/);
+		expect(note).not.toMatch(/rather than its configured/);
 	});
 });

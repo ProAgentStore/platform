@@ -21,6 +21,24 @@ export interface RepoWorkingState {
 	branch: string | null;
 	dirty: boolean;
 	changedFiles: number;
+	/**
+	 * The machine ANSWERED that this path is not a git working tree (#548).
+	 *
+	 * Distinct from every other shape this record takes, and that is the point: `branch: null`
+	 * already means "unknown", so before this existed a `git status` that came back
+	 * `fatal: not a git repository` was indistinguishable from a runner that did not reply, and
+	 * both were reported to the Pilot as nothing at all. One value for two facts, and the more
+	 * actionable of the two was the one being thrown away.
+	 *
+	 * Only ever set from a definite refusal by git itself. Absent means "no such answer was
+	 * received" — never "it is a repository".
+	 */
+	notAGitRepo?: boolean;
+}
+
+/** The state a definite "this is not a working tree" answer produces. */
+export function notAGitRepoState(): RepoWorkingState {
+	return { branch: null, dirty: false, changedFiles: 0, notAGitRepo: true };
 }
 
 /**
@@ -41,6 +59,20 @@ export function offTrunkClause(state: RepoWorkingState, configuredBranch?: strin
 	const offTrunk = state.branch ? (configured ? state.branch !== configured : !IMPLICIT_TRUNK.includes(state.branch)) : false;
 	if (!offTrunk) return null;
 	return `on branch \`${state.branch}\`${configured ? ` rather than its configured \`${configured}\`` : " rather than the trunk"} — a new goal will run on that branch unless you say otherwise`;
+}
+
+/**
+ * The clause that outranks the other two (#548).
+ *
+ * When git has said the path is not a working tree there is no branch to be off and no diff to
+ * preserve, so composing this with the others would produce a sentence about a repository that
+ * does not exist. It is also the only clause here that IS a problem rather than a condition worth
+ * weighing — but it still states fact-and-consequence rather than an instruction, for the same
+ * reason the others do: the recipient decides.
+ */
+export function notAGitRepoClause(state: RepoWorkingState): string | null {
+	if (!state.notAGitRepo) return null;
+	return "not a git working tree at all — the folder is there but has no `.git`, so every git command in it fails; nothing can be pulled, committed or branched until it is a clone";
 }
 
 export function dirtyClause(state: RepoWorkingState): string | null {
