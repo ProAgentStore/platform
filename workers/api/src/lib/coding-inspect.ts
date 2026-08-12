@@ -1,4 +1,5 @@
 import { callRunner, type RunnerConn } from "./runner-client.js";
+import { READ_FETCH_BYTES, renderRepoFileWindow } from "./repo-file-window.js";
 import { canReadHosted, hostedCoordinate, listHostedIssues, readHostedIssue, type HostedRepoRef } from "./hosted-repo.js";
 import type { Env } from "../types.js";
 
@@ -47,8 +48,10 @@ export function buildInspectTools(opts: { code?: boolean; issues?: boolean } = {
 			fn("list_files", "List the repo's files/folders (names only) to see what's there. Use before assuming a feature does or doesn't exist.", {
 				path: { type: "string", description: "Sub-folder to list (optional; defaults to the repo root)." },
 			}),
-			fn("read_file", "Read a file's contents from the repo, to check what's actually implemented.", {
+			fn("read_file", "Read a file's contents from the repo, to check what's actually implemented. A large file comes back as a WINDOW of numbered lines that says which lines you got and how to ask for the next ones — read on with `startLine` instead of assuming the file ends there.", {
 				path: { type: "string", description: "File path relative to the repo root, e.g. src/App.tsx." },
+				startLine: { type: "number", description: "First line to return — 1-based and inclusive (default 1)." },
+				endLine: { type: "number", description: "Last line to return — 1-based and inclusive (optional)." },
 			}, ["path"]),
 			fn("git_status", "Show which files have uncommitted changes right now (git status).", {}),
 			fn("git_diff", "Show the actual uncommitted changes (git diff) — use this to confirm what did or didn't change before claiming it.", {
@@ -75,7 +78,10 @@ export const ISSUE_TOOL_NAMES = new Set(["list_issues", "read_issue"]);
 /** Every read tool the co-pilot recognizes (code + issues). */
 export const ALL_INSPECT_TOOL_NAMES = new Set([...INSPECT_TOOL_NAMES, ...ISSUE_TOOL_NAMES]);
 
-/** Per-call byte budgets so a huge file/diff can't blow the model context. */
+/** Per-call budgets so a huge file/diff can't blow the model context. Bytes, except `read_file`,
+ *  which is now the CHARACTER budget of a line window (#534) — deliberately left at this reader's
+ *  own 8,192 rather than raised to the Assistant's 20,000, so the Co-pilot gains the range and the
+ *  numbers without its per-turn token cost moving at all. */
 const CAPS = { read_file: 8 * 1024, git_diff: 12 * 1024, list_files: 6 * 1024, git_status: 4 * 1024, issues: 4 * 1024, issue: 8 * 1024 };
 
 /**
@@ -134,9 +140,22 @@ export async function executeInspectTool(target: InspectTarget, call: { name: st
 			}
 			case "read_file": {
 				if (!path) return "read_file needs a `path`.";
-				const r = await callRunner<{ content?: string; binary?: boolean; truncated?: boolean }>(conn, "/coding/read-file", { ...base, path, maxBytes: CAPS.read_file });
+				// The SECOND reader of the same files (#534). This carried the identical defect the
+				// ticket is about — an 8KB byte cap, no range, and a disclosure that was the single
+				// word "(truncated)" with no numbers — so the Co-pilot and the Assistant could
+				// disagree about what a file contains. It takes the same window, keeping its OWN
+				// smaller budget: the fix here is the range and the honest header, not more tokens.
+				const r = await callRunner<{ content?: string; binary?: boolean; truncated?: boolean; size?: number }>(conn, "/coding/read-file", { ...base, path, maxBytes: READ_FETCH_BYTES });
 				if (r.binary) return `${path} is a binary file (not shown).`;
-				return clip(`Contents of ${path}${r.truncated ? " (truncated)" : ""}:\n${r.content ?? ""}`, CAPS.read_file);
+				return renderRepoFileWindow({
+					path,
+					content: r.content ?? "",
+					size: r.size,
+					fetchTruncated: r.truncated,
+					startLine: call.arguments?.startLine,
+					endLine: call.arguments?.endLine,
+					maxChars: CAPS.read_file,
+				}).content;
 			}
 			case "git_status": {
 				const r = await callRunner<{ output?: string }>(conn, "/coding/git", { ...base, cmd: "status" });

@@ -73,8 +73,28 @@ describe("executeInspectTool", () => {
 
 	it("read_file → /coding/read-file with the path", async () => {
 		const out = await executeInspectTool(target, { name: "read_file", arguments: { path: "src/app.ts" } });
-		expect(calls[0]).toMatchObject({ path: "/coding/read-file", body: { path: "src/app.ts" } });
+		// Everything the runner will give, sliced cloud-side into a window (#534) — the Co-pilot was
+		// the SECOND reader carrying the identical 8KB-with-no-range defect.
+		expect(calls[0]).toMatchObject({ path: "/coding/read-file", body: { path: "src/app.ts", maxBytes: 128 * 1024 } });
 		expect(out).toMatch(/export const x/);
+		expect(out).toContain("--- src/app.ts — lines 1-1 of 1");
+	});
+
+	it("read_file takes a line range and keeps this reader's own smaller budget", async () => {
+		const rc = await import("./runner-client.js");
+		const content = Array.from({ length: 900 }, (_, i) => `line ${i + 1} ${"y".repeat(30)}`).join("\n");
+		(rc.callRunner as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce({ content, size: content.length });
+		const ranged = await executeInspectTool(target, { name: "read_file", arguments: { path: "src/app.ts", startLine: 500, endLine: 502 } });
+		expect(ranged).toContain("500: line 500");
+		expect(ranged).toContain("502: line 502");
+		expect(ranged).not.toContain("503: ");
+
+		(rc.callRunner as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce({ content, size: content.length });
+		const whole = await executeInspectTool(target, { name: "read_file", arguments: { path: "src/app.ts" } });
+		// 8,192 characters, not the Assistant's 20,000: the Co-pilot gains the range and the numbers
+		// without its per-turn token cost moving.
+		expect(whole.length).toBeLessThan(9_000);
+		expect(whole).toContain("startLine=");
 	});
 
 	it("list_files → /coding/tree, rendered as a path list", async () => {

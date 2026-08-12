@@ -223,17 +223,50 @@ describe("repo-local — tool behaviour", () => {
 		expect(r.content).toContain("truncated");
 	});
 
-	it("repo_read_file caps the byte budget and labels the excerpt with its path", async () => {
+	it("repo_read_file asks the runner for everything it will give and labels the window with its path", async () => {
 		callRunner.mockResolvedValue({ content: "export const a = 1;", size: 19 });
 		const r = await tool("repo_read_file").handler(ctx(), { path: "src/a.ts" });
 		expect(callRunner).toHaveBeenCalledWith(
 			FAKE_CONN,
 			"/coding/read-file",
-			{ workDir: "~/work/my-repo", path: "src/a.ts", maxBytes: 8 * 1024 },
+			// The runner clamps at its own HARD_MAX_FILE_BYTES; the slicing is cloud-side (#534), so
+			// there is no CLI release in this and no version to skew on.
+			{ workDir: "~/work/my-repo", path: "src/a.ts", maxBytes: 128 * 1024 },
 			expect.anything(),
 		);
-		expect(r.content).toContain("--- src/a.ts ---");
-		expect(r.content).toContain("export const a = 1;");
+		expect(r.content).toContain("--- src/a.ts — lines 1-1 of 1 (the whole file) ---");
+		expect(r.content).toContain("1: export const a = 1;");
+	});
+
+	// #534's acceptance test, at the tool boundary: firestore.rules is 511+ lines and the rule the
+	// owner needed sits at 511 — past the old 8KB cut, and unreachable by ANY argument the model
+	// could pass, which is why the agent had to fall back to repo_grep.
+	it("repo_read_file returns a line range past the old 8KB cut in one call", async () => {
+		const lines = Array.from({ length: 560 }, (_, i) => `// filler ${i + 1} ${"x".repeat(40)}`);
+		lines[510] = "match /eventCalls/{callId} {";
+		callRunner.mockResolvedValue({ content: lines.join("\n"), size: 30_000 });
+		const r = await tool("repo_read_file").handler(ctx(), { path: "firestore.rules", startLine: 505, endLine: 515 });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("511: match /eventCalls/{callId} {");
+	});
+
+	it("repo_read_file discloses a window in the HEADER, with the call that returns the next one", async () => {
+		const content = Array.from({ length: 3_000 }, (_, i) => `const line${i} = ${i};`).join("\n");
+		callRunner.mockResolvedValue({ content, size: content.length });
+		const r = await tool("repo_read_file").handler(ctx(), { path: "big.ts" });
+		expect(r.success).toBe(true);
+		// The head is what capToolResult keeps, so everything needed to ask again lives there.
+		const head = r.content.slice(0, 600);
+		expect(head).toContain("of 3,000");
+		expect(head).toContain("were NOT returned");
+		expect(head).toMatch(/startLine=\d/);
+	});
+
+	it("repo_read_file refuses a startLine past the end instead of returning an empty window", async () => {
+		callRunner.mockResolvedValue({ content: "a\nb\nc\n", size: 6 });
+		const r = await tool("repo_read_file").handler(ctx(), { path: "src/a.ts", startLine: 900 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("has 3 lines");
 	});
 
 	it("repo_read_file requires a path and reports a binary file instead of dumping bytes", async () => {
@@ -264,6 +297,35 @@ describe("repo-local — tool behaviour", () => {
 			expect.anything(),
 		);
 		expect(r.content).toBe("abc123 fix thing");
+	});
+
+	// AC 5, the sibling cap in the same shape as the one #534 is about: the handler used to
+	// `.slice(0, CAPS.git)` and never read `res.truncated`, so a cut `git diff` was textually
+	// indistinguishable from a complete one — at BOTH the machine's 64KB cut and this 12KB one.
+	it("repo_git says when the output was cut, at either end", async () => {
+		callRunner.mockResolvedValue({ cmd: "git diff", output: "x".repeat(20_000), pathApplied: false });
+		const wide = await tool("repo_git").handler(ctx(), { cmd: "diff" });
+		expect(wide.content.startsWith("(TRUNCATED:")).toBe(true);
+		expect(wide.content).toContain("diff-stat");
+
+		callRunner.mockResolvedValue({ cmd: "git diff", output: "short", truncated: true, pathApplied: false });
+		const machine = await tool("repo_git").handler(ctx(), { cmd: "diff" });
+		expect(machine.content).toContain("your machine had already cut it");
+	});
+
+	it("repo_git stays byte-for-byte unchanged when nothing was cut", async () => {
+		callRunner.mockResolvedValue({ cmd: "git status", output: "## main\n M src/a.ts", pathApplied: false });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "status" });
+		expect(r.content).toBe("## main\n M src/a.ts");
+	});
+
+	// Same class again: the count note is the one part of a truncated search result the model must
+	// see, and appending it before the slice could cut it off the end.
+	it("repo_grep keeps its 'showing N of M' outside the byte cap", async () => {
+		const matches = Array.from({ length: 50 }, (_, i) => ({ path: `${"deep/".repeat(30)}file${i}.ts`, line: i, text: "x".repeat(160) }));
+		callRunner.mockResolvedValue({ matches, shown: 50, total: 812, truncated: true });
+		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
+		expect(r.content).toContain("showing 50 of 812");
 	});
 
 	it("repo_remote reports the origin, and says so plainly when there isn't one", async () => {
