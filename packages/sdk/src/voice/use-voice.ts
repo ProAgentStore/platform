@@ -50,10 +50,10 @@ import { isConnectivityError, reportClientError } from "../client.js";
 import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, VOICE_FLOOR } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, dictationDiverged, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, isEchoing, lostTail, LOST_TAIL_WORDS, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceCommand, type VoiceCommandWords, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
-import { planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
+import { dropNote, planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
 import { TRANSCRIBE_STREAM_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt } from "./stt.js";
@@ -548,16 +548,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// diagnostic, not a platform failure, and it must not flood the error log.
 		const heard = lastHeardRef.current;
 		lastHeardRef.current = "";
-		if (heard && dictationDiverged(heard, text)) {
+		const tail = heard ? lostTail(heard, text) : 0;
+		if (heard && (tail >= LOST_TAIL_WORDS || dictationDiverged(heard, text))) {
 			console.warn("[voice] transcript lost content", { heard, final: text });
-			let debug = false;
-			try {
-				debug = typeof localStorage !== "undefined" && !!localStorage.getItem("pags:voice-debug");
-			} catch {
-				// Ignorable: Safari private mode throws on `localStorage`. Off is the safe default —
-				// the branch it guards is a diagnostic that must not reach the log unasked (#291).
-			}
-			if (debug) reportClientError("voice-transcript", "final transcript dropped content heard live", { heard, final: text });
+			// A whole CLAUSE lost off the end now reports unconditionally (#512). It used to be
+			// gated behind a `pags:voice-debug` localStorage flag, so in production it never fired
+			// at all — and `dictationDiverged` on its own asks about volume, which a clause lost
+			// from a long turn does not move. This is the failure the user cannot see: a dropped
+			// clip gets said again, a truncated one reaches the agent reading like a complete
+			// instruction with its operative half missing.
+			reportClientError("voice-transcript", "final transcript dropped a clause heard live", { heard: heard.slice(0, 400), final: text.slice(0, 400), lostTail: tail });
 		}
 		// The two gates a transcript must clear (noise, then language) and whether this turn has a
 		// recording worth an audio key — decided together, in order, by `planSend`.
@@ -587,7 +587,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				flushSync(() => setNotice("Didn't catch your language — please say that again."));
 				setTimeout(() => setNotice((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
 			}
-			return { sent: false, note: plan.reason === "language" ? "Not the language you set, so nothing was sent — these are the words heard live." : "Came back as noise, so nothing was sent — these are the words heard live." };
+			return { sent: false, note: dropNote(plan.reason) };
 		}
 		if (plan.attachAudio && blob && instanceId) {
 			const turnId = crypto.randomUUID();

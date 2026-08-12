@@ -377,21 +377,27 @@ describe("silent / near-silent clip speech gate (#490)", () => {
 		expect(results).toEqual(["Hello world."]);
 	});
 
-	it("temperature=0 is always sent to suppress random-sampling hallucinations", async () => {
-		const bodies: FormData[] = [];
-		vi.stubGlobal("localStorage", { getItem: () => "test-token" });
-		vi.stubGlobal("fetch", vi.fn(async (_url: string, init: { body: FormData }) => {
-			bodies.push(init.body);
-			return { ok: true, body: null, json: async () => ({ text: "hi" }), text: async () => "" };
-		}));
-
-		const stt = new VoiceStt("openai", { language: "en-US" });
-		(stt as unknown as { _peakLevel: number })._peakLevel = 0.3;
-		await (stt as unknown as { _transcribeWhisper(b: Blob): Promise<void> })._transcribeWhisper(
-			new Blob(["x"], { type: "audio/webm" }),
-		);
-
-		expect(bodies[0].get("temperature")).toBe("0");
+	it("temperature=0 is sent to whisper-1 and NOT to the streaming model (#512)", async () => {
+		// This test used to assert "always sent". The decision is now split by model family, and
+		// the reasoning is in stt.ts: for whisper-1, OpenAI documents 0 as the value that turns the
+		// log-probability temperature ladder ON, so #490's use of it stands. For the
+		// gpt-4o-transcribe family, 0 is plain greedy decoding — the regime that produces the
+		// repetition loops recorded on 2026-08-11, one of which was sent to an agent as a real user
+		// turn — and it was never shown to help there, so the model's own default is used instead.
+		const send = async (model: string) => {
+			const bodies: FormData[] = [];
+			vi.stubGlobal("localStorage", { getItem: () => "test-token" });
+			vi.stubGlobal("fetch", vi.fn(async (_url: string, init: { body: FormData }) => {
+				bodies.push(init.body);
+				return { ok: true, body: null, json: async () => ({ text: "hi" }), text: async () => "" };
+			}));
+			const stt = new VoiceStt("openai", { language: "en-US", model });
+			(stt as unknown as { _peakLevel: number })._peakLevel = 0.3;
+			await (stt as unknown as { _transcribeWhisper(b: Blob): Promise<void> })._transcribeWhisper(new Blob(["x"], { type: "audio/webm" }));
+			return bodies[0];
+		};
+		expect((await send("whisper-1")).get("temperature")).toBe("0");
+		expect((await send(DEFAULT_STT_MODEL)).get("temperature")).toBeNull();
 	});
 
 	it("bias prompt is suppressed when peak is low-energy (near-silent clip)", async () => {

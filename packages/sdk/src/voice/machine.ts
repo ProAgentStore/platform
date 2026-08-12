@@ -573,6 +573,44 @@ export function dictationLoss(heard: string, final: string): number {
 	return lost;
 }
 
+/** A trailing clause this long, heard live and absent from the transcript, is reported (#512).
+ *  Four words is a clause with an instruction in it; one or two is an ordinary mishearing of the
+ *  last word, and reporting those would bury the log in the normal disagreement between two
+ *  recognizers. */
+export const LOST_TAIL_WORDS = 4;
+
+/**
+ * How many words at the END of the live capture the transcript does not account for (#512).
+ *
+ * A different question from {@link dictationDiverged}, which asks about VOLUME — for a long turn
+ * it fires only when the transcript is more than 40% shorter, so a clause lost off the end of a
+ * paragraph does not register at all. And it is a different failure with a different cost: a
+ * dropped clip is visible, because the user says it again, while a silently TRUNCATED one is not.
+ * The agent receives a grammatical, plausible instruction that is missing its operative half. The
+ * recorded case:
+ *
+ *     sent   "…and file issues that come out of it."
+ *     heard  "…file issues that come out of it don't wait for the night rebuild we have to run"
+ *
+ * Counted from the end and stopping at the first word the transcript does have, so this measures a
+ * lost TAIL rather than general disagreement — words dropped from the middle are mishearing, which
+ * `dictationLoss` already counts. `nearWord` so a spelling variant is not mistaken for a loss.
+ *
+ * It is therefore a FLOOR on the loss, not an exact count: a common word inside the lost clause
+ * ("the", "to") ends the walk early, and the case above scores 6 for 10 lost words. Undercounting
+ * is the right direction for something whose only job is to decide whether a row is worth writing.
+ */
+export function lostTail(heard: string, final: string): number {
+	const h = words(heard);
+	const f = words(final);
+	let n = 0;
+	for (let i = h.length - 1; i >= 0; i--) {
+		if (f.some((w) => nearWord(w, h[i]))) break;
+		n++;
+	}
+	return n;
+}
+
 /** Cap on a stored dictation. An utterance is one breath; this is far past any of them. */
 export const DICTATION_MAX = 4000;
 

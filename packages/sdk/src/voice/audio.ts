@@ -137,6 +137,48 @@ export function isNoiseTranscript(text: string, biasPrompt?: string): boolean {
 	return SILENCE_HALLUCINATIONS.has(t);
 }
 
+/** A repeated phrase must occur at least this many times CONSECUTIVELY, and cover at least
+ *  {@link REPETITION_MIN_COVERAGE} of the words, before the transcript is called a loop. Both
+ *  bars are deliberately high: a false positive here DROPS A REAL TURN, which is the exact harm
+ *  this is meant to prevent. "no, no, no" (3, short) and "very very good" stay ordinary speech. */
+export const REPETITION_MIN_RUN = 4;
+export const REPETITION_MIN_COVERAGE = 0.5;
+/** Longest phrase considered as the repeating unit. Loops observed in the log are 1–2 words
+ *  ("chess academy"); 5 is headroom, and a longer "repeat" is usually a person being emphatic. */
+const REPETITION_MAX_PHRASE = 5;
+
+/**
+ * Is this transcript a decoder repetition loop rather than something a person said? (#512)
+ *
+ * Autoregressive decoders get stuck. Two real ones reached this platform on 2026-08-11, and the
+ * first of them was **sent to the agent as a real user turn**:
+ *
+ *     "apps chess academy, chess academy, chess academy, chess academy, chess academy, chess academy"
+ *     "chess-academy" ×14
+ *
+ * `isNoiseTranscript` cannot catch these: it matches a fixed list of silence hallucinations, and a
+ * loop is made of the user's OWN vocabulary, so every phrase in it is plausible. The shape is the
+ * signal, not the words — which is also why this survives whatever the transcription model does
+ * next. Whether `temperature` provoked these is unresolved (see stt.ts); this holds either way,
+ * and it is the half of #512 that does not depend on that answer.
+ *
+ * Judged on the whole utterance and on normalised words, so punctuation and casing between the
+ * repeats ("chess academy, chess academy" vs "chess-academy chess-academy") cannot hide the shape.
+ */
+export function isRepetitionLoop(text: string): boolean {
+	const w = normalizeSpeech(text).split(" ").filter(Boolean);
+	if (w.length < REPETITION_MIN_RUN * 1) return false;
+	for (let size = 1; size <= Math.min(REPETITION_MAX_PHRASE, Math.floor(w.length / REPETITION_MIN_RUN)); size++) {
+		for (let start = 0; start + size * REPETITION_MIN_RUN <= w.length; start++) {
+			const phrase = w.slice(start, start + size).join(" ");
+			let run = 1;
+			while (w.slice(start + run * size, start + (run + 1) * size).join(" ") === phrase) run++;
+			if (run >= REPETITION_MIN_RUN && (run * size) / w.length >= REPETITION_MIN_COVERAGE) return true;
+		}
+	}
+	return false;
+}
+
 /** One decoded event from the streaming-transcription SSE (gpt-4o-transcribe). */
 export interface TranscriptionStreamEvent {
 	type: string;

@@ -18,7 +18,7 @@
  * No React, no browser — the hook keeps the side effects and this decides what they should be.
  */
 
-import { isNoiseTranscript } from "./audio.js";
+import { isNoiseTranscript, isRepetitionLoop } from "./audio.js";
 import { commandStateFor, matchVoiceCommand, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
 import { endOfTurnAction, storedDictation } from "./machine.js";
 import { applyVocabulary, type VocabularyCorrection } from "./vocabulary.js";
@@ -223,7 +223,7 @@ export function planNoiseRejection(text: string, cfg: { transcribePrompt?: strin
  * — with the live capture beside it and, only when there is really a recording, an audio key.
  */
 export type SendPlan =
-	| { action: "drop"; reason: "noise" | "language" }
+	| { action: "drop"; reason: "noise" | "language" | "repetition" }
 	| {
 			action: "send";
 			text: string;
@@ -276,6 +276,12 @@ export function planSend(
 	},
 ): SendPlan {
 	if (isNoiseTranscript(text, cfg.transcribePrompt)) return { action: "drop", reason: "noise" };
+	// REPETITION between the two, and for the same reason noise goes first: a decoder that stuck
+	// produced this, not a person, so it must not earn a "say that again in your language" nudge.
+	// It is checked here rather than left to the noise list because a loop is built from the
+	// user's own words — every phrase in it is plausible, and one was sent to an agent as a real
+	// user turn (#512). The words are KEPT on the failed bubble; only the send is refused.
+	if (isRepetitionLoop(text)) return { action: "drop", reason: "repetition" };
 	if (cfg.confirmLanguage && transcriptLanguageMismatch(text, cfg.lang)) return { action: "drop", reason: "language" };
 	const fixed = applyVocabulary(text, cfg.vocabulary || []);
 	return {
@@ -286,3 +292,15 @@ export function planSend(
 		corrections: fixed.corrections,
 	};
 }
+
+/**
+ * What the failed bubble says under "Not transcribed" when a turn is dropped on its way to the
+ * agent — one table, so the three reasons cannot disagree about the promise they all make: the
+ * words the user spoke are still on screen, and the user decides what happens to them.
+ */
+export function dropNote(reason: "noise" | "language" | "repetition"): string {
+	if (reason === "language") return "Not the language you set, so nothing was sent — these are the words heard live.";
+	if (reason === "repetition") return "Came back as a repeated phrase (a transcription glitch), so nothing was sent — these are the words heard live.";
+	return NOISE_NOTE_SEND;
+}
+const NOISE_NOTE_SEND = "Came back as noise, so nothing was sent — these are the words heard live.";

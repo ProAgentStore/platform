@@ -463,9 +463,32 @@ export class VoiceStt {
 		form.append("file", blob, whisperFilename(blob.type));
 		form.append("model", this.model);
 		form.append("language", this.language.slice(0, 2));
-		// temperature=0 suppresses the random sampling that produces fluent-but-wrong
-		// hallucinations on silence. Both whisper-1 and gpt-4o-transcribe accept it.
-		form.append("temperature", "0");
+		// Stream the transcript for a "live" feel — words land as they're recognised instead of one
+		// blob after a pause. whisper-1 ignores streaming, so only the gpt-4o-transcribe models get
+		// it. Declared up here because the decoding options below now differ by model family too.
+		const streaming = this.model !== "whisper-1";
+		// TEMPERATURE — whisper-1 only (#512).
+		//
+		// #490 sent `temperature=0` on every request to suppress the random sampling behind
+		// fluent-but-wrong hallucinations on silence. For whisper-1 that reasoning holds and is
+		// kept: OpenAI documents 0 on this endpoint as "the model will use log probability to
+		// automatically increase the temperature until certain thresholds are hit" — i.e. for the
+		// Whisper decoder, 0 SELECTS the fallback ladder rather than removing it. #512 reads it the
+		// other way round, and for whisper-1 the issue's stated mechanism is inverted.
+		//
+		// It is dropped for the streaming gpt-4o-transcribe family, which is a different
+		// architecture the ladder wording does not describe: there, 0 is plain greedy decoding, and
+		// greedy autoregressive decoding is the regime that produces repetition loops — two of
+		// which were recorded on 2026-08-11, one sent to an agent as a real user turn. It was never
+		// shown to help on this model (the phantom problem it was added for is handled here by the
+		// energy gate and the noise filter), so the model's own default is the better default.
+		//
+		// HONEST LIMIT: if that default is itself 0, this change is inert and the loops have
+		// another cause. The client cannot observe it, and #512 names the experiment — count
+		// repetition rows over a comparable window. That is why the client-side detector
+		// (`isRepetitionLoop`), not this line, is the deliverable: it holds whichever way the
+		// experiment lands.
+		if (!streaming) form.append("temperature", "0");
 		// Vocabulary bias — nudges the model toward domain words (a developer's "bugs"
 		// isn't "bars"). Suppressed when the clip is low-energy (peak barely cleared the
 		// speech floor) so the model has no list to "continue" on near-silence — one of
@@ -475,15 +498,10 @@ export class VoiceStt {
 		const lowEnergy = !hadSpeech(this._peakLevel, this._noiseFloor);
 		if (!lowEnergy && this.transcribePrompt && this.language.toLowerCase().startsWith("en"))
 			form.append("prompt", this.transcribePrompt);
-		// Stream the transcript for a "live" feel — words land as they're recognised
-		// instead of one blob after a pause. whisper-1 ignores streaming, so only the
-		// gpt-4o-transcribe models get it; everything else takes the plain json path.
-		//
-		// The two conditions are asked SEPARATELY on purpose (#511). They were one flag, and the
-		// model-side confidence gate was a passenger on the transport choice — so "does this model
-		// stream?" silently decided "is this turn checked for silence?", and the answer for the
-		// default model was no. See `supportsNoSpeechProb`.
-		const streaming = this.model !== "whisper-1";
+		// The transport and the confidence gate are asked SEPARATELY on purpose (#511). They were
+		// one flag, and the model-side gate was a passenger on the transport choice — so "does this
+		// model stream?" silently decided "is this turn checked for silence?", and the answer for
+		// the default model was no. See `supportsNoSpeechProb`.
 		if (streaming) form.append("stream", "true");
 		// verbose_json is what carries `no_speech_prob`, and only whisper-1 accepts it.
 		if (supportsNoSpeechProb(this.model)) form.append("response_format", "verbose_json");

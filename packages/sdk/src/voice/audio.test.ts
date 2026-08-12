@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeRmsLevel, describeTranscribeHttpError, drainSseData, isNoiseTranscript, isPlatformErrorBody, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+import { computeRmsLevel, describeTranscribeHttpError, drainSseData, isNoiseTranscript, isPlatformErrorBody, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES , isRepetitionLoop } from "./audio.js";
 
 describe("isNoiseTranscript", () => {
 	it("drops the exact Whisper silence hallucinations seen in the wild", () => {
@@ -224,5 +224,41 @@ describe("describeTranscribeHttpError (#421 — say whose failure it is)", () =>
 	});
 	it("survives a body that is neither (an edge 502 page, say)", () => {
 		expect(describeTranscribeHttpError(502, "<html>Bad Gateway</html>")).toMatch(/Whisper error 502/);
+	});
+});
+
+describe("isRepetitionLoop — #512: a decoder that stuck is not a user turn", () => {
+	it("catches the loop that WAS sent to an agent as a real user message", () => {
+		// Recorded 2026-08-11 21:44:05. isNoiseTranscript cannot catch this: it matches a fixed
+		// list of silence hallucinations, and every phrase here is the user's own vocabulary.
+		expect(isRepetitionLoop("apps chess academy, chess academy, chess academy, chess academy, chess academy, chess academy")).toBe(true);
+	});
+
+	it("catches the longer loop that was only caught by luck downstream (01:33:37)", () => {
+		expect(isRepetitionLoop(Array(14).fill("chess-academy").join(" "))).toBe(true);
+	});
+
+	it("is blind to punctuation and casing between the repeats", () => {
+		// "chess academy, chess academy" and "chess-academy chess-academy" are the same shape.
+		expect(isRepetitionLoop("Chess Academy. chess-academy, CHESS academy chess academy")).toBe(true);
+	});
+
+	it("does NOT fire on a person being emphatic — a false positive DROPS a real turn", () => {
+		expect(isRepetitionLoop("no, no, no, that is not what I meant")).toBe(false);
+		expect(isRepetitionLoop("very very good")).toBe(false);
+		expect(isRepetitionLoop("run the tests again and again until they pass")).toBe(false);
+		expect(isRepetitionLoop("I said it three times: stop, stop, stop")).toBe(false);
+	});
+
+	it("does NOT fire on ordinary speech that repeats a word naturally", () => {
+		expect(isRepetitionLoop("the deploy failed so the deploy needs a rerun and the deploy log is here")).toBe(false);
+		expect(isRepetitionLoop("add a test for the test runner in the test directory")).toBe(false);
+	});
+
+	it("needs COVERAGE as well as a run — a loop tacked onto a real sentence stays a real sentence", () => {
+		// Deliberate: refusing to send a long instruction because it ended in a stutter would lose
+		// more than it saves. Only a transcript that is MOSTLY the loop is refused.
+		const real = "please review the deployment logs and open an issue for anything that looks wrong before the release";
+		expect(isRepetitionLoop(`${real} chess academy chess academy chess academy chess academy`)).toBe(false);
 	});
 });

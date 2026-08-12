@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { matchVoiceCommand, splitTrailingCommand, stripStopWord, type VoiceCommandWords } from "./convo.js";
-import { type FinalizedTurn, planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
+import { dropNote, type FinalizedTurn, planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
+import { lostTail, LOST_TAIL_WORDS } from "./machine.js";
 import { VOICE_FLOOR } from "./vad.js";
 
 describe("utteranceSoFar", () => {
@@ -485,5 +486,67 @@ describe("planTurnClose — #510: the idle recycle stops eating proven speech, s
 		expect(suspicious.action === "discard" && suspicious.report).toBeTruthy();
 		const quiet = close("idle", null, 0.02);
 		expect(quiet.action === "discard" && quiet.report).toBeNull();
+	});
+});
+
+describe("planSend — #512 criterion 4: a repetition loop is never sent as a user turn", () => {
+	const base = { heard: "", confirmLanguage: false, lang: "en-US", audioBytes: 100, instanceId: "i1" };
+
+	it("REFUSES the exact transcript that reached an agent as a user message", () => {
+		const plan = planSend("apps chess academy, chess academy, chess academy, chess academy, chess academy, chess academy", base);
+		expect(plan).toEqual({ action: "drop", reason: "repetition" });
+	});
+
+	it("keeps the user's words on screen rather than vanishing the turn", () => {
+		// Same contract as the noise and language drops: the send is refused, the decision is the
+		// user's, and they can only make it while their words are still in front of them.
+		expect(dropNote("repetition")).toContain("these are the words heard live");
+		expect(dropNote("noise")).toContain("these are the words heard live");
+		expect(dropNote("language")).toContain("these are the words heard live");
+		// Each says something DIFFERENT about what happened — a shared note would be a lie in two
+		// of the three cases.
+		expect(new Set([dropNote("repetition"), dropNote("noise"), dropNote("language")]).size).toBe(3);
+	});
+
+	it("is judged BEFORE the language gate, so a glitch never earns a 'say it again' nudge", () => {
+		// Ordering is the content here, as it is for noise: a decoder that stuck did not speak the
+		// wrong language, and telling the user it did sends them to fix the wrong thing.
+		const plan = planSend(Array(14).fill("chess-academy").join(" "), { ...base, confirmLanguage: true, lang: "fr-FR" });
+		expect(plan.action === "drop" && plan.reason).toBe("repetition");
+	});
+
+	it("still sends an ordinary sentence that happens to repeat a word", () => {
+		const plan = planSend("add a test for the test runner in the test directory", base);
+		expect(plan.action).toBe("send");
+	});
+});
+
+describe("lostTail — #512 criterion 3: a clause lost off the end is measurable", () => {
+	it("measures the recorded truncation the volume test can miss", () => {
+		// sent   "…and file issues that come out of it."
+		// heard  "…that come out of it don't wait for the night rebuild we have to run"
+		const heard = "review the deployment logs and file issues that come out of it don't wait for the night rebuild we have to run";
+		const final = "review the deployment logs and file issues that come out of it";
+		// 6, not the 10 words actually lost: the walk stops at "the", which the transcript has
+		// earlier on. That is the measure's deliberate shape — a FLOOR on the loss, undercounting
+		// whenever a common word sits inside the lost clause. Undercounting is the safe direction
+		// for something whose only job is to decide whether a row is worth writing.
+		expect(lostTail(heard, final)).toBe(6);
+		expect(lostTail(heard, final)).toBeGreaterThanOrEqual(LOST_TAIL_WORDS);
+	});
+
+	it("counts a TAIL, not general disagreement — a mid-sentence mishearing is a different bug", () => {
+		// dictationLoss already counts words dropped from the middle; conflating them would make
+		// every ordinary mishearing look like a truncation.
+		expect(lostTail("run the tests and deploy", "run the exams and deploy")).toBe(0);
+	});
+
+	it("does not accuse the pipeline over a spelling variant at the end", () => {
+		expect(lostTail("open the colour picker", "open the color picker")).toBe(0);
+	});
+
+	it("is zero when the transcript is complete, and stays under the bar for one dropped word", () => {
+		expect(lostTail("run the tests", "run the tests")).toBe(0);
+		expect(lostTail("run the tests now", "run the tests")).toBeLessThan(LOST_TAIL_WORDS);
 	});
 });
