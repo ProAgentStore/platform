@@ -58,7 +58,11 @@ describe("connector registry", () => {
 		expect(repo?.auth).toBe("none");
 		expect(repo?.scopes).toEqual({ read: true, write: false });
 		const tools = connectorTools().filter((t) => t.connector === "repo-local");
-		expect(tools.length).toBe(4);
+		// Six since #508 added repo_find and repo_grep — the connector had four read tools and not
+		// one of them searched. The invariant that matters is the NEXT line: a connector whose
+		// `scopes.write` is false can never be write-consented, so the count growing must never
+		// grow the privilege.
+		expect(tools.length).toBe(6);
 		expect(tools.every((t) => t.scope === "read")).toBe(true);
 	});
 
