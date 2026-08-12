@@ -2,6 +2,7 @@
 
 import { API, getToken } from "../client.js";
 import { describeTranscribeHttpError, drainSseData, isTooShortToTranscribe, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { type GateEvidence } from "./machine.js";
 import { isBenignRecognizerEnd, type MicErrorDetail, planMicRestart } from "./mic-retry.js";
 import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
 import { type ClipVerdict, hadSpeech, type LevelSnapshot, onsetFloorFor, planClipGate } from "./vad.js";
@@ -128,12 +129,12 @@ export interface SttOptions {
 	/**
 	 * The live browser-dictation gate's reading, read AT THE MOMENT the clip is judged.
 	 *
-	 * A function rather than a value because both flags change during the recording, and the
-	 * question ("did real words happen this turn?") is only meaningful at the decision. The same
-	 * snapshot `use-voice` hands to `endOfTurnAction` and `planNoiseRejection`, so all three
-	 * answer it identically.
+	 * A function rather than a value because the flags change during the recording, and the question
+	 * ("did real words happen this turn?") is only meaningful at the decision. The same snapshot
+	 * `use-voice` hands to `planTurnClose` and `planNoiseRejection`, so all three answer it
+	 * identically — one shape, and since #535 one precedence rule (`speechVerdict`).
 	 */
-	gate?: () => { isAlive: boolean; heardSpeech: boolean } | null;
+	gate?: () => GateEvidence;
 	/** The speech gate's verdict on a finished clip, with the numbers behind it — so a discard
 	 *  before upload can leave a durable row instead of nothing at all (#510 criterion 2). */
 	onClipGate?: (verdict: ClipVerdict, snapshot: LevelSnapshot) => void;
@@ -149,7 +150,7 @@ export class VoiceStt {
 	onError: (error: string, detail?: MicErrorDetail) => void;
 	onEnd: () => void;
 	onAudio: (blob: Blob) => void;
-	gate: (() => { isAlive: boolean; heardSpeech: boolean } | null) | undefined;
+	gate: (() => GateEvidence) | undefined;
 	onClipGate: (verdict: ClipVerdict, snapshot: LevelSnapshot) => void;
 	listening = false;
 

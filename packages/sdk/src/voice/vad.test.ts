@@ -249,8 +249,11 @@ describe("adaptive noise floor — #490 noisy-room onset gate", () => {
 });
 
 describe("planClipGate — #510: zero frames is no measurement, not a measurement of silence", () => {
-	const alive = { isAlive: true, heardSpeech: true };
-	const aliveSilent = { isAlive: true, heardSpeech: false };
+	const alive = { isAlive: true, isHearing: true, heardSpeech: true };
+	const aliveSilent = { isAlive: true, isHearing: true, heardSpeech: false };
+	/** #535: `onend` fires for a recognizer that was refused the microphone, so this gate reports
+	 *  alive with no device at all. It may not condemn the clip it never listened to. */
+	const aliveButDeaf = { isAlive: true, isHearing: false, heardSpeech: false };
 
 	it("UPLOADS a clip the analyser never measured, when nothing can condemn it", () => {
 		// THE #510 regression, and the one with no possible evidence for it in the log: rAF does
@@ -270,6 +273,13 @@ describe("planClipGate — #510: zero frames is no measurement, not a measuremen
 		expect(planClipGate({ frames: 0, peakLevel: 0, noiseFloor: -1, gate: aliveSilent })).toEqual({ action: "discard", reason: "no-speech" });
 	});
 
+	it("#535: a gate that was never HEARING cannot condemn an unmeasured clip", () => {
+		// The same reading that destroyed ten hands-free turns, arriving on the other path. "Alive"
+		// is a session-lifetime fact and an `audio-capture` failure never clears it; only the
+		// per-turn one is evidence about this clip.
+		expect(planClipGate({ frames: 0, peakLevel: 0, noiseFloor: -1, gate: aliveButDeaf })).toEqual({ action: "transcribe", reason: "no-data" });
+	});
+
 	it("a MEASURED zero is real silence and is still discarded", () => {
 		// The distinction that makes the fix safe: frames > 0 means the analyser ran and reported
 		// nothing. That is evidence, and #490's protection against it is untouched.
@@ -284,6 +294,22 @@ describe("planClipGate — #510: zero frames is no measurement, not a measuremen
 		expect(planClipGate({ frames: 40, peakLevel: 0.05, noiseFloor: 0.04, gate: alive })).toEqual({ action: "transcribe", reason: "gate-vouched" });
 	});
 
+	it("#535: the verdicts are unchanged — this was the forgiving rule the other two moved to", () => {
+		// planClipGate already let a MEASUREMENT outrank a condemning gate; planTurnClose's end
+		// branch did not, which is the whole disagreement. Pinned as a table so "make the three
+		// rules agree" cannot be satisfied later by quietly moving this one.
+		const table: Array<[typeof alive | null, number, number, "transcribe" | "discard"]> = [
+			[alive, 0.05, 40, "transcribe"], // vouched beats a peak under the floor
+			[aliveSilent, 0.3, 40, "transcribe"], // measured speech beats gate silence
+			[aliveSilent, 0.04, 40, "discard"], // measured silence + a listening gate
+			[null, 0.04, 40, "discard"], // measured silence, no witness
+			[null, 0.3, 40, "transcribe"], // measured speech, no witness
+		];
+		for (const [gate, peakLevel, frames, action] of table) {
+			expect(planClipGate({ frames, peakLevel, noiseFloor: -1, gate }).action, `${JSON.stringify(gate)} @ ${peakLevel}`).toBe(action);
+		}
+	});
+
 	it("reports the two verdicts that are otherwise invisible, and only those", () => {
 		expect(clipGateReport({ action: "discard", reason: "no-speech" })).toBeTruthy();
 		expect(clipGateReport({ action: "transcribe", reason: "no-data" })).toBeTruthy();
@@ -295,10 +321,22 @@ describe("planClipGate — #510: zero frames is no measurement, not a measuremen
 describe("captureDiagnostics — #510 criterion 5: a drop row you can diagnose from", () => {
 	it("carries every input the speech gate used, and distinguishes absent from zero", () => {
 		// This took a code read rather than a query, because the rows carried none of it.
-		expect(captureDiagnostics({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42 }, { isAlive: true, heardSpeech: false }))
-			.toEqual({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42, gateAlive: true, gateHeardSpeech: false });
+		expect(captureDiagnostics({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42 }, { isAlive: true, isHearing: true, heardSpeech: false, sawWords: true }))
+			.toEqual({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42, gateAlive: true, gateHearing: true, gateHeardSpeech: false, gateSawWords: true });
 		// No recorder / no gate is itself an answer, and must not read as "measured zero".
-		expect(captureDiagnostics(undefined, null)).toEqual({ gateAlive: null, gateHeardSpeech: null });
+		expect(captureDiagnostics(undefined, null)).toEqual({ gateAlive: null, gateHearing: null, gateHeardSpeech: null, gateSawWords: null });
+	});
+
+	it("#535: the row distinguishes a gate with no device from one that declined the words", () => {
+		// `gateAlive:true, gateHeardSpeech:false` was ten rows of ambiguity — the traced mechanism
+		// (no microphone) and the alternative (words arrived and `acceptSpeech`/the noise filter
+		// refused them) produce the identical pair, need different fixes, and could otherwise only
+		// be told apart by a human watching the screen as it happened.
+		const noDevice = captureDiagnostics(undefined, { isAlive: true, isHearing: false, heardSpeech: false, sawWords: false });
+		const declined = captureDiagnostics(undefined, { isAlive: true, isHearing: true, heardSpeech: false, sawWords: true });
+		expect(noDevice).not.toEqual(declined);
+		expect(noDevice.gateHearing).toBe(false);
+		expect(declined.gateSawWords).toBe(true);
 	});
 });
 

@@ -274,13 +274,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 		paused: pausedForThinkingRef.current,
 		muted: mutedRef.current,
 	}), []);
-	/** The same idea for the dictation gate: its two flags read TOGETHER, at the moment of the
-	 *  decision, in the shape the pure verdicts take (`endOfTurnAction`, `planNoiseRejection`).
-	 *  Both of them ask "did real words happen this turn?" and both must answer it the same way —
-	 *  a gate that never ran vouches for nothing, wherever the question is asked from. */
+	/** The same idea for the dictation gate: its flags read TOGETHER, at the moment of the decision,
+	 *  in the shape the pure verdicts take (`speechVerdict`, `planNoiseRejection`). All of them ask
+	 *  "did real words happen this turn?" and must answer it the same way — a gate that was not
+	 *  HEARING this turn vouches for nothing and condemns nothing (#535), wherever it is asked from. */
 	const gateSnapshot = useCallback(() => {
 		const g = gateRef.current;
-		return g ? { isAlive: g.isAlive(), heardSpeech: g.heardSpeech() } : null;
+		return g ? { isAlive: g.isAlive(), isHearing: g.isHearing(), heardSpeech: g.heardSpeech(), sawWords: g.sawWords() } : null;
 	}, []);
 	/** The measurements every voice drop row carries, so the next one is diagnosable from the log
 	 *  instead of from a code read (#510 criterion 5). Shape + reasoning: `captureDiagnostics`. */

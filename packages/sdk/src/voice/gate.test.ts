@@ -11,9 +11,15 @@ class FakeSR {
 	onresult: ((e: unknown) => void) | null = null;
 	onerror: ((e: { error: string }) => void) | null = null;
 	onend: (() => void) | null = null;
+	/** Chrome fires this when it has actually acquired the microphone — the event a recognizer
+	 *  dying on `audio-capture` never gets to fire, and the whole of #535. */
+	onaudiostart: (() => void) | null = null;
 	started = 0;
 	stopped = 0;
+	/** A session that GETS the device. `start()` alone deliberately does not, so a test has to say
+	 *  which of the two happened — that is the distinction the gate is now made of. */
 	start() { this.started++; }
+	openMic() { this.onaudiostart?.(); }
 	stop() { this.stopped++; if (this.onend) this.onend(); }
 	// Helper: emit a result with one alternative.
 	emit(transcript: string, isFinal: boolean) {
@@ -108,7 +114,7 @@ describe("speech gate", () => {
 		restore();
 	});
 
-	// #332 — the heard-speech flag is what endOfTurnAction trusts to DISCARD a silent clip. It
+	// #332 — the heard-speech flag is what `speechVerdict` trusts to DISCARD a silent clip. It
 	// used to latch on any recognised words, including the agent's own TTS coming back through
 	// the speakers, so the gate vouched for a turn the user never took: the clip was uploaded,
 	// and Whisper returned a term from its own vocabulary prompt ("Coder Lead", the agent's name).
@@ -119,7 +125,7 @@ describe("speech gate", () => {
 		gate.start();
 
 		instances[0].emit("here is what I found in the repository", true); // the agent, aloud
-		expect(gate.heardSpeech()).toBe(false); // → endOfTurnAction discards the silent turn
+		expect(gate.heardSpeech()).toBe(false); // → the gate condemns rather than vouches for the turn
 
 		mine = true;
 		instances[0].emit("fix the bug", true); // the user, once the echo window has passed
@@ -147,6 +153,94 @@ describe("speech gate", () => {
 		gate.reset();
 		expect(gate.heardSpeech()).toBe(false);
 		expect(gate.isAlive()).toBe(true); // liveness persists across turns
+		restore();
+	});
+
+	/**
+	 * #535 — the ten turns. `isAlive` answers "has this engine ever run"; the verdict needs "is it
+	 * hearing THIS turn", and reading the first as the second let a gate that never received one
+	 * audio frame veto ten consecutive turns the mic had measured at 0.664 against a 0.1 floor.
+	 */
+	it("is NOT hearing just because the recognizer started and ended", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		// A recognizer refused the microphone still ends. That is all `onend` proves.
+		instances[0].onend?.();
+		expect(gate.isAlive()).toBe(true);
+		expect(gate.isHearing()).toBe(false);
+		restore();
+	});
+
+	it("is hearing once the browser reports the microphone open, and again on any result", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		expect(gate.isHearing()).toBe(false);
+		instances[0].openMic();
+		expect(gate.isHearing()).toBe(true);
+		// Belt-and-braces for a browser that never fires onaudiostart: audio reaching the
+		// recognizer is itself proof it has the device.
+		gate.reset();
+		expect(gate.isHearing()).toBe(false);
+		instances[0].emit("fix the bug", true);
+		expect(gate.isHearing()).toBe(true);
+		restore();
+	});
+
+	it("stops claiming to hear when the recognizer is refused the device (#535 criterion 4)", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		instances[0].openMic();
+		instances[0].onerror?.({ error: "audio-capture" });
+		expect(gate.isHearing()).toBe(false);
+		// ...and `onend`, which follows every error, must not put it back.
+		instances[0].onend?.();
+		expect(gate.isHearing()).toBe(false);
+		expect(gate.isAlive()).toBe(true); // the session fact is unchanged and still honest
+		restore();
+	});
+
+	it("KEEPS hearing through no-speech — that error is the evidence the veto is made of", () => {
+		// `no-speech` is the recognizer reporting FROM an open microphone that nobody spoke. It is
+		// the one error that must not clear liveness, or the gate could never condemn silence.
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		instances[0].openMic();
+		instances[0].onerror?.({ error: "no-speech" });
+		expect(gate.isHearing()).toBe(true);
+		instances[0].onerror?.({ error: "aborted" }); // our own stop()
+		expect(gate.isHearing()).toBe(true);
+		restore();
+	});
+
+	it("hearing is PER TURN — a device held at 08:51 says nothing about the turn at 08:57", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		instances[0].openMic();
+		expect(gate.isHearing()).toBe(true);
+		gate.reset(); // the next turn begins (startAudioMonitor resets before every start)
+		expect(gate.isHearing()).toBe(false);
+		expect(gate.isAlive()).toBe(true);
+		restore();
+	});
+
+	it("records that words ARRIVED even when both filters decline them (#535 diagnostics)", () => {
+		// The observation the issue could not get without a human at the screen: no words at all
+		// (the gate has no device) versus words that arrived and were refused by `acceptSpeech`
+		// or the noise filter. Same `heardSpeech:false`, different cause, different fix.
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {}, acceptSpeech: () => false })!;
+		gate.start();
+		expect(gate.sawWords()).toBe(false);
+		instances[0].emit("here is what I found in the repository", true);
+		expect(gate.sawWords()).toBe(true);
+		expect(gate.heardSpeech()).toBe(false);
+		gate.reset();
+		expect(gate.sawWords()).toBe(false);
 		restore();
 	});
 

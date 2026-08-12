@@ -40,6 +40,11 @@ interface SpeechRecognitionLike {
 	onresult: ((e: SpeechRecognitionEventLike) => void) | null;
 	onerror: ((e: { error: string }) => void) | null;
 	onend: (() => void) | null;
+	/** Fired when the UA BEGINS CAPTURING AUDIO — the one event that means "this recognizer has the
+	 *  microphone", as distinct from `onend`, which a recognizer that was refused the device fires
+	 *  too (#535). Optional here because a stub may not have it, and because a browser that never
+	 *  fires it leaves the gate unable to condemn, which is the safe direction. */
+	onaudiostart?: (() => void) | null;
 	start(): void;
 	stop(): void;
 	/** Standard on the real API; optional here because a stub may not have it. See `stop()` below. */
@@ -59,11 +64,30 @@ export interface SpeechGate {
 	stop(): void;
 	/** True once at least one real (non-noise) word was heard since the last reset. */
 	heardSpeech(): boolean;
-	/** True once the recognizer has actually produced any event (proof the engine runs).
-	 *  The caller only trusts a "no speech → discard" verdict from a gate that's alive, so
-	 *  a browser that exposes SpeechRecognition but never runs it can't black-hole speech. */
+	/** True once the recognizer has produced any event at all, EVER — including `onend`, which a
+	 *  recognizer refused the microphone still fires. So this answers "has this engine ever run",
+	 *  not "is it hearing now", and no verdict may use it (#535). Diagnostic only. */
 	isAlive(): boolean;
-	/** Clear the heard-speech flag + any buffered interim (call at the start of each turn). */
+	/**
+	 * Does this gate have the microphone FOR THE CURRENT TURN?
+	 *
+	 * The question `planTurnClose` was asking `isAlive` and getting the wrong answer to. Set by
+	 * `onaudiostart` (the UA reports capture has begun) or by any result arriving; cleared by
+	 * `reset()` at every turn boundary and by any non-benign recognizer error — `audio-capture`,
+	 * the code the two background recognizers produce fighting over one device, and the one on ten
+	 * `client:voice-gate` rows the morning #535 was filed.
+	 *
+	 * False is the SAFE value: a gate that is not hearing abstains, and an abstaining gate cannot
+	 * destroy a turn. A browser that never fires `onaudiostart` therefore loses the veto and keeps
+	 * everything else.
+	 */
+	isHearing(): boolean;
+	/** Did any transcript at all arrive this turn, accepted or not? Diagnostic only — it is what
+	 *  distinguishes "the gate had no device" from "the gate had words and `acceptSpeech` or the
+	 *  noise filter declined them", which #535 could otherwise only settle by watching the screen. */
+	sawWords(): boolean;
+	/** Clear the PER-TURN facts — heard, hearing, saw-words and any buffered interim (call at the
+	 *  start of each turn). `isAlive` is session-lifetime and deliberately survives. */
 	reset(): void;
 }
 
@@ -88,7 +112,7 @@ export interface SpeechGateOptions {
 	/**
 	 * Could the words arriving RIGHT NOW belong to the user? Default: yes.
 	 *
-	 * The heard-speech flag is what `endOfTurnAction` trusts to discard a silent clip, and it
+	 * The heard-speech flag is what `speechVerdict` trusts to discard a silent clip, and it
 	 * used to latch on ANY recognised words — including the agent's own TTS coming back through
 	 * the speakers, and anything picked up while a reply was in flight. So the gate would vouch
 	 * for a turn in which the user had not spoken at all, the clip was uploaded, and Whisper
@@ -141,6 +165,11 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 	/** The utterance so far — accumulated across phrases AND across the gate's own restarts (#458). */
 	let utterance: HeardState = EMPTY_HEARD;
 	let alive = false;
+	/** Per-TURN: the recognizer has the device right now. Cleared by `reset()` and by any device or
+	 *  permission failure — the distinction `alive` cannot make (#535). */
+	let hearing = false;
+	/** Per-TURN: a transcript arrived, whatever was then done with it. Diagnostic (#535). */
+	let sawWords = false;
 	/** The browser refused this origin the microphone. Terminal until the user changes it (#425). */
 	let denied = false;
 	let restartFails = 0;
@@ -156,8 +185,18 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		r.continuous = true;
 		r.interimResults = true;
 		r.lang = opts.lang || "en-US";
+		r.onaudiostart = () => {
+			// The UA has the microphone open for this session. THE per-turn liveness fact: it is the
+			// only event that means the device was actually acquired, and it is exactly what a
+			// recognizer dying on `audio-capture` never gets to fire (#535).
+			alive = true;
+			hearing = true;
+		};
 		r.onresult = (e: SpeechRecognitionEventLike) => {
 			alive = true;
+			// Audio reached the recognizer, so it demonstrably has the device — belt-and-braces for a
+			// browser that does not implement `onaudiostart`.
+			hearing = true;
 			// Audio arrived → the failure run is over (the only proof of recovery on offer).
 			micFails = 0;
 			micBurstAt = 0;
@@ -187,6 +226,8 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// firing. The display half gets both, from `whole`, which is where the flicker #458
 			// also reports actually lived.
 			const phrase = (deltaFinal || deltaInterim).trim();
+			// Words existed, whatever the two filters below then decide about them (#535).
+			if (phrase) sawWords = true;
 			if (whole) opts.onInterim(whole, phrase);
 			// Real words (not a bare filler/punctuation) from someone who is not the agent → the
 			// turn is legitimate. `acceptSpeech` is the ONLY thing standing between the agent's own
@@ -211,6 +252,13 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 				micFails = 0;
 				micBurstAt = 0;
 			} else {
+				// #535 criterion 4: the gate stops claiming to hear. `audio-capture` and the permission
+				// codes all mean the same thing about this session — it does not have the device — and
+				// until now the gate said nothing about itself either way, so a recognizer that never
+				// got one audio frame went on vetoing turns. `no-speech` and `aborted` are excluded
+				// deliberately: `no-speech` is the recognizer reporting FROM an open microphone that
+				// nobody spoke, which is the evidence the veto is actually made of.
+				hearing = false;
 				if (!micFails) micBurstAt = Date.now();
 				micFails++;
 			}
@@ -218,7 +266,10 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			if (isReportableMicError(code)) opts.onMicError?.(code, { fails: micFails, burstMs: micBurstAt ? Date.now() - micBurstAt : 0 });
 		};
 		r.onend = () => {
-			alive = true; // it started and ended → the engine is running
+			// "It started and ended" — and NOTHING MORE. A recognizer that was refused the microphone
+			// ends too, which is why this line may not touch `hearing`: reading it as liveness is the
+			// whole of #535. `alive` keeps its honest, session-lifetime meaning and no verdict reads it.
+			alive = true;
 			// A restart resets `results`, so whatever this session heard has to be banked BEFORE it
 			// is gone (#458). Done here rather than in `start()` because only this handler knows a
 			// session ended at all — which is why the accumulator has to live in the gate and not
@@ -287,8 +338,19 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		isAlive() {
 			return alive;
 		},
+		isHearing() {
+			return hearing;
+		},
+		sawWords() {
+			return sawWords;
+		},
 		reset() {
 			heard = false;
+			// Per-turn, both of them, and for the same reason `heard` is: a fact about the last turn
+			// answering a question about this one is what let a gate deaf since 08:51 condemn a turn
+			// spoken at 08:57 (#535).
+			hearing = false;
+			sawWords = false;
 			// The one place an utterance is forgotten, and the caller already calls this exactly
 			// once per turn (`startAudioMonitor`) — which is what keeps text from bleeding across
 			// turns now that it survives a restart.

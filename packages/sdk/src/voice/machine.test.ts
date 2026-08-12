@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, isMutedTurn, pendingUtterance, planMuteTeardown, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, reduceHeard, heardText, EMPTY_HEARD, type Dictation } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, gateEvidence, speechVerdict, derivePhase, isLateTurn, isMutedTurn, pendingUtterance, planMuteTeardown, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, reduceHeard, heardText, EMPTY_HEARD, type Dictation } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -236,20 +236,57 @@ describe("canOpenMic", () => {
 	});
 });
 
-describe("endOfTurnAction (dictation gate)", () => {
-	it("no gate (iOS / gate off) → always transcribe", () => {
-		expect(endOfTurnAction(null)).toBe("transcribe");
-		expect(endOfTurnAction(undefined)).toBe("transcribe");
+describe("gateEvidence / speechVerdict — #535: one precedence rule over speech evidence", () => {
+	const hearingHeard = { isAlive: true, isHearing: true, heardSpeech: true };
+	const hearingSilent = { isAlive: true, isHearing: true, heardSpeech: false };
+	/** THE #535 reading: `onend` fires for a recognizer that was refused the microphone, so a gate
+	 *  with no device at all reports alive forever. It must claim nothing about the turn. */
+	const aliveButDeaf = { isAlive: true, isHearing: false, heardSpeech: false };
+
+	it("separates 'has ever run' from 'is hearing now'", () => {
+		expect(gateEvidence(hearingHeard)).toBe("vouches");
+		expect(gateEvidence(hearingSilent)).toBe("condemns");
+		// The whole defect in one assertion: alive is not evidence, hearing is.
+		expect(gateEvidence(aliveButDeaf)).toBe("abstains");
+		expect(gateEvidence(null)).toBe("abstains");
+		expect(gateEvidence(undefined)).toBe("abstains");
 	});
-	it("alive gate that heard nothing → discard (silence/keyboard/noise)", () => {
-		expect(endOfTurnAction({ isAlive: true, heardSpeech: false })).toBe("discard");
+
+	it("a vouching gate outranks the energy heuristic (#511 criterion 4)", () => {
+		// Direct evidence of speech beats an inference about it — the 0.15-0.18 band that peak
+		// energy genuinely cannot resolve is resolved toward the user's words surviving.
+		for (const energy of ["speech", "silence", "unmeasured"] as const) {
+			expect(speechVerdict({ gate: hearingHeard, energy })).toBe("transcribe");
+		}
 	});
-	it("alive gate that heard real words → transcribe", () => {
-		expect(endOfTurnAction({ isAlive: true, heardSpeech: true })).toBe("transcribe");
+
+	it("a MEASUREMENT of speech outranks gate silence (#535 criterion 2)", () => {
+		// The direction that was missing, and the ten lost turns: 0.664 against a 0.1 floor is the
+		// detector's own definition of speech. A gate that heard nothing over it is evidence about
+		// the recognizer, not about whether the user spoke.
+		expect(speechVerdict({ gate: hearingSilent, energy: "speech" })).toBe("transcribe");
+		expect(speechVerdict({ gate: aliveButDeaf, energy: "speech" })).toBe("transcribe");
 	});
-	it("a NOT-alive gate can never veto real speech → transcribe", () => {
-		// The safety valve: a stalled/dead recognizer must not black-hole your voice.
-		expect(endOfTurnAction({ isAlive: false, heardSpeech: false })).toBe("transcribe");
+
+	it("a measurement of SILENCE discards whatever the gate is doing — #490 stands", () => {
+		for (const gate of [hearingSilent, aliveButDeaf, null, undefined]) {
+			expect(speechVerdict({ gate, energy: "silence" })).toBe("discard");
+		}
+	});
+
+	it("with NO measurement, only a hearing gate may condemn", () => {
+		// The backgrounded-tab case (#510): rAF does not run for a hidden document, so zero frames
+		// is the absence of a measurement. An unknown clip is uploaded unless something that was
+		// genuinely listening says it was silence.
+		expect(speechVerdict({ gate: hearingSilent, energy: "unmeasured" })).toBe("discard");
+		expect(speechVerdict({ gate: aliveButDeaf, energy: "unmeasured" })).toBe("transcribe");
+		expect(speechVerdict({ gate: null, energy: "unmeasured" })).toBe("transcribe");
+	});
+
+	it("no gate at all never destroys a turn", () => {
+		// iOS Safari, browser-dictation mode. A missing witness is not a hostile one.
+		expect(speechVerdict({ gate: null, energy: "speech" })).toBe("transcribe");
+		expect(speechVerdict({ gate: undefined, energy: "unmeasured" })).toBe("transcribe");
 	});
 });
 

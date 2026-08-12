@@ -278,8 +278,8 @@ describe("planSend", () => {
 });
 
 describe("planNoiseRejection", () => {
-	const heardIt = { isAlive: true, heardSpeech: true };
-	const heardNothing = { isAlive: true, heardSpeech: false };
+	const heardIt = { isAlive: true, isHearing: true, heardSpeech: true };
+	const heardNothing = { isAlive: true, isHearing: true, heardSpeech: false };
 
 	it("passes anything that is not noise, whatever the gate says", () => {
 		for (const gate of [heardIt, heardNothing, null, undefined]) {
@@ -301,12 +301,16 @@ describe("planNoiseRejection", () => {
 	});
 
 	it("discards when there is no gate, or one that never ran", () => {
-		// Same trust rule as endOfTurnAction — but the DEFAULT is the opposite way round on purpose:
+		// Same trust rule as speechVerdict — but the DEFAULT is the opposite way round on purpose:
 		// where there is no gate (iOS, browser-dictation mode) there is no live capture either, so
 		// "keeping the words" would put an empty "(nothing was captured)" bubble on screen.
 		expect(planNoiseRejection("you", { gate: null }).action).toBe("discard");
 		expect(planNoiseRejection("you", {}).action).toBe("discard");
-		expect(planNoiseRejection("you", { gate: { isAlive: false, heardSpeech: true } }).action).toBe("discard");
+		expect(planNoiseRejection("you", { gate: { isAlive: false, isHearing: false, heardSpeech: true } }).action).toBe("discard");
+		// #535: and a gate that was ALIVE from an earlier turn but not hearing in this one is the
+		// same nothing. `heardSpeech` cannot be true without hearing in practice; the point is that
+		// the vouch is read off the per-turn fact, so a stale liveness cannot manufacture one.
+		expect(planNoiseRejection("you", { gate: { isAlive: true, isHearing: false, heardSpeech: true } }).action).toBe("discard");
 	});
 
 	it("keeps a turn rejected as a bias echo when the gate vouched for it", () => {
@@ -443,9 +447,9 @@ describe("a command that fired during capture never reaches the agent (#457 step
 });
 
 describe("planTurnClose — #510: the idle recycle stops eating proven speech, silently", () => {
-	const alive = { isAlive: true, heardSpeech: true };
-	const aliveSilent = { isAlive: true, heardSpeech: false };
-	const dead = { isAlive: false, heardSpeech: false };
+	const alive = { isAlive: true, isHearing: true, heardSpeech: true };
+	const aliveSilent = { isAlive: true, isHearing: true, heardSpeech: false };
+	const dead = { isAlive: false, isHearing: false, heardSpeech: false };
 	const close = (d: "end" | "idle", gate: typeof alive | null, peakLevel = 0.3) =>
 		planTurnClose(d, { gate, peakLevel, voiceFloor: VOICE_FLOOR });
 
@@ -464,12 +468,6 @@ describe("planTurnClose — #510: the idle recycle stops eating proven speech, s
 		expect(close("end", alive).action).toBe(close("idle", alive).action);
 	});
 
-	it("still discards an end-of-turn the live gate condemns — and now says so", () => {
-		const v = close("end", aliveSilent);
-		expect(v.action).toBe("discard");
-		expect(v.action === "discard" && v.report).toBeTruthy(); // #510 criterion 2
-	});
-
 	it("a gate that never ran vouches for nothing — in EITHER direction", () => {
 		// It cannot save a clip...
 		expect(close("idle", dead).action).toBe("discard");
@@ -477,6 +475,49 @@ describe("planTurnClose — #510: the idle recycle stops eating proven speech, s
 		// ...and it cannot condemn one.
 		expect(close("end", dead)).toEqual({ action: "transcribe" });
 		expect(close("end", null)).toEqual({ action: "transcribe" });
+	});
+
+	it("#535: a HEARING gate that heard nothing no longer overrules a proven onset", () => {
+		// The turn the fix is about. `"end"` is reachable only after onset (`vad.ts` returns
+		// "idle"/null while `!seen`), so by the time this branch runs the energy detector has
+		// already measured speech by its own definition. Gate silence is then evidence about the
+		// recognizer, not about the user's mouth — even when the gate really does have the device.
+		expect(close("end", aliveSilent)).toEqual({ action: "transcribe" });
+	});
+
+	it("#535: NO gate reading can discard an end-of-turn — the branch is transcribe-only today", () => {
+		// Pins the claim `planTurnClose` makes in prose: with `energy: "speech"` the end branch
+		// cannot reach its discard, so the CLOSE_END_DISCARDED mapping is exhaustiveness rather
+		// than a live path. If `vadStep` ever grows an exit to "end" that is NOT onset-proven,
+		// this is the test that should fail and make someone decide again.
+		for (const gate of [alive, aliveSilent, dead, null, undefined]) {
+			expect(planTurnClose("end", { gate, peakLevel: 0.664, voiceFloor: VOICE_FLOOR })).toEqual({ action: "transcribe" });
+		}
+	});
+
+	it("#535: the production row, replayed — 244 frames at 0.664 against a 0.1 floor", () => {
+		// Ten of these between 08:50 and 08:57 UTC on 2026-08-12, hands-free + Whisper, each
+		// destroying a turn the user had spoken: `path:"end" peakLevel:0.664 onsetFloor:0.1
+		// frames:244 gateAlive:true gateHeardSpeech:false`, in lockstep with ten
+		// `client:voice-gate "audio-capture"` rows. Both readings of that pair now transcribe —
+		// the traced one (a gate that never got the device, so `isHearing:false`) and the
+		// alternative that could not be ruled out from the log (a gate that had the device and
+		// declined the words, so `isHearing:true`).
+		const noDevice = { isAlive: true, isHearing: false, heardSpeech: false, sawWords: false };
+		const hadWordsDeclinedThem = { isAlive: true, isHearing: true, heardSpeech: false, sawWords: true };
+		for (const gate of [noDevice, hadWordsDeclinedThem]) {
+			expect(planTurnClose("end", { gate, peakLevel: 0.664, voiceFloor: VOICE_FLOOR })).toEqual({ action: "transcribe" });
+		}
+	});
+
+	it("#535: an idle turn is still discarded — the silent-clip protection is untouched", () => {
+		// The other half of criterion 5. `"idle"` means onset never fired in 15 s, which is the
+		// VAD stating silence, and only a vouching gate overrules it. Reading `hadSpeech(peak)`
+		// here instead would start uploading 15-second near-silent clips to Whisper, which is the
+		// #490 phantom-turn failure this path exists to prevent.
+		expect(close("idle", aliveSilent).action).toBe("discard");
+		expect(close("idle", { isAlive: true, isHearing: false, heardSpeech: false }, 0.664).action).toBe("discard");
+		expect(close("idle", alive).action).toBe("transcribe");
 	});
 
 	it("reports an idle discard that had ENERGY behind it, and stays quiet on true silence", () => {

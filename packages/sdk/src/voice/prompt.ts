@@ -203,7 +203,7 @@ export function transcribeBiasTerms(prompt?: string): string[] {
  * echo of EITHER form is caught.
  *
  * This is defence in depth, not the fix: silence should never reach the decoder in the first
- * place (see the dictation gate in `gate.ts` and `endOfTurnAction`). It is what catches the leak.
+ * place (see the dictation gate in `gate.ts` and `speechVerdict`). It is what catches the leak.
  */
 export function isTranscribeBiasEcho(text: string, prompt?: string): boolean {
 	const t = normalizeSpeech(text);

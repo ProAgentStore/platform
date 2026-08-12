@@ -20,7 +20,7 @@
 
 import { isNoiseTranscript, isRepetitionLoop } from "./audio.js";
 import { commandStateFor, matchVoiceCommand, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
-import { endOfTurnAction, storedDictation } from "./machine.js";
+import { gateEvidence, type GateEvidence, speechVerdict, storedDictation } from "./machine.js";
 import { applyVocabulary, type VocabularyCorrection } from "./vocabulary.js";
 
 /**
@@ -128,8 +128,10 @@ export function planFinalizedTurn(
 }
 
 /** The dictation gate's answer to "did real words happen this turn?", read at the moment of the
- *  decision. Null where there is no gate at all (browser-dictation mode, iOS Safari). */
-export type GateReading = { isAlive: boolean; heardSpeech: boolean } | null | undefined;
+ *  decision. Null where there is no gate at all (browser-dictation mode, iOS Safari). Declared in
+ *  machine.ts since #535, because the same reading now feeds the same precedence rule from all
+ *  three decision points; the alias stays for the call sites that name it. */
+export type GateReading = GateEvidence;
 
 /** Fixed messages, for the same reason the noise ones are fixed: `reportClientError` de-dups on
  *  source+message, so a burst collapses to one row and the per-turn numbers ride in the context. */
@@ -143,16 +145,28 @@ export type TurnClose = { action: "transcribe" } | { action: "discard"; report: 
  * The mic-level VAD has closed the turn. Transcribe the clip, or throw it away?
  *
  * Both of `vadStep`'s terminal decisions land here, because they were making INCOMPATIBLE choices
- * about the same evidence. `"end"` asked the dictation gate first (`endOfTurnAction`); `"idle"`
+ * about the same evidence. `"end"` asked the dictation gate first, and alone; `"idle"`
  * asked nothing, cleared the live words and dropped the clip — so a turn where Web Speech had
  * PROVEN real words were spoken, but the energy VAD never registered onset, vanished from the
  * screen 15 s after the user watched their own words appear on it. That is #377's failure shape
  * verbatim, and it left no row: the discard path reports nothing, and it can produce no watchdog
  * row either, because nothing is uploaded for a watchdog to time out.
  *
- * The rule is one rule, and it is `planNoiseRejection`'s: **a proven-alive gate that heard words
- * outranks the energy heuristic, and a gate that never ran vouches for nothing.** Onset failing
- * while the recognizer is returning text is a false negative of the energy gate, not silence.
+ * The rule is one rule, and since #535 it is literally one function — `speechVerdict`, shared with
+ * `planClipGate`. What this function still owns is the ENERGY half: translating which of `vadStep`'s
+ * two exits fired into what the detector is thereby claiming.
+ *
+ *  - **`"end"` means the detector measured speech.** It is reachable only after onset, and onset
+ *    requires `level > onsetFloor && speaking` (`vad.ts`). So the branch that used to ask the gate
+ *    alone — and destroyed ten turns measured at 0.664 against a 0.1 floor, with `peakLevel` and
+ *    `voiceFloor` sitting unused in this very signature — is now the branch where the strongest
+ *    energy evidence the VAD can produce is on the table. Gate silence does not outrank it.
+ *  - **`"idle"` means the detector measured silence** — 15 s in which onset never fired, which is a
+ *    stronger and more specific statement than any peak. Reading `hadSpeech(peak, floor)` here
+ *    instead would second-guess the VAD with a weaker form of its own input; a lone spike during
+ *    the noise-sampling window would start uploading 15-second near-silent clips to Whisper, which
+ *    is the #490 failure this path exists to prevent. So the gate remains the only thing that can
+ *    save an idle turn, exactly as before.
  *
  * `report: null` is deliberate and is the only silence left. A turn that idles out with the peak
  * under the voice floor is the ordinary quiet mic — hands-free recycles it every 15 s while the
@@ -163,10 +177,13 @@ export function planTurnClose(
 	decision: "end" | "idle",
 	s: { gate?: GateReading; peakLevel: number; voiceFloor: number },
 ): TurnClose {
-	if (decision === "end") {
-		return endOfTurnAction(s.gate) === "discard" ? { action: "discard", report: CLOSE_END_DISCARDED } : { action: "transcribe" };
-	}
-	if (s.gate?.isAlive && s.gate.heardSpeech) return { action: "transcribe" };
+	const energy = decision === "end" ? "speech" : "silence";
+	if (speechVerdict({ gate: s.gate, energy }) === "transcribe") return { action: "transcribe" };
+	// Total, not reachable in both directions: with `energy: "speech"` the `end` branch cannot
+	// discard today, and turn.test.ts asserts exactly that for every gate reading there is. The
+	// mapping stays whole so a future `vadStep` exit that is NOT onset-proven leaves its own row
+	// rather than borrowing the idle wording.
+	if (decision === "end") return { action: "discard", report: CLOSE_END_DISCARDED };
 	return { action: "discard", report: s.peakLevel > s.voiceFloor ? CLOSE_IDLE_DISCARDED : null };
 }
 
@@ -200,11 +217,11 @@ const NOISE_DISCARDED = "voice turn rejected as noise — nothing was heard, dis
  * and any record that a turn had happened at all. The user watched their own words appear and
  * then vanish, and there was no message, no trace event and no error row to confirm it with.
  *
- * The gate already knows which claim is true. If a PROVEN-ALIVE browser-dictation gate heard real
- * words this turn then the user spoke and the transcriber failed to render it — a `failed` turn,
- * not an empty one, which is exactly the status `reduceDictation` documents as "the words we DID
- * hear must survive so nothing is silently lost". Same trust rule as `endOfTurnAction`: a gate
- * that never ran vouches for nothing.
+ * The gate already knows which claim is true. If a HEARING browser-dictation gate heard real words
+ * this turn then the user spoke and the transcriber failed to render it — a `failed` turn, not an
+ * empty one, which is exactly the status `reduceDictation` documents as "the words we DID hear must
+ * survive so nothing is silently lost". Same trust rule as `speechVerdict`, whose `vouches` this
+ * is: a gate that was not hearing this turn vouches for nothing.
  *
  * A missing gate therefore `discard`s, deliberately. Where there is no gate there is no live
  * capture either — in Whisper mode the recorder produces nothing until the clip uploads — so
@@ -214,7 +231,7 @@ const NOISE_DISCARDED = "voice turn rejected as noise — nothing was heard, dis
  */
 export function planNoiseRejection(text: string, cfg: { transcribePrompt?: string; gate?: GateReading } = {}): NoiseRejection {
 	if (!isNoiseTranscript(text, cfg.transcribePrompt)) return { action: "pass" };
-	if (!cfg.gate?.isAlive || !cfg.gate.heardSpeech) return { action: "discard", report: NOISE_DISCARDED };
+	if (gateEvidence(cfg.gate) !== "vouches") return { action: "discard", report: NOISE_DISCARDED };
 	return { action: "keep", note: NOISE_NOTE, report: NOISE_KEPT };
 }
 

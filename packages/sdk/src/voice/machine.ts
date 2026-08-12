@@ -137,14 +137,102 @@ export function canOpenMic(s: Pick<VoiceGuardState, "paused" | "muted">): boolea
 }
 
 /**
- * At an amplitude-VAD end-of-turn: transcribe the clip, or discard it? Discard only when a
- * PROVEN-ALIVE browser-dictation gate heard no real words this turn (→ it was silence /
- * keyboard / background noise; uploading it makes Whisper hallucinate a phantom turn). A
- * gate that isn't alive (iOS, or a stalled recognizer) can never veto real speech.
+ * What the browser-dictation gate knows about the turn in front of it — and, load-bearingly, WHEN
+ * it knew it.
+ *
+ * Four fields rather than two, because the two it had answered different questions than the ones
+ * asked of them (#535). `isAlive` is a SESSION-lifetime fact: "this recognizer produced an event at
+ * some point". A recognizer that was refused the microphone still fires `onend`, and `onend` set
+ * it — so a gate that had never received one audio frame reported alive permanently, and that was
+ * read as authority to condemn ten consecutive turns the mic had measured at 0.664 against a 0.1
+ * floor. Every verdict now asks {@link GateReading.isHearing}, which is per-TURN: cleared by
+ * `reset()` at each turn boundary, set only by evidence the device is actually open, and cleared
+ * again by any device or permission failure.
  */
-export function endOfTurnAction(gate: { isAlive: boolean; heardSpeech: boolean } | null | undefined): "transcribe" | "discard" {
-	if (gate?.isAlive && !gate.heardSpeech) return "discard";
-	return "transcribe";
+export interface GateReading {
+	/** Session lifetime: has this recognizer ever produced any event at all? **Diagnostic only** —
+	 *  no verdict may read it, for the reason above. It stays because it is the fact that separates
+	 *  "the browser exposes SpeechRecognition but never ran it" from "it ran and then went deaf". */
+	isAlive: boolean;
+	/** THIS turn: the recognizer reported audio capture (or delivered a result), and has not since
+	 *  failed on the device. The only liveness a verdict is allowed to trust. */
+	isHearing: boolean;
+	/** THIS turn: real words, from someone who is not the agent (`acceptSpeech`, #332). */
+	heardSpeech: boolean;
+	/** THIS turn: ANY transcript arrived, accepted or not. **Diagnostic only.** It is what separates
+	 *  "the gate had no device" from "the gate had words and declined them" — the one question #535
+	 *  could not settle from the log, and could otherwise only be settled by a human watching the
+	 *  screen at the moment it happened. */
+	sawWords?: boolean;
+}
+
+/** A gate reading, or its absence: `null`/`undefined` where there is no gate at all (browser
+ *  dictation mode, iOS Safari). Absence is a distinct answer, not a false. */
+export type GateEvidence = GateReading | null | undefined;
+
+/**
+ * What the gate is ENTITLED to claim about this turn.
+ *
+ * `abstains` covers both "there is no gate" and "there is a gate and it did not have the
+ * microphone" — deliberately the same verdict, because they carry the same amount of information
+ * about whether the user spoke: none. That equivalence is the whole of #535's first criterion.
+ */
+export function gateEvidence(gate: GateEvidence): "vouches" | "condemns" | "abstains" {
+	if (!gate?.isHearing) return "abstains";
+	return gate.heardSpeech ? "vouches" : "condemns";
+}
+
+/**
+ * What the ENERGY detector concluded about the same turn.
+ *
+ * `unmeasured` is not `silence` and never collapses into it (#510): `noteLevel`'s only caller is a
+ * `requestAnimationFrame` tick, and rAF does not run for a hidden document, so a minimised console
+ * delivers zero frames for a clip full of speech.
+ */
+export type EnergyVerdict = "speech" | "silence" | "unmeasured";
+
+/**
+ * **The one precedence rule over speech evidence.** Three call sites consulted three different
+ * ones, and the harshest ran first (#535 criterion 3).
+ *
+ * Before this, the same body of evidence produced opposite verdicts depending on which path a turn
+ * happened to take: `planClipGate` (tap-to-talk, and every clip at `onstop`) consulted the gate's
+ * condemnation ONLY when there were no frames, falling through to the measured peak otherwise —
+ * and would have transcribed all ten of #535's lost turns. `planTurnClose`'s end-of-turn branch ran
+ * first, asked the gate alone, and destroyed them, with `peakLevel` and `voiceFloor` sitting unused
+ * in its own scope. The forgiving rule was unreachable from the path that mattered.
+ *
+ * The rule adopted is `planClipGate`'s, generalised — so this function is byte-for-byte the verdict
+ * that path already produced, and the change lands on the two paths that disagreed with it:
+ *
+ *  1. **A vouching gate outranks the energy heuristic** (#511 criterion 4). Web Speech returning
+ *     real text is direct evidence of speech; a peak under a floor is an inference about it. The
+ *     0.15–0.18 band `ONSET_FLOOR_CEILING` documents as unresolvable by energy alone is resolved
+ *     here, in the direction of the user's words surviving.
+ *  2. **A measurement of speech outranks gate silence** (#535 criterion 2). This is the direction
+ *     that was missing. A gate that hears nothing is evidence only about the gate; where the
+ *     detector has actually measured speech-level energy, the gate's silence describes a recognizer
+ *     problem, not the user's mouth.
+ *  3. **A measurement of silence discards**, whatever the gate says — unchanged, and the reason the
+ *     hallucination protection (#490, #332) is still standing.
+ *  4. **With no measurement, only a HEARING gate may condemn.** A gate that abstains cannot save a
+ *     clip and cannot destroy one, so an unknown clip is uploaded — the pre-#490 behaviour, which
+ *     fails toward the words surviving.
+ *
+ * What this deliberately gives up: on the hands-free end-of-turn path, a loud non-speech transient
+ * (a door slam clearing the adaptive onset floor) is now uploaded instead of vetoed by the gate.
+ * That was the one place the veto still bit, and keeping it would mean keeping a veto that fires on
+ * a gate whose own liveness we have just established we cannot fully trust. The same transient has
+ * always been uploaded in tap-to-talk, which runs `planClipGate` — so this equalises the two modes
+ * at the level the system already accepts, behind the same downstream defences
+ * (`planNoiseRejection`, `isNoiseTranscript` against the bias prompt, `isRepetitionLoop`).
+ */
+export function speechVerdict(s: { gate: GateEvidence; energy: EnergyVerdict }): "transcribe" | "discard" {
+	const claim = gateEvidence(s.gate);
+	if (claim === "vouches") return "transcribe";
+	if (s.energy === "speech") return "transcribe";
+	if (s.energy === "silence") return "discard";
+	return claim === "condemns" ? "discard" : "transcribe";
 }
 
 /**

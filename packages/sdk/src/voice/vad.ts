@@ -7,7 +7,13 @@
  * from the mic level itself. Silence is judged RELATIVE to how loud YOU were this
  * turn (the peak, no decay) — not an absolute threshold — so it works at any volume
  * or mic noise floor. A too-high fixed threshold left noisy mics "stuck listening".
+ *
+ * The clip verdict below is the ENERGY half of the evidence only. What is done with it when the
+ * dictation gate disagrees is not decided here — it is `speechVerdict` in machine.ts, the one
+ * precedence rule all three decision points now share (#535).
  */
+
+import { type EnergyVerdict, gateEvidence, type GateEvidence, speechVerdict } from "./machine.js";
 
 export interface VadState {
 	/** Loudest mic level this turn (0–1), no decay. */
@@ -179,11 +185,6 @@ export interface LevelSnapshot {
 	frames: number;
 }
 
-/** The dictation gate's answer to "did real words happen this turn?" — structurally the same
- *  reading `turn.ts` passes to `planNoiseRejection`, declared here so this module stays free of
- *  the transcript/command layer. */
-type GateEvidence = { isAlive: boolean; heardSpeech: boolean } | null | undefined;
-
 export type ClipVerdict = {
 	action: "transcribe" | "discard";
 	/** Why, in a form a log row can carry. */
@@ -191,35 +192,35 @@ export type ClipVerdict = {
 };
 
 /**
- * Does this finished recording get uploaded? (#510 criteria 3 + 4, #511 criterion 4.)
+ * What the analyser MEASURED, as the one word the shared precedence rule takes (#535).
  *
- * Three inputs, and the whole point is that they are not interchangeable:
+ * **`frames === 0` is NOT silence.** It is the absence of a measurement. `noteLevel` has one
+ * caller — a `requestAnimationFrame` tick — and rAF does not run for a document that is not
+ * `visible`. So a minimised console produces zero frames for a clip full of speech. #490 read zero
+ * peak as "no speech" and discarded it, inverting the contract the comment it replaced stated out
+ * loud: *"a caller with no analyser keeps working rather than going silently deaf"*. Keeping the
+ * three states apart in the type is what stops the next reader collapsing them again.
+ */
+export function energyVerdict(s: { frames: number; peakLevel: number; noiseFloor: number }): EnergyVerdict {
+	if (s.frames === 0) return "unmeasured";
+	return hadSpeech(s.peakLevel, s.noiseFloor) ? "speech" : "silence";
+}
+
+/**
+ * Does this finished recording get uploaded? (#510 criteria 3 + 4, #511 criterion 4, #535.)
  *
- *  - **`frames === 0` is NOT silence.** It is the absence of a measurement. `noteLevel` has one
- *    caller — a `requestAnimationFrame` tick — and rAF does not run for a document that is not
- *    `visible`. So a minimised console produces zero frames for a clip full of speech. #490 read
- *    zero peak as "no speech" and discarded it, inverting the contract the comment it replaced
- *    stated out loud: *"a caller with no analyser keeps working rather than going silently deaf"*.
- *    With no energy evidence the gate is the only witness, and where there is no witness either,
- *    an unknown clip is uploaded — that is the pre-#490 behaviour, and it fails toward the user's
- *    words surviving rather than toward silence.
- *  - **A proven-alive gate that heard words outranks the energy heuristic.** Web Speech returning
- *    real text is direct evidence of speech; a peak under a floor is an inference about it. This
- *    is the same precedence `planNoiseRejection` already applies at the other end of the turn.
- *  - **A gate that never ran vouches for nothing** — in either direction. It cannot condemn a
- *    clip and it cannot save one.
+ * The measurement is this module's; the precedence over a disagreeing gate is `speechVerdict`'s,
+ * and is now shared with `planTurnClose`. The verdicts this function returns are unchanged — it was
+ * the forgiving rule of the three, and the other two moved to it.
  */
 export function planClipGate(s: { frames: number; peakLevel: number; noiseFloor: number; gate?: GateEvidence }): ClipVerdict {
-	const vouched = !!s.gate?.isAlive && s.gate.heardSpeech;
-	const condemned = !!s.gate?.isAlive && !s.gate.heardSpeech;
-	if (s.frames === 0) {
-		// No analyser data. Only the gate can decide, and only when it is alive.
-		return condemned ? { action: "discard", reason: "no-speech" } : { action: "transcribe", reason: "no-data" };
-	}
-	if (vouched) return { action: "transcribe", reason: "gate-vouched" };
-	return hadSpeech(s.peakLevel, s.noiseFloor)
-		? { action: "transcribe", reason: "speech" }
-		: { action: "discard", reason: "no-speech" };
+	const energy = energyVerdict(s);
+	if (speechVerdict({ gate: s.gate, energy }) === "discard") return { action: "discard", reason: "no-speech" };
+	// `no-data` BEFORE `gate-vouched`, as it always has been: the row it earns
+	// ({@link clipGateReport}) is about the missing measurement, and a vouching gate does not make
+	// the tab any less backgrounded.
+	if (energy === "unmeasured") return { action: "transcribe", reason: "no-data" };
+	return { action: "transcribe", reason: gateEvidence(s.gate) === "vouches" ? "gate-vouched" : "speech" };
 }
 
 /**
@@ -246,9 +247,20 @@ export function clipGateReport(v: ClipVerdict): string | null {
  * what was measured, what it was measured against, how many frames there were (0 = no analyser
  * data, NOT silence), and whether the recognizer heard words anyway. Null where the recorder or
  * the gate does not exist, which is itself the answer to a different question.
+ *
+ * `gateHearing` and `gateSawWords` are #535's: `gateAlive:true, gateHeardSpeech:false` was ten rows
+ * of ambiguity — a gate with no microphone and a gate that had words and declined them produce the
+ * identical pair, need different fixes, and could only be told apart by a human watching the screen
+ * at the moment it happened. `gateHearing:false` is the first; `gateSawWords:true` is the second.
  */
 export function captureDiagnostics(snapshot: LevelSnapshot | undefined, gate: GateEvidence): Record<string, unknown> {
-	return { ...(snapshot ?? {}), gateAlive: gate?.isAlive ?? null, gateHeardSpeech: gate?.heardSpeech ?? null };
+	return {
+		...(snapshot ?? {}),
+		gateAlive: gate?.isAlive ?? null,
+		gateHearing: gate?.isHearing ?? null,
+		gateHeardSpeech: gate?.heardSpeech ?? null,
+		gateSawWords: gate?.sawWords ?? null,
+	};
 }
 
 /**
