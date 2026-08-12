@@ -1,6 +1,15 @@
 import { runUserWorkersAi } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
+import {
+	instructionKey,
+	renderPaneForPilot,
+	repeatCaution,
+	repeatNote,
+	repeatStopDetail,
+	repetitionVerdict,
+	PILOT_PANE_CHARS,
+} from "./coding-repetition.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -132,6 +141,10 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	const actionLog: string[] = [];
 	let refusals = 0;
 	let emptyInstructions = 0;
+	/** Normalised key of every instruction actually driven into the engine, in order (#522). */
+	const sentKeys: string[] = [];
+	/** The instruction this run was warned about repeating, if any — read by the `finish` branch. */
+	let repeatedInstruction: string | null = null;
 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
@@ -148,10 +161,18 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		if (decision.thought) await deps.onEvent?.("thought", decision.thought);
 
 		if (decision.finish) {
-			transcript.push(`finish: ${decision.finish.status} — ${decision.finish.detail}`);
+			// A `done` reached after the run repeated itself gets the measurement appended (#522). Run
+			// 3c83b0e9 ended "All safely executable tests were run with zero failures" — true, and the
+			// five specs the owner asked for were not among them. The loop cannot honestly rewrite the
+			// brain's summary, so it states the one thing it measured and lets the reader check.
+			const detail =
+				decision.finish.status === "done" && repeatedInstruction
+					? `${decision.finish.detail}\n\n${repeatCaution(repeatedInstruction)}`
+					: decision.finish.detail;
+			transcript.push(`finish: ${decision.finish.status} — ${detail}`);
 			return {
 				outcome: decision.finish.status === "done" ? "done" : "failed",
-				detail: decision.finish.detail,
+				detail,
 				steps: step,
 				transcript,
 			};
@@ -222,6 +243,38 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// the detail says exactly why so the owner can approve the merge themselves.
 			if (refusals >= MAX_REFUSALS) return { outcome: "failed", detail: refusal, steps: step, transcript };
 			continue;
+		}
+
+		// REPEATED INSTRUCTION (#522). The two ways the Pilot gets stuck on one instruction — the CLI
+		// refusing it, and the CLI answering it outside the terminal window the Pilot can read — are
+		// indistinguishable from here and do not need to be told apart: both look like the same payload
+		// going out again, and both are bounded by counting that. The prompt rule #505 added for the
+		// first of them is prose, and a run repeated a byte-identical payload three times after it
+		// deployed; this is the code-side counterpart.
+		//
+		// Keyed on the instruction (fenced command preferred), counted over a WINDOW rather than the
+		// whole run — see coding-repetition.ts for why a naive consecutive-equality counter would have
+		// killed a working 26-step run at step 21.
+		if (decision.action.kind === "message") {
+			const key = instructionKey(decision.action.text);
+			const v = repetitionVerdict(sentKeys, key);
+			if (v.verdict === "stop") {
+				const why = repeatStopDetail(decision.action.text);
+				transcript.push(why);
+				await deps.onEvent?.("repeated", why);
+				// `stuck`, not `failed`: a refusal on safety grounds and an unreadable answer are both
+				// things a human settles in seconds, the takeover machinery already exists, and `failed`
+				// throws away a session nine steps in. An unanswered handoff still times out to `failed`.
+				return { outcome: "stuck", detail: why, steps: step, transcript };
+			}
+			if (v.verdict === "note") {
+				repeatedInstruction = decision.action.text;
+				const note = repeatNote(v);
+				actionLog.push(note);
+				transcript.push(note);
+				await deps.onEvent?.("repeated", note);
+			}
+			sentKeys.push(key);
 		}
 
 		const label = describe(decision.action);
@@ -328,6 +381,11 @@ export function systemPrompt(goal: CodingGoal): string {
 		"WHO IS WHO: your instructions reach the CLI as a user turn, so when the terminal says \"the user\" — asked, was warned, chose, approved — it means YOU, not the human. The human is not watching this run and has not been asked anything.",
 		"- NEVER report a decision as the human's. If you decided it, say that you decided it, and say why.",
 		"- If the CLI objects to an instruction on grounds of correctness or safety, you may NOT simply repeat it. Either follow its recommendation, or call request_human quoting the objection — the human is the only one who can overrule the CLI on a judgement like that.",
+		// WHAT YOU CAN SEE (#522, cause B). The Pilot was never told the size of its own window, so an
+		// answer whose start had scrolled past read as an answer that never came — and the only move
+		// that reading suggests is to ask again, which pushes it further out. This states the
+		// measurement; renderPaneForPilot states the per-decision number on the pane itself.
+		`- You see only the LAST ~${PILOT_PANE_CHARS} characters of the terminal, never all of it. An instruction whose output is longer than that can never be verified by you: ask for a bounded slice (a line range, a grep, head/tail) rather than a full dump, and never re-send an instruction hoping earlier output will come back — it will not.`,
 		"",
 		"Never output step-by-step thinking; just call one tool.",
 	);
@@ -350,7 +408,8 @@ export async function decideCodingAction(
 	const userMsg = [
 		`Steps so far:\n${params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
 		`\nTERMINAL (run-state: ${params.snapshot.runState}):`,
-		params.snapshot.pane.slice(-6000),
+		// Not a bare `slice(-6000)`: the tail is labelled with what it is a tail OF (#522, cause B).
+		renderPaneForPilot(params.snapshot.pane),
 		"\nDo the single next step toward the objective. Call exactly one tool.",
 	].join("\n");
 

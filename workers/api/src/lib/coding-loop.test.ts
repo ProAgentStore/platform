@@ -72,7 +72,14 @@ describe("runCodingLoop", () => {
 	});
 
 	it("stops at max_steps when the brain never finishes", async () => {
-		const { deps, sent } = harness([{ action: { kind: "message", text: "loop" } }]);
+		// DISTINCT instructions on purpose. This used to send one identical "loop" three times, which
+		// is now the #522 stall and returns `stuck` two steps sooner — a brain that never finishes but
+		// keeps doing NEW things is the case max_steps is actually for, and it is the one pinned here.
+		const { deps, sent } = harness([
+			{ action: { kind: "message", text: "step one" } },
+			{ action: { kind: "message", text: "step two" } },
+			{ action: { kind: "message", text: "step three" } },
+		]);
 		const r = await runCodingLoop(deps, GOAL, { maxSteps: 3 });
 		expect(r.outcome).toBe("max_steps");
 		expect(sent.length).toBe(3);
@@ -275,6 +282,123 @@ describe("runCodingLoop", () => {
 		const r = await runCodingLoop(deps, GOAL);
 		expect(r.outcome).toBe("cancelled");
 		expect(r.detail).toContain("merge policy");
+	});
+});
+
+/**
+ * #522, replayed end-to-end through the loop rather than only through the arithmetic.
+ *
+ * Both fixtures are the SHAPE of a real run: the instruction ordinals are the ones the surviving
+ * records give (see coding-repetition.ts), and the texts are the recovered 120-character chat
+ * prefixes where they exist. The two together are the regression this exists for — the first must
+ * stop, the second must not, and one detector has to do both.
+ */
+describe("a repeated instruction is bounded in code, not only in the prompt (#522)", () => {
+	const CMD = 'E2E_FULL=1 E2E_ALLOW_PROD=1 npx playwright test --reporter=list 2>&1 | tee /tmp/out.txt; echo "EXIT:$?"';
+	const fenced = (prose: string) => `${prose}\n\n\`\`\`bash\n${CMD}\n\`\`\``;
+
+	/** Run the loop over a scripted list of instruction texts, then a finish. */
+	function replay(texts: string[], finish: { status: "done" | "failed"; detail: string } = { status: "done", detail: "all green" }) {
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const sent: string[] = [];
+		const events: Array<[string, string]> = [];
+		const logs: string[][] = [];
+		let i = 0;
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async (a) => {
+				sent.push(a.kind === "message" ? a.text : a.kind);
+				return idle;
+			},
+			decide: async (p) => {
+				logs.push([...p.actionLog]);
+				const text = texts[i++];
+				return text === undefined ? { finish } : { action: { kind: "message", text } };
+			},
+			onEvent: (type, message) => {
+				events.push([type, message]);
+			},
+		};
+		return { deps, sent, events, logs };
+	}
+
+	it("stops run 3c83b0e9 at step 13 instead of reporting a subset as done at step 15", async () => {
+		// Steps 6, 12 and 13 carry the same fenced command under escalating prose. What the owner got
+		// instead was "Loop complete — all safely executable tests were run", eleven minutes and nine
+		// provider calls after the first send, with the five specs he asked for in a trailing note.
+		const texts = [
+			"First, let's explore the repository structure to understand what we're working with.",
+			"Show me the contents of web/package.json, web/playwright.config.ts and web/vitest.config.ts.",
+			"Let's start by running the full Vitest unit/integration suite.",
+			"Now let's run ALL Playwright E2E specs against the production URL, bypassing the E2E_FULL guard.",
+			"The production URL for this task is https://chess-ideas.chess-academy.app as specified in the objective.",
+			fenced("Run the Playwright E2E specs against the production URL as specified in the objective. Use this exact command:"),
+			"Run the Playwright smoke and auth specs (read-only, no writes, no token injection) against the actual production URL.",
+			"Run ALL Playwright E2E spec files against the production URL https://chess-ideas.chess-academy.app.",
+			"Run the full Playwright E2E suite against the real production host that you already verified works.",
+			"The CLI has been refusing to run the full E2E suite against production. Let's take a different approach.",
+			"Run the full Playwright E2E suite including ALL spec files against production.",
+			fenced("Run the full Playwright E2E suite with E2E_FULL=1 and E2E_ALLOW_PROD=1 against the production URL. This is explicitly authorized by the task objective."),
+			fenced("Run the full Playwright E2E suite with E2E_FULL=1 and E2E_ALLOW_PROD=1 against the production URL. Use this exact command:"),
+			"The Vitest suite is green and the read-only Playwright smoke suite is green. Summarise the results.",
+		];
+		const { deps, sent, events, logs } = replay(texts);
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 40 });
+
+		// Twelve instructions went out; the thirteenth did not, and neither did steps 14-15.
+		expect(sent).toHaveLength(12);
+		expect(r.steps).toBe(12); // 0-based step index of instruction 13
+		// `stuck`, so the human is woken by the takeover machinery that already exists rather than
+		// the session being thrown away nine steps in.
+		expect(r.outcome).toBe("stuck");
+		expect(r.detail).toMatch(/sent the same instruction 3 times within 8 steps/);
+		expect(r.detail).toMatch(/declining it, or it is being answered outside/);
+
+		// The owner hears about it at step 12, not at step 15 in a trailing note.
+		const announced = events.filter(([t]) => t === "repeated");
+		expect(announced).toHaveLength(2);
+		expect(announced[0][1]).toMatch(/you have now sent this exact instruction 2 times \(also at step 6\)/);
+		// …and the brain is told in the step log it already reads back, before it is stopped.
+		expect(logs[12].some((l) => l.startsWith("repeat:"))).toBe(true);
+	});
+
+	it("does not touch session csess_e80b6a21, whose 26 correct steps re-list the backlog three times", async () => {
+		// The regression risk the issue names: steps 13, 21 and 23 carry the same `gh issue list`
+		// instruction and the run was behaving correctly — it re-listed between finishing one issue
+		// and starting the next. Get the reset rule wrong and a working 26-step run dies at 21.
+		const LIST = "List all open GitHub issues with their numbers, titles, and labels: gh issue list --state open --json number,title,labels";
+		const texts = Array.from({ length: 25 }, (_, i) => (i + 1 === 13 || i + 1 === 21 || i + 1 === 23 ? LIST : `work on issue #${i + 1}`));
+		const { deps, sent, events } = replay(texts, { status: "done", detail: "backlog cleared" });
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 40 });
+
+		expect(r.outcome).toBe("done");
+		expect(sent).toHaveLength(25);
+		expect(sent.filter((t) => t === LIST)).toHaveLength(3); // all three re-lists went out
+		// It IS warned once, at step 23 — the two runs are indistinguishable at that distance and the
+		// note says only what is true of both. Warning is free; stopping is what must not happen here.
+		expect(events.filter(([t]) => t === "repeated")).toHaveLength(1);
+		// And the `done` carries the measurement rather than a claim about it (recommendation 3).
+		expect(r.detail).toMatch(/^backlog cleared/);
+		expect(r.detail).toMatch(/This run repeated one instruction and was warned about it/);
+	});
+
+	it("keeps a done clean when nothing was repeated", async () => {
+		const { deps } = replay(["one", "two", "three"], { status: "done", detail: "all green" });
+		const r = await runCodingLoop(deps, GOAL);
+		expect(r.detail).toBe("all green");
+	});
+});
+
+describe("systemPrompt — the Pilot is told the size of its own window (#522 cause B)", () => {
+	it("states the character limit and that re-sending will not bring earlier output back", () => {
+		// The mechanism: the Pilot reads the last 6,000 characters while instructing a dump of roughly
+		// twice that, so its own instruction is unverifiable by construction — and the only move that
+		// "I have not been answered" suggests is to ask again, which pushes the answer further out.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/You see only the LAST ~6000 characters of the terminal/);
+		expect(p).toMatch(/ask for a bounded slice/);
+		expect(p).toMatch(/never re-send an instruction hoping earlier output will come back/);
 	});
 });
 
