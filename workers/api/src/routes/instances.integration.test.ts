@@ -526,6 +526,34 @@ describe("POST /v1/instances/:id/chat (integration)", () => {
 		expect(usage).toBeTruthy();
 		expect(JSON.parse(usage!.args[3] as string).instanceId).toBe("inst-1");
 	});
+
+	// #514. The turn id used to be minted AFTER the DO answered, so the DO never received one:
+	// `chat.truncated` and `chat.invented_result` — the two events that record the platform
+	// catching its own agent — were written with trace_id NULL on every console turn and could
+	// not be joined to the chat.in/chat.out pair beside them. And `chat.in` was stamped at the
+	// END of the turn (measured 7,792 ms after the user spoke), so timestamp-matching a user turn
+	// to its trace was systematically wrong by one turn.
+	it("mints the turn id before the DO call and stamps chat.in with the arrival time", async () => {
+		const { app, env, writes, doCalls } = buildApp({ owns: [["inst-1", "u1"]] });
+		const before = Date.now();
+		const res = await post(app, env, "/v1/instances/inst-1/chat", { message: "hello" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+
+		const chat = doCalls.find((d) => d.name === "inst-1" && d.path === "/chat");
+		const sentTraceId = (chat!.body as { traceId?: string }).traceId;
+		expect(typeof sentTraceId).toBe("string");
+
+		const events = writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"));
+		const byName = new Map(events.map((w) => [w.args[7] as string, w.args]));
+		expect([...byName.keys()].sort()).toEqual(["chat.in", "chat.out"]);
+		// The id the DO was given is the id the events carry — one turn, one trace.
+		for (const args of byName.values()) expect(args[4]).toBe(sentTraceId);
+		// chat.in is stamped on ARRIVAL, and still sorts before chat.out.
+		const inTs = byName.get("chat.in")![1] as number;
+		const outTs = byName.get("chat.out")![1] as number;
+		expect(inTs).toBeGreaterThanOrEqual(before);
+		expect(inTs).toBeLessThanOrEqual(outTs);
+	});
 });
 
 // ————————————————————————————————————————————————————————————————

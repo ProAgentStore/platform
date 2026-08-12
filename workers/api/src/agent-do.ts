@@ -473,6 +473,9 @@ export class AgentDO extends DurableObject<Env> {
 			// cleared chat cannot leave a dictation behind. Capped like any client-supplied
 			// string; it is NEVER read back into the model's context, only shown to the user.
 			...(typeof body.dictation === "string" && body.dictation.trim() ? { dictation: body.dictation.slice(0, 4000) } : {}),
+			// The turn id the caller minted (#514), so this message can be joined to the
+			// `chat.in`/`tool.call`/`chat.out`/`chat.truncated` events that describe the same turn.
+			...(delegation?.traceId ? { traceId: delegation.traceId } : {}),
 			createdAt: new Date().toISOString(),
 		};
 		await this.appendMessage(userMsg);
@@ -564,6 +567,9 @@ export class AgentDO extends DurableObject<Env> {
 				role: "assistant",
 				content: response,
 				channel: channel || "chat",
+				// Same turn id as the user message that provoked it (#514) — the pair is what makes
+				// "the message I am complaining about, and the turn before it" addressable at all.
+				...(delegation?.traceId ? { traceId: delegation.traceId } : {}),
 				createdAt: new Date().toISOString(),
 			};
 			await this.appendMessage(assistantMsg);

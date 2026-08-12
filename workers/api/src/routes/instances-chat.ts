@@ -56,6 +56,19 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			"SELECT name FROM agents WHERE id = ?1",
 		).bind(instance.agent_id).first<{ name: string }>();
 
+		// The turn's identity, minted BEFORE the DO is asked (#514). It used to be minted after the
+		// reply came back, which had two consequences that only look small: the DO's own warn-level
+		// events about this very turn — `chat.truncated` and `chat.invented_result`, the two rows
+		// that record the platform catching its own agent — were written with `trace_id = NULL`
+		// (agent-think.ts reads `delegation.traceId`, which only the Loop ever supplied), so they
+		// could never be joined to the `chat.in`/`chat.out` pair beside them; and `chat.in` was
+		// stamped `Date.now()` at the END of the turn, measured 7,792 ms after the user actually
+		// spoke on instance 5fab318d. A trace whose "when the user spoke" is off by a whole turn
+		// cannot be matched to a transcript by timestamp at all, and with concurrent turns on one
+		// instance (#429) that window can contain another exchange entirely.
+		const turnId = crypto.randomUUID();
+		const startedAt = Date.now();
+
 		const doRes = await stub.fetch(
 			new Request("https://agent/chat", {
 				method: "POST",
@@ -63,7 +76,7 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 				body: JSON.stringify({
 					message, channel: "chat", userId: session.uid,
 					agentId: instanceId, agentName: agentMeta?.name || "Agent",
-					audioKey, dictation,
+					audioKey, dictation, traceId: turnId,
 				}),
 			}),
 		);
@@ -95,13 +108,17 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (doRes.ok) {
 			// Trace the turn (in → tools → out) grouped by one turn id so agent_trace
 			// shows what the agent was asked, which tools it ran, and what it replied.
-			const turnId = crypto.randomUUID();
+			// Still written only on success, and only here: a failed turn's events are the error
+			// log's job, and changing that alongside the id would confuse two fixes (#514).
 			const reply = isRecord(data) && isRecord(data.message) ? String(data.message.content ?? "") : "";
 			const tools = isRecord(data) && isRecord(data.toolMessage) ? String(data.toolMessage.content ?? "") : "";
+			// `chat.in` carries the time the request ARRIVED, not the time the reply finished, so it
+			// lands within a few ms of the user message's own createdAt and the two are matchable.
+			// `startedAt < now` always, so listEvents' ts ordering still reads in → tools → out.
 			const now = Date.now();
-			await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
-			if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: tools.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1 });
-			await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 2 });
+			await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: startedAt });
+			if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: tools.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
+			await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1 });
 			// Bump last_activity_at — chat is the primary signal for "used recently".
 			// Fire-and-forget: a write failure must not surface as a request error.
 			void touchInstanceActivity(c.env, instanceId, session.uid);

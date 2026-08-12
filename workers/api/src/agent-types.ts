@@ -15,6 +15,13 @@ export interface AgentMessage {
 	 *  the message is also what gives it the transcript's retention for free: clearing the chat
 	 *  deletes the record, and the dictation with it. Absent for typed turns. */
 	dictation?: string;
+	/** The turn this message belongs to, matching `agent_events.trace_id` for the same turn (#514).
+	 *  Stamped on the user message and the assistant reply by the caller that minted the id — the
+	 *  console chat route and the Loop both do. Before this the ONLY join between a transcript and
+	 *  its trace was a timestamp, and the trace's timestamp was wrong (see routes/instances-chat.ts).
+	 *  Optional and additive: a message written before this existed, or over a channel that mints no
+	 *  turn id (the WS chat path), simply has none. */
+	traceId?: string;
 	/** Stamped by `/messages` on an assistant message that claims a tool result the platform never
 	 *  wrote (#406). NEVER persisted — it is computed from the message's own text on every read, so
 	 *  it reaches rows written before the guard that catches this at generation time (#395) existed,

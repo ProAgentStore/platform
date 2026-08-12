@@ -604,7 +604,13 @@ const PINS = {
 	// already paid for rather than re-fetching them — and where those tools were writes, does not
 	// commit the side effect twice. Decisions are pure in lib/resumable-round.ts; the −15 is the
 	// fourth copy of one five-field system-message literal collapsing into `systemMessage()`.
-	"workers/api/src/agent-do.ts": 1212,
+	// +6 for #514, four of them comment: the user message and the assistant reply both carry the
+	// turn id the caller minted. Raised rather than split — it is one optional field on the two
+	// message literals `handleChat`/`runTurn` already build, exactly like `dictation` above, and
+	// moving it elsewhere would separate it from the messages it identifies. The lines that matter
+	// are the prose: before this the ONLY join from a transcript to its trace was a timestamp, and
+	// the trace's `chat.in` timestamp was stamped at the END of the turn (measured 7.8s late).
+	"workers/api/src/agent-do.ts": 1218,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -895,7 +901,9 @@ const PINS = {
 	// permanent: an entry that says only "it got bigger" is a number, and this list is a ledger.
 	// +7 at #509: the InstanceDetail raise above, whose reason has to say why a one-property
 	// growth was recorded rather than squeezed out — plus this self-ref.
-	"scripts/check-file-size.mjs": 979,
+	// +8 at #514: the agent-do raise above (a trace id on both messages of a turn) and its reason,
+	// plus this self-ref.
+	"scripts/check-file-size.mjs": 987,
 };
 
 /**
