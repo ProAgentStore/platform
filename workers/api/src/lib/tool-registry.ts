@@ -580,6 +580,16 @@ export async function runRegistryTool(
 	// creator's own trial chat of a ceiling-declaring agent was not subject to that ceiling, while
 	// the write-consent gate two blocks up refused the identical input. Hence the fix is here and
 	// not at the caller: a rule that holds only where the caller remembered is not a rule.
+	//
+	// That surface stays REFUSED, decided rather than inherited (#441). `resolveAgentCapabilities`
+	// falls back to the `agents` row and `lookupConnectorConstraints` does not, so the same id
+	// resolves the tools and cannot resolve their ceiling — but the asymmetry runs the safe way
+	// round, and giving the ceiling that fallback would make it depend on which KIND of id a caller
+	// passed, which is the property this block removed. It would also govern nothing: both
+	// constrained connectors resolve their runner by instance id, and the write half never gets
+	// here at all because consent is keyed by instance id too. The full argument, and the condition
+	// under which to revisit it (a cloud-backed connector with a ceiling), is in
+	// `docs/capability-constraints.md`.
 	let callInput = input || {};
 	const connector = tool.connector;
 	if (connector && CONNECTOR_CONSTRAINTS[connector]) {
@@ -601,7 +611,7 @@ export async function runRegistryTool(
 		if (found.instance === "missing") {
 			return {
 				name,
-				content: `This agent's declared constraints for the ${connector} connector could not be resolved — this call names no instance for them to belong to — so "${name}" was refused rather than run unconstrained.`,
+				content: `This agent's declared constraints for the ${connector} connector could not be resolved — this call names no subscribed instance for them to belong to — so "${name}" was refused rather than run unconstrained. A ceiling is resolved per instance (the creator's declaration, narrowed by that instance's own binding), so run this from a subscribed instance rather than from a template preview or trial chat.`,
 				success: false,
 			};
 		}

@@ -391,6 +391,33 @@ describe("capability-constraint gate (#404)", () => {
 			expect(r.content).toMatch(/could not be resolved/i);
 		});
 
+		it("and does NOT go looking for an agents row instead — one lookup, the instance join (#441)", async () => {
+			// The decision, pinned as a property rather than left in prose (docs/capability-constraints.md).
+			// `resolveAgentCapabilities` resolves a template's TOOL list from the `agents` row when the
+			// instance join misses; the obvious symmetry is to give this lookup the same fallback so a
+			// creator's trial chat is ceiling-governed instead of refused. It is deliberately not taken:
+			// the permissive resolver may fall back, the boundary may not, or a ceiling's applicability
+			// starts depending on which KIND of id a caller happened to pass — the property this gate
+			// exists to remove. A second query here IS the review signal, so it fails the test.
+			const sqls: string[] = [];
+			const env = {
+				DB: {
+					prepare(sql: string) {
+						sqls.push(sql);
+						return { bind: () => ({ first: async () => null }) };
+					},
+				},
+			} as unknown as Env;
+			const r = await runRegistryTool("terminal_capture", { env, userId: "u1", instanceId: "agent_kitty_operator" }, { target: "kitty:1" });
+			expect(r.success).toBe(false);
+			expect(sqls).toHaveLength(1);
+			expect(sqls[0]).toContain("agent_instances");
+			// And the refusal names the surface it wants, not a store failure: "no runner yet" and
+			// "this can never have one" read identically otherwise, which is what made the old wording
+			// the weak part of the fix.
+			expect(r.content).toMatch(/subscribed instance/i);
+		});
+
 		it("but a row that EXISTS and declares nothing still runs — that is every agent today", async () => {
 			// The regression this whole change has to avoid. Reaching the handler (and failing there
 			// on the absent runner) is the proof that the gate let it through.

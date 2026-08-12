@@ -106,6 +106,25 @@ Set through `GET`/`PUT /v1/instances/{id}/terminal-target`, merged by
 one; with nothing bound, a target-taking call is refused rather than guessed — the same call the
 backend ceiling already makes when several backends are permitted and none is named.
 
+**Two connectors carry a vocabulary, not one** (#447). `tmux` joined `terminal` in
+`CONNECTOR_CONSTRAINTS`, and it is the shape a VALUE ceiling cannot express — #403 moved the one
+PUBLISHED Operator onto the backend-exclusive `tmux_*` tools, which made it a tmux agent by
+construction and, because the table is keyed by CONNECTOR id, simultaneously moved it onto a
+connector that had no vocabulary at all. So it carries a binding field and nothing else: the
+backend is already answered by which tools exist, and a value list covering the whole vocabulary is
+dropped by `parseConstraintSpec` anyway.
+
+```
+agents.config.capabilities.surfaceOptions   { tmux: { sessions: "single" } }
+agent_instances.config.surfaceOptions       { tmux: { boundSession: "work" } }
+```
+
+Set through `GET`/`PUT /v1/instances/{id}/tmux-session` — the second mount of the SAME handler
+pair, parameterised over the binding field, since the read-merge-write of one `surfaceOptions` key
+is the part that must not exist twice (`routes/instances-terminal.ts`). Each binding field names
+its own route in the vocabulary (`bindRoute`), so a refusal can tell the caller where to bind, and
+`instances.contract.test.ts` asserts the mounts against that table so the two cannot drift.
+
 ### The posture: fail CLOSED, in both directions (#441)
 
 The gate refuses whenever it cannot **locate** the ceiling it is meant to honour — not only when
@@ -131,10 +150,47 @@ what left a creator's own trial chat of a ceiling-declaring agent unconstrained 
 gate refused the identical input. **The fix is at the gate, not at the caller**: a rule that holds
 only where the caller remembered to pass the right kind of id is not a rule.
 
+#### The agent-template surface stays refused — deliberately (#441)
+
+There is a real asymmetry underneath that, and it is worth naming because it looks like an
+oversight: on the template surface `resolveAgentCapabilities` (`agent-think.ts`) tries the instance
+join and **then** the `agents` row, so the agent's full declared TOOL list resolves there, while
+`lookupConnectorConstraints` joins `agent_instances` only, so their CEILING cannot. The same id
+resolves the tools and cannot resolve their limit.
+
+Giving the constraint lookup the same second query — the creator's ceiling with the subscriber half
+empty — was considered and is **not** what ships. Three reasons, in the order they mattered:
+
+- **The asymmetry runs the safe way round.** The permissive resolver (which tools exist at all)
+  falls back; the boundary refuses. Reversing it would make a declared ceiling's applicability
+  depend on which kind of id a caller happened to pass, which is the property #441 removed.
+- **There is nothing there to govern.** Both connectors with a vocabulary are runner-backed, and a
+  runner is resolved by INSTANCE id (`getBoundRunnerConn` → `instance_runtimes` /
+  `instance_runtime_nodes`, written only behind `requireOwnedInstance`), so an agent id can never
+  name a machine. The write half never reaches the gate either: `instance_connector_consent` is
+  likewise keyed by instance id and `setConsent`'s only callers sit behind `requireOwnedInstance`,
+  so the consent gate two blocks above refuses every write tool first. Measured on the seven
+  `tmux_*` tools, before and after `tmux` joined the table: the five writes are byte-identical, and
+  the two reads swapped one refusal message for another.
+- **Half the ceiling does not exist for a template.** A constraint is resolved per instance — the
+  creator's declaration narrowed by that instance's own binding — and a template has no binding and
+  no subscriber.
+
+Revisit this the first time a ceiling-governed connector becomes CLOUD-backed. Then a creator's
+trial chat would be doing real work, the ceiling would have something to constrain, and the fallback
+becomes the better answer rather than a widening.
+
 Blast radius, stated because it is small and should not be overestimated: only a connector present
 in `CONNECTOR_CONSTRAINTS` reaches this gate at all. Every other connector skips the block
 entirely. Adding a key to that table therefore turns the posture on for that connector's tools, and
 its dispatch paths must be checked for an instance id first.
+
+That has now happened once, and it is the worked example: `tmux` had no entry until #447, so none of
+this posture applied to `tmux_*` at all — a `tmux_capture_pane` with an unresolvable authority fell
+straight through to the handler and was refused for the absent runner instead. Adding the key
+turned the posture on for all seven tools in one commit. Nothing was lost (the table above is the
+audit), but the check that made that safe was reading the dispatch paths for an instance id, and it
+is owed again the next time a key is added.
 
 ## What this is NOT
 
