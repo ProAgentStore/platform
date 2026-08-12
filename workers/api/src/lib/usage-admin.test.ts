@@ -71,6 +71,22 @@ describe("aggregateAdminUsage", () => {
 		expect(s.split.byok.chargedMicros).toBe(0);
 	});
 
+	it("carries the charged figure into byUser and byAgent, not only into the split (#543)", () => {
+		// The operator view had the same defect as the owner's page: a per-user total that could
+		// not be decomposed into money. Both breakdowns go through the shared `bump()`, so this
+		// is the assertion that keeps the two aggregates from drifting apart again.
+		const s = aggregateAdminUsage([
+			row({ user_id: "u1", agent_id: "a1", cost_micros: 1_000_000, payer: "byok-api" }),
+			row({ user_id: "u1", agent_id: "a2", cost_micros: 48_760_000, payer: "subscription" }),
+			row({ user_id: "u2", agent_id: "a2", cost_micros: 900, payer: null }),
+		]);
+		expect(s.byUser.find((b) => b.key === "u1")).toMatchObject({ costMicros: 49_760_000, chargedCostMicros: 1_000_000 });
+		expect(s.byUser.find((b) => b.key === "u2")).toMatchObject({ costMicros: 900, chargedCostMicros: 0 });
+		expect(s.byAgent.find((b) => b.key === "a2")).toMatchObject({ costMicros: 48_760_900, chargedCostMicros: 0 });
+		const sum = s.byUser.reduce((n, b) => n + b.chargedCostMicros, 0);
+		expect(sum).toBe(s.totals.chargedMicros);
+	});
+
 	it("labels users and agents from the provided name maps", () => {
 		const s = aggregateAdminUsage([row({ user_id: "u1", agent_id: "a1" })], {
 			userNames: { u1: "alice" },

@@ -43,6 +43,10 @@ interface OpsMockOptions {
 	failPaths?: string[];
 	/** `GET /v1/feedback` — the owner's recorded complaints (#514). */
 	feedback?: Array<Record<string, unknown>>;
+	/** `GET /v1/usage` — see DEFAULT_USAGE for why the default is production-shaped. */
+	usage?: Record<string, unknown>;
+	/** `GET /v1/budget/limits` — the ceilings panel under the usage data. */
+	budget?: Record<string, unknown>;
 }
 
 /**
@@ -70,6 +74,70 @@ const DEFAULT_CONNECTORS = [
  * Same reason as above: `NotificationPreferences` is `if (!types.length) return null`, so with no
  * vocabulary in the fixture that whole section rendered NOTHING and no guard had ever visited it.
  */
+/**
+ * `GET /v1/usage`, shaped like the account the defect was measured on (#543).
+ *
+ * The figures are the real ones read from production on 2026-08-13: a coding agent holding 99.4%
+ * of the account's notional value with NONE of it attributable to a payer, beside a chat agent
+ * whose whole value is charged to an API key. That ratio is the bug — the page printed
+ * $9,566.69 beside "Repo Coder" and $36.35 as the charged headline — so a fixture with tidy
+ * round numbers would render a page on which nothing looks wrong.
+ *
+ * It is also the widest content this page ever holds: `$9,567` is the longest string the money
+ * column takes, which is what the mobile sweep needs in order to mean anything.
+ */
+const DEFAULT_USAGE = {
+	range: "30d",
+	totals: {
+		inputTokens: 5_907_475,
+		outputTokens: 3_582_926,
+		cacheReadTokens: 1_278_844_405,
+		cacheWriteTokens: 14_548_104,
+		costMicros: 9_621_218_575,
+		chargedCostMicros: 36_352_782,
+		calls: 5_721,
+	},
+	daily: [
+		{ date: "2026-08-09", inputTokens: 812_004, outputTokens: 402_119, costMicros: 1_204_881_004, calls: 402 },
+		{ date: "2026-08-10", inputTokens: 1_002_331, outputTokens: 611_284, costMicros: 1_811_004_882, calls: 588 },
+		{ date: "2026-08-11", inputTokens: 2_192_612, outputTokens: 2_032_986, costMicros: 6_457_081_537, calls: 822 },
+	],
+	byModel: [
+		{ key: "claude-sonnet-4-6", inputTokens: 5_800_000, outputTokens: 3_500_000, cacheReadTokens: 1_278_000_000, cacheWriteTokens: 14_500_000, costMicros: 9_600_000_000, chargedCostMicros: 30_000_000, calls: 5_600 },
+		{ key: "@cf/baai/bge-base-en-v1.5", inputTokens: 107_475, outputTokens: 82_926, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 21_218_575, chargedCostMicros: 6_352_782, calls: 121 },
+	],
+	byKind: [
+		{ key: "engine", inputTokens: 56_035, outputTokens: 3_283_599, cacheReadTokens: 1_270_000_000, cacheWriteTokens: 14_000_000, costMicros: 9_541_310_295, chargedCostMicros: 0, calls: 449 },
+		{ key: "chat", inputTokens: 5_851_440, outputTokens: 299_327, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 79_908_280, chargedCostMicros: 36_352_782, calls: 5_272 },
+	],
+	byAgent: [
+		{ key: "agent-coder", label: "Repo Coder", inputTokens: 56_035, outputTokens: 3_283_599, cacheReadTokens: 1_270_000_000, cacheWriteTokens: 14_000_000, costMicros: 9_566_686_384, chargedCostMicros: 0, calls: 3_462 },
+		{ key: "agent-1", label: "Test Agent", inputTokens: 5_851_440, outputTokens: 299_327, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 54_532_191, chargedCostMicros: 36_352_782, calls: 2_259 },
+	],
+	byPayer: [
+		{ key: "unknown", label: "Payer not established", inputTokens: 56_035, outputTokens: 3_603_049, cacheReadTokens: 1_270_000_000, cacheWriteTokens: 14_000_000, costMicros: 9_584_865_793, chargedCostMicros: 0, calls: 3_462 },
+		{ key: "byok-api", label: "Billed to your API key", inputTokens: 5_800_000, outputTokens: 232_914, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 36_336_533, chargedCostMicros: 36_336_533, calls: 1_866 },
+		{ key: "platform", label: "Paid by ProAgentStore", inputTokens: 51_440, outputTokens: 16_202, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 16_249, chargedCostMicros: 16_249, calls: 393 },
+	],
+	unmetered: { drives: 0, aiCliDrives: 0, instances: 0, lastAt: null, windowDays: 14 },
+};
+
+const DEFAULT_BUDGET = {
+	stored: { chargedMicrosCeiling: null, tokenCeiling: null, perTreeCostMicros: null, perTreeDelegations: null, perTreeMaxDepth: null, loopMaxIterations: null },
+	effective: {
+		chargedMicrosCeiling: 50_000_000, chargedMicrosCeilingTier: "default",
+		tokenCeiling: 250_000_000, tokenCeilingTier: "default",
+		perTreeCostMicros: 5_000_000, perTreeCostMicrosTier: "default",
+		perTreeDelegations: 20, perTreeDelegationsTier: "default",
+		perTreeMaxDepth: 3, perTreeMaxDepthTier: "default",
+		loopMaxIterations: 25, loopMaxIterationsTier: "default",
+	},
+	consumption: { chargedMicros: 6_763_290, tokens: 30_710_799 },
+	remaining: { chargedMicros: 43_236_710, tokens: 219_289_201 },
+	maxOverride: { chargedMicrosCeiling: 500_000_000, tokenCeiling: 2_000_000_000, perTreeCostMicros: 50_000_000, perTreeDelegations: 100, perTreeMaxDepth: 8, loopMaxIterations: 200 },
+	enforced: false,
+};
+
 const DEFAULT_NOTIFICATION_TYPES = [
 	{ id: "task.needs_human", label: "An agent needs your input", description: "A run has stopped and is waiting on you — a CAPTCHA, or a value it does not have.", alerts: true },
 	{ id: "deploy.finished", label: "Deployment finished", description: "A build of one of your agents completed or failed.", alerts: false },
@@ -710,6 +778,10 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		}
 		if (path === "/v1/dashboard/creator") return json({ totalAgents: 1, totalSubscribers: 0, totalUsage: 0, agents: [] });
 		if (path === "/v1/dashboard/usage") return json({ activeInstances: 1, dailyUsage: [] });
+		// The Usage page (#543). Unmocked until now, which is why the page's densest row — four
+		// fixed-width slots and a bar — had never been measured at 320px by anything.
+		if (path === "/v1/usage") return json(options.usage ?? DEFAULT_USAGE);
+		if (path === "/v1/budget/limits") return json(options.budget ?? DEFAULT_BUDGET);
 
 		return json({ error: `Unhandled mock route ${method} ${path}` }, 500);
 	});
@@ -2291,6 +2363,72 @@ test.describe("ProAgentStore authenticated Console", () => {
 });
 
 /**
+ * The Usage page's central claim: a breakdown row says what it VALUE is and what it COST (#543).
+ *
+ * The page previously printed one figure per row — notional list-price value — in the same `$`
+ * format and the same column as a headline that showed charged money. On the account this fixture
+ * copies, those two numbers differ by 263x on the same screen. These specs assert the pair is
+ * present and that the two states of a zero are distinguishable, because that is the distinction a
+ * later "simplification" back to one column would delete.
+ */
+test.describe("Usage — value and charged are two numbers (#543)", () => {
+	test("prints the charged figure beside the notional one, for every breakdown", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		// The by-agent row for the coding agent: $9,567 of value, $0.00 of it charged. Both on
+		// screen, in the same row — the thing the page could not say before.
+		const coder = page.locator("div").filter({ hasText: /^Repo Coder/ }).first();
+		await expect(coder).toContainText("$9,567");
+		await expect(coder).toContainText("$0.00");
+
+		// And the agent that IS charged shows its own money, not the account's.
+		const other = page.locator("div").filter({ hasText: /^Test Agent/ }).first();
+		await expect(other).toContainText("$54.53");
+		await expect(other).toContainText("$36.35");
+
+		// The column header names both, so the second line is not an unlabelled number.
+		const header = page.getByTestId("usage-cost-header").first();
+		await expect(header).toContainText("Value");
+		await expect(header).toContainText("charged");
+	});
+
+	test("says a $0.00 charged row is not a free one, and does not claim the total is complete", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		const legend = page.getByTestId("usage-charged-legend");
+		await expect(legend).toContainText("is not free");
+		await expect(legend).toContainText("understates");
+	});
+
+	test("shows one figure, and no charged header, when the API does not report the split", async ({ page }) => {
+		// An older API omits `chargedCostMicros`. `$0.00` would be a number we do not have, so the
+		// row shows value alone rather than inventing a measurement.
+		await mockSignedInConsole(page, {
+			usage: {
+				range: "30d",
+				totals: { inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 },
+				daily: [{ date: "2026-08-11", inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 }],
+				byModel: [{ key: "claude-sonnet-4-6", inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 }],
+				byKind: [{ key: "chat", inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 }],
+				byAgent: [{ key: "agent-1", label: "Test Agent", inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 }],
+			},
+		});
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByText("Test Agent").first()).toBeVisible();
+		const header = page.getByTestId("usage-cost-header").first();
+		await expect(header).toContainText("Value");
+		await expect(header).not.toContainText("charged");
+		await expect(page.getByTestId("usage-charged-legend")).toHaveCount(0);
+	});
+});
+
+/**
  * Overflow measurement shared by the guards below.
  *
  * `<main>` is the scroll region and the header nav is an intentional `overflow-x-auto` strip, so
@@ -2446,6 +2584,10 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 		"/console/profile",
 		"/console/preferences",
 		"/console/notifications",
+		// Added at #543, when the breakdown row grew a second money figure. The route had never
+		// been swept because `/v1/usage` was not mocked at all — so the densest row in the console
+		// (a label, a bar and two fixed-width numeric columns) had never been measured on a phone.
+		"/console/usage",
 	];
 
 	for (const width of WIDTHS) {

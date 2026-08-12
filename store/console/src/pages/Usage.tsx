@@ -5,8 +5,9 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, hasChargedFigures } from "../lib/usageFigures";
 
-interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
+interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number }
 interface Day { date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
 /**
  * What the dollars above LEAVE OUT, counted (#348).
@@ -137,31 +138,82 @@ function TokenCell({ r }: { r: Bucket }) {
 	const cache = (r.cacheReadTokens ?? 0) + (r.cacheWriteTokens ?? 0);
 	const total = r.inputTokens + r.outputTokens + cache;
 	if (cache === 0) {
-		return <span className="w-20 text-right shrink-0 tabular-nums text-muted-soft text-xs">{tok(total)}</span>;
+		return <span className="w-16 sm:w-20 text-right shrink-0 tabular-nums text-muted-soft text-xs">{tok(total)}</span>;
 	}
 	return (
-		<span className="w-20 text-right shrink-0 text-xs flex flex-col items-end leading-tight">
+		<span className="w-16 sm:w-20 text-right shrink-0 text-xs flex flex-col items-end leading-tight">
 			<span className="tabular-nums text-muted-soft">{tok(total)}</span>
 			<span className="text-2xs text-muted-soft/60">+cache</span>
 		</span>
 	);
 }
 
-/** Horizontal breakdown bars, biggest first, sized by cost (falls back to tokens when all-free). */
+/**
+ * A row's money, as TWO figures (#543).
+ *
+ * The top line is notional value; the line under it is the part of that value someone is actually
+ * charged. Stacked rather than given its own column because the row already carries four fixed
+ * slots at 320px and a fifth does not fit — and because the two belong together: the reader's
+ * question is the ratio between them.
+ *
+ * The charged line is dimmed at zero and absent when the API did not report it, which is the
+ * difference between "none of this was charged" and "we do not know" — the states that read
+ * identically before, and the reason a $9,566.69 row sat beside a $36.35 headline unexplained.
+ */
+function CostCell({ r }: { r: Bucket }) {
+	const charged = chargedCell(r);
+	return (
+		<span className="w-14 sm:w-20 text-right shrink-0 text-xs flex flex-col items-end leading-tight">
+			<span className="tabular-nums text-muted">{usd(r.costMicros)}</span>
+			{charged.kind === "charged" && <span className="text-2xs tabular-nums text-accent">{usd(charged.micros)}</span>}
+			{charged.kind === "none" && <span className="text-2xs tabular-nums text-muted-soft/70">$0.00</span>}
+		</span>
+	);
+}
+
+/**
+ * Horizontal breakdown bars, biggest first, sized by cost (falls back to tokens when all-free).
+ *
+ * The three fixed column widths (`w-24`/`w-14`/`w-16`, widening at `sm:`) are written out at each
+ * call site rather than shared through a constant, on purpose: `truncation.test.ts` reads these
+ * class strings as SOURCE TEXT to prove a `truncate shrink-0` element is bounded, and an
+ * interpolated constant hides the width from it. They are narrower below `sm:` than they were
+ * because at 320px the row did not fit — 112 + 64 + 80 of fixed width plus three 8px gaps is 280
+ * inside a 272px card, and the bar between them is `min-w-0` so it absorbed nothing; the four
+ * cards escaped their grid by 10px. That was already true before this page grew a second money
+ * figure. It had never been measured: `/v1/usage` was not mocked, so the route was not in the
+ * mobile sweep. Both are, now (#543).
+ */
 function Breakdown({ rows, labelOf }: { rows: Bucket[]; labelOf: (b: Bucket) => string }) {
+	// Sized by NOTIONAL, on purpose. Sizing by charged would render the agent that did 99% of the
+	// account's work as a 2%-wide stub, which is a worse lie than the one being fixed. Two
+	// numbers, one bar.
 	const useCost = rows.some((r) => r.costMicros > 0);
 	const val = (r: Bucket) => (useCost ? r.costMicros : r.inputTokens + r.outputTokens);
 	const max = Math.max(1, ...rows.map(val));
+	const twoFigures = hasChargedFigures(rows);
 	if (rows.length === 0) return <p className="text-sm text-muted-soft py-2">No usage yet.</p>;
 	return (
 		<div className="flex flex-col gap-1.5">
+			<div className="flex items-center gap-1.5 sm:gap-2 text-2xs uppercase tracking-wide text-muted-soft">
+				<span className="w-24 sm:w-36 shrink-0" />
+				<span className="flex-1 min-w-0" />
+				{/* Stacked to mirror the cell under it, so each word sits directly above the number
+				    it names — and because "Value / charged" on one line does not fit the money
+				    column on a 320px phone. */}
+				<span className="w-14 sm:w-20 text-right shrink-0 flex flex-col items-end leading-tight" data-testid="usage-cost-header">
+					<span>Value</span>
+					{twoFigures && <span className="text-accent/70">charged</span>}
+				</span>
+				<span className="w-16 sm:w-20 text-right shrink-0">Tokens</span>
+			</div>
 			{rows.map((r) => (
-				<div key={r.key} className="flex items-center gap-2 text-sm">
-					<span className="w-28 sm:w-36 truncate shrink-0" title={labelOf(r)}>{labelOf(r)}</span>
+				<div key={r.key} className="flex items-center gap-1.5 sm:gap-2 text-sm">
+					<span className="w-24 sm:w-36 truncate shrink-0" title={labelOf(r)}>{labelOf(r)}</span>
 					<div className="flex-1 h-4 bg-line/40 rounded overflow-hidden min-w-0">
 						<div className="h-full bg-accent/70 rounded" style={{ width: `${Math.max(2, (val(r) / max) * 100)}%` }} />
 					</div>
-					<span className="w-16 text-right shrink-0 tabular-nums text-muted">{usd(r.costMicros)}</span>
+					<CostCell r={r} />
 					<TokenCell r={r} />
 				</div>
 			))}
@@ -301,7 +353,7 @@ export default function Usage() {
 						    said. Total list value is the answer to "what would this have cost on the
 						    API?" — a genuinely useful number, and not one anybody owes. */}
 						{totals.chargedCostMicros !== undefined && totals.chargedCostMicros !== totals.costMicros && (
-							<>{usd(totals.costMicros)} of list-price value in total (<b>value</b> = notional list price of all AI; <b>charged</b> = real payer money), of which {usd(totals.chargedCostMicros)} is charged to someone.</>
+							<>{usd(totals.costMicros)} of list-price value in total (<b>value</b> = notional list price of all AI; <b>charged</b> = real payer money), of which {usd(totals.chargedCostMicros)} is charged to someone. {CHARGED_COVERAGE_NOTE}</>
 						)}
 					</div>
 
@@ -320,6 +372,14 @@ export default function Usage() {
 					</Card>
 
 					{/* Breakdowns */}
+					{/* The legend for the second figure every breakdown below now carries (#543).
+					    Stated once, above all four cards, because it is one rule and repeating it
+					    per card would make it noise the reader learns to skip — and it is the
+					    sentence that stops "$0.00 charged" beside a five-figure value being read
+					    as "this agent was free". */}
+					{hasChargedFigures(data.byAgent) && (
+						<p className="text-xs text-muted-soft mb-3" data-testid="usage-charged-legend">{CHARGED_LEGEND}</p>
+					)}
 					<div className="grid md:grid-cols-2 gap-4">
 						{/* Who pays (#346) — first, and full width, because it is the axis that decides
 						    how to read every other card on this page. Without it the reader has one

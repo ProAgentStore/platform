@@ -891,7 +891,17 @@ const PINS = {
 	// so splitting it would put the two halves of the same user action in separate files.
 	// +12 at #486: BudgetPanel adds an observe-only notice (renders when enforced===false from the
 	// new API field), reflecting that daily circuit-breaker ceilings are stored but not yet enforced.
-	"store/console/src/pages/Usage.tsx": 862,
+	// +60 at #543: every breakdown row now prints TWO figures — notional value and the charged part
+	// of it — so `CostCell` joins `TokenCell`, and the four cards get a stacked column header and
+	// one shared legend. The prose and the three-state rule (charged / measured-zero / never
+	// measured) are NOT here: they are pure in lib/usageFigures.ts with their own tests, which is
+	// what keeps this file to the JSX. The rest is the paragraph on `Breakdown` recording why the
+	// three column widths are written out at each call site instead of shared through a constant —
+	// `truncation.test.ts` reads them as source text, and a constant hides the width from it, which
+	// is a guard defeated silently. The seam if it grows again: BudgetPanel and its three helpers
+	// (~370 lines) read a different API and answer a different question, and moving them to their
+	// own file would not split the SCREEN, which is what the note above is actually about.
+	"store/console/src/pages/Usage.tsx": 922,
 	// First entry at #291, crossing 800 by 5 lines. Recorded rather than squeezed, because the
 	// alternative on offer was deleting the paragraph that says why the change exists — and the
 	// change is the one that stops a dropped GET from arming "Save All Settings" over an empty
@@ -959,7 +969,9 @@ const PINS = {
 	// +15 at #518: the agent-do and InstanceDetail raises above — one is a call, one is a line — and
 	// both reasons are mostly about a user who speaks rather than types, because that is the fact
 	// that turned #442's stored round into a feature nobody could reach. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1043,
+	// +12 at #543: the Usage.tsx raise above, whose reason names the seam (BudgetPanel) so the next
+	// raise has a cheaper option than this one. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1055,
 };
 
 /**

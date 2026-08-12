@@ -131,6 +131,57 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 	});
 });
 
+// ── #543: every breakdown carries the charged figure, not just the totals ────
+//
+// The measured symptom: the console printed $9,566.69 beside "Repo Coder" and $36.35 as the
+// charged headline, 263x apart, with nothing on the page connecting them — because `bump()`
+// accumulated five columns of the row it was handed and not the sixth.
+describe("charged value decomposes per bucket (#543)", () => {
+	// One fixture spanning all four payer states, so the identity below is asserted over a row set
+	// that contains each of them — charged, platform-charged, subscription (real tokens, no
+	// charge) and NULL (pre-0092 / machine-login, payer never established).
+	const fourPayers = () => [
+		row({ agent_id: "a-chat", kind: "chat", payer: "byok-api", cost_micros: 4000 }),
+		row({ agent_id: "a-chat", kind: "embedding", payer: "platform", cost_micros: 1000 }),
+		row({ agent_id: "a-coder", kind: "engine", payer: "subscription", cost_micros: 2_870_000 }),
+		row({ agent_id: "a-coder", kind: "engine", payer: null, cost_micros: 900_000 }),
+	];
+
+	it("sums to the same charged figure the totals report, on every axis", () => {
+		const s = aggregateUsage(fourPayers());
+		const sum = (bs: { chargedCostMicros: number }[]) => bs.reduce((n, b) => n + b.chargedCostMicros, 0);
+		expect(s.totals.chargedCostMicros).toBe(5000);
+		expect(sum(s.byAgent)).toBe(s.totals.chargedCostMicros);
+		expect(sum(s.byKind)).toBe(s.totals.chargedCostMicros);
+		expect(sum(s.byModel)).toBe(s.totals.chargedCostMicros);
+		expect(sum(s.byPayer)).toBe(s.totals.chargedCostMicros);
+	});
+
+	it("shows an agent whose whole value is unattributed as $0 charged, not as idle", () => {
+		// The Repo Coder case exactly: 99.4% of the account's notional value, none of it money we
+		// can name. Both numbers have to survive — filtering the breakdown to charged rows would
+		// render the busiest agent as absent, which is a worse answer than the one being fixed.
+		const s = aggregateUsage(fourPayers());
+		const coder = s.byAgent.find((b) => b.key === "a-coder");
+		expect(coder?.costMicros).toBe(3_770_000);
+		expect(coder?.chargedCostMicros).toBe(0);
+		const chat = s.byAgent.find((b) => b.key === "a-chat");
+		expect(chat?.costMicros).toBe(5000);
+		expect(chat?.chargedCostMicros).toBe(5000);
+	});
+
+	it("keeps the two payer buckets that are money apart from the two that are not", () => {
+		const s = aggregateUsage(fourPayers());
+		const by = (k: string) => s.byPayer.find((b) => b.key === k);
+		expect(by("byok-api")).toMatchObject({ costMicros: 4000, chargedCostMicros: 4000 });
+		expect(by("platform")).toMatchObject({ costMicros: 1000, chargedCostMicros: 1000 });
+		// Real tokens, real value, no marginal charge — and a payer we could not establish. Both
+		// report zero charged, and neither is a claim that the work was free.
+		expect(by("subscription")).toMatchObject({ costMicros: 2_870_000, chargedCostMicros: 0 });
+		expect(by("unknown")).toMatchObject({ costMicros: 900_000, chargedCostMicros: 0 });
+	});
+});
+
 
 // ── #325: the one read in this module that is NOT observability ──────────────
 //

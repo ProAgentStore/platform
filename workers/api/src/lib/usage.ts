@@ -293,6 +293,23 @@ export interface UsageBucket {
 	cacheReadTokens: number;
 	cacheWriteTokens: number;
 	costMicros: number;
+	/**
+	 * The subset of `costMicros` in this bucket that someone is actually charged (#543).
+	 *
+	 * `costMicros` is notional value on every row, so a breakdown carrying only it answers "how
+	 * much AI did this use", never "what did it cost me" — and the page printed the notional
+	 * figure beside a charged headline, in the same `$` format, with nothing saying which was
+	 * which. The totals loop had computed exactly this since #346; the buckets simply never did,
+	 * so `byAgent`/`byKind`/`byModel`/`byPayer` (and both admin breakdowns, which share `bump`)
+	 * were all notional-only.
+	 *
+	 * Accumulated here rather than as a parallel `chargedByAgent` array: every bucket already
+	 * passes through one `bump()`, and two arrays joined by key are two things that can disagree.
+	 *
+	 * A bucket at 0 is NOT a claim that the work was free — `isCharged` excludes `subscription`
+	 * (no marginal charge) and NULL (payer not established). The console says so beside it.
+	 */
+	chargedCostMicros: number;
 	calls: number;
 }
 
@@ -319,7 +336,7 @@ export interface UsageSummary {
 	byPayer: UsageBucket[];
 }
 
-const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, calls: 0 });
+const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 });
 
 function bump(b: UsageBucket, r: UsageRow) {
 	b.inputTokens += r.input_tokens || 0;
@@ -330,6 +347,10 @@ function bump(b: UsageBucket, r: UsageRow) {
 	b.cacheReadTokens += r.cache_read_tokens || 0;
 	b.cacheWriteTokens += r.cache_write_tokens || 0;
 	b.costMicros += r.cost_micros || 0;
+	// The same predicate, on the same row, that the totals loop applies six lines down. Doing it
+	// here is what makes every breakdown decomposable into "value" and "money" — without it the
+	// page could state a true charged total and not say which agent any of it belonged to (#543).
+	if (isCharged(r.payer)) b.chargedCostMicros += r.cost_micros || 0;
 	b.calls += 1;
 }
 
