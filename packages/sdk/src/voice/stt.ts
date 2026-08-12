@@ -3,7 +3,7 @@
 import { API, getToken } from "../client.js";
 import { describeTranscribeHttpError, drainSseData, isTooShortToTranscribe, pickRecorderMimeType, whisperFilename } from "./audio.js";
 import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
-import { hadSpeech } from "./vad.js";
+import { type ClipVerdict, hadSpeech, type LevelSnapshot, onsetFloorFor, planClipGate } from "./vad.js";
 
 /** OpenAI's real-time transcription model — replaces the legacy batch `whisper-1`.
  *  Same upload endpoint, far better accuracy/latency, no verbose_json (we use json). */
@@ -91,6 +91,18 @@ export interface SttOptions {
 	/** Fired with the raw recorded audio for a transcribed turn (Whisper only) so the
 	 *  caller can save it for replay. Browser dictation has no blob → never fires. */
 	onAudio?: (blob: Blob) => void;
+	/**
+	 * The live browser-dictation gate's reading, read AT THE MOMENT the clip is judged.
+	 *
+	 * A function rather than a value because both flags change during the recording, and the
+	 * question ("did real words happen this turn?") is only meaningful at the decision. The same
+	 * snapshot `use-voice` hands to `endOfTurnAction` and `planNoiseRejection`, so all three
+	 * answer it identically.
+	 */
+	gate?: () => { isAlive: boolean; heardSpeech: boolean } | null;
+	/** The speech gate's verdict on a finished clip, with the numbers behind it — so a discard
+	 *  before upload can leave a durable row instead of nothing at all (#510 criterion 2). */
+	onClipGate?: (verdict: ClipVerdict, snapshot: LevelSnapshot) => void;
 }
 
 export class VoiceStt {
@@ -103,6 +115,8 @@ export class VoiceStt {
 	onError: (error: string) => void;
 	onEnd: () => void;
 	onAudio: (blob: Blob) => void;
+	gate: (() => { isAlive: boolean; heardSpeech: boolean } | null) | undefined;
+	onClipGate: (verdict: ClipVerdict, snapshot: LevelSnapshot) => void;
 	listening = false;
 
 	private _rec: SpeechRecognitionLike | null = null;
@@ -114,6 +128,16 @@ export class VoiceStt {
 	private _recStartedAt = 0;
 	/** Loudest mic level seen during the current recording, fed by noteLevel(). */
 	private _peakLevel = 0;
+	/**
+	 * How many levels `noteLevel` was given for the current recording.
+	 *
+	 * The distinction `_peakLevel` alone cannot make, and the one #490 got wrong: **0 frames is no
+	 * measurement, not a measurement of silence.** `noteLevel`'s only caller is a
+	 * `requestAnimationFrame` tick, and rAF does not run for a hidden document — so a backgrounded
+	 * console produces 0 frames for a clip full of speech, and reading that as "no speech" discards
+	 * every clip the user records while looking at something else. See `planClipGate`.
+	 */
+	private _levelFrames = 0;
 	/** The last clip handed to transcription, kept so a failed attempt can be RETRIED with the same
 	 *  audio (#421) instead of asking the user to say it again. Cleared on a fresh recording. */
 	private _lastBlob: Blob | null = null;
@@ -143,6 +167,8 @@ export class VoiceStt {
 		this.onError = opts.onError || (() => {});
 		this.onEnd = opts.onEnd || (() => {});
 		this.onAudio = opts.onAudio || (() => {});
+		this.gate = opts.gate;
+		this.onClipGate = opts.onClipGate || (() => {});
 	}
 
 	async start() {
@@ -221,7 +247,22 @@ export class VoiceStt {
 	 * silence — with no speech gate at all.
 	 */
 	noteLevel(level: number) {
+		this._levelFrames++;
 		if (level > this._peakLevel) this._peakLevel = level;
+	}
+
+	/**
+	 * What the analyser measured for the clip in hand — the numbers a drop has to be diagnosed
+	 * with (#510 criterion 5). Before this the durable log carried only `{code}` / `{transcript}`,
+	 * so "it didn't hear me" was answerable only by reading the source and guessing at the inputs.
+	 */
+	levelSnapshot(): LevelSnapshot {
+		return {
+			peakLevel: this._peakLevel,
+			noiseFloor: this._noiseFloor,
+			onsetFloor: onsetFloorFor(this._noiseFloor),
+			frames: this._levelFrames,
+		};
 	}
 
 	stopDiscard() {
@@ -318,6 +359,7 @@ export class VoiceStt {
 	private async _startRecording() {
 		this._discard = false;
 		this._peakLevel = 0;
+		this._levelFrames = 0;
 		this._noiseFloor = -1; // reset per-turn adaptive floor; VAD will populate it via the monitor loop
 		this._lastBlob = null; // a new turn — the previous clip is no longer what Retry means
 		try {
@@ -354,19 +396,15 @@ export class VoiceStt {
 				// sentence built from those terms, which is then attributed to the user and (in
 				// hands-free) auto-sent. See hadSpeech() for the real transcript this produced.
 				//
-				// Adaptive floor: `_noiseFloor` is set from the VAD's per-turn noise estimate
-				// (populated after NOISE_SAMPLE_FRAMES frames). When available it raises the
-				// threshold above VOICE_FLOOR so steady room noise cannot fake a clip. When the
-				// analyser never ran (`_peakLevel === 0`) AND there is no Web Speech gate available
-				// to vouch for the turn, the clip is discarded — no energy data + no gate means
-				// we have no way to know whether speech happened. A caller with an analyser but
-				// no gate still has the adaptive-floor check as the primary defence.
-				if (this._peakLevel === 0) {
-					// No energy data at all. Discard rather than uploading an unknown clip.
-					this.onEnd();
-					return;
-				}
-				if (!hadSpeech(this._peakLevel, this._noiseFloor)) {
+				// Every input and every rule is in `planClipGate` — including the gate check this
+				// comment used to DESCRIBE while the code below it did something else (#510
+				// criterion 3): it claimed the zero-energy discard happened only when there was
+				// "no Web Speech gate available to vouch for the turn", and there was no gate
+				// check in the branch at all.
+				const snapshot = this.levelSnapshot();
+				const verdict = planClipGate({ ...snapshot, gate: this.gate?.() });
+				this.onClipGate(verdict, snapshot);
+				if (verdict.action === "discard") {
 					this.onEnd();
 					return;
 				}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, VOICE_FLOOR, NOISE_SAMPLE_FRAMES, NOISE_ONSET_RATIO, HIGH_SPEECH_THRESHOLD } from "./vad.js";
+import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, planClipGate, VOICE_FLOOR, NOISE_SAMPLE_FRAMES, NOISE_ONSET_RATIO, HIGH_SPEECH_THRESHOLD } from "./vad.js";
 
 const cfg = (o: Partial<VadConfig> = {}): VadConfig => ({ silenceMs: 1000, sensitivity: 1, ...o });
 
@@ -215,5 +215,59 @@ describe("adaptive noise floor — #490 noisy-room onset gate", () => {
 		// Feeding more frames must NOT update the noise estimate (window is already closed)
 		vadStep(s, 0.12, (NOISE_SAMPLE_FRAMES + 1) * 100, cfg());
 		expect(s.noiseFrames).toBe(floorsAfterOnset); // unchanged after onset
+	});
+});
+
+describe("planClipGate — #510: zero frames is no measurement, not a measurement of silence", () => {
+	const alive = { isAlive: true, heardSpeech: true };
+	const aliveSilent = { isAlive: true, heardSpeech: false };
+
+	it("UPLOADS a clip the analyser never measured, when nothing can condemn it", () => {
+		// THE #510 regression, and the one with no possible evidence for it in the log: rAF does
+		// not run for a hidden document, so a minimised console feeds `noteLevel` ZERO frames for
+		// a clip full of speech. #490 read the resulting `_peakLevel === 0` as "no speech" and
+		// discarded EVERY such clip. The contract it replaced said the opposite, out loud: a
+		// caller with no analyser keeps working rather than going silently deaf.
+		expect(planClipGate({ frames: 0, peakLevel: 0, noiseFloor: -1 })).toEqual({ action: "transcribe", reason: "no-data" });
+		expect(planClipGate({ frames: 0, peakLevel: 0, noiseFloor: -1, gate: alive }).action).toBe("transcribe");
+	});
+
+	it("discards an unmeasured clip only when a LIVE gate heard nothing — the comment's own rule", () => {
+		// #490's comment claimed the zero-energy discard happened only where there was "no Web
+		// Speech gate available to vouch for the turn". There was no gate check in the branch at
+		// all (#510 criterion 3). There is now, and it is the only thing that can condemn a clip
+		// nobody measured.
+		expect(planClipGate({ frames: 0, peakLevel: 0, noiseFloor: -1, gate: aliveSilent })).toEqual({ action: "discard", reason: "no-speech" });
+	});
+
+	it("a MEASURED zero is real silence and is still discarded", () => {
+		// The distinction that makes the fix safe: frames > 0 means the analyser ran and reported
+		// nothing. That is evidence, and #490's protection against it is untouched.
+		expect(planClipGate({ frames: 40, peakLevel: 0, noiseFloor: -1 }).action).toBe("discard");
+		expect(planClipGate({ frames: 40, peakLevel: 0.04, noiseFloor: -1 }).action).toBe("discard");
+	});
+
+	it("a proven-alive gate that heard words outranks the energy floor (#511 criterion 4)", () => {
+		// Direct evidence beats an inference about it — the same precedence planNoiseRejection
+		// already applies at the other end of the turn. Without this, a quiet-but-real utterance
+		// that Web Speech transcribed fine is thrown away for peaking under an adaptive floor.
+		expect(planClipGate({ frames: 40, peakLevel: 0.05, noiseFloor: 0.04, gate: alive })).toEqual({ action: "transcribe", reason: "gate-vouched" });
+	});
+
+	it("reports the two verdicts that are otherwise invisible, and only those", () => {
+		expect(clipGateReport({ action: "discard", reason: "no-speech" })).toBeTruthy();
+		expect(clipGateReport({ action: "transcribe", reason: "no-data" })).toBeTruthy();
+		expect(clipGateReport({ action: "transcribe", reason: "speech" })).toBeNull();
+		expect(clipGateReport({ action: "transcribe", reason: "gate-vouched" })).toBeNull();
+	});
+});
+
+describe("captureDiagnostics — #510 criterion 5: a drop row you can diagnose from", () => {
+	it("carries every input the speech gate used, and distinguishes absent from zero", () => {
+		// This took a code read rather than a query, because the rows carried none of it.
+		expect(captureDiagnostics({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42 }, { isAlive: true, heardSpeech: false }))
+			.toEqual({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42, gateAlive: true, gateHeardSpeech: false });
+		// No recorder / no gate is itself an answer, and must not read as "measured zero".
+		expect(captureDiagnostics(undefined, null)).toEqual({ gateAlive: null, gateHeardSpeech: null });
 	});
 });

@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { matchVoiceCommand, splitTrailingCommand, stripStopWord, type VoiceCommandWords } from "./convo.js";
-import { type FinalizedTurn, planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
+import { type FinalizedTurn, planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
+import { VOICE_FLOOR } from "./vad.js";
 
 describe("utteranceSoFar", () => {
 	it("prepends the accumulated buffer in hands-free browser dictation", () => {
@@ -437,5 +438,52 @@ describe("a command that fired during capture never reaches the agent (#457 step
 		for (const msg of ["run the tests", "what is the status of the deploy", "push everything"]) {
 			expect(planFinalizedTurn(msg, { ...base, firedDuringCapture: null }), msg).toEqual(planFinalizedTurn(msg, base));
 		}
+	});
+});
+
+describe("planTurnClose — #510: the idle recycle stops eating proven speech, silently", () => {
+	const alive = { isAlive: true, heardSpeech: true };
+	const aliveSilent = { isAlive: true, heardSpeech: false };
+	const dead = { isAlive: false, heardSpeech: false };
+	const close = (d: "end" | "idle", gate: typeof alive | null, peakLevel = 0.3) =>
+		planTurnClose(d, { gate, peakLevel, voiceFloor: VOICE_FLOOR });
+
+	it("TRANSCRIBES an idle-out that the live gate proved was speech", () => {
+		// THE #510 regression. `vadStep` returns "idle" when onset never fired in 15s. Before
+		// this, that discarded the clip AND cleared the words the user was watching appear —
+		// even though Web Speech had returned real text for the same turn. Onset failing while
+		// the recognizer is producing words is a false negative of the ENERGY gate, not silence.
+		expect(close("idle", alive)).toEqual({ action: "transcribe" });
+	});
+
+	it("agrees with the end-of-turn path on identical evidence — the two cannot drift", () => {
+		// The bug was structural: two branches, thirteen lines apart, deciding the same question
+		// from the same inputs and reaching opposite answers. A proven-alive gate that heard
+		// words means TRANSCRIBE on both, everywhere.
+		expect(close("end", alive).action).toBe(close("idle", alive).action);
+	});
+
+	it("still discards an end-of-turn the live gate condemns — and now says so", () => {
+		const v = close("end", aliveSilent);
+		expect(v.action).toBe("discard");
+		expect(v.action === "discard" && v.report).toBeTruthy(); // #510 criterion 2
+	});
+
+	it("a gate that never ran vouches for nothing — in EITHER direction", () => {
+		// It cannot save a clip...
+		expect(close("idle", dead).action).toBe("discard");
+		expect(close("idle", null).action).toBe("discard");
+		// ...and it cannot condemn one.
+		expect(close("end", dead)).toEqual({ action: "transcribe" });
+		expect(close("end", null)).toEqual({ action: "transcribe" });
+	});
+
+	it("reports an idle discard that had ENERGY behind it, and stays quiet on true silence", () => {
+		// The one deliberate silence left. Hands-free recycles a quiet mic every 15s while the
+		// user thinks; a row per recycle would bury the rows this exists to make findable.
+		const suspicious = close("idle", null, VOICE_FLOOR + 0.05);
+		expect(suspicious.action === "discard" && suspicious.report).toBeTruthy();
+		const quiet = close("idle", null, 0.02);
+		expect(quiet.action === "discard" && quiet.report).toBeNull();
 	});
 });

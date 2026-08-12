@@ -20,7 +20,7 @@
 
 import { isNoiseTranscript } from "./audio.js";
 import { commandStateFor, matchVoiceCommand, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
-import { storedDictation } from "./machine.js";
+import { endOfTurnAction, storedDictation } from "./machine.js";
 import { applyVocabulary, type VocabularyCorrection } from "./vocabulary.js";
 
 /**
@@ -130,6 +130,45 @@ export function planFinalizedTurn(
 /** The dictation gate's answer to "did real words happen this turn?", read at the moment of the
  *  decision. Null where there is no gate at all (browser-dictation mode, iOS Safari). */
 export type GateReading = { isAlive: boolean; heardSpeech: boolean } | null | undefined;
+
+/** Fixed messages, for the same reason the noise ones are fixed: `reportClientError` de-dups on
+ *  source+message, so a burst collapses to one row and the per-turn numbers ride in the context. */
+const CLOSE_END_DISCARDED = "voice turn discarded at end-of-turn — the live gate heard no words";
+const CLOSE_IDLE_DISCARDED = "voice turn discarded as idle — the mic heard energy but speech onset never fired";
+
+/** What closing the mic does to the clip behind it, and what to record about it. */
+export type TurnClose = { action: "transcribe" } | { action: "discard"; report: string | null };
+
+/**
+ * The mic-level VAD has closed the turn. Transcribe the clip, or throw it away?
+ *
+ * Both of `vadStep`'s terminal decisions land here, because they were making INCOMPATIBLE choices
+ * about the same evidence. `"end"` asked the dictation gate first (`endOfTurnAction`); `"idle"`
+ * asked nothing, cleared the live words and dropped the clip — so a turn where Web Speech had
+ * PROVEN real words were spoken, but the energy VAD never registered onset, vanished from the
+ * screen 15 s after the user watched their own words appear on it. That is #377's failure shape
+ * verbatim, and it left no row: the discard path reports nothing, and it can produce no watchdog
+ * row either, because nothing is uploaded for a watchdog to time out.
+ *
+ * The rule is one rule, and it is `planNoiseRejection`'s: **a proven-alive gate that heard words
+ * outranks the energy heuristic, and a gate that never ran vouches for nothing.** Onset failing
+ * while the recognizer is returning text is a false negative of the energy gate, not silence.
+ *
+ * `report: null` is deliberate and is the only silence left. A turn that idles out with the peak
+ * under the voice floor is the ordinary quiet mic — hands-free recycles it every 15 s while the
+ * user thinks, and a row per recycle would bury the log in exactly the rows this exists to make
+ * findable. Energy above the floor with no onset is the suspicious case, and it always reports.
+ */
+export function planTurnClose(
+	decision: "end" | "idle",
+	s: { gate?: GateReading; peakLevel: number; voiceFloor: number },
+): TurnClose {
+	if (decision === "end") {
+		return endOfTurnAction(s.gate) === "discard" ? { action: "discard", report: CLOSE_END_DISCARDED } : { action: "transcribe" };
+	}
+	if (s.gate?.isAlive && s.gate.heardSpeech) return { action: "transcribe" };
+	return { action: "discard", report: s.peakLevel > s.voiceFloor ? CLOSE_IDLE_DISCARDED : null };
+}
 
 /**
  * What a NOISE rejection costs the user (#377) — `pass` (it wasn't noise), or a rejection that

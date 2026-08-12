@@ -47,13 +47,13 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, type VoiceConfig } from "./config.js";
 import { isConnectivityError, reportClientError } from "../client.js";
-import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
+import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, VOICE_FLOOR } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, isEchoing, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceCommand, type VoiceCommandWords, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
-import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
+import { planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
 import { TRANSCRIBE_STREAM_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt } from "./stt.js";
@@ -278,6 +278,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 		const g = gateRef.current;
 		return g ? { isAlive: g.isAlive(), heardSpeech: g.heardSpeech() } : null;
 	}, []);
+	/** The measurements every voice drop row carries, so the next one is diagnosable from the log
+	 *  instead of from a code read (#510 criterion 5). Shape + reasoning: `captureDiagnostics`. */
+	const captureContext = useCallback(() => captureDiagnostics(sttRef.current?.levelSnapshot(), gateSnapshot()), [gateSnapshot]);
 
 	const stopAudioMonitor = useCallback(() => {
 		gateRef.current?.stop();
@@ -444,19 +447,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// stops recording → transcribe → send.
 				if (!echoing && shouldAutoDetectEndOfTurn({ isWhisper: sttIsWhisperRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current, manualTalk: manualTalkRef.current })) {
 					const decision = vadStep(vadStateRef.current, level, now, { silenceMs: silenceMsRef.current, sensitivity: vadSensitivityRef.current });
-					if (decision === "end") {
+					if (decision) {
+						// BOTH terminal decisions go through ONE verdict (#510) — they used to
+						// disagree about the same evidence, and the "idle" half discarded the clip
+						// AND the live words with no trace at all. Rules + reasons: planTurnClose.
+						const peakLevel = vadStateRef.current.peak;
 						vadStateRef.current = initVad();
-						// DICTATION GATE: if a live browser-dictation gate is running and heard
-						// NO real words this turn, the "end" was silence / keyboard / background
-						// noise (the amplitude VAD can't tell). Discard it — never upload to
-						// Whisper (which would hallucinate a phrase), no "Transcribing/Working".
-						// Only trust a gate that's proven alive, so a dead recognizer can't
-						// black-hole real speech (then we fall back to sending + the noise filter).
-						if (endOfTurnAction(gateSnapshot()) === "discard") {
-							idleRecycleRef.current = true;
-							clearVoiceText();
-							sttRef.current?.stopDiscard();
-						} else {
+						const close = planTurnClose(decision, { gate: gateSnapshot(), peakLevel, voiceFloor: VOICE_FLOOR });
+						if (close.action === "transcribe") {
 							// Whisper has no streaming results, so nothing shows between your pause
 							// and the transcript landing (~1-2s). This used to write the literal
 							// "Transcribing…" over the composer — which ERASED the words the user
@@ -464,14 +462,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 							// now moves on the pending bubble and the speech stays put.
 							dictate({ type: "endOfTurn", at: now });
 							sttRef.current?.stop();
+						} else {
+							if (close.report) reportClientError("voice", close.report, { path: decision, ...captureContext() });
+							idleRecycleRef.current = true;
+							clearVoiceText();
+							sttRef.current?.stopDiscard();
 						}
-					} else if (decision === "idle") {
-						// Mic sat open with nothing said — recycle the silent recording (no
-						// Whisper upload, no buffer growth). Reopens via onEnd; skip the chime.
-						vadStateRef.current = initVad();
-						idleRecycleRef.current = true;
-						clearVoiceText();
-						sttRef.current?.stopDiscard();
 					}
 				}
 				analyserRef.current.raf = requestAnimationFrame(tick);
@@ -491,7 +487,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
-	}, [stopAudioMonitor, readGuard, gateSnapshot, dictate, clearVoiceText]);
+	}, [stopAudioMonitor, readGuard, gateSnapshot, dictate, clearVoiceText, captureContext]);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -583,7 +579,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// Until #455 `finalize` had ALREADY cleared the bubble before we got here, so a drop was
 			// invisible from every side — precisely why #377 could not be confirmed from the data. The
 			// verdict now goes back with the return. Fixed message (de-duped per 30s), evidence in context.
-			reportClientError("voice", `voice turn dropped before sending — ${plan.reason}`, { transcript: text.slice(0, 200), path: "send" });
+			reportClientError("voice", `voice turn dropped before sending — ${plan.reason}`, { transcript: text.slice(0, 200), path: "send", ...captureContext() });
 			// The language nudge asks them to repeat — never an automatic language switch. Noise
 			// gets no notice at all: there is nothing for the user to do about a turn they didn't
 			// take, and telling them there was one is the confusing part.
@@ -938,11 +934,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// Same treatment `leaveForSwitch` gives a destroyed utterance: the noise filter keeps a
 			// pure-echo "turn" out of the composer, and a rejection is LOGGED rather than vanishing.
 			const noise = planNoiseRejection(plan.recoverText, { gate: gateSnapshot() });
-			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: plan.recoverText.slice(0, 200), path: "mute" });
+			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: plan.recoverText.slice(0, 200), path: "mute", ...captureContext() });
 			else onRecoveredTextRef.current?.(plan.recoverText);
 		}
 		clearVoiceText();
-	}, [stopAudioMonitor, clearVoiceText, gateSnapshot]);
+	}, [stopAudioMonitor, clearVoiceText, gateSnapshot, captureContext]);
 	const muteFromCommandRef = useRef(muteFromCommand);
 	muteFromCommandRef.current = muteFromCommand;
 
@@ -1152,7 +1148,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// whole recover contract (#175) and costs a line the user can clear if we were wrong.
 			if (recovered) {
 				const noise = planNoiseRejection(recovered, { gate: gateSnapshot() });
-				if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: recovered.slice(0, 200), path: "recover" });
+				if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: recovered.slice(0, 200), path: "recover", ...captureContext() });
 				else onRecoveredTextRef.current?.(recovered);
 			}
 			return;
@@ -1302,7 +1298,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// Logged either way. A discard is the case that could not be confirmed from the
 						// data at all — no message, no trace event, no error row — and the transcript
 						// rides in the context because it is the only evidence of what came back.
-						reportClientError("voice", noise.report, { transcript: t.slice(0, 200), path: "handsFree" });
+						reportClientError("voice", noise.report, { transcript: t.slice(0, 200), path: "handsFree", ...captureContext() });
 						// `failed` keeps the live capture on the bubble with a reason and the existing
 						// Dismiss, instead of erasing the words the user just watched appear.
 						flushSync(() => { if (noise.action === "keep") dictate({ type: "failed", note: noise.note, at: Date.now() }); else clearVoiceText(); });
@@ -1379,7 +1375,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// not the composer.
 			flushSync(() => dictate({ type: "speech", text, at: Date.now() }));
 		}
-	}, [stopAudioMonitor, readGuard, gateSnapshot, setPaused, dictate, clearVoiceText, biasPrompt]);
+	}, [stopAudioMonitor, readGuard, gateSnapshot, setPaused, dictate, clearVoiceText, biasPrompt, captureContext]);
 
 	const makeStt = useCallback(async () => {
 		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page reload, and
@@ -1405,6 +1401,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			onResult: handleResult,
 			// Stash the turn's recorded audio so emitSend can save it for replay.
 			onAudio: (blob) => { lastAudioBlobRef.current = blob; },
+			// The recorder's own speech gate gets the same witness the VAD paths use, so all three
+			// answer "did real words happen this turn?" identically — and reports what it decided.
+			gate: gateSnapshot,
+			onClipGate: (v) => { const r = clipGateReport(v); if (r) reportClientError("voice", r, { path: "clip-gate", ...captureContext() }); },
 			onError: (err) => {
 				console.warn("[voice] STT error:", err);
 				// Soft "no-speech" = empty transcription (silence, echo, or the agent's own
@@ -1499,7 +1499,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			},
 		});
 		return stt;
-	}, [instanceId, handleResult, startListening, setPaused, applyConfig, clearVoiceText, dictate, biasPrompt]);
+	}, [instanceId, handleResult, startListening, setPaused, applyConfig, clearVoiceText, dictate, biasPrompt, gateSnapshot, captureContext]);
 
 	const toggleMic = useCallback(async () => {
 		if (micOn) {
@@ -1604,7 +1604,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// breadcrumb rather than the turn evaporating on the way to another agent (#377).
 		if (prep.recoverText) {
 			const noise = planNoiseRejection(prep.recoverText, { gate: gateSnapshot() });
-			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: prep.recoverText.slice(0, 200), path: "switch" });
+			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: prep.recoverText.slice(0, 200), path: "switch", ...captureContext() });
 			else onRecoveredTextRef.current?.(prep.recoverText);
 		}
 		if (prep.cancelSpeech) ttsRef.current?.cancel();
@@ -1615,7 +1615,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		stopConvoRef.current();
 		clearVoiceText();
 		return prep.carryMode;
-	}, [clearVoiceText, gateSnapshot]);
+	}, [clearVoiceText, gateSnapshot, captureContext]);
 	const leaveForSwitchRef = useRef(leaveForSwitch);
 	leaveForSwitchRef.current = leaveForSwitch;
 

@@ -113,8 +113,108 @@ export const VOICE_FLOOR = 0.1;
  *                    so a noisy room raises the bar while a quiet room still uses the fixed floor.
  */
 export function hadSpeech(peakLevel: number, noiseFloor = -1): boolean {
-	const adaptiveFloor = noiseFloor >= 0 ? Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * noiseFloor) : VOICE_FLOOR;
-	return peakLevel > adaptiveFloor;
+	return peakLevel > onsetFloorFor(noiseFloor);
+}
+
+/**
+ * THE speech threshold, in one place.
+ *
+ * `hadSpeech` (the onstop gate) and `vadStep` (the onset gate) both computed this expression
+ * inline, and they are required to agree — two gates with two floors is how one mode transcribes
+ * what the other discards. It is also the number a dropped turn has to be diagnosed WITH: the
+ * durable log recorded neither the peak nor the floor, so "it didn't hear me" could only be
+ * answered by reading the source. Exported so the drop rows can carry it (#510 criterion 5).
+ *
+ * `noiseFloor < 0` = the VAD has not sampled the room yet (tap-to-talk, or the first frames of a
+ * turn) → the fixed floor, unchanged.
+ */
+export function onsetFloorFor(noiseFloor: number): number {
+	if (!(noiseFloor >= 0)) return VOICE_FLOOR;
+	return Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * noiseFloor);
+}
+
+/** What the analyser measured over one recording, as the drop paths report it. */
+export interface LevelSnapshot {
+	/** Loudest level seen (0–1), or 0 when {@link LevelSnapshot.frames} is 0. */
+	peakLevel: number;
+	/** The per-turn adaptive floor estimate, `-1` when never sampled. */
+	noiseFloor: number;
+	/** What {@link onsetFloorFor} made of it — the number the peak was actually judged against. */
+	onsetFloor: number;
+	/** How many frames the analyser delivered. **0 means no data**, not silence. */
+	frames: number;
+}
+
+/** The dictation gate's answer to "did real words happen this turn?" — structurally the same
+ *  reading `turn.ts` passes to `planNoiseRejection`, declared here so this module stays free of
+ *  the transcript/command layer. */
+type GateEvidence = { isAlive: boolean; heardSpeech: boolean } | null | undefined;
+
+export type ClipVerdict = {
+	action: "transcribe" | "discard";
+	/** Why, in a form a log row can carry. */
+	reason: "speech" | "gate-vouched" | "no-speech" | "no-data";
+};
+
+/**
+ * Does this finished recording get uploaded? (#510 criteria 3 + 4, #511 criterion 4.)
+ *
+ * Three inputs, and the whole point is that they are not interchangeable:
+ *
+ *  - **`frames === 0` is NOT silence.** It is the absence of a measurement. `noteLevel` has one
+ *    caller — a `requestAnimationFrame` tick — and rAF does not run for a document that is not
+ *    `visible`. So a minimised console produces zero frames for a clip full of speech. #490 read
+ *    zero peak as "no speech" and discarded it, inverting the contract the comment it replaced
+ *    stated out loud: *"a caller with no analyser keeps working rather than going silently deaf"*.
+ *    With no energy evidence the gate is the only witness, and where there is no witness either,
+ *    an unknown clip is uploaded — that is the pre-#490 behaviour, and it fails toward the user's
+ *    words surviving rather than toward silence.
+ *  - **A proven-alive gate that heard words outranks the energy heuristic.** Web Speech returning
+ *    real text is direct evidence of speech; a peak under a floor is an inference about it. This
+ *    is the same precedence `planNoiseRejection` already applies at the other end of the turn.
+ *  - **A gate that never ran vouches for nothing** — in either direction. It cannot condemn a
+ *    clip and it cannot save one.
+ */
+export function planClipGate(s: { frames: number; peakLevel: number; noiseFloor: number; gate?: GateEvidence }): ClipVerdict {
+	const vouched = !!s.gate?.isAlive && s.gate.heardSpeech;
+	const condemned = !!s.gate?.isAlive && !s.gate.heardSpeech;
+	if (s.frames === 0) {
+		// No analyser data. Only the gate can decide, and only when it is alive.
+		return condemned ? { action: "discard", reason: "no-speech" } : { action: "transcribe", reason: "no-data" };
+	}
+	if (vouched) return { action: "transcribe", reason: "gate-vouched" };
+	return hadSpeech(s.peakLevel, s.noiseFloor)
+		? { action: "transcribe", reason: "speech" }
+		: { action: "discard", reason: "no-speech" };
+}
+
+/**
+ * Which clip-gate verdicts earn a durable row, and what it says (#510 criterion 2).
+ *
+ * Two of the four, because the other two are the system working. A **discard** is the user's words
+ * gone with nothing else on any surface to show a turn was ever taken. A **`no-data` transcribe**
+ * is a clip judged with no measurement at all — the backgrounded-tab signature — and it is worth a
+ * row precisely BECAUSE it now succeeds: the failure it replaces was invisible, and so is the fix
+ * unless it says so. Fixed strings, because `reportClientError` de-dups on source+message.
+ */
+export function clipGateReport(v: ClipVerdict): string | null {
+	if (v.action === "discard") return "clip discarded before upload — the speech gate heard nothing";
+	if (v.reason === "no-data") return "clip uploaded unmeasured — the analyser delivered no frames (hidden tab?)";
+	return null;
+}
+
+/**
+ * The context every voice drop row carries (#510 criterion 5).
+ *
+ * Rows used to carry only `{code}` / `{transcript,path}` / `{sttWhisper}` — enough to know a turn
+ * was lost, never enough to know why, so "sometimes it doesn't hear me" was answerable only by
+ * reading the source and inventing the inputs. These are the ENTIRE input set of the speech gate:
+ * what was measured, what it was measured against, how many frames there were (0 = no analyser
+ * data, NOT silence), and whether the recognizer heard words anyway. Null where the recorder or
+ * the gate does not exist, which is itself the answer to a different question.
+ */
+export function captureDiagnostics(snapshot: LevelSnapshot | undefined, gate: GateEvidence): Record<string, unknown> {
+	return { ...(snapshot ?? {}), gateAlive: gate?.isAlive ?? null, gateHeardSpeech: gate?.heardSpeech ?? null };
 }
 
 /**
@@ -184,9 +284,7 @@ export function vadStep(s: VadState, level: number, now: number, cfg: VadConfig)
 		if (s.noiseFrames >= NOISE_SAMPLE_FRAMES || earlyHigh) {
 			// When the minimum is high (speech started early), fall back to VOICE_FLOOR so
 			// the onset behaves exactly as before this change. Otherwise use the adaptive floor.
-			const onsetFloor = (earlyHigh || s.noiseFloor < 0)
-				? VOICE_FLOOR
-				: Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * s.noiseFloor);
+			const onsetFloor = earlyHigh ? VOICE_FLOOR : onsetFloorFor(s.noiseFloor);
 			if (level > onsetFloor && speaking) {
 				s.seen = true;
 				s.lastLoud = now;
