@@ -40,6 +40,8 @@ import {
 import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
+import { CodingRunProbe, recordCodingFailure } from "../lib/coding-failure.js";
+import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
 
 export type { CodingSessionParams } from "./coding-session-params.js";
@@ -135,6 +137,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 */
 		let ownerTurns = 0;
 
+		const probe = new CodingRunProbe(); // Where this run was, and how big its payload, if it dies (#529).
+
 		/**
 		 * Put a line in the OWNER'S CHAT THREAD.
 		 *
@@ -145,22 +149,10 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 *
 		 * Written by the WORKFLOW, not the browser. The completion notice used to come from the
 		 * console's poll, so closing the tab meant it was never recorded anywhere — the run finished
-		 * and the thread simply never mentioned it.
+		 * and the thread simply never mentioned it. The thread is a RECORD, never the work, so the
+		 * swallow lives here rather than inside the shared `postSystemMessage`.
 		 */
-		const postToChat = async (content: string) => {
-			try {
-				const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
-				await stub.fetch(
-					new Request("https://agent/system-message", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ content }),
-					}),
-				);
-			} catch {
-				// The thread is a record, never the work. A failed append must not fail the run.
-			}
-		};
+		const postToChat = (content: string) => postSystemMessage(env, instanceId, content).catch(() => undefined);
 
 		/**
 		 * Close the rows a DELEGATED run opened — the loop-run row `check_delegation` reads and the
@@ -286,7 +278,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 * carry through — the same reason every `step.do` result below already casts.
 		 */
 		type LooseDo = (name: string, opts: unknown, cb: () => Promise<unknown>) => Promise<unknown>;
-		const runWith = (opts: unknown): RunStep => (name, fn) => (step.do as unknown as LooseDo)(name, opts, fn);
+		const runWith = (opts: unknown): RunStep => (name, fn) => (step.do as unknown as LooseDo)(probe.at(name), opts, fn);
 		const runRetry = runWith(retry);
 		const runIdle = runWith(idleRetry);
 		let n = 0;
@@ -402,6 +394,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					: Promise.resolve(false),
 			]);
 			const { usage, acts, ...pane } = snap;
+			probe.saw(pane.pane);
 			// The SAME snapshot carries how the engine authenticated (runtime.ts sets it on every
 			// capture), so the payer is in hand here exactly as it is on the route drain. Dropping
 			// it made the Pilot-driven sessions — the longest and most expensive the platform runs —
@@ -459,7 +452,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// and never drew on it — unbounded spend on exactly the path a supervisor can trigger
 			// without a human watching. Wrapping `decide` keeps runCodingLoop untouched.
 			decide: (p) =>
-				step.do(`s${n++}-decide`, retry, async () => {
+				step.do(probe.at(`s${n++}-decide`), retry, async () => {
 					const budgetId = event.payload.budgetId ?? null;
 					if (!budgetId) return decideCodingAction(env, userId, p, { kind: "coding", instanceId });
 
@@ -556,6 +549,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						? (data as { text: string }).text
 						: "";
 					if (driven) {
+						probe.drove(driven);
 						await appendTimeline(env, { sessionId, instanceId, userId, type: "command", content: driven }).catch(() => undefined);
 					}
 					// Heartbeat the single-flight claim. Without it a run longer than
@@ -675,6 +669,14 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// This is the sentence that replaces "run error: No runner connected — run `pags up`".
 			const message = e instanceof Error ? e.message : String(e);
 			result = { outcome: "failed", detail: isRunnerGone(e) ? message : `run error: ${message}`, steps: result.steps, transcript: result.transcript };
+			// …and it is RECORDED (#529). Every peer workflow logs its own crash; this one logged
+			// nothing, so three runs that died on one instruction existed only as chat bubbles, and
+			// nobody could say whether that was a provider stall or an exhausted balance. The class,
+			// the step it died at and the payload sizes are what the next occurrence is read from.
+			await recordCodingFailure(env, {
+				err: e, userId, instanceId, sessionId, probe, steps: pilotSteps, startedAt: runStartedAt, repo: goal.repo,
+				node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null,
+			}).catch(() => undefined);
 		} finally {
 			// The repo's STANDING POLICIES are evaluated here (#322), because this is where its
 			// state is already read — the moment it actually changed, and the only moment a live

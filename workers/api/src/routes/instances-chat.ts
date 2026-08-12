@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { logEvent } from "../lib/events.js";
 import { touchInstanceActivity } from "../lib/instance-config.js";
+import { postSystemMessage } from "../lib/instance-system-message.js";
 import { isCredentialsError, runLoopDecide } from "../lib/loop-orchestrator.js";
 import { attachGlossesToMessages } from "./instances-translation.js";
 import {
@@ -191,12 +192,7 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (!instance) throw new HttpError(404, "Instance not found");
 		const { content } = await c.req.json<{ content: string }>();
 		if (!content) throw new HttpError(400, "content required");
-		const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
-		await stub.fetch(new Request("https://agent/system-message", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ content }),
-		}));
+		await postSystemMessage(c.env, instanceId, content);
 		return c.json({ ok: true });
 	});
 

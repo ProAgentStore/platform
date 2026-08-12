@@ -114,7 +114,12 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 			message: e.message,
 			userId: e.userId ?? null,
 			instanceId: (ctx.instanceId as string) ?? (ctx.instance_id as string) ?? null,
-			traceId: (ctx.taskId as string) ?? (ctx.task_id as string) ?? null,
+			// `traceId` FIRST (#529). The bridge only ever read `taskId`, which is the apply/browser
+			// workflows' correlation key and nobody else's: a coding run correlates by its loop-run
+			// id, a pipeline by its run id. Those callers had a trace id to give and no way to give
+			// it, so their failures mirrored into `agent_trace` with a NULL `trace_id` — present in
+			// the timeline, absent from `?trace_id=<run>`, which is the query an investigator makes.
+			traceId: (ctx.traceId as string) ?? (ctx.trace_id as string) ?? (ctx.taskId as string) ?? (ctx.task_id as string) ?? null,
 			context: e.context,
 		}).catch(() => undefined);
 		// Opportunistic retention: there is no cron, so ~2% of writes prune rows older

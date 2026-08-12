@@ -171,6 +171,18 @@ describe("logError — an identical repeat is counted, not re-inserted (#424)", 
 		expect(mirrors).toHaveLength(1);
 	});
 
+	it("mirrors an explicit context.traceId, not only the apply workflows' taskId (#529)", async () => {
+		// The bridge read `taskId` and nothing else, so a caller whose correlation key has another
+		// name — a coding run's loop-run id, a pipeline's run id — mirrored with a NULL `trace_id`.
+		// The row was in the timeline and invisible to `?trace_id=<run>`, the query an investigator
+		// actually makes. `taskId` still works, and still wins over nothing.
+		const { env, mirrors } = collapsingDb();
+		await logError(env, { source: "coding:session", message: "run died", context: { traceId: "run_9", taskId: "card_1" } });
+		await logError(env, { source: "job-apply", message: "apply crashed", context: { taskId: "card_1" } });
+		// (id, ts, user_id, instance_id, trace_id, …)
+		expect(mirrors.map((m) => m[4])).toEqual(["run_9", "card_1"]);
+	});
+
 	it("keeps failures apart when ANY of source, message, status, user or level differs", async () => {
 		// Collapse is on EXACT identity, deliberately — not on the normalized signature the
 		// summary groups by. Merging "instance abc failed" with "instance def failed" at write
