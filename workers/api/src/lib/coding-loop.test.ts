@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	runCodingLoop,
+	systemPrompt,
 	type CodingDecision,
 	type CodingDeps,
 	type CodingGoal,
@@ -274,5 +275,29 @@ describe("runCodingLoop", () => {
 		const r = await runCodingLoop(deps, GOAL);
 		expect(r.outcome).toBe("cancelled");
 		expect(r.detail).toContain("merge policy");
+	});
+});
+
+describe("systemPrompt — who the terminal means by \"the user\" (#505)", () => {
+	it("tells the Pilot that the terminal's \"user\" is itself, not the human", () => {
+		// The runner writes the Pilot's instruction as `role: "user"`, so the engine calls its
+		// interlocutor "the user" and means the Pilot. A Pilot that relayed that wording back told
+		// the owner he had been warned and had chosen — about a bump he was never asked about.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/WHO IS WHO/);
+		expect(p).toMatch(/means YOU, not the human/);
+	});
+
+	it("forbids reporting a decision as the human's", () => {
+		expect(systemPrompt(GOAL)).toMatch(/NEVER report a decision as the human's/);
+	});
+
+	it("requires escalation, not repetition, when the engine objects", () => {
+		// The engine's objection in the incident was CORRECT and overriding it broke the deploy.
+		// `request_human` is the channel that already exists for "someone else has to decide this".
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/objects to an instruction/);
+		expect(p).toMatch(/you may NOT simply repeat it/);
+		expect(p).toMatch(/request_human quoting the objection/);
 	});
 });

@@ -302,7 +302,11 @@ const CODING_TOOLS = [
 	},
 ] as const;
 
-function systemPrompt(goal: CodingGoal): string {
+/**
+ * Exported for its test. The two rules below are the Pilot-side half of #505 and they are prose, so
+ * the only thing that can hold them is an assertion that they are still in the prompt.
+ */
+export function systemPrompt(goal: CodingGoal): string {
 	const lines: string[] = [];
 	if (goal.specialInstructions) lines.push(`USER RULES (highest priority):\n${goal.specialInstructions}\n`);
 	lines.push(
@@ -315,6 +319,16 @@ function systemPrompt(goal: CodingGoal): string {
 		"- When the objective is satisfied, call finish(status:'done'). If it's impossible, finish(status:'failed').",
 		"- If a value is required that only the user has, call request_user_info — NEVER invent secrets, tokens, or personal data.",
 		"- If you hit something a human must handle live (interactive login, captcha), call request_human.",
+		"",
+		// WHO IS WHO (#505). The runner writes your instruction to the CLI as `role: "user"`, so the
+		// CLI's transcript calls YOU "the user" — and a Pilot that reads that back reported to the
+		// owner that HE had been warned and had chosen, about a version bump he was never asked
+		// about and which broke his deploy. The platform stamps a report that does this
+		// (lib/run-attribution.ts); this is the rule that should mean it never has to.
+		"WHO IS WHO: your instructions reach the CLI as a user turn, so when the terminal says \"the user\" — asked, was warned, chose, approved — it means YOU, not the human. The human is not watching this run and has not been asked anything.",
+		"- NEVER report a decision as the human's. If you decided it, say that you decided it, and say why.",
+		"- If the CLI objects to an instruction on grounds of correctness or safety, you may NOT simply repeat it. Either follow its recommendation, or call request_human quoting the objection — the human is the only one who can overrule the CLI on a judgement like that.",
+		"",
 		"Never output step-by-step thinking; just call one tool.",
 	);
 	// Placed AFTER the objective and the user rules, and worded as overriding both, because the

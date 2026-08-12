@@ -38,6 +38,7 @@ import {
 	type MergePolicy,
 } from "../lib/coding-authority.js";
 import { actsInWindow } from "../lib/instance-work.js";
+import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
@@ -128,6 +129,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		let pilotThoughts = 0;
 
 		/**
+		 * Times the HUMAN actually intervened in this run (#505): a resolved takeover, a value
+		 * supplied to a needs-input handoff. Nothing else counts — see lib/run-attribution.ts for
+		 * why the objective and the Pilot's own instructions do not, and what is done with this.
+		 */
+		let ownerTurns = 0;
+
+		/**
 		 * Put a line in the OWNER'S CHAT THREAD.
 		 *
 		 * A loop on a coding agent drives the engine, so the Assistant tab saw nothing at all while
@@ -181,7 +189,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// invisibility the issue is about — and the policy line rides along whenever one is in
 			// force, so even a run that behaved shows the authority it ran under.
 			const breach = unauthorizedActs(mergePolicy, acts).map((a) => describeViolation(mergePolicy, a)).join(" ");
-			const head = `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`;
+			// #505: the report is the Pilot's own account of the run, and it reaches the owner
+			// unmodified. When it says the human decided something and the platform knows the human
+			// said nothing, that fact is stamped on. Annotated, never rewritten — the owner has to
+			// see the claim in order to distrust it.
+			const detail = annotateOwnerAttribution(outcome.detail ?? "", ownerTurns);
+			const head = `outcome: ${outcome.outcome}${detail ? ` — ${detail}` : ""}`;
 			const note = [head, breach && `POLICY VIOLATION: ${breach}`, authorityNote, actLine].filter(Boolean).join(" | ");
 			if (event.payload.loopRunId) {
 				await step.do(`delegation-run-done${suffix}`, async () => {
@@ -211,7 +224,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// open, so a run finished while you were elsewhere was never recorded at all.
 					const ok = reason === "done";
 					await postToChat(
-						`${ok ? "**Loop complete**" : `**Loop stopped** (${reason})`}${outcome.detail ? `\n\n${outcome.detail}` : ""}${actLine ? `\n\n${actLine}` : ""}`,
+						`${ok ? "**Loop complete**" : `**Loop stopped** (${reason})`}${detail ? `\n\n${detail}` : ""}${actLine ? `\n\n${actLine}` : ""}`,
 					);
 				});
 			}
@@ -641,6 +654,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					resolved = status.resolved;
 					if (resolved) providedValue = status.value;
 				}
+				// The human answered the handoff — this run has an owner turn in it, so a report that
+				// says "the user chose" may well be true and is left alone (#505).
+				if (resolved) ownerTurns++;
 				if (!resolved) {
 					result = { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps, transcript: result.transcript };
 					break;
