@@ -94,15 +94,89 @@ function isGithubCoordinate(v: string): boolean {
 	return /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(v);
 }
 
+/** The GitHub reads that need only an `owner/name` ARGUMENT — no local checkout at all. */
+const GITHUB_READ_TOOLS = ["github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull", "github_workflow_runs"] as const;
+
+/**
+ * What the "no repository configured" refusal is allowed to SAY (#513).
+ *
+ * The old sentence was one hardcoded string serving two agents: `Set "Repository path" …`. That is
+ * `local-repo-chat`'s field label (0066). A `coder-repo` instance has a field labelled
+ * **"Repository"** (0063), so the owner was sent to a control that is not on his screen — and it is
+ * the ONLY guidance he gets, because a Repo Coder with no repo has nothing else to show him.
+ *
+ * The connector already reads BOTH keys on purpose (`REPO_PATH_SETTINGS`) because "the two agents
+ * name the same thing differently and neither should be renamed". The message never got the same
+ * treatment. It does now: the label is read from the agent's own `settingsSchema`, which is where
+ * the truth is, so a third agent adopting this connector gets its own label with no code change.
+ *
+ * Two other facts are read in the SAME query, because both change what the refusal may claim:
+ *
+ *   `github`  — whether this agent declares a GitHub read tool. Those take `repo` as an ARGUMENT,
+ *               so they work with no checkout whatever. Asked for "the EAP open issues", a Repo
+ *               Coder answered that it "can't look up issues" until a path was set, which was not
+ *               true, and then described the label-filtered query it would run once it was. The
+ *               refusal now carries the escape hatch in the same string, so the model cannot
+ *               separate the "no" from the "but". CONDITIONAL, and that is not a detail: the other
+ *               agent on this connector, `local-repo-chat`, declares no GitHub tool at all, and an
+ *               unconditional promise would simply move the false claim to the other agent.
+ *   `coord`   — the setting may already hold `owner/name` rather than a path (the `coder-repo`
+ *               field explicitly accepts either). `repoPathForInstance` skips that case as "not a
+ *               checkout", which is honest for the LOCAL tools; but the model was then made to ask
+ *               for a coordinate the owner had already typed. Naming it here is the difference
+ *               between "I don't know which repo" and "I know which repo, I have no local copy".
+ *
+ * One extra read, only on a path that fires when something is already wrong.
+ */
+async function repoRefusalHint(ctx: RegistryToolCtx): Promise<{ label: string; github: boolean; coord: string | null }> {
+	const fallback = { label: "the repository setting", github: false, coord: null };
+	if (!ctx.instanceId || !ctx.userId) return fallback;
+	const row = await ctx.env.DB.prepare(
+		"SELECT a.config AS agent_config, i.config AS instance_config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
+	)
+		.bind(ctx.instanceId, ctx.userId)
+		.first<{ agent_config: string | null; instance_config: string | null }>();
+	if (!row?.agent_config) return fallback;
+	try {
+		const cfg = JSON.parse(row.agent_config) as { settingsSchema?: Array<{ id?: string; label?: string }>; capabilities?: { tools?: string[] } };
+		const field = (cfg.settingsSchema ?? []).find((f) => typeof f?.id === "string" && (REPO_PATH_SETTINGS as readonly string[]).includes(f.id));
+		const declared = cfg.capabilities?.tools;
+		// Only an EXPLICIT declaration counts. An agent that declares nothing gets the per-surface
+		// default server-side, and promising a capability the console cannot confirm is the same
+		// mistake in a new place.
+		const github = Array.isArray(declared) && GITHUB_READ_TOOLS.some((t) => declared.includes(t));
+		let coord: string | null = null;
+		const settings = row.instance_config ? ((JSON.parse(row.instance_config) as { settings?: Record<string, unknown> }).settings ?? {}) : {};
+		for (const key of REPO_PATH_SETTINGS) {
+			const raw = settings[key];
+			const v = typeof raw === "string" ? raw.trim() : "";
+			if (v && isGithubCoordinate(v)) {
+				coord = v;
+				break;
+			}
+		}
+		// A label that is present but blank is worse than none — fall back rather than quote "".
+		return { label: field?.label?.trim() || fallback.label, github, coord };
+	} catch {
+		return fallback;
+	}
+}
+
+/** Build the refusal. Kept pure so both halves of it can be asserted without a database. */
+export function repoMissingMessage(hint: { label: string; github: boolean; coord: string | null }): string {
+	const where = hint.label === "the repository setting" ? `Set ${hint.label}` : `Set "${hint.label}"`;
+	const known = hint.coord ? ` The setting currently holds \`${hint.coord}\`, which is a GitHub coordinate rather than a checkout on this machine — so this agent knows WHICH repository it owns, it just has no local copy of it to read.` : "";
+	const still = hint.github
+		? ` You can still answer questions about that repository's GitHub issues, pull requests and CI right now — those tools take the repository as an argument and need no checkout. ${hint.coord ? `Use \`${hint.coord}\`.` : "If you do not already know the repository as `owner/name`, ask for it once, then answer."}`
+		: "";
+	return `No repository is configured for this agent. ${where} in the console (Settings → Agent settings) to the checkout on your machine, e.g. ~/work/my-repo.${known}${still}`;
+}
+
 /** Resolve both halves a read needs: a live runner AND a configured checkout. */
 async function resolveTarget(ctx: RegistryToolCtx): Promise<{ conn: RunnerConn; workDir: string } | { error: string }> {
 	if (!ctx.instanceId || !ctx.userId) return { error: "No instance context for the repo-local connector." };
 	const workDir = await repoPathForInstance(ctx);
-	if (!workDir) {
-		return {
-			error: `No repository is configured for this agent. Set "Repository path" in the console (Settings → Agent settings) to the checkout on your machine, e.g. ~/work/my-repo.`,
-		};
-	}
+	if (!workDir) return { error: repoMissingMessage(await repoRefusalHint(ctx)) };
 	const conn = await getBoundRunnerConn(ctx.env, ctx.instanceId, ctx.userId).catch(() => null);
 	if (!conn) {
 		return { error: "No runner is connected — run `pags up` on the machine that has this repository checked out." };

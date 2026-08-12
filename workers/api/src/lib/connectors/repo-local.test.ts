@@ -12,7 +12,7 @@ vi.mock("../runner-client.js", () => ({
 	READ_TIMEOUT_MS: 30_000,
 }));
 
-import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoPathForInstance } from "./repo-local.js";
+import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoMissingMessage, repoPathForInstance } from "./repo-local.js";
 import { CONNECTORS } from "./registry.js";
 import { getRegistryTool, registryToolNameSet } from "../tool-registry.js";
 import type { Env } from "../../types.js";
@@ -407,5 +407,103 @@ describe("a depth stop and a dropped path are both VISIBLE now (#508)", () => {
 
 	it("says `path` applies to every command, because now it does", async () => {
 		expect(JSON.stringify(tool("repo_git").jsonSchema)).toContain("Applies to every command");
+	});
+});
+
+describe("an unconfigured agent is told about the control it actually HAS (#513)", () => {
+	// FIS coder (agent `coder-repo`), 2026-08-11 01:34 — the instance's entire history, and it has
+	// not been used since. The tool result said: Set "Repository path" in the console. That is
+	// `local-repo-chat`'s field label (0066). A `coder-repo` has a field labelled "Repository"
+	// (0063). One hardcoded string served two agents, so the owner was sent to a setting that is
+	// not on his screen — and it is the only guidance a Repo Coder with no repo can give him.
+
+	/** A D1 stub that answers the JOIN the refusal path makes, not just the instance read. */
+	const envJoin = (agentConfig: unknown, instanceConfig: unknown = { settings: {} }) =>
+		({
+			DB: {
+				prepare: (sql: string) => ({
+					bind: () => ({
+						first: async () =>
+							sql.includes("JOIN agents")
+								? { agent_config: JSON.stringify(agentConfig), instance_config: JSON.stringify(instanceConfig) }
+								: { config: JSON.stringify(instanceConfig) },
+					}),
+				}),
+			},
+		}) as unknown as Env;
+
+	const CODER_REPO = {
+		settingsSchema: [{ id: "repo", label: "Repository", type: "text" }],
+		capabilities: { tools: ["repo_tree", "repo_git", "github_list_issues", "github_read_issue"] },
+	};
+	const LOCAL_REPO_CHAT = {
+		settingsSchema: [{ id: "repo_path", label: "Repository path", type: "text" }],
+		capabilities: { tools: ["repo_tree", "repo_read_file", "repo_git", "repo_remote"] },
+	};
+
+	const refuse = async (agentConfig: unknown, instanceConfig: unknown = { settings: {} }, name = "repo_tree") =>
+		(await tool(name).handler({ env: envJoin(agentConfig, instanceConfig), userId: "u1", instanceId: "i1", agentId: "i1" } as never, {})).content as string;
+
+	it("names Repository on a coder-repo and Repository path on a local-repo-chat", async () => {
+		expect(await refuse(CODER_REPO)).toContain('Set "Repository"');
+		expect(await refuse(CODER_REPO)).not.toContain("Repository path");
+		expect(await refuse(LOCAL_REPO_CHAT)).toContain('Set "Repository path"');
+	});
+
+	it("takes the label from the agent's own settingsSchema, so a third agent needs no code change", async () => {
+		const invented = { settingsSchema: [{ id: "repo_path", label: "Where the code lives" }], capabilities: { tools: ["repo_tree"] } };
+		expect(await refuse(invented)).toContain('Set "Where the code lives"');
+	});
+
+	it("names no control at all rather than the wrong one, when there is no schema to read", async () => {
+		// The explicitly-weaker fallback, chosen because a message naming NO control still beats one
+		// naming a control that does not exist.
+		expect(await refuse({ capabilities: { tools: ["repo_tree"] } })).toContain("Set the repository setting");
+		expect(await refuse({ settingsSchema: [{ id: "repo", label: "   " }] })).toContain("Set the repository setting");
+	});
+
+	it("refuses identically through every local tool — the string served all four", async () => {
+		for (const name of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "repo_find", "repo_grep"]) {
+			expect(await refuse(CODER_REPO, { settings: {} }, name), name).toContain('Set "Repository"');
+		}
+	});
+
+	it("says what still works, instead of declining GitHub work that needs no checkout", async () => {
+		// The second defect in the same four lines: it told the owner it "can't ... look up issues
+		// tied to a specific repo". `github_list_issues` takes `repo` as an ARGUMENT and was
+		// `allowed:true` on that instance. The "but" is in the SAME string so the model cannot
+		// separate it from the "no".
+		const msg = await refuse(CODER_REPO);
+		expect(msg).toContain("You can still answer questions about that repository's GitHub issues");
+		expect(msg).toContain("need no checkout");
+		// Bounded, per the ticket's own regression note: ask ONCE, and only with no coordinate.
+		expect(msg).toContain("ask for it once");
+	});
+
+	it("does NOT promise GitHub work to an agent that declares no GitHub tool", async () => {
+		// The correction to the ticket's proposal. local-repo-chat declares four repo tools and no
+		// GitHub tool at all, so an unconditional escape hatch would move the false claim rather
+		// than fix it.
+		const msg = await refuse(LOCAL_REPO_CHAT);
+		expect(msg).not.toContain("GitHub issues");
+		expect(msg).toContain('Set "Repository path"');
+	});
+
+	it("says which repo it owns when the setting already holds owner/name", async () => {
+		// The `coder-repo` field explicitly accepts "a local path (~/dev/my-repo) or owner/name".
+		// repoPathForInstance skips the coordinate as "not a checkout" — honest for the LOCAL tools,
+		// but the model was then made to ask for something the owner had already typed.
+		const msg = await refuse(CODER_REPO, { settings: { repo: "ProAgentStore/platform" } });
+		expect(msg).toContain("`ProAgentStore/platform`");
+		expect(msg).toContain("has no local copy");
+		expect(msg).toContain("Use `ProAgentStore/platform`.");
+		expect(msg).not.toContain("ask for it once");
+	});
+
+	it("keeps a real checkout path out of the coordinate branch", async () => {
+		// `~/work/my-repo` is a path, not a coordinate, and must never be offered to a GitHub tool.
+		const msg = repoMissingMessage({ label: "Repository", github: true, coord: null });
+		expect(msg).not.toContain("GitHub coordinate");
+		expect(msg).toContain("ask for it once");
 	});
 });
