@@ -416,8 +416,8 @@ describe("0108 — the Lead can propose a direction, the Repo Coder can read CI 
 		// tools array, so every tools assertion in this file passes while the Repo Coder silently
 		// regains a second way to drive its engine (#154/#209).
 		const last = effectiveWholeCapabilities("coder-repo");
-		expect(last?.file, "0108 is no longer the last migration to restate coder-repo's capabilities").toBe(
-			"0108_declare_unreachable_registry_tools.sql",
+		expect(last?.file, "the pin below names the migration that must be re-checked when it moves").toBe(
+			"0120_coder_issue_mutation_tools.sql",
 		);
 		const caps = last?.caps as { surfaceOptions?: { coding?: Record<string, unknown> } };
 		expect(caps.surfaceOptions?.coding).toEqual({ repos: "single", drive: false, copilot: false });
@@ -536,5 +536,136 @@ describe("0119 — the Lead can FILE an issue, not just read one (#506)", () => 
 		expect(sql).toContain("WHERE slug = 'coder-lead'");
 		expect(sql).not.toMatch(/slug\s+IN\s*\(/i);
 		expect([...sql.matchAll(/WHERE slug = '/g)].length).toBe(1);
+	});
+});
+
+/**
+ * Every slug any migration declares `capabilities` for.
+ *
+ * `effectiveDeclared` answers "what does THIS slug declare" and every caller above names its slug
+ * literally, which is right for an assertion about a specific agent and wrong for an invariant that
+ * must hold for agents nobody has written yet. This walks the migrations for the slugs themselves,
+ * so a Coder-equivalent stamped out next month is covered with no test edit.
+ */
+function slugsDeclaredByAnyMigration(): string[] {
+	const slugs = new Set<string>();
+	for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()) {
+		const sql = readFileSync(join(MIGRATIONS, f), "utf8");
+		for (const stmt of sql.split(/;\s*\n/)) {
+			if (!stmt.includes("$.capabilities")) continue;
+			const m = stmt.match(/slug\s*=\s*'([^']+)'/);
+			if (m) slugs.add(m[1]);
+		}
+	}
+	return [...slugs].sort();
+}
+
+describe("0120 — an agent that can OPEN an issue can follow it up (#507)", () => {
+	const FOLLOW_UP = "github_comment_issue";
+
+	/**
+	 * THE PER-AGENT COHESION RULE, and an honest statement of how narrow it is.
+	 *
+	 * #444's guard (`tool-reachability.test.ts`) asks "does SOME agent declare this tool". It was
+	 * green through both of the gaps this pair of issues is about — `coder-repo` declares
+	 * `github_create_issue`, so the Lead having no way to file an issue (#506) was invisible to it,
+	 * and nothing at all noticed that every Coder could open a ticket it could never touch again.
+	 * A catalog-wide denominator cannot see a per-agent hole; that is a limit of the question, not
+	 * a bug in the guard.
+	 *
+	 * The general fix — a statement of what each agent SHOULD hold — is not derivable from the
+	 * catalog: it is a product decision per agent. So this does the small, checkable part instead.
+	 * It encodes ONE relationship between two tools: opening a ticket you cannot comment on is an
+	 * incomplete capability, and the transcripts show what that incompleteness costs (a Pilot run
+	 * and an Engine session to write one sentence). It does NOT claim to close #444's blind spot in
+	 * general, and it should not be read as though it does.
+	 */
+	it("every agent declaring github_create_issue also declares github_comment_issue", () => {
+		let checked = 0;
+		for (const slug of slugsDeclaredByAnyMigration()) {
+			// A slug whose migrations set `$.capabilities` without a `tools` array (surfaces-only
+			// edits, board columns) has no declaration to be incoherent — skip it rather than throw.
+			let declared: { file: string; tools: string[] };
+			try {
+				declared = effectiveDeclared(slug);
+			} catch {
+				continue;
+			}
+			const { tools, file } = declared;
+			if (!tools.includes("github_create_issue")) continue;
+			checked++;
+			expect(
+				tools,
+				`${slug} (last declared in ${file}) can OPEN a GitHub issue and then never touch it again. ` +
+					`Declare ${FOLLOW_UP} for it, or take github_create_issue away — an agent that can only file ` +
+					`is one whose follow-up costs a whole coding run (#507).`,
+			).toContain(FOLLOW_UP);
+		}
+		// A cohesion rule that matched no agent would pass forever while meaning nothing.
+		expect(checked, "no agent declares github_create_issue — the walk or the parser is broken").toBeGreaterThanOrEqual(3);
+	});
+
+	it("covers the agents it claims to — the walk is not silently empty", () => {
+		// The way this assertion gets neutered is a migration shape the slug walk cannot read, not
+		// someone editing the expectation.
+		const slugs = slugsDeclaredByAnyMigration();
+		expect(slugs.length).toBeGreaterThan(3);
+		for (const s of ["coder", "coder-repo", "coder-lead"]) expect(slugs).toContain(s);
+	});
+
+	it("the Repo Coder and the legacy Coder can close, relabel and assign", async () => {
+		const { toolNamesFor } = await import("../agent-do-tools.js");
+		for (const slug of ["coder-repo", "coder"]) {
+			const { tools } = effectiveDeclared(slug);
+			for (const n of [FOLLOW_UP, "github_update_issue"]) {
+				expect(tools, `${slug} is missing ${n}`).toContain(n);
+				// Declaration is necessary, not sufficient — a name outside CREATOR_SELECTABLE_TOOLS is
+				// declared and still invisible.
+				expect(
+					toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools } as never).has(n),
+					`${slug}: ${n} declared but not granted`,
+				).toBe(true);
+			}
+		}
+	});
+
+	it("the Lead can comment and deliberately CANNOT close", () => {
+		// A Lead learns that work is done second-hand, from `check_delegation` — the field it has
+		// already been observed over-trusting. Leaving the record on a ticket is reporting; closing
+		// it is a claim about someone else's work. One extra name in a new migration reverses this
+		// if the owner decides otherwise, which is the point of it being data.
+		const { tools } = effectiveDeclared("coder-lead");
+		expect(tools).toContain(FOLLOW_UP);
+		expect(tools).not.toContain("github_update_issue");
+	});
+
+	it("nobody lost anything — 0120 restates three whole objects", () => {
+		const repo = effectiveDeclared("coder-repo").tools;
+		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_create_issue", "github_read_pull", "github_workflow_runs"]) {
+			expect(repo, n).toContain(n);
+		}
+		const lead = effectiveDeclared("coder-lead").tools;
+		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation", "transfer_conversation", "set_direction", "github_create_issue"]) {
+			expect(lead, n).toContain(n);
+		}
+		const coder = effectiveDeclared("coder").tools;
+		for (const n of ["github_create_issue", "github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull"]) {
+			expect(coder, n).toContain(n);
+		}
+	});
+
+	it("passes the validator the create/update routes apply, like every seeded object", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0120_coder_issue_mutation_tools.sql"), "utf8");
+		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
+		expect(objs.length, "0120 no longer re-sets three whole capabilities objects").toBe(3);
+		for (const m of objs) {
+			const caps = JSON.parse(m[1]) as Record<string, unknown>;
+			expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+		}
+	});
+
+	it("grants the issue writes to nobody else — repo-chat stays knowledge-only", () => {
+		const { tools } = effectiveDeclared("repo-chat");
+		expect(tools.filter((n) => n.startsWith("github_"))).toEqual([]);
 	});
 });

@@ -112,6 +112,30 @@ export async function invalidateIssuesCache(env: Env, userId: string, githubRepo
 }
 
 /**
+ * Forget this user's cached issue list AND the cached read of every individual issue in a repo.
+ *
+ * `invalidateIssuesCache` above drops ONE of the two resources this module caches, which was the
+ * complete answer while the only write we performed was opening an issue: a brand-new number has
+ * no `ISSUE_RESOURCE` entry to be stale. Commenting on and updating an existing issue (#507) makes
+ * it incomplete in the more damaging direction — `github_read_issue` caches per issue under
+ * `ISSUE_RESOURCE` with the number as its variant, so an agent that closes #128 and then reads
+ * #128 back would be shown `state: open` and would report, accurately as far as it could tell,
+ * that the close did not take.
+ *
+ * Both entries go, not just the one for the issue that changed: variants live INSIDE an entry
+ * precisely so invalidation can drop a resource with one delete (see `github-cache.ts`
+ * MAX_VARIANTS), and there is no per-variant delete. Dropping a sibling issue's cached read costs
+ * that issue one ordinary conditional request — which is a 304 with no body and no primary
+ * rate-limit charge if it really is unchanged. That is the cheaper mistake by a wide margin.
+ */
+export async function invalidateIssueCaches(env: Env, userId: string, githubRepo: string): Promise<void> {
+	await Promise.all([
+		invalidateGithubCache(env, userId, githubRepo, ISSUES_RESOURCE),
+		invalidateGithubCache(env, userId, githubRepo, ISSUE_RESOURCE),
+	]);
+}
+
+/**
  * List a repo's issues (PRs filtered out). Public repos work unauthenticated;
  * private repos need the GitHub App installed for the owner. Returns [] on any
  * failure (no App, no install, GitHub error, malformed repo).

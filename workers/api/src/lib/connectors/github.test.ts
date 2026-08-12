@@ -7,17 +7,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // serialise) without re-testing github-issues.ts. github_workflow_runs + github_create_issue
 // fetch api.github.com directly, so those go through the stubbed globalThis.fetch.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { listIssues, readIssue, invalidateIssuesCache, listPulls, readPull } = vi.hoisted(() => ({
+const { listIssues, readIssue, invalidateIssuesCache, invalidateIssueCaches, listPulls, readPull } = vi.hoisted(() => ({
 	listIssues: vi.fn(),
 	readIssue: vi.fn(),
 	// The cache drop `github_create_issue` performs after a successful POST (#401) — mocked at the
 	// same seam, and ASSERTED below: an agent that opens an issue and then lists issues must not
 	// read back its own pre-write copy.
 	invalidateIssuesCache: vi.fn(async () => undefined),
+	// The wider drop the issue-MUTATION tools perform (#507): a comment or a state change makes the
+	// cached single-issue READ stale too, not just the list, so `github_read_issue` after a close
+	// would otherwise still report `state: open`.
+	invalidateIssueCaches: vi.fn(async () => undefined),
 	listPulls: vi.fn(),
 	readPull: vi.fn(),
 }));
-vi.mock("../github-issues.js", () => ({ listIssues, readIssue, invalidateIssuesCache }));
+vi.mock("../github-issues.js", () => ({ listIssues, readIssue, invalidateIssuesCache, invalidateIssueCaches }));
 vi.mock("../github-prs.js", () => ({ listPulls, readPull }));
 
 import { GITHUB_TOOLS } from "./github.js";
@@ -64,14 +68,25 @@ beforeEach(() => {
 	readPull.mockReset();
 	invalidateIssuesCache.mockReset();
 	invalidateIssuesCache.mockResolvedValue(undefined);
+	invalidateIssueCaches.mockReset();
+	invalidateIssueCaches.mockResolvedValue(undefined);
 	fetchMock = vi.fn();
 	vi.stubGlobal("fetch", fetchMock);
 });
 
 describe("github connector — registration", () => {
-	it("registers all 6 tools with correct scopes (everything read except create_issue)", () => {
+	it("registers all 8 tools with correct scopes (reads, plus the three issue writes)", () => {
 		const names = registryToolNameSet();
-		for (const n of ["github_workflow_runs", "github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull", "github_create_issue"]) {
+		for (const n of [
+			"github_workflow_runs",
+			"github_list_issues",
+			"github_read_issue",
+			"github_list_pulls",
+			"github_read_pull",
+			"github_create_issue",
+			"github_comment_issue",
+			"github_update_issue",
+		]) {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("github_workflow_runs")?.scope).toBe("read");
@@ -80,15 +95,29 @@ describe("github connector — registration", () => {
 		expect(getRegistryTool("github_list_pulls")?.scope).toBe("read");
 		expect(getRegistryTool("github_read_pull")?.scope).toBe("read");
 		expect(getRegistryTool("github_create_issue")?.scope).toBe("write");
+		// The gate that matters. `runRegistryTool` requires per-instance write consent for any
+		// `scope:"write"` connector tool; a new mutation registered as a read would reach GitHub
+		// with nobody having consented, and no other test in this file would notice.
+		expect(getRegistryTool("github_comment_issue")?.scope).toBe("write");
+		expect(getRegistryTool("github_update_issue")?.scope).toBe("write");
 	});
 
-	it("groups the 6 tools under the github connector for the catalog", () => {
+	it("groups the 8 tools under the github connector for the catalog", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "github");
 		expect(grp).toBeDefined();
 		expect(grp?.tools).toEqual(
-			expect.arrayContaining(["github_workflow_runs", "github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull", "github_create_issue"]),
+			expect.arrayContaining([
+				"github_workflow_runs",
+				"github_list_issues",
+				"github_read_issue",
+				"github_list_pulls",
+				"github_read_pull",
+				"github_create_issue",
+				"github_comment_issue",
+				"github_update_issue",
+			]),
 		);
-		expect(grp?.tools).toHaveLength(6);
+		expect(grp?.tools).toHaveLength(8);
 	});
 
 	/**
@@ -434,5 +463,174 @@ describe("github connector — write-consent gate (runRegistryTool)", () => {
 		);
 		expect(r.success).toBe(true);
 		expect(listIssues).toHaveBeenCalled();
+	});
+});
+
+/**
+ * The issue-mutation tools (#507).
+ *
+ * The connector could OPEN an issue and never touch it again — no comment, no close, no relabel,
+ * no assign. Verbatim from the owner's Chess coder 2 on 2026-08-11: "I can't assign issues to you
+ * via my tools (no write access to issue assignment)." True, and expensive: closing issue #128
+ * with one sentence of comment consumed a Pilot run and an Engine session on his machine, because
+ * `gh issue close` was the only route — a route unavailable entirely to any agent without a
+ * runner, which is every Coder Lead.
+ */
+describe("github connector — github_comment_issue dispatch", () => {
+	it("POSTs the comment and returns its url", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ html_url: "https://github.com/acme/widgets/issues/128#issuecomment-1" }));
+		const r = await tool("github_comment_issue").handler(ctx(), { repo: "acme/widgets", number: 128, body: "Not in scope — closing." });
+		expect(r.success).toBe(true);
+		expect(r.content).toBe("Commented on acme/widgets#128 — https://github.com/acme/widgets/issues/128#issuecomment-1");
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://api.github.com/repos/acme/widgets/issues/128/comments");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(String(init.body))).toEqual({ body: "Not in scope — closing." });
+		expect((init.headers as Record<string, string>).Authorization).toBe("token gh-token-abc");
+	});
+
+	it("requires a number and a non-empty body WITHOUT fetching", async () => {
+		// GitHub 422s an empty comment. Spending the request to find that out tells the agent
+		// "GitHub returned 422", which sends it looking at the repo instead of at its own argument.
+		for (const input of [
+			{ repo: "acme/widgets", body: "hi" },
+			{ repo: "acme/widgets", number: 0, body: "hi" },
+			{ repo: "acme/widgets", number: 3, body: "   " },
+		]) {
+			const r = await tool("github_comment_issue").handler(ctx(), input);
+			expect(r.success, JSON.stringify(input)).toBe(false);
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("reports a non-ok GitHub status rather than claiming the comment landed", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({}, false, 404));
+		const r = await tool("github_comment_issue").handler(ctx(), { repo: "acme/widgets", number: 9, body: "x" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/GitHub returned 404 commenting on issue #9 in acme\/widgets/);
+	});
+
+	it("drops BOTH cached issue resources, so a read-back is not pre-write", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ html_url: "u" }));
+		await tool("github_comment_issue").handler(ctx(), { repo: "acme/widgets", number: 5, body: "x" });
+		expect(invalidateIssueCaches).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets");
+	});
+
+	it("does NOT drop the cache when the comment failed — nothing changed to invalidate", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({}, false, 403));
+		await tool("github_comment_issue").handler(ctx(), { repo: "acme/widgets", number: 5, body: "x" });
+		expect(invalidateIssueCaches).not.toHaveBeenCalled();
+	});
+});
+
+describe("github connector — github_update_issue dispatch", () => {
+	it("closes an issue and reports the state GitHub came back with", async () => {
+		fetchMock.mockResolvedValue(
+			jsonResponse({ state: "closed", html_url: "https://github.com/acme/widgets/issues/128", labels: [{ name: "bug" }], assignees: [] }),
+		);
+		const r = await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 128, state: "closed" });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("state: closed");
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://api.github.com/repos/acme/widgets/issues/128");
+		expect(init.method).toBe("PATCH");
+		expect(JSON.parse(String(init.body))).toEqual({ state: "closed" });
+	});
+
+	it("assigns and relabels in ONE call — the request the owner was refused", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ state: "open", html_url: "u", labels: [{ name: "high priority" }], assignees: [{ login: "serge-ivo" }] }));
+		const r = await tool("github_update_issue").handler(ctx(), {
+			repo: "acme/widgets",
+			number: 16,
+			assignees: "serge-ivo",
+			labels: "high priority, , high priority",
+		});
+		expect(r.success).toBe(true);
+		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+		// trimmed, empties dropped, de-duplicated — same handling as create's labels.
+		expect(sent).toEqual({ labels: ["high priority"], assignees: ["serge-ivo"] });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports the RESULTING assignees, not the requested ones", async () => {
+		// GitHub does not error on an assignee without push access — it accepts the request and
+		// silently drops the name. Echoing the REQUEST would have the agent report an assignment
+		// that does not exist, which is the one failure mode a write tool must not have.
+		fetchMock.mockResolvedValue(jsonResponse({ state: "open", html_url: "u", labels: [], assignees: [] }));
+		const r = await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 16, assignees: "someone-with-no-access" });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("assignees: none");
+		expect(r.content).not.toContain("someone-with-no-access");
+	});
+
+	it("omits every field that was not supplied — an update is never a silent overwrite", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ state: "closed", html_url: "u", labels: [{ name: "bug" }], assignees: [{ login: "a" }] }));
+		await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 4, state: "closed", labels: "  ", assignees: "" });
+		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+		// PATCH treats `[]` as "empty this field", so an empty string arg must NOT become `[]` —
+		// otherwise a model passing `labels: ""` to mean "leave them" strips every label.
+		expect(sent).toEqual({ state: "closed" });
+		expect(sent).not.toHaveProperty("labels");
+		expect(sent).not.toHaveProperty("assignees");
+	});
+
+	it("refuses an empty update instead of reporting a no-op as success", async () => {
+		const r = await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 4 });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/Nothing to update/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("rejects a state that is not open/closed WITHOUT fetching", async () => {
+		const r = await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 4, state: "resolved" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/must be "open" or "closed"/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("requires a usable issue number WITHOUT fetching", async () => {
+		for (const input of [{ repo: "acme/widgets", state: "closed" }, { repo: "acme/widgets", number: -1, state: "closed" }]) {
+			expect((await tool("github_update_issue").handler(ctx(), input)).success).toBe(false);
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("reports a non-ok GitHub status rather than claiming the change landed", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({}, false, 410));
+		const r = await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 4, state: "closed" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/GitHub returned 410 updating issue #4 in acme\/widgets/);
+	});
+
+	it("drops BOTH cached issue resources after a successful update, and neither after a failure", async () => {
+		// The half that is new relative to the create path: `github_read_issue` caches per issue
+		// under its own resource, so closing #128 and reading #128 back would report `open`.
+		fetchMock.mockResolvedValue(jsonResponse({ state: "closed", html_url: "u", labels: [], assignees: [] }));
+		await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 128, state: "closed" });
+		expect(invalidateIssueCaches).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets");
+
+		invalidateIssueCaches.mockClear();
+		fetchMock.mockResolvedValue(jsonResponse({}, false, 422));
+		await tool("github_update_issue").handler(ctx(), { repo: "acme/widgets", number: 128, state: "closed" });
+		expect(invalidateIssueCaches).not.toHaveBeenCalled();
+	});
+
+	it("refuses an unresolvable repo before it writes anything", async () => {
+		const r = await tool("github_update_issue").handler(ctx({ connectorClient: tokenClient(null) }), {
+			repo: "acme/widgets",
+			number: 4,
+			state: "closed",
+		});
+		expect(r.success).toBe(false);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("says out loud that labels and assignees REPLACE rather than add", async () => {
+		// The one sharp edge of modelling this as GitHub models it. A model told only "labels:
+		// comma-separated" will pass the ONE label it was asked to add and silently strip the rest.
+		// The description is the whole mitigation, so it is asserted rather than trusted.
+		const d = tool("github_update_issue").description;
+		expect(d).toMatch(/REPLACE/);
+		expect(d).toMatch(/github_read_issue/);
 	});
 });

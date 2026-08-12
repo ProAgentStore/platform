@@ -434,7 +434,7 @@ Registered connectors (`CONNECTORS`):
 
 | id | auth | scopes | notes |
 |---|---|---|---|
-| `github` | app (GitHub-App installation token) | read+write | issues + workflow runs; `github_create_issue` is write |
+| `github` | app (GitHub-App installation token) | read+write | issues + workflow runs; the three issue-lifecycle writes are `github_create_issue`, `github_comment_issue`, `github_update_issue` |
 | `http` | token (vault key) | read+write | generic HTTP/REST — call any API as config |
 | `web-search` | token (vault key) | read | Google Custom Search |
 | `meta` | token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
