@@ -133,25 +133,29 @@ export default function Browse() {
 										</div>
 									</form>
 								) : (
+									// The same two-button row as the naming form above it, and now the same shape:
+									// that branch was already `<Button size="lg">` while this one drew
+									// `px-3 py-1.5 rounded-xl` by hand, so one card rendered two geometries
+									// depending on which arm of the ternary was open (#366).
 									<div className="flex gap-2">
-										<button
-											type="button"
+										<Button
+											variant={sub ? "secondary" : "primary"}
+											size="lg"
+											className="flex-1"
 											onClick={() => openOrSubscribe(a)}
 											disabled={busy === a.id}
-											className={`flex-1 text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent-soft" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
 										>
 											{busy === a.id ? "Subscribing…" : sub ? "Open →" : "Subscribe"}
-										</button>
+										</Button>
 										{sub && (
-											<button
-												type="button"
+											<Button
+												size="lg"
 												onClick={() => setNaming({ id: a.id, value: "" })}
 												disabled={busy === a.id}
 												title="Create another instance of this agent (own documents, settings, memory)"
-												className="text-sm px-3 py-1.5 rounded-xl font-semibold border border-line text-muted hover:border-accent hover:text-accent transition-all disabled:opacity-50"
 											>
 												+ New
-											</button>
+											</Button>
 										)}
 									</div>
 								)}

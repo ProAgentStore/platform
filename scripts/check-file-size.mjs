@@ -412,7 +412,12 @@ const PINS = {
 	// is where the message-corner cluster now lives together with the reason there are two layouts
 	// of it. Banked rather than left as headroom — the seam named above (this file is the shell)
 	// only stays true if the pieces that leave it stay gone.
-	"store/console/src/pages/InstanceDetail.tsx": 1477,
+	// +1 at #366, and it is one `import Button` line. Three controls here stopped spelling their own
+	// padding and radius; the JSX came out even, so the whole cost is the import. Raised rather than
+	// paid for by collapsing the call sites onto single lines — compressing code to clear a ratchet
+	// is the mirror image of lowering a pin to make room for it, and both leave the number honest
+	// while making the file worse.
+	"store/console/src/pages/InstanceDetail.tsx": 1478,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -918,7 +923,11 @@ const PINS = {
 	// the lines `CopyButton` took with it — plus this self-ref.
 	// +9 more at #514: the agent-think raise above (the FEEDBACK paragraph) and its reason, plus
 	// this self-ref.
-	"scripts/check-file-size.mjs": 1002,
+	// +8 at #366: the InstanceDetail raise above is ONE line of code (an import), and its reason is
+	// longer than the growth it explains — because the interesting part is what was refused, not
+	// what was added: collapsing three call sites onto single lines would have cleared the ratchet
+	// and made the file worse. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1011,
 };
 
 /**

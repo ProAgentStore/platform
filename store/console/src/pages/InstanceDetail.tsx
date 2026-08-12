@@ -5,6 +5,7 @@ import type { Instance, Message, RunnerPresence } from "../lib/types";
 import { identityFor } from "../lib/identity";
 import { mergeOlderMessages, nextOlderCursor, resolveHasMore, type MessagePageResponse } from "../lib/messagePaging";
 import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
+import Button from "../components/Button";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
@@ -1067,9 +1068,9 @@ function InstancePage() {
 							    the newest page again, which is the whole of #428. A button that cannot work is
 							    not shown. */}
 							{hasMore && olderCursor && (
-								<button type="button" onClick={loadMore} disabled={loadingMore} className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2">
+								<Button size="md" onClick={loadMore} disabled={loadingMore} className="self-center mb-2">
 									{loadingMore ? "Loading..." : "Load earlier messages"}
-								</button>
+								</Button>
 							)}
 							{messages.map((m, i) => {
 								// Classification lives in the SDK — the same heuristic was written out three
@@ -1369,8 +1370,8 @@ function InstancePage() {
 								<div className="flex items-center gap-2 justify-between">
 									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
 									<div className="flex gap-1.5">
-										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
+										<Button size="md" onClick={() => setShowLoopForm(false)}>Cancel</Button>
+										<Button variant="primary" size="md" onClick={startLoop} disabled={!loopObjective.trim()}>Start Loop</Button>
 									</div>
 								</div>
 							</div>

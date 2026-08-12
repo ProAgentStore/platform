@@ -7,6 +7,7 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { boardBusy } from "../lib/pollBusy";
 import { statusBadgeClass } from "../lib/statusBadge";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
+import Button from "../components/Button";
 import Card from "../components/Card";
 
 type BoardView = "kanban" | "list";
@@ -244,8 +245,8 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 							placeholder="Start URL, e.g. https://www.facebook.com/friends/requests"
 							className="flex-1 min-w-0 sm:min-w-[18rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 						/>
-						<button type="button" onClick={() => runBrowse(false)} disabled={running || !runUrl.trim()} className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">Run</button>
-						<button type="button" onClick={() => runBrowse(true)} disabled={running || !runUrl.trim()} className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">Dry run</button>
+						<Button variant="primary" size="lg" onClick={() => runBrowse(false)} disabled={running || !runUrl.trim()}>Run</Button>
+						<Button variant="secondary" size="lg" onClick={() => runBrowse(true)} disabled={running || !runUrl.trim()}>Dry run</Button>
 					</div>
 					{runMsg && <p className="text-xs text-muted mt-2">{runMsg}</p>}
 				</Card>
@@ -261,30 +262,20 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 						<button type="button" onClick={() => changeView("kanban")} title="Board view" aria-pressed={view === "kanban"} className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold ${view === "kanban" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}><LayoutGrid size={13} /><span className="hidden sm:inline">Board</span></button>
 						<button type="button" onClick={() => changeView("list")} title="List view" aria-pressed={view === "list"} className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold ${view === "list" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}><List size={13} /><span className="hidden sm:inline">List</span></button>
 					</div>
-					<button
-						type="button"
-						onClick={() => setEditingCols(true)}
-						title="Customize columns"
-						className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold"
-					>
+					<Button size="md" onClick={() => setEditingCols(true)} title="Customize columns">
 						<SlidersHorizontal size={13} /><span className="hidden sm:inline">Columns</span>
-					</button>
+					</Button>
+					{/* `danger`, not a muted button with a red hover: this DELETES every finished card,
+					    and a control that only looks destructive once the pointer is on it says so too
+					    late (#366, the same judgement as Disconnect / Kill / Unsubscribe). */}
 					{finishedCount > 0 && (
-						<button
-							type="button"
-							onClick={handleClearFinished}
-							className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-danger hover:text-danger font-semibold"
-						>
+						<Button variant="danger" size="md" onClick={handleClearFinished}>
 							Clear finished ({finishedCount})
-						</button>
+						</Button>
 					)}
-					<button
-						type="button"
-						onClick={loadBoard}
-						className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold"
-					>
+					<Button size="md" onClick={loadBoard}>
 						Refresh
-					</button>
+					</Button>
 				</div>
 			</div>
 
@@ -683,15 +674,23 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 					))}
 				</div>
 
-				<button type="button" onClick={addCol} className="mt-2 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-line text-muted hover:border-accent hover:text-accent font-semibold"><Plus size={13} /> Add column</button>
+				{/* `border-dashed` is handed through className, which Button's docstring reserves for
+				    POSITION — the exception is stated rather than taken quietly. The caveat there is
+				    about Tailwind resolving SAME-property utilities by stylesheet order; border-style
+				    and the variant's border-width/colour are different properties, so there is no race
+				    to lose. And the dash is the affordance: it is what says "this row does not exist
+				    yet", which no variant in the table encodes. */}
+				<Button size="md" onClick={addCol} className="mt-2 border-dashed"><Plus size={13} /> Add column</Button>
 
 				{err && <div className="mt-3 text-xs px-3 py-2 rounded-lg bg-danger-soft border border-danger-line text-danger">{err}</div>}
 
 				<div className="flex items-center justify-between gap-2 mt-4">
-					<button type="button" onClick={reset} disabled={saving} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted hover:border-danger hover:text-danger font-semibold disabled:opacity-50">Reset to default</button>
+					{/* Discards the columns this user configured, which is why it is `danger` and not the
+					    red-on-hover it was. */}
+					<Button variant="danger" size="md" onClick={reset} disabled={saving}>Reset to default</Button>
 					<div className="flex gap-2">
-						<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
-						<button type="button" onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save columns"}</button>
+						<Button size="md" onClick={onClose}>Cancel</Button>
+						<Button variant="primary" size="md" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save columns"}</Button>
 					</div>
 				</div>
 			</div>

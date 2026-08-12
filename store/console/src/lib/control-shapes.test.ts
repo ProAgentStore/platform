@@ -105,7 +105,47 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // `Button`'s className passthrough is position-only — colour handed in there does not reliably
 // win, which is the trap its own docstring names. The composer they open uses `<Button>` for all
 // four of its ordinary controls, so what is banked here is exactly the overlay pair.
-const PINNED = { "store/console": 56, "store/admin": 15, "agents/coder/web": 47 };
+//
+// ── 56 → 42, and the console is DONE, which is a different statement from "42 left"
+//
+// 14 sites migrated, following the rule above unchanged: `BoardTab` 9, `InstanceDetail` 3,
+// `Browse` 2. Every one preserved its rendered type step — `text-sm` → `lg`, `text-xs` → `md`.
+//
+// The number that matters is not 42 but the fact that all 42 now fall inside a class §3 already
+// excludes on purpose, counted rather than asserted:
+//
+//   10  below the smallest step's type size (`text-2xs` — BoardTab's dense chips, Usage's metric row)
+//    5  pills (`rounded-full`)
+//    5  card-shaped buttons (Dashboard's two grids, Notifications' rows, RunnerPanel, DeploymentCard)
+//    4  overlaid message actions with their own scrim
+//    3  segmented selectors with an active arm (Usage, StatsTab, TeamworkSection)
+//    6  the three judgements already recorded below (LoadFailed, Login's pair, RunDetail's text-base trio)
+//    9  four more judgements recorded HERE for the first time
+//
+// So the next pass on this tree is not "finish the migration" — it is a decision about whether the
+// vocabulary should GROW a step (a filled status tint, a pill, an active arm), which is a design
+// question and not a sweep. Quoting 42 as remaining effort would overstate it by 42.
+//
+// ── The four new judgements
+//
+//  - **`RunDetail`'s takeover header** (Resume / End / Close) is three filled tints — success-soft,
+//    danger-soft, panel — on a `bg-black` full-screen surface. `secondary` draws no fill, and an
+//    unfilled control on black is the same contrast failure that kept `LoadFailed`'s Retry
+//    hand-written. Three buttons in one row, so it is all or none.
+//  - **`RunDetail`'s "tap your answer" options** sit in the SAME panel as the `text-base` Send the
+//    note below already excludes, and carry `text-ink` rather than `text-muted` because they are the
+//    user's own answer to a question about their legal name or their salary. Migrating half a panel
+//    that is deliberately larger and higher-contrast than the rest of the app is how that decision
+//    gets lost.
+//  - **`InstanceDetail`'s composer control row** (Mute, Loop stop, Loop open, kebab) is four
+//    matched-height controls, each with a state colour no variant has: filled danger when muted,
+//    `LOOP_BUTTON_CLASS[phase]`, `bg-accent-soft` when open. The Mute is additionally governed by
+//    ADR 0001 (reachable in every phase, never behind a disclosure) — the wrong control to restyle
+//    for a shape.
+//  - **`InstanceDetail`'s Send** is sized to the textarea beside it (`py-2.5`, `rounded-xl`, matching
+//    the composer's own geometry). `lg` is `py-2 rounded-lg`, which would leave the send button
+//    shorter than the box it sends.
+const PINNED = { "store/console": 42, "store/admin": 15, "agents/coder/web": 47 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],
