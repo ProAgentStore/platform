@@ -39,3 +39,4 @@ a violation).
 | # | Title | Status |
 |---|---|---|
 | [0001](./0001-mute-is-always-available.md) | Mute is available at every moment of a voice session | Accepted |
+| [0002](./0002-a-guard-states-what-it-measured.md) | A guard states the size of what it measured | Accepted |
