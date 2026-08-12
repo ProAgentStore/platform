@@ -266,8 +266,34 @@ excludes on purpose. The ~84 ordinary ones were simply unmigrated, and separatin
 per-screen work: the Board's chips look migratable and are not, because `size="sm"` would raise
 their type step and change the radius in the densest rows in the app.
 
-**The console is now at 69**, and the excluded third is most of what is left — `BoardTab` (18),
-`AgentDetail` (15) and `InstanceDetail` (11) hold three quarters of it. When migrating the rest:
+**The console is now at 42 and every one of those is in an excluded class** — 10 below the smallest
+step's type size, 5 pills, 5 card-shaped, 4 overlaid, 3 segmented, 15 recorded judgements. So the
+console is finished against this vocabulary, and the next question about it is whether the table
+should *grow* a step, not which call sites are left.
+
+**`agents/coder/web` is at 23, and the table is vendored there** (`agents/coder/web/src/control-classes.ts`).
+It could not import the console's: `store/console` depends on `@proagentstore/coder-web`, so the
+arrow only goes one way, and the SDK is not a home for it because Tailwind v4 skips `node_modules`
+— the same reason `index.css` carries an explicit `@source` for that directory. The region between
+the `vendored:button-vocabulary` markers is held byte-identical by `control-classes.test.ts`, the
+bargain §4 already strikes for the tokens in `store/admin`.
+
+### What may be handed to `<Button className>`, measured (#366)
+
+The docstring said "colour handed in there does not reliably win" without saying how to tell. The
+test:
+
+- **Safe** if the vocabulary sets no rule for that CSS property — `border-dashed` (the variant sets
+  border *width* and *colour*, not style), `active:scale-95`, every position utility.
+- **Otherwise**, the incoming utility only wins if it is emitted later in the built stylesheet.
+  `.hidden{display:none}` is emitted **before** `.inline-flex`, so `className="hidden sm:flex"` on a
+  `<Button>` does not hide it: `BUTTON_BASE` wins, silently, on mobile only, and it looks right on
+  the desktop the author is testing on. Eight controls in the Coder session header are responsive
+  that way and stay hand-written for that reason — a gap in the table, not unmigrated work.
+  `.transition-transform` does win over `.transition-colors`, but it *replaces* `transition-property`
+  rather than adding to it, so the hover colour transition goes with it.
+
+When migrating the rest:
 
 - **Preserve the rendered type step; collapse padding and radius.** `text-sm` → `size="lg"`,
   `text-xs` → `md` or `sm` by padding. Mapping every `px-3 py-1.5` onto `md` regardless would shrink

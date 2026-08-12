@@ -15,6 +15,23 @@ import { type ButtonSize, type ButtonVariant, buttonClass } from "../lib/control
  * order in the generated stylesheet, not by their order in the class attribute, so a
  * `px-4` handed in here does not reliably beat the size's `px-3`. If a shape is missing, add a
  * step to the table.
+ *
+ * ── The test for "is this class safe to hand in", measured rather than guessed (#366)
+ *
+ * Safe if the vocabulary sets no rule for that CSS PROPERTY at all — `border-dashed` (style, where
+ * the variant sets width and colour), `active:scale-95` (transform), every position utility.
+ *
+ * If the vocabulary DOES set the property, the incoming utility only wins when it is emitted later
+ * in the stylesheet. Two that matter, read out of the built `index.css`:
+ *
+ *  - **`hidden` loses.** `.hidden{display:none}` is emitted BEFORE `.inline-flex`, so
+ *    `className="hidden sm:flex"` on a Button does nothing on mobile — the control stays visible.
+ *    That is silent: no error, no warning, and it looks correct on the desktop the author is on.
+ *    A control with responsive visibility therefore cannot use this component today; the honest
+ *    options are a wrapper element or a step in the table, not a class handed in here.
+ *  - **`transition-transform` wins**, being emitted after `.transition-colors` — but it REPLACES
+ *    `transition-property` rather than adding to it, so the hover colour transition is lost. Two
+ *    outcomes, one class, and only one of them visible from the call site.
  */
 export default function Button({
 	variant = "secondary",

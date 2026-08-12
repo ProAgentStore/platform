@@ -10,6 +10,7 @@ import { repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
 import { repoOpenAction } from "./repo-open";
 import { repoFreshnessLabel, staleListNotice, type RecheckReport } from "./repo-freshness";
+import Button from "./Button";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
@@ -178,10 +179,9 @@ export default function ReposList({
 								// No aria-label: the visible word IS the accessible name, and overriding it with
 								// "Open <repo>" would make the control unaddressable by the name a user (or a
 								// test) reads off the screen — the row already announces which repo it is.
-								<button type="button" onClick={() => openRepo(r.id)} disabled={a.disabled} title={a.title}
-									className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold disabled:opacity-60">
+								<Button variant="primary" size="sm" onClick={() => openRepo(r.id)} disabled={a.disabled} title={a.title}>
 									{a.label}
-								</button>
+								</Button>
 							);
 						})()}
 						<button
@@ -194,7 +194,7 @@ export default function ReposList({
 						>
 							{phase === "loading" ? <Loader2 size={14} className="animate-spin" /> : phase === "playing" ? <Square size={14} /> : <Play size={14} />}
 						</button>
-						<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
+						<Button size="icon" onClick={() => setSettingsRepoId(r.id)} title="Repo settings"><Settings size={14} /></Button>
 					</div>
 				</div>
 				{playErr?.id === r.id && (
@@ -260,9 +260,9 @@ export default function ReposList({
 	);
 
 	const enginesButton = (
-		<button type="button" onClick={onOpenEngines} title="CLI engines & sign-in" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold flex items-center gap-1">
+		<Button size="md" onClick={onOpenEngines} title="CLI engines & sign-in">
 			<Cpu size={13} /><span className="hidden sm:inline">Engines</span>
-		</button>
+		</Button>
 	);
 
 	/**
@@ -284,7 +284,7 @@ export default function ReposList({
 						{enginesButton}
 						{/* A one-repo agent that HAS its repo cannot use this — one is its maximum. */}
 						{!singleRepo && (
-							<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
+							<Button size="md" onClick={() => setShowAddRepo(!showAddRepo)}>+ Add</Button>
 						)}
 					</div>
 				</div>

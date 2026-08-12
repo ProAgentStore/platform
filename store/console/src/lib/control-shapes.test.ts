@@ -145,7 +145,25 @@ function sweep(root: string, find = findHandAuthoredControls) {
 //  - **`InstanceDetail`'s Send** is sized to the textarea beside it (`py-2.5`, `rounded-xl`, matching
 //    the composer's own geometry). `lg` is `py-2 rounded-lg`, which would leave the send button
 //    shorter than the box it sends.
-const PINNED = { "store/console": 42, "store/admin": 15, "agents/coder/web": 47 };
+//
+// ── `agents/coder/web` 47 → 23: the vocabulary transfers, the MODULE cannot
+//
+// The Coder UI renders inside this console and compiles against its stylesheet, so until now one
+// screen carried two button systems. It could not import `lib/control-classes.ts`: `store/console`
+// depends on `@proagentstore/coder-web`, and the SDK is not a home for it because Tailwind v4
+// skips `node_modules` — which is exactly why `index.css` carries an explicit `@source` for that
+// directory. So the table is VENDORED there and held byte-identical by `control-classes.test.ts`,
+// the same bargain `designTokens.test.ts` already strikes for the tokens in `store/admin`.
+//
+// 24 sites migrated. The 23 left are the usual excluded classes — 2 pills, 1 overlay, 1
+// card-shaped, 4 active-arm toggles, the composer send, the responsive-padding issue button — plus
+// **8 that a measurement disqualified rather than a judgement**, and that is the finding worth
+// keeping: `.hidden{display:none}` is emitted BEFORE `.inline-flex` in the built stylesheet, so
+// `className="hidden sm:flex"` on a `<Button>` does not hide it — `BUTTON_BASE` wins, silently,
+// and only on mobile. The whole coding-session header is responsive that way. Those eight are not
+// unmigrated work; they are a gap in the table, and `Button.tsx`'s docstring now carries the test
+// for which classes may be handed through and which cannot.
+const PINNED = { "store/console": 42, "store/admin": 15, "agents/coder/web": 23 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

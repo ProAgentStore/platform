@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
 import { repoProviderLabel } from "./repo-title";
 import { Settings, Trash2, Lock } from "lucide-react";
+import Button from "./Button";
 
 /**
  * Per-repo settings sheet: name, FOLDER, special instructions (rules), launch URLs, and delete.
@@ -175,10 +176,10 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 				<input id="repo-settings-production-url" value={prod} onChange={(e) => setProd(e.target.value)} placeholder="Production URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs" />
 
 				<div className="flex gap-2 justify-between items-center mt-4">
-					<button type="button" onClick={del} disabled={deleting || saving} className="text-xs px-3 py-1.5 rounded-md text-danger font-semibold hover:bg-danger-soft disabled:opacity-50 flex items-center gap-1"><Trash2 size={13} />{deleting ? "Deleting…" : "Delete"}</button>
+					<Button variant="danger" size="md" onClick={del} disabled={deleting || saving}><Trash2 size={13} />{deleting ? "Deleting…" : "Delete"}</Button>
 					<div className="flex gap-2">
-						<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
-						<button type="button" onClick={save} disabled={saving || deleting} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+						<Button size="md" onClick={onClose}>Cancel</Button>
+						<Button variant="primary" size="md" onClick={save} disabled={saving || deleting}>{saving ? "Saving…" : "Save"}</Button>
 					</div>
 				</div>
 			</div>

@@ -5,6 +5,7 @@ import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
 import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
+import Button from "./Button";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -311,8 +312,8 @@ export default function CopilotView({
 					<div className="flex items-center gap-2 justify-between">
 						<label className="text-xs text-muted flex items-center gap-1.5">Max iterations: <input type="number" value={loop.loopMax} onChange={(e) => loop.setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
 						<div className="flex gap-1.5">
-							<button type="button" onClick={() => loop.setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-							<button type="button" onClick={loop.start} disabled={!loop.loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
+							<Button size="md" onClick={() => loop.setShowLoopForm(false)}>Cancel</Button>
+							<Button variant="primary" size="md" onClick={loop.start} disabled={!loop.loopObjective.trim()}>Start Loop</Button>
 						</div>
 					</div>
 				</div>
@@ -336,8 +337,8 @@ export default function CopilotView({
 							<div className="flex items-center gap-2 justify-between">
 								<label className="text-xs text-muted flex items-center gap-1.5">Max iterations: <input type="number" value={loop.loopMax} onChange={(e) => loop.setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
 								<div className="flex gap-1.5">
-									<button type="button" onClick={loop.skipProposedIssue} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Skip</button>
-									<button type="button" onClick={loop.approveProposedIssue} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Approve &amp; run #{loop.proposedIssue.number}</button>
+									<Button size="md" onClick={loop.skipProposedIssue}>Skip</Button>
+									<Button variant="primary" size="md" onClick={loop.approveProposedIssue}>Approve &amp; run #{loop.proposedIssue.number}</Button>
 								</div>
 							</div>
 						</>
@@ -345,8 +346,8 @@ export default function CopilotView({
 						<div className="flex items-center justify-between gap-2">
 							<div className="text-xs text-muted">No open issue to work — the backlog looks clear.</div>
 							<div className="flex gap-1.5 shrink-0">
-								<button type="button" onClick={() => loop.setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Close</button>
-								<button type="button" onClick={loop.proposeNextIssue} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Check again</button>
+								<Button size="md" onClick={() => loop.setShowLoopForm(false)}>Close</Button>
+								<Button variant="primary" size="md" onClick={loop.proposeNextIssue}>Check again</Button>
 							</div>
 						</div>
 					)}

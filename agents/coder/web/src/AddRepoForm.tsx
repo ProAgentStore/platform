@@ -1,3 +1,5 @@
+import Button from "./Button";
+
 /**
  * "Point this agent at a repo" — ONE form, wherever the question is asked (#411).
  *
@@ -35,7 +37,7 @@ export default function AddRepoForm({ value, onChange, onAdd, heading, className
 					autoCorrect="off"
 					className="flex-1 min-w-[180px] bg-panel border border-line rounded-xl px-3 py-2 text-sm"
 				/>
-				<button type="button" onClick={onAdd} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Add</button>
+				<Button variant="primary" size="md" onClick={onAdd}>Add</Button>
 			</div>
 			<p className="text-xs text-muted mt-1.5 text-left">
 				<b>Best for dev:</b> point at a repo you already have (<code>~/dev/my-repo</code>) — the agent works in your real checkout.

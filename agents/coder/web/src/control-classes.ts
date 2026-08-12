@@ -1,40 +1,36 @@
 /**
- * The console's atomic shape vocabulary: what a button, a card and a badge LOOK like (#366).
+ * The Coder UI's copy of the console's button vocabulary (#366).
  *
- * ── What was measured, on 2026-08-08, before any of this was written
+ * ── Why a copy, and not an import
  *
- * 266 `<button>` elements across `store/console/src` in 47 distinct padding+radius shapes.
- * The three biggest were `px-3 py-1.5 rounded-lg` (58), `px-2 py-1 rounded` (23) and
- * `px-2.5 py-1.5 rounded-lg` (22) — the first and third differ by 2px of horizontal padding
- * and nothing else. Nobody chose that difference 22 times; it was copied from whichever
- * neighbour was nearest. Cards were three geometries over 78 panels: `rounded-xl p-3 sm:p-4`
- * (34), `rounded-xl p-4` (18), `rounded-lg p-3` (15) — so whether a card's padding responded
- * to the viewport depended on which file you were in.
+ * This package is rendered INSIDE the console — `store/console/src/index.css` `@source`s this
+ * directory so its classes compile against the console's tokens — so the two surfaces sit on one
+ * screen and must agree about what a button looks like. They cannot share a module:
  *
- * ── Why a table and not a component with ternaries
+ *  - **Not by importing the console's.** `store/console` depends on `@proagentstore/coder-web`
+ *    (`package.json`, `workspace:*`). The arrow already points this way; reversing it is a cycle.
+ *  - **Not by moving it into `@proagentstore/sdk`,** which both packages do depend on. Tailwind v4
+ *    finds classes by scanning source text and **skips `node_modules`** — that is the documented
+ *    reason the `@source` line above exists at all, after classes used only in this package were
+ *    silently never generated and its desktop controls vanished. Putting the strings in a built
+ *    `dist/` would walk back into exactly that. The SDK is also published to npm for third-party
+ *    agent authors, and the console's private design decisions are not their API.
  *
- * These are DATA. A `variant === "primary" ? … : variant === "danger" ? …` chain cannot be
- * enumerated, cannot be tested for the property that actually matters (every variant produces
- * exactly one font-weight, exactly one radius), and grows a fifteenth shape the same way the
- * call sites did. A record can be iterated by a test; a ternary can only be read.
+ * So it is vendored, which is what this repo already does with the design TOKENS: `store/admin`
+ * carries a byte-identical `@theme` block and `designTokens.test.ts` holds the two equal
+ * (DESIGN-SYSTEM.md §4, "three copies"). Same bargain here — duplication a machine can police,
+ * rather than an abstraction that cannot be built.
  *
- * ── Why the strings are whole and literal
+ * ── What holds it
  *
- * Tailwind v4 finds classes by scanning source text. `` `rounded-${size}` `` generates nothing
- * — the same silent-nothing failure mode as a dead colour token (`DESIGN-SYSTEM.md` §1), with
- * no error at build time. Every utility below is written out in full for that reason; see
- * `components/Page.tsx`, which learned it first.
+ * `store/console/src/lib/control-classes.test.ts` extracts the region between the
+ * `vendored:button-vocabulary` markers from BOTH files and requires them byte-identical. Edit one,
+ * paste into the other; the whole point of the markers is that this is mechanical.
  *
- * ── The conventions these encode, from DESIGN-SYSTEM.md §3
- *
- *  - `rounded-lg` for controls, `rounded-xl` for cards, `rounded-full` for pills. Bare
- *    `rounded` on a control is older code, and the 23 sites that had it are folded in here.
- *  - Nothing a user reads is below `text-xs` (12px). The one step below it — `text-2xs`, 11px,
- *    declared in `@theme` at #390 — is the floor of the scale and belongs to dense telemetry,
- *    not to a control's label. No size below carries it.
+ * The console's copy carries `Card` and `Badge` beyond this region. They are not here because
+ * nothing in this package uses them yet — copying an unused table would be three copies of a
+ * decision with two call sites.
  */
-
-import { INTENT_CLASS, type StatusIntent } from "./statusBadge";
 
 /* ── vendored:button-vocabulary ──────────────────────────────────────────────────────────────
  * This region exists TWICE and is held byte-identical by `control-classes.test.ts`:
@@ -111,34 +107,3 @@ export function buttonClass(variant: ButtonVariant = "secondary", size: ButtonSi
 	return `${BUTTON_BASE} ${BUTTON_SIZE[size]} ${BUTTON_VARIANT[variant]}${extra ? ` ${extra}` : ""}`;
 }
 /* ── /vendored:button-vocabulary ─────────────────────────────────────────────────────────── */
-
-/**
- * ONE card geometry, with the responsive padding as the default rather than as one of three.
- *
- * `tone` is colour, not geometry: `panel` is a card on the page, `paper` is a card nested
- * INSIDE a panel (a board item inside a column), where the same fill would disappear. Adding a
- * padding prop here would re-open exactly the three-geometry drift this replaces.
- */
-export type CardTone = "panel" | "paper";
-
-export const CARD_TONE: Record<CardTone, string> = {
-	panel: "bg-panel border border-line",
-	paper: "bg-paper border border-line",
-};
-
-export const CARD_GEOMETRY = "rounded-xl p-3 sm:p-4";
-
-export function cardClass(tone: CardTone = "panel", extra = ""): string {
-	return `${CARD_TONE[tone]} ${CARD_GEOMETRY}${extra ? ` ${extra}` : ""}`;
-}
-
-/**
- * Status pills. The tone vocabulary is `statusBadge.ts`'s existing intent layer, imported
- * rather than restated — #368 refused to invent a third status vocabulary and this would have
- * been the fourth.
- */
-export const BADGE_BASE = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium";
-
-export function badgeClass(tone: StatusIntent = "neutral", extra = ""): string {
-	return `${BADGE_BASE} ${INTENT_CLASS[tone]}${extra ? ` ${extra}` : ""}`;
-}

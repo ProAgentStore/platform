@@ -28,6 +28,7 @@ import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
 import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
 import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
+import Button from "./Button";
 
 interface Props {
 	instanceId: string;
@@ -1021,13 +1022,13 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					    the table and the one-line assertion are in `e2e/console.spec.ts`'s #431 block. */}
 					{solo && <span title={`${repoTitle(solo)} · ${repoLabel(solo)}`} className="text-xs text-muted truncate min-w-0 flex-1 basis-0">{repoTitle(solo)} · {repoLabel(solo)}</span>}
 					<div className="ml-auto flex gap-1 shrink-0">
-						<button type="button" onClick={() => setShowEngines(true)} title="CLI engines & sign-in" aria-label="CLI engines" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Cpu size={13} /></button>
-						{solo && <button type="button" onClick={() => setSettingsRepoId(solo.id)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><FolderCog size={13} /></button>}
+						<Button size="icon" onClick={() => setShowEngines(true)} title="CLI engines & sign-in" aria-label="CLI engines"><Cpu size={13} /></Button>
+						{solo && <Button size="icon" onClick={() => setSettingsRepoId(solo.id)} title="Repo settings" aria-label="Repo settings"><FolderCog size={13} /></Button>}
 						{/* The session actions the header takeover used to hold. Without these the solo
 						    view could start a session and never stop it. */}
-						{openSession && <button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" aria-label="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Copy size={13} /></button>}
-						{openSession && <button type="button" onClick={restartSession} title="Restart the CLI" aria-label="Restart the CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><RotateCw size={13} /></button>}
-						{openSession && <button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-danger text-danger font-semibold"><Square size={13} /></button>}
+						{openSession && <Button size="icon" onClick={copySummaryJson} title="Copy conversation as JSON" aria-label="Copy conversation as JSON"><Copy size={13} /></Button>}
+						{openSession && <Button size="icon" onClick={restartSession} title="Restart the CLI" aria-label="Restart the CLI"><RotateCw size={13} /></Button>}
+						{openSession && <Button variant="danger" size="icon" onClick={endSession} title="End session" aria-label="End session"><Square size={13} /></Button>}
 					</div>
 				</div>
 
@@ -1073,10 +1074,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										{(() => {
 											const a = repoOpenAction({ hasActiveSession: false, opening: openingRepoId === solo.id, runnerOnline });
 											return (
-												<button type="button" onClick={() => openRepoSession(solo.id)} disabled={a.disabled} title={a.title}
-													className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-60">
+												<Button variant="primary" size="lg" onClick={() => openRepoSession(solo.id)} disabled={a.disabled} title={a.title}>
 													{a.label}
-												</button>
+												</Button>
 											);
 										})()}
 										{/* The runner warning goes BESIDE the action, never instead of it (#241).
@@ -1202,13 +1202,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							<pre className="text-2xs text-muted mt-1 whitespace-pre-wrap break-all">{authPrompt.evidence}</pre>
 						)}
 						{authPrompt.kind === "oauth-url" && (
-							<button
-								type="button"
-								onClick={startSignin}
-								className="mt-2 text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold"
-							>
+							<Button variant="primary" size="md" className="mt-2" onClick={startSignin}>
 								Open sign-in on my runner
-							</button>
+							</Button>
 						)}
 						{signinMsg && <div className="text-xs text-muted mt-1.5">{signinMsg}</div>}
 					</div>

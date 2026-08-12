@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BADGE_BASE, BUTTON_BASE, BUTTON_SIZE, BUTTON_VARIANT, CARD_GEOMETRY, CARD_TONE, badgeClass, buttonClass, cardClass } from "./control-classes.js";
 import { INTENT_CLASS } from "./statusBadge.js";
@@ -130,5 +132,57 @@ describe("badgeClass", () => {
 
 	it("defaults to neutral", () => {
 		expect(badgeClass()).toContain(INTENT_CLASS.neutral);
+	});
+});
+
+/**
+ * The second copy (#366).
+ *
+ * `agents/coder/web` renders inside this console and shares its compiled stylesheet, so a button
+ * in the Coding tab sits beside a button in the console shell. Until this commit those were two
+ * vocabularies: 47 hand-authored shapes there against four steps here, on one screen.
+ *
+ * It could not import the table — `store/console` depends on `@proagentstore/coder-web`, so the
+ * arrow only goes one way, and the SDK is not a home for it because Tailwind v4 skips
+ * `node_modules` (the reason `index.css` carries an explicit `@source` for that directory in the
+ * first place). So the table is vendored, exactly as the design TOKENS are vendored into
+ * `store/admin` and held equal by `designTokens.test.ts` — DESIGN-SYSTEM.md §4's "three copies".
+ *
+ * What makes duplication acceptable is that a machine polices it. This reads the region between
+ * the `vendored:button-vocabulary` markers out of both files and requires it byte-identical, so a
+ * fifth size added on one side fails here rather than in a screenshot of one tab.
+ */
+describe("the vendored copy in agents/coder/web", () => {
+	const CONSOLE_FILE = join(import.meta.dirname, "control-classes.ts");
+	const CODER_WEB_FILE = join(import.meta.dirname, "../../../../agents/coder/web/src/control-classes.ts");
+
+	/** Between the markers, inclusive. Null when a marker is missing, which is itself a failure. */
+	function region(path: string): string | null {
+		const src = readFileSync(path, "utf-8");
+		const open = src.indexOf("/* ── vendored:button-vocabulary");
+		const close = src.indexOf("/* ── /vendored:button-vocabulary");
+		if (open === -1 || close === -1 || close < open) return null;
+		return src.slice(open, src.indexOf("\n", close) + 1);
+	}
+
+	it("carries the markers in both files", () => {
+		// A missing marker would make the comparison below vacuously pass on an empty string, which
+		// is the way a text-region guard silently stops guarding.
+		expect(region(CONSOLE_FILE)).not.toBeNull();
+		expect(region(CODER_WEB_FILE)).not.toBeNull();
+		expect(region(CONSOLE_FILE)?.length).toBeGreaterThan(500);
+	});
+
+	it("is byte-identical to this file's", () => {
+		expect(region(CODER_WEB_FILE)).toBe(region(CONSOLE_FILE));
+	});
+
+	it("really is the table this module exports, not a stale paste of its text", () => {
+		// The region is compared as TEXT, so it proves the two files agree — not that either one
+		// still describes what `buttonClass` does. These two assertions tie the text back to the
+		// runtime values, so deleting a step from the exported record cannot leave the guard green.
+		const text = region(CONSOLE_FILE) ?? "";
+		for (const [size, cls] of Object.entries(BUTTON_SIZE)) expect(text).toContain(`${size}: "${cls}"`);
+		for (const [variant, cls] of Object.entries(BUTTON_VARIANT)) expect(text).toContain(`${variant}: "${cls}"`);
 	});
 });

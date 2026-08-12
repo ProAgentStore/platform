@@ -4,6 +4,7 @@ import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
 import { engineContinuityNote } from "./engine-continuity";
 import { Cpu, History, Trash2 } from "lucide-react";
+import Button from "./Button";
 
 /** The engine's vault-key name shown in the api-key option label. */
 function apiKeyName(command: string): string {
@@ -156,17 +157,13 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 					})}
 				</div>
 
-				<button
-					type="button"
-					onClick={() => setEngines((prev) => [...prev, { id: `engine-${prev.length + 1}`, label: "", command: "" }])}
-					className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold mt-2"
-				>
+				<Button size="md" className="mt-2" onClick={() => setEngines((prev) => [...prev, { id: `engine-${prev.length + 1}`, label: "", command: "" }])}>
 					+ Add engine
-				</button>
+				</Button>
 
 				<div className="flex gap-2 justify-end mt-4">
-					<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
-					<button type="button" onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+					<Button size="md" onClick={onClose}>Cancel</Button>
+					<Button variant="primary" size="md" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
 				</div>
 			</div>
 		</div>
