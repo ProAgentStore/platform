@@ -17,8 +17,9 @@
  */
 
 import { isNoiseTranscript } from "./audio.js";
-import { isMicPermissionDenied } from "./convo.js";
+import { isReportableMicError } from "./convo.js";
 import { EMPTY_HEARD, type HeardState, heardText, reduceHeard } from "./machine.js";
+import { isBenignRecognizerEnd, type MicErrorDetail, planMicRestart } from "./mic-retry.js";
 
 interface SpeechRecognitionAlternativeLike {
 	readonly transcript: string;
@@ -100,15 +101,21 @@ export interface SpeechGateOptions {
 	 */
 	acceptSpeech?: () => boolean;
 	/**
-	 * The recognizer was refused the microphone (#425).
+	 * The recognizer could not have the microphone (#425).
 	 *
 	 * `r.onerror` was an empty block. That silence had two costs: nobody could learn that a gate had
 	 * died, and `planNoiseRejection` treats a dead gate as "cannot vouch for this turn", so a
 	 * blocked gate quietly changes which marginal turns survive. Reported through a callback rather
 	 * than by importing the client here, so this module stays a pure browser adapter and the test
 	 * can observe the call without a network stub.
+	 *
+	 * Named `onDenied` and gated on `isMicPermissionDenied` until the #425 reopen, which is how the
+	 * two background recognizers ended up asymmetric: the control listener reported `audio-capture`
+	 * and the gate did not, so the one contention code produced by two recognizers fighting over one
+	 * device — the code actually seen in production — was invisible from exactly the recognizer that
+	 * competes with the recorder. Reporting is now {@link isReportableMicError} on both.
 	 */
-	onDenied?: (code: string) => void;
+	onMicError?: (code: string, detail: MicErrorDetail) => void;
 }
 
 /** Is browser dictation available at all? (Used to decide whether to gate.) */
@@ -137,6 +144,12 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 	/** The browser refused this origin the microphone. Terminal until the user changes it (#425). */
 	let denied = false;
 	let restartFails = 0;
+	/** The failure RUN over the device, and the code that ended the current session — the inputs
+	 *  {@link planMicRestart} needs to decide between an instant re-arm and a backoff (#425). */
+	let micFails = 0;
+	let micBurstAt = 0;
+	let lastCode: string | null = null;
+	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const build = (): SpeechRecognitionLike => {
 		const r = new SR();
@@ -145,6 +158,9 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		r.lang = opts.lang || "en-US";
 		r.onresult = (e: SpeechRecognitionEventLike) => {
 			alive = true;
+			// Audio arrived → the failure run is over (the only proof of recovery on offer).
+			micFails = 0;
+			micBurstAt = 0;
 			// The WHOLE session (from 0) and the DELTA (from resultIndex) in one pass. The session
 			// halves are what {@link reduceHeard} folds — recomputed, never accumulated, so a phrase
 			// re-delivered as final after arriving as interim cannot be counted twice. The delta is
@@ -185,10 +201,21 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		r.onerror = (e: { error: string }) => {
 			// "no-speech"/"aborted" are normal for a gate — the onend restart handles it. A
 			// PERMISSION verdict is not: it will not resolve by trying again, and re-arming into it
-			// is what makes Chrome re-prompt on every restart (#425).
-			if (!isMicPermissionDenied(e?.error)) return;
-			denied = true;
-			opts.onDenied?.(e.error);
+			// is what makes Chrome re-prompt on every restart (#425). Anything in between —
+			// `audio-capture`, the recorder and this gate reaching for one device at a turn
+			// boundary — is neither: it is reported and retried, with a backoff so the retry is not
+			// itself a mic-activation storm.
+			const code = e?.error;
+			lastCode = code ?? null;
+			if (isBenignRecognizerEnd(code)) {
+				micFails = 0;
+				micBurstAt = 0;
+			} else {
+				if (!micFails) micBurstAt = Date.now();
+				micFails++;
+			}
+			if (planMicRestart({ code, consecutiveFailures: micFails }).terminal) denied = true;
+			if (isReportableMicError(code)) opts.onMicError?.(code, { fails: micFails, burstMs: micBurstAt ? Date.now() - micBurstAt : 0 });
 		};
 		r.onend = () => {
 			alive = true; // it started and ended → the engine is running
@@ -200,14 +227,24 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// `denied` is checked with `active` because a restart here cannot succeed and each
 			// attempt costs the user another prompt.
 			if (!active || denied) return;
-			// Keep watching: restart unless it's failing in a tight loop (mic blocked).
-			try {
-				r.start();
-				restartFails = 0;
-			} catch {
-				restartFails++;
-				if (restartFails <= 3) setTimeout(() => { if (active) { try { r.start(); } catch { /* give up quietly */ } } }, 250);
-			}
+			const plan = planMicRestart({ code: lastCode, consecutiveFailures: micFails });
+			lastCode = null;
+			// Keep watching: restart unless it's failing in a tight loop (mic blocked). A failing
+			// cycle waits — the no-delay version re-acquired the device as fast as Chrome would
+			// cycle it, against a recorder that was in the middle of releasing it.
+			const go = () => {
+				if (!active || denied) return;
+				try {
+					r.start();
+					restartFails = 0;
+				} catch {
+					restartFails++;
+					if (restartFails <= 3) setTimeout(() => { if (active) { try { r.start(); } catch { /* give up quietly */ } } }, 250);
+				}
+			};
+			if (plan.delayMs <= 0) return go();
+			if (retryTimer) clearTimeout(retryTimer);
+			retryTimer = setTimeout(() => { retryTimer = null; go(); }, plan.delayMs);
 		};
 		return r;
 	};
@@ -227,6 +264,11 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		},
 		stop() {
 			active = false;
+			// A pending backoff retry must not reopen the mic after the turn it belonged to ended.
+			if (retryTimer) {
+				clearTimeout(retryTimer);
+				retryTimer = null;
+			}
 			if (rec) {
 				try {
 					rec.stop();

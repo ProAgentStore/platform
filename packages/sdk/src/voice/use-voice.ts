@@ -51,6 +51,7 @@ import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn,
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, isEchoing, lostTail, LOST_TAIL_WORDS, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { shouldAnnounceMicContention } from "./mic-retry.js";
 import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceCommand, type VoiceCommandWords, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
 import { dropNote, planFinalizedTurn, planNoiseRejection, planSend, planTurnClose, utteranceSoFar } from "./turn.js";
@@ -217,6 +218,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// yield the mic to the main recorder synchronously. Wired below (ensureControlStt + effect).
 	const ctrlSttRef = useRef<VoiceStt | null>(null);
 	const ctrlWantRef = useRef(false);
+	/** The browser REFUSED us (#425). Sticky: the effect below recomputes `ctrlWantRef` on every mic
+	 *  transition, so clearing only that re-armed — and re-prompted — on the user's next turn. */
+	const ctrlDeniedRef = useRef(false);
 	/** Have we already said that this browser has no voice-command channel at all? Once per
 	 *  session — the reconcile effect below runs on every mic transition (#388). */
 	const noWebSpeechToldRef = useRef(false);
@@ -329,7 +333,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// A denied gate is not a no-op: `planNoiseRejection` treats a dead gate as
 					// "cannot vouch for this turn", so it quietly changes which marginal turns
 					// survive — and until #425 it produced no evidence of itself at all.
-					onDenied: (code) => reportClientError("voice-gate", `speech gate refused the microphone: ${code}`, { code }),
+					onMicError: (code, detail) => reportClientError("voice-gate", `speech gate refused the microphone: ${code}`, { code, ...detail }),
 					// `text` is the whole utterance so far; `phrase` is only what the recognizer just
 					// changed. The command scan below takes `phrase` and the bubble takes `text` —
 					// see the two-argument rationale on SpeechGateOptions.onInterim (#458).
@@ -1049,32 +1053,28 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// is passed through rather than discarded at the boundary.
 				onResult: (text, isFinal) => handleControlResultRef.current(text, isFinal),
 				/**
-				 * This handler used to be empty, with a comment naming "mic denied" as an expected
-				 * case (#425). It is the listener that carries ADR 0001 M1 in every phase where the
-				 * mic is closed — the agent speaking or thinking — so a denial here DELETES
-				 * mute-by-voice, and it did so with no error row, no notice and no state change.
-				 * An ADR 0001 violation was unobservable in production by construction.
-				 *
-				 * Two different verdicts, deliberately:
-				 *  - REPORT covers a missing device too, because that is diagnostic.
-				 *  - STOP RE-ARMING is narrower, and only for the two codes the browser can only
-				 *    produce by refusing. `onEnd` re-starts on every end, Chrome ends a continuous
-				 *    recognizer after a short silence, and Chrome activates the mic on every
-				 *    `start()` — so against a non-persistent grant this loop IS the "asks me all the
-				 *    time" report. But `audio-capture` can come from two recognizers contending for
-				 *    one device, and latching on that would silently disable mute for the rest of
-				 *    the session, i.e. cause the exact failure this ticket exists to expose.
+				 * This handler used to be empty, with a comment naming "mic denied" as an expected case
+				 * (#425). It carries ADR 0001 M1 in every phase where the mic is closed, so a denial
+				 * here DELETES mute-by-voice — and did so with no row, notice or state change: an ADR
+				 * 0001 violation, unobservable in production by construction.
+				 * THREE verdicts, load-bearing differences, reasoning in `mic-retry.ts`. REPORT covers
+				 * a missing device, which is diagnostic. STOP RE-ARMING covers only the two codes a
+				 * browser produces by refusing: latching on `audio-capture` — two recognizers over one
+				 * device — would delete mute for the session, the failure this ticket exists to expose.
 				 */
-				onError: (err) => {
+				onError: (err, detail) => {
 					const code = String(err ?? "");
 					if (!isReportableMicError(code)) return; // no-speech / aborted: ordinary churn
-					reportClientError("voice-control", `control listener refused the microphone: ${code}`, { code });
-					if (!isMicPermissionDenied(code)) return;
-					ctrlWantRef.current = false;
-					// Said ONCE, not once per restart. ADR 0001's known hole, reached the other way:
-					// with no control listener the on-screen mute is the whole invariant, so the
-					// user has to be told which channel they have left.
-					setNotice("⚠ Voice commands are off — the microphone is blocked for this site.");
+					reportClientError("voice-control", `control listener refused the microphone: ${code}`, { code, ...detail });
+					if (isMicPermissionDenied(code)) {
+						// Once, not once per restart: with no control listener the on-screen mute is the whole invariant.
+						ctrlWantRef.current = false;
+						ctrlDeniedRef.current = true;
+						setNotice("⚠ Voice commands are off — the microphone is blocked for this site.");
+					} else if (shouldAnnounceMicContention(detail?.fails ?? 0)) {
+						// NOT latched: the listener is still retrying under the backoff, so this names the outage without removing it.
+						setNotice("⚠ Voice commands can't reach the microphone right now — still retrying.");
+					}
 				},
 				onEnd: () => { if (ctrlWantRef.current) { try { ctrlSttRef.current?.start(); } catch { /* SR busy */ } } },
 			});
@@ -1849,7 +1849,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// recognizer while the main path is actively capturing a turn (micOn). This is what makes the
 	// mute command interceptable at ANY moment, not just during active recording.
 	useEffect(() => {
-		const want = shouldRunControlListener({ engaged: convoOn || speakOn, mainRecording: micOn });
+		const want = !ctrlDeniedRef.current && shouldRunControlListener({ engaged: convoOn || speakOn, mainRecording: micOn });
 		ctrlWantRef.current = want;
 		if (want) {
 			const stt = ensureControlStt();

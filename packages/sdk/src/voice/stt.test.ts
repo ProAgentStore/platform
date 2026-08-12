@@ -451,3 +451,160 @@ describe("silent / near-silent clip speech gate (#490)", () => {
 		expect(bodies[0].get("stream")).toBe("true");
 	});
 });
+
+/**
+ * #425, reopened — "the control listener is refused the microphone, and re-arms forever."
+ *
+ * The re-arm that matters is NOT the one in `use-voice.ts`. That handler's `onEnd` is reached only
+ * through the `else` branch of `onend` here, i.e. only when `listening` is false — and nothing
+ * cleared `listening` on an error. So on a permission denial the recognizer's OWN loop restarted
+ * it, the caller's `onEnd` was never called, and the `ctrlWantRef = false` latch that #425 shipped
+ * to stop the loop was dead state written by a handler that could not reach it. Everything below
+ * is driven through a fake SpeechRecognition because the real one needs a device this agent has no
+ * access to; what it cannot prove is the browser-side claim that Chrome activates the microphone
+ * on every `start()` — that is Chrome's documented behaviour, not this suite's finding.
+ */
+describe("the browser recognizer's re-arm loop (#425)", () => {
+	class FakeSR {
+		continuous = false;
+		interimResults = false;
+		lang = "";
+		onresult: ((e: unknown) => void) | null = null;
+		onerror: ((e: { error: string }) => void) | null = null;
+		onend: (() => void) | null = null;
+		started = 0;
+		start() { this.started++; }
+		stop() {}
+		abort() {}
+	}
+
+	function withFakeSR(): { instances: FakeSR[]; restore: () => void } {
+		const instances: FakeSR[] = [];
+		class Ctor extends FakeSR {
+			constructor() {
+				super();
+				instances.push(this);
+			}
+		}
+		const prev = (globalThis as { window?: unknown }).window;
+		(globalThis as { window?: unknown }).window = { SpeechRecognition: Ctor as unknown as new () => FakeSR };
+		return { instances, restore: () => { (globalThis as { window?: unknown }).window = prev; } };
+	}
+
+	/** A live browser recognizer plus the handles the tests drive it with. */
+	async function listening(onError?: (e: string, d?: { fails: number; burstMs: number }) => void, onEnd?: () => void) {
+		const { instances, restore } = withFakeSR();
+		const stt = new VoiceStt("browser", { onError, onEnd });
+		await stt.start();
+		return { stt, sr: instances[0], instances, restore };
+	}
+
+	it("hands a permission denial back to the caller instead of restarting into it", async () => {
+		vi.useFakeTimers();
+		const ends: number[] = [];
+		const { stt, sr, restore } = await listening(undefined, () => ends.push(1));
+		const before = sr.started;
+
+		sr.onerror?.({ error: "not-allowed" });
+		sr.onend?.();
+
+		expect(stt.listening, "`listening` stayed true, so the internal loop owns the recognizer and the caller's latch can never run").toBe(false);
+		expect(ends, "the caller's onEnd was never called — which is where the #425 latch and notice live").toEqual([1]);
+		expect(sr.started, "each restart into a denied device is another permission prompt").toBe(before);
+		// And it stays stopped: nothing pending can resurrect it.
+		vi.advanceTimersByTime(60_000);
+		expect(sr.started).toBe(before);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("keeps re-arming through a contention failure, but backs off", async () => {
+		// `audio-capture` — the code actually seen in production — is two recognizers reaching for
+		// one device. Latching on it would delete mute-by-voice for the session (ADR 0001 M1), so
+		// the answer is neither "stop" nor "spin".
+		vi.useFakeTimers();
+		const { stt, sr, restore } = await listening();
+		const before = sr.started;
+
+		sr.onerror?.({ error: "audio-capture" });
+		sr.onend?.();
+		expect(stt.listening, "a device conflict was treated as a refusal, deleting the control channel").toBe(true);
+		expect(sr.started, "the failing restart fired at the browser's own rate — the loop this ticket is about").toBe(before);
+
+		vi.advanceTimersByTime(400);
+		expect(sr.started).toBe(before + 1);
+
+		// The RUN escalates, not the event.
+		sr.onerror?.({ error: "audio-capture" });
+		sr.onend?.();
+		vi.advanceTimersByTime(400);
+		expect(sr.started, "the backoff did not escalate, so a device that never comes back is probed forever at 400ms").toBe(before + 1);
+		vi.advanceTimersByTime(400);
+		expect(sr.started).toBe(before + 2);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("restarts the ordinary silence cycle with no delay at all", async () => {
+		// The control listener lives in this path. A delay here is a window where a spoken "mute"
+		// reaches nothing, so the backoff must not leak into it (ADR 0001 M1).
+		vi.useFakeTimers();
+		const { sr, restore } = await listening();
+		const before = sr.started;
+		sr.onerror?.({ error: "no-speech" });
+		sr.onend?.();
+		expect(sr.started).toBe(before + 1);
+		sr.onend?.(); // Chrome also ends with no error at all
+		expect(sr.started).toBe(before + 2);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("reports the failure RUN, not just the code", async () => {
+		// The durable log de-dups an identical message to one row per 30s, so the 20 production
+		// rows are a floor on the failures rather than a count of them. `fails` is the measurement
+		// that says whether a row is a turn-boundary transient or an hour-long loop.
+		vi.useFakeTimers();
+		const seen: Array<{ code: string; fails: number }> = [];
+		const { sr, restore } = await listening((code, d) => seen.push({ code, fails: d?.fails ?? -1 }));
+		for (let i = 0; i < 3; i++) {
+			sr.onerror?.({ error: "audio-capture" });
+			sr.onend?.();
+			vi.advanceTimersByTime(10_000);
+		}
+		expect(seen.map((s) => s.fails), "a row cannot distinguish one bad turn boundary from a loop").toEqual([1, 2, 3]);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("clears the run when audio arrives, so one bad boundary does not ratchet the backoff", async () => {
+		vi.useFakeTimers();
+		const seen: number[] = [];
+		const { sr, restore } = await listening((_c, d) => seen.push(d?.fails ?? -1));
+		sr.onerror?.({ error: "audio-capture" });
+		sr.onend?.();
+		vi.advanceTimersByTime(400);
+		// Recovery: the recognizer produced audio. That is the only proof on offer.
+		sr.onresult?.({ resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: "hello" } } } });
+		sr.onerror?.({ error: "audio-capture" });
+		sr.onend?.();
+		expect(seen, "the run survived a successful capture, so the backoff ratchets to its ceiling for the session").toEqual([1, 1]);
+		vi.advanceTimersByTime(400);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("does not reopen the microphone through a retry pending at stop()", async () => {
+		// The same class as #291: a path that leaves the mic live after the caller closed it.
+		vi.useFakeTimers();
+		const { stt, sr, restore } = await listening();
+		sr.onerror?.({ error: "audio-capture" });
+		sr.onend?.();
+		const before = sr.started;
+		stt.stop();
+		vi.advanceTimersByTime(60_000);
+		expect(sr.started, "a pending backoff reopened the mic after stop()").toBe(before);
+		vi.useRealTimers();
+		restore();
+	});
+});

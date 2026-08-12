@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSpeechGate, speechGateAvailable } from "./gate.js";
+import { MIC_RETRY_BASE_MS } from "./mic-retry.js";
 
 // A controllable fake of the browser SpeechRecognition, so the gate's speech/liveness
 // logic is tested without a real mic. Tests fire onresult/onend by hand.
@@ -214,7 +215,7 @@ describe("a refused microphone (#425)", () => {
 	it("stops re-arming once the browser has refused, and says so exactly once", () => {
 		const { instances, restore } = withFakeSR();
 		const denials: string[] = [];
-		const gate = createSpeechGate({ onInterim: () => {}, onDenied: (c) => denials.push(c) })!;
+		const gate = createSpeechGate({ onInterim: () => {}, onMicError: (c) => denials.push(c) })!;
 		gate.start();
 		const sr = instances[0];
 		const startsBefore = sr.started;
@@ -238,15 +239,79 @@ describe("a refused microphone (#425)", () => {
 		// `audio-capture` can be two recognizers contending for one microphone. Latching on it
 		// would silently disable the gate — and, on the sibling control listener, mute-by-voice
 		// with it, which is the ADR 0001 failure this ticket exists to make VISIBLE.
+		vi.useFakeTimers();
 		const { instances, restore } = withFakeSR();
 		const denials: string[] = [];
-		const gate = createSpeechGate({ onInterim: () => {}, onDenied: (c) => denials.push(c) })!;
+		const gate = createSpeechGate({ onInterim: () => {}, onMicError: (c) => denials.push(c) })!;
 		gate.start();
 		const sr = instances[0];
 		sr.onerror?.({ error: "audio-capture" });
 		endsItself(sr);
-		expect(sr.started).toBeGreaterThan(1);
-		expect(denials).toEqual([]);
+		vi.advanceTimersByTime(MIC_RETRY_BASE_MS);
+		expect(sr.started, "the gate gave up on a code that a turn boundary produces routinely").toBeGreaterThan(1);
+		expect(denials, "the gate was the one recognizer that could not report contention — the asymmetry the #425 close comment named").toEqual(["audio-capture"]);
+		vi.useRealTimers();
+		restore();
+	});
+
+	/**
+	 * The half the first pass of #425 missed, and the one the reopen is about: the gate did stop
+	 * re-arming on a REFUSAL, but on a contention code it re-armed at the browser's own cycle rate,
+	 * with no delay and no memory. That is a hot loop against a device the MediaRecorder beside it
+	 * is in the middle of releasing, and Chrome activates the microphone on every `start()`.
+	 */
+	it("backs off instead of re-acquiring the device as fast as the browser will cycle it", () => {
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		const sr = instances[0];
+		const before = sr.started;
+
+		sr.onerror?.({ error: "audio-capture" });
+		endsItself(sr);
+		expect(sr.started, "a failing restart fired immediately — the storm this ticket is about").toBe(before);
+		vi.advanceTimersByTime(MIC_RETRY_BASE_MS);
+		expect(sr.started).toBe(before + 1);
+
+		// Second consecutive failure waits longer. The run is what escalates, not the event.
+		sr.onerror?.({ error: "audio-capture" });
+		endsItself(sr);
+		vi.advanceTimersByTime(MIC_RETRY_BASE_MS);
+		expect(sr.started, "the backoff did not escalate, so a permanently absent device is still a mic-activation loop").toBe(before + 1);
+		vi.advanceTimersByTime(MIC_RETRY_BASE_MS);
+		expect(sr.started).toBe(before + 2);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("keeps the ordinary silence cycle instant — a gap there is a gap in mute-by-voice", () => {
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		const sr = instances[0];
+		const before = sr.started;
+		sr.onerror?.({ error: "no-speech" });
+		endsItself(sr);
+		expect(sr.started, "the backoff leaked into the normal cycle, which runs constantly (ADR 0001 M1)").toBe(before + 1);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("does not reopen the microphone after stop() through a retry that was already pending", () => {
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		const sr = instances[0];
+		sr.onerror?.({ error: "audio-capture" });
+		endsItself(sr);
+		const before = sr.started;
+		gate.stop();
+		vi.advanceTimersByTime(MIC_RETRY_BASE_MS * 4);
+		expect(sr.started, "a pending backoff reopened the mic after the turn that owned it ended (#291's class)").toBe(before);
+		vi.useRealTimers();
 		restore();
 	});
 });

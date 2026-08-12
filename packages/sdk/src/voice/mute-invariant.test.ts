@@ -37,6 +37,7 @@ import { describe, expect, it } from "vitest";
 import { readAdr } from "../../../../scripts/lib/adr.mjs";
 import { commandStateFor, matchVoiceCommand, shouldRunControlListener, type TranscriptKind, type VoiceCommand } from "./convo.js";
 import { classifyResult, isEchoing, planMuteTeardown, type Dictation } from "./machine.js";
+import { planMicRestart } from "./mic-retry.js";
 
 /** Shared with the TOUCH half of this same ADR — see `scripts/lib/adr.mjs` for why the parse is
  *  not duplicated per test file. */
@@ -482,7 +483,7 @@ describe("the known hole — a browser with no Web Speech API (ADR 0001, Consequ
 	 * "the app is ignoring me", and would keep saying them into a channel that does not exist.
 	 */
 	it("announces the hole rather than leaving configured command words to do nothing", () => {
-		const effect = USE_VOICE.slice(USE_VOICE.indexOf("const want = shouldRunControlListener("));
+		const effect = USE_VOICE.slice(USE_VOICE.indexOf("const want = "));
 		const body = effect.slice(0, effect.indexOf("}, [convoOn, speakOn, micOn"));
 		expect(body.length, "the control-listener reconcile effect moved — this guard is looking at nothing").toBeGreaterThan(0);
 		expect(body, "a browser with no Web Speech API now fails into silence again: mute-by-voice does not exist there and nothing says so (ADR 0001, Consequences)").toMatch(/if \(!stt/);
@@ -509,6 +510,41 @@ describe("the known hole — a browser with no Web Speech API (ADR 0001, Consequ
 		// The narrowness is the load-bearing part, not the reporting. `audio-capture` is two
 		// recognizers contending for one device; latching the re-arm off on that would disable
 		// mute-by-voice for the rest of the session — causing the failure this guard is about.
-		expect(onError, "the re-arm is disabled on something wider than a permission verdict — a transient device conflict would then delete mute (ADR 0001 M1)").toMatch(/if \(!isMicPermissionDenied\(code\)\) return;\s*\n\s*ctrlWantRef\.current = false;/);
+		expect(onError, "the re-arm is disabled on something wider than a permission verdict — a transient device conflict would then delete mute (ADR 0001 M1)").toMatch(/if \(isMicPermissionDenied\(code\)\) \{[^}]*ctrlWantRef\.current = false;/);
+		// The second branch (#425 reopened) tells the user about a contention run that will not
+		// clear. It must be a NOTICE and nothing more: one `ctrlWantRef.current = false` in the
+		// whole handler, under the permission branch, is the difference between naming an outage
+		// and causing one.
+		expect(onError.match(/ctrlWantRef\.current = false/g) ?? [], "a second latch appeared — the contention branch now disables the control listener it exists to report on").toHaveLength(1);
+		// …and the latch has to OUTLIVE the handler that sets it. `ctrlWantRef` is recomputed by the
+		// reconcile effect on every mic transition, so clearing it alone stopped the re-arm only
+		// until the user's next turn — after which a denied device was asked for again, which is the
+		// prompt loop this ticket is named for. The sticky flag is what makes "once" true.
+		expect(onError, "the denial is not recorded anywhere that survives the next mic transition, so it re-arms and re-prompts next turn (#425)").toMatch(/ctrlDeniedRef\.current = true/);
+		const effect = USE_VOICE.slice(USE_VOICE.indexOf("const want = "));
+		expect(effect.slice(0, effect.indexOf("\n")), "the reconcile effect re-arms the control listener without consulting the refusal").toMatch(/ctrlDeniedRef\.current/);
+	});
+
+	/**
+	 * #425 REOPENED, and the half the first pass missed. 20 production rows, ten in one 94-minute
+	 * window: `control listener refused the microphone: audio-capture`. The latch above is correct
+	 * and was also, until this change, unreachable — `VoiceStt`'s own `onend` restarted the
+	 * recognizer whenever `listening` was true, and no error path cleared it, so the caller's
+	 * `onEnd` (where the latch and the notice live) was never called at all.
+	 *
+	 * The fix must not become "latch wider". These two assertions are the fence around that: the
+	 * planner both loops now consult may never call a contention code terminal, and it may never
+	 * put a delay in front of the ordinary silence cycle — the cycle the control listener spends
+	 * its whole life in, where a gap IS a gap in mute-by-voice.
+	 */
+	it("keeps the control channel alive through a device conflict, and instant through ordinary silence", () => {
+		const contention = planMicRestart({ code: "audio-capture", consecutiveFailures: 9 });
+		expect(contention.restart, "a device conflict now stops the only listener running while the agent speaks (ADR 0001 M1)").toBe(true);
+		expect(contention.terminal).toBe(false);
+		expect(contention.delayMs, "a failing retry must still wait — Chrome activates the mic on every start()").toBeGreaterThan(0);
+
+		for (const code of ["no-speech", "aborted", null]) {
+			expect(planMicRestart({ code, consecutiveFailures: 0 }).delayMs, `${code} now delays the re-arm, leaving a window where a spoken mute reaches nothing`).toBe(0);
+		}
 	});
 });

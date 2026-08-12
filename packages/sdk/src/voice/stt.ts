@@ -2,6 +2,7 @@
 
 import { API, getToken } from "../client.js";
 import { describeTranscribeHttpError, drainSseData, isTooShortToTranscribe, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { isBenignRecognizerEnd, type MicErrorDetail, planMicRestart } from "./mic-retry.js";
 import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
 import { type ClipVerdict, hadSpeech, type LevelSnapshot, onsetFloorFor, planClipGate } from "./vad.js";
 
@@ -115,7 +116,11 @@ export interface SttOptions {
 	/** Vocabulary-bias prompt (see ./prompt.ts) so domain words aren't mis-heard. */
 	transcribePrompt?: string;
 	onResult?: (text: string, isFinal: boolean) => void;
-	onError?: (error: string) => void;
+	/** `detail` accompanies a browser-recognizer failure only (#425): how many times in a row this
+	 *  recognizer has failed, and how long the burst has lasted. The durable log de-dups an
+	 *  identical message to one row per 30s, so without the counter a single row cannot tell a
+	 *  turn-boundary transient from a loop that has been re-activating the mic for an hour. */
+	onError?: (error: string, detail?: MicErrorDetail) => void;
 	onEnd?: () => void;
 	/** Fired with the raw recorded audio for a transcribed turn (Whisper only) so the
 	 *  caller can save it for replay. Browser dictation has no blob → never fires. */
@@ -141,7 +146,7 @@ export class VoiceStt {
 	model: string;
 	transcribePrompt: string;
 	onResult: (text: string, isFinal: boolean) => void;
-	onError: (error: string) => void;
+	onError: (error: string, detail?: MicErrorDetail) => void;
 	onEnd: () => void;
 	onAudio: (blob: Blob) => void;
 	gate: (() => { isAlive: boolean; heardSpeech: boolean } | null) | undefined;
@@ -149,6 +154,13 @@ export class VoiceStt {
 	listening = false;
 
 	private _rec: SpeechRecognitionLike | null = null;
+	/** Consecutive non-benign browser-recognizer failures, and when the run began (#425). On the
+	 *  INSTANCE rather than in `_startBrowser`'s closure because the run belongs to the device, not
+	 *  to a recognizer object — Chrome's `start()` throws after an abort, and the recovery for that
+	 *  is to build a fresh one, which would otherwise reset the backoff to zero every time. */
+	private _micFails = 0;
+	private _micBurstAt = 0;
+	private _micRetryTimer: ReturnType<typeof setTimeout> | null = null;
 	private _mediaRec: MediaRecorder | null = null;
 	private _stream: MediaStream | null = null;
 	/** Set by stopDiscard(): the pending recording is dropped instead of transcribed. */
@@ -209,6 +221,12 @@ export class VoiceStt {
 
 	stop() {
 		this.listening = false;
+		// A pending backoff retry must not reopen the microphone after the caller asked for it to
+		// close — the same class of leak as a swallowed `stop()` below (#291).
+		if (this._micRetryTimer) {
+			clearTimeout(this._micRetryTimer);
+			this._micRetryTimer = null;
+		}
 		if (this._rec) {
 			try {
 				this._rec.stop();
@@ -328,6 +346,11 @@ export class VoiceStt {
 		rec.interimResults = true;
 		rec.lang = this.language;
 		rec.onresult = (e: SpeechRecognitionEventLike) => {
+			// Audio arrived → whatever was wrong with the device is over. This is the only proof of
+			// recovery a recognizer offers, and without it the backoff would ratchet to its ceiling
+			// for the rest of the session on the strength of one bad turn boundary.
+			this._micFails = 0;
+			this._micBurstAt = 0;
 			let interim = "",
 				final = "";
 			for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -338,27 +361,65 @@ export class VoiceStt {
 			if (final) this.onResult(final.trim(), true);
 			else if (interim) this.onResult(interim.trim(), false);
 		};
+		/** The code that ended THIS session, consumed by `onend` and then forgotten — the next
+		 *  cycle's reason is a new event. */
+		let lastCode: string | null = null;
 		rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
-			if (e.error !== "no-speech") this.onError(e.error);
+			lastCode = e.error;
+			// A device failure is only interesting as a RUN. `no-speech`/`aborted` are the ordinary
+			// churn of a continuous recognizer, so they clear the run rather than extend it.
+			if (isBenignRecognizerEnd(e.error)) {
+				this._micFails = 0;
+				this._micBurstAt = 0;
+			} else {
+				if (!this._micFails) this._micBurstAt = Date.now();
+				this._micFails++;
+			}
+			// A PERMISSION verdict is terminal, and this line is the whole reason the #425 latch
+			// works at all. `onEnd` — where the caller clears its want-flag and shows the notice —
+			// is reached only through the `else` in `onend` below, i.e. only when `listening` is
+			// false. Nothing cleared it on a denial, so the internal re-arm fired instead, the
+			// caller's `onEnd` was never called, and `ctrlWantRef = false` was dead state written
+			// by a handler that could not stop the loop it was added to stop.
+			if (planMicRestart({ code: e.error, consecutiveFailures: this._micFails }).terminal) this.listening = false;
+			if (e.error !== "no-speech") this.onError(e.error, { fails: this._micFails, burstMs: this._micBurstAt ? Date.now() - this._micBurstAt : 0 });
 		};
 		let restartFails = 0;
-		rec.onend = () => {
-			if (this.listening) {
-				try {
-					// continuous mode ends and we auto-restart — re-apply the language each time
-					// so a restart never reverts to the browser's default/auto-detect locale.
-					rec.lang = this.language;
-					rec.start();
-					restartFails = 0;
-				} catch {
-					restartFails++;
-					if (restartFails > 3) {
-						this.listening = false;
-						this.onError("mic restart failed");
-						this.onEnd();
-					}
+		const rearm = () => {
+			if (!this.listening) return; // stopped while the backoff was pending
+			try {
+				// continuous mode ends and we auto-restart — re-apply the language each time
+				// so a restart never reverts to the browser's default/auto-detect locale.
+				rec.lang = this.language;
+				rec.start();
+				restartFails = 0;
+			} catch {
+				restartFails++;
+				if (restartFails > 3) {
+					this.listening = false;
+					this.onError("mic restart failed");
+					this.onEnd();
 				}
-			} else this.onEnd();
+			}
+		};
+		rec.onend = () => {
+			if (!this.listening) return this.onEnd();
+			const plan = planMicRestart({ code: lastCode, consecutiveFailures: this._micFails });
+			lastCode = null;
+			if (!plan.restart) {
+				this.listening = false;
+				return this.onEnd();
+			}
+			// The ordinary cycle stays instant — a gap here is a gap in mute-by-voice (ADR 0001 M1).
+			// A failing one backs off instead of restarting at the browser's own rate, because
+			// Chrome activates the microphone on every `start()`: the no-delay loop was a device
+			// contention storm AND, against a non-persistent grant, one prompt per restart (#425).
+			if (plan.delayMs <= 0) return rearm();
+			if (this._micRetryTimer) clearTimeout(this._micRetryTimer);
+			this._micRetryTimer = setTimeout(() => {
+				this._micRetryTimer = null;
+				rearm();
+			}, plan.delayMs);
 		};
 		this._rec = rec;
 		try {
