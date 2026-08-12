@@ -17,6 +17,7 @@ import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { resolveCloneCredential } from "../lib/git-credentials.js";
+import { openBudget } from "../lib/delegation-budget-store.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
@@ -164,12 +165,19 @@ async function delegateToTarget(
 	const goal: CodingGoal = { objective, repo: repo.name, clientType: session.clientType, specialInstructions: combined || undefined };
 	// One credential seam for every provider (#221) — see lib/git-credentials.ts.
 	const credential = await resolveCloneCredential(c.env, uid, repo).catch(() => null);
+	// A pool, like every other autonomous entry point (#184, #502). This one is started by the
+	// OVERSEER — a model deciding to delegate — so it is the least supervised of the three, and it
+	// reached the Pilot with no `budgetId`, which is the value the Pilot's `decide` checks before
+	// it will reserve anything at all. Depth 0: the Overseer opens the tree.
+	const budget = await openBudget(c.env, uid, instanceId);
 	await c.env.CODING_SESSION.create({
 		params: {
 			instanceId, userId: uid, sessionId: session.id, repoId: repo.id,
 			runnerNode: session.runnerNode ?? null, cloneUrl: repo.cloneUrl ?? undefined,
 			branch: repo.branch || undefined, token: credential?.token, tokenUsername: credential?.username, goal, boardTaskId: taskId,
 			driverId,
+			budgetId: budget.id,
+			depth: 0,
 		},
 	});
 	// The notice is only set when THIS call opened the session (#407/#408), and it is news the

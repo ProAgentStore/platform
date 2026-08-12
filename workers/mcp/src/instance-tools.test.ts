@@ -718,40 +718,109 @@ describe("ticket_thread / ask_ticket (#150 — a ticket a supervisor can questio
 
 // ── coding_loop: in-memory orchestration state machine ───────────────────────
 
-describe("coding loop state machine", () => {
-	it("runs the objective then stops when loop-decide says done, tracking status", async () => {
-		const h = setup();
-		// findInstanceForAgent → my/instances (used to resolve the id)
+describe("coding loop tools drive the server's durable, budgeted run (#502)", () => {
+	// These three used to run the loop INLINE here: `/chat`, then up to 49 rounds of
+	// `/loop-decide` + `/chat`, all before the tool returned. Neither endpoint touches the budget,
+	// so it was up to 50 unbudgeted BYOK Claude calls with no pool, no reservation and no
+	// account-ceiling check — and the "running" state lived in a Map in this Worker, so nothing
+	// could cancel it and nothing else could see it. The escape #374 closed for the browser Loop.
+	const withInstance = (h: Harness) => {
 		h.fetchStub.respond((u) => u.endsWith("/my/instances"), {
 			body: { instances: [{ id: "i1", agent_id: "coder", status: "active" }] },
 		});
-		h.fetchStub.respond((u, m) => u.endsWith("/i1/chat") && m === "POST", {
-			body: { message: { content: "starting" } },
+	};
+
+	it("starts the run through POST /loop — the one path that opens a budget pool", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", {
+			body: { runId: "run-1", driver: "CODING_SESSION", budgetId: "bud-1", maxIterations: 5, status: "running" },
 		});
-		h.fetchStub.respond((u, m) => u.endsWith("/loop-decide") && m === "POST", {
-			body: { decision: "done", reason: "Objective met" },
-		});
+
 		const res = await h.tools.get("coding_loop_start")!.handler({
 			instance_id: "coder",
 			objective: "do the thing",
 			max_iterations: 5,
 		});
-		expect(res.content[0].text).toContain("Iteration 0: sent objective");
-		expect(res.content[0].text).toContain("Done: Objective met");
-		// The loop was audited as started.
-		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start")).toBe(true);
-		// After completion the active-loop map is cleared → status reports none.
-		const status = await h.tools.get("coding_loop_status")!.handler({ instance_id: "coder" });
-		expect(status.content[0].text).toContain("No active loop");
+
+		const started = h.fetchStub.calls.find((c) => c.url.endsWith("/i1/loop") && c.method === "POST");
+		expect(started).toBeDefined();
+		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5 });
+		// It must NOT reimplement the loop here any more.
+		expect(h.fetchStub.calls.some((c) => c.url.includes("/loop-decide"))).toBe(false);
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/i1/chat"))).toBe(false);
+
+		const body = JSON.parse(res.content[0].text) as { runId: string; budgetId: string };
+		expect(body.runId).toBe("run-1");
+		expect(body.budgetId).toBe("bud-1");
+		const audited = h.auditEvents().find((e) => e.tool === "coding_loop_start" && e.action === "completed");
+		expect((audited?.result as { budgetId?: string })?.budgetId).toBe("bud-1");
 	});
 
-	it("coding_loop_stop reports no active loop when nothing is running", async () => {
+	it("does not report a refusal as a started run", async () => {
 		const h = setup();
-		h.fetchStub.respond((u) => u.endsWith("/my/instances"), {
-			body: { instances: [{ id: "i1", agent_id: "coder", status: "active" }] },
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", { status: 409, body: { error: "already being worked on" } });
+
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x" });
+
+		expect(JSON.parse(res.content[0].text).error).toBeDefined();
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start" && e.action === "completed")).toBe(false);
+	});
+
+	it("reads status from the server's run record, not from memory in this Worker", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.includes("/i1/loop/run-1") && m === "GET", {
+			body: { runId: "run-1", status: "running", iteration: 3, maxIterations: 5, budgetId: "bud-1" },
 		});
+
+		const res = await h.tools.get("coding_loop_status")!.handler({ instance_id: "coder", run_id: "run-1" });
+
+		const body = JSON.parse(res.content[0].text) as { iteration: number; budgetId: string };
+		expect(body.iteration).toBe(3);
+		expect(body.budgetId).toBe("bud-1");
+	});
+
+	it("lists recent runs when no run id is given — a run survives the client that started it", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "GET", {
+			body: { runs: [{ runId: "run-2", status: "running", iteration: 1 }] },
+		});
+
+		const res = await h.tools.get("coding_loop_status")!.handler({ instance_id: "coder" });
+		expect(JSON.parse(res.content[0].text).runs).toHaveLength(1);
+	});
+
+	it("stops the newest running run when no id is given, and names the one it stopped", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "GET", {
+			body: {
+				runs: [
+					{ runId: "run-3", status: "failed" },
+					{ runId: "run-2", status: "running" },
+					{ runId: "run-1", status: "running" },
+				],
+			},
+		});
+		h.fetchStub.respond((u, m) => u.includes("/loop/run-2/cancel") && m === "POST", { body: { ok: true, status: "cancelling" } });
+
 		const res = await h.tools.get("coding_loop_stop")!.handler({ instance_id: "coder" });
-		expect(res.content[0].text).toContain("No active loop to stop");
+
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ ok: true, runId: "run-2" });
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_stop" && e.action === "completed")).toBe(true);
+	});
+
+	it("says so plainly when there is nothing running", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "GET", { body: { runs: [{ runId: "run-1", status: "done" }] } });
+
+		const res = await h.tools.get("coding_loop_stop")!.handler({ instance_id: "coder" });
+		expect(res.content[0].text).toContain("No running loop");
+		expect(h.fetchStub.calls.some((c) => c.url.includes("/cancel"))).toBe(false);
 	});
 });
 
@@ -819,10 +888,11 @@ describe("coding_loop_start dry run", () => {
 			max_iterations: 50,
 			dry_run: true,
 		});
-		const body = JSON.parse(res.content[0].text) as { dryRun: boolean; wouldDo: { spend: string } };
+		const body = JSON.parse(res.content[0].text) as { dryRun: boolean; wouldDo: { effect: string; endpoint: string } };
 		expect(body.dryRun).toBe(true);
 		// The number a caller is really committing to when it leaves max_iterations at the cap.
-		expect(body.wouldDo.spend).toContain("50 agent turns");
+		expect(body.wouldDo.effect).toContain("50 steps");
+		expect(body.wouldDo.endpoint).toContain("/loop");
 		expect(h.fetchStub.calls).toHaveLength(0);
 	});
 

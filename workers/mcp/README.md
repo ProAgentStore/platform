@@ -282,14 +282,20 @@ Agent-scoped (the creator's template), not instance-scoped.
 All six are always registered — the `coding_loop_*` tools live in the coding module but
 sit outside its surface gate.
 
+All six drive the **same** thing: the server's durable `agent_loop_runs` record, started
+through `POST /v1/instances/:id/loop`. The `coding_loop_*` trio used to be a second,
+in-memory orchestrator that ran up to 50 `/chat` + `/loop-decide` round trips inline with
+no budget pool; #502 rewired it onto the durable path, so it now returns a run id
+immediately instead of a whole transcript.
+
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `start_instance_loop` | Give an agent an objective and let it run on the server, budget-bounded | write | yes | |
 | `check_instance_loop` | Status, steps taken, stop reason (omit `run_id` to list runs) | read | | |
 | `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | no ([why](#tools-with-no-dry-run)) | |
-| `coding_loop_start` | Client-side loop: send objective, then iterate via loop-decide — runs every iteration before returning | runtime | yes | |
-| `coding_loop_status` | Status of that loop | — | | |
-| `coding_loop_stop` | Stop it (in-memory only; no scope check) | — | | |
+| `coding_loop_start` | Same run, started for a coding instance — returns a run id, keeps going after the call | runtime | yes | |
+| `coding_loop_status` | Status of that run from the server's record (omit `run_id` to list runs) | read | | |
+| `coding_loop_stop` | Cooperative stop; omit `run_id` to stop the newest running one | write | no ([why](#tools-with-no-dry-run)) | |
 
 ### Triggers
 
@@ -363,15 +369,16 @@ sit outside its surface gate.
 ### Tools with no dry run
 
 `dry_run` is how a caller — usually a model — finds out what a call would do without
-doing it. Every mutating tool offers one except these two, and the reason in both cases
+doing it. Every mutating tool offers one except these three, and the reason in each case
 is that a preview here would be *less* informative than something that already exists:
 
 | Tool | Why not | Read this instead |
 |---|---|---|
 | `call_instance_tool` | A generic invoker. What the call does is decided by the connector registry in `workers/api`, which this Worker cannot see. Its preview could only echo your own `tool` and `input` back — a safety check that knows nothing about the side effect it is previewing. | `list_instance_tools` — the registry's own verdict (`allowed`, `scope`, `disabled`, `reason`) plus the input schema, as a read. |
 | `stop_instance_loop` | Fully described by `run_id`; there is nothing else to get wrong. Stopping is also the safe direction — cooperative, the in-flight step settles its own spend. | `check_instance_loop` — the objective, steps taken and stop reason for the run you are about to stop. |
+| `coding_loop_stop` | The same cancel through the same route, under the coding name (#502) — so it inherits the same argument. | `coding_loop_status` — the run's step count, stop reason and budget pool. |
 
-Both carry that reasoning in a comment above their registration, and
+All three carry that reasoning in a comment above their registration, and
 `instance-tools/contract.test.ts` lists them, so the set moves only deliberately.
 
 ## Not exposed via MCP

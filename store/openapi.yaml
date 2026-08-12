@@ -195,6 +195,12 @@ tags:
       and needs CLI ≥ 0.4.48 on the machine, below which the policy reports that it asked and
       was not answered rather than reporting success.
 
+      **Spend.** `POST …/coding/sessions/{sessionId}/run` hands the session to the autonomous
+      Pilot, so it opens a budget pool for the run and returns its `budgetId` alongside
+      `workflowId`. Every Pilot decision reserves against that pool and settles what it spent;
+      an exhausted pool ends the run with the limit that fired, rather than continuing. Before
+      #502 this route passed no pool and the Pilot skipped the budget entirely.
+
 components:
   securitySchemes:
     bearerAuth:

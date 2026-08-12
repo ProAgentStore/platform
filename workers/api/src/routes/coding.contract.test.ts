@@ -449,7 +449,7 @@ describe("what a stranger gets from every route", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A D1 that answers as if `owner-uid` owns everything, and records what it was asked to write. */
-function ownerEnv(opts: { session?: Record<string, unknown> | null; config?: string } = {}) {
+function ownerEnv(opts: { session?: Record<string, unknown> | null; config?: string; repo?: Record<string, unknown> | null } = {}) {
 	const ledger: Statement[] = [];
 	const runs: Statement[] = [];
 	const sessionRow =
@@ -472,11 +472,32 @@ function ownerEnv(opts: { session?: Record<string, unknown> | null; config?: str
 				}
 			: opts.session;
 
-	const answer = (sql: string): unknown => {
+	const answer = (sql: string, binds: unknown[] = []): unknown => {
 		if (/SELECT id FROM agent_instances/.test(sql)) return { id: "inst-1" };
 		if (/FROM users/.test(sql)) return null;
 		if (/SELECT config FROM agent_instances/.test(sql)) return { config: opts.config ?? "{}" };
 		if (/FROM coding_sessions/.test(sql)) return sessionRow;
+		if (/FROM coding_repos/.test(sql)) return opts.repo ?? null;
+		// `openBudget` reads its own row back after inserting it, so the pool it returns has to
+		// resolve or the caller sees a 500 rather than a budgeted run.
+		if (/FROM delegation_budgets/.test(sql)) {
+			return {
+				id: String(binds[0] ?? ""),
+				user_id: "owner-uid",
+				root_instance_id: "inst-1",
+				cost_micros_limit: 5_000_000,
+				cost_micros_reserved: 0,
+				cost_micros_spent: 0,
+				delegations_limit: 50,
+				delegations_used: 0,
+				max_depth: 3,
+				status: "open",
+				exhausted_reason: null,
+				exhausted_at_depth: null,
+				created_at: "2026-08-11T00:00:00.000Z",
+				updated_at: "2026-08-11T00:00:00.000Z",
+			};
+		}
 		// A session stamped with a node resolves through `instance_runtime_nodes`; the legacy
 		// single-machine path reads `instance_runtimes`. Both are the same registered machine here.
 		if (/FROM instance_runtime(s|_nodes)/.test(sql)) {
@@ -495,7 +516,7 @@ function ownerEnv(opts: { session?: Record<string, unknown> | null; config?: str
 					stmt._binds = binds;
 					return stmt;
 				},
-				first: async () => answer(flat),
+				first: async () => answer(flat, stmt._binds),
 				all: async () => ({ results: [] }),
 				run: async () => {
 					runs.push({ sql: flat, binds: stmt._binds });
@@ -867,5 +888,83 @@ describe("GET …/timeline?terminal=1 — a page of snapshots, not the whole ses
 		const { issued } = await read("?terminal=1&limit=9999", []);
 		const q = issued.find((s) => /type = 'terminal'/.test(s.sql));
 		expect(q?.binds[2]).toBe(51); // 50 (the cap) + the has-more probe row
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Every autonomous entry point opens a pool (#184, #502)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `POST …/sessions/:id/run` hands one named session to the Pilot with an objective, and the Pilot
+ * then drives BYOK Claude in a loop until it decides it is done. It created the workflow with no
+ * `budgetId` — and `coding-session.ts` short-circuits straight past `reserve()` when it has none:
+ *
+ *     const budgetId = event.payload.budgetId ?? null;
+ *     if (!budgetId) return decideCodingAction(...)
+ *
+ * So this route was an autonomous entry point with no reservation, no settlement, and no account
+ * ceiling check — the escape #374 closed for the browser Loop, left open on the direct route.
+ *
+ * Driven rather than grepped, for the same reason as the payer observation above: the pool is one
+ * argument at one call site, its absence typechecks, and its effect is only visible two files away
+ * inside a workflow. What is asserted is the value that reaches the workflow.
+ */
+describe("a Pilot started through /run is admitted against a budget (#502)", () => {
+	async function run(body: unknown) {
+		const { DB, runs, relayFor } = ownerEnv({
+			repo: { id: "repo-1", instance_id: "inst-1", user_id: "owner-uid", name: "acme/site", clone_url: null, branch: null, status: "ready", workdir: "/home/me/site" },
+		});
+		const created: Array<{ params: Record<string, unknown> }> = [];
+		const env = {
+			SESSION_SIGNING_KEY: SECRET,
+			DB,
+			RELAY: relayFor(() => ({})),
+			CODING_SESSION: {
+				create: async (opts: { params: Record<string, unknown> }) => {
+					created.push(opts);
+					return { id: "wf-1" };
+				},
+			},
+		} as unknown as Env;
+		const token = await signSession("owner-uid", SECRET, { roles: ["user"] });
+		const res = await ownerApp().request(
+			"/v1/instances/inst-1/coding/sessions/csess-1/run",
+			{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
+			env,
+		);
+		return { status: res.status, body: (await res.json()) as Record<string, unknown>, runs, created };
+	}
+
+	it("opens a delegation_budgets row before creating the workflow", async () => {
+		const { status, runs } = await run({ objective: "fix the failing build" });
+		expect(status).toBe(200);
+		const opened = runs.filter((r) => /INSERT INTO delegation_budgets/.test(r.sql));
+		expect(opened).toHaveLength(1);
+		// The pool belongs to the caller and is rooted at their instance, not at the session.
+		expect(opened[0].binds[1]).toBe("owner-uid");
+		expect(opened[0].binds[2]).toBe("inst-1");
+	});
+
+	it("passes that pool id and depth 0 into the Pilot, which is what makes `decide` reserve", async () => {
+		const { runs, created } = await run({ objective: "fix the failing build" });
+		const opened = runs.find((r) => /INSERT INTO delegation_budgets/.test(r.sql));
+		expect(created).toHaveLength(1);
+		expect(created[0].params.budgetId).toBe(opened?.binds[0]);
+		expect(created[0].params.depth).toBe(0);
+	});
+
+	it("reports the pool id back, so a caller can read the run's spend", async () => {
+		const { body, runs } = await run({ objective: "fix the failing build" });
+		const opened = runs.find((r) => /INSERT INTO delegation_budgets/.test(r.sql));
+		expect(body.budgetId).toBe(opened?.binds[0]);
+		expect(body.workflowId).toBe("wf-1");
+	});
+
+	it("refuses without an objective, and opens no pool for a run that never starts", async () => {
+		const { status, runs, created } = await run({});
+		expect(status).toBe(400);
+		expect(runs.filter((r) => /INSERT INTO delegation_budgets/.test(r.sql))).toHaveLength(0);
+		expect(created).toHaveLength(0);
 	});
 });

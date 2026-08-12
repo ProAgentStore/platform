@@ -229,8 +229,11 @@ const TABLE: Record<string, Row> = {
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
-	coding_loop_status: ["coding", "none", null, null, "instance_id,token"],
-	coding_loop_stop: ["coding", "none", null, null, "instance_id,token"],
+	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
+	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
+	// other read and every other write (#502).
+	coding_loop_status: ["coding", "read", null, null, "instance_id,run_id,token"],
+	coding_loop_stop: ["coding", "write", null, null, "instance_id,run_id,token"],
 	connector_status: ["connectors", "none", null, null, "provider,token"],
 	create_connection: ["composition", "write", null, "envelope", "action,config,dry_run,event_type,instance_id,target_instance_id,token"],
 	create_instance_trigger: ["triggers", "write", null, "envelope", "action,config,dry_run,instance_id,name,schedule,token,type"],
@@ -442,12 +445,15 @@ describe("conventions the table has to keep", () => {
 		//                        worth asking ("which run is that?") is answered better by
 		//                        `check_instance_loop`. Stopping is also the safe direction:
 		//                        cooperative, the in-flight step settles its own spend.
+		//   coding_loop_stop     the same tool by another name since #502 — it cancels the same
+		//                        durable run through the same route, so it inherits the same
+		//                        argument for having no preview.
 		//
-		// Both carry that reasoning in a comment above their registration. Anything joining
+		// All three carry that reasoning in a comment above their registration. Anything joining
 		// this list needs the same — the entry here is the index, not the argument.
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
-		).toEqual(["call_instance_tool", "stop_instance_loop"]);
+		).toEqual(["call_instance_tool", "coding_loop_stop", "stop_instance_loop"]);
 	});
 
 	it("every tool takes the standard optional session token", () => {

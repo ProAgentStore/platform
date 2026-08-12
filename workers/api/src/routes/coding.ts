@@ -3,6 +3,7 @@ import { HttpError } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { resolveCloneCredential } from "../lib/git-credentials.js";
+import { openBudget } from "../lib/delegation-budget-store.js";
 import {
 	engineAuthFor,
 	ENGINE_AUTHS,
@@ -630,6 +631,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 	};
 	// One credential seam for every provider (#221) — see lib/git-credentials.ts.
 	const credential = await resolveCloneCredential(c.env, uid, repo);
+	// Every autonomous entry point opens a pool (#184, #502). This one did not: it created the
+	// workflow with no `budgetId`, and the Pilot's `decide` short-circuits straight past `reserve`
+	// when it has none — so a run started here spent BYOK Claude with nothing reserving, nothing
+	// settling, and nothing to trip when the account ceiling is reached. `POST /loop` has done this
+	// since #374; a direct drive of one named session is the same commitment made through a
+	// narrower door. Depth 0: this is a root run, not a delegation.
+	const budget = await openBudget(c.env, uid, instanceId);
 	const wf = await c.env.CODING_SESSION.create({
 		params: {
 			instanceId,
@@ -643,9 +651,11 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 			tokenUsername: credential?.username,
 			goal,
 			driverId,
+			budgetId: budget.id,
+			depth: 0,
 		},
 	});
-	return c.json({ workflowId: wf.id, sessionId });
+	return c.json({ workflowId: wf.id, sessionId, budgetId: budget.id });
 });
 
 /** Resolve a brain handoff: the human finished, so the workflow may resume. */

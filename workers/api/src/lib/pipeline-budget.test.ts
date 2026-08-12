@@ -75,6 +75,12 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			"lib/tool-registry.ts",
 			// `POST /v1/instances/:id/loop` — the human pressing Loop is always a root.
 			"routes/tools.ts",
+			// `POST …/coding/sessions/:id/run` — handing one named session to the Pilot is the
+			// same commitment as pressing Loop, through a narrower door. A root, so depth 0 (#502).
+			"routes/coding.ts",
+			// The Overseer delegating to the Pilot. A MODEL decides to start this one, which makes
+			// it the least supervised of the three and the one that most needs a pool (#502).
+			"routes/coding-brains.ts",
 		].sort());
 	});
 });
