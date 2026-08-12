@@ -65,6 +65,12 @@ export interface SurfaceContext {
 	 * and every runtime surface then makes the SAME statement about it as the dot above it.
 	 */
 	runner?: RunnerPresence;
+	/**
+	 * The same declared capabilities `show` decided on. A composite surface has to make the same
+	 * judgement about its own parts that the registry made about the tab (#509) — handing it the
+	 * caps is what lets it ask the shared predicate instead of inventing a second one.
+	 */
+	caps: SurfaceCaps;
 	setChildHeader: (node: ReactNode | null) => void;
 	onUnsubscribe: () => void;
 }
@@ -128,6 +134,40 @@ function canUse(caps: SurfaceCaps, names: readonly string[]): boolean {
 const KB_TOOLS = ["search_knowledge", "list_knowledge", "read_knowledge", "add_knowledge", "update_knowledge", "delete_knowledge"] as const;
 /** Structured collections — what the Data tab renders. */
 const COLLECTION_TOOLS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"] as const;
+/** Instance file storage — what the Knowledge → Files sub-tab uploads into. */
+const FILE_TOOLS = ["upload_file", "list_files", "read_file", "delete_file"] as const;
+
+/**
+ * The vector store behind RAG — named once so the `indexing` SURFACE and the `index` SUB-TAB
+ * inside Knowledge cannot drift apart (#509). They render the same component.
+ */
+const showsIndexing = (caps: SurfaceCaps): boolean => caps.surfaces.includes("repo") || canUse(caps, KB_TOOLS);
+
+/**
+ * Should this Knowledge SUB-tab appear (#509)?
+ *
+ * The `knowledge` surface itself is deliberately ungated below, because it is a composite:
+ * Memory, Tasks, Credentials and Rules & Tips are per-instance and universal, and gating the
+ * whole tab would take those away from every coding agent to hide two panels. The sub-tabs are
+ * a different question. Documents and Files accept data that only the KB/file tools can read
+ * back, so on an agent declaring neither, an upload succeeds, vectorises, and is then invisible
+ * to the agent — which answers conversationally and looks like it ignored the document.
+ *
+ * `index` is the sharp end: it is the SAME `VectorsSection` the `indexing` surface was gated to
+ * stop showing on coding agents, still reachable one level in. That predicate is shared, not
+ * restated, so the half-applied fix cannot happen a second time.
+ */
+export function showsKnowledgeSubTab(caps: SurfaceCaps, id: string): boolean {
+	if (id === "docs") return canUse(caps, KB_TOOLS);
+	// Files has TWO readers, not one. An upload's extracted text is vectorised as
+	// `sourceType:"file"` (agent-storage/files.ts), and `search_knowledge` searches that source
+	// by default — so an agent with KB reads and no file tools still reaches what was uploaded.
+	// Gating on the file tools alone would have hidden Files from repo-chat, which declares
+	// exactly the three KB reads.
+	if (id === "files") return canUse(caps, FILE_TOOLS) || canUse(caps, KB_TOOLS);
+	if (id === "index") return showsIndexing(caps);
+	return true;
+}
 
 export const SURFACES: SurfaceDef[] = [
 	{ id: "chat", label: "Assistant", icon: "💬", show: () => true },
@@ -236,7 +276,7 @@ export const SURFACES: SurfaceDef[] = [
 		// sub-tabs. Splitting the composite is the real fix and is a separate change.
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, isApply }) => <KnowledgeTab instanceId={instanceId} isApply={isApply} />,
+		render: ({ instanceId, isApply, caps }) => <KnowledgeTab instanceId={instanceId} isApply={isApply} caps={caps} />,
 	},
 	{
 		id: "behaviour",
@@ -259,7 +299,7 @@ export const SURFACES: SurfaceDef[] = [
 		// nothing that searches it, so this rendered an empty panel on every coding agent — the
 		// same "shown because nobody asked whether the agent declares it" failure as the second
 		// chat. The `repo` surface counts: repo-chat ingests a codebase INTO this store.
-		show: (caps) => caps.surfaces.includes("repo") || canUse(caps, KB_TOOLS),
+		show: showsIndexing,
 		scroll: true,
 		render: ({ instanceId }) => <IndexingTab instanceId={instanceId} />,
 	},

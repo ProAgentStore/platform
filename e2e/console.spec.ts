@@ -1290,6 +1290,47 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 	});
 
+	test("Knowledge hides Documents, Files and Index on an agent with no tool to read them (#509)", async ({ page }) => {
+		// The `indexing` SURFACE was gated on declared knowledge tools; the `index` SUB-TAB inside
+		// Knowledge was a static array, so the same VectorsSection stayed reachable one level in.
+		// A coder-repo declares repo + GitHub tools and not one knowledge or file tool, so an
+		// upload here vectorises and is then invisible to the agent that was supposed to read it.
+		await mockSignedInConsole(page, {
+			instances: [
+				{
+					id: "inst-1",
+					name: "Heartfull",
+					slug: "coder-repo",
+					category: "code",
+					capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools: ["repo_tree", "repo_read_file", "repo_git", "github_list_issues"] },
+				},
+			],
+		});
+		await page.goto("/console/instances/inst-1/knowledge");
+
+		// It lands on Memory rather than a Documents panel it then has to hide.
+		await expect(page.getByRole("button", { name: "Memory" })).toBeVisible();
+		for (const gone of ["Documents", "Files", "Index"]) {
+			await expect(page.getByRole("button", { name: gone, exact: true }), gone).toHaveCount(0);
+		}
+		// The composite's universal half is exactly what gating the whole tab would have cost.
+		await expect(page.getByRole("button", { name: "Rules & Tips" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "Credentials" })).toBeVisible();
+	});
+
+	test("Knowledge keeps all seven sub-tabs for an agent that declares nothing (#509)", async ({ page }) => {
+		// The half that decides whether the guard above is just always-red. An agent declaring NO
+		// allowlist gets the server-side per-surface default, which the console cannot know — so
+		// every legacy and undeclared agent's tabs must be exactly what they were.
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/knowledge");
+
+		await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
+		for (const shown of ["Documents", "Files", "Index"]) {
+			await expect(page.getByRole("button", { name: shown, exact: true }), shown).toBeVisible();
+		}
+	});
+
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
 		await mockSignedInConsole(page);
 

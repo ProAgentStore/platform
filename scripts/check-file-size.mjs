@@ -402,7 +402,13 @@ const PINS = {
 	// says why — the line is already in `messages` synchronously, so the user has read it, and
 	// reporting a failed system message would require emitting a second system message that
 	// might equally fail. That recursion is the reason, and it is not visible from the code.
-	"store/console/src/pages/InstanceDetail.tsx": 1503,
+	// +1 at #509: one property. The shell already computes `surfaceCaps` for `visibleSurfaces`;
+	// it now also hands it to `render`, so a COMPOSITE surface can ask the registry the same
+	// question the registry asked about it. Knowledge was gated as a whole and its sub-tabs were
+	// a static array, which is how the Index panel stayed reachable after the Indexing tab was
+	// hidden. The seam here is unchanged and still the right one: this file is the shell, and the
+	// next split is the chat/voice state it owns inline, not the surface plumbing.
+	"store/console/src/pages/InstanceDetail.tsx": 1504,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -887,7 +893,9 @@ const PINS = {
 	// decision (3 lines over, recorded rather than squeezed) and the seam the next person should
 	// take — plus this self-ref. Naming the seam is the part that stops a pin from becoming
 	// permanent: an entry that says only "it got bigger" is a number, and this list is a ledger.
-	"scripts/check-file-size.mjs": 971,
+	// +7 at #509: the InstanceDetail raise above, whose reason has to say why a one-property
+	// growth was recorded rather than squeezed out — plus this self-ref.
+	"scripts/check-file-size.mjs": 979,
 };
 
 /**

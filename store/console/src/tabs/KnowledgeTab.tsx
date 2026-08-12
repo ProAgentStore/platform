@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
 import { showsConnector } from "../lib/connectorState";
+import { showsKnowledgeSubTab, type SurfaceCaps } from "../lib/surfaces";
 import { buttonClass, cardClass } from "../lib/control-classes";
 import FilesSection from "../components/FilesSection";
 import LoadFailed from "../components/LoadFailed";
@@ -38,6 +39,7 @@ interface WorkDriveFile {
 interface Props {
 	instanceId: string;
 	isApply: boolean;
+	/** Declared capabilities — decide which sub-tabs this agent can read back (#509). */ caps: SurfaceCaps;
 }
 
 interface ConnectorGrant {
@@ -48,8 +50,9 @@ interface ConnectorGrant {
 	resourceType: string;
 }
 
-export default function KnowledgeTab({ instanceId }: Props) {
-	const [subTab, setSubTab] = useState<KbSubTab>("docs");
+export default function KnowledgeTab({ instanceId, caps }: Props) {
+	// Documents only when the agent can read one back, else Memory (#509). The buttons ARE the filtered list.
+	const [subTab, setSubTab] = useState<KbSubTab>(() => (showsKnowledgeSubTab(caps, "docs") ? "docs" : "memory"));
 	const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
 	const [credentials, setCredentials] = useState<Credential[]>([]);
 	const [instructions, setInstructions] = useState("");
@@ -415,7 +418,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 		return file.isFolder === true || type.includes("folder");
 	};
 
-	const subTabs: { id: KbSubTab; label: string }[] = [
+	const subTabs = ([
 		{ id: "docs", label: "Documents" },
 		{ id: "memory", label: "Memory" },
 		// Beside Memory, not the Board: same class of state — agent-written, prompt-injected,
@@ -425,7 +428,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 		{ id: "index", label: "Index" },
 		{ id: "credentials", label: "Credentials" },
 		{ id: "rules", label: "Rules & Tips" },
-	];
+	] satisfies { id: KbSubTab; label: string }[]).filter((t) => showsKnowledgeSubTab(caps, t.id));
 
 	return (
 		<div>

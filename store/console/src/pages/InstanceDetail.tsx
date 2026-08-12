@@ -1489,6 +1489,7 @@ function InstancePage() {
 						// The same reading the header dot renders, handed to the surface (#378) — one
 						// poll, one answer, so a tab cannot contradict the dot directly above it.
 						runner: { online: runnerOnline, node: runnerNode, attachment: runnerAttachment },
+						caps: surfaceCaps,
 						setChildHeader,
 						onUnsubscribe: () => navigate("/instances"),
 					});

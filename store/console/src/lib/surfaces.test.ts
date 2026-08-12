@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SURFACES, surfaceOwnsHeader, visibleSurfaces } from "./surfaces";
+import { SURFACES, showsKnowledgeSubTab, surfaceOwnsHeader, visibleSurfaces } from "./surfaces";
 
 describe("surfaceOwnsHeader — the header takeover is DECLARED, not hardcoded to one tab", () => {
 	it("grants it only to a surface that declares it", () => {
@@ -185,3 +185,71 @@ describe("Stats is universal, and registered rather than hardcoded (#311)", () =
 	});
 });
 
+
+describe("Knowledge sub-tabs are gated by the same predicates as the surfaces (#509)", () => {
+	/** The sub-tab ids KnowledgeTab actually renders, read from its source so a NEW one is seen. */
+	function subTabIds(): string[] {
+		const src = readFileSync(join(__dirname, "../tabs/KnowledgeTab.tsx"), "utf8");
+		const block = /const subTabs[\s\S]*?\n\t\]/.exec(src);
+		expect(block, "the subTabs array was renamed or reshaped — this guard reads it by source").toBeTruthy();
+		return [...(block?.[0] ?? "").matchAll(/\{\s*id:\s*"([a-z]+)"/g)].map((m) => m[1]);
+	}
+
+	const visible = (caps: { surfaces: string[]; tools?: string[] }) => subTabIds().filter((id) => showsKnowledgeSubTab(caps, id));
+
+	it("hides Documents, Files and Index on an agent that declares no tool to read them back", () => {
+		// coder-repo / coder-lead: ten declared tools, not one of them a knowledge or file tool.
+		// Uploading into Documents WORKED — the API stored it and the DO vectorised it — and the
+		// agent could then neither search, list nor read it. The gate the `indexing` surface got
+		// was never applied one level in, so the same VectorsSection stayed reachable.
+		const coderRepo = { surfaces: ["coding"], tools: ["repo_tree", "repo_read_file", "repo_git", "github_list_issues"] };
+		expect(visible(coderRepo)).toEqual(["memory", "tasks", "credentials", "rules"]);
+		const coderLead = { surfaces: [], tools: ["delegate_goal", "github_list_issues"] };
+		expect(visible(coderLead)).toEqual(["memory", "tasks", "credentials", "rules"]);
+	});
+
+	it("leaves all seven in place for repo-chat, for a KB agent, and for anything undeclared", () => {
+		const seven = ["docs", "memory", "tasks", "files", "index", "credentials", "rules"];
+		// repo-chat indexes a codebase INTO the vector store, so Index is meaningful there — and it
+		// declares the three KB reads and no file tool, which is precisely the case that proves
+		// Files needs both arms: an upload is vectorised and `search_knowledge` reads it back.
+		expect(visible({ surfaces: ["repo"], tools: ["search_knowledge", "list_knowledge", "read_knowledge"] })).toEqual(seven);
+		expect(visible({ surfaces: ["chat"], tools: ["add_knowledge", "upload_file"] })).toEqual(seven);
+		// File tools with no KB tools is the mirror case and must also keep Files.
+		expect(visible({ surfaces: ["chat"], tools: ["upload_file", "list_files"] })).toContain("files");
+		// The important case: an agent that declares NO allowlist gets the server-side per-surface
+		// default, which the console cannot know — so it must stay permissive, exactly as before.
+		expect(visible({ surfaces: ["coding"] })).toEqual(seven);
+		expect(visible({ surfaces: [] })).toEqual(seven);
+	});
+
+	it("decides `index` with the identical expression the `indexing` surface uses", () => {
+		// The acceptance criterion the issue names: imported, not restated. Asserted behaviourally
+		// across the matrix that separates them, so a copy-paste divergence fails here.
+		const matrix = [
+			{ surfaces: ["repo"], tools: ["repo_tree"] },
+			{ surfaces: ["coding"], tools: ["repo_tree"] },
+			{ surfaces: ["coding"], tools: ["search_knowledge"] },
+			{ surfaces: [], tools: [] },
+			{ surfaces: ["chat"] },
+		];
+		for (const caps of matrix) {
+			const surfaceShown = visibleSurfaces(caps).some((s) => s.id === "indexing");
+			expect(showsKnowledgeSubTab(caps, "index"), JSON.stringify(caps)).toBe(surfaceShown);
+		}
+	});
+
+	it("keeps the tab itself ungated — Memory and Rules belong to every agent", () => {
+		// Explicitly rejected alternative: gating the whole Knowledge tab would take Memory, Tasks,
+		// Credentials and Rules & Tips away from every coding agent to hide two panels.
+		expect(visibleSurfaces({ surfaces: ["coding"], tools: ["repo_git"] }).map((s) => s.id)).toContain("knowledge");
+	});
+
+	it("makes the filter unremovable — KnowledgeTab must ask the registry", () => {
+		// The array is static and lived one level below the registry, which is exactly how the gate
+		// went missing the first time. If the `.filter` goes, the panels come back silently.
+		const src = codeOf("../tabs/KnowledgeTab.tsx");
+		expect(src).toContain("showsKnowledgeSubTab");
+		expect(src).toMatch(/\.filter\(\(t\) => showsKnowledgeSubTab\(caps, t\.id\)\)/);
+	});
+});
