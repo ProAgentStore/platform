@@ -581,6 +581,43 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		expect(res.status).toBe(404);
 		expect(writes.some((w) => w.sql.includes("UPDATE agent_instances"))).toBe(false);
 	});
+
+	// #533. This route wrote the most consequential routing input on the platform and logged
+	// NOTHING — no `agent_events` row, no activity entry. That cost a diagnosis: #530's central
+	// claim about what the pin held at 07:44:10 had to ship labelled inferred rather than measured,
+	// because the repin left no trace. The record now goes to the same trace as every other
+	// instance event, so `GET /v1/instances/:id/trace` and MCP `agent_trace` read it.
+	it("records the repin to the trace, carrying the previous and new machine", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" }) });
+		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "Sergeys-Mac-mini.local" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+
+		const events = writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"));
+		expect(events).toHaveLength(1);
+		// logEvent's bind order: id, ts, user_id, instance_id, trace_id, source, level, event, message, context.
+		const [, , userId, instanceId, , source, , event, message, context] = events[0].args;
+		expect({ userId, instanceId, source, event }).toEqual({ userId: "u1", instanceId: "inst-1", source: "runtime", event: "runner_node.changed" });
+		expect(JSON.parse(context as string)).toMatchObject({ from: "RLs-MacBook-Air.local", to: "Sergeys-Mac-mini.local" });
+		expect(message).toBe("Runs on: RLs-MacBook-Air.local → Sergeys-Mac-mini.local");
+	});
+
+	// Clearing to Automatic is as consequential as pinning — it is what makes routing start
+	// resolving to whichever machine holds a live socket.
+	it("records clearing the pin, naming the machine it stopped being pinned to", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "laptop-A" }) });
+		expect((await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "" }, await tokenFor("u1"))).status).toBe(200);
+		const events = writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"));
+		expect(events).toHaveLength(1);
+		expect(JSON.parse(events[0].args[9] as string)).toMatchObject({ from: "laptop-A", to: null });
+	});
+
+	// The no-op decision (#533 AC 3), asserted at the route: re-choosing the machine already
+	// pinned is ordinary picker behaviour and writes nothing to the trace.
+	it("writes no trace row when the pin does not actually change", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "laptop-A" }) });
+		expect((await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "laptop-A" }, await tokenFor("u1"))).status).toBe(200);
+		expect(writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"))).toHaveLength(0);
+	});
 });
 
 describe("POST /v1/instances/:id/tasks/direct (runner-less board ticket, #150 P3)", () => {

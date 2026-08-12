@@ -62,6 +62,7 @@ import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "..
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment } from "../lib/runtime-attachment.js";
 import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
+import { setRunnerNodePin } from "../lib/runner-node-pin.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -495,19 +496,18 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail, resolvedNode });
 });
 
-/** Pin (or clear, with an empty/null value) the node this instance runs on. */
+/** Pin (or clear, with an empty/null value) the node this instance runs on.
+ *
+ *  The write itself lives in `lib/runner-node-pin.ts`, which records the change to the trace (#533).
+ *  It is there rather than here because this key decides whether every runner call routes anywhere,
+ *  and an audit a route remembers is one the next writer forgets — see that module's header. */
 instanceRoutes.put("/:instanceId/runner-node", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
-	const node = normalizeRunnerNode(body.runnerNode);
-	// Patch just this key (#231) — pinning a runner must not clobber a Settings or behaviour change
-	// saved from another tab between the read and the write. That refactor left its read-merge-write
-	// SELECT behind, parsed into a `cfg` nothing read: the second discarded config read here (#350).
-	if (node) await patchInstanceConfig(c.env, instanceId, session.uid, "runnerNode", node);
-	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "runnerNode");
-	return c.json({ runnerNode: node || null });
+	const { to } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
+	return c.json({ runnerNode: to || null });
 });
 
 /** Read which terminal session was last selected in the UI for this instance (#491). */
