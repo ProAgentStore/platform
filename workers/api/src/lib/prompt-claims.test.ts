@@ -33,6 +33,8 @@ import {
 	promptClaimViolations,
 	promptTextOf,
 } from "./prompt-claims.js";
+import { describeFacts } from "./runner-availability.js";
+import type { AttachmentDiagnosis, AttachmentState } from "./runtime-attachment.js";
 import { recentWorkPrompt } from "./work-report.js";
 
 // ── 1. The inverse lexer ─────────────────────────────────────────────────────────────────────
@@ -112,7 +114,8 @@ function assemblePrompt(
 	opts: {
 		technicalSeed: boolean;
 		hasRepos: boolean;
-		runnerOnline: boolean;
+		/** The runner block's diagnosis, or `null` for "the connectivity read failed" (#530). */
+		runner: AttachmentDiagnosis | null;
 		activeSession: boolean;
 		indexedRepos: boolean;
 		/**
@@ -143,7 +146,7 @@ function assemblePrompt(
 		// in the default voice while `styleGuidance` below got the real one is what let the
 		// contradiction sit in the sweep unnoticed.
 		opts.indexedRepos ? indexedReposPrompt(model, plainSpeech) : "",
-		opts.hasRepos ? runnerStatusPrompt(model, opts.runnerOnline) : "",
+		opts.hasRepos ? runnerStatusPrompt(model, opts.runner) : "",
 		opts.hasRepos && !opts.activeSession ? noActiveSessionPrompt(model) : "",
 		// No `lengthRule`: the unset case is the one that shipped broken (#430), and the default it
 		// falls back to is chosen inside `styleGuidance`, so passing one here would hide it.
@@ -156,16 +159,53 @@ function assemblePrompt(
 	return parts.join("\n");
 }
 
+/**
+ * One set of facts per attachment state, swept as STATES rather than as online/offline (#530).
+ *
+ * The runner block used to take a boolean, so this axis had two values and the sentence that
+ * mattered — "you are pinned to a machine that is off; the other one is up" — was never built by
+ * any condition, and therefore never adjudicated. It carries the phrase "start the runner on X",
+ * which is a `local-runner` claim, so an ungated version of it is exactly what this guard is for.
+ *
+ * Typed as a full `Record<AttachmentState, …>`: adding a sixth state to the union is a compile
+ * error here until the sweep covers it.
+ */
+const heartbeat = (agoMs: number) => new Date(Date.now() - agoMs).toISOString().slice(0, 19).replace("T", " ");
+const RUNNER_FACTS: Record<AttachmentState, Parameters<typeof describeFacts>[0]> = {
+	attached: { hasRuntimeRow: true, relayConnected: true, node: "RLs-MacBook-Air", runnerVersion: null, lastSeenAt: heartbeat(5_000) },
+	"never-registered": { hasRuntimeRow: false, relayConnected: false, node: null, runnerVersion: null, lastSeenAt: null },
+	"runner-offline": { hasRuntimeRow: true, relayConnected: false, node: "RLs-MacBook-Air", runnerVersion: null, lastSeenAt: heartbeat(600_000) },
+	"machine-online-agent-detached": {
+		hasRuntimeRow: true,
+		relayConnected: false,
+		node: "RLs-MacBook-Air",
+		runnerVersion: null,
+		lastSeenAt: heartbeat(5_000),
+	},
+	"pinned-machine-offline": {
+		hasRuntimeRow: true,
+		relayConnected: false,
+		node: "Sergeys-Mac-mini.local",
+		runnerVersion: null,
+		lastSeenAt: heartbeat(5_000),
+		pinnedNode: "Sergeys-Mac-mini.local",
+		liveNodeExcludedByPin: "RLs-MacBook-Air",
+	},
+};
+
+/** Every diagnosis the block can carry, plus the unread case. */
+const RUNNER_STATES: (AttachmentDiagnosis | null)[] = [null, ...Object.values(RUNNER_FACTS).map((f) => describeFacts(f))];
+
 /** Every runtime shape a prompt can be built in — the branches are what drift. */
 const CONDITIONS = [true, false].flatMap((technicalSeed) =>
 	[true, false].flatMap((hasRepos) =>
-		[true, false].flatMap((runnerOnline) =>
+		RUNNER_STATES.flatMap((runner) =>
 			[true, false].flatMap((activeSession) =>
 				[true, false].flatMap((indexedRepos) =>
 					[true, false].map((lowTechnicality) => ({
 						technicalSeed,
 						hasRepos,
-						runnerOnline,
+						runner,
 						activeSession,
 						indexedRepos,
 						lowTechnicality,
@@ -272,7 +312,7 @@ describe("the incidents that motivated this", () => {
 			assemblePrompt(REPO_CHAT, {
 				technicalSeed: true, // migration 0032 seeds guardrails.responseStyle: "technical"
 				hasRepos: false,
-				runnerOnline: false,
+				runner: null,
 				activeSession: false,
 				indexedRepos: true,
 				lowTechnicality,
@@ -302,6 +342,31 @@ describe("the incidents that motivated this", () => {
 				expect(both, `${capabilities.name} ${JSON.stringify(cond)}`).toBe(false);
 			}
 		}
+	});
+
+	it("#530 — the pinned sentence is built by the sweep, and is a claim only an agent with a runner may make", () => {
+		// Two ways this could pass while testing nothing: the fixtures could diagnose something
+		// other than what they are filed under, or the pinned diagnosis could never reach a prompt.
+		for (const [state, f] of Object.entries(RUNNER_FACTS)) expect(describeFacts(f).state, state).toBe(state);
+		const pinned = RUNNER_STATES.find((d) => d?.state === "pinned-machine-offline");
+		expect(pinned?.remedy).toBeNull();
+
+		const coder = assemblePrompt(CODER_REPO, {
+			technicalSeed: false,
+			hasRepos: true,
+			runner: pinned ?? null,
+			// An active session, so the only block that could contribute a `pags up` is the runner one.
+			activeSession: true,
+			indexedRepos: false,
+			lowTechnicality: false,
+		});
+		expect(coder).toContain("pinned to Sergeys-Mac-mini.local");
+		expect(coder).toContain("RLs-MacBook-Air is connected");
+		expect(coder).not.toContain("pags up");
+
+		// And the reason the block gates the diagnosis on `hasRunner` rather than always emitting it:
+		// the same sentence handed to a cloud-only agent IS a claim about a runner it has not got.
+		expect(promptClaimViolations(`## Runner status: OFFLINE — ${pinned?.message}`, PLAIN_CHAT).map((v) => v.claim)).toEqual(["local-runner"]);
 	});
 
 	it("naming a tool the agent was not granted", () => {

@@ -21,6 +21,9 @@
  * reworded prompt would make a behaviour change look like a refactor.
  */
 import type { SelfModel } from "./agent-self-description.js";
+// Type-only, and `runtime-attachment.ts` is a leaf that imports nothing: the prompt module stays
+// pure over a diagnosis it is handed, rather than acquiring the connectivity graph to compute one.
+import type { AttachmentDiagnosis } from "./runtime-attachment.js";
 
 /**
  * The channel the agent is heard through, and does not control (#340).
@@ -80,22 +83,51 @@ export function tabClause(model: SelfModel, tab: string, clause: string): string
 }
 
 /**
- * Whether the local runner is connected — and, when it is not, what to do about it.
+ * Whether the local runner is connected — and, when it is not, WHY, and what actually fixes it.
  *
- * `pags up` is a claim about a NAMED capability (`capabilities.runtime`): an agent with no local
- * runtime has no runner to start, and telling its owner to start one is the same class of error as
- * naming a tab it does not have. Cloud-only agents therefore get the state without the remedy.
+ * ── The boolean that produced a confidently wrong instruction (#530)
+ *
+ * Live, 07:44:10: *"The runner is currently offline — I can't start new work until it's connected.
+ * Run `pags up` in your terminal…"* — while `pags up` was running, on `RLs-MacBook-Air`, and had
+ * been for four hours. The instance was pinned to another machine. `getBoundRunnerConn` had done
+ * its job: a pin is authoritative, the pinned machine held no socket, so it returned null. The
+ * caller then collapsed that to `online: false` and this function turned the boolean into the one
+ * remedy a boolean can express. Running `pags up` again could not have helped; the fix was one
+ * click in "Runs on", which nothing in the prompt could say because the pin never reached it.
+ *
+ * ── Why a diagnosis and not a second flag
+ *
+ * `diagnoseAttachment` (#237/#379/#380/#461) already separates never-registered / runner-offline /
+ * machine-online-agent-detached / pinned-machine-offline, each with the remedy that applies —
+ * `pags up`, `pags up --force`, or, for the pinned case, deliberately NONE. Taking the diagnosis
+ * whole is what stops this becoming a fifth construction site for "why is there no runner": the
+ * remedy is now quoted from the diagnosis rather than written here, so a state whose right answer
+ * is not a command emits no command at all.
+ *
+ * `null` means the connectivity READ failed, which is not the same as knowing the runner is gone.
+ * It keeps exactly the sentence that shipped — an unexplained OFFLINE with `pags up` — because a
+ * failed read must not be upgraded into a confident claim about which machine is where.
+ *
+ * Both halves stay gated on `hasRunner`, and the diagnosis text is why that matters as much as the
+ * remedy: the pinned message ends "…or start the runner on <machine>", so an agent with no local
+ * runtime would be told to start a runner it does not have — the exact claim `prompt-claims.ts`'s
+ * `local-runner` rule exists to catch.
  */
-export function runnerStatusPrompt(model: SelfModel, online: boolean): string {
-	if (online) {
+export function runnerStatusPrompt(model: SelfModel, status: AttachmentDiagnosis | null): string {
+	if (status?.state === "attached") {
 		return "\n\n## Runner status: ONLINE — the local runner is connected, so the sessions below can reflect live activity.";
 	}
-	const remedy = model.hasRunner
-		? ` If the user wants to run, search, or fix code, tell them to start the runner first with \`pags up\`${tabClause(model, "Coding", " (then use the Coding tab)")}.`
-		: "";
+	const detail = model.hasRunner && status ? ` ${status.message}` : "";
+	// An unread state keeps the old default; a read one gets ITS remedy, or silence where the
+	// platform knows no command fixes it.
+	const remedy = status ? status.remedy : "pags up";
+	const advice =
+		model.hasRunner && remedy
+			? ` If the user wants to run, search, or fix code, tell them to start the runner first with \`${remedy}\`${tabClause(model, "Coding", " (then use the Coding tab)")}.`
+			: "";
 	return (
 		"\n\n## Runner status: OFFLINE — the local runner is NOT connected right now. Nothing is running;" +
-		` the sessions below show only their LAST captured state.${remedy} Do not imply anything is happening live.`
+		` the sessions below show only their LAST captured state.${detail}${advice} Do not imply anything is happening live.`
 	);
 }
 

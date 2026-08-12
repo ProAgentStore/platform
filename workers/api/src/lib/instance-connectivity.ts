@@ -6,7 +6,7 @@
 // Deriving "online" any other way is how a status display ends up disagreeing with the thing it
 // is describing: the DB `status` column is never cleared on disconnect (#238), so a machine whose
 // laptop closed still reads `registered` forever.
-import { getBoundRunnerConn, liveNodeIgnoringPin } from "./runner-client.js";
+import { getBoundRunnerConn, liveNodeIgnoringPin, type RunnerConn } from "./runner-client.js";
 import { parseBoundRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -130,6 +130,26 @@ async function pinnedNodes(env: Env, userId: string, ids: readonly string[]): Pr
 	return out;
 }
 
+/**
+ * One instance's four reads, assembled into the record every diagnosis is built from.
+ *
+ * Shared by the batched form and the single one so the two cannot drift into disagreeing about
+ * what "online" means — the failure this whole module exists to prevent.
+ */
+function factsFor(row: RegistrationRow | undefined, conn: RunnerConn | null, pin: string | null, excludedByPin: string | null): RuntimeFacts {
+	return {
+		hasRuntimeRow: Boolean(row),
+		relayConnected: Boolean(conn),
+		// Prefer the node the LIVE socket is on — that is where work would actually run, and
+		// naming any other machine in a remedy sends the user to the wrong laptop.
+		node: (conn?.runnerNode || row?.runner_node || "").trim() || null,
+		runnerVersion: (row?.runner_version || "").trim() || null,
+		lastSeenAt: row?.last_seen_at ?? null,
+		pinnedNode: pin,
+		liveNodeExcludedByPin: excludedByPin,
+	};
+}
+
 export async function runtimeConnectivityMany(env: Env, userId: string, ids: readonly string[]): Promise<Map<string, RuntimeFacts>> {
 	const [rows, pins] = await Promise.all([registrations(env, userId, ids), pinnedNodes(env, userId, ids)]);
 	const out = new Map<string, RuntimeFacts>();
@@ -142,19 +162,7 @@ export async function runtimeConnectivityMany(env: Env, userId: string, ids: rea
 		probe.map((id, i) => (pins.get(id) && !live[i] ? liveNodeIgnoringPin(env, id, userId).catch(() => null) : Promise.resolve(null))),
 	);
 	for (const [i, id] of probe.entries()) {
-		const row = rows.get(id);
-		const conn = live[i];
-		out.set(id, {
-			hasRuntimeRow: Boolean(row),
-			relayConnected: Boolean(conn),
-			// Prefer the node the LIVE socket is on — that is where work would actually run, and
-			// naming any other machine in a remedy sends the user to the wrong laptop.
-			node: (conn?.runnerNode || row?.runner_node || "").trim() || null,
-			runnerVersion: (row?.runner_version || "").trim() || null,
-			lastSeenAt: row?.last_seen_at ?? null,
-			pinnedNode: pins.get(id) ?? null,
-			liveNodeExcludedByPin: excluded[i],
-		});
+		out.set(id, factsFor(rows.get(id), live[i], pins.get(id) ?? null, excluded[i]));
 	}
 	for (const id of ids.slice(MAX_RELAY_PROBES)) {
 		const row = rows.get(id);
@@ -180,6 +188,38 @@ export async function runtimeConnectivityMany(env: Env, userId: string, ids: rea
  * only thing keeping a call site honest.
  */
 export async function runtimeConnectivity(env: Env, instanceId: string, userId: string): Promise<RuntimeFacts> {
-	const m = await runtimeConnectivityMany(env, userId, [instanceId]);
-	return m.get(instanceId) ?? EMPTY;
+	return (await runtimeConnectivityWithConn(env, instanceId, userId)).facts;
+}
+
+/**
+ * The facts AND the connection they were resolved from (#530).
+ *
+ * For the caller that needs both: the chat prompt has to SAY why there is no runner, and the same
+ * turn's terminal fan-out has to CALL the runner when there is one. Before this it did the second
+ * with `getBoundRunnerConn` and derived the first from whether that returned something — which is
+ * exactly the boolean that lost the pin and told an owner to run `pags up` on a machine that was
+ * already running it.
+ *
+ * Handing back `conn` is what makes going through this module free rather than a second probe:
+ * `getBoundRunnerConn` has ALREADY live-checked the relay by the time it returns a connection (it
+ * refuses to route to a socket it has not confirmed), so `relayConnected: Boolean(conn)` is the
+ * same fact the caller used to re-ask the RelayDO for. The pin-excluded scan is the one added
+ * round-trip and it is paid only where it can change the sentence: pinned, and nothing resolved.
+ *
+ * `getBoundRunnerConn` runs alongside the two D1 reads rather than after them; nothing here feeds
+ * it, and this sits on the chat hot path.
+ */
+export async function runtimeConnectivityWithConn(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<{ facts: RuntimeFacts; conn: RunnerConn | null }> {
+	const [rows, pins, conn] = await Promise.all([
+		registrations(env, userId, [instanceId]),
+		pinnedNodes(env, userId, [instanceId]),
+		getBoundRunnerConn(env, instanceId, userId).catch(() => null),
+	]);
+	const pin = pins.get(instanceId) ?? null;
+	const excluded = pin && !conn ? await liveNodeIgnoringPin(env, instanceId, userId).catch(() => null) : null;
+	return { facts: factsFor(rows.get(instanceId), conn, pin, excluded), conn };
 }

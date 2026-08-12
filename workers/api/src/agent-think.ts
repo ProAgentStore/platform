@@ -39,7 +39,9 @@ import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { attachedReposPrompt } from "./lib/repo-status-prompt.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
-import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
+import { callRunner, READ_TIMEOUT_MS } from "./lib/runner-client.js";
+import { runtimeConnectivityWithConn } from "./lib/instance-connectivity.js";
+import { describeFacts } from "./lib/runner-availability.js";
 import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
 import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance, voiceControlPrompt } from "./lib/agent-style-prompt.js";
 import { listDelegatedRuns, listLoopRuns } from "./lib/agent-loop-store.js";
@@ -526,14 +528,12 @@ export async function runAgentThink(opts: {
 		try {
 			const repos = attachedRepos;
 			if (repos.length > 0) {
-				// Resolve the runner honoring this instance's node binding (config.runnerNode),
-				// then ask the RelayDO — on the SAME node-scoped relay the runner connects to —
-				// whether it's actually live right now. DB session status can read "active" after
-				// an unclean disconnect, so the relay is authoritative. This also fixes the gap
-				// where a node-connected runner looked OFFLINE to a node-less check.
-				const boundConn = await getBoundRunnerConn(env, state.agentId, userId).catch(() => null);
-				const runnerOnline = boundConn ? await relayConnected(env, state.agentId, boundConn.runnerNode ?? null) : false;
-				systemPrompt += runnerStatusPrompt(selfModel, runnerOnline);
+				// The pin-aware read every other surface uses, kept WHOLE (#530): collapsing it to a
+				// boolean is what told an owner to run `pags up` while it was already running. Reasons
+				// in `agent-style-prompt.ts`; the conn rides along, so the fan-out below re-probes nothing.
+				const { facts, conn: boundConn } = await runtimeConnectivityWithConn(env, state.agentId, userId).catch(() => ({ facts: null, conn: null }));
+				const runnerOnline = facts?.relayConnected ?? false;
+				systemPrompt += runnerStatusPrompt(selfModel, facts ? describeFacts(facts) : null);
 				// #416: the block is a pure function now, not a ternary chain. The chain read
 				// `cloneError` on exactly ONE branch and printed the raw enum token for every status it
 				// did not enumerate — so #405's relayable diagnosis ("the configured checkout … exists

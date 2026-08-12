@@ -24,7 +24,7 @@ vi.mock("./runner-client.js", async (importOriginal) => ({
 	liveNodeIgnoringPin,
 }));
 
-import { MAX_RELAY_PROBES, runtimeConnectivity, runtimeConnectivityMany } from "./instance-connectivity.js";
+import { MAX_RELAY_PROBES, runtimeConnectivity, runtimeConnectivityMany, runtimeConnectivityWithConn } from "./instance-connectivity.js";
 import type { Env } from "../types.js";
 
 const UID = "user-1";
@@ -119,6 +119,35 @@ describe("runtimeConnectivity — the pin is a fact about connectivity (#461)", 
 	// Past MAX_RELAY_PROBES nothing is probed, so the "other machine" is unknown. Both fields are
 	// needed for the pinned diagnosis, so the tail degrades to exactly its previous answer rather
 	// than to a half-diagnosis built from one of them.
+	// The chat prompt needs BOTH halves of this read: the facts, to say why there is no runner, and
+	// the connection, to fan out `/coding/capture` on the turn where there is one. Before #530 it
+	// resolved the connection itself and inferred the facts from it, which is how the pin got lost.
+	// Handing the connection back is what makes going through this module cost nothing extra.
+	it("returns the connection it resolved, not just the verdict about it", async () => {
+		const conn = { runnerNode: "Air", instanceId: "i1" };
+		getBoundRunnerConn.mockResolvedValue(conn);
+		const { env } = db({ registrations: [reg("i1", "Air")] });
+		const out = await runtimeConnectivityWithConn(env, "i1", UID);
+		expect(out.conn).toBe(conn);
+		expect(out.facts).toMatchObject({ relayConnected: true, node: "Air" });
+		// One resolution, not two: `getBoundRunnerConn` has already live-checked the relay before it
+		// returns a connection, so re-asking would be a second DO fetch for a fact we hold.
+		expect(getBoundRunnerConn).toHaveBeenCalledTimes(1);
+		expect(liveNodeIgnoringPin).not.toHaveBeenCalled();
+	});
+
+	it("gives the single-instance read the same facts whichever entry point asks", async () => {
+		// `runtimeConnectivity` delegates to the with-conn form, so a caller that wants only the
+		// facts cannot get a different answer from one that wants both.
+		liveNodeIgnoringPin.mockResolvedValue("Air");
+		const { env } = db({ pins: { i1: "mini" }, registrations: [reg("i1", "mini")] });
+		const facts = await runtimeConnectivity(env, "i1", UID);
+		const both = await runtimeConnectivityWithConn(env, "i1", UID);
+		expect(both.facts).toEqual(facts);
+		expect(both.conn).toBeNull();
+		expect(facts).toMatchObject({ pinnedNode: "mini", liveNodeExcludedByPin: "Air" });
+	});
+
 	it("gives the unprobed tail its pin but never invents a live machine for it", async () => {
 		const ids = Array.from({ length: MAX_RELAY_PROBES + 1 }, (_, i) => `i${i}`);
 		const tail = ids[ids.length - 1];
