@@ -67,6 +67,18 @@ export const BASE = [
 	// never the scope.
 	"get_stats",
 	"set_stats_card",
+	// Record that the user says the agent got something wrong (#514).
+	//
+	// Base for the same reason the behaviour pair is, and with the same evidence behind it: told
+	// "you got that wrong, write it down", an agent with nowhere to put it reaches for the tool it
+	// already has. #506 is the live instance — the owner asked twice for a bug to be filed and it
+	// ended as `write_memory → fact:pending issue:…`, a promise nothing schedules and nothing
+	// re-reads. A complaint is not a fact about the subject and not a manner to adopt; without a
+	// home of its own it lands in one of those two and is never read again.
+	//
+	// The console's flag on a message is the path that CANNOT fail (no model in it). This is the
+	// one that catches the complaint said out loud mid-conversation, hands-free.
+	"record_feedback",
 ] as const;
 
 /** Read the vector knowledge base (RAG). Only agents that HAVE an index get these.

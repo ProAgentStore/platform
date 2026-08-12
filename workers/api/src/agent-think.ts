@@ -319,6 +319,20 @@ export async function runAgentThink(opts: {
 		" not memory. If the user asks you to change how you answer, call set_behaviour; to tell them" +
 		" your current manner, call get_behaviour. Never store a communication preference with write_memory.";
 
+	// The third destination, emitted for the same reason and in the same voice (#514). The two
+	// paragraphs together are a table: subject → memory, manner → behaviour, standing rule → Rules
+	// & Tips, "the platform got this wrong" → feedback. Without this, a complaint reaches for
+	// write_memory — #506 is the live instance, where "file a bug about this" became
+	// `fact:pending issue:…` and nothing ever read it again. Feedback is never read back into a
+	// prompt (nothing in this file loads it), so an agent cannot answer its own complaints.
+	systemPrompt +=
+		"\n\nFEEDBACK vs MEMORY vs BEHAVIOUR: when the user tells you that YOU got something wrong" +
+		" — a wrong answer, an action you claimed but did not take, a step that failed silently —" +
+		" call record_feedback. That is a report about the platform, kept for the people who improve" +
+		" it; it is not a fact to remember and not a manner to adopt. Do not write it to memory, do" +
+		" not add it to your behaviour, and do not promise to remember it for next time. Record it," +
+		" say you have, and carry on with the task.";
+
 	// Provenance, the staleness cutoff and the injection cap live in lib/agent-tasks.ts (#337) —
 	// this block is agent-WRITABLE durable state on the instruction path, so what reaches the
 	// prompt is a decision worth testing rather than an inline filter.

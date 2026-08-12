@@ -131,6 +131,62 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 	);
 
 	server.tool(
+		"list_feedback",
+		"Read what the OWNER said went wrong (#514) — in-session complaints about an agent, each anchored to the turn it is about. Every row carries `trace_id` and `message_id`, so the natural next calls are agent_trace(trace_id=…) for the tool calls of that turn and instance_messages for the surrounding conversation. That sequence, done by hand, is what produced issues #503–#505. Rows also carry a snapshot (target_text, prompt_text) that outlives the transcript and the trace's 14-day retention. Filter by instance_id and status (open|triaged|filed|dismissed).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().optional().describe("Narrow to one agent; omit for everything you have flagged."),
+			status: z.enum(["open", "triaged", "filed", "dismissed"]).optional().describe('Triage state; "open" is the unfiled backlog.'),
+			limit: z.number().int().min(1).max(500).optional().describe("Most-recent rows to return (default 100)."),
+		},
+		async ({ token, instance_id, status, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (instance_id) qs.set("instance_id", instance_id);
+			if (status) qs.set("status", status);
+			if (limit) qs.set("limit", String(limit));
+			const data = await authedCall(`/v1/feedback${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"resolve_feedback",
+		"Close the loop on one piece of feedback: set its status and record the issue it became. This is what keeps the backlog honest — a complaint filed as a GitHub issue (github_create_issue) is stamped with the URL so it is not filed twice, and one that is still open stays visible. The BODY is never editable: the row records what the owner said at the time, which is the property that makes it evidence.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			feedback_id: z.string().describe("The row id from list_feedback."),
+			status: z.enum(["open", "triaged", "filed", "dismissed"]).describe("Where it now sits."),
+			issue_url: z.string().optional().describe("The issue it became, when status is \"filed\"."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, feedback_id, status, issue_url, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { feedback_id, status, ...(issue_url ? { issue_url } : {}) };
+			const denied = await requirePermission(safetyFor(token), "write", "resolve_feedback", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "resolve_feedback", `set feedback ${feedback_id} to ${status}`, input, {
+					endpoint: `/v1/feedback/${feedback_id}`,
+					method: "PATCH",
+				});
+			}
+			const data = await authedCall(
+				`/v1/feedback/${encodeURIComponent(feedback_id)}`,
+				sessionToken,
+				{ method: "PATCH", body: JSON.stringify({ status, ...(issue_url !== undefined ? { issue_url } : {}) }) },
+				env,
+			);
+			// Only a SUCCESS is audited as completed — `apiCall` returns `{error}` rather than
+			// throwing, so an unchecked audit here would record a filing that never happened (#325).
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "resolve_feedback", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"list_pipeline_runs",
 		"List an instance's declarative-pipeline runs (issue #98) — for each run: which pipeline, when it started/finished, its status, and its counts (seen/added/skipped/errors). This is the run-level observability surface; for the per-output-record audit trail (what the pipeline saw + decided for each record), read the sink collection's records — each carries an `audit` field. Filter by pipeline name; limit caps rows (most recent first).",
 		{

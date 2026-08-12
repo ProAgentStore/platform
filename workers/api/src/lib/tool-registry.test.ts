@@ -106,6 +106,56 @@ describe("tool registry", () => {
 	});
 });
 
+describe("record_feedback — the complaint's home (#514)", () => {
+	/** Captures the INSERT the tool performs, so the row shape is asserted rather than assumed. */
+	function envCapturing(rows: Array<{ sql: string; args: unknown[] }>): Env {
+		return {
+			DB: {
+				prepare(sql: string) {
+					return { bind: (...args: unknown[]) => ({ run: async () => { rows.push({ sql, args }); return { meta: { changes: 1 } }; } }) };
+				},
+			},
+		} as unknown as Env;
+	}
+
+	it("is a base tool, so no declared allowlist can leave an agent with nowhere to put a complaint", () => {
+		expect(getRegistryTool("record_feedback")?.tier).toBe("base");
+	});
+
+	it("writes an agent-authored row stamped with the turn it was said on", () => {
+		const rows: Array<{ sql: string; args: unknown[] }> = [];
+		return runRegistryTool("record_feedback", { env: envCapturing(rows), userId: "u1", instanceId: "i1", traceId: "turn-9" }, {
+			body: "you said you filed it and you did not",
+		}).then((res) => {
+			expect(res.success).toBe(true);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].sql).toContain("INSERT INTO agent_feedback");
+			// [id, ts, user, instance, author, surface, sentiment, body, trace_id, …]
+			expect(rows[0].args[2]).toBe("u1");
+			expect(rows[0].args[3]).toBe("i1");
+			expect(rows[0].args[4]).toBe("agent");
+			expect(rows[0].args[7]).toBe("you said you filed it and you did not");
+			// The pointer is what lets a reader jump from the complaint to the tool calls that
+			// provoked it — the same anchor the console's capture path stores.
+			expect(rows[0].args[8]).toBe("turn-9");
+		});
+	});
+
+	it("refuses an empty complaint instead of storing a row with nothing said in it", async () => {
+		const rows: Array<{ sql: string; args: unknown[] }> = [];
+		const res = await runRegistryTool("record_feedback", { env: envCapturing(rows), userId: "u1", instanceId: "i1" }, { body: "   " });
+		expect(res.success).toBe(false);
+		expect(rows).toHaveLength(0);
+	});
+
+	it("says so rather than writing when there is no owned instance to attach it to", async () => {
+		const rows: Array<{ sql: string; args: unknown[] }> = [];
+		const res = await runRegistryTool("record_feedback", { env: envCapturing(rows), userId: "u1" }, { body: "wrong" });
+		expect(res.success).toBe(false);
+		expect(rows).toHaveLength(0);
+	});
+});
+
 describe("tmux connector", () => {
 	it("registers the tmux tools with correct scopes", () => {
 		const names = registryToolNameSet();

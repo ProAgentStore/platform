@@ -407,6 +407,43 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			};
 		},
 	},
+	{
+		name: "record_feedback",
+		description:
+			"Record that the USER said YOU got something wrong — a wrong answer, an action you claimed but did not take, a step that failed silently. Pass `body`: their complaint in THEIR words, not your interpretation of it. This is a report kept for the people who improve the platform. It is NOT a fact to remember (write_memory), NOT a change to how you communicate (set_behaviour), and NOT work for the board (create_ticket). Record it, say you have, and carry on with the task — do not promise to remember it.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				body: { type: "string", description: "What the user said was wrong, in their words." },
+				sentiment: { type: "string", description: "'bad' (the default) or 'good' when they are saying something worked well." },
+			},
+			required: ["body"],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "record_feedback needs an owned instance context.", success: false };
+			// Deferred import, like every other first-party tool here: keeps this module out of the
+			// D1-access import graph it would otherwise pull in.
+			const { buildFeedbackRow, insertFeedback } = await import("./feedback.js");
+			const built = buildFeedbackRow({
+				userId: ctx.userId,
+				instanceId: ctx.instanceId,
+				body: String(input.body ?? ""),
+				author: "agent",
+				sentiment: typeof input.sentiment === "string" ? input.sentiment : "bad",
+				// The turn this call belongs to, already threaded through every registry tool. It is
+				// what lets a reader jump from the complaint to the tool calls that provoked it —
+				// the same pointer the console's capture path stores.
+				traceId: ctx.traceId ?? null,
+			});
+			if (!built.ok) return { content: built.error, success: false };
+			await insertFeedback(ctx.env, built.row);
+			return {
+				content: "Recorded that as feedback for the people who maintain this platform. It is not stored as a memory or as a change to how I work.",
+				success: true,
+			};
+		},
+	},
 	// Core pipeline step library (issue #96): map / filter / dedupe_upsert / fan_out /
 	// http_reachable / geocode — standard-tier, composed by the pipeline runner (#97).
 	...STEP_TOOLS,

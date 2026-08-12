@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**133 tool registrations.** 115 are always registered; 18 are gated to the console
+**135 tool registrations.** 117 are always registered; 18 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -347,6 +347,8 @@ sit outside its surface gate.
 |---|---|---|---|---|
 | `agent_trace` | The primary debug tool — time-ordered timeline of chat turns, apply steps, tool calls, failures | — | | |
 | `list_errors` | Persisted platform failures (`scope: "all"` is admin-only) | — | | |
+| `list_feedback` | What the owner said went wrong, anchored to the turn — pair the `trace_id` with `agent_trace` | — | | |
+| `resolve_feedback` | Triage one row: status + the `issue_url` it became | write | yes | |
 | `instance_activity` | Append-only instance activity log | — | | |
 | `list_pipeline_runs` | Declarative-pipeline runs with counts | — | | |
 | `get_instance_pipeline` | Read back a single stored pipeline definition (with validity) | — | | |

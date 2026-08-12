@@ -193,6 +193,30 @@ describe("memory is rendered with its provenance and age (#495)", () => {
 // was shown every single turn. The shape of the fix is asserted over the source because the
 // regression is a REVERT to something that reads perfectly well: two `aiMessages.push` calls of
 // plain strings.
+describe("the prompt names a home for a complaint, and never reads one back (#514)", () => {
+	// #506, live: the owner asked twice for a bug to be filed and it landed as
+	// `write_memory → fact:pending issue:Heartfull:event link shows ID instead of event name` — a
+	// promise nothing schedules and nothing re-reads. The paragraph exists for the same reason the
+	// MEMORY-vs-BEHAVIOUR one above it does: write_memory is the tool the model already knows, and
+	// without being told otherwise it keeps reaching for it.
+	it("tells the agent where feedback goes, unconditionally", () => {
+		// Over the RAW file: `stripCommentsAndLiterals` blanks string bodies, and this IS a string.
+		expect(THINKER).toContain("FEEDBACK vs MEMORY vs BEHAVIOUR");
+		expect(THINKER).toContain("call record_feedback");
+		// The clause that matters most, because #506's agent did exactly this instead.
+		expect(THINKER).toContain("do not promise to remember it for next time");
+	});
+
+	it("never loads feedback into the prompt it builds", () => {
+		// An agent that reads complaints about itself starts ANSWERING them — apologising,
+		// over-correcting, treating a bug report as a standing instruction. Structural rather than
+		// asserted over one rendered prompt: the builder must not know the store exists.
+		expect(THINKER).not.toContain("agent_feedback");
+		expect(THINKER).not.toContain("lib/feedback.js");
+		expect(findCalls(THINKER_CODE, "listFeedback")).toHaveLength(0);
+	});
+});
+
 describe("tool results are the platform's blocks, not the assistant's words (#398)", () => {
 	// These read the RAW file: `stripCommentsAndLiterals` blanks string bodies, so `role: "user"`
 	// survives as `role: "    "` and a rule about which ROLE carries the blocks cannot be written

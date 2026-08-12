@@ -748,7 +748,14 @@ const PINS = {
 	// UNAVAILABLE, reusing the exact vocabulary the terminal grounding rules already use for an
 	// unreadable pane. Raised rather than split: the added lines are two prompt strings and the
 	// reason they are strings, and they need this function's `systemPrompt` accumulator.
-	"workers/api/src/agent-think.ts": 1158,
+	// +14 for #514, seven of them comment: the paragraph naming FEEDBACK as a third destination
+	// beside MEMORY and BEHAVIOUR. Raised rather than split, and it sits directly under the
+	// MEMORY-vs-BEHAVIOUR paragraph it extends because the two are one table — subject → memory,
+	// manner → behaviour, "you got this wrong" → feedback — and separating them is how a reader
+	// stops seeing that. Moving prompt prose into a module was considered and rejected for the
+	// same reason the block above gives: these lines need this function's `systemPrompt`
+	// accumulator, and a paragraph in a helper is a paragraph nobody reads next to its siblings.
+	"workers/api/src/agent-think.ts": 1172,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -909,7 +916,9 @@ const PINS = {
 	// plus this self-ref.
 	// +6 more at #514: the InstanceDetail entry above is now a LOWERING with its reason, banking
 	// the lines `CopyButton` took with it — plus this self-ref.
-	"scripts/check-file-size.mjs": 993,
+	// +9 more at #514: the agent-think raise above (the FEEDBACK paragraph) and its reason, plus
+	// this self-ref.
+	"scripts/check-file-size.mjs": 1002,
 };
 
 /**
