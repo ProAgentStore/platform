@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, planClipGate, VOICE_FLOOR, NOISE_SAMPLE_FRAMES, NOISE_ONSET_RATIO, HIGH_SPEECH_THRESHOLD } from "./vad.js";
+import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, onsetFloorFor, ONSET_FLOOR_CEILING, planClipGate, VOICE_FLOOR, NOISE_SAMPLE_FRAMES, NOISE_ONSET_RATIO, HIGH_SPEECH_THRESHOLD } from "./vad.js";
 
 const cfg = (o: Partial<VadConfig> = {}): VadConfig => ({ silenceMs: 1000, sensitivity: 1, ...o });
 
@@ -146,13 +146,43 @@ describe("hadSpeech — the mode-independent speech gate", () => {
 		expect(q.seen).toBe(hadSpeech(0.05)); // both false
 	});
 
-	it("raises the bar when a noise floor is provided (adaptive mode)", () => {
-		// Room noise at 0.08 → adaptive floor = max(0.1, 3 * 0.08) = 0.24.
-		// A 0.2 level that passes the fixed floor should NOT pass the adaptive one.
+	it("raises the bar when a noise floor is provided — but never past its own definition of speech", () => {
+		// THIS TEST USED TO ASSERT THE BUG (#511). It read:
+		//
+		//     expect(hadSpeech(0.2, 0.08)).toBe(false); // 0.2 < 0.24
+		//
+		// green, shipped, and stating that a clip peaking at 0.2 is thrown away in a room with a
+		// fan in it — while HIGH_SPEECH_THRESHOLD forty lines up in vad.ts defines 0.2–0.5 as
+		// "typical unambiguous speech peaks". The arithmetic was right and the bar was wrong.
 		const roomNoise = 0.08;
-		const adaptiveFloor = Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * roomNoise); // 0.24
-		expect(hadSpeech(0.2, roomNoise)).toBe(false); // 0.2 < 0.24
-		expect(hadSpeech(adaptiveFloor + 0.01, roomNoise)).toBe(true); // just above
+		expect(NOISE_ONSET_RATIO * roomNoise).toBeGreaterThan(ONSET_FLOOR_CEILING); // 0.24, uncapped
+		expect(onsetFloorFor(roomNoise)).toBe(ONSET_FLOOR_CEILING); // …capped at 0.18
+		expect(hadSpeech(0.2, roomNoise)).toBe(true); // the peak the file itself calls speech
+		// The bar still RISES with the room — that half of #490 is the point and is intact.
+		expect(onsetFloorFor(roomNoise)).toBeGreaterThan(VOICE_FLOOR);
+	});
+
+	it("no room is noisy enough to make real speech inaudible", () => {
+		// The invariant, stated once so it cannot be re-derived wrongly: whatever the room, a peak
+		// in the band vad.ts defines as unambiguous speech gets through. Re-raising the ratio or
+		// removing the cap fails here.
+		for (const noiseFloor of [0, 0.02, 0.05, 0.07, 0.08, 0.1, 0.12, 0.3, 0.9]) {
+			for (const speechPeak of [0.2, 0.25, 0.3, 0.5]) {
+				expect(hadSpeech(speechPeak, noiseFloor)).toBe(true);
+			}
+		}
+	});
+
+	it("covers the 0.15–0.3 band against a 0.07–0.12 floor, in BOTH directions (#511 criterion 3)", () => {
+		// Every #490 test used a 0.40 spike against a 0.12 floor — nowhere near the boundary that
+		// decides real turns. These are the cases that matter.
+		expect(hadSpeech(0.3, 0.12)).toBe(true);   // clear speech, noisy room → kept
+		expect(hadSpeech(0.25, 0.1)).toBe(true);   // ordinary speech, noisy room → kept
+		expect(hadSpeech(0.2, 0.07)).toBe(true);   // quiet speech, quiet room → kept
+		expect(hadSpeech(0.19, 0.07)).toBe(true);  // just under the band, still above the cap
+		expect(hadSpeech(0.13, 0.12)).toBe(false); // room tone peaking above its own floor → dropped
+		expect(hadSpeech(0.12, 0.1)).toBe(false);  // the #490 phantom case → still dropped
+		expect(hadSpeech(0.09, 0.02)).toBe(false); // near-silence in a quiet room → dropped
 	});
 
 	it("falls back to fixed VOICE_FLOOR when no noise floor is available (noiseFloor = -1)", () => {
@@ -269,5 +299,45 @@ describe("captureDiagnostics — #510 criterion 5: a drop row you can diagnose f
 			.toEqual({ peakLevel: 0.31, noiseFloor: 0.08, onsetFloor: 0.24, frames: 42, gateAlive: true, gateHeardSpeech: false });
 		// No recorder / no gate is itself an answer, and must not read as "measured zero".
 		expect(captureDiagnostics(undefined, null)).toEqual({ gateAlive: null, gateHeardSpeech: null });
+	});
+});
+
+describe("#511 criterion 5 — which of #490's two onset tightenings is load-bearing", () => {
+	// #490 changed onset in two independent ways in one commit: peak-relative → INSTANTANEOUS
+	// level, and a fixed floor → an ADAPTIVE one. Shipping both together is why the regression
+	// was hard to attribute. Measured here so the answer is recorded rather than argued.
+
+	it("the ADAPTIVE FLOOR is the half that rejects room tone — the fixed floor never could", () => {
+		// #490's stated goal: steady room tone at 0.12 must stop setting seen=true. 0.12 is ABOVE
+		// VOICE_FLOOR (0.1), so a fixed floor lets it through whether it is compared against the
+		// instantaneous level or the ratcheted peak. Only the adaptive floor moves the bar.
+		expect(0.12).toBeGreaterThan(VOICE_FLOOR); // a fixed-floor onset fires on room tone
+		const s = initVad();
+		for (let i = 0; i < NOISE_SAMPLE_FRAMES + 5; i++) vadStep(s, 0.12, i * 100, cfg());
+		expect(s.seen).toBe(false); // …the adaptive one does not
+	});
+
+	it("instantaneous-vs-peak is NOT load-bearing — it costs latency, not decisions", () => {
+		// A peak ratchets and never drops, so peak-based onset fires on any later frame once the
+		// peak has cleared the floor; instantaneous onset needs the loud frame itself. Since the
+		// loudest frame satisfies both the floor and the peak-relative `speaking` check, the two
+		// converge on the same turn — which is why reverting this half alone would not have
+		// recovered the lost speech, and re-tightening it would not have prevented the phantoms.
+		const s = initVad();
+		for (let i = 0; i < NOISE_SAMPLE_FRAMES; i++) vadStep(s, 0.02, i * 16, cfg()); // quiet room
+		vadStep(s, 0.35, NOISE_SAMPLE_FRAMES * 16, cfg()); // one loud frame
+		expect(s.seen).toBe(true);
+	});
+
+	it("the short sampling window can mistake your own voice for the room — and is now bounded", () => {
+		// vadStep runs per requestAnimationFrame (~16ms), NOT per LEVEL_THROTTLE_MS as vad.ts
+		// used to claim, so the noise estimate is ~83ms taken from the instant the mic opens. A
+		// user already speaking when it opens poisons noiseMin with their own ramp. Uncapped, a
+		// 0.15 ramp set the bar at 0.45 and the whole turn went to the silent idle path.
+		const s = initVad();
+		for (let i = 0; i < NOISE_SAMPLE_FRAMES; i++) vadStep(s, 0.15, i * 16, cfg()); // speech ramp
+		expect(NOISE_ONSET_RATIO * s.noiseFloor).toBeCloseTo(0.45, 5); // what it would have been
+		vadStep(s, 0.3, NOISE_SAMPLE_FRAMES * 16, cfg()); // the rest of the sentence
+		expect(s.seen).toBe(true); // capped at 0.18, so the speech is heard
 	});
 });

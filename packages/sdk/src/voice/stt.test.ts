@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TRANSCRIBE_FIRST_BYTE_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt, NO_SPEECH_PROB_THRESHOLD } from "./stt.js";
+import { DEFAULT_STT_MODEL, supportsNoSpeechProb, TRANSCRIBE_FIRST_BYTE_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt, NO_SPEECH_PROB_THRESHOLD } from "./stt.js";
 
 /** Drive the private Whisper upload directly — start() needs a real mic + recorder. */
 const transcribe = (stt: VoiceStt, blob: Blob) =>
@@ -420,5 +420,28 @@ describe("silent / near-silent clip speech gate (#490)", () => {
 
 		// Prompt must NOT be sent for a low-energy clip
 		expect(bodies[0].get("prompt")).toBeNull();
+	});
+	it("the model-side no-speech gate is asked for ONLY where the model can answer it (#511)", async () => {
+		// #490 shipped `no_speech_prob` as one of three defences against phantom turns, inside the
+		// `else` of a streaming check — so it ran only on `whisper-1`, which is not the default and
+		// which almost nobody selects. The gate protected nobody, and phantoms were still reaching
+		// Whisper 13 hours after it deployed. The capability is now asked about by name.
+		expect(supportsNoSpeechProb("whisper-1")).toBe(true);
+		expect(supportsNoSpeechProb(DEFAULT_STT_MODEL)).toBe(false);
+		expect(supportsNoSpeechProb("gpt-4o-mini-transcribe")).toBe(false);
+
+		const bodies: FormData[] = [];
+		vi.stubGlobal("localStorage", { getItem: () => "test-token" });
+		vi.stubGlobal("fetch", vi.fn(async (_url: string, init: { body: FormData }) => {
+			bodies.push(init.body);
+			return { ok: true, body: null, json: async () => ({ text: "hi" }), text: async () => "" };
+		}));
+		// verbose_json is what carries no_speech_prob, and the streaming models reject it — so
+		// asking for it on the default model would break transcription outright, not improve it.
+		const stt = new VoiceStt("openai", { language: "en-US", model: DEFAULT_STT_MODEL });
+		(stt as unknown as { _peakLevel: number })._peakLevel = 0.3;
+		await (stt as unknown as { _transcribeWhisper(b: Blob): Promise<void> })._transcribeWhisper(new Blob(["x"], { type: "audio/webm" }));
+		expect(bodies[0].get("response_format")).toBeNull();
+		expect(bodies[0].get("stream")).toBe("true");
 	});
 });

@@ -19,6 +19,35 @@ export const DEFAULT_STT_MODEL = "gpt-4o-transcribe";
 export const NO_SPEECH_PROB_THRESHOLD = 0.6;
 
 /**
+ * Can this model tell us it heard no speech? (#511 criterion 1.)
+ *
+ * Only `whisper-1`. `no_speech_prob` rides on `response_format=verbose_json`, which the
+ * `gpt-4o-transcribe` family does not support — they take `json`, and we stream them. #490 shipped
+ * this layer as one of three defences against phantom turns and it landed in the `else` of a
+ * `const streaming = this.model !== "whisper-1"`, forty lines from the decision, where it reads as
+ * a streaming-transport detail rather than what it is: **a capability only the legacy model has.**
+ * The consequence went unnoticed for a day — the default model is `gpt-4o-transcribe`, so the
+ * model-side gate protected nobody, and phantoms were still reaching Whisper 13 hours after #490
+ * deployed. Naming the capability is what stops "we have a confidence gate" being said of a
+ * request that cannot carry one.
+ *
+ * The streaming model's phantom defence is therefore entirely ours, in three layers that DO run on
+ * it: the adaptive energy gate before upload (`planClipGate`), `isNoiseTranscript` on the way to
+ * the agent, and the low-energy suppression of the vocabulary bias prompt — without which silence
+ * does not come back empty but comes back as a fluent sentence assembled from our own term list.
+ * Both phantoms dated in #511 were caught by the second of those; neither became a user turn.
+ *
+ * NOT added here: `include[]=logprobs`, which is the one model-side confidence signal
+ * `gpt-4o-transcribe` does expose. It would be a new, blind discard layer on the ONLY transcription
+ * path anyone uses, tuned against no data, deployed on push — while the live complaint being worked
+ * is speech going MISSING. Wrong direction to guess in. It is worth doing against the peakLevel /
+ * onsetFloor rows #510 now writes, not before them.
+ */
+export function supportsNoSpeechProb(model: string): boolean {
+	return model === "whisper-1";
+}
+
+/**
  * Deadlines on a transcription request (#421).
  *
  * There were none — no `signal`, no `AbortController` anywhere in `voice/`, and none on the server
@@ -449,15 +478,15 @@ export class VoiceStt {
 		// Stream the transcript for a "live" feel — words land as they're recognised
 		// instead of one blob after a pause. whisper-1 ignores streaming, so only the
 		// gpt-4o-transcribe models get it; everything else takes the plain json path.
+		//
+		// The two conditions are asked SEPARATELY on purpose (#511). They were one flag, and the
+		// model-side confidence gate was a passenger on the transport choice — so "does this model
+		// stream?" silently decided "is this turn checked for silence?", and the answer for the
+		// default model was no. See `supportsNoSpeechProb`.
 		const streaming = this.model !== "whisper-1";
-		if (streaming) {
-			form.append("stream", "true");
-		} else {
-			// For the non-streaming whisper-1 path: request verbose_json so the response
-			// includes `no_speech_prob`, which we use to discard silent transcriptions at
-			// the model level rather than relying solely on the energy gate.
-			form.append("response_format", "verbose_json");
-		}
+		if (streaming) form.append("stream", "true");
+		// verbose_json is what carries `no_speech_prob`, and only whisper-1 accepts it.
+		if (supportsNoSpeechProb(this.model)) form.append("response_format", "verbose_json");
 		// The deadline. An AbortController rather than `AbortSignal.timeout` because the second
 		// deadline has to REPLACE the first once headers arrive — a stream is allowed to take
 		// longer than a first byte — and because `timedOut` has to be readable from the catch, so a

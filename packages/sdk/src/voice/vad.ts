@@ -43,13 +43,23 @@ export function initVad(): VadState {
 	return { peak: 0, lastLoud: 0, turnStart: -1, seen: false, noiseFloor: -1, noiseMin: Infinity, noiseFrames: 0 };
 }
 
-/** Number of frames sampled to estimate the per-turn ambient noise floor. The MINIMUM
- *  level across these frames is used as the floor estimate. The adaptive onset check is
- *  withheld until this window closes so ambient frames fill the estimate before onset
- *  can fire. At 66ms/frame (LEVEL_THROTTLE_MS in use-voice.ts) this is ~330ms of sampling.
- *  During that window, levels at or above `HIGH_SPEECH_THRESHOLD` will immediately trigger
- *  onset as "user started speaking before the mic fully opened" — no regression for the
- *  common pattern where the user speaks within 1-2 seconds of the chime. */
+/**
+ * Number of frames sampled to estimate the per-turn ambient noise floor. The MINIMUM level across
+ * these frames is used as the floor estimate. The adaptive onset check is withheld until this
+ * window closes so ambient frames fill the estimate before onset can fire. During that window,
+ * levels at or above `HIGH_SPEECH_THRESHOLD` immediately trigger onset as "user started speaking
+ * before the mic fully opened" — no regression for the common pattern where the user speaks within
+ * a second or two of the chime.
+ *
+ * **This window is ~83ms, not the ~330ms this comment used to claim.** It said "at 66ms/frame
+ * (LEVEL_THROTTLE_MS in use-voice.ts)", but `LEVEL_THROTTLE_MS` throttles only the React
+ * `setAudioLevel` call; `vadStep` is invoked on EVERY `requestAnimationFrame` tick, so five frames
+ * is five sixtieths of a second. That matters in one direction: the fewer frames a minimum is
+ * taken over, the more likely it lands on a loud one, so a SHORT window is the one that mistakes
+ * the leading edge of your own voice for the room. A longer window can only ever lower the
+ * estimate. It is left at 5 because {@link ONSET_FLOOR_CEILING} now bounds what a poisoned
+ * estimate can cost, and because lengthening it delays onset past the end of a one-word answer.
+ */
 export const NOISE_SAMPLE_FRAMES = 5;
 /** Speech onset must be at least this many times the measured noise floor before the VAD
  *  treats the turn as "real speech started". At ratio 3: ambient at 0.08 → onset
@@ -130,8 +140,32 @@ export function hadSpeech(peakLevel: number, noiseFloor = -1): boolean {
  */
 export function onsetFloorFor(noiseFloor: number): number {
 	if (!(noiseFloor >= 0)) return VOICE_FLOOR;
-	return Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * noiseFloor);
+	return Math.min(ONSET_FLOOR_CEILING, Math.max(VOICE_FLOOR, NOISE_ONSET_RATIO * noiseFloor));
 }
+
+/**
+ * The adaptive floor may never rise above this (#511).
+ *
+ * `NOISE_ONSET_RATIO * noiseFloor` was unbounded, and the file contradicted itself as a result: at
+ * ambient 0.08 — an ordinary room with a fan — the floor became 0.24, while forty lines up this
+ * same file defines 0.2–0.5 as "typical unambiguous speech peaks". A shipped, passing test
+ * (`vad.test.ts`, before this change) asserted that a clip peaking at 0.2 was thrown away. Quiet
+ * speech, a distant mic, or a laptop fan put a real utterance under the bar, and the turn then took
+ * the silent idle-recycle path. A gate that discards what its own definition calls speech is not
+ * strict, it is wrong.
+ *
+ * 0.18 is chosen to sit strictly BELOW the bottom of that stated band, with margin, so a peak
+ * anywhere in 0.2–0.5 clears the floor in ANY room. The protection #490 was opened for survives
+ * intact: steady room tone at 0.12 peaks around 0.13 and is still rejected.
+ *
+ * The band this knowingly cannot resolve is 0.15–0.18 — the file's other comment puts the bottom
+ * of real speech at ~0.15, and room tone reaches ~0.13, so peak energy alone genuinely cannot
+ * separate them. That gap is not closed by moving this number; moving it down re-admits the
+ * phantoms and moving it up eats speech. It is closed by evidence of a different kind, which is
+ * why `planClipGate` lets a proven-alive dictation gate that heard real words overrule this floor
+ * outright (#511 criterion 4).
+ */
+export const ONSET_FLOOR_CEILING = 0.18;
 
 /** What the analyser measured over one recording, as the drop paths report it. */
 export interface LevelSnapshot {
