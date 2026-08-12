@@ -4,7 +4,9 @@ import {
 	AI_STALL_TIMEOUT_MS,
 	AI_TOTAL_TIMEOUT_MS,
 	type AiDeadlineKind,
+	connectionLostMessage,
 	deadlineMessage,
+	isRetryableDeadline,
 } from "./ai-deadlines.js";
 import {
 	AnthropicStreamAssembler,
@@ -32,6 +34,18 @@ export class UserAiProviderError extends Error {
 		public readonly status = 502,
 		public readonly upstreamStatus?: number,
 		public readonly details?: unknown,
+		/**
+		 * Could an IDENTICAL immediate retry plausibly succeed? (#518)
+		 *
+		 * Set at the site that knows WHICH failure this is, because by the time it reaches a caller
+		 * the only things left are a message and a 502/504 — and the three deadlines all report 504
+		 * while disagreeing completely about whether retrying helps. Read by
+		 * `autoResumableRoundOf`, which is what decides whether the platform performs the retry its
+		 * own error message recommends. Defaults to false: a failure nobody classified is one
+		 * nobody has established is transient, and the cost of guessing wrong is the user's own
+		 * provider credit.
+		 */
+		public readonly retryable = false,
 	) {
 		super(message);
 		this.name = "UserAiProviderError";
@@ -213,6 +227,11 @@ async function runAnthropic(
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			errBody,
+			// A 5xx (including 529 `overloaded_error`) is the provider saying "not me, not now" —
+			// worth one immediate retry (#518). A 4xx is not: a bad key, a model the key cannot
+			// reach, or a rate limit are all still true a second later, and 429 in particular wants
+			// a backoff this path does not have.
+			res.status >= 500,
 		);
 	}
 
@@ -320,11 +339,19 @@ function withDeadline<T>(promise: Promise<T>, remainingMs: number, kind: AiDeadl
 
 /** Translate our two internal failures into the error the user reads. Anything else is a real bug. */
 function asProviderError(err: unknown): UserAiProviderError | null {
-	if (err instanceof DeadlineExceeded) return new UserAiProviderError(deadlineMessage(err.kind, err.budgetMs), 504);
-	if (err instanceof AnthropicStreamError) return new UserAiProviderError(`Anthropic: ${err.message}`, 502);
-	// The runtime's own abort, raised by a socket we cancelled or one the provider dropped.
+	if (err instanceof DeadlineExceeded) {
+		// Retryability comes from the SAME table the sentence does (#518), so what the platform does
+		// automatically is what the platform told the user to do.
+		return new UserAiProviderError(deadlineMessage(err.kind, err.budgetMs), 504, undefined, undefined, isRetryableDeadline(err.kind));
+	}
+	// A malformed or truncated stream is a transport fact — a lost frame, a mid-stream
+	// `overloaded_error`, tool arguments that arrived half-written. A fresh generation is a fresh
+	// stream, so this is worth exactly one retry.
+	if (err instanceof AnthropicStreamError) return new UserAiProviderError(`Anthropic: ${err.message}`, 502, undefined, undefined, true);
+	// The runtime's own abort, raised by a socket we cancelled or one the provider dropped. It says
+	// nothing about HOW LONG anything waited — see `connectionLostMessage`.
 	if (err instanceof Error && err.name === "AbortError") {
-		return new UserAiProviderError(deadlineMessage("stall", AI_STALL_TIMEOUT_MS), 504);
+		return new UserAiProviderError(connectionLostMessage(), 504, undefined, undefined, true);
 	}
 	return null;
 }

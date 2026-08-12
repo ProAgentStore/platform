@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	autoResumableRoundOf,
 	buildResumableRound,
 	isResumableFor,
 	RESUMABLE_MAX_BYTES,
 	RESUMABLE_TTL_MS,
 	type ResumableRound,
 	resumableRoundOf,
+	thinkWithAutoResume,
 	withResumableRound,
 } from "./resumable-round.js";
 
@@ -136,5 +138,130 @@ describe("what a resumed turn is fed — the shape #398 requires", () => {
 		// replayed messages either re-spends the budget or skips rounds that never happened.
 		const r = round();
 		expect(r.messages.length).toBe(r.roundsUsed * 2);
+	});
+});
+
+/** A failure shaped like the one the provider client raises: a round, and its own verdict on retrying. */
+const failure = (opts: { round?: ResumableRound | null; retryable?: boolean } = {}): Error => {
+	const err = Object.assign(new Error("The AI provider stopped sending mid-reply"), { status: 504 });
+	if (opts.retryable !== undefined) Object.assign(err, { retryable: opts.retryable });
+	return withResumableRound(err, opts.round === undefined ? round() : opts.round) as Error;
+};
+
+describe("autoResumableRoundOf — which failures the platform retries for the user (#518)", () => {
+	it("takes the round when the provider says a retry could work", () => {
+		expect(autoResumableRoundOf(failure({ retryable: true }))?.prompt).toBe("Start implementing");
+	});
+
+	it("declines the deterministic failures, whose own message says a retry fails identically", () => {
+		// The `total` deadline, an invalid key, a model the key cannot reach. Retrying these spends
+		// the user's credit to reproduce the same error — the exact behaviour #427 removed from the
+		// error text, which would be pointless to reintroduce as an automatic action.
+		expect(autoResumableRoundOf(failure({ retryable: false }))).toBeNull();
+		expect(autoResumableRoundOf(failure())).toBeNull();
+	});
+
+	it("declines when nothing executed — there is no work to protect and no reason to pay twice", () => {
+		expect(autoResumableRoundOf(failure({ round: null, retryable: true }))).toBeNull();
+	});
+
+	it("tolerates a non-object error", () => {
+		expect(autoResumableRoundOf("string error")).toBeNull();
+		expect(autoResumableRoundOf(undefined)).toBeNull();
+	});
+});
+
+/**
+ * #518's sixth acceptance criterion, and the reason it was written: #442's tests all proved a round
+ * is BUILT correctly. Not one of them proved anything ever reads one back, which is precisely how a
+ * feature ships correct and unreachable. These assert the round is CONSUMED — handed to a second
+ * attempt — and that the attempt is bounded.
+ */
+describe("thinkWithAutoResume — the stored round is consumed, not merely stored (#518)", () => {
+	it("hands the SAME round to a second attempt and returns its answer", async () => {
+		const stored = round();
+		const seen: (ResumableRound | undefined)[] = [];
+		const think = vi.fn(async (resume?: ResumableRound) => {
+			seen.push(resume);
+			if (seen.length === 1) throw withResumableRound(Object.assign(new Error("stall"), { retryable: true }), stored);
+			return "the answer, built on results already in hand";
+		});
+
+		await expect(thinkWithAutoResume(think)).resolves.toBe("the answer, built on results already in hand");
+		expect(think).toHaveBeenCalledTimes(2);
+		expect(seen[0]).toBeUndefined();
+		// Identity, not shape: what the second attempt gets must be the round the FIRST one paid
+		// for. A copy assembled from somewhere else would pass a `toEqual` and re-run the tools.
+		expect(seen[1]).toBe(stored);
+	});
+
+	it("carries the executed-tool ledger into the retry, so an identical write cannot run twice", async () => {
+		// The dedup that stops it lives in `runAgentThink` and is seeded from these two fields. What
+		// is asserted here is that they ARRIVE: `executed` naming the write, and the mutation count
+		// its read-repeat rule is keyed to.
+		const stored = round({ executed: [["create_task:{\"title\":\"ship it\"}", 0]], mutations: 1, executedTools: ["create_task"] });
+		let received: ResumableRound | undefined;
+		await thinkWithAutoResume(async (resume) => {
+			if (!resume) throw withResumableRound(Object.assign(new Error("stall"), { retryable: true }), stored);
+			received = resume;
+			return "done";
+		});
+		expect(new Map(received?.executed ?? []).get("create_task:{\"title\":\"ship it\"}")).toBe(0);
+		expect(received?.mutations).toBe(1);
+		expect(received?.executedTools).toEqual(["create_task"]);
+	});
+
+	it("starts from a round the CALLER validated, when the user's own retry brought one", async () => {
+		const stored = round();
+		const think = vi.fn(async () => "answered from the stored round");
+		await expect(thinkWithAutoResume(think, { resume: stored })).resolves.toBe("answered from the stored round");
+		expect(think).toHaveBeenCalledWith(stored);
+	});
+
+	it("retries exactly once — a second failure is about the provider, not this turn", async () => {
+		const think = vi.fn(async () => {
+			throw withResumableRound(Object.assign(new Error("still down"), { retryable: true }), round());
+		});
+		await expect(thinkWithAutoResume(think)).rejects.toThrow("still down");
+		expect(think).toHaveBeenCalledTimes(2);
+	});
+
+	it("leaves the second failure carrying its round, so the manual path still works", async () => {
+		const think = vi.fn(async () => {
+			throw withResumableRound(Object.assign(new Error("still down"), { retryable: true }), round());
+		});
+		const err = await thinkWithAutoResume(think).catch((e) => e);
+		expect(resumableRoundOf(err)?.executedTools).toEqual(["github_read_issue"]);
+	});
+
+	it("does not retry a failure with no round, or one the provider called deterministic", async () => {
+		const noRound = vi.fn(async () => {
+			throw Object.assign(new Error("nothing ran"), { retryable: true });
+		});
+		await expect(thinkWithAutoResume(noRound)).rejects.toThrow("nothing ran");
+		expect(noRound).toHaveBeenCalledTimes(1);
+
+		const deterministic = vi.fn(async () => {
+			throw withResumableRound(new Error("reply was too long to finish"), round());
+		});
+		await expect(thinkWithAutoResume(deterministic)).rejects.toThrow("too long");
+		expect(deterministic).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports the recovery, and retries even when reporting it fails", async () => {
+		const seen: string[] = [];
+		const think = vi.fn(async (resume?: ResumableRound) => {
+			if (!resume) throw withResumableRound(Object.assign(new Error("stall"), { retryable: true }), round());
+			return "recovered";
+		});
+		await expect(
+			thinkWithAutoResume(think, {
+				onAutoResume: async (r, err) => {
+					seen.push(`${r.executedTools.join(",")}|${(err as Error).message}`);
+					throw new Error("D1 is having a moment");
+				},
+			}),
+		).resolves.toBe("recovered");
+		expect(seen).toEqual(["github_read_issue|stall"]);
 	});
 });

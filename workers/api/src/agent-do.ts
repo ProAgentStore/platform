@@ -46,7 +46,8 @@ import {
 	ensureStateDefaults,
 } from "./agent-do-prompt.js";
 import { runAgentThink } from "./agent-think.js";
-import { isResumableFor, RESUMED_NOTICE, type ResumableRound, resumableRoundOf } from "./lib/resumable-round.js";
+import { isResumableFor, RESUMED_NOTICE, type ResumableRound, resumableRoundOf, thinkWithAutoResume } from "./lib/resumable-round.js";
+import { logEvent } from "./lib/events.js";
 import type { ConversationTransfer } from "./lib/conversation-transfer.js";
 import {
 	buildRepoOverview,
@@ -552,7 +553,33 @@ export class AgentDO extends DurableObject<Env> {
 			this.broadcast({ type: "message", message: notice });
 		}
 		try {
-			const { response, toolCalls, transfer } = await this.think(state, engine, userId, delegation, resume);
+			// #518: one automatic retry, from the round the failed attempt left behind.
+			//
+			// #442 made the retry cheap and left PERFORMING it to the user, behind a gate that is
+			// byte equality with the failed message — on an instance its owner drives by VOICE, where
+			// two utterances of one sentence never transcribe alike, and from a console that had
+			// already cleared the text the error told him to send again. The platform is the only
+			// party still holding that exact string, so the platform is what retries. Only a failure
+			// the provider itself called retryable qualifies, so the deterministic `total` deadline —
+			// whose message says a retry fails identically — still fails once and stays failed.
+			// The event row is the measurement: a recovery nobody can count is one nobody trusts.
+			const { response, toolCalls, transfer } = await thinkWithAutoResume(
+				(r) => this.think(state, engine, userId, delegation, r),
+				{
+					resume,
+					onAutoResume: (round, failure) =>
+						logEvent(this.env, {
+							source: "chat",
+							event: "chat.auto_resumed",
+							level: "warn",
+							message: (failure instanceof Error ? failure.message : String(failure)).slice(0, 300),
+							userId: userId ?? null,
+							instanceId: state.agentId,
+							traceId: delegation?.traceId ?? null,
+							context: { toolsCarried: round.executedTools, roundsUsed: round.roundsUsed },
+						}),
+				},
+			);
 
 			// Save tool calls as a system message (visible in chat)
 			let toolMsg: AgentMessage | undefined;

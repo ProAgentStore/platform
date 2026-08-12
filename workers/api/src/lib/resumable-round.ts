@@ -62,12 +62,19 @@ export interface ResumableRound {
 /**
  * How long a stored round stays valid.
  *
- * A resumable round is only worth resuming while its results are still TRUE. Ten minutes covers
- * the retry a user performs immediately — #427's own evidence is six minutes apart — and expires
- * well before a `github_read_issue` from a different working day. A resumed stale read is worse
- * than a re-fetch, because it is confidently wrong where the re-fetch is merely slow.
+ * A resumable round is only worth resuming while its results are still TRUE, and it expires well
+ * before a `github_read_issue` from a different working day: a resumed stale read is worse than a
+ * re-fetch, because it is confidently wrong where the re-fetch is merely slow.
+ *
+ * Ten minutes was chosen from #427's evidence — a user retrying six minutes later — and #518
+ * measured the other side of that distribution on the same mechanism: the failure at 03:11:49, the
+ * next attempt on the page at 03:24:56, **13m 07s**. The round had expired unused three minutes
+ * earlier. Ten minutes is ample for the automatic retry (#518 performs it within seconds) and short
+ * for the human path, which is the path that has to survive reading the error, deciding, and coming
+ * back. Thirty covers the observed gap with headroom and still cannot span a coffee break plus a
+ * meeting.
  */
-export const RESUMABLE_TTL_MS = 10 * 60 * 1000;
+export const RESUMABLE_TTL_MS = 30 * 60 * 1000;
 
 /** Serialized ceiling for a stored round. Well above a capped round, far below DO storage's limit. */
 export const RESUMABLE_MAX_BYTES = 96 * 1024;
@@ -129,4 +136,71 @@ export function withResumableRound(err: unknown, round: ResumableRound | null): 
 export function resumableRoundOf(err: unknown): ResumableRound | null {
 	if (!err || typeof err !== "object") return null;
 	return (err as { resumableRound?: ResumableRound }).resumableRound ?? null;
+}
+
+/**
+ * The round an IMMEDIATE automatic retry may use, or null (#518).
+ *
+ * #442 stored the round and left reaching it to the user, behind a gate that is byte equality with
+ * the failed message. The owner of the instance that produced the evidence drives it by VOICE: two
+ * utterances of the same sentence transcribe differently, so for him the gate could essentially
+ * never open, and the console had already cleared the text the error told him to send again. A
+ * saved round nobody can reach is a saved round.
+ *
+ * Two conditions, both necessary:
+ *
+ *  - **A round exists.** Nothing executed ⇒ nothing to protect from re-execution, and no reason to
+ *    spend a second generation on the user's key.
+ *  - **The provider said a retry could work** (`retryable`, set by `UserAiProviderError` at the
+ *    site that knows which failure it is). A `total` deadline is deterministic — its own message
+ *    says a retry "will fail the same way" — and an invalid key is not going to become valid
+ *    between two calls one second apart.
+ *
+ * Read structurally rather than with `instanceof`: this module is pure by design (it is what the
+ * decisions are tested through) and importing the provider client to name one boolean would drag
+ * D1, crypto and the whole BYOK path into it.
+ */
+export function autoResumableRoundOf(err: unknown): ResumableRound | null {
+	const round = resumableRoundOf(err);
+	if (!round) return null;
+	return (err as { retryable?: unknown }).retryable === true ? round : null;
+}
+
+/**
+ * Run a turn, and on a retryable failure that carried a round, run it ONCE more from that round.
+ *
+ * This is the half #442 left to the user (#518). It is written as a function OVER `think` rather
+ * than as a branch inside the Durable Object for one reason: the property worth proving is that
+ * the stored round is *consumed* — handed to a second attempt — and a branch inside a DO method can
+ * only be proved by inspection, which is how #442 shipped correct and unreachable.
+ *
+ * Exactly two attempts. Not a loop: the second failure is evidence about the provider, not about
+ * this turn, and a turn that retries until it succeeds spends someone else's credit deciding when
+ * to stop. If the second attempt fails it throws normally, carrying its own (larger) round, so the
+ * manual path — the stored round plus the composer restoring the exact text — is untouched.
+ *
+ * Re-executing tools is not a risk this has to argue about, because it is not a new mechanism: the
+ * round carries `executed` and `mutations`, and `runAgentThink` seeds the cross-round dedup from
+ * them, so an identical call the model re-issues is refused exactly as it would be inside one turn.
+ * The results themselves are replayed into the transcript, which is why it does not re-issue.
+ */
+export async function thinkWithAutoResume<T>(
+	think: (resume?: ResumableRound) => Promise<T>,
+	opts: { resume?: ResumableRound; onAutoResume?: (round: ResumableRound, err: unknown) => void | Promise<void> } = {},
+): Promise<T> {
+	try {
+		return await think(opts.resume);
+	} catch (err) {
+		const round = autoResumableRoundOf(err);
+		if (!round) throw err;
+		// The record of the recovery must never be able to prevent it: this is a durable log write
+		// on the failure path, and losing the retry to a logging error would be a strictly worse
+		// outcome than losing the log line.
+		try {
+			await opts.onAutoResume?.(round, err);
+		} catch {
+			/* observability is not a precondition */
+		}
+		return await think(round);
+	}
 }

@@ -417,7 +417,13 @@ const PINS = {
 	// paid for by collapsing the call sites onto single lines — compressing code to clear a ratchet
 	// is the mirror image of lowering a pin to make room for it, and both leave the number honest
 	// while making the file worse.
-	"store/console/src/pages/InstanceDetail.tsx": 1478,
+	// +12 at #518, and eleven of them are the paragraph. The code is `setInput((cur) => cur.trim() ?
+	// cur : msg)` in the send catch: the composer cleared the text before the POST, so the platform
+	// told a voice user to "send the message again" with nothing left to send, and the server-side
+	// resume behind it is gated on byte equality with that exact string. The prose has to say why it
+	// only fills an EMPTY box and why re-speaking is not a substitute, or the next reader deletes it
+	// as a stray restore.
+	"store/console/src/pages/InstanceDetail.tsx": 1490,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -619,7 +625,14 @@ const PINS = {
 	// moving it elsewhere would separate it from the messages it identifies. The lines that matter
 	// are the prose: before this the ONLY join from a transcript to its trace was a timestamp, and
 	// the trace's `chat.in` timestamp was stamped at the END of the turn (measured 7.8s late).
-	"workers/api/src/agent-do.ts": 1218,
+	// +27 for #518, of which the executable part is one call: `think` now runs through
+	// `thinkWithAutoResume`, so a retryable failure that carried a round is retried ONCE from that
+	// round instead of being handed to a user who cannot reproduce the sentence it is keyed to. The
+	// rest is the `chat.auto_resumed` event (a recovery nobody can count is one nobody trusts) and
+	// the paragraph naming why the platform retries rather than the person. The decision, the
+	// bound and the consumption are pure and tested in lib/resumable-round.ts — the same split #442
+	// took, which is why this raise is wiring and prose rather than logic.
+	"workers/api/src/agent-do.ts": 1245,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -943,7 +956,10 @@ const PINS = {
 	// +15 at #517: the agent-think raise above — three lines of code that carry WHICH join matched
 	// out of `resolveAgentCapabilities` — and a reason longer than the growth, because the part
 	// worth reading is the measurement that rejected the cheaper fix. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1027,
+	// +15 at #518: the agent-do and InstanceDetail raises above — one is a call, one is a line — and
+	// both reasons are mostly about a user who speaks rather than types, because that is the fact
+	// that turned #442's stored round into a feature nobody could reach. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1043,
 };
 
 /**

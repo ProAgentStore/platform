@@ -109,3 +109,39 @@ export function deadlineMessage(kind: AiDeadlineKind, budgetMs: number): string 
 		" or narrow the request to one file, one issue or one step."
 	);
 }
+
+/**
+ * The same verdict as `deadlineMessage`, in the form a MACHINE can act on (#518).
+ *
+ * Two of the three sentences above end in "Send the message again" and the third says a retry
+ * "will fail the same way". That advice was only ever prose: the platform told the user to retry
+ * and then made retrying their problem. Now that a failed turn's completed tool rounds are
+ * resumable (#442), the platform can perform that retry itself — but only where its own message
+ * says a retry is worth performing, which is exactly this function.
+ *
+ * Keeping the two together is the point. `ai-deadlines.test.ts` asserts they agree sentence by
+ * sentence, so a message that starts advising a retry and a policy that declines to make one
+ * cannot drift apart in silence — the failure mode that makes automated recovery untrustworthy.
+ */
+export function isRetryableDeadline(kind: AiDeadlineKind): boolean {
+	// `total` is the one deterministic failure of the three: the reply was too LONG, and a
+	// byte-identical retry produces a reply of the same length and stops at the same ceiling.
+	return kind !== "total";
+}
+
+/**
+ * What the user reads when the socket dies rather than a deadline expiring (#518).
+ *
+ * The runtime's own `AbortError` used to be reported with `deadlineMessage("stall", 20_000)`, which
+ * states a MEASUREMENT — "20s of silence" — that nothing measured: the number was the constant, and
+ * the connection may have been dropped a second in. The observable fact is only that the connection
+ * ended mid-reply, so that is all this says. The remedy is identical, which is why it was tempting
+ * to reuse the sentence and why reusing it was wrong: an error message that invents a number is one
+ * an investigator will later spend an hour trusting.
+ */
+export function connectionLostMessage(): string {
+	return (
+		"The connection to the AI provider ended mid-reply, so the answer was cut off rather than slow." +
+		" The half-written answer was discarded instead of being shown as if it were complete. Send the message again."
+	);
+}

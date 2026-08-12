@@ -3,8 +3,11 @@ import {
 	AI_FIRST_TOKEN_TIMEOUT_MS,
 	AI_STALL_TIMEOUT_MS,
 	AI_TOTAL_TIMEOUT_MS,
+	type AiDeadlineKind,
+	connectionLostMessage,
 	deadlineMessage,
 	generationBudgetMs,
+	isRetryableDeadline,
 	PROMPT_PROCESSING_ALLOWANCE_MS,
 	SUSTAINED_OUTPUT_TOKENS_PER_SECOND,
 } from "./ai-deadlines.js";
@@ -80,5 +83,40 @@ describe("what the user is told (#427 item 4)", () => {
 		for (const kind of ["first-token", "stall", "total"] as const) {
 			expect(deadlineMessage(kind, 25_000)).not.toContain("25000");
 		}
+	});
+});
+
+describe("the advice and the automatic behaviour, held equal (#518)", () => {
+	const KINDS: AiDeadlineKind[] = ["first-token", "stall", "total"];
+
+	/**
+	 * The invariant that makes an automatic retry trustworthy: the platform retries exactly the
+	 * failures whose message tells the user to. Two tables that mean the same thing and are checked
+	 * by nothing is how #427's own numbers drifted apart, and this pair is far easier to break —
+	 * one is prose.
+	 */
+	it("retries precisely the kinds whose sentence says to send the message again", () => {
+		for (const kind of KINDS) {
+			const invitesRetry = /send the message again/i.test(deadlineMessage(kind, 25_000));
+			expect(isRetryableDeadline(kind), `${kind}: the message and the retry policy disagree`).toBe(invitesRetry);
+		}
+	});
+
+	it("never auto-retries the one deadline that fails identically every time", () => {
+		expect(isRetryableDeadline("total")).toBe(false);
+		expect(isRetryableDeadline("first-token")).toBe(true);
+		expect(isRetryableDeadline("stall")).toBe(true);
+	});
+
+	/**
+	 * The adjacent nit on #518: a runtime `AbortError` was reported as `deadlineMessage("stall",
+	 * AI_STALL_TIMEOUT_MS)` — "20s of silence" — where the 20 was the CONSTANT and nothing had
+	 * measured anything. A dropped socket may have dropped a second in.
+	 */
+	it("reports a dropped connection without inventing a duration", () => {
+		const msg = connectionLostMessage();
+		expect(msg).not.toMatch(/\d+\s*s\b/);
+		expect(msg).toMatch(/discarded/i);
+		expect(msg).toMatch(/send the message again/i);
 	});
 });

@@ -2053,6 +2053,34 @@ test.describe("ProAgentStore Console smoke", () => {
 			),
 		).toBeVisible();
 	});
+
+	/**
+	 * #518: the platform's own error says "Send the message again", and the composer had cleared the
+	 * text before the POST — so the instruction named an action the surface had made impossible, and
+	 * the server-side resume behind it (#442) is gated on byte equality with that exact string. The
+	 * owner who found this speaks his messages: re-speaking one never transcribes identically, so
+	 * the restored draft is not a convenience, it is the only way that gate opens by hand.
+	 */
+	test("a failed send gives the words back, so the retry the error asks for is possible (#518)", async ({
+		page,
+	}) => {
+		await mockSignedInConsole(page, {
+			instanceChatStatus: 504,
+			instanceChatBody: {
+				error:
+					"The AI provider stopped sending mid-reply — 20s of silence, so the connection is gone rather than slow. The half-written answer was discarded instead of being shown as if it were complete. Send the message again.",
+			},
+		});
+
+		await page.goto("/console/instances/inst-1");
+		const input = page.getByPlaceholder(/Send a message|Ask about your repos/);
+		await input.fill("what changed in the last deploy?");
+		await page.getByRole("button", { name: /Send/ }).first().click();
+
+		await expect(page.getByText(/Send the message again/)).toBeVisible();
+		// Byte-identical, not "something like it" — that is the whole property.
+		await expect(input).toHaveValue("what changed in the last deploy?");
+	});
 });
 
 test.describe("ProAgentStore skill discovery", () => {

@@ -649,6 +649,18 @@ function InstancePage() {
 				...prev,
 				{ role: "system", content: `Error: ${e instanceof Error ? e.message : String(e)}`, createdAt: new Date().toISOString() },
 			]);
+			// #518: give the words back. `sendMessage` clears the composer BEFORE the POST, so the
+			// platform's own advice — "Send the message again" — asked for a string this surface had
+			// already thrown away, and the server-side resume it unlocks is gated on byte equality
+			// with it. Restoring the exact text makes that gate openable by construction; retyping it,
+			// or re-speaking it, essentially cannot (two dictations of one sentence never match).
+			// Same landing place a turn recovered mid-reply takes (#175), so a voice mode shows the
+			// composer for it rather than swallowing it — see lib/composer.ts.
+			//
+			// Only into an EMPTY box: waiting for a failing turn is exactly when someone starts typing
+			// the next thing, and a recovery that overwrites a draft has traded one lost message for
+			// another.
+			setInput((cur) => (cur.trim() ? cur : msg));
 		}
 		setThinking(false);
 		if (transfer) {
