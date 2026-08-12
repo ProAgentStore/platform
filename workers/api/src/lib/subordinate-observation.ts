@@ -46,6 +46,15 @@ export interface SubordinateSummary {
 	buckets: Array<{ id: string; title: string; count: number }>;
 	work: ObservedWork[];
 	runs: ObservedRun[];
+	/**
+	 * How many older work items the budget dropped from THIS subordinate (#503).
+	 *
+	 * Present only when something was dropped, and the trim now stops at one item rather than
+	 * emptying the list: an empty `work` means IDLE — the legend says so in as many words — so a
+	 * subordinate trimmed to nothing was reporting a busy agent as doing nothing, which is the same
+	 * defect #259 is about arriving by a different route.
+	 */
+	workOmitted?: number;
 }
 
 export interface SubordinateInput {
@@ -153,6 +162,8 @@ export function summarizeSubordinates(input: {
 		let victim: SubordinateSummary | null = null;
 		let oldest = Number.POSITIVE_INFINITY;
 		for (const s of out) {
+			// Never below one item. See `workOmitted`: a list trimmed to empty is read as idle.
+			if (s.work.length <= 1) continue;
 			const last = s.work[s.work.length - 1]; // sorted newest-first, so this is its oldest
 			if (!last) continue;
 			const ts = at(last.updatedAt);
@@ -161,8 +172,9 @@ export function summarizeSubordinates(input: {
 				victim = s;
 			}
 		}
-		if (!victim) break; // nothing left to drop — runs and identity always survive
+		if (!victim) break; // nothing left to drop — runs, identity and one work item always survive
 		victim.work.pop();
+		victim.workOmitted = (victim.workOmitted ?? 0) + 1;
 		truncated = true;
 	}
 

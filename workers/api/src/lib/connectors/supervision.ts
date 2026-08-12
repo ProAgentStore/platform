@@ -37,6 +37,7 @@ import {
 } from "../instance-work.js";
 import { logError } from "../error-log.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
+import { STATUS_LEGEND, TIMES_LEGEND, fitStatusPayload, rosterLines } from "../subordinate-payload.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity, type BudgetFacts } from "../subordinate-connectivity.js";
 import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
@@ -458,38 +459,31 @@ async function observeSubordinates(
 				: {}),
 		};
 	});
-	return {
-		content: JSON.stringify(
-			{
-				// The reason #329 was filed: this was `new Date().toISOString()`, and a Lead read it
-				// back to a Sydney owner as "22:33:34 UTC" (#345).
-				asOf: localStamp(Date.now(), zone),
-				// What the tool decided the caller meant, when they named an agent rather than an id.
-				...(resolved ? { resolved } : {}),
-				// Stated in the payload, not only in the tool description, because the description
-				// is far away by the time the model reads this JSON — and the failure it prevents
-				// is precisely a model reasoning from an empty board to "no runner" (#259).
-				legend:
-					"`connectivity.canWork` is the ONLY field that says whether an agent can be given work now. Empty `work`/`runs` means IDLE — which is normal and ready, not offline. " +
-					"`repo` is the CURRENT state of the checkout a goal would run in — the branch it is parked on and any uncommitted work a previous run left. It is context, not a gate: a run starts from wherever the repo was left, and nothing resets or discards it. Relay `repo.note` to the human when it is present, and never instruct an agent to clear a working tree you did not put there. " +
-					// #320: the Lead passed "fws" to github_list_issues because `repo.name` was all it
-					// had, got "No github access", and asked the HUMAN for a path the platform stores.
-					"`repo.githubRepo` is that repository's `owner/name` on GitHub and is the ONLY value to pass to a GitHub tool. `repo.name` is a display label chosen by the owner — it may look like a path and still not be one. When `githubRepo` is absent the repo is not linked to GitHub; say that rather than guessing an owner or asking the human to supply one. " +
-					"`acts` is what an agent actually DID — a pull request opened or merged, a push, a force-push, a delete, a deploy — with the literal command as evidence. Anything with `irreversible: true` changed something that cannot simply be undone, so REPORT IT to the human unprompted: an outcome of 'done' says only that the agent believes it finished, never what it changed on the way. " +
-					"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
-					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing. " +
-					TIMES_LEGEND +
-					CONFIG_LEGEND +
-					" " +
-					DIRECTION_LEGEND,
-				...view,
-				subordinates: withConnectivity,
-			},
-			null,
-			2,
-		),
-		success: true,
-	};
+	// Fitted to a budget measured on what actually SHIPS, not on the intermediate object
+	// `summarizeSubordinates` sees (#503) — and with the complete roster in the first bytes, so the
+	// count survives whatever the budget costs. The roster is built from the FULL list, never from
+	// `subs`: a call narrowed to one agent must still be able to say how many there are.
+	//
+	// Compact JSON, not `null, 2`: pretty-printing a payload that is competing for a budget spends
+	// roughly a sixth of it on indentation no model reads.
+	const fitted = fitStatusPayload({
+		// The reason #329 was filed: this was `new Date().toISOString()`, and a Lead read it back
+		// to a Sydney owner as "22:33:34 UTC" (#345).
+		asOf: localStamp(Date.now(), zone),
+		roster: rosterLines({
+			roster,
+			observed: view.subordinates,
+			canWork: new Map([...connectivityById].map(([id, c]) => [id, c.canWork] as const)),
+		}),
+		subordinates: withConnectivity as unknown as Array<Record<string, unknown>>,
+		// What the tool decided the caller meant, when they named an agent rather than an id.
+		...(resolved ? { extra: { resolved } } : {}),
+		// Stated in the payload, not only in the tool description, because the description is far
+		// away by the time the model reads this JSON — and the failure it prevents is precisely a
+		// model reasoning from an empty board to "no runner" (#259).
+		legend: STATUS_LEGEND,
+	});
+	return { content: fitted.content, success: true };
 }
 
 /**
@@ -520,16 +514,6 @@ async function standingConfigFor(ctx: SupervisionCtx, instanceId: string): Promi
 export const MAX_ACTS_PER_SUBORDINATE = 5;
 
 const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
-
-/**
- * Said in the payload because the payload is what the model is reading (#345).
- *
- * Every timestamp here has already been converted to the owner's zone with the zone NAMED, so the
- * remaining failure is a model "helpfully" converting an already-local time back to UTC — which is
- * the same wrong hour arriving by the opposite route.
- */
-const TIMES_LEGEND =
-	"Every time in this payload is ALREADY the owner's local wall clock with its zone named. Repeat it as written — do not convert it, do not re-label it UTC, and do not add an offset. ";
 
 export const SUPERVISION_TOOLS: ToolDef[] = [
 	{
@@ -564,7 +548,15 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"What every agent you supervise is doing RIGHT NOW, in one call: what each is working on, " +
 			"what finished, what is waiting on a human, and how long anything has been quiet. Call this " +
 			"FIRST whenever you are asked about status, progress, or what is happening, and answer from " +
-			"it — never start a run just to find out. Each item's `status` is that agent's own word for " +
+			"it — never start a run just to find out. " +
+			// #503: the Lead reported 3 of 6 agents for two days. The count now rides in the first
+			// bytes of the answer and is never reduced, so this sentence says where to read it —
+			// counting `subordinates` is what produced every wrong number in that transcript.
+			"The answer opens with `total` and `roster`: the COMPLETE list of every agent you supervise, " +
+			"never shortened. \"How many agents do you have\" is `total`; \"which ones are idle\" is " +
+			"`roster[].activity`. Never answer either by counting the `subordinates` detail below it — " +
+			"that detail is shortened when it does not fit, and `coverage` says when it was. " +
+			"Each item's `status` is that agent's own word for " +
 			"it; `columnTitle` is what THAT agent says the word means. " +
 			"`connectivity` is a SEPARATE question from busyness: `connectivity.canWork` says whether " +
 			"an agent is reachable and can be given work now. An agent with no work in flight is IDLE " +

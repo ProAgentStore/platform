@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS, autoNumberedNames, resolveSubordinate, type SubordinateRow } from "./supervision.js";
 import { stripCommentsAndLiterals } from "../source-guard.js";
+import { capToolResult } from "../tool-result-cap.js";
 import type { Env } from "../../types.js";
 
 const tool = (name: string) => {
@@ -994,5 +995,103 @@ describe("transfer_conversation — moving the PERSON (#279)", () => {
 	it("tells the model the move already happened, so it stops talking", async () => {
 		const r = await tool("transfer_conversation").handler(ctx(buildEnv()) as never, { instanceId: "sub", note: "about the parser" });
 		expect(r.content).toMatch(/no longer reading/i);
+	});
+});
+
+describe("subordinate_status — the whole roster, not the part that fit (#503)", () => {
+	// The owner's own six, in the order the live payload carried them. FAS, FWS and FGS were the
+	// three the Lead could always see; Heartfull, PAS Coder and Chess coder 2 were the three it
+	// never could, for two days, across six turns of being asked.
+	const SIX = ["FAS platform", "FWS platform", "FGS platform", "Heartfull", "PAS Coder", "Chess coder 2"];
+	const id = (i: number) => `sub${i}`;
+
+	/** Six subordinates as busy as the live ones — work, runs, acts, repos and standing rules. */
+	const sixBusyAgents = () =>
+		buildEnv({
+			edges: SIX.map((_, i) => ["sup", id(i)] as [string, string]),
+			instances: SIX.map((name, i) => ({
+				id: id(i),
+				status: "active",
+				config: JSON.stringify({ specialInstructions: `Always run the suite before pushing. ${"Never force-push to main. ".repeat(8)}` }),
+				agent_name: name,
+				slug: "coder",
+				category: "code",
+				agent_config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }),
+			})),
+			work: SIX.flatMap((_, i) =>
+				Array.from({ length: 8 }, (_, w) => ({
+					instance_id: id(i),
+					id: `t-${i}-${w}`,
+					type: "delegation",
+					status: "running",
+					payload: JSON.stringify({ title: `Delegated: ${"work the issue queue bugs first ".repeat(4)}`, description: "progress ".repeat(30) }),
+					updated_at: `2026-08-1${w % 2} 10:0${w}:00`,
+				})),
+			),
+			runs: SIX.flatMap((_, i) =>
+				Array.from({ length: 5 }, (_, r) => ({
+					instance_id: id(i),
+					run_id: `r-${i}-${r}`,
+					objective: "work through the open issues, bugs first, and report what changed ".repeat(4),
+					status: r === 0 ? "running" : "completed",
+					stop_reason: null,
+					detail: "iteration detail ".repeat(15),
+					iteration: 4,
+					max_iterations: 10,
+					started_at: 1,
+					finished_at: null,
+					last_progress_at: 2,
+				})),
+			),
+			acts: SIX.flatMap((_, i) =>
+				Array.from({ length: 5 }, (_, a) => ({
+					instance_id: id(i),
+					trace_id: `r-${i}-0`,
+					message: `merged a pull request #${a} — ${"squashed onto main ".repeat(6)}`,
+					context: JSON.stringify({ act: "pr.merge", irreversible: true, command: `gh pr merge ${a} --squash ${"--delete-branch ".repeat(10)}` }),
+					ts: 1700,
+				})),
+			),
+			repos: SIX.map((name, i) => ({ instance_id: id(i), name, github_repo: `some-organisation/${name.replace(/\s+/g, "-").toLowerCase()}`, merge_policy: "pr-only" })),
+		});
+
+	it("returns all six agents in a result capToolResult does not touch", async () => {
+		const out = await tool("subordinate_status").handler(ctx(sixBusyAgents()) as never, {});
+		// The measured defect: 60,239 characters into a 24,000 ceiling, so three agents never
+		// reached the model. `capToolResult` returns its input unchanged when it fits, so this is
+		// the assertion that the two budgets can no longer disagree.
+		expect(capToolResult(out.content)).toBe(out.content);
+		const parsed = JSON.parse(out.content) as {
+			total: number;
+			roster: Array<{ name: string; activity: string }>;
+			coverage: { detailFor: number; detailLevel: string; note: string };
+			subordinates: Array<{ name: string }>;
+		};
+		// "How many agents do you have in total?" — asked six times, answered wrongly every time.
+		expect(parsed.total).toBe(6);
+		expect(parsed.roster.map((r) => r.name).sort()).toEqual([...SIX].sort());
+		expect(parsed.subordinates.map((s) => s.name).sort()).toEqual([...SIX].sort());
+		// "Which agents are idling, doing nothing?" — one field, on every agent, always present.
+		expect(parsed.roster.every((r) => r.activity === "working" || r.activity === "idle")).toBe(true);
+		// And it fits because it was REDUCED, not because this fixture is small: six agents this
+		// busy do not fit at full detail, and the payload says so rather than ending mid-object.
+		expect(parsed.coverage.detailLevel).not.toBe("full");
+		expect(parsed.coverage).toMatchObject({ detailFor: 6 });
+		expect(parsed.coverage.note).toMatch(/SHORTENED/);
+
+	});
+
+	it("answers about ONE of them in full — the narrower slice the truncation notice asks for", async () => {
+		const out = await tool("subordinate_status").handler(ctx(sixBusyAgents()) as never, { instanceId: "Heartfull" });
+		expect(capToolResult(out.content)).toBe(out.content);
+		const parsed = JSON.parse(out.content) as { total: number; roster: unknown[]; resolved: { name: string }; subordinates: Array<{ name: string; acts: unknown[]; runs: unknown[] }> };
+		// Narrowed to one — and the roster is STILL all six, so a follow-up "how many again?" does
+		// not need another call and cannot be answered from the one agent that was asked about.
+		expect(parsed.total).toBe(6);
+		expect(parsed.roster).toHaveLength(6);
+		expect(parsed.resolved.name).toBe("Heartfull");
+		expect(parsed.subordinates).toHaveLength(1);
+		expect(parsed.subordinates[0].acts.length).toBeGreaterThan(0);
+		expect(parsed.subordinates[0].runs.length).toBeGreaterThan(0);
 	});
 });
