@@ -631,12 +631,15 @@ describe("the payer observation survives (#348/#356)", () => {
 	it("ending a session ledgers the closing turn (#267)", async () => {
 		// A session's last turn routinely completes after its final capture poll, so a drain only
 		// on /capture would lose the closing turn of EVERY session — a bias, not noise.
+		const { ledger } = await endSession({ usage: [{ ...TURN, id: "closing-turn" }] });
+		expect(ledger).toHaveLength(1);
+		expect(ledger[0].binds).toContain("owner-uid");
+	});
+
+	/** Drive `POST …/end` against a runner that answers `reply`, and hand back what reached D1. */
+	async function endSession(reply: Record<string, unknown>) {
 		const { DB, ledger, relayFor } = ownerEnv();
-		const env = {
-			SESSION_SIGNING_KEY: SECRET,
-			DB,
-			RELAY: relayFor(() => ({ usage: [{ ...TURN, id: "closing-turn" }] })),
-		} as unknown as Env;
+		const env = { SESSION_SIGNING_KEY: SECRET, DB, RELAY: relayFor(() => reply) } as unknown as Env;
 		const token = await signSession("owner-uid", SECRET, { roles: ["user"] });
 		const res = await ownerApp().request(
 			"/v1/instances/inst-1/coding/sessions/csess-1/end",
@@ -644,8 +647,28 @@ describe("the payer observation survives (#348/#356)", () => {
 			env,
 		);
 		expect(res.status).toBe(200);
-		expect(ledger).toHaveLength(1);
-		expect(ledger[0].binds).toContain("owner-uid");
+		return { ledger };
+	}
+
+	it("the closing turn carries the payer too — the fourth site, missed by #356 (#554)", async () => {
+		// The bug this replaces was invisible on an account where every row was already
+		// payer-unknown for an unrelated reason, and structurally biased rather than random: it
+		// could only ever hit the turns that completed after the last capture poll, which is
+		// exactly the set the end drain exists to catch. So a session whose every capture said
+		// `api-key` still contributed a NULL tail.
+		const { ledger } = await endSession({ usage: [{ ...TURN, id: "closing-turn" }], authResolved: "api-key" });
+		expect(payerOf(ledger[0])).toBe("byok-api");
+	});
+
+	it("a runner too old to answer it still writes UNKNOWN rather than a preset-derived guess (#554)", async () => {
+		// The rejected alternative was to look the credential up from the session's engine preset.
+		// That is the CONFIGURED mode, and the whole premise of `engine-auth.ts` is that the mode
+		// is not the outcome — a shell-exported ANTHROPIC_API_KEY beats an injected subscription
+		// token. A confident wrong payer is worse than an honest NULL, because #343's ceiling acts
+		// on it. The session row this drives says `launch_command: "claude"`, so a preset lookup
+		// would have had something to answer with; it must still answer nothing.
+		const { ledger } = await endSession({ usage: [{ ...TURN, id: "closing-turn" }] });
+		expect(payerOf(ledger[0])).toBeNull();
 	});
 });
 

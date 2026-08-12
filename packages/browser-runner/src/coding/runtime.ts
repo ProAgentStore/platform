@@ -298,8 +298,19 @@ export class CodingRuntime {
 	 * turn of a session very often runs after the final capture poll, and ending is where that
 	 * record would otherwise be lost — silently, and only for the turns at the end of every
 	 * session, which is a bias rather than noise.
+	 *
+	 * …and, since #554, WHO PAID for it. The spend was already returned here; the observation that
+	 * makes it attributable was one field away on the session object in hand, so every closing turn
+	 * of every session reached the ledger with `payer` NULL even when the credential was known. The
+	 * bias is the same one the paragraph above describes, which is why the omission mattered: it
+	 * did not lose a random sample of turns, it lost the last turn of every session.
+	 *
+	 * `null` is a REAL answer here, not a default. `end()` tolerates a `sessionId` it has never
+	 * heard of, and the honest report for a session this runner does not have is that it cannot say
+	 * what the engine authenticated with — not a guess derived from the preset (see
+	 * `usage-payer.ts`, and the alternative #554 rejected).
 	 */
-	end(sessionId: string): { ok: true; usage: EngineUsageRecord[]; acts: EngineActRecord[] } {
+	end(sessionId: string): { ok: true; usage: EngineUsageRecord[]; acts: EngineActRecord[]; authResolved: EngineAuthResolved | null } {
 		const session = this.sessions.get(sessionId);
 		const usage = session ? session.takeUsage() : [];
 		// Acts drain here too, and for a sharper version of the same reason (#294): the LAST thing a
@@ -307,12 +318,16 @@ export class CodingRuntime {
 		// happens after the final capture poll. Discarding the tail would systematically lose exactly
 		// the acts this record exists for.
 		const acts = session ? session.takeActs() : [];
+		// Read BEFORE `stop()`: `authResolved` is a live getter over the merged spawn env
+		// (`headless.ts`), so it must be taken while the session is still the object that spawned
+		// the process rather than after it has been torn down and dropped from the map.
+		const authResolved = session ? session.authResolved : null;
 		if (session) {
 			session.stop();
 			this.sessions.delete(sessionId);
 		}
 		this.takeovers.delete(sessionId);
-		return { ok: true, usage, acts };
+		return { ok: true, usage, acts, authResolved };
 	}
 
 	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string }> {

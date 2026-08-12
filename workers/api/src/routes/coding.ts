@@ -698,7 +698,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	// and durably rather than reporting a clean stop that did not happen.
 	let stopError: string | null = null;
 	const ended = conn
-		? await callRunner<{ usage?: unknown; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch((e) => {
+		? await callRunner<{ usage?: unknown; acts?: unknown; authResolved?: unknown }>(conn, "/coding/end", { sessionId }).catch((e) => {
 				stopError = e instanceof Error ? e.message : String(e);
 				return null;
 			})
@@ -711,7 +711,15 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 			context: { instanceId, sessionId, runnerNode: session?.runnerNode ?? null },
 		});
 	}
-	await recordEngineUsage(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineUsage(ended?.usage));
+	// …and WHO paid for it (#554). This was the fourth `recordEngineUsage` site and the only one
+	// that dropped the observation, so the closing turns above — the ones the comment calls a bias
+	// rather than noise — landed with `payer` NULL however the engine had actually signed in.
+	// `?? null`, never a fallback to the preset: what was CONFIGURED is not what was resolved.
+	await recordEngineUsage(
+		c.env,
+		{ userId: uid, sessionId, instanceId, authResolved: (ended?.authResolved ?? null) as EngineAuthResolved | null },
+		sanitizeEngineUsage(ended?.usage),
+	);
 	// Same tail problem, sharper consequence (#294): a coding session very often ENDS with the
 	// consequential act — push, open the PR, merge it — so acts drained only on capture would
 	// systematically miss the last and most important one of every session.

@@ -217,6 +217,29 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(rt.list().some((s) => s.sessionId === "s2")).toBe(false);
 	});
 
+	it("ending a session reports what its engine authenticated with (#554)", () => {
+		// The closing drain is the ONLY `recordEngineUsage` site the cloud cannot supply this for
+		// itself: the credential is decided by a merge with THIS machine's shell, so the runner is
+		// the only party that knows. Without the field every session's last turns — the ones the
+		// end drain exists to catch — reached the ledger with `payer` NULL.
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "auth-end", repoId: "r1", workDir: dir, clientType: "claude", bin, env: { ANTHROPIC_API_KEY: "sk-test" } });
+		const ended = rt.end("auth-end");
+		expect(ended.authResolved).toBe("api-key");
+	});
+
+	it("ending a session it has never heard of answers null, not a guess and not a missing key", () => {
+		// `end()` tolerates an unknown id, and the honest answer for a session this runner does not
+		// hold is that it cannot say. `null` and an ABSENT key both reach the cloud as unknown, but
+		// only the explicit null says the runner was asked and answered — which is what
+		// distinguishes this runner from one published before #554.
+		rt = new CodingRuntime(join(dir, "base"));
+		const ended = rt.end("never-existed");
+		expect("authResolved" in ended).toBe(true);
+		expect(ended.authResolved).toBeNull();
+		expect(ended.usage).toEqual([]);
+	});
+
 	it("takeover forwards human input to the agent", async () => {
 		rt = new CodingRuntime(join(dir, "base"));
 		rt.start({ sessionId: "s3", repoId: "r1", workDir: dir, clientType: "claude", bin });
