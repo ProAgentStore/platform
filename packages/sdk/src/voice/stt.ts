@@ -3,7 +3,8 @@
 import { API, getToken } from "../client.js";
 import { describeTranscribeHttpError, drainSseData, isTooShortToTranscribe, pickRecorderMimeType, whisperFilename } from "./audio.js";
 import { type GateEvidence } from "./machine.js";
-import { isBenignRecognizerEnd, type MicErrorDetail, planMicRestart } from "./mic-retry.js";
+import { micHandoff, nextMicOwner } from "./mic-handoff.js";
+import { isBenignRecognizerEnd, type MicErrorDetail, type MicFailureRun, micErrorDetail, NO_MIC_FAILURES, noteMicFailure, planMicRestart } from "./mic-retry.js";
 import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
 import { type ClipVerdict, hadSpeech, type LevelSnapshot, onsetFloorFor, planClipGate } from "./vad.js";
 
@@ -94,6 +95,10 @@ interface SpeechRecognitionLike {
 	onresult: ((e: SpeechRecognitionEventLike) => void) | null;
 	onerror: ((e: SpeechRecognitionErrorEventLike) => void) | null;
 	onend: (() => void) | null;
+	/** Fired when the UA BEGINS CAPTURING AUDIO. The one honest proof that this recognizer got the
+	 *  device, and therefore the only event that may end a failure run (#425). Optional because a
+	 *  stub may not have it — where it is absent a transcript is the fallback proof. */
+	onaudiostart?: (() => void) | null;
 	start(): void;
 	stop(): void;
 	/** Standard on the real API; optional here because a stub may not have it. `stop()` asks for
@@ -155,13 +160,21 @@ export class VoiceStt {
 	listening = false;
 
 	private _rec: SpeechRecognitionLike | null = null;
-	/** Consecutive non-benign browser-recognizer failures, and when the run began (#425). On the
-	 *  INSTANCE rather than in `_startBrowser`'s closure because the run belongs to the device, not
-	 *  to a recognizer object — Chrome's `start()` throws after an abort, and the recovery for that
-	 *  is to build a fresh one, which would otherwise reset the backoff to zero every time. */
-	private _micFails = 0;
-	private _micBurstAt = 0;
+	/** The failure run over the device (#425). On the INSTANCE rather than in `_startBrowser`'s
+	 *  closure because the run belongs to the device, not to a recognizer object — Chrome's
+	 *  `start()` throws after an abort, and the recovery for that is to build a fresh one, which
+	 *  would otherwise reset the backoff to zero every time. For the same reason it is now cleared
+	 *  only by PROOF OF CAPTURE and not by a benign code: `aborted` is what this class's own
+	 *  `stop()` raises, and `stop()` happens at every turn boundary — which is where the contention
+	 *  is. See {@link MicFailureRun}. */
+	private _micRun: MicFailureRun = NO_MIC_FAILURES;
 	private _micRetryTimer: ReturnType<typeof setTimeout> | null = null;
+	/** This recognizer's identity in the shared device handoff (#425). Per INSTANCE: the control
+	 *  listener and the main dictation recognizer are two `VoiceStt`s over one microphone. */
+	private _owner = nextMicOwner("stt");
+	/** Is a browser recognition session open (started, no `onend` since)? Only then does `stop()`
+	 *  leave a close for the next consumer to wait on. */
+	private _sessionOpen = false;
 	private _mediaRec: MediaRecorder | null = null;
 	private _stream: MediaStream | null = null;
 	/** Set by stopDiscard(): the pending recording is dropped instead of transcribed. */
@@ -222,12 +235,21 @@ export class VoiceStt {
 
 	stop() {
 		this.listening = false;
+		// A start queued behind someone else's close belongs to a session the caller has now
+		// cancelled; running it later would reopen the mic behind their back (#291, via #425's
+		// new door).
+		micHandoff.cancel(this._owner);
 		// A pending backoff retry must not reopen the microphone after the caller asked for it to
 		// close — the same class of leak as a swallowed `stop()` below (#291).
 		if (this._micRetryTimer) {
 			clearTimeout(this._micRetryTimer);
 			this._micRetryTimer = null;
 		}
+		// Declare the close BEFORE asking for it. Both stops below are asynchronous — the
+		// recognizer's completes at `onend`, the recorder's when its tracks actually stop — and
+		// `use-voice` starts the next consumer in the same tick. That gap is the handoff race
+		// (#425); this is what makes the next consumer wait for it.
+		if (this._sessionOpen || (this._mediaRec && this._mediaRec.state !== "inactive") || this._stream) micHandoff.releasing(this._owner);
 		if (this._rec) {
 			try {
 				this._rec.stop();
@@ -271,6 +293,10 @@ export class VoiceStt {
 
 	/** Stop every mic track and drop the stream. Safe to call twice. */
 	private _releaseStream() {
+		// The recorder's close is complete once the tracks are down — whether or not there was a
+		// stream to release, this is the last step of a Whisper teardown, so the waiting control
+		// listener is freed here (#425).
+		micHandoff.released(this._owner);
 		if (!this._stream) return;
 		for (const t of this._stream.getTracks()) {
 			try {
@@ -324,17 +350,27 @@ export class VoiceStt {
 		// If it throws (InvalidStateError — Chrome does this after abort/end),
 		// discard it and create a fresh one.
 		if (this._rec) {
-			try {
-				// Re-apply the configured language before EVERY start — never leave it at the
-				// browser/OS-locale default (which auto-detects and can transcribe/translate to
-				// the wrong language).
-				this._rec.lang = this.language;
-				this._rec.start();
-				return;
-			} catch {
-				this._rec = null;
-				// Fall through to create a new one
-			}
+			const reused = this._rec;
+			// Re-apply the configured language before EVERY start — never leave it at the
+			// browser/OS-locale default (which auto-detects and can transcribe/translate to
+			// the wrong language).
+			reused.lang = this.language;
+			// …and wait for anyone else's close first. The control listener is started by the
+			// reconcile effect in the same tick that the gate and the Whisper recorder were told
+			// to stop, and neither has let go of the device yet (#425).
+			let threw = false;
+			micHandoff.whenFree(this._owner, () => {
+				if (!this.listening) return; // stopped while the handoff was pending
+				try {
+					reused.start();
+					this._sessionOpen = true;
+				} catch {
+					threw = true;
+				}
+			});
+			if (!threw) return;
+			this._rec = null;
+			// Fall through to create a new one
 		}
 		const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 		if (!SR) {
@@ -347,11 +383,10 @@ export class VoiceStt {
 		rec.interimResults = true;
 		rec.lang = this.language;
 		rec.onresult = (e: SpeechRecognitionEventLike) => {
-			// Audio arrived → whatever was wrong with the device is over. This is the only proof of
-			// recovery a recognizer offers, and without it the backoff would ratchet to its ceiling
+			// Audio arrived → whatever was wrong with the device is over. Proof of capture is the
+			// ONLY thing that ends a run, and without it the backoff would ratchet to its ceiling
 			// for the rest of the session on the strength of one bad turn boundary.
-			this._micFails = 0;
-			this._micBurstAt = 0;
+			this._micRun = NO_MIC_FAILURES;
 			let interim = "",
 				final = "";
 			for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -368,44 +403,56 @@ export class VoiceStt {
 		rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
 			lastCode = e.error;
 			// A device failure is only interesting as a RUN. `no-speech`/`aborted` are the ordinary
-			// churn of a continuous recognizer, so they clear the run rather than extend it.
-			if (isBenignRecognizerEnd(e.error)) {
-				this._micFails = 0;
-				this._micBurstAt = 0;
-			} else {
-				if (!this._micFails) this._micBurstAt = Date.now();
-				this._micFails++;
-			}
+			// churn of a continuous recognizer, so they do not EXTEND the run — but they no longer
+			// clear it either: `aborted` is what our own `stop()` raises, at every turn boundary,
+			// which is exactly where the contention is. Only proof of capture clears a run.
+			if (!isBenignRecognizerEnd(e.error)) this._micRun = noteMicFailure(this._micRun, Date.now());
 			// A PERMISSION verdict is terminal, and this line is the whole reason the #425 latch
 			// works at all. `onEnd` — where the caller clears its want-flag and shows the notice —
 			// is reached only through the `else` in `onend` below, i.e. only when `listening` is
 			// false. Nothing cleared it on a denial, so the internal re-arm fired instead, the
 			// caller's `onEnd` was never called, and `ctrlWantRef = false` was dead state written
 			// by a handler that could not stop the loop it was added to stop.
-			if (planMicRestart({ code: e.error, consecutiveFailures: this._micFails }).terminal) this.listening = false;
-			if (e.error !== "no-speech") this.onError(e.error, { fails: this._micFails, burstMs: this._micBurstAt ? Date.now() - this._micBurstAt : 0 });
+			if (planMicRestart({ code: e.error, consecutiveFailures: this._micRun.fails }).terminal) this.listening = false;
+			if (e.error !== "no-speech") this.onError(e.error, micErrorDetail(this._micRun, Date.now()));
 		};
 		let restartFails = 0;
 		const rearm = () => {
 			if (!this.listening) return; // stopped while the backoff was pending
-			try {
-				// continuous mode ends and we auto-restart — re-apply the language each time
-				// so a restart never reverts to the browser's default/auto-detect locale.
-				rec.lang = this.language;
-				rec.start();
-				restartFails = 0;
-			} catch {
-				restartFails++;
-				if (restartFails > 3) {
-					this.listening = false;
-					this.onError("mic restart failed");
-					this.onEnd();
+			// The backoff is a guess about how long a release takes; the handoff is the fact. Both
+			// apply — a re-arm waits out the delay AND any close still in flight (#425).
+			micHandoff.whenFree(this._owner, () => {
+				if (!this.listening) return;
+				try {
+					// continuous mode ends and we auto-restart — re-apply the language each time
+					// so a restart never reverts to the browser's default/auto-detect locale.
+					rec.lang = this.language;
+					rec.start();
+					this._sessionOpen = true;
+					restartFails = 0;
+				} catch {
+					restartFails++;
+					if (restartFails > 3) {
+						this.listening = false;
+						this.onError("mic restart failed");
+						this.onEnd();
+					}
 				}
-			}
+			});
+		};
+		rec.onaudiostart = () => {
+			// The UA acquired the device. The strongest proof of capture there is, and — for a
+			// control listener that is running precisely so that nobody has to speak to it — often
+			// the ONLY one that will ever arrive (#425).
+			this._micRun = NO_MIC_FAILURES;
 		};
 		rec.onend = () => {
+			// The close the next consumer has been waiting for is complete NOW, not when `stop()`
+			// returned (#425).
+			this._sessionOpen = false;
+			micHandoff.released(this._owner);
 			if (!this.listening) return this.onEnd();
-			const plan = planMicRestart({ code: lastCode, consecutiveFailures: this._micFails });
+			const plan = planMicRestart({ code: lastCode, consecutiveFailures: this._micRun.fails });
 			lastCode = null;
 			if (!plan.restart) {
 				this.listening = false;
@@ -423,12 +470,16 @@ export class VoiceStt {
 			}, plan.delayMs);
 		};
 		this._rec = rec;
-		try {
-			rec.start();
-		} catch (e) {
-			this.onError(e instanceof Error ? e.message : String(e));
-			this.listening = false;
-		}
+		micHandoff.whenFree(this._owner, () => {
+			if (!this.listening) return; // stopped while the handoff was pending
+			try {
+				rec.start();
+				this._sessionOpen = true;
+			} catch (e) {
+				this.onError(e instanceof Error ? e.message : String(e));
+				this.listening = false;
+			}
+		});
 	}
 
 	/**

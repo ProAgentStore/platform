@@ -1,6 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpeechGate, speechGateAvailable } from "./gate.js";
+import { micHandoff } from "./mic-handoff.js";
 import { MIC_RETRY_BASE_MS } from "./mic-retry.js";
+
+// The device handoff is process-wide by design (#425) — the gate, the control listener and the
+// recorder are separate objects that must agree about one microphone. A test that leaves a gate
+// stopped without its `onend` (the abort case below does exactly that) leaves a close in flight,
+// and the next test's gate would then legitimately wait on it.
+beforeEach(() => micHandoff.reset());
 
 // A controllable fake of the browser SpeechRecognition, so the gate's speech/liveness
 // logic is tested without a real mic. Tests fire onresult/onend by hand.
@@ -390,6 +397,81 @@ describe("a refused microphone (#425)", () => {
 		endsItself(sr);
 		expect(sr.started, "the backoff leaked into the normal cycle, which runs constantly (ADR 0001 M1)").toBe(before + 1);
 		vi.useRealTimers();
+		restore();
+	});
+
+	/**
+	 * The reopen, and the reason `4cf17eb`'s backoff could not do its job.
+	 *
+	 * The run was cleared on {@link isBenignRecognizerEnd}, which includes `aborted` — the code our
+	 * own `stop()` raises. The caller stops the gate at EVERY turn boundary, and the turn boundary
+	 * is where the contention is, so the counter was zeroed by the event immediately before the
+	 * failure. Every `client:voice-gate` row in production read `fails: 1, burstMs: 0`, including
+	 * one that could not have been collapsed with anything, eleven minutes into a burst.
+	 */
+	it("carries the failure run ACROSS the turn boundary that produced it", () => {
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		const seen: Array<{ fails: number; burstMs: number }> = [];
+		const gate = createSpeechGate({ onInterim: () => {}, onMicError: (_c, d) => seen.push(d) })!;
+		for (let turn = 0; turn < 3; turn++) {
+			gate.start();
+			gate.reset(); // the caller does this once per turn; per-turn facts, not the device's
+			const sr = instances[0];
+			sr.onerror?.({ error: "audio-capture" }); // the gate loses the device to the handoff
+			endsItself(sr);
+			sr.onerror?.({ error: "aborted" }); // …and the turn ends: our own stop(), our own code
+			gate.stop();
+			vi.advanceTimersByTime(1_000);
+		}
+		expect(seen.map((d) => d.fails), "the run reset at every turn boundary, so the backoff never left its 400ms floor").toEqual([1, 2, 3]);
+		expect(seen[2].burstMs, "burstMs stayed at 0, so a row could not say how long the device had been refusing").toBeGreaterThan(0);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("ends the run only on proof of capture — the browser reporting the microphone open", () => {
+		// `onaudiostart` is the one event that means the device was actually acquired. Nothing else
+		// may end a run, because nothing else is evidence about the device.
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		const seen: number[] = [];
+		const gate = createSpeechGate({ onInterim: () => {}, onMicError: (_c, d) => seen.push(d.fails) })!;
+		gate.start();
+		const sr = instances[0];
+		sr.onerror?.({ error: "audio-capture" });
+		endsItself(sr);
+		vi.advanceTimersByTime(MIC_RETRY_BASE_MS);
+		sr.openMic(); // the retry got the device
+		sr.onerror?.({ error: "audio-capture" });
+		expect(seen, "a recovered device kept escalating the backoff on the strength of one bad boundary").toEqual([1, 1]);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("waits for another consumer's close before it opens the device", () => {
+		// Turn start: `startListening` tells the control listener to stop and `startAudioMonitor`
+		// starts the gate a tick later, while that listener is still letting go. `audio-capture` is
+		// the code a browser produces for exactly that.
+		const { instances, restore } = withFakeSR();
+		micHandoff.releasing("stt:ctrl");
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		expect(instances[0].started, "the gate opened the device on top of a close that had not finished").toBe(0);
+		micHandoff.released("stt:ctrl");
+		expect(instances[0].started).toBe(1);
+		restore();
+	});
+
+	it("throws away a start it is still waiting for when the turn ends", () => {
+		// The #291 leak through the new door: a queued start belongs to a turn that is now over.
+		const { instances, restore } = withFakeSR();
+		micHandoff.releasing("stt:ctrl");
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		gate.stop();
+		micHandoff.released("stt:ctrl");
+		expect(instances[0].started, "the microphone reopened after the caller closed it").toBe(0);
 		restore();
 	});
 

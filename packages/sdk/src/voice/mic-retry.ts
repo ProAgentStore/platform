@@ -61,10 +61,68 @@ export const MIC_CONTENTION_NOTICE_AFTER = 4;
  * completely different things about the user's machine.
  */
 export interface MicErrorDetail {
-	/** Consecutive non-benign errors, reset by any result or ordinary end. */
+	/** Consecutive non-benign errors over the device, reset by proof of capture. */
 	fails: number;
 	/** Milliseconds since the first failure of this burst (0 on the first). */
 	burstMs: number;
+}
+
+/**
+ * How long a quiet gap has to be before the next failure counts as a NEW burst rather than a
+ * continuation of the last one.
+ *
+ * Without a gap rule a run only ever grows, so the fourth failure of a session shows the
+ * contention notice even if the three before it were hours ago and the device has worked since.
+ * 30s is the durable log's own de-dup window, which makes `fails` and the row count answer the
+ * same question over the same period.
+ */
+export const MIC_BURST_GAP_MS = 30_000;
+
+/**
+ * The failure run over the DEVICE — the state {@link planMicRestart} escalates and the durable row
+ * reports.
+ *
+ * It is a value rather than a pair of counters in a recognizer's closure because of what shipping
+ * it the other way cost. Both re-arming loops held their own `micFails` and cleared it on
+ * {@link isBenignRecognizerEnd} — which includes `aborted`, the code a DELIBERATE `stop()` raises.
+ * Every turn boundary stops both background recognizers, and turn boundaries are exactly where the
+ * contention lives, so the run was zeroed by the very event that preceded the failure. Production
+ * after the backoff shipped: eleven `client:voice-gate` rows over eleven minutes, then a separate
+ * `not-allowed` row one second after the last of them — and every one of them, including the
+ * standalone row that cannot have been collapsed with anything, reads `fails: 1, burstMs: 0`. The
+ * backoff was real code that could never leave its 400ms floor.
+ *
+ * So the two questions are now separate, and only one of them reads the error code:
+ *
+ *  - **How long to wait before re-arming?** {@link planMicRestart}, from the code. Unchanged, and
+ *    still instant for `no-speech`/`aborted` — a delay there is a gap in mute-by-voice (ADR 0001
+ *    M1).
+ *  - **Is the run over?** Only PROOF OF CAPTURE answers that: the UA reporting `audiostart`, or a
+ *    transcript arriving. A code is not evidence about a device; `aborted` in particular is
+ *    evidence about nothing at all, because we are the ones who raised it.
+ */
+export interface MicFailureRun {
+	/** Consecutive failures since the last proof of capture (or the last {@link MIC_BURST_GAP_MS}
+	 *  of quiet). */
+	fails: number;
+	/** When the run began — epoch ms, 0 when there is no run. */
+	startedAt: number;
+	/** The most recent failure — epoch ms, 0 when there is no run. */
+	lastAt: number;
+}
+
+/** No failures: what a fresh consumer starts with, and what proof of capture returns it to. */
+export const NO_MIC_FAILURES: MicFailureRun = { fails: 0, startedAt: 0, lastAt: 0 };
+
+/** Fold one more failure into the run, starting a fresh burst after a long enough gap. */
+export function noteMicFailure(run: MicFailureRun, now: number): MicFailureRun {
+	if (run.fails === 0 || now - run.lastAt > MIC_BURST_GAP_MS) return { fails: 1, startedAt: now, lastAt: now };
+	return { fails: run.fails + 1, startedAt: run.startedAt, lastAt: now };
+}
+
+/** The run in the shape the durable row carries. */
+export function micErrorDetail(run: MicFailureRun, now: number): MicErrorDetail {
+	return { fails: run.fails, burstMs: run.startedAt ? now - run.startedAt : 0 };
 }
 
 export interface MicRestartPlan {

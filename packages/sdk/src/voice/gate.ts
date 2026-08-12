@@ -19,7 +19,8 @@
 import { isNoiseTranscript } from "./audio.js";
 import { isReportableMicError } from "./convo.js";
 import { EMPTY_HEARD, type HeardState, heardText, reduceHeard } from "./machine.js";
-import { isBenignRecognizerEnd, type MicErrorDetail, planMicRestart } from "./mic-retry.js";
+import { micHandoff, nextMicOwner } from "./mic-handoff.js";
+import { isBenignRecognizerEnd, type MicErrorDetail, type MicFailureRun, micErrorDetail, NO_MIC_FAILURES, noteMicFailure, planMicRestart } from "./mic-retry.js";
 
 interface SpeechRecognitionAlternativeLike {
 	readonly transcript: string;
@@ -174,11 +175,20 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 	let denied = false;
 	let restartFails = 0;
 	/** The failure RUN over the device, and the code that ended the current session — the inputs
-	 *  {@link planMicRestart} needs to decide between an instant re-arm and a backoff (#425). */
-	let micFails = 0;
-	let micBurstAt = 0;
+	 *  {@link planMicRestart} needs to decide between an instant re-arm and a backoff (#425).
+	 *  It is cleared ONLY by proof of capture, never by an error code: the gate is stopped and
+	 *  started at every turn boundary, so clearing it on `aborted` — the code our own `stop()`
+	 *  raises — reset the counter at exactly the moment the contention happens. See
+	 *  {@link MicFailureRun}. */
+	let micRun: MicFailureRun = NO_MIC_FAILURES;
 	let lastCode: string | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
+	/** This gate's identity in the shared device handoff (#425). */
+	const owner = nextMicOwner("gate");
+	/** Did a `start()` succeed with no `onend` since? Only then does `stop()` have a close for the
+	 *  next consumer to wait on — otherwise every turn end would cost the control listener the
+	 *  handoff timeout for a session that was never open. */
+	let sessionOpen = false;
 
 	const build = (): SpeechRecognitionLike => {
 		const r = new SR();
@@ -191,6 +201,9 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// recognizer dying on `audio-capture` never gets to fire (#535).
 			alive = true;
 			hearing = true;
+			// The UA acquired the device — the strongest proof of capture there is, and the one
+			// event that can honestly end a failure run (#425).
+			micRun = NO_MIC_FAILURES;
 		};
 		r.onresult = (e: SpeechRecognitionEventLike) => {
 			alive = true;
@@ -198,8 +211,7 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// browser that does not implement `onaudiostart`.
 			hearing = true;
 			// Audio arrived → the failure run is over (the only proof of recovery on offer).
-			micFails = 0;
-			micBurstAt = 0;
+			micRun = NO_MIC_FAILURES;
 			// The WHOLE session (from 0) and the DELTA (from resultIndex) in one pass. The session
 			// halves are what {@link reduceHeard} folds — recomputed, never accumulated, so a phrase
 			// re-delivered as final after arriving as interim cannot be counted twice. The delta is
@@ -248,10 +260,7 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// itself a mic-activation storm.
 			const code = e?.error;
 			lastCode = code ?? null;
-			if (isBenignRecognizerEnd(code)) {
-				micFails = 0;
-				micBurstAt = 0;
-			} else {
+			if (!isBenignRecognizerEnd(code)) {
 				// #535 criterion 4: the gate stops claiming to hear. `audio-capture` and the permission
 				// codes all mean the same thing about this session — it does not have the device — and
 				// until now the gate said nothing about itself either way, so a recognizer that never
@@ -259,13 +268,16 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 				// deliberately: `no-speech` is the recognizer reporting FROM an open microphone that
 				// nobody spoke, which is the evidence the veto is actually made of.
 				hearing = false;
-				if (!micFails) micBurstAt = Date.now();
-				micFails++;
+				micRun = noteMicFailure(micRun, Date.now());
 			}
-			if (planMicRestart({ code, consecutiveFailures: micFails }).terminal) denied = true;
-			if (isReportableMicError(code)) opts.onMicError?.(code, { fails: micFails, burstMs: micBurstAt ? Date.now() - micBurstAt : 0 });
+			if (planMicRestart({ code, consecutiveFailures: micRun.fails }).terminal) denied = true;
+			if (isReportableMicError(code)) opts.onMicError?.(code, micErrorDetail(micRun, Date.now()));
 		};
 		r.onend = () => {
+			// The device is genuinely free NOW — not when `stop()` was called, which is the whole of
+			// the handoff race (#425): `stop()` returns immediately and the close lands here.
+			sessionOpen = false;
+			micHandoff.released(owner);
 			// "It started and ended" — and NOTHING MORE. A recognizer that was refused the microphone
 			// ends too, which is why this line may not touch `hearing`: reading it as liveness is the
 			// whole of #535. `alive` keeps its honest, session-lifetime meaning and no verdict reads it.
@@ -278,20 +290,26 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// `denied` is checked with `active` because a restart here cannot succeed and each
 			// attempt costs the user another prompt.
 			if (!active || denied) return;
-			const plan = planMicRestart({ code: lastCode, consecutiveFailures: micFails });
+			const plan = planMicRestart({ code: lastCode, consecutiveFailures: micRun.fails });
 			lastCode = null;
 			// Keep watching: restart unless it's failing in a tight loop (mic blocked). A failing
 			// cycle waits — the no-delay version re-acquired the device as fast as Chrome would
 			// cycle it, against a recorder that was in the middle of releasing it.
 			const go = () => {
 				if (!active || denied) return;
-				try {
-					r.start();
-					restartFails = 0;
-				} catch {
-					restartFails++;
-					if (restartFails <= 3) setTimeout(() => { if (active) { try { r.start(); } catch { /* give up quietly */ } } }, 250);
-				}
+				// …and it waits for anyone else's close to finish, which the delay above cannot do:
+				// a backoff is a guess about how long a release takes, the handoff is the fact.
+				micHandoff.whenFree(owner, () => {
+					if (!active || denied) return;
+					try {
+						r.start();
+						sessionOpen = true;
+						restartFails = 0;
+					} catch {
+						restartFails++;
+						if (restartFails <= 3) setTimeout(() => { if (active) { try { r.start(); sessionOpen = true; } catch { /* give up quietly */ } } }, 250);
+					}
+				});
 			};
 			if (plan.delayMs <= 0) return go();
 			if (retryTimer) clearTimeout(retryTimer);
@@ -305,21 +323,34 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			if (active || denied) return;
 			active = true;
 			if (!rec) rec = build();
-			try {
-				rec.start();
-			} catch {
-				// Chrome throws if start() races a prior end — a fresh instance recovers.
-				rec = build();
-				try { rec.start(); } catch { /* unavailable right now; onend won't fire */ }
-			}
+			// The turn-start half of the handoff: `startAudioMonitor` runs one tick after
+			// `startListening` told the control listener to stop, and that listener has not let go
+			// of the device yet (#425). Synchronous when nobody is mid-close, which is the norm.
+			micHandoff.whenFree(owner, () => {
+				if (!active || denied || !rec) return;
+				try {
+					rec.start();
+					sessionOpen = true;
+				} catch {
+					// Chrome throws if start() races a prior end — a fresh instance recovers.
+					rec = build();
+					try { rec.start(); sessionOpen = true; } catch { /* unavailable right now; onend won't fire */ }
+				}
+			});
 		},
 		stop() {
 			active = false;
+			// A queued start belongs to the turn that has just ended. Running it would reopen a
+			// microphone the caller has closed — the #291 class of leak, via the new door.
+			micHandoff.cancel(owner);
 			// A pending backoff retry must not reopen the mic after the turn it belonged to ended.
 			if (retryTimer) {
 				clearTimeout(retryTimer);
 				retryTimer = null;
 			}
+			// Claim the device as CLOSING before asking it to close, so the control listener the
+			// reconcile effect is about to start waits for `onend` instead of racing it.
+			if (sessionOpen) micHandoff.releasing(owner);
 			if (rec) {
 				try {
 					rec.stop();

@@ -1,5 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechGate } from "./gate.js";
+import { micHandoff, MIC_HANDOFF_TIMEOUT_MS } from "./mic-handoff.js";
 import { DEFAULT_STT_MODEL, supportsNoSpeechProb, TRANSCRIBE_FIRST_BYTE_MS, TRANSCRIBE_TIMEOUT_MESSAGE, VoiceStt, NO_SPEECH_PROB_THRESHOLD } from "./stt.js";
+
+// The device handoff is process-wide by design (#425): the control listener, the gate and the
+// recorder are separate objects that must agree about one microphone. A test that stops a fake
+// recognizer which never fires `onend` leaves a close in flight, and the next test's recognizer
+// would then legitimately wait on it.
+beforeEach(() => micHandoff.reset());
 
 /** Drive the private Whisper upload directly — start() needs a real mic + recorder. */
 const transcribe = (stt: VoiceStt, blob: Blob) =>
@@ -590,6 +598,86 @@ describe("the browser recognizer's re-arm loop (#425)", () => {
 		sr.onend?.();
 		expect(seen, "the run survived a successful capture, so the backoff ratchets to its ceiling for the session").toEqual([1, 1]);
 		vi.advanceTimersByTime(400);
+		vi.useRealTimers();
+		restore();
+	});
+
+	/**
+	 * The reopen. `4cf17eb` gave both re-arming loops a backoff and a `fails` counter; the counter
+	 * was cleared on {@link isBenignRecognizerEnd}, which includes `aborted` — the code THIS class's
+	 * own `stop()` raises. The control listener is stopped at every mic transition, so the run was
+	 * zeroed by the event immediately preceding each failure, and every production row read
+	 * `fails: 1, burstMs: 0` however long the device had been refusing.
+	 */
+	it("carries the failure run across the turn boundary that produced it", async () => {
+		vi.useFakeTimers();
+		const seen: Array<{ fails: number; burstMs: number }> = [];
+		const { instances, restore } = withFakeSR();
+		// Only the contention code: `aborted` reaches `onError` too, and `use-voice` filters it out
+		// through `isReportableMicError` before anything durable is written.
+		const stt = new VoiceStt("browser", { onError: (c, d) => { if (c === "audio-capture" && d) seen.push(d); } });
+		for (let turn = 0; turn < 3; turn++) {
+			await stt.start();
+			const sr = instances[0];
+			sr.onerror?.({ error: "audio-capture" }); // it lost the device to the handoff
+			sr.onend?.();
+			sr.onerror?.({ error: "aborted" }); // …and the main mic opened: our own stop(), our own code
+			stt.stop();
+			sr.onend?.();
+			vi.advanceTimersByTime(1_000);
+		}
+		expect(seen.map((d) => d.fails), "the run reset at every turn boundary, so the backoff never left its 400ms floor").toEqual([1, 2, 3]);
+		expect(seen[2].burstMs, "a row could not say how long the device had been refusing").toBeGreaterThan(0);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("ends the run when the browser reports the microphone open, not when it reports a code", async () => {
+		// `onaudiostart` matters most exactly here: the control listener exists so that nobody HAS
+		// to speak to it, so a transcript may never arrive and be the only proof of recovery.
+		vi.useFakeTimers();
+		const seen: number[] = [];
+		const { sr, restore } = await listening((_c, d) => seen.push(d?.fails ?? -1));
+		sr.onerror?.({ error: "audio-capture" });
+		sr.onend?.();
+		vi.advanceTimersByTime(400);
+		(sr as unknown as { onaudiostart?: () => void }).onaudiostart?.();
+		sr.onerror?.({ error: "audio-capture" });
+		expect(seen, "a device that came back kept escalating the backoff for the rest of the session").toEqual([1, 1]);
+		vi.useRealTimers();
+		restore();
+	});
+
+	/**
+	 * The turn-END half of the handoff, and the one ADR 0001 M1 rides on: `stopAudioMonitor` stops
+	 * the gate and the reconcile effect starts the control listener in the same tick, while the
+	 * gate is still letting go of the device. `stop()` returns immediately; the close lands at
+	 * `onend`.
+	 */
+	it("waits for the gate's close before the control listener opens the device", async () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		gate.stop(); // asked to close — this fake, like a real browser, has not ended yet
+		const ctrl = new VoiceStt("browser", {});
+		await ctrl.start();
+		expect(instances[1].started, "the control listener opened the device on top of the gate's unfinished close").toBe(0);
+		instances[0].onend?.(); // the gate's close lands
+		expect(instances[1].started, "…and then never opened it at all, which is mute-by-voice deleted").toBe(1);
+		restore();
+	});
+
+	it("gives the control listener the device even when the other consumer never closes (ADR 0001 M1)", async () => {
+		// A wedged recognizer must forfeit the device rather than hold the one channel that carries
+		// mute while the agent is speaking. The wait is bounded; it is never indefinite.
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		micHandoff.releasing("gate:wedged"); // and never releases
+		const ctrl = new VoiceStt("browser", {});
+		await ctrl.start();
+		expect(instances[0].started).toBe(0);
+		vi.advanceTimersByTime(MIC_HANDOFF_TIMEOUT_MS);
+		expect(instances[0].started, "mute-by-voice was held shut by a recognizer that had already died").toBe(1);
 		vi.useRealTimers();
 		restore();
 	});
