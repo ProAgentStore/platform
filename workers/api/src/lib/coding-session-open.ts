@@ -6,7 +6,7 @@
 // the autonomous path (`loop-drivers.ts`) and the interactive path share ONE implementation —
 // a second copy would drift on exactly the details that make it work (machine-switch reclaim,
 // installation tokens, engine env).
-import { callRunner, getBoundRunnerConn, getRunnerConn, relayConnected, type RunnerConn } from "./runner-client.js";
+import { callRunner, getBoundRunnerConn, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
@@ -75,7 +75,10 @@ export async function startSessionOnRunner(
 	repo: CodingRepo,
 	opts?: { resumeFrom?: string | null },
 ): Promise<StartOnRunnerResult> {
-	let conn = await getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);
+	// IGNORING LIVENESS, deliberately (#532) — the reclaim immediately below is what acts on a dead
+	// stamped node, and it probes the relay itself two lines down. Resolving live here would only
+	// ask the same DO the same question twice per open.
+	let conn = await getRunnerConnIgnoringLiveness(env, instanceId, uid, session.runnerNode ?? null);
 	// Machine-switch reclaim. `conn` resolves from the DB (endpoint+token) even for a machine
 	// that's gone offline — the `status` column isn't cleared on disconnect — so verify the
 	// session's own machine actually holds a live relay socket. If it doesn't, but the user is

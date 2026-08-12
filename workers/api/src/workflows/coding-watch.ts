@@ -1,7 +1,7 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import type { CodingPaneSnapshot, CodingResult } from "../lib/coding-loop.js";
 import type { CodingSessionParams } from "./coding-session-params.js";
-import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getRunnerConnIgnoringLiveness, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -30,7 +30,22 @@ import type { Env } from "../types.js";
  */
 export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
 	const { instanceId, userId, sessionId, runnerNode, goal } = event.payload;
-	const conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
+	// IGNORING LIVENESS, deliberately (#532) — and this one is a REGRESSION AVOIDED, not a saved
+	// probe.
+	//
+	// The null on the next line is terminal: unlike the autonomous run in `coding-session.ts`, this
+	// mode is NOT behind #341's `makeRunnerGuard`, so nothing here can turn a disconnect into a
+	// pause. Its whole tolerance for a runner that is momentarily away is that it proceeds to
+	// `callRunner`, which raises the typed `RunnerUnreachableError` after the 2.5s settle and one
+	// 2s step retry. Small — and #341's argument is precisely that a budget under the runner's 30s
+	// reconnect cap loses by construction — but resolving live here would delete even that and fail
+	// the watch before a single command was attempted.
+	//
+	// Nothing is lost by holding the row: this mode makes no online CLAIM to anyone (#532 is about
+	// resolutions that report as connected), and liveness is decided one line later by the command
+	// itself, which is a fact rather than a probe. Giving this path a real pause is #341 follow-up
+	// work, not this ticket's.
+	const conn = await getRunnerConnIgnoringLiveness(env, instanceId, userId, runnerNode ?? null);
 	if (!conn) return { outcome: "failed", detail: "No coding runner connected.", steps: 0 };
 
 	// Wait for the just-sent instruction to run to completion (pane goes idle).

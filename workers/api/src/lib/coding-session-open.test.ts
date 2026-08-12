@@ -22,7 +22,9 @@ vi.mock("./coding-store.js", () => ({
 vi.mock("./runner-client.js", () => ({
 	callRunner: vi.fn(async () => ({ ok: true })),
 	getBoundRunnerConn: vi.fn(),
-	getRunnerConn: vi.fn(),
+	// The loader, not the live-checked resolve (#532): `startSessionOnRunner` reasons about a
+	// stamped node that may be dead, and probes the relay itself.
+	getRunnerConnIgnoringLiveness: vi.fn(),
 	relayConnected: vi.fn(async () => true),
 }));
 vi.mock("./coding-engines.js", () => ({
@@ -71,7 +73,7 @@ const conn = { endpointUrl: "https://r", token: "t", instanceId: "inst", userId:
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	vi.mocked(runner.getRunnerConn).mockResolvedValue(conn as never);
+	vi.mocked(runner.getRunnerConnIgnoringLiveness).mockResolvedValue(conn as never);
 	vi.mocked(runner.getBoundRunnerConn).mockResolvedValue(conn as never);
 	vi.mocked(runner.relayConnected).mockResolvedValue(true);
 	vi.mocked(runner.callRunner).mockResolvedValue({ ok: true } as never);
@@ -170,8 +172,8 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 	});
 
 	it("relocates a reused session to the machine that is live now", async () => {
-		// Machine-switch reclaim. `getRunnerConn` resolves from D1 even for a laptop that closed
-		// its lid (the `status` column is never cleared), so without the live check a delegated run
+		// Machine-switch reclaim. `getRunnerConnIgnoringLiveness` resolves from D1 even for a laptop
+		// that closed its lid (the `status` column is never cleared), so without the live check a run
 		// dead-ends on the offline node while the user's other machine sits connected.
 		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_moved"));
 		vi.mocked(runner.relayConnected).mockResolvedValue(false);

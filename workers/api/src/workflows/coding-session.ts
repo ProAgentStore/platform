@@ -8,7 +8,7 @@ import {
 	type CodingPaneSnapshot,
 	type CodingResult,
 } from "../lib/coding-loop.js";
-import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
+import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
 import { runWatchSession } from "./coding-watch.js";
 import type { CodingSessionParams } from "./coding-session-params.js";
@@ -92,13 +92,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		// unconfigured run claims no protection it does not have.
 		const authorityNote = describeAuthority(mergePolicy, goal.clientType);
 
-		let startConn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
+		let startConn = await getRunnerConnIgnoringLiveness(env, instanceId, userId, runnerNode ?? null);
 		// Machine-switch reclaim (matches the interactive /message path). A durable /run can be
 		// queued/resumed long after it was created, by which point the session's owning machine
-		// may be offline while the user is running `pags up` elsewhere. `conn` resolves from the
-		// DB even for a dead node (the `status` column isn't cleared on disconnect), so verify the
-		// relay socket is live; if not, relocate the session to whatever machine the agent runs on
-		// now (live + pin-aware) instead of failing the whole autonomous run.
+		// may be offline while the user is running `pags up` elsewhere. The loader is the DELIBERATE
+		// resolve (#532): this is the code that ACTS on a dead stamped node, so it must be able to
+		// see one, and it asks the relay itself below rather than twice. Not live → relocate the
+		// session to whatever machine the agent runs on now (live + pin-aware) instead of failing.
 		const live = await relayConnected(env, instanceId, runnerNode ?? null).catch(() => false);
 		if (!live) {
 			const fallback = await getBoundRunnerConn(env, instanceId, userId);

@@ -49,12 +49,30 @@ export async function readSpecialInstructions(env: Env, instanceId: string, user
 	}
 }
 
-/** The machine that owns this session — routing follows the session's stamped node. */
+/**
+ * The machine that owns this session — routing follows the session's stamped node, and null when
+ * that machine is not actually connected (#532).
+ *
+ * The stamp stays authoritative: `/message`, `/resume`, `/end` and `/restart` address a child
+ * process that exists on ONE machine, so this must never silently answer with a different one. It
+ * simply no longer answers with a machine that is off. `getRunnerConn` is the live-checked resolve;
+ * relocating a session whose machine has gone away is `startSessionOnRunner`'s job, on the paths
+ * that open or drive one.
+ *
+ * Measured before the fix: session `csess_c960d431…` stamped to `Sergeys-Mac-mini.local`, resolved
+ * here for ten hours across the machine being off, and `/capture` answered `runnerConnected: true`
+ * off the row every time.
+ */
 export async function getSessionRunnerConn(env: Env, instanceId: string, uid: string, session: CodingSessionRecord) {
 	return getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);
 }
 
-/** The instance's default machine — for the commands that aren't scoped to one session. */
+/**
+ * The instance's default machine — for the commands that aren't scoped to one session.
+ *
+ * Live-checked since #532, for the same reason: `/coding/browse` reads a filesystem that only
+ * exists while that machine is up, and the default `instance_runtimes` row outlives it.
+ */
 export async function getDefaultRunnerConn(env: Env, instanceId: string, uid: string) {
 	const runtime = await getRuntime(env, instanceId, uid);
 	return getRunnerConn(env, instanceId, uid, runtime?.runner_node ?? null);

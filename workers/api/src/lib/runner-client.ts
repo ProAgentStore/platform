@@ -17,10 +17,57 @@ export interface RunnerConn {
 
 /**
  * Resolve the connected runner for an instance and decrypt its bearer token.
- * Returns null when no runner is online.
+ *
+ * Returns null when no runner is online — and since #532 that sentence is TRUE. It used to be a
+ * description of {@link getRunnerConnIgnoringLiveness} below, which answers a different question
+ * (does a registration row exist), and the gap between the two is the whole defect: FOUR call sites
+ * had independently written the same `relayConnected` workaround around it (both resolvers below,
+ * the Pilot's reclaim, `startSessionOnRunner`), and the ones that had not were exactly the ones
+ * reporting a machine that had been off for days as connected.
+ *
+ * Liveness is the RelayDO's answer, asked here, once. Callers that already probe — or that must
+ * hold the row for a machine known to be dead, like the machine-switch reclaim — call
+ * {@link getRunnerConnIgnoringLiveness} BY NAME, so the choice is visible at the call site rather
+ * than implied by which helper happened to be imported.
  */
 export async function getRunnerConn(env: Env, instanceId: string, userId: string, runnerNode?: string | null): Promise<RunnerConn | null> {
+	const conn = await getRunnerConnIgnoringLiveness(env, instanceId, userId, runnerNode);
+	if (!conn) return null;
+	// The RESOLVED node, not the requested one: with no node the row carries the default runtime's
+	// machine, and the relay is keyed per (instance, node). This is the same probe `getLiveRunnerConn`
+	// used to make on the line after its own call, so the default path's behaviour is unchanged.
+	if (!(await relayConnected(env, instanceId, conn.runnerNode ?? null).catch(() => false))) return null;
+	return conn;
+}
+
+/**
+ * The registration ROW for a machine, decrypted — with no claim that the machine is up (#532).
+ *
+ * For the two callers that need it and say so: a resolver that has already asked the relay itself
+ * (and would otherwise pay for a second identical probe), and the machine-switch reclaim, which
+ * exists precisely to act on a stamped node that is dead and must be able to see it.
+ *
+ * Anything that will report, gate, or route on the answer wants {@link getRunnerConn}.
+ */
+export async function getRunnerConnIgnoringLiveness(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	runnerNode?: string | null,
+): Promise<RunnerConn | null> {
 	const node = normalizeRunnerNode(runnerNode);
+	// WHAT `status` MEANS, because three defects in one month have turned on it (#238, #531, #532).
+	//
+	// It is the last thing a runner SAID about itself — `registered`/`online`, written by the
+	// register + heartbeat routes. NOTHING CLEARS IT ON DISCONNECT: `RelayDO.webSocketClose` does
+	// not touch D1, so a laptop whose lid closed months ago still reads `online` here forever.
+	// `/runtime/status` will write `offline` only when a probe fails AND the heartbeat has already
+	// gone stale, which by construction never happens for a machine that simply stopped calling.
+	//
+	// So this predicate excludes a runner that was explicitly marked down, and NOTHING ELSE. It is
+	// not liveness and must never be read as liveness. Liveness is `relayConnected` — the RelayDO
+	// holds the socket — and since #532 the one function responsible for asking it on this row's
+	// behalf is {@link getRunnerConn}, directly above.
 	const row = await env.DB.prepare(
 		node
 			? "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node = ?3 AND status != 'offline'"
@@ -84,7 +131,8 @@ export async function getBoundRunnerConn(env: Env, instanceId: string, userId: s
 		// (RelayDO.webSocketClose doesn't touch D1), so a machine that closed its laptop still
 		// reads `registered`. The RelayDO is the only source of truth. Pinned + dead → offline.
 		if (await relayConnected(env, instanceId, node).catch(() => false)) {
-			return getRunnerConn(env, instanceId, userId, node);
+			// Already probed, on this exact node — the loader, so the socket is not asked about twice.
+			return getRunnerConnIgnoringLiveness(env, instanceId, userId, node);
 		}
 		// The pinned NAME is dead — but a name is not a machine (#379). `os.hostname()` moves under
 		// the machine (DHCP, VPN, the `.local` mDNS form), so a pin can outlive the name it was
@@ -94,7 +142,7 @@ export async function getBoundRunnerConn(env: Env, instanceId: string, userId: s
 		// No id recorded → no candidates → the same null as before.
 		for (const alias of await sameMachineNodes(env, instanceId, userId, node)) {
 			if (await relayConnected(env, instanceId, alias).catch(() => false)) {
-				return getRunnerConn(env, instanceId, userId, alias);
+				return getRunnerConnIgnoringLiveness(env, instanceId, userId, alias);
 			}
 		}
 		return null;
@@ -163,8 +211,10 @@ export async function liveNodeIgnoringPin(env: Env, instanceId: string, userId: 
  * is the antidote to the stale-`status` column: routing follows the socket, not the DB row.
  */
 async function getLiveRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
+	// `getRunnerConn` IS the default row plus that probe since #532 — the check that used to be
+	// written out on this line is now inside it, so a non-null answer here is already live-checked.
 	const def = await getRunnerConn(env, instanceId, userId);
-	if (def && (await relayConnected(env, instanceId, def.runnerNode ?? null).catch(() => false))) return def;
+	if (def) return def;
 	// Default is stale/offline — scan the per-machine node registrations for a live socket.
 	const { results } = await env.DB.prepare(
 		"SELECT DISTINCT runner_node FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node IS NOT NULL AND runner_node != '' ORDER BY updated_at DESC",
@@ -173,7 +223,7 @@ async function getLiveRunnerConn(env: Env, instanceId: string, userId: string): 
 		const node = normalizeRunnerNode(r.runner_node);
 		if (!node) continue;
 		if (await relayConnected(env, instanceId, node).catch(() => false)) {
-			return getRunnerConn(env, instanceId, userId, node);
+			return getRunnerConnIgnoringLiveness(env, instanceId, userId, node);
 		}
 	}
 	return null;

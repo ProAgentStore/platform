@@ -1,5 +1,14 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { callRunner, getBoundRunnerConn, isRunnerOnline, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
+import {
+	callRunner,
+	getBoundRunnerConn,
+	getRunnerConn,
+	getRunnerConnIgnoringLiveness,
+	isRunnerOnline,
+	relayConnected,
+	READ_TIMEOUT_MS,
+	type RunnerConn,
+} from "./runner-client.js";
 import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import { isRunnerUnreachable } from "./runner-unreachable.js";
 import type { Env } from "../types.js";
@@ -166,61 +175,112 @@ describe("runtime node helpers", () => {
 	});
 });
 
-describe("getBoundRunnerConn (live-aware routing)", () => {
-	const INST = "inst-1";
-	// Build an Env whose DB answers the three reads getBoundRunnerConn makes, and whose RELAY
-	// reports `connected` only for relay names in `liveNames`. This models the real bug: the DB
-	// `status` column is never cleared on disconnect, so routing MUST follow the live socket.
-	function buildEnv(opts: {
-		pin?: string;                                   // config.runnerNode (pin)
-		defaultNode?: string | null;                    // instance_runtimes.runner_node
-		nodes?: string[];                               // instance_runtime_nodes rows
-		liveNames?: string[];                           // relay names reporting connected
-		/** node -> machine_id (#379). Absent = the column is NULL, which is every legacy row. */
-		machines?: Record<string, string>;
-	}): Env {
-		const live = new Set(opts.liveNames ?? []);
-		const DB = {
-			prepare(sql: string) {
-				return {
-					bind(...args: unknown[]) {
-						return {
-							async first() {
-								if (sql.includes("FROM agent_instances")) return { config: JSON.stringify({ runnerNode: opts.pin ?? "" }) };
-								if (sql.includes("FROM instance_runtimes")) {
-									return opts.defaultNode
-										? { endpoint_url: `http://default`, token_plaintext: "t", runner_node: opts.defaultNode, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
-										: null;
-								}
-								if (sql.includes("FROM instance_runtime_nodes") && sql.includes("runner_node = ?3")) {
-									const node = String(args[2]);
-									return (opts.nodes ?? []).includes(node)
-										? { endpoint_url: `http://${node}`, token_plaintext: "t", runner_node: node, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
-										: null;
-								}
-								return null;
-							},
-							async all() {
-								if (sql.includes("SELECT DISTINCT runner_node")) return { results: (opts.nodes ?? []).map((n) => ({ runner_node: n })) };
-								// The machine-identity read (#379) — every node the USER has, with its id.
-								if (sql.includes("machine_id AS machineId")) {
-									return { results: (opts.nodes ?? []).map((n) => ({ node: n, machineId: opts.machines?.[n] ?? null, instanceId: INST, lastSeenAt: null })) };
-								}
-								return { results: [] };
-							},
-							async run() { return { meta: { changes: 0 } }; },
-						};
-					},
-				};
-			},
-		};
-		const RELAY = {
-			idFromName: (name: string) => ({ name }),
-			get: (id: { name: string }) => ({ fetch: async () => Response.json({ connected: live.has(id.name) }) }),
-		};
-		return { RELAY, DB } as unknown as Env;
-	}
+const INST = "inst-1";
 
+/**
+ * An Env whose DB answers the reads the resolvers make, and whose RELAY reports `connected` only
+ * for relay names in `liveNames`.
+ *
+ * This models the real bug in both tickets: every row it returns is a row the DB is HAPPY to
+ * return — `status` is never cleared on disconnect, so the query behind these reads matches a
+ * machine that has been off for months. Which machine is up is expressed ONLY through `liveNames`,
+ * because that is the only place the truth lives in production too.
+ */
+function buildEnv(opts: {
+	pin?: string;                                   // config.runnerNode (pin)
+	defaultNode?: string | null;                    // instance_runtimes.runner_node
+	nodes?: string[];                               // instance_runtime_nodes rows
+	liveNames?: string[];                           // relay names reporting connected
+	/** node -> machine_id (#379). Absent = the column is NULL, which is every legacy row. */
+	machines?: Record<string, string>;
+}): Env {
+	const live = new Set(opts.liveNames ?? []);
+	const DB = {
+		prepare(sql: string) {
+			return {
+				bind(...args: unknown[]) {
+					return {
+						async first() {
+							if (sql.includes("FROM agent_instances")) return { config: JSON.stringify({ runnerNode: opts.pin ?? "" }) };
+							if (sql.includes("FROM instance_runtimes")) {
+								return opts.defaultNode
+									? { endpoint_url: `http://default`, token_plaintext: "t", runner_node: opts.defaultNode, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
+									: null;
+							}
+							if (sql.includes("FROM instance_runtime_nodes") && sql.includes("runner_node = ?3")) {
+								const node = String(args[2]);
+								return (opts.nodes ?? []).includes(node)
+									? { endpoint_url: `http://${node}`, token_plaintext: "t", runner_node: node, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
+									: null;
+							}
+							return null;
+						},
+						async all() {
+							if (sql.includes("SELECT DISTINCT runner_node")) return { results: (opts.nodes ?? []).map((n) => ({ runner_node: n })) };
+							// The machine-identity read (#379) — every node the USER has, with its id.
+							if (sql.includes("machine_id AS machineId")) {
+								return { results: (opts.nodes ?? []).map((n) => ({ node: n, machineId: opts.machines?.[n] ?? null, instanceId: INST, lastSeenAt: null })) };
+							}
+							return { results: [] };
+						},
+						async run() { return { meta: { changes: 0 } }; },
+					};
+				},
+			};
+		},
+	};
+	const RELAY = {
+		idFromName: (name: string) => ({ name }),
+		get: (id: { name: string }) => ({ fetch: async () => Response.json({ connected: live.has(id.name) }) }),
+	};
+	return { RELAY, DB } as unknown as Env;
+}
+
+describe("getRunnerConn — the contract it always documented (#532)", () => {
+	// THE regression test. A session stamped to a machine that is off used to resolve here, and
+	// `/coding/capture` answered `runnerConnected: true` off that resolution — for ten measured
+	// hours on instance f8ddc272, across the incident that produced #530 and #531. The row is
+	// present and `status != 'offline'` in EVERY case below; the only difference is the socket.
+	it("a stamped node with a stale row and NO live socket resolves to null", async () => {
+		const env = buildEnv({ nodes: ["Sergeys-Mac-mini.local"], liveNames: [] });
+		expect(await getRunnerConn(env, INST, "u1", "Sergeys-Mac-mini.local")).toBeNull();
+	});
+
+	it("the same stamped node resolves normally once its socket is live", async () => {
+		const env = buildEnv({ nodes: ["Sergeys-Mac-mini.local"], liveNames: [relayNameForInstance(INST, "Sergeys-Mac-mini.local")] });
+		const conn = await getRunnerConn(env, INST, "u1", "Sergeys-Mac-mini.local");
+		expect(conn?.endpointUrl).toBe("http://Sergeys-Mac-mini.local");
+		expect(conn?.relayName).toBe(relayNameForInstance(INST, "Sergeys-Mac-mini.local"));
+	});
+
+	it("another machine being live does NOT make the stamped one resolve", async () => {
+		// `/message`, `/end` and `/restart` address a child process that exists on ONE machine, so
+		// the fix must not have quietly become a fallback: the answer for a dead stamp is null, not
+		// somebody else's socket.
+		const env = buildEnv({ nodes: ["mini", "laptop"], liveNames: [relayNameForInstance(INST, "laptop")] });
+		expect(await getRunnerConn(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("the default runtime row is live-checked too, on the node the ROW names", async () => {
+		// `/coding/browse` reads a filesystem that only exists while that machine is up.
+		const dead = buildEnv({ defaultNode: "mini", nodes: ["mini"], liveNames: [] });
+		expect(await getRunnerConn(dead, INST, "u1")).toBeNull();
+		const live = buildEnv({ defaultNode: "mini", nodes: ["mini"], liveNames: [relayNameForInstance(INST, "mini")] });
+		expect((await getRunnerConn(live, INST, "u1"))?.endpointUrl).toBe("http://default");
+	});
+
+	it("the loader still hands back the dead machine's row — for the reclaim, which must see it", async () => {
+		// `startSessionOnRunner` and the Pilot relocate a session OFF a machine that has gone away.
+		// That is the one job that needs the row a live check would throw out, and it names the
+		// function that gives it one rather than getting it by accident.
+		const env = buildEnv({ nodes: ["mini"], liveNames: [] });
+		const conn = await getRunnerConnIgnoringLiveness(env, INST, "u1", "mini");
+		expect(conn?.endpointUrl).toBe("http://mini");
+		expect(conn?.runnerNode).toBe("mini");
+	});
+});
+
+describe("getBoundRunnerConn (live-aware routing)", () => {
 	it("unpinned: routes to the default machine when its relay is live", async () => {
 		const env = buildEnv({ defaultNode: "A", nodes: ["A"], liveNames: [relayNameForInstance(INST, "A")] });
 		const conn = await getBoundRunnerConn(env, INST, "u1");

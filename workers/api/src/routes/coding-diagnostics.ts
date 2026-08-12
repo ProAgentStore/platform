@@ -19,6 +19,7 @@ import { callRunner, getRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../l
 import { githubAppConfigured } from "../lib/github-app.js";
 import { engineAuthFor, engineAuthReport, readEngines, type EngineAuthResolved } from "../lib/coding-engines.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
+import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
@@ -95,11 +96,19 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		};
 
 		// 2. Live runner probe
+		//
+		// Live-checked since #532: this used to resolve off the registration row alone, so the
+		// transparency view — the screen a user opens BECAUSE something is wrong — described a
+		// machine that had been off for days as a connection, then reported the two failed commands
+		// as if the machine had answered badly. `reachable` is still what the commands actually did;
+		// what changed is that a dead machine no longer gets asked.
 		const conn = await getRunnerConn(env, instanceId, uid, runtimeRow?.runner_node ?? null);
 		let runnerHealth: unknown = null;
 		let runnerDiag: unknown = null;
 		let runnerReachable = false;
-		const relayName = conn?.relayName ?? null;
+		// Named from the ROW, not the connection: the relay name is the thing you go and look at
+		// when there is no connection, so it must survive the case that has none.
+		const relayName = runtimeRow ? relayNameForInstance(instanceId, runtimeRow.runner_node ?? null) : null;
 		if (conn) {
 			try {
 				runnerHealth = await callRunner<unknown>(conn, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS });

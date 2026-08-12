@@ -29,7 +29,8 @@ vi.mock("./runner-client.js", () => ({
 	READ_TIMEOUT_MS: 20_000,
 	callRunner: vi.fn(async () => ({ ok: true })),
 	getBoundRunnerConn: vi.fn(),
-	getRunnerConn: vi.fn(),
+	// `startSessionOnRunner` holds the stamped row and probes for itself (#532).
+	getRunnerConnIgnoringLiveness: vi.fn(),
 	relayConnected: vi.fn(async () => true),
 }));
 vi.mock("./coding-engines.js", () => ({
@@ -88,7 +89,7 @@ beforeEach(() => {
 	vi.mocked(store.listSessions).mockResolvedValue([]);
 	vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(null);
 	vi.mocked(store.endSession).mockResolvedValue(true);
-	vi.mocked(runner.getRunnerConn).mockResolvedValue(conn as never);
+	vi.mocked(runner.getRunnerConnIgnoringLiveness).mockResolvedValue(conn as never);
 	vi.mocked(runner.getBoundRunnerConn).mockResolvedValue(conn as never);
 	vi.mocked(runner.relayConnected).mockResolvedValue(true);
 	vi.mocked(runner.callRunner).mockResolvedValue({ pane: "$ pnpm test\nall good", runState: "idle" } as never);
