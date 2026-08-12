@@ -484,7 +484,7 @@ export async function runAgentThink(opts: {
 	const { codingContext, styleReminder, plainSpeech } = resolveResponseStyle({
 		repoChatStyle: state.guardrails?.responseStyle === "technical",
 		hasCodingContext,
-		behaviour,
+		behaviour, subscriberRules, // #521: the stored rules ride the same (strongest) position, last.
 	});
 
 	// Repo-chat: list the repositories actually indexed, read live from the DO so

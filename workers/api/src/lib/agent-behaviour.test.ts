@@ -431,3 +431,58 @@ describe("resolveResponseStyle — a preference changes language, never capabili
 		}
 	});
 });
+
+describe("a stored subscriber rule outranks the platform's style sentence (#521)", () => {
+	const plainAgent = { repoChatStyle: false, hasCodingContext: false };
+	const coder = { repoChatStyle: false, hasCodingContext: true };
+
+	/** The rule that produced the ticket, read back off the instance with get_instance_instructions. */
+	const NO_FILENAMES =
+		"Do NOT mention file names, file paths, directory names, or code identifiers (function names, variable names, class names) in your chat replies unless I explicitly ask for them.";
+
+	// These two literals are the shipped reminders, pinned. `styleReminder` is appended to the LAST
+	// USER TURN — once per tool round and again before the final answer — which agent-think.ts calls
+	// "the strongest position of all", so a stray word here changes every reply on the platform.
+	const TECHNICAL =
+		"Answer accurately and concretely, grounded in the code above. Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help.";
+	const PLAIN = "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
+
+	it("is byte-identical to today for an instance with no rule stored", () => {
+		// Acceptance criterion 3 — this must not become a general style change. Every branch:
+		// hardcoded technical, hardcoded plain-speech, and a declared behaviour reminder.
+		expect(resolveResponseStyle({ ...coder, behaviour: {} }).styleReminder).toBe(TECHNICAL);
+		expect(resolveResponseStyle({ ...plainAgent, behaviour: {} }).styleReminder).toBe(PLAIN);
+		const declared = { verbosity: "thorough" };
+		expect(resolveResponseStyle({ ...coder, behaviour: declared }).styleReminder).toBe(
+			`Answer accurately and concretely, grounded in the code above. ${behaviourStyleReminder(declared)}`,
+		);
+		// An empty or whitespace-only rule is the same as no rule: a cleared textarea stores "\n".
+		expect(resolveResponseStyle({ ...coder, behaviour: {}, subscriberRules: "" }).styleReminder).toBe(TECHNICAL);
+		expect(resolveResponseStyle({ ...coder, behaviour: {}, subscriberRules: " \n " }).styleReminder).toBe(TECHNICAL);
+	});
+
+	it("puts the owner's rule AFTER the sentence it contradicts, and says the rule wins", () => {
+		// Acceptance criterion 5, and the exact production case: technical style (a repo is attached,
+		// nothing configured) + a rule forbidding the file paths that sentence asks for. Both survive
+		// in one string; what changes is which one is last and which one is declared to govern.
+		const r = resolveResponseStyle({ ...coder, behaviour: {}, subscriberRules: NO_FILENAMES });
+		expect(r.technical).toBe(true);
+		expect(r.styleReminder.startsWith(TECHNICAL)).toBe(true);
+		expect(r.styleReminder).toContain("OUTRANK this note");
+		expect(r.styleReminder.endsWith(NO_FILENAMES)).toBe(true);
+		expect(r.styleReminder.indexOf("cite real file paths")).toBeLessThan(r.styleReminder.indexOf(NO_FILENAMES));
+	});
+
+	it("carries the rule on a declared-behaviour reminder and on the plain-speech one too", () => {
+		// Precedence is positional, not a special case for the technical branch — the same clause has
+		// to reach a rule about emoji or length on any agent, which is why no conflict is detected.
+		for (const opts of [
+			{ ...plainAgent, behaviour: {} },
+			{ ...plainAgent, behaviour: { verbosity: "brief" } },
+			{ ...coder, behaviour: { technicality: 10 } },
+		]) {
+			const r = resolveResponseStyle({ ...opts, subscriberRules: NO_FILENAMES });
+			expect(r.styleReminder.endsWith(NO_FILENAMES)).toBe(true);
+		}
+	});
+});

@@ -33,6 +33,7 @@
  * `default` below is only where the UI parks a slider before the user touches it. This is what
  * makes the change safe: an agent that has configured nothing gets today's prompt byte-for-byte.
  */
+import { withSubscriberRulePrecedence } from "./subscriber-rule-precedence.js";
 
 export type BehaviourValue = number | string | boolean | string[];
 
@@ -770,6 +771,8 @@ export function resolveResponseStyle(opts: {
 	repoChatStyle: boolean;
 	hasCodingContext: boolean;
 	behaviour: Behaviour;
+	/** The subscriber's stored Rules & Tips. They outrank the style sentence — see #521. */
+	subscriberRules?: string;
 }): ResponseStyle {
 	const codingContext = opts.repoChatStyle || opts.hasCodingContext;
 	const technical = prefersTechnical(opts.behaviour) ?? codingContext;
@@ -778,7 +781,7 @@ export function resolveResponseStyle(opts: {
 	// The grounding clause SURVIVES a declared style. Replacing the whole reminder meant setting
 	// verbosity alone silently dropped "grounded in the code above" from every post-tool round on a
 	// coding agent — a length preference quietly removing an accuracy instruction.
-	const styleReminder = declared
+	const platformReminder = declared
 		? codingContext
 			? `${GROUNDED} ${declared}`
 			: declared
@@ -792,5 +795,5 @@ export function resolveResponseStyle(opts: {
 	// names, or code", the one thing a non-technical owner reaches for — were unreachable for a
 	// Coder at EVERY slider position, including 0. The grounding is not lost with them: the coding
 	// branch still emits its factual lines, and only the voice changes.
-	return { codingContext, technical, styleReminder, plainSpeech: !technical };
+	return { codingContext, technical, styleReminder: withSubscriberRulePrecedence(platformReminder, opts.subscriberRules), plainSpeech: !technical };
 }
