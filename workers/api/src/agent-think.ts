@@ -32,7 +32,7 @@ import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invente
 import { logEvent } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
-import { capToolResult } from "./lib/tool-result-cap.js";
+import { capToolResult, toolLogLine } from "./lib/tool-result-cap.js";
 import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
@@ -1091,9 +1091,9 @@ export async function runAgentThink(opts: {
 					state.agentId,
 				);
 			}
-			const icon = toolResult.success ? "\u2705" : "\u274c";
-			const shortContent = toolResult.content.slice(0, 120);
-			allToolLog.push(`${icon} **${tc.name}** ${shortContent}`);
+			// The pill the OWNER reads — not the copy `record` hands the model. A FAILURE gets a wider
+			// budget there: its remedy is its last clause, and a flat 120 cut into that word (#517).
+			allToolLog.push(toolLogLine(tc.name, toolResult.content, toolResult.success));
 			executedTools.push(tc.name);
 			record(tc, toolResult.content, !toolResult.success);
 			broadcast({ type: "tool_call", tool: tc.name, result: toolResult });

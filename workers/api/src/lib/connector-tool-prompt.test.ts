@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { CONSENT_RULE, TERMINAL_CLI_PROTOCOL, TOOL_LIST_CLOSED, connectorToolsPrompt, consentLabel, type PromptTool } from "./connector-tool-prompt.js";
+import {
+	CONSENT_RULE,
+	TERMINAL_CLI_PROTOCOL,
+	TOOL_LIST_CLOSED,
+	TOOL_REFUSAL_RELAY,
+	connectorToolsPrompt,
+	consentLabel,
+	type PromptTool,
+} from "./connector-tool-prompt.js";
 import { registryToolDefs, registryTools } from "./tool-registry.js";
 
 /** The four write tools from the reported instance, as the registry declares them. */
@@ -239,5 +247,71 @@ describe("#483 — TERMINAL_CLI_PROTOCOL injected for terminal/tmux agents", () 
 		const githubTool: PromptTool = { name: "github_create_issue", description: "Create issue.", connector: "github", scope: "write", jsonSchema: {} };
 		const prompt = connectorToolsPrompt([githubTool], ["github"]);
 		expect(prompt).not.toContain("INTERACTIVE CLI PROTOCOL");
+	});
+});
+
+describe("#517 — a REFUSED tool's own remedy may not be swapped for an invented one", () => {
+	// The production incident: a creator's tmux Operator, asked on the agent page to list tmux
+	// sessions, was refused by the capability-constraint gate — whose result ends with the true
+	// remedy, "run this from a subscribed instance" — and answered "go to Settings → Connections in
+	// the console and connect a tmux instance". No console screen links a tmux instance. 5/5 across
+	// two agents and two connectors, including a first turn on an empty conversation.
+	it("names the trigger #493 left open: a tool that IS on the list, was called, and was refused", () => {
+		// TOOL_LIST_CLOSED's trigger is "a system that is NOT on it", so the model was outside that
+		// sentence rather than in breach of it. This one has to say CALLED and REFUSED.
+		expect(TOOL_REFUSAL_RELAY).toMatch(/CALLED/);
+		expect(TOOL_REFUSAL_RELAY).toMatch(/refused or failed/);
+		expect(TOOL_REFUSAL_RELAY).toContain("relay THAT");
+	});
+
+	it("forbids the substitution itself — a location the refusal did not name", () => {
+		expect(TOOL_REFUSAL_RELAY).toContain("Never name a console page, tab, section, setting or switch that the refusal itself did not name");
+		expect(TOOL_REFUSAL_RELAY).toContain("never offer a fix you were not told works");
+	});
+
+	it("says what to do when the refusal names no location, rather than leaving a gap to fill", () => {
+		// A prohibition with nothing in its place is how the previous invention got composed. The
+		// refusal's own final clause IS the answer, so the clause states it as the example.
+		expect(TOOL_REFUSAL_RELAY).toContain("there is no switch to flip");
+		expect(TOOL_REFUSAL_RELAY).toContain("from a subscribed instance");
+	});
+
+	it("scopes the CONSENT remedy to a consent refusal, which is where the invented phrase came from", () => {
+		// Not incidental: on the agent-template surface `listConsents` is handed an agent id and
+		// consent rows are keyed by instance id, so every write tool renders "consent NOT granted"
+		// and CONSENT_RULE — directly above — points at console → Settings → Connections. The
+		// authorised remedy for a case that did not apply was the nearest thing to hand.
+		const tmuxTools: PromptTool[] = [
+			{ name: "tmux_list_sessions", description: "List sessions.", connector: "tmux", scope: "read", jsonSchema: {} },
+			{ name: "tmux_run_command", description: "WRITE: run a command.", connector: "tmux", scope: "write", jsonSchema: {} },
+		];
+		const templateSurface = connectorToolsPrompt(tmuxTools, []);
+		expect(templateSurface).toContain("consent NOT granted");
+		expect(templateSurface).toContain("Settings → Connections");
+		expect(TOOL_REFUSAL_RELAY).toContain("the remedy for a CONSENT refusal only");
+		expect(TOOL_REFUSAL_RELAY).toContain("not fixed by enabling write access");
+	});
+
+	it("is NOT a blocklist of the word 'Settings' — a consent refusal is genuinely fixed there", () => {
+		// #517's stated regression risk. TmuxTab tells a user to grant kill access in Settings and
+		// the write-consent refusal names "the instance's Connections settings" itself, so a rule
+		// worded against the string would forbid the one case where it is right — and would rot the
+		// first time the console renames a tab.
+		expect(TOOL_REFUSAL_RELAY).not.toMatch(/never (mention|say) Settings/i);
+		expect(CONSENT_RULE).toContain("Settings → Connections");
+	});
+
+	it("is injected into every CONNECTED TOOLS block, and after the two rules it narrows", () => {
+		const prompt = connectorToolsPrompt(TERMINAL_WRITES, []);
+		expect(prompt).toContain(TOOL_REFUSAL_RELAY);
+		expect(connectorToolsPrompt([TERMINAL_READ], ["terminal"])).toContain(TOOL_REFUSAL_RELAY);
+		// Order is the point: CONSENT_RULE names a console location and TOOL_LIST_CLOSED forbids
+		// naming one; this decides which applies to a present-but-refused tool, so it reads last.
+		expect(prompt.indexOf(TOOL_REFUSAL_RELAY)).toBeGreaterThan(prompt.indexOf(CONSENT_RULE));
+		expect(prompt.indexOf(TOOL_REFUSAL_RELAY)).toBeGreaterThan(prompt.indexOf(TOOL_LIST_CLOSED));
+	});
+
+	it("emits nothing for an agent with no connector tools", () => {
+		expect(connectorToolsPrompt([], [])).toBe("");
 	});
 });

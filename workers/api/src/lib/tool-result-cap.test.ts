@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RESOURCE_MAX_CHARS } from "./connectors/mcp.js";
-import { capToolResult, TOOL_RESULT_MAX_CHARS } from "./tool-result-cap.js";
+import { capToolResult, TOOL_LOG_FAILURE_MAX_CHARS, TOOL_LOG_MAX_CHARS, TOOL_RESULT_MAX_CHARS, toolLogLine } from "./tool-result-cap.js";
 
 describe("capToolResult (#427 item 3)", () => {
 	it("leaves an ordinary result completely alone", () => {
@@ -40,5 +40,53 @@ describe("capToolResult (#427 item 3)", () => {
 
 	it("survives a non-string result without throwing", () => {
 		expect(capToolResult(undefined as unknown as string)).toBe("");
+	});
+});
+
+/**
+ * The capability-constraint refusal exactly as `runRegistryTool` composes it (tool-registry.ts),
+ * for `tmux_list_sessions` on the `tmux` connector — the string the reported turn actually produced.
+ * Copied rather than imported because it is built inline at the refusal site; if the wording there
+ * changes, re-measure it here, since the whole point of the number below is that it covers this.
+ */
+const TMUX_CONSTRAINT_REFUSAL =
+	'This agent\'s declared constraints for the tmux connector could not be resolved — this call names no subscribed instance for them to belong to — so "tmux_list_sessions" was refused rather than run unconstrained. A ceiling is resolved per instance (the creator\'s declaration, narrowed by that instance\'s own binding), so run this from a subscribed instance rather than from a template preview or trial chat.';
+
+describe("toolLogLine (#517) — a FAILED tool result reaches the owner whole", () => {
+	it("shows the refusal's remedy clause, which the flat 120 cut off", () => {
+		// The reported defect, stated as the thing the owner could and could not read. At 120 the pill
+		// ended four characters into "instance" — the word that begins the remedy — so the console
+		// showed a wrong fix from the model and the right one nowhere.
+		expect(TMUX_CONSTRAINT_REFUSAL.slice(0, TOOL_LOG_MAX_CHARS)).not.toContain("run this from a subscribed instance");
+		const line = toolLogLine("tmux_list_sessions", TMUX_CONSTRAINT_REFUSAL, false);
+		expect(line).toContain("run this from a subscribed instance rather than from a template preview or trial chat.");
+		expect(line.startsWith("❌ **tmux_list_sessions** ")).toBe(true);
+	});
+
+	it("bounds a failure nobody authored, and marks the cut", () => {
+		// The only long failure text is the passthrough at tool-registry's outer catch, which can
+		// carry an upstream body. Visible truncation, because the sentence being cut is an
+		// instruction — a silently truncated instruction is how this started.
+		const upstream = `Error: ${"z".repeat(2_000)}`;
+		const line = toolLogLine("http_request", upstream, false);
+		expect(line.length).toBeLessThanOrEqual(TOOL_LOG_FAILURE_MAX_CHARS + 40);
+		expect(line.endsWith("…")).toBe(true);
+	});
+
+	it("every platform-authored refusal fits, so the budget is a backstop and not a cut", () => {
+		expect(TMUX_CONSTRAINT_REFUSAL.length).toBeLessThanOrEqual(TOOL_LOG_FAILURE_MAX_CHARS);
+	});
+
+	it("leaves a SUCCESS pill byte-identical to what it was", () => {
+		// #517's acceptance criteria: no change to any successful tool call's transcript. A success
+		// pill is a preview of DATA and the answer above it carries the meaning — so it keeps the old
+		// number and, deliberately, the old absence of an ellipsis.
+		const data = "a".repeat(400);
+		expect(toolLogLine("tmux_capture_pane", data, true)).toBe(`✅ **tmux_capture_pane** ${data.slice(0, 120)}`);
+		expect(toolLogLine("create_task", "done", true)).toBe("✅ **create_task** done");
+	});
+
+	it("survives a non-string result without throwing", () => {
+		expect(toolLogLine("x", undefined as unknown as string, false)).toBe("❌ **x** ");
 	});
 });

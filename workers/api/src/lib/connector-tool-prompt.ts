@@ -139,6 +139,55 @@ export const TOOL_LIST_CLOSED =
 	" never promise a lookup you have not made.";
 
 /**
+ * A REFUSED tool carries its own remedy, and it may not be swapped for a different one (#517).
+ *
+ * ── What happened
+ *
+ * A creator asked their tmux Operator, on the agent page, to list tmux sessions. `tmux_list_sessions`
+ * was refused — correctly — by the capability-constraint gate, whose 405-character result ends with
+ * the true remedy: "run this from a subscribed instance rather than from a template preview or trial
+ * chat." The reply instead said to "go to Settings → Connections in the console and connect a tmux
+ * instance." No such control exists on any console screen. Reproduced 5/5 across two agents and two
+ * connectors, including on a first turn of an empty conversation, so it is what this refusal
+ * produces rather than one conversation going astray.
+ *
+ * ── Why, and why the sentence above does not cover it
+ *
+ * `TOOL_LIST_CLOSED` already forbids the errand, but its trigger is "a system that is NOT on it".
+ * Here the system IS on the list, the tool exists, was offered, and was called: the model is outside
+ * that sentence, not in breach of it. Every reproduction ran on a deployment already carrying it.
+ *
+ * And the invented location is not invented from nothing — it is the nearest AUTHORISED remedy in
+ * this same block. On the agent-template surface `listConsents` is passed an agent id and consent
+ * rows are keyed by instance id, so it returns nothing and `writeConsentOf` reports "required" for
+ * every write tool the agent holds; the tmux Operator's five write tools therefore each render
+ * "consent NOT granted", and `CONSENT_RULE` directly above instructs the model to point the owner at
+ * console → Settings → Connections. Asked to explain a refusal of the READ tool, the model reached
+ * for the remedy the prompt had already licensed. (Verified: the labels and the instruction; the
+ * model's reason for choosing them is inference — no endpoint returns the assembled prompt.)
+ *
+ * ── The rule
+ *
+ * The same device as #493 and #399, pointed at the door they left open: the platform knows the
+ * answer at that moment and it is IN the tool result, so require it to be relayed rather than
+ * paraphrased into a guess. Scoped to "a location the refusal did not name" and not to the word
+ * "Settings", because a consent refusal genuinely IS fixed in Settings and says so itself — a
+ * blocklist of the string would forbid the one case where it is right, and would rot the first time
+ * the console renames a tab.
+ */
+export const TOOL_REFUSAL_RELAY =
+	"\n\nWhen a tool on this list is CALLED and comes back refused or failed, its result text is the" +
+	" platform's own account of why and what to do — relay THAT. Give the reason it gives and the" +
+	" remedy it gives, in your own words if you prefer, and stop there. Never name a console page," +
+	" tab, section, setting or switch that the refusal itself did not name, and never offer a fix you" +
+	" were not told works. If the refusal names no place to go, there is no switch to flip: repeat what" +
+	" it does say — for example that the call has to be made from a subscribed instance rather than an" +
+	" agent-template preview — instead of supplying a location of your own. The consent labels above" +
+	" are the remedy for a CONSENT refusal only; a tool refused for any other reason is not fixed by" +
+	" enabling write access, and sending the owner there is a wasted errand. Quoting the refusal is" +
+	" always safe.";
+
+/**
  * Protocol for driving interactive CLIs (Claude Code, Codex, Grok, REPLs) through a terminal
  * connector. Stated once here and injected into every agent that carries terminal/tmux tools so
  * the rule is not rediscovered per-incident.
@@ -195,6 +244,10 @@ export function connectorToolsPrompt(tools: readonly PromptTool[], grantedWriteC
 		// trigger ("a line DOES say consent is not granted" vs "a system NOT on it"), but the
 		// closure is the stronger statement and reads as one only at the end of the enumeration.
 		TOOL_LIST_CLOSED +
+		// Last of the three, because it is the one that NARROWS the other two: CONSENT_RULE ends by
+		// naming a console location and TOOL_LIST_CLOSED forbids naming one, and neither says which
+		// applies to a tool that is present, was called, and was refused for a third reason (#517).
+		TOOL_REFUSAL_RELAY +
 		(hasTerminalTools ? TERMINAL_CLI_PROTOCOL : "")
 	);
 }
