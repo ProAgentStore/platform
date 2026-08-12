@@ -6,6 +6,7 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentTask, MemoryEntry } from "../agent-types.js";
 import { MAX_TASKS } from "./agent-tasks.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
+import { annotateFetchResult } from "./fetch-url-diagnosis.js";
 import { fenceUntrusted } from "./untrusted-fence.js";
 
 export interface ToolDef {
@@ -161,12 +162,27 @@ async function memoryKeyList(storage: DurableObjectStorage): Promise<string> {
 		: `All memory keys: ${keys.join(", ")}`;
 }
 
+/**
+ * What `fetch_url` needs to know about the CALLER in order to explain its own failures (#494/#493).
+ *
+ * Optional, and absent means "annotate nothing": the diagnosis asserts things about this agent's
+ * resolved tool set, so a caller that cannot supply one must not get a note guessing at it.
+ * `agent-think.ts` is the only caller today and passes both.
+ */
+export interface ToolExecContext {
+	/** Resolved tool names — post-allowlist, post-`config.disabledTools`. */
+	toolNames?: ReadonlySet<string>;
+	/** `config.githubRepo`, unvalidated; the diagnosis applies the Deployment block's own guard. */
+	configuredRepo?: unknown;
+}
+
 /** Execute a tool call against DO storage + R2. */
 export async function executeTool(
 	call: ToolCallRequest,
 	storage: DurableObjectStorage,
 	r2: R2Bucket | null,
 	agentId: string,
+	ctx: ToolExecContext = {},
 ): Promise<ToolCallResult> {
 	try {
 		switch (call.name) {
@@ -363,11 +379,22 @@ export async function executeTool(
 				// On a failure, lead with the HTTP status so the agent (and the durable log)
 				// know HOW it failed — a bare "Internal Server Error" body hid that it was a
 				// 500 vs a 4xx, which let an agent misread it as "queued".
-				return {
-					name: call.name,
-					content: res.ok ? fenced : `HTTP ${res.status} ${res.statusText}: ${truncated ? fenced : "(no response body)"}`,
-					success: res.ok,
-				};
+				// The status is read HERE, from the response, rather than parsed back out of the string
+				// below — the framing above is a display decision and a diagnosis that depended on it
+				// would break silently the first time someone reworded it.
+				//
+				// Appended AFTER the fence, never inside it: this is the platform's own voice, and the
+				// note is only ever added on a failure status, where the result already carries the
+				// `HTTP …` prefix outside the block (so `unfenceUntrusted` could not have matched it
+				// anyway, and nothing downstream changes shape).
+				return annotateFetchResult(
+					{
+						name: call.name,
+						content: res.ok ? fenced : `HTTP ${res.status} ${res.statusText}: ${truncated ? fenced : "(no response body)"}`,
+						success: res.ok,
+					},
+					{ url, status: res.status, toolNames: ctx.toolNames, configuredRepo: ctx.configuredRepo },
+				);
 			}
 
 			// `store_file`'s handler is deleted with its definition (#444) — see the note above

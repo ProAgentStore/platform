@@ -1092,12 +1092,12 @@ export async function runAgentThink(opts: {
 				);
 			} else {
 				const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
-				toolResult = await executeTool(
-					callReq,
-					doStorage,
-					env.STORAGE,
-					state.agentId,
-				);
+				// What lets `fetch_url` explain its own failure rather than leave the model to invent a
+				// cause (#494/#493). Both already in hand; the reasoning is in lib/fetch-url-diagnosis.ts.
+				toolResult = await executeTool(callReq, doStorage, env.STORAGE, state.agentId, {
+					toolNames: allowedToolNames,
+					configuredRepo: instanceCfg.githubRepo,
+				});
 			}
 			// The pill the OWNER reads — not the copy `record` hands the model. A FAILURE gets a wider
 			// budget there: its remedy is its last clause, and a flat 120 cut into that word (#517).

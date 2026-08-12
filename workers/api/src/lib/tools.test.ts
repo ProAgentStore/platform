@@ -212,3 +212,77 @@ describe("fetch_url — the page body is fenced", () => {
 		expect(r.content).not.toContain(FENCE_TAG);
 	});
 });
+
+/**
+ * The wiring, not the wording (#494/#493).
+ *
+ * `fetch-url-diagnosis.test.ts` owns what the note SAYS. What can only be proved here is that the
+ * handler reaches it with the real response status and the caller's real context — the two things
+ * that would fail silently if someone reworded the `HTTP …` prefix or dropped the parameter.
+ */
+describe("fetch_url explains its own 404 on a host the platform has a connector for", () => {
+	const fetchUrl = (url: string) => ({ name: "fetch_url", input: { url } });
+	const mockPage = (status: number, body: string) =>
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			async () => new Response(body, { status, headers: { "Content-Type": "text/html" } }),
+		);
+
+	afterEach(() => vi.restoreAllMocks());
+
+	it("annotates the incident's exact turn: private repo, anonymous fetch, 404", async () => {
+		mockPage(404, "Not Found");
+		const r = await executeTool(
+			fetchUrl("https://github.com/heartfull-online/platform"),
+			mockDoStorage(),
+			null,
+			"agent-1",
+			{ toolNames: new Set(["tmux_capture_pane", "fetch_url"]), configuredRepo: "heartfull-online/platform" },
+		);
+		expect(r.success).toBe(false);
+		expect(r.content.startsWith("HTTP 404")).toBe(true);
+		expect(r.content).toContain("PLATFORM NOTE");
+		expect(r.content).toContain("NOT evidence that the repository, organisation or name is wrong");
+		expect(r.content).toContain("You have NO dedicated GitHub tool");
+		expect(r.content).toContain("`heartfull-online/platform`");
+	});
+
+	it("carries the real status, not one parsed back out of the display string", async () => {
+		// A 403 and a 404 get different clauses. If the status were re-read from the `HTTP …`
+		// prefix, rewording that prefix would silently give every failure the 404 clause.
+		mockPage(403, "rate limited");
+		const r = await executeTool(fetchUrl("https://api.github.com/repos/x/y"), mockDoStorage(), null, "agent-1", {
+			toolNames: new Set(["fetch_url"]),
+		});
+		expect(r.content).toContain("60 per hour");
+		expect(r.content).not.toContain("does not disclose");
+	});
+
+	it("adds nothing when the caller supplies no context, so other callers are unaffected", async () => {
+		// The context is optional and absent means silent: a caller that cannot describe the agent's
+		// tool set must not get a note guessing at it.
+		mockPage(404, "Not Found");
+		const r = await executeTool(fetchUrl("https://github.com/x/y"), mockDoStorage(), null, "agent-1");
+		expect(r.content).toContain("You have NO dedicated GitHub tool");
+		expect(r.content).not.toContain("authoritative");
+	});
+
+	it("leaves an unrelated host's failure exactly as it was", async () => {
+		mockPage(404, "Not Found");
+		const r = await executeTool(fetchUrl("https://example.com/missing"), mockDoStorage(), null, "agent-1", {
+			toolNames: new Set(["fetch_url"]),
+		});
+		expect(r.content).not.toContain("PLATFORM NOTE");
+	});
+
+	it("leaves a SUCCESSFUL GitHub fetch byte-identical, fence and all", async () => {
+		// The note is only ever appended on a failure status, which is what keeps a fenced-only
+		// result unfenceable-by-`unfenceUntrusted` untouched.
+		mockPage(200, "readme");
+		const r = await executeTool(fetchUrl("https://github.com/x/y"), mockDoStorage(), null, "agent-1", {
+			toolNames: new Set(["fetch_url"]),
+		});
+		expect(r.success).toBe(true);
+		expect(r.content.endsWith(`</${FENCE_TAG}>`)).toBe(true);
+		expect(r.content).not.toContain("PLATFORM NOTE");
+	});
+});
