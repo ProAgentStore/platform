@@ -120,6 +120,41 @@ export async function listRepos(env: Env, instanceId: string, userId: string): P
 	return (results ?? []).map(toRepo);
 }
 
+/** Just the columns the repo-local connector needs to resolve (or refuse) a checkout. */
+export interface RepoWorkdirRow {
+	name: string;
+	workdir: string | null;
+	/**
+	 * The row's `clone_status`. Carried because `needs_attention` is the ONE status that is a
+	 * MEASUREMENT rather than a default: `cloneStatusForVerdict` (lib/coding-workdir.ts) returns it
+	 * only from a definite runner verdict, and returns `null` for `unverified` so an offline or
+	 * old runner never overwrites a good status. That is what makes it safe to route on.
+	 */
+	cloneStatus: string;
+}
+
+/**
+ * The repo rows' names and folders for one instance, most-recently-updated first (#520).
+ *
+ * `repoPathForInstance` runs in front of six tools, so it reads two columns rather than going
+ * through `listRepos`' `SELECT *` + `toRepo` mapping — it needs the address, not the record.
+ * The ORDER BY is deliberately the same one `listRepos` uses: "which repo" must not depend on
+ * which function asked.
+ *
+ * `workdir` is returned as stored, including when the row's `clone_status` says the checkout is
+ * broken. Filtering here would turn "the folder you configured does not exist on this machine"
+ * back into "no repository is configured" — the exact distinction #405 exists to make. The status
+ * rides along so the CALLER can order its candidates by it without losing that distinction.
+ */
+export async function listRepoWorkdirs(env: Env, instanceId: string, userId: string): Promise<RepoWorkdirRow[]> {
+	const { results } = await env.DB.prepare(
+		"SELECT name, workdir, clone_status FROM coding_repos WHERE instance_id = ?1 AND user_id = ?2 ORDER BY updated_at DESC",
+	)
+		.bind(instanceId, userId)
+		.all<{ name: string | null; workdir: string | null; clone_status: string | null }>();
+	return (results ?? []).map((r) => ({ name: r.name ?? "", workdir: r.workdir, cloneStatus: r.clone_status ?? "" }));
+}
+
 export async function getRepo(env: Env, instanceId: string, userId: string, repoId: string): Promise<CodingRepo | null> {
 	const row = await env.DB.prepare(
 		"SELECT * FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",

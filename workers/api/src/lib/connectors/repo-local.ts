@@ -20,16 +20,21 @@
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import { checkWorkdirVia, isWorkdirBroken } from "../coding-workdir.js";
+import { listRepoWorkdirs, type RepoWorkdirRow } from "../coding-store.js";
+import { agentCapabilities } from "../agent-capabilities.js";
 
 /**
  * The typed settings (settingsSchema) that can name the checkout on the user's machine.
  *
  * Two keys, because two agents name the same thing differently and neither should be renamed:
- * `local-repo-chat` declares `repo_path`, and the configurable Repo Coder declares `repo` ("a
- * local path (~/dev/my-repo) or owner/name"). Reading both is what lets a Repo Coder's ONE chat
- * inspect its own code — the capability that made the Co-pilot look necessary.
+ * `local-repo-chat` declares `repo_path`, and the Repo Coder USED to declare `repo` ("a local path
+ * (~/dev/my-repo) or owner/name") until migration 0102 deleted that field. Reading both is still
+ * right: `local-repo-chat`'s field is live, and a `coder-repo` instance created before 0102 keeps
+ * an orphaned `repo` value in its stored settings which is the only address it has ever had.
  *
- * A `repo` holding `owner/name` rather than a path is not a checkout; the tools then report no
+ * This is now the FALLBACK, not the source (#520) — see `repoPathForInstance`.
+ *
+ * A value holding `owner/name` rather than a path is not a checkout; the tools then report no
  * repository is configured, which is honest, instead of guessing at a managed clone directory.
  */
 export const REPO_PATH_SETTINGS = ["repo_path", "repo"] as const;
@@ -61,13 +66,70 @@ function runnerTooOld(e: unknown, what: string): string | null {
 }
 
 /**
- * The local checkout this instance is pointed at. Read from the instance's typed settings
- * rather than a tool input ON PURPOSE: the path is configuration the OWNER sets once in the
- * console, so a prompt-injected instruction inside the repo's own code can't talk the model
- * into re-aiming the tools at ~/.ssh. The tools then confine every read to within it.
+ * The local checkout this instance is pointed at. Read from CONFIGURATION rather than a tool
+ * input ON PURPOSE: the path is something the OWNER sets once in the console, so a
+ * prompt-injected instruction inside the repo's own code can't talk the model into re-aiming the
+ * tools at ~/.ssh. The tools then confine every read to within it.
+ *
+ * ── Resolution order, and why the row comes first (#520)
+ *
+ * `coding_repos.workdir` FIRST; the typed setting (`REPO_PATH_SETTINGS`) only when no repo row
+ * carries one.
+ *
+ * Migration 0102 decided that the repo row is the single home for a repo's address and deleted
+ * the Repo Coder's `repo` setting — but it also stated that "no code reads it", and this function
+ * was that code. `applySettingsPatch` is schema-driven, so from that migration on the setting
+ * could not be written by the console or the API while six tools still required it: every
+ * `coder-repo` instance created after it had no working `repo_*` tool at all (FIS coder
+ * `5d14a2e1`, whose entire history is one refused `repo_remote`).
+ *
+ * Preferring the setting would have been the smaller edit and it would rebuild the half-wire 0102
+ * removed. #410 made the folder editable on the repo row, validated by #405's check and refused
+ * while a session is live; that is the WRITER, so it has to be the READER. Chess coder
+ * `bfc76603` is the live instance where it matters — its stored path is wrong and the Coding tab
+ * is now the only place it can be corrected.
+ *
+ * `local-repo-chat` is untouched: it declares `surfaces: []`, has no repo rows at all, and its
+ * `repo_path` field is still on its schema — so the fallback is its only source and still decides.
+ *
+ * ── The row yields to the setting when the MACHINE says the row is broken
+ *
+ * Row-first has one live counter-example, and it was measured rather than reasoned about. Chess
+ * coder `bfc76603` works TODAY off its orphaned setting, while its repo row points at
+ * `~/dev/stores/pas/platform/apps/chess-academy`, which the runner reports does not exist
+ * (`clone_status = 'needs_attention'`). A flat "row wins" would take a working instance to a
+ * broken one — and criterion 3 of #520 names pre-0102 instances specifically. So a row whose
+ * folder has been VERIFIED unusable steps aside for a setting that might still work.
+ *
+ * `needs_attention` may decide this because it is a measurement, not a default:
+ * `cloneStatusForVerdict` (lib/coding-workdir.ts) writes it only from a definite runner verdict
+ * and returns `null` for `unverified`, so an offline or too-old runner never demotes a good row.
+ *
+ * A BROKEN workdir is still RETURNED when it is the only candidate (step 3 below), never
+ * swallowed. That is what lets `workdirProblem` say "the configured checkout … does not exist on
+ * the connected machine" (#405), naming the path the owner can fix, instead of the useless "no
+ * repository is configured" — and it names the ROW, which since #410 is the one he can edit.
+ *
+ * MULTIPLE ROWS: the most recently updated row that carries a folder wins, reusing `listRepos`'
+ * own `updated_at DESC`. `surfaceOptions.coding.repos: "single"` bounds `coder-repo` to one, and
+ * every live coder-repo instance had exactly one when this was written (measured 2026-08-12).
  */
-export async function repoPathForInstance(ctx: RegistryToolCtx): Promise<string | null> {
+export async function repoPathForInstance(ctx: RegistryToolCtx, rows?: readonly RepoWorkdirRow[]): Promise<string | null> {
 	if (!ctx.instanceId || !ctx.userId) return null;
+	const repos = rows ?? (await listRepoWorkdirs(ctx.env, ctx.instanceId, ctx.userId));
+	const configured = repos.map((r) => ({ path: (r.workdir ?? "").trim(), broken: r.cloneStatus === "needs_attention" })).filter((r) => r.path.length > 0);
+	// 1. A row whose folder nobody has faulted.
+	const healthy = configured.find((r) => !r.broken);
+	if (healthy) return healthy.path;
+	// 2. The pre-0102 setting — the only remaining candidate that has not been measured as broken.
+	const fromSettings = await repoPathFromSettings(ctx);
+	if (fromSettings) return fromSettings;
+	// 3. The broken row, so #405 diagnoses the path the owner can actually correct.
+	return configured[0]?.path ?? null;
+}
+
+/** The pre-0102 source: a typed setting on the instance. Now only consulted when no row has one. */
+async function repoPathFromSettings(ctx: RegistryToolCtx): Promise<string | null> {
 	const row = await ctx.env.DB.prepare(
 		"SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2",
 	)
@@ -120,23 +182,56 @@ const GITHUB_READ_TOOLS = ["github_list_issues", "github_read_issue", "github_li
  *               separate the "no" from the "but". CONDITIONAL, and that is not a detail: the other
  *               agent on this connector, `local-repo-chat`, declares no GitHub tool at all, and an
  *               unconditional promise would simply move the false claim to the other agent.
- *   `coord`   — the setting may already hold `owner/name` rather than a path (the `coder-repo`
- *               field explicitly accepts either). `repoPathForInstance` skips that case as "not a
- *               checkout", which is honest for the LOCAL tools; but the model was then made to ask
- *               for a coordinate the owner had already typed. Naming it here is the difference
- *               between "I don't know which repo" and "I know which repo, I have no local copy".
+ *   `coord`   — the stored value may already hold `owner/name` rather than a path (the pre-0102
+ *               `coder-repo` field explicitly accepted either). `repoPathForInstance` skips that
+ *               case as "not a checkout", which is honest for the LOCAL tools; but the model was
+ *               then made to ask for a coordinate the owner had already typed. Naming it here is
+ *               the difference between "I don't know which repo" and "I know which repo, I have no
+ *               local copy".
  *
- * One extra read, only on a path that fires when something is already wrong.
+ * ── #520: the control the message names must be one the owner actually HAS
+ *
+ * #513's premise expired six hours after it shipped. Migration 0102 deleted the `coder-repo`
+ * `repo` field, so on the agent #513 was written for there is now NO field in
+ * Settings → Agent settings — and the message kept sending the owner there. That is #513's own
+ * defect, reintroduced by #513's own fix, which is why two more facts are read here:
+ *
+ *   `coding`  — the agent shows the Coding tab, where the repo and its folder now live (#410).
+ *               Resolved through `agentCapabilities`, NOT the raw declaration, because a legacy
+ *               `category:'code'` agent that declares nothing still renders that tab; naming no
+ *               control for an agent that has one would be the same false statement inverted.
+ *   `repoWithoutFolder` — a repo row that EXISTS and carries no folder. FIS coder `5d14a2e1` is in
+ *               exactly that state, and the difference matters: told "add a repository" the owner
+ *               adds a second one, told "this repo has no folder recorded" he fixes the one he has.
+ *
+ * One extra read, only on a path that fires when something is already wrong; the repo rows are
+ * passed in from `resolveTarget`, which has just read them, so the refusal costs one query.
  */
-async function repoRefusalHint(ctx: RegistryToolCtx): Promise<{ label: string; github: boolean; coord: string | null }> {
-	const fallback = { label: "the repository setting", github: false, coord: null };
+export interface RepoRefusalHint {
+	/** The settings-field label to quote, `""` when a field is declared with a blank label, and
+	 *  `null` when the agent's schema declares no repo-path field at all. */
+	label: string | null;
+	github: boolean;
+	coord: string | null;
+	/** The agent renders the Coding tab — the repo row and its folder are editable there. */
+	coding: boolean;
+	/** The name of a repo row that exists with no folder recorded, if there is one. */
+	repoWithoutFolder: string | null;
+}
+
+async function repoRefusalHint(ctx: RegistryToolCtx, rows: readonly RepoWorkdirRow[]): Promise<RepoRefusalHint> {
+	const missingFolder = rows.find((r) => !(r.workdir ?? "").trim())?.name?.trim() || null;
+	const fallback: RepoRefusalHint = { label: null, github: false, coord: null, coding: false, repoWithoutFolder: missingFolder };
 	if (!ctx.instanceId || !ctx.userId) return fallback;
 	const row = await ctx.env.DB.prepare(
-		"SELECT a.config AS agent_config, i.config AS instance_config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
+		"SELECT a.slug AS slug, a.category AS category, a.config AS agent_config, i.config AS instance_config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
 	)
 		.bind(ctx.instanceId, ctx.userId)
-		.first<{ agent_config: string | null; instance_config: string | null }>();
+		.first<{ slug: string | null; category: string | null; agent_config: string | null; instance_config: string | null }>();
 	if (!row?.agent_config) return fallback;
+	// Resolved, not declared: `agentCapabilities` applies the slug/category fallback that decides
+	// which tabs the console actually renders for a pre-registry agent.
+	const coding = agentCapabilities({ slug: row.slug, category: row.category, config: row.agent_config }).surfaces.includes("coding");
 	try {
 		const cfg = JSON.parse(row.agent_config) as { settingsSchema?: Array<{ id?: string; label?: string }>; capabilities?: { tools?: string[] } };
 		const field = (cfg.settingsSchema ?? []).find((f) => typeof f?.id === "string" && (REPO_PATH_SETTINGS as readonly string[]).includes(f.id));
@@ -155,28 +250,54 @@ async function repoRefusalHint(ctx: RegistryToolCtx): Promise<{ label: string; g
 				break;
 			}
 		}
-		// A label that is present but blank is worse than none — fall back rather than quote "".
-		return { label: field?.label?.trim() || fallback.label, github, coord };
+		// `undefined` label vs a blank one are different answers: no field at all sends the owner to
+		// the Coding tab, a field with a blank label still sends him to Settings without quoting "".
+		return { label: field ? (field.label?.trim() ?? "") : null, github, coord, coding, repoWithoutFolder: missingFolder };
 	} catch {
-		return fallback;
+		return { ...fallback, coding };
 	}
 }
 
-/** Build the refusal. Kept pure so both halves of it can be asserted without a database. */
-export function repoMissingMessage(hint: { label: string; github: boolean; coord: string | null }): string {
-	const where = hint.label === "the repository setting" ? `Set ${hint.label}` : `Set "${hint.label}"`;
-	const known = hint.coord ? ` The setting currently holds \`${hint.coord}\`, which is a GitHub coordinate rather than a checkout on this machine — so this agent knows WHICH repository it owns, it just has no local copy of it to read.` : "";
+/** The generic name for the setting, used when a field is declared without a usable label. */
+const GENERIC_SETTING_LABEL = "the repository setting";
+
+/**
+ * Where the owner can actually fix this — three cases, none of which may invent a control (#513).
+ *
+ * The schema still declaring the field is checked FIRST: `local-repo-chat` has no Coding tab and
+ * its `repo_path` really is on Settings → Agent settings, so nothing about it changes.
+ */
+function repoMissingWhere(hint: RepoRefusalHint): string {
+	if (hint.label !== null) {
+		const named = hint.label ? `Set "${hint.label}"` : `Set ${GENERIC_SETTING_LABEL}`;
+		return `${named} in the console (Settings → Agent settings) to the checkout on your machine, e.g. ~/work/my-repo.`;
+	}
+	if (hint.coding && hint.repoWithoutFolder) {
+		return `The repository "${hint.repoWithoutFolder}" is already on this agent's Coding tab, but no folder on your machine is recorded for it — that is why there is nothing to read. Open that repository's settings in the Coding tab and set its folder to the checkout, e.g. ~/work/my-repo. Fix the repository that is already there rather than adding a second one.`;
+	}
+	if (hint.coding) {
+		return `Add the repository in the console (Coding tab) and give it the folder on your machine, e.g. ~/work/my-repo — that folder is what these tools read.`;
+	}
+	return `This agent has no console control for a repository: its settings declare no repository field and it has no Coding tab, so there is nowhere for you to set one. That is a gap in how the agent itself is configured, not something you can fix.`;
+}
+
+/** Build the refusal. Kept pure so every branch of it can be asserted without a database. */
+export function repoMissingMessage(hint: RepoRefusalHint): string {
+	const known = hint.coord ? ` This agent's stored repository value is \`${hint.coord}\`, which is a GitHub coordinate rather than a checkout on this machine — so this agent knows WHICH repository it owns, it just has no local copy of it to read.` : "";
 	const still = hint.github
 		? ` You can still answer questions about that repository's GitHub issues, pull requests and CI right now — those tools take the repository as an argument and need no checkout. ${hint.coord ? `Use \`${hint.coord}\`.` : "If you do not already know the repository as `owner/name`, ask for it once, then answer."}`
 		: "";
-	return `No repository is configured for this agent. ${where} in the console (Settings → Agent settings) to the checkout on your machine, e.g. ~/work/my-repo.${known}${still}`;
+	return `No repository is configured for this agent. ${repoMissingWhere(hint)}${known}${still}`;
 }
 
 /** Resolve both halves a read needs: a live runner AND a configured checkout. */
 async function resolveTarget(ctx: RegistryToolCtx): Promise<{ conn: RunnerConn; workDir: string } | { error: string }> {
 	if (!ctx.instanceId || !ctx.userId) return { error: "No instance context for the repo-local connector." };
-	const workDir = await repoPathForInstance(ctx);
-	if (!workDir) return { error: repoMissingMessage(await repoRefusalHint(ctx)) };
+	// Read once, used twice: the rows decide the workdir, and — when there isn't one — whether the
+	// refusal says "add a repository" or "the repository you added has no folder".
+	const repos = await listRepoWorkdirs(ctx.env, ctx.instanceId, ctx.userId);
+	const workDir = await repoPathForInstance(ctx, repos);
+	if (!workDir) return { error: repoMissingMessage(await repoRefusalHint(ctx, repos)) };
 	const conn = await getBoundRunnerConn(ctx.env, ctx.instanceId, ctx.userId).catch(() => null);
 	if (!conn) {
 		return { error: "No runner is connected — run `pags up` on the machine that has this repository checked out." };

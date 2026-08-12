@@ -23,18 +23,25 @@ const tool = (name: string) => {
 	return t;
 };
 
-/** A D1 stub whose single row carries `config` — what repoPathForInstance parses. */
-const envWith = (config: string | null) =>
+/**
+ * A D1 stub answering both reads the connector makes: the instance's `config` (`.first`) and the
+ * instance's `coding_repos` rows (`.all`). The rows default to EMPTY, so every pre-#520 test keeps
+ * measuring the settings fallback exactly as it did.
+ */
+const envWith = (config: string | null, repos: Array<{ name: string; workdir: string | null; clone_status?: string }> = []) =>
 	({
 		DB: {
 			prepare: () => ({
-				bind: () => ({ first: async () => (config === null ? null : { config }) }),
+				bind: () => ({
+					first: async () => (config === null ? null : { config }),
+					all: async () => ({ results: repos }),
+				}),
 			}),
 		},
 	}) as unknown as Env;
 
-const ctx = (config: string | null = JSON.stringify({ settings: { repo_path: "~/work/my-repo" } }), over: Record<string, unknown> = {}) =>
-	({ env: envWith(config), userId: "u1", instanceId: "i1", agentId: "i1", ...over }) as never;
+const ctx = (config: string | null = JSON.stringify({ settings: { repo_path: "~/work/my-repo" } }), over: Record<string, unknown> = {}, repos: Array<{ name: string; workdir: string | null; clone_status?: string }> = []) =>
+	({ env: envWith(config, repos), userId: "u1", instanceId: "i1", agentId: "i1", ...over }) as never;
 
 const FAKE_CONN = { kind: "relay" } as never;
 
@@ -73,6 +80,86 @@ describe("repo-local — registration", () => {
 		const names = REPO_LOCAL_TOOLS.map((t) => t.name);
 		expect(names).not.toContain("list_files");
 		expect(names).not.toContain("read_file");
+	});
+});
+
+/**
+ * Which address wins (#520).
+ *
+ * Migration 0102 deleted the Repo Coder's `repo` SETTING — correctly, because #410 had made the
+ * folder editable on the `coding_repos` row and two homes for one address is what produced the
+ * original "I updated it and it still uses the old one". What it did not do was move the READER:
+ * `repoPathForInstance` still read only the setting, and `applySettingsPatch` is schema-driven, so
+ * from that migration on nothing could write the value six tools required. Every `coder-repo`
+ * instance subscribed after it had no working `repo_*` tool at all.
+ *
+ * So the row is the source and the setting is the fallback. The three cases below are the whole
+ * decision, and each one is a live instance: a Chess coder (row with a folder), a `local-repo-chat`
+ * (no rows, `repo_path` still on its schema), and Chess coder's broken folder, which must still be
+ * RETURNED so #405 can diagnose it rather than reporting "no repository is configured".
+ */
+describe("repoPathForInstance — the repo row is the address, the setting is the fallback", () => {
+	it("prefers the repo row's workdir over the stored setting", async () => {
+		const c = ctx(JSON.stringify({ settings: { repo: "~/stale/from-settings" } }), {}, [{ name: "chess", workdir: "~/dev/stores/pas/apps/chess-academy" }]);
+		expect(await repoPathForInstance(c)).toBe("~/dev/stores/pas/apps/chess-academy");
+	});
+
+	it("falls back to the setting when no repo row carries a folder", async () => {
+		// `local-repo-chat` has no repo rows at all; FIS coder has a row with no folder. Both land
+		// here, and for the first of the two the setting is still the right and only answer.
+		expect(await repoPathForInstance(ctx(JSON.stringify({ settings: { repo_path: "~/work/my-repo" } }), {}, []))).toBe("~/work/my-repo");
+		expect(await repoPathForInstance(ctx(JSON.stringify({ settings: { repo_path: "~/work/my-repo" } }), {}, [{ name: "fis", workdir: null }]))).toBe("~/work/my-repo");
+		expect(await repoPathForInstance(ctx(JSON.stringify({ settings: { repo_path: "~/work/my-repo" } }), {}, [{ name: "fis", workdir: "   " }]))).toBe("~/work/my-repo");
+	});
+
+	it("returns an UNVERIFIED workdir rather than hiding it — #405 needs the path to diagnose", async () => {
+		// The tempting filter is `cloneStatus === 'ready'`. It would turn "the configured checkout
+		// does not exist on the connected machine" back into "no repository is configured", which is
+		// the useless sentence #405 exists to replace. Only a MEASURED fault demotes a row (below);
+		// a row nobody has looked at is used, and diagnosed at call time if it turns out to be gone.
+		const c = ctx(null, {}, [{ name: "chess", workdir: "~/dev/stores/pas/platform/apps/chess-academy" }]);
+		expect(await repoPathForInstance(c)).toBe("~/dev/stores/pas/platform/apps/chess-academy");
+	});
+
+	it("yields to the setting when the MACHINE has faulted the row's folder", async () => {
+		// Chess coder `bfc76603`, measured in production 2026-08-12: `repo_tree` works today off the
+		// orphaned setting, while its row points at a folder the runner reports does not exist. A
+		// flat row-first rule would take a WORKING instance to a broken one — #520 criterion 3 names
+		// pre-0102 instances specifically. `needs_attention` may decide this because
+		// `cloneStatusForVerdict` writes it only from a definite verdict and returns null for
+		// `unverified`, so an offline or too-old runner never demotes a good row.
+		const c = ctx(JSON.stringify({ settings: { repo: "~/dev/stores/pas/apps/chess-academy" } }), {}, [
+			{ name: "chess", workdir: "~/dev/stores/pas/platform/apps/chess-academy", clone_status: "needs_attention" },
+		]);
+		expect(await repoPathForInstance(c)).toBe("~/dev/stores/pas/apps/chess-academy");
+	});
+
+	it("still returns the faulted row when it is the ONLY candidate", async () => {
+		// Stepping aside is only ever in favour of something else. With no setting to fall back to,
+		// swallowing the path would cost the owner #405's diagnosis AND the name of the one control
+		// he can edit (#410) — he would be told nothing is configured while a repo sits on his
+		// Coding tab.
+		const c = ctx(null, {}, [{ name: "chess", workdir: "~/broken", clone_status: "needs_attention" }]);
+		expect(await repoPathForInstance(c)).toBe("~/broken");
+	});
+
+	it("prefers a healthy row over a faulted one regardless of recency", async () => {
+		const c = ctx(null, {}, [
+			{ name: "newest but faulted", workdir: "~/work/gone", clone_status: "needs_attention" },
+			{ name: "older, fine", workdir: "~/work/here", clone_status: "ready" },
+		]);
+		expect(await repoPathForInstance(c)).toBe("~/work/here");
+	});
+
+	it("takes the most recently updated row that has a folder", async () => {
+		// `listRepoWorkdirs` orders `updated_at DESC` — the same ordering `listRepos` uses, so "which
+		// repo" cannot depend on which function asked. A row with no folder is skipped, not chosen.
+		const c = ctx(null, {}, [
+			{ name: "newest, no folder", workdir: null },
+			{ name: "newest with a folder", workdir: "~/work/a" },
+			{ name: "older", workdir: "~/work/b" },
+		]);
+		expect(await repoPathForInstance(c)).toBe("~/work/a");
 	});
 });
 
@@ -417,21 +504,24 @@ describe("an unconfigured agent is told about the control it actually HAS (#513)
 	// (0063). One hardcoded string served two agents, so the owner was sent to a setting that is
 	// not on his screen — and it is the only guidance a Repo Coder with no repo can give him.
 
-	/** A D1 stub that answers the JOIN the refusal path makes, not just the instance read. */
-	const envJoin = (agentConfig: unknown, instanceConfig: unknown = { settings: {} }) =>
+	/** A D1 stub that answers the JOIN the refusal path makes, the instance read, and the repo rows. */
+	const envJoin = (agentConfig: unknown, instanceConfig: unknown = { settings: {} }, repos: Array<{ name: string; workdir: string | null; clone_status?: string }> = [], agentRow: { slug?: string | null; category?: string | null } = {}) =>
 		({
 			DB: {
 				prepare: (sql: string) => ({
 					bind: () => ({
 						first: async () =>
 							sql.includes("JOIN agents")
-								? { agent_config: JSON.stringify(agentConfig), instance_config: JSON.stringify(instanceConfig) }
+								? { slug: agentRow.slug ?? null, category: agentRow.category ?? null, agent_config: JSON.stringify(agentConfig), instance_config: JSON.stringify(instanceConfig) }
 								: { config: JSON.stringify(instanceConfig) },
+						all: async () => ({ results: repos }),
 					}),
 				}),
 			},
 		}) as unknown as Env;
 
+	// The pre-0102 shape, kept verbatim: `local-repo-chat` still declares its field, and a
+	// creator-authored agent may declare either key, so this branch is not historical.
 	const CODER_REPO = {
 		settingsSchema: [{ id: "repo", label: "Repository", type: "text" }],
 		capabilities: { tools: ["repo_tree", "repo_git", "github_list_issues", "github_read_issue"] },
@@ -441,8 +531,8 @@ describe("an unconfigured agent is told about the control it actually HAS (#513)
 		capabilities: { tools: ["repo_tree", "repo_read_file", "repo_git", "repo_remote"] },
 	};
 
-	const refuse = async (agentConfig: unknown, instanceConfig: unknown = { settings: {} }, name = "repo_tree") =>
-		(await tool(name).handler({ env: envJoin(agentConfig, instanceConfig), userId: "u1", instanceId: "i1", agentId: "i1" } as never, {})).content as string;
+	const refuse = async (agentConfig: unknown, instanceConfig: unknown = { settings: {} }, name = "repo_tree", repos: Array<{ name: string; workdir: string | null; clone_status?: string }> = [], agentRow: { slug?: string | null; category?: string | null } = {}) =>
+		(await tool(name).handler({ env: envJoin(agentConfig, instanceConfig, repos, agentRow), userId: "u1", instanceId: "i1", agentId: "i1" } as never, {})).content as string;
 
 	it("names Repository on a coder-repo and Repository path on a local-repo-chat", async () => {
 		expect(await refuse(CODER_REPO)).toContain('Set "Repository"');
@@ -455,11 +545,12 @@ describe("an unconfigured agent is told about the control it actually HAS (#513)
 		expect(await refuse(invented)).toContain('Set "Where the code lives"');
 	});
 
-	it("names no control at all rather than the wrong one, when there is no schema to read", async () => {
-		// The explicitly-weaker fallback, chosen because a message naming NO control still beats one
-		// naming a control that does not exist.
-		expect(await refuse({ capabilities: { tools: ["repo_tree"] } })).toContain("Set the repository setting");
-		expect(await refuse({ settingsSchema: [{ id: "repo", label: "   " }] })).toContain("Set the repository setting");
+	it("keeps the generic label for a field declared with a blank one — the control still exists", async () => {
+		// A field IS declared, so Settings → Agent settings is the right place; only the label is
+		// unusable. Quoting "" would be worse than naming the setting generically.
+		expect(await refuse({ settingsSchema: [{ id: "repo", label: "   " }], capabilities: { tools: ["repo_tree"] } })).toContain(
+			"Set the repository setting in the console (Settings → Agent settings)",
+		);
 	});
 
 	it("refuses identically through every local tool — the string served all four", async () => {
@@ -502,8 +593,101 @@ describe("an unconfigured agent is told about the control it actually HAS (#513)
 
 	it("keeps a real checkout path out of the coordinate branch", async () => {
 		// `~/work/my-repo` is a path, not a coordinate, and must never be offered to a GitHub tool.
-		const msg = repoMissingMessage({ label: "Repository", github: true, coord: null });
+		const msg = repoMissingMessage({ label: "Repository", github: true, coord: null, coding: false, repoWithoutFolder: null });
 		expect(msg).not.toContain("GitHub coordinate");
 		expect(msg).toContain("ask for it once");
+	});
+});
+
+/**
+ * The control the refusal names must be one that EXISTS — after 0102 as well (#520).
+ *
+ * #513's fix was correct on the day it shipped and false six hours later: migration 0102 deleted
+ * `coder-repo`'s `repo` field, so "Settings → Agent settings" now names a card with no such
+ * control on the very agent #513 was written for. Three cases, three answers, and the pure
+ * function is asserted directly so every one of them is readable in one place.
+ */
+describe("after 0102 the refusal points at the Coding tab, not a deleted setting (#520)", () => {
+	const CODER_REPO_TODAY = {
+		// What `coder-repo` declares after 0102: engine/autonomy/merge_policy, no repo field.
+		settingsSchema: [{ id: "engine", label: "Coding CLI", type: "select" }, { id: "autonomy", label: "Autonomy", type: "select" }],
+		capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools: ["repo_tree", "repo_git", "github_list_issues"] },
+	};
+
+	/** The same D1 stub the #513 block uses, reached through a real tool handler. */
+	const refuseWith = async (agentConfig: unknown, repos: Array<{ name: string; workdir: string | null; clone_status?: string }>, agentRow: { slug?: string | null; category?: string | null } = {}) => {
+		const env = {
+			DB: {
+				prepare: (sql: string) => ({
+					bind: () => ({
+						first: async () =>
+							sql.includes("JOIN agents")
+								? { slug: agentRow.slug ?? null, category: agentRow.category ?? null, agent_config: JSON.stringify(agentConfig), instance_config: JSON.stringify({ settings: {} }) }
+								: { config: JSON.stringify({ settings: {} }) },
+						all: async () => ({ results: repos }),
+					}),
+				}),
+			},
+		} as unknown as Env;
+		return (await tool("repo_tree").handler({ env, userId: "u1", instanceId: "i1", agentId: "i1" } as never, {})).content as string;
+	};
+
+	it("tells a Repo Coder with no repo at all to add one in the Coding tab", () => {
+		const msg = repoMissingMessage({ label: null, github: false, coord: null, coding: true, repoWithoutFolder: null });
+		expect(msg).toContain("Coding tab");
+		expect(msg).not.toContain("Settings → Agent settings");
+		expect(msg).toContain("folder on your machine");
+	});
+
+	it("names the repo whose FOLDER is missing, so the owner fixes the row he already has", () => {
+		// FIS coder `5d14a2e1` exactly: one repo row, `clone_status: ready`, and no workdir. Told
+		// "add a repository" the owner adds a second one; told this, he fixes the first.
+		const msg = repoMissingMessage({ label: null, github: false, coord: null, coding: true, repoWithoutFolder: "～/dev/stores/fis/platform" });
+		expect(msg).toContain('"～/dev/stores/fis/platform"');
+		expect(msg).toContain("no folder on your machine is recorded for it");
+		expect(msg).toContain("rather than adding a second one");
+	});
+
+	it("says plainly that there is no control, rather than inventing one", () => {
+		// The weakest of the three answers and still the right one: an agent with no repo field and
+		// no Coding tab genuinely cannot be pointed anywhere, and #513/#517's rule is that a message
+		// naming nothing beats a message naming a control the owner will not find.
+		const msg = repoMissingMessage({ label: null, github: false, coord: null, coding: false, repoWithoutFolder: null });
+		expect(msg).toContain("no console control for a repository");
+		expect(msg).not.toContain("Settings → Agent settings");
+		// It may SAY there is no Coding tab; what it must never do is send the owner to one.
+		expect(msg).not.toMatch(/Set "|Add the repository|Open that repository|in the Coding tab/);
+	});
+
+	it("a declared schema field still wins — local-repo-chat has no Coding tab and needs its setting", () => {
+		const msg = repoMissingMessage({ label: "Repository path", github: false, coord: null, coding: false, repoWithoutFolder: null });
+		expect(msg).toContain('Set "Repository path" in the console (Settings → Agent settings)');
+	});
+
+	it("resolves the coding surface end to end, from the agent row the refusal reads", async () => {
+		// The pure function is only half the guarantee: `repoRefusalHint` has to READ the surface.
+		const msg = await refuseWith(CODER_REPO_TODAY, [{ name: "～/dev/stores/fis/platform", workdir: null }]);
+		expect(msg).toContain("Coding tab");
+		expect(msg).toContain("～/dev/stores/fis/platform");
+		// The escape hatch and the base sentence both survive the new branch.
+		expect(msg).toContain("No repository is configured for this agent.");
+		expect(msg).toContain("You can still answer questions about that repository's GitHub issues");
+	});
+
+	it("honours a legacy agent's RESOLVED surface, not just a declared one", async () => {
+		// `category:'code'` resolves to `surfaces:['coding']` in agentCapabilities, so such an agent
+		// really does render the Coding tab. Reading only the declaration would tell its owner no
+		// control exists while one is on his screen — #513's defect with the sign flipped.
+		const legacy = { capabilities: { tools: ["repo_tree"] } };
+		const msg = await refuseWith(legacy, [], { slug: "legacy-coder", category: "code" });
+		expect(msg).toContain("Coding tab");
+	});
+});
+
+describe("the tools read the repo row's folder, not just the setting (#520)", () => {
+	it("repo_tree sends the workdir from the coding_repos row", async () => {
+		callRunner.mockResolvedValue({ entries: [{ path: "src/index.ts", type: "file" }] });
+		await tool("repo_tree").handler(ctx(JSON.stringify({ settings: { repo: "~/stale" } }), {}, [{ name: "chess", workdir: "~/dev/chess" }]), {});
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/coding/tree", { workDir: "~/dev/chess", path: undefined, maxDepth: undefined }, expect.anything());
 	});
 });

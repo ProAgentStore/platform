@@ -28,10 +28,37 @@
 -- ── Stored values are ORPHANED, deliberately
 --
 -- Instances keep `config.settings.repo` in their JSON. With the field off the schema the console
--- stops rendering it, `applySettingsPatch` (schema-driven) can no longer write it, and no code
--- reads it — it is inert. It is NOT copied into `coding_repos.workdir`: these values were never
--- validated and at least one of them is provably wrong, so adopting one would install a broken
--- path as though somebody had chosen it, which is precisely the false `ready` claim #405 removed.
+-- stops rendering it and `applySettingsPatch` (schema-driven) can no longer write it. It is NOT
+-- copied into `coding_repos.workdir`: these values were never validated and at least one of them
+-- is provably wrong, so adopting one would install a broken path as though somebody had chosen
+-- it, which is precisely the false `ready` claim #405 removed.
+--
+-- ── CORRECTION (#520, comment only — the DDL below is unchanged and has already run)
+--
+-- This section used to end "and no code reads it — it is inert". That was FALSE when it was
+-- written. `REPO_PATH_SETTINGS` (`workers/api/src/lib/connectors/repo-local.ts:35`) read
+-- `config.settings.repo`, and `repoPathForInstance` was the ONLY source of the workdir for all six
+-- `repo_*` tools — repo_tree, repo_read_file, repo_git, repo_remote, and later repo_find and
+-- repo_grep. So this migration removed the INPUT and left the READER: from `fc01c17` (2026-08-08
+-- 04:05 UTC) a `coder-repo` instance could not be given a repository by any route, and its six
+-- read tools could only refuse. FIS coder `5d14a2e1-140c-466d-beec-ddd331a1e72b`, subscribed
+-- 2026-08-10, is the recorded casualty: its entire conversation history is one failed
+-- `repo_remote` — "No repository is configured for this agent."
+--
+-- The reader now points where this migration said the truth lives: `repoPathForInstance` resolves
+-- `coding_repos.workdir` first (the row #410 made editable in the Coding tab), falling back to
+-- these orphaned settings when no row carries a folder OR when the runner has MEASURED the row's
+-- folder missing (`clone_status = 'needs_attention'`). That second clause is not tidiness: Chess
+-- coder `bfc76603` works today off its orphaned setting while its row points at a folder that does
+-- not exist, so a flat row-first rule would have broken a working instance. Together the two keep
+-- every pre-0102 instance working and keep `local-repo-chat`'s live `repo_path` field
+-- authoritative for the agent that still declares it. `repo-path-writer.test.ts` now fails if a
+-- schema edit orphans a required setting again; a comment claiming "no code reads it" is not a
+-- substitute for that test, which is the lesson of this paragraph existing.
+--
+-- Corrected in place rather than in a new migration because the statement is documentation, not
+-- behaviour: `scripts/check-migrations.mjs` strips comments before comparing history, and 0080 is
+-- this repo's precedent for correcting a comment that says something untrue.
 --
 -- ── Shape
 --
