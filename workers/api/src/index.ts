@@ -20,6 +20,7 @@ import { emailRoutes } from "./routes/email.js";
 import { driveRoutes } from "./routes/drive.js";
 import { workdriveRoutes } from "./routes/workdrive.js";
 import { errorRoutes } from "./routes/errors.js";
+import { feedbackRoutes } from "./routes/feedback.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { pushRoutes } from "./routes/push.js";
@@ -175,6 +176,7 @@ app.route("/v1/drive", driveRoutes); // /v1/drive/google/start, /callback, /stat
 app.route("/v1/workdrive", workdriveRoutes); // /v1/workdrive/zoho/start, /callback, /status, /folder, /instances/:id/import
 app.route("/v1/triggers", triggerRoutes); // instance webhook + cron triggers
 app.route("/v1/errors", errorRoutes); // GET /v1/errors — durable error log read-back
+app.route("/v1/feedback", feedbackRoutes); // owner's in-session complaints, turn-anchored (#514)
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
 app.route("/v1/admin", adminRoutes); // operator portal: /me, /audit (+ users, agents, usage, moderation)

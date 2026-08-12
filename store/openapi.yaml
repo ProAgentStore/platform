@@ -140,6 +140,8 @@ tags:
     description: Token and cost transparency across agents, models, and modalities
   - name: Errors
     description: The durable error log — server exceptions plus client-reported failures
+  - name: Feedback
+    description: What the owner said was wrong, anchored to the turn it is about
   - name: Push
     description: Web Push subscriptions and VAPID key
   - name: Profile
@@ -8810,6 +8812,117 @@ paths:
               schema: { type: object, properties: { ok: { type: boolean } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Feedback ──────────────────────────────────────────────────────────────
+
+  /v1/feedback:
+    get:
+      summary: My in-session feedback
+      description: |
+        Everything you have flagged on your own agents, newest first. `instance_id` scopes it to
+        one agent (the Feedback tab); omit it for the platform-wide triage view. Always your own —
+        there is no `scope=all`.
+      operationId: listFeedback
+      tags: [Feedback]
+      parameters:
+        - { name: instance_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [open, triaged, filed, dismissed] } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        "200":
+          description: Feedback rows, most recent first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  feedback:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      summary: Record feedback on a turn
+      description: |
+        One complaint, anchored to the message it is about. The pointers (`traceId`, `messageId`,
+        `sessionId`) keep full fidelity while the referents live; the snapshots (`targetText`,
+        `promptText`) survive Clear chat and the trace's 14-day prune. No model is in this path.
+      operationId: createFeedback
+      tags: [Feedback]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instanceId, body]
+              properties:
+                instanceId: { type: string }
+                body: { type: string, description: "What the owner said. Max 4000 chars." }
+                surface: { type: string, enum: [chat, coding, board, apply, other], default: chat }
+                sentiment: { type: string, enum: [bad, good] }
+                traceId: { type: string, description: "agent_events.trace_id for the turn" }
+                messageId: { type: string }
+                sessionId: { type: string }
+                timelineSeq: { type: integer }
+                targetRole: { type: string, enum: [assistant, user, system] }
+                targetText: { type: string }
+                targetAt: { type: string }
+                promptText: { type: string }
+                context: { type: object, additionalProperties: true, description: "audioKey, dictation, model, agentSlug, …" }
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean }, feedback: { type: object, additionalProperties: true } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/feedback/{id}:
+    patch:
+      summary: Triage one feedback row
+      description: |
+        Moves `status` and records the `issue_url` it became. The body is never editable — the row
+        records what was said at a moment, and editing that destroys what makes it evidence.
+      operationId: updateFeedback
+      tags: [Feedback]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [open, triaged, filed, dismissed] }
+                issue_url: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Delete one feedback row
+      description: It survives Clear chat by design and can contain anything you typed, so deleting your data has to reach it.
+      operationId: deleteFeedback
+      tags: [Feedback]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ── Push ──────────────────────────────────────────────────────────────────
 
