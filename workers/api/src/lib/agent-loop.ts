@@ -19,7 +19,8 @@ export type LoopStopReason =
 	| "max_iterations" // hit the caller's iteration cap
 	| "budget" // the tree ran out of money/delegations (#184)
 	| "cancelled" // a human stopped it
-	| "no_progress"; // repeating itself — a loop that cannot terminate on its own
+	| "no_progress" // repeating itself — a loop that cannot terminate on its own
+	| "engine_limit"; // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
 
 export interface LoopState {
 	iteration: number;
@@ -197,14 +198,18 @@ export function nextStep(
 
 /** Does this ending need a human? Drives whether the run notifies rather than closing quietly. */
 export function needsHuman(reason: LoopStopReason): boolean {
-	return reason === "escalated" || reason === "failed" || reason === "budget" || reason === "no_progress";
+	return reason === "escalated" || reason === "failed" || reason === "budget" || reason === "no_progress" || reason === "engine_limit";
 }
 
 /** Terminal status for the run record — mirrors the vocabulary pipeline runs already use. */
 export function statusFor(reason: LoopStopReason): "completed" | "failed" | "needs_human" | "cancelled" {
 	if (reason === "done") return "completed";
 	if (reason === "cancelled") return "cancelled";
-	if (reason === "escalated") return "needs_human";
+	// `engine_limit` sits with `escalated` rather than with `failed` (#541): the run did not fail, it
+	// ran out of the time it was allowed to wait for somebody else's usage window. The remedy is the
+	// OWNER's — wait for the next window, upgrade the plan, or switch engine — so "needs you" is the
+	// honest column, and the distinct REASON is what keeps it tellable apart from a human handoff.
+	if (reason === "escalated" || reason === "engine_limit") return "needs_human";
 	return "failed";
 }
 

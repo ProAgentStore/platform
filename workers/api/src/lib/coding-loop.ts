@@ -10,6 +10,7 @@ import {
 	repetitionVerdict,
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
+import { clockLine } from "./coding-wait.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -34,6 +35,21 @@ export interface CodingGoal {
 	specialInstructions?: string;
 	/** Live free-text message the user sent while the agent was paused/stuck. */
 	userHint?: string;
+	/**
+	 * A fact the PLATFORM is telling the brain at the start of this round (#541).
+	 *
+	 * Deliberately not `userHint`, which renders as "The user just told you:" — attributing a
+	 * platform action to the human is exactly what #505 stamps reports for. Today its only writer is
+	 * the resume note after a usage-limit park (`engineResumeNote`).
+	 */
+	resumeNote?: string;
+	/**
+	 * The owner's IANA zone, resolved once per run, for the clock the brain converts against (#541).
+	 *
+	 * Undefined is the honest unset state and renders as UTC, out loud — `accountTimeZone` returns
+	 * undefined on any failure and a silently-assumed zone is a ten-hour error.
+	 */
+	timeZone?: string;
 	/** Test mode: plan + send guidance but NEVER let a destructive action through. */
 	dryRun?: boolean;
 	/**
@@ -73,7 +89,13 @@ export interface CodingPaneSnapshot {
  */
 export type CodingActionKind = { kind: "message"; text: string } | { kind: "interrupt" };
 
-export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled";
+/**
+ * `waiting` is the only NON-TERMINAL member (#541): the Engine cannot work right now for a reason
+ * that resolves on a clock rather than by anyone doing anything. The loop returns it, the workflow
+ * parks and re-enters — and only when the run's wait budget is spent does it stay as the outcome,
+ * which is why it must never be treated as a failure by the surfaces that read one.
+ */
+export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled" | "waiting";
 
 export interface CodingDecision {
 	thought?: string;
@@ -83,6 +105,11 @@ export interface CodingDecision {
 	stuck?: { why: string };
 	/** A value only the user can provide (ask-and-hold). */
 	needsInput?: { field: string; why?: string };
+	/**
+	 * The Engine reported ITS OWN usage/rate limit (#541). `at` is the reset instant it named, as an
+	 * ISO-8601 string that must carry an explicit offset to be believed — see `coding-wait.ts`.
+	 */
+	waitUntil?: { at?: string; why: string };
 	usage?: { input: number; output: number };
 	/**
 	 * The provider stopped this decision at its output cap (#504).
@@ -99,6 +126,8 @@ export interface CodingResult {
 	outcome: CodingOutcome;
 	detail?: string;
 	fieldNeeded?: string;
+	/** On `waiting`: the reset instant the Engine named, unvalidated — the planner decides what it is worth. */
+	waitUntil?: string;
 	steps: number;
 	transcript?: string[];
 }
@@ -176,6 +205,14 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 				steps: step,
 				transcript,
 			};
+		}
+		// THE ENGINE'S OWN LIMIT IS NOT A HANDOFF (#541). Returned rather than slept on: durability
+		// belongs to the Workflow, exactly as it does for `stuck`, so this stays testable without one.
+		if (decision.waitUntil) {
+			const why = decision.waitUntil.why;
+			transcript.push(`waiting: ${why}`);
+			await deps.onEvent?.("waiting", why);
+			return { outcome: "waiting", detail: why, waitUntil: decision.waitUntil.at, steps: step, transcript };
 		}
 		if (decision.stuck) {
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
@@ -323,7 +360,8 @@ function describe(a: CodingActionKind): string {
  */
 const PILOT_MAX_TOKENS = 2048;
 
-const CODING_TOOLS = [
+/** Exported for the contract test below: every advertised tool must have a `toDecision` case. */
+export const CODING_TOOLS = [
 	{
 		name: "send_message",
 		description: "Send a natural-language instruction to the coding CLI (the next single step toward the objective).",
@@ -353,6 +391,26 @@ const CODING_TOOLS = [
 		description: "Ask the user for a specific value you do not have and must not invent (ask-and-hold).",
 		parameters: { type: "object", properties: { field: { type: "string" }, why: { type: "string" } }, required: ["field"] },
 	},
+	// THE VERB THAT DID NOT EXIST (#541). Without it, "the CLI is rate-limited until 22:30" had only
+	// `request_human` to come out as — which binds the run to a 15-minute human deadline and killed
+	// three real runs 41 minutes before the resource they were waiting for came back.
+	{
+		name: "wait_for_reset",
+		description:
+			"The coding CLI has hit ITS OWN usage/rate limit and cannot work until its window resets. Use this instead of request_human: no human can resolve a usage window, and the platform will sleep and resume you at the same step.",
+		parameters: {
+			type: "object",
+			properties: {
+				resetsAt: {
+					type: "string",
+					description:
+						"When the CLI says its limit resets, as an absolute ISO-8601 instant WITH an explicit offset or Z (e.g. 2026-08-12T22:30:00+10:00). Convert the time the terminal states using the current time you were given. Omit this if the terminal states no reset time — never guess one.",
+				},
+				why: { type: "string", description: "Quote what the CLI actually said." },
+			},
+			required: ["why"],
+		},
+	},
 ] as const;
 
 /**
@@ -372,6 +430,10 @@ export function systemPrompt(goal: CodingGoal): string {
 		"- When the objective is satisfied, call finish(status:'done'). If it's impossible, finish(status:'failed').",
 		"- If a value is required that only the user has, call request_user_info — NEVER invent secrets, tokens, or personal data.",
 		"- If you hit something a human must handle live (interactive login, captcha), call request_human.",
+		// #541. Stated as the DIFFERENCE between the two, because the three runs this comes from
+		// escalated correctly under the old vocabulary — `request_human` was the only honest move
+		// they had. The rule that matters is which of the two a usage window is, and why.
+		"- If the CLI reports ITS OWN usage or rate limit (a subscription window that resets), call wait_for_reset — NOT request_human. A human cannot resolve a usage window by taking over the session; the platform will sleep until it resets and resume you at the same step. Convert the reset time the terminal states into an absolute instant WITH an offset, using the current time given to you below; if the terminal states no reset time, omit it rather than guessing.",
 		"",
 		// WHO IS WHO (#505). The runner writes your instruction to the CLI as `role: "user"`, so the
 		// CLI's transcript calls YOU "the user" — and a Pilot that reads that back reported to the
@@ -395,6 +457,8 @@ export function systemPrompt(goal: CodingGoal): string {
 	const authority = authorityInstruction(goal.mergePolicy ?? "merge");
 	if (authority) lines.push(`\n${authority}`);
 	if (goal.dryRun) lines.push("\nTEST MODE: avoid destructive or irreversible instructions; prefer read-only/plan steps.");
+	// Attributed to the PLATFORM, never folded into `userHint` — see CodingGoal.resumeNote.
+	if (goal.resumeNote) lines.push(`\n${goal.resumeNote}`);
 	if (goal.userHint) lines.push(`\nThe user just told you: ${goal.userHint}`);
 	return lines.join("\n");
 }
@@ -406,6 +470,10 @@ export async function decideCodingAction(
 	usageCtx?: UsageContext,
 ): Promise<CodingDecision> {
 	const userMsg = [
+		// The clock, per decision rather than per run (#541): a run that parks for an hour and
+		// resumes must convert the CLI's stated local reset time against the time it is NOW. In the
+		// user message for that reason — the system prompt is built once and would go stale.
+		clockLine(Date.now(), params.goal.timeZone),
 		`Steps so far:\n${params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
 		`\nTERMINAL (run-state: ${params.snapshot.runState}):`,
 		// Not a bare `slice(-6000)`: the tail is labelled with what it is a tail OF (#522, cause B).
@@ -441,7 +509,7 @@ export async function decideCodingAction(
 	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated };
 }
 
-function toDecision(call: { name: string; arguments: Record<string, unknown> }): CodingDecision {
+export function toDecision(call: { name: string; arguments: Record<string, unknown> }): CodingDecision {
 	const a = call.arguments ?? {};
 	const str = (v: unknown) => (typeof v === "string" ? v : "");
 	switch (call.name) {
@@ -457,6 +525,10 @@ function toDecision(call: { name: string; arguments: Record<string, unknown> }):
 			return { stuck: { why: str(a.why) || "needs a human" } };
 		case "request_user_info":
 			return { needsInput: { field: str(a.field) || "a value", why: str(a.why) } };
+		case "wait_for_reset":
+			// `at` is passed through UNVALIDATED. Judging it here would put the timezone rule in two
+			// places, and the planner is the one that knows the run's remaining budget.
+			return { waitUntil: { at: str(a.resetsAt) || undefined, why: str(a.why) || "the coding CLI reported its own usage limit" } };
 		default:
 			return { stuck: { why: `unknown tool ${call.name}` } };
 	}

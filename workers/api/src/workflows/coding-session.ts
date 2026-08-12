@@ -15,6 +15,9 @@ import type { CodingSessionParams } from "./coding-session-params.js";
 import { isRunnerGone, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../lib/runner-availability.js";
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
+import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../lib/coding-pause.js";
+import { accountTimeZone } from "../lib/account-timezone.js";
+import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
 import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
@@ -48,10 +51,6 @@ export type { CodingSessionParams } from "./coding-session-params.js";
 
 /** Bounded worst case for one Pilot decide step, in USD micros. Settle refunds the rest. */
 const CODING_RESERVE_MICROS = 150_000; // $0.15
-
-
-/** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
-const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
 
 /**
  * The coding orchestrator's remote brain: a durable Cloudflare Workflow that
@@ -87,6 +86,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 */
 		const mergePolicy = (await step.do("merge-authority", () => readMergePolicyForRun(env, { instanceId, userId, repoId }))) as MergePolicy;
 		goal.mergePolicy = mergePolicy;
+		// The Pilot must convert "resets at 10:30pm" into an absolute instant, and "10:30pm" is 10:30pm
+		// SOMEWHERE (#541). Resolved once, like mergePolicy; unset stays unset and renders as UTC.
+		goal.timeZone = ((await step.do("owner-timezone", async () => (await accountTimeZone(env, userId)) ?? null)) as string | null) ?? undefined;
 		// What the owner is told about this run's authority — including, on an engine that reports no
 		// acts, that its commands could not be checked. Null under the default policy, so an
 		// unconfigured run claims no protection it does not have.
@@ -190,14 +192,10 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const note = [head, breach && `POLICY VIOLATION: ${breach}`, authorityNote, actLine].filter(Boolean).join(" | ");
 			if (event.payload.loopRunId) {
 				await step.do(`delegation-run-done${suffix}`, async () => {
-					const reason =
-						outcome.outcome === "cancelled"
-							? "cancelled"
-							: outcome.outcome === "max_steps"
-								? "max_iterations"
-								: outcome.outcome === "failed"
-									? "failed"
-									: "done";
+					// A pure table (#541) — `stopReasonFor`. The chain this replaces mapped every
+					// non-failed, non-cancelled, non-max_steps outcome to `done`, which was true only
+					// while `stuck` could never survive to here.
+					const reason = stopReasonFor(outcome.outcome);
 					// The Pilot drives its own loop and never called `recordIteration`, so
 					// `check_delegation` reported "iteration: 0 of 10" for a run that took a dozen
 					// steps — the supervisor's only progress signal, permanently reading zero.
@@ -222,7 +220,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			}
 			if (event.payload.boardTaskId) {
 				await step.do(`delegation-task-done${suffix}`, async () => {
-					const ok = outcome.outcome !== "failed" && outcome.outcome !== "max_steps";
+					const ok = runSucceeded(outcome.outcome);
 					// Same shared record shape as the route that opened the card (#155) — only the
 					// status + outcome note change. Inline upsert keeps the workflow off a routes import.
 					const task = delegationTaskRecord({
@@ -563,6 +561,37 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			},
 		};
 
+		/** This RUN's wait budget, held across rounds — a park is a property of the run, not a round. */
+		const waitState: EngineWaitState = { waits: 0, spentMs: 0 };
+		/** The pause machine's effects (#541). `conn` is read at call time: the guard re-points it. */
+		const pauseDeps = (round: number): PauseDeps => ({
+			repo: goal.repo,
+			timeZone: goal.timeZone,
+			now: () => Date.now(),
+			takeover: (label, reason) => runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined),
+			takeoverStatus: () =>
+				runRetry(`hstatus-${round}-${n++}`, () => callRunner(conn, "/coding/takeover-status", { sessionId })) as Promise<{ resolved: boolean; value?: string }>,
+			endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
+			sleep: (label, ms) => step.sleep(label, ms),
+			notify: (title, body, key, alert) =>
+				runRetry(`notify-${key}-${round}`, async () => {
+					const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined };
+					return await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), opts).then(() => null, () => null);
+				}).then(() => undefined),
+			announce: postToChat,
+			// Outside `step.do`, like the runner guard's own tick: idempotent writes whose only job is to be
+			// recent. `recordIteration` writes `last_progress_at`, without which `sweepStaleRuns` closes a
+			// parked run as dead at 3h.
+			tick: async () => {
+				const { driverId, loopRunId } = event.payload;
+				if (driverId) await touchSessionDriver(env, instanceId, userId, sessionId, driverId).catch(() => undefined);
+				await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+				if (!loopRunId) return true;
+				await recordIteration(env, loopRunId, pilotSteps).catch(() => undefined);
+				return !(await isCancelRequested(env, loopRunId).catch(() => false));
+			},
+		});
+
 		let result: CodingResult = { outcome: "failed", detail: "did not start", steps: 0 };
 		// Wrap the whole run so a thrown step (clone/runner/AI hiccup that exhausts its
 		// retries) STILL ends the session + notifies — otherwise the D1 row sits "active"
@@ -614,51 +643,22 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			for (let round = 0; round < 12; round++) {
 				// The caller's cap when it named one, the historical 40 when it did not (#374).
 				result = await runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? 40 });
-				// userHint is consumed by the round above — clear it so stale handoff input
-				// isn't re-injected into later rounds that don't get a fresh value.
+				// Both are consumed by the round above — cleared so a stale handoff value or a stale platform note isn't re-injected into a later round.
 				goal.userHint = undefined;
-				if (result.outcome !== "stuck" && result.outcome !== "needs_input") break;
-
-				const reason = result.outcome === "needs_input" ? "needs_input" : "stuck";
-				const label = result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
-				await step.do(`handoff-${round}`, () => callRunner<{ ok?: boolean }>(conn, "/coding/takeover", { sessionId, label, reason }));
-				// Ping the user — the agent is paused waiting on them.
-				await step.do(`notify-handoff-${round}`, async () => {
-					await notifyUser(
-						env,
-						userId,
-						"coding",
-						"🙋 Coder needs you",
-						`${goal.repo}: ${label}`,
-						codingSessionLink(instanceId, sessionId),
-						// The Engine is stopped until someone answers — `alert`, so muting "Coder"
-						// silences the finished/stopped updates below and never this.
-						{ key: `coding-handoff:${sessionId}:${reason}:${round}`, kind: "alert" },
-					).catch(() => undefined);
-					return null;
-				});
-
-				let resolved = false;
-				let providedValue: string | undefined;
-				for (let poll = 0; poll < HANDOFF_WAIT_POLLS && !resolved; poll++) {
-					await step.sleep(`wait-${round}-${poll}`, "5 seconds");
-					const status = await step.do(`hstatus-${round}-${poll}`, () =>
-						callRunner<{ resolved: boolean; value?: string }>(conn, "/coding/takeover-status", { sessionId }),
-					).catch(() => ({ resolved: false }) as { resolved: boolean; value?: string });
-					resolved = status.resolved;
-					if (resolved) providedValue = status.value;
+				goal.resumeNote = undefined;
+				// WHICH pause this is, how long it may last and what the owner is told: `lib/coding-pause.ts`.
+				// "How long may a run wait, and for what" is a rule, and a rule inside a Workflow can only be
+				// tested by running one (#541).
+				const pause = await resolvePause(pauseDeps(round), { round, result, state: waitState });
+				if (!pause.resume) {
+					result = pause.result;
+					break;
 				}
 				// The human answered the handoff — this run has an owner turn in it, so a report that
 				// says "the user chose" may well be true and is left alone (#505).
-				if (resolved) ownerTurns++;
-				if (!resolved) {
-					result = { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps, transcript: result.transcript };
-					break;
-				}
-				if (result.outcome === "needs_input" && providedValue && result.fieldNeeded) {
-					goal.userHint = `${result.fieldNeeded}: ${providedValue}`;
-				}
-				await step.do(`resume-${round}`, () => callRunner<{ ok?: boolean }>(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {}));
+				if (pause.ownerTurn) ownerTurns++;
+				goal.userHint = pause.userHint;
+				goal.resumeNote = pause.resumeNote;
 			}
 		} catch (e) {
 			// A step exhausted its retries and threw — record it so the finally still
@@ -771,7 +771,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			});
 			// Tell the user the run is over so they can check the results + summary.
 			await step.do("notify-end", async () => {
-				const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
+				const ok = runSucceeded(result.outcome);
 				const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
 				const body = `${goal.repo}: ${result.detail || result.outcome}`;
 				// A session ends once. `update` — nothing is waiting on the user, so this is what a

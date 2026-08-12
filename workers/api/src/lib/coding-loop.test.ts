@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	CODING_TOOLS,
 	runCodingLoop,
 	systemPrompt,
+	toDecision,
 	type CodingDecision,
 	type CodingDeps,
 	type CodingGoal,
@@ -423,5 +425,79 @@ describe("systemPrompt — who the terminal means by \"the user\" (#505)", () =>
 		expect(p).toMatch(/objects to an instruction/);
 		expect(p).toMatch(/you may NOT simply repeat it/);
 		expect(p).toMatch(/request_human quoting the objection/);
+	});
+});
+
+describe("the Engine's own usage limit has a verb of its own (#541)", () => {
+	// The three verbatim sentences the platform's own handoff notifications carried on 2026-08-12.
+	// Their runs escalated to a human 16s, 23s and 24s in, and were declared failed at +15m15s —
+	// 41 minutes before the reset each of them had just been told about.
+	const REPORTED = [
+		"The Claude CLI session has hit its usage limit and resets at 10:30pm Australia/Sydney time. I cannot proceed until the session limit resets.",
+		"The Claude CLI session has hit its usage limit and will reset at 10:30pm Australia/Melbourne time.",
+		"The Claude CLI has hit its session limit and cannot process any more requests until it resets at 10:30pm (Australia/Melbourne time).",
+	];
+
+	it("yields `waiting`, not `stuck`, for each of the three 2026-08-12 transcripts", async () => {
+		for (const why of REPORTED) {
+			const { deps } = harness([{ waitUntil: { at: "2026-08-12T22:30:00+10:00", why } }]);
+			const r = await runCodingLoop(deps, GOAL);
+			expect(r.outcome).toBe("waiting");
+			expect(r.detail).toBe(why);
+			expect(r.waitUntil).toBe("2026-08-12T22:30:00+10:00");
+		}
+	});
+
+	it("still yields `waiting` when the CLI named no reset time", async () => {
+		// Then the bound comes from the backoff ladder rather than a parse — see coding-wait.ts.
+		const { deps } = harness([{ waitUntil: { why: "usage limit reached" } }]);
+		const r = await runCodingLoop(deps, GOAL);
+		expect(r.outcome).toBe("waiting");
+		expect(r.waitUntil).toBeUndefined();
+	});
+
+	it("drives nothing into the engine before parking", async () => {
+		const { deps, sent } = harness([{ waitUntil: { at: "2026-08-12T22:30:00+10:00", why: REPORTED[0] } }]);
+		await runCodingLoop(deps, GOAL);
+		expect(sent).toEqual([]);
+	});
+
+	it("offers the verb, and tells the Pilot which of the two pauses a usage window is", async () => {
+		// The prompt rule is the half that decides whether the tool is ever reached: all three runs
+		// escalated CORRECTLY under the old vocabulary, because `request_human` was all they had.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/call wait_for_reset — NOT request_human/);
+		expect(p).toMatch(/A human cannot resolve a usage window/);
+		expect(p).toMatch(/absolute instant WITH an offset/);
+		expect(p).toMatch(/omit it rather than guessing/);
+	});
+
+	it("carries a platform note without attributing it to the human (#505)", () => {
+		const p = systemPrompt({ ...GOAL, resumeNote: "PLATFORM NOTE (not from the human): paused 56 minutes." });
+		expect(p).toContain("PLATFORM NOTE (not from the human)");
+		expect(p).not.toMatch(/The user just told you: PLATFORM NOTE/);
+	});
+});
+
+describe("every tool the Pilot is offered maps to a decision", () => {
+	// The failure this guards is one rename apart: a tool advertised in CODING_TOOLS with no `case`
+	// in `toDecision` falls to "unknown tool", which the loop reports as a stuck handoff. That is
+	// exactly the shape of the `press_keys` defect (#448) — advertised, routed into a no-op, and
+	// indistinguishable from success — and of #541, where the missing verb cost three runs.
+	it("has no advertised tool that falls through to the unknown-tool branch", () => {
+		for (const tool of CODING_TOOLS) {
+			const d = toDecision({ name: tool.name, arguments: {} });
+			expect(d.stuck?.why ?? "").not.toMatch(/unknown tool/);
+		}
+	});
+
+	it("routes wait_for_reset to a wait, carrying the instant the CLI named", () => {
+		const d = toDecision({ name: "wait_for_reset", arguments: { resetsAt: "2026-08-12T22:30:00+10:00", why: "usage limit" } });
+		expect(d.waitUntil).toEqual({ at: "2026-08-12T22:30:00+10:00", why: "usage limit" });
+		expect(d.stuck).toBeUndefined();
+	});
+
+	it("still routes a genuine human handoff to stuck", () => {
+		expect(toDecision({ name: "request_human", arguments: { why: "interactive login" } }).stuck?.why).toBe("interactive login");
 	});
 });
