@@ -161,6 +161,13 @@ function collapseSubordinate(sub: Record<string, unknown>, level: DetailLevel): 
 	for (const key of ["instanceId", "name", "subscription"]) if (key in sub) out[key] = sub[key];
 	for (const [key, v] of Object.entries(sub)) {
 		if (!Array.isArray(v)) continue;
+		// A list that is ALREADY a summary survives as itself: `bucketsCount: 4` counts board
+		// COLUMNS, which answers nothing, where `buckets` is "Running: 1, Needs you: 2" — the
+		// cheapest true statement about what an agent has in flight, and 120 characters.
+		if (NEVER_TRIM.has(key)) {
+			out[key] = reduceValue(v, level);
+			continue;
+		}
 		const already = sub[`${key}Omitted`];
 		out[`${key}Count`] = v.length + (typeof already === "number" ? already : 0);
 	}

@@ -213,6 +213,17 @@ describe("fitStatusPayload — the last rung is one line, and it is still honest
 		expect(withPrior.workCount).toBe(48);
 	});
 
+	it("keeps the bucket counts as counts, not a count OF them", () => {
+		// Live, the first cut of this rung reported `bucketsCount: 4` — the number of board COLUMNS,
+		// which answers nothing. The buckets themselves are already the summary.
+		const s = summarised()[0];
+		expect(s.buckets).toEqual([
+			{ id: "running", title: "Running", count: 2 },
+			{ id: "needs", title: "Needs you", count: 1 },
+		]);
+		expect(s.bucketsCount).toBeUndefined();
+	});
+
 	it("keeps the four things a supervisor cannot lose", () => {
 		const s = summarised()[0];
 		// The only field the legend says answers "can I give it work".
