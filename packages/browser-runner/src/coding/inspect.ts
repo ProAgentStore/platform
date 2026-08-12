@@ -301,7 +301,16 @@ export function repoTree(
 				let size: number | undefined;
 				try {
 					size = statSync(abs).size;
-				} catch {}
+				} catch {
+					// Benign, and traced rather than assumed (#291). `size` stays `undefined`, which JSON
+					// drops, so the entry reaches the model as `{path, type: "file"}` — the same listing a
+					// successful stat produces, because `repo-local.ts`'s renderer prints `e.path` and has
+					// never shown a size at all. The test is whether the fallback can be mistaken for a
+					// real answer: `size: 0` would be a claim about an empty file; an absent field is not
+					// a claim. The entry itself is still emitted because `readdir` saw it, and the one
+					// case where that is already stale — deleted between the readdir and this stat —
+					// degrades into an honest error from `repo_read_file`, not into a wrong listing.
+				}
 				entries.push({ path: rel, type: "file", size });
 			}
 		}

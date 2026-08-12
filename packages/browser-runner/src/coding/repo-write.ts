@@ -92,7 +92,16 @@ export interface SwitchBranchResult {
 	to: string;
 	/** Read back AFTER the checkout, from git, not assumed from the exit code. */
 	branch: string | null;
-	dirty: boolean;
+	/**
+	 * Whether the tree has uncommitted work. `null` means git would not say (#291).
+	 *
+	 * It cannot default to `false`, because "clean" is the load-bearing word here: it is the
+	 * precondition that makes an unattended checkout safe, and it is the clause the card prints to
+	 * explain why nothing came along. This same function treats an unreadable `git status` as fatal
+	 * BEFORE the switch — so answering "clean" after it would make one failure mean opposite things
+	 * ten lines apart.
+	 */
+	dirty: boolean | null;
 	refused?: SwitchRefusal;
 	error?: string;
 }
@@ -179,9 +188,17 @@ export function switchRepoBranch(workDir: string, branch: string): SwitchBranchR
 	// CONFIRM, do not assume. The exit code says the command ran; only reading HEAD back says where
 	// the checkout actually is, and that is the only thing the cloud is allowed to report as done.
 	const after = currentBranch(workDir);
-	let dirtyAfter = false;
+	// And the same rule for the tree: `null` when git would not answer, never `false`. Nothing in
+	// the cloud reads this field today — `repo-policy-act.ts` acts on `refused`, `error` and its own
+	// independent read — so this is prophylactic rather than a live defect, and it is recorded that
+	// way. What makes it worth changing anyway is that the value is a CLAIM and the next reader
+	// inherits it: `dirty: false` off a failed `git status` says "clean" in the one field whose
+	// whole job is to say whether anything came across. Absent is degraded; manufactured is wrong.
+	let dirtyAfter: boolean | null;
 	try {
 		dirtyAfter = isDirty(workDir);
-	} catch {}
+	} catch {
+		dirtyAfter = null;
+	}
 	return { ok: after === to, changed: after === to, from, to, branch: after, dirty: dirtyAfter };
 }

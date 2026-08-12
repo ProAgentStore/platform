@@ -73,7 +73,8 @@ interface SwitchBranchWire {
 	from?: string | null;
 	to?: string;
 	branch?: string | null;
-	dirty?: boolean;
+	/** `null` from a runner that could not read `git status` back; absent from one before #291. */
+	dirty?: boolean | null;
 	refused?: string;
 	error?: string;
 }

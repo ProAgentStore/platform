@@ -83,12 +83,12 @@ const PINNED = {
 	"packages/cli/src": 0,
 	"workers/api/src": 0,
 	"workers/mcp/src": 0,
-	// Not cleared, and deliberately: `coding/inspect.ts` and `coding/repo-write.ts` sit in a tree
-	// another session was editing while #291's triage ran, and `repo-write.ts` arrived DURING it —
-	// which is this ratchet's argument in miniature, since nothing failed when it did. Reaching
-	// into another agent's live edits to win a number is how two of this repo's worst afternoons
-	// started. Pinned rather than excluded, so the debt is visible and may only go down.
-	"packages/browser-runner/src": 2,
+	// Cleared once the tree was free, so this is a gate rather than a ratchet — and the two sites
+	// went opposite ways, which is the triage rule working rather than a formality. `inspect.ts`'s
+	// lost `stat` only drops a `size` the renderer never printed, so the sentence IS the fix;
+	// `repo-write.ts` was answering `dirty: false` off a failed `git status`, in the one field whose
+	// job is to say whether anything came across a checkout. See #291.
+	"packages/browser-runner/src": 0,
 };
 
 /** Generated, not authored — `build.js` emits it and nobody edits it. */

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -153,5 +153,26 @@ describe("switchRepoBranch (on a real temp repo)", () => {
 
 	it("throws rather than shelling out when the name is unusable", () => {
 		expect(() => switchRepoBranch(dir, "--force")).toThrow(InspectError);
+	});
+
+	it("says `dirty: null` when git will not say, rather than claiming the tree is clean (#291)", () => {
+		// Provoked, not mocked: a `post-checkout` hook turns `.git/index` into a directory, so the
+		// checkout and `rev-parse` both still succeed and only the status read that follows them
+		// fails. That is the exact ordering the swallow lived in — the PRE-switch `isDirty` is
+		// already fatal, so this is the one call whose failure used to be answered with `false`.
+		// It is uid-independent (unlike a chmod, which root walks through) and therefore safe in CI.
+		mkdirSync(join(dir, ".git", "hooks"), { recursive: true });
+		const hook = join(dir, ".git", "hooks", "post-checkout");
+		writeFileSync(hook, "#!/bin/sh\nrm -f .git/index\nmkdir -p .git/index\n");
+		chmodSync(hook, 0o755);
+
+		const r = switchRepoBranch(dir, "main");
+
+		// The switch itself really happened and is still reported as done — an unreadable tree does
+		// not demote a confirmed checkout.
+		expect(r).toMatchObject({ ok: true, changed: true, from: "fix/36", to: "main", branch: "main" });
+		// The whole point: NOT false. "Clean" is the word that makes an unattended checkout safe,
+		// and it must never be manufactured from a failed read.
+		expect(r.dirty).toBeNull();
 	});
 });
