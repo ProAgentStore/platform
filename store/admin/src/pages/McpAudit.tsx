@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
+import Button from "../components/Button";
 
 interface McpAuditEvent {
 	time?: string;
@@ -75,13 +76,12 @@ export default function McpAudit() {
 					placeholder="Filter by user id"
 					className="border border-line rounded px-2 py-1 text-sm"
 				/>
-				<button
-					type="button"
-					onClick={load}
-					className="bg-accent-soft text-accent border border-accent/30 rounded px-3 py-1 text-sm font-medium"
-				>
+				{/* Filled accent, like Audit's own Apply. It was a soft tint with an ad-hoc
+				    `border-accent/30` — an alpha invented at one call site, which is what §1 of
+				    DESIGN-SYSTEM.md objects to, and the two audit pages now agree. */}
+				<Button variant="primary" size="lg" onClick={load}>
 					Apply
-				</button>
+				</Button>
 			</div>
 			{err ? (
 				<ErrorBox message={err} />

@@ -271,12 +271,25 @@ step's type size, 5 pills, 5 card-shaped, 4 overlaid, 3 segmented, 15 recorded j
 console is finished against this vocabulary, and the next question about it is whether the table
 should *grow* a step, not which call sites are left.
 
-**`agents/coder/web` is at 23, and the table is vendored there** (`agents/coder/web/src/control-classes.ts`).
-It could not import the console's: `store/console` depends on `@proagentstore/coder-web`, so the
-arrow only goes one way, and the SDK is not a home for it because Tailwind v4 skips `node_modules`
-— the same reason `index.css` carries an explicit `@source` for that directory. The region between
-the `vendored:button-vocabulary` markers is held byte-identical by `control-classes.test.ts`, the
-bargain §4 already strikes for the tokens in `store/admin`.
+**`agents/coder/web` is at 23 and `store/admin` at 4, and the table is vendored into both.**
+Neither could import the console's. The Coder UI cannot because `store/console` depends on
+`@proagentstore/coder-web`, so the arrow only goes one way; the operator portal cannot because it
+is a separate Vite app and a separate package whose `rootDir` does not reach across. The SDK is not
+a home for it either: Tailwind v4 skips `node_modules`, which is the same reason `index.css`
+carries an explicit `@source` for the Coder directory. The region between the
+`vendored:button-vocabulary` markers is held byte-identical across all three by
+`control-classes.test.ts` — the bargain §4 already strikes for the tokens.
+
+**Three copies is the limit, and the list says so.** The Coder UI's copy is justified by the two
+surfaces rendering on one screen; the operator portal's rests on the weaker argument that a
+maintainer should not hold two definitions of "a small button". A fourth is the signal to stop
+copying and build the shared package instead — three is where duplication is still cheaper than the
+abstraction, and four is an assertion nobody has tested.
+
+**All three trees are now at the floor of what this vocabulary can express.** What the ratchet holds
+is no longer a migration backlog; it is the list of shapes the table does not have: a filled
+destructive button, a pill, a segmented arm, a card-shaped button, an overlay with its own scrim,
+anything below `text-xs`, and anything whose display is responsive (below).
 
 ### What may be handed to `<Button className>`, measured (#366)
 

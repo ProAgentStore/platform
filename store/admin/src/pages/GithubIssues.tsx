@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, fmtInt } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel, Stat } from "../lib/ui";
+import Button from "../components/Button";
 
 type IssueState = "open" | "closed";
 type Severity = "critical" | "high" | "medium" | "low" | "none";
@@ -102,7 +103,7 @@ export default function GithubIssues() {
 						onKeyDown={(e) => e.key === "Enter" && applyRepo()}
 						className="!w-auto min-w-[15rem] text-sm font-mono"
 					/>
-					<button type="button" onClick={applyRepo} className="text-sm px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold">Load</button>
+					<Button variant="primary" size="lg" onClick={applyRepo}>Load</Button>
 					<select aria-label="Time range" value={range} onChange={(e) => setRange(e.target.value)} className="!w-auto text-sm">
 						{RANGES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
 					</select>

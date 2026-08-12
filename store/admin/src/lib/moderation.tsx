@@ -10,6 +10,7 @@ import {
 	runArgs,
 } from "./danger";
 import { Empty } from "./ui";
+import Button from "../components/Button";
 
 /**
  * Shared moderation controls for the operator portal (issues #34 API, #41 UI).
@@ -110,15 +111,9 @@ export function DangerAction({
 	if (!open) {
 		return (
 			<div>
-				<button
-					type="button"
-					onClick={() => dispatch({ type: "open" })}
-					className={`text-sm px-3 py-1.5 rounded-lg border ${
-						danger ? "border-danger-line text-danger hover:bg-danger-soft" : "border-line text-ink hover:bg-panel-hover"
-					}`}
-				>
+				<Button variant={danger ? "danger" : "secondary"} size="lg" onClick={() => dispatch({ type: "open" })}>
 					{label}
-				</button>
+				</Button>
 				{ok ? <span className="text-success text-xs ml-2">{ok}</span> : null}
 			</div>
 		);

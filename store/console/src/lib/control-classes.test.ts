@@ -136,25 +136,38 @@ describe("badgeClass", () => {
 });
 
 /**
- * The second copy (#366).
+ * The other two copies (#366).
  *
  * `agents/coder/web` renders inside this console and shares its compiled stylesheet, so a button
- * in the Coding tab sits beside a button in the console shell. Until this commit those were two
- * vocabularies: 47 hand-authored shapes there against four steps here, on one screen.
+ * in the Coding tab sits beside a button in the console shell: 47 hand-authored shapes there
+ * against four steps here, on one screen. `store/admin` never shares a screen with anything, and
+ * its copy rests on the weaker argument — a maintainer reading both should not hold two
+ * definitions of "a small button" — which is stated in that file's own header rather than implied.
  *
- * It could not import the table — `store/console` depends on `@proagentstore/coder-web`, so the
+ * Neither could import the table — `store/console` depends on `@proagentstore/coder-web`, so the
  * arrow only goes one way, and the SDK is not a home for it because Tailwind v4 skips
  * `node_modules` (the reason `index.css` carries an explicit `@source` for that directory in the
  * first place). So the table is vendored, exactly as the design TOKENS are vendored into
  * `store/admin` and held equal by `designTokens.test.ts` — DESIGN-SYSTEM.md §4's "three copies".
+ * `store/admin` cannot import it either, for the plainer reason that it is a separate Vite app and
+ * a separate package, whose `rootDir` does not reach across.
  *
  * What makes duplication acceptable is that a machine polices it. This reads the region between
  * the `vendored:button-vocabulary` markers out of both files and requires it byte-identical, so a
  * fifth size added on one side fails here rather than in a screenshot of one tab.
  */
-describe("the vendored copy in agents/coder/web", () => {
+describe("the vendored copies", () => {
 	const CONSOLE_FILE = join(import.meta.dirname, "control-classes.ts");
-	const CODER_WEB_FILE = join(import.meta.dirname, "../../../../agents/coder/web/src/control-classes.ts");
+	/**
+	 * Every copy, by path. Three is the number DESIGN-SYSTEM.md §4 already records for the tokens,
+	 * and it is where duplication is still cheaper than the abstraction. A FOURTH entry here is the
+	 * signal to stop copying and build the shared package instead — said in the list rather than in
+	 * a doc, because this is the line someone would be editing.
+	 */
+	const COPIES: Record<string, string> = {
+		"agents/coder/web": join(import.meta.dirname, "../../../../agents/coder/web/src/control-classes.ts"),
+		"store/admin": join(import.meta.dirname, "../../../admin/src/control-classes.ts"),
+	};
 
 	/** Between the markers, inclusive. Null when a marker is missing, which is itself a failure. */
 	function region(path: string): string | null {
@@ -165,16 +178,16 @@ describe("the vendored copy in agents/coder/web", () => {
 		return src.slice(open, src.indexOf("\n", close) + 1);
 	}
 
-	it("carries the markers in both files", () => {
+	it("carries the markers in every copy", () => {
 		// A missing marker would make the comparison below vacuously pass on an empty string, which
 		// is the way a text-region guard silently stops guarding.
 		expect(region(CONSOLE_FILE)).not.toBeNull();
-		expect(region(CODER_WEB_FILE)).not.toBeNull();
 		expect(region(CONSOLE_FILE)?.length).toBeGreaterThan(500);
+		for (const path of Object.values(COPIES)) expect(region(path)).not.toBeNull();
 	});
 
-	it("is byte-identical to this file's", () => {
-		expect(region(CODER_WEB_FILE)).toBe(region(CONSOLE_FILE));
+	it.each(Object.entries(COPIES))("%s is byte-identical to this file's", (_name, path) => {
+		expect(region(path)).toBe(region(CONSOLE_FILE));
 	});
 
 	it("really is the table this module exports, not a stale paste of its text", () => {

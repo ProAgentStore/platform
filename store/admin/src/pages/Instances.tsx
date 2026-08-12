@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { LIST_PAGE, buildListQuery, isFiltered, predicateKey, predicateParams } from "../lib/list-query";
 import { Empty, ErrorBox, LiveDot, Loading, Panel } from "../lib/ui";
 import { Pager } from "./Agents";
+import Button from "../components/Button";
 
 interface Instance {
 	id: string;
@@ -82,9 +83,9 @@ export default function Instances() {
 					{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
 				</select>
 				{filtered ? (
-					<button type="button" onClick={() => { setAgent(""); setOwner(""); setStatus(""); }} className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted hover:bg-panel-hover">
+					<Button size="lg" onClick={() => { setAgent(""); setOwner(""); setStatus(""); }}>
 						Clear
-					</button>
+					</Button>
 				) : null}
 			</div>
 

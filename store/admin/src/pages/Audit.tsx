@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { type AuditRow, prettyDetail } from "../lib/moderation";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
+import Button from "../components/Button";
 
 /**
  * Every action the moderation API can record. Listed explicitly rather than derived
@@ -102,15 +103,14 @@ export default function Audit() {
 				<select aria-label="Number of rows" value={limit} onChange={(e) => setLimit(e.target.value)} className="!w-auto text-sm">
 					{LIMITS.map((l) => <option key={l} value={l}>last {l}</option>)}
 				</select>
-				<button type="button" onClick={apply} className="text-sm px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold">Apply</button>
+				<Button variant="primary" size="lg" onClick={apply}>Apply</Button>
 				{applied.actor || applied.action || applied.target ? (
-					<button
-						type="button"
+					<Button
+						size="lg"
 						onClick={() => { setActor(""); setAction(""); setTarget(""); setApplied({ actor: "", action: "", target: "", limit }); }}
-						className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted hover:bg-panel-hover"
 					>
 						Clear
-					</button>
+					</Button>
 				) : null}
 			</div>
 

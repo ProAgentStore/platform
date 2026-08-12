@@ -163,7 +163,25 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // and only on mobile. The whole coding-session header is responsive that way. Those eight are not
 // unmigrated work; they are a gap in the table, and `Button.tsx`'s docstring now carries the test
 // for which classes may be handed through and which cannot.
-const PINNED = { "store/console": 42, "store/admin": 15, "agents/coder/web": 23 };
+//
+// ── `store/admin` 15 → 4, and the pin becomes a floor rather than a debt
+//
+// The same vendoring, for a plainer reason: a separate Vite app and a separate package, whose
+// `rootDir` does not reach into the console's. 11 sites migrated across App, Agents (incl. the
+// shared `Pager`), Audit, GithubIssues, Instances, McpAudit and the moderation trigger. McpAudit's
+// Reload also loses an ad-hoc `border-accent/30` — an alpha invented at one call site, which is
+// what §1 objects to — and now matches Audit's own Apply.
+//
+// The 4 left: the confirm/force PAIR in `moderation.tsx` (the Force arm is a FILLED red, which the
+// table has no variant for, and the console deliberately has no filled destructive step — migrating
+// only its Cancel would break the pair, which is the Login-pair judgement again), the `AuditLine`
+// disclosure (a full-width text row that happens to name `px-1 rounded`, the "text link in a
+// button's clothing" case this guard's own docstring describes), and GithubIssues' severity
+// selector (card-shaped, with a selected state).
+//
+// All three trees are now at the floor of what this vocabulary can express. What is pinned is no
+// longer a migration backlog; it is the list of shapes the table does not have.
+const PINNED = { "store/console": 42, "store/admin": 4, "agents/coder/web": 23 };
 
 describe.each([
 	["store/console", CONSOLE_SRC],

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { LIST_PAGE, buildListQuery, isFiltered, pagerRange, predicateKey } from "../lib/list-query";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
+import Button from "../components/Button";
 
 interface Agent {
 	id: string;
@@ -82,13 +83,9 @@ export default function Agents() {
 				</select>
 				<input aria-label="Filter agents by owner" placeholder="Owner (login or id)" value={owner} onChange={(e) => setOwner(e.target.value)} className="!w-auto min-w-[13rem] text-sm" />
 				{filtered ? (
-					<button
-						type="button"
-						onClick={() => { setSearch(""); setVisibility(""); setStatus(""); setOwner(""); }}
-						className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted hover:bg-panel-hover"
-					>
+					<Button size="lg" onClick={() => { setSearch(""); setVisibility(""); setStatus(""); setOwner(""); }}>
 						Clear
-					</button>
+					</Button>
 				) : null}
 			</div>
 
@@ -139,8 +136,8 @@ export function Pager({ total, offset, onChange, page = PAGE }: { total: number;
 	return (
 		<div className="flex items-center gap-2 text-xs text-muted">
 			<span>{r.from}–{r.to} of {total}</span>
-			<button type="button" disabled={!r.hasPrev} onClick={() => onChange(r.prevOffset)} className="px-2 py-1 rounded border border-line disabled:opacity-30 hover:bg-panel-hover">Prev</button>
-			<button type="button" disabled={!r.hasNext} onClick={() => onChange(r.nextOffset)} className="px-2 py-1 rounded border border-line disabled:opacity-30 hover:bg-panel-hover">Next</button>
+			<Button size="sm" disabled={!r.hasPrev} onClick={() => onChange(r.prevOffset)}>Prev</Button>
+			<Button size="sm" disabled={!r.hasNext} onClick={() => onChange(r.nextOffset)}>Next</Button>
 		</div>
 	);
 }
