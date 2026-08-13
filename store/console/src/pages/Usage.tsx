@@ -5,10 +5,11 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
-import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, hasChargedFigures } from "../lib/usageFigures";
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel } from "../lib/usageFigures";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number }
-interface Day { date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
+/** Cache fields optional: an API older than #547 does not report them, which is not the same as zero. */
+interface Day { date: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
 /**
  * What the dollars above LEAVE OUT, counted (#348).
  *
@@ -91,9 +92,16 @@ const KIND_LABEL: Record<string, string> = {
 	engine: "Coding engine",
 };
 
-/** A dead-simple, dependency-free SVG bar chart (one bar per day). Value is chosen by `metric`. */
+/**
+ * A dead-simple, dependency-free SVG bar chart (one bar per day). Value is chosen by `metric`.
+ *
+ * The token metric counts all four columns — the same quantity the daily circuit breaker counts
+ * (#547). It counted `input + output` while the ceiling counted cache too, and cache is 98% of
+ * that on an account with a coding engine: the day a 250M-token ceiling tripped at 268M drew as a
+ * 4.2M bar. A chart that cannot show the quantity being enforced cannot be used to calibrate it.
+ */
 function DailyChart({ daily, metric }: { daily: Day[]; metric: "cost" | "tokens" }) {
-	const vals = daily.map((d) => (metric === "cost" ? d.costMicros : d.inputTokens + d.outputTokens));
+	const vals = daily.map((d) => (metric === "cost" ? d.costMicros : dayTokens(d)));
 	const max = Math.max(1, ...vals);
 	const W = 640, H = 140, pad = 4;
 	const n = Math.max(1, daily.length);
@@ -109,7 +117,9 @@ function DailyChart({ daily, metric }: { daily: Day[]; metric: "cost" | "tokens"
 						<g key={d.date}>
 							<rect x={x + bw * 0.12} y={H - h - 16} width={bw * 0.76} height={Math.max(v > 0 ? 2 : 0, h)} rx={1.5}
 								className="fill-accent" opacity={0.85}>
-								<title>{`${d.date}: ${metric === "cost" ? usd(d.costMicros) : `${tok(d.inputTokens + d.outputTokens)} tokens`} · ${d.calls} calls`}</title>
+								{/* The composition, not just the magnitude: "4.2M I/O + 850M cache". A reader
+								    comparing one number to a ceiling has to be able to see what it is made of. */}
+								<title>{`${d.date}: ${metric === "cost" ? usd(d.costMicros) : tokenSplitLabel(d, tok)} · ${d.calls} calls`}</title>
 							</rect>
 						</g>
 					);

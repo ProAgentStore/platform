@@ -97,10 +97,12 @@ const DEFAULT_USAGE = {
 		chargedCostMicros: 36_352_782,
 		calls: 5_721,
 	},
+	// Every day carries all four token columns (#547). Cache is ~99% of them on an account with a
+	// coding engine, which is the whole reason the chart was 137x out.
 	daily: [
-		{ date: "2026-08-09", inputTokens: 812_004, outputTokens: 402_119, costMicros: 1_204_881_004, calls: 402 },
-		{ date: "2026-08-10", inputTokens: 1_002_331, outputTokens: 611_284, costMicros: 1_811_004_882, calls: 588 },
-		{ date: "2026-08-11", inputTokens: 2_192_612, outputTokens: 2_032_986, costMicros: 6_457_081_537, calls: 822 },
+		{ date: "2026-08-09", inputTokens: 812_004, outputTokens: 402_119, cacheReadTokens: 220_000_000, cacheWriteTokens: 3_000_000, costMicros: 1_204_881_004, calls: 402 },
+		{ date: "2026-08-10", inputTokens: 1_002_331, outputTokens: 611_284, cacheReadTokens: 212_844_405, cacheWriteTokens: 2_148_104, costMicros: 1_811_004_882, calls: 588 },
+		{ date: "2026-08-11", inputTokens: 2_192_612, outputTokens: 2_032_986, cacheReadTokens: 846_000_000, cacheWriteTokens: 9_400_000, costMicros: 6_457_081_537, calls: 822 },
 	],
 	byModel: [
 		{ key: "claude-sonnet-4-6", inputTokens: 5_800_000, outputTokens: 3_500_000, cacheReadTokens: 1_278_000_000, cacheWriteTokens: 14_500_000, costMicros: 9_600_000_000, chargedCostMicros: 30_000_000, calls: 5_600 },
@@ -2425,6 +2427,53 @@ test.describe("Usage — value and charged are two numbers (#543)", () => {
 		await expect(header).toContainText("Value");
 		await expect(header).not.toContainText("charged");
 		await expect(page.getByTestId("usage-charged-legend")).toHaveCount(0);
+	});
+});
+
+/**
+ * The chart plots the quantity the ceiling is denominated in (#547).
+ *
+ * The token metric summed `input + output` while the daily circuit breaker counts those plus cache
+ * read and cache write — and cache is 98.2% of what it counts. So the day a 250M-token ceiling
+ * tripped at 268M drew as a 4.2M bar, and a user who was stopped by the breaker was sent to a page
+ * that contradicted it.
+ */
+test.describe("Usage — the daily chart counts cache (#547)", () => {
+	test("the tooltip states the I/O and cache split rather than one number", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+		await page.getByRole("button", { name: "tokens" }).click();
+
+		// 2026-08-11: 4.2M of I/O and 855M of cache. Before this it read "4.2M tokens".
+		const title = page.locator('svg[aria-label="Daily usage"] title', { hasText: "2026-08-11" });
+		await expect(title).toContainText("I/O +");
+		await expect(title).toContainText("cache");
+	});
+
+	test("a cache-heavy day draws taller than an I/O-heavy one, which is the ceiling's ordering", async ({ page }) => {
+		// The assertion that fails on the old metric: day A has 10x the I/O of day B and a
+		// hundredth of the tokens the breaker would count. Bar height has to follow the second.
+		await mockSignedInConsole(page, {
+			usage: {
+				range: "7d",
+				totals: { inputTokens: 1_100_000, outputTokens: 0, cacheReadTokens: 500_000_000, cacheWriteTokens: 0, costMicros: 100, chargedCostMicros: 0, calls: 2 },
+				daily: [
+					{ date: "2026-08-10", inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 50, calls: 1 },
+					{ date: "2026-08-11", inputTokens: 100_000, outputTokens: 0, cacheReadTokens: 500_000_000, cacheWriteTokens: 0, costMicros: 50, calls: 1 },
+				],
+				byModel: [], byKind: [], byAgent: [], byPayer: [],
+			},
+		});
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+		await page.getByRole("button", { name: "tokens" }).click();
+
+		// Scoped to the chart's own svg: a lucide icon is an svg with rects in it too.
+		const bars = page.locator('svg[aria-label="Daily usage"] rect');
+		const ioDay = await bars.nth(0).boundingBox();
+		const cacheDay = await bars.nth(1).boundingBox();
+		expect(cacheDay!.height).toBeGreaterThan(ioDay!.height * 10);
 	});
 });
 

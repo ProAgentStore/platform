@@ -901,7 +901,12 @@ const PINS = {
 	// is a guard defeated silently. The seam if it grows again: BudgetPanel and its three helpers
 	// (~370 lines) read a different API and answer a different question, and moving them to their
 	// own file would not split the SCREEN, which is what the note above is actually about.
-	"store/console/src/pages/Usage.tsx": 922,
+	// +10 at #547: the chart's token metric becomes the ceiling's metric (all four token columns,
+	// not just I/O) and the tooltip states the split. Two call sites and the paragraph saying why a
+	// 4.2M bar was drawn for a day that tripped a 250M ceiling at 268M. The arithmetic itself is
+	// pure in lib/usageFigures.ts (`dayTokens`, `tokenSplitLabel`) with the measured day as its
+	// fixture.
+	"store/console/src/pages/Usage.tsx": 932,
 	// First entry at #291, crossing 800 by 5 lines. Recorded rather than squeezed, because the
 	// alternative on offer was deleting the paragraph that says why the change exists — and the
 	// change is the one that stops a dropped GET from arming "Save All Settings" over an empty
@@ -971,7 +976,9 @@ const PINS = {
 	// that turned #442's stored round into a feature nobody could reach. Plus this self-ref.
 	// +12 at #543: the Usage.tsx raise above, whose reason names the seam (BudgetPanel) so the next
 	// raise has a cheaper option than this one. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1055,
+	// +7 at #547: the Usage.tsx raise above (the chart's token metric now counts cache, which is
+	// 98% of what the ceiling beside it counts). Plus this self-ref.
+	"scripts/check-file-size.mjs": 1062,
 };
 
 /**

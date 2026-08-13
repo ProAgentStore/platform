@@ -328,7 +328,24 @@ export interface UsageSummary {
 		chargedCostMicros: number;
 		calls: number;
 	};
-	daily: Array<{ date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }>;
+	/**
+	 * The per-day series, carrying ALL FOUR token columns (#547).
+	 *
+	 * It carried only input and output, so the chart plotted 4.2M tokens for 2026-08-11 — the day
+	 * a 250M-token circuit breaker tripped at 268M. Cache reads are 98.2% of what that ceiling
+	 * counts (`accountUsageSince` sums all four), so the one view that could answer "which day did
+	 * I blow the ceiling, and on what?" was off by 137x. The numbers were already accumulated by
+	 * `bump()` into `dayMap` and then dropped on the way out; nothing new is computed here.
+	 */
+	daily: Array<{
+		date: string;
+		inputTokens: number;
+		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		costMicros: number;
+		calls: number;
+	}>;
 	byModel: UsageBucket[];
 	byKind: UsageBucket[];
 	byAgent: UsageBucket[];
@@ -404,7 +421,15 @@ export function aggregateUsage(
 	const days = opts.fromDay && opts.toDay ? denseDays(opts.fromDay, opts.toDay) : [...dayMap.keys()].sort();
 	for (const date of days) {
 		const b = dayMap.get(date);
-		daily.push({ date, inputTokens: b?.inputTokens || 0, outputTokens: b?.outputTokens || 0, costMicros: b?.costMicros || 0, calls: b?.calls || 0 });
+		daily.push({
+			date,
+			inputTokens: b?.inputTokens || 0,
+			outputTokens: b?.outputTokens || 0,
+			cacheReadTokens: b?.cacheReadTokens || 0,
+			cacheWriteTokens: b?.cacheWriteTokens || 0,
+			costMicros: b?.costMicros || 0,
+			calls: b?.calls || 0,
+		});
 	}
 
 	const sortBuckets = (m: Map<string, UsageBucket>) =>
@@ -517,7 +542,15 @@ export function aggregateAdminUsage(
 	const days = opts.fromDay && opts.toDay ? denseDays(opts.fromDay, opts.toDay) : [...maps.day.keys()].sort();
 	for (const date of days) {
 		const b = maps.day.get(date);
-		daily.push({ date, inputTokens: b?.inputTokens || 0, outputTokens: b?.outputTokens || 0, costMicros: b?.costMicros || 0, calls: b?.calls || 0 });
+		daily.push({
+			date,
+			inputTokens: b?.inputTokens || 0,
+			outputTokens: b?.outputTokens || 0,
+			cacheReadTokens: b?.cacheReadTokens || 0,
+			cacheWriteTokens: b?.cacheWriteTokens || 0,
+			costMicros: b?.costMicros || 0,
+			calls: b?.calls || 0,
+		});
 	}
 
 	const sortByCost = (m: Map<string, UsageBucket>) =>

@@ -121,6 +121,29 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		expect(coding?.cacheReadTokens).toBe(0);
 	});
 
+	it("carries the split into the DAILY series too, which is what the ceiling is denominated in (#547)", () => {
+		// The series dropped the two cache columns on the way out, although `bump()` had already
+		// accumulated them into the day bucket. So the chart plotted `input + output` while the
+		// circuit breaker counted all four — and cache was 98.2% of what it counted. The day the
+		// 250M ceiling tripped at 268M rendered as 4.2M tokens.
+		const rows = [
+			row({ created_at: "2026-08-11 03:00:00", input_tokens: 1_100_000, output_tokens: 1_000_000, cache_read_tokens: 400_000_000, cache_write_tokens: 4_000_000 }),
+			row({ created_at: "2026-08-11 19:00:00", input_tokens: 1_092_612, output_tokens: 1_032_986, cache_read_tokens: 446_000_000, cache_write_tokens: 5_400_000 }),
+		];
+		const s = aggregateUsage(rows, { fromDay: "2026-08-10", toDay: "2026-08-11" });
+		const aug11 = s.daily.find((d) => d.date === "2026-08-11");
+		expect(aug11).toMatchObject({ inputTokens: 2_192_612, outputTokens: 2_032_986, cacheReadTokens: 846_000_000, cacheWriteTokens: 9_400_000 });
+
+		// The identity that silently failed for two of the four columns: the series must sum to the
+		// totals over the same range. A zero-filled gap day contributes nothing to either side.
+		const sum = (k: "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens") =>
+			s.daily.reduce((n, d) => n + d[k], 0);
+		expect(sum("inputTokens")).toBe(s.totals.inputTokens);
+		expect(sum("outputTokens")).toBe(s.totals.outputTokens);
+		expect(sum("cacheReadTokens")).toBe(s.totals.cacheReadTokens);
+		expect(sum("cacheWriteTokens")).toBe(s.totals.cacheWriteTokens);
+	});
+
 	it("treats a pre-migration NULL as zero for the sum without crashing", () => {
 		// Rows written before 0074 have NULL — genuinely unknown. Aggregation has to add them up
 		// somehow, and zero is the only sane arithmetic; the unknown-vs-zero distinction lives in

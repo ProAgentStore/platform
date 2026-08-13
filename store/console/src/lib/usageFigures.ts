@@ -59,3 +59,48 @@ export const CHARGED_LEGEND =
 /** The same understatement caveat, next to the headline that carries the charged total. */
 export const CHARGED_COVERAGE_NOTE =
 	"Charged is only recorded for calls made since payer tracking began, so a longer range understates it.";
+
+/**
+ * A day in the chart's series (#547).
+ *
+ * The cache fields are optional because a response from an API older than #547 does not carry
+ * them — and that absence must read as "not reported", not as "no cache activity". Treating it as
+ * zero in the SUM is the only arithmetic available, but the distinction is why the tooltip only
+ * mentions cache when there is cache to mention.
+ */
+export interface UsageDay {
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+}
+
+/**
+ * Every token the day cost — the SAME four columns the daily circuit breaker counts.
+ *
+ * This is the point of #547 and it is not a cosmetic sum. The chart plotted `input + output`,
+ * while `accountUsageSince` counts input + output + cache read + cache write. On the account this
+ * was measured on, cache reads were 98.2% of the counted total: the chart showed 4.2M tokens for
+ * the day a 250M/day ceiling tripped at 268M, 137x out. A reader comparing one number against a
+ * ceiling has to be shown the number the ceiling is denominated in.
+ */
+export function dayTokens(d: UsageDay): number {
+	return (d.inputTokens || 0) + (d.outputTokens || 0) + (d.cacheReadTokens || 0) + (d.cacheWriteTokens || 0);
+}
+
+/**
+ * The composition behind that total, in words: "4.2M I/O + 850M cache".
+ *
+ * The magnitude alone would be a second unexplained number. Splitting it in the tooltip is what
+ * lets a reader see that a day is nearly all cache — which is the fact that makes the ceiling's
+ * arithmetic legible, and the input to whether cache reads should be weighted in it at all (#485).
+ * Falls back to the plain total when the payload carries no cache columns, rather than printing
+ * "+ 0 cache" for a day whose cache is unknown.
+ */
+export function tokenSplitLabel(d: UsageDay, fmt: (n: number) => string): string {
+	const io = (d.inputTokens || 0) + (d.outputTokens || 0);
+	const cache = (d.cacheReadTokens || 0) + (d.cacheWriteTokens || 0);
+	const reported = typeof d.cacheReadTokens === "number" || typeof d.cacheWriteTokens === "number";
+	if (!reported || cache === 0) return `${fmt(io)} tokens`;
+	return `${fmt(io)} I/O + ${fmt(cache)} cache`;
+}
