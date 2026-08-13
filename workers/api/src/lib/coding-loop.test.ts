@@ -501,3 +501,147 @@ describe("every tool the Pilot is offered maps to a decision", () => {
 		expect(toDecision({ name: "request_human", arguments: { why: "interactive login" } }).stuck?.why).toBe("interactive login");
 	});
 });
+
+/**
+ * #545 — the platform did not notice the engine was dying.
+ *
+ * Replays the production shape of `csess_22d08431`: a Codex engine that exits 1 on every turn, with
+ * its reason printed in the pane each time, while `alive`/`ready`/`runState` stay honestly
+ * true/true/idle. The loop's two liveness guards do not fire — correctly, the session CAN take
+ * another turn — so before this the brain got the refusal only as prose and spent three BYOK
+ * decisions on path variants before handing off to a human who never came.
+ */
+describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)", () => {
+	/** The engine's real refusal, verbatim from the production capture. */
+	const REFUSAL = "Not inside a trusted directory and --skip-git-repo-check was not specified.";
+
+	/**
+	 * A session whose engine refuses every turn. `alive`/`ready`/`runState` are the values
+	 * production actually reported — the point is that they are RIGHT and were never the problem.
+	 */
+	function refusingEngine(decisions: CodingDecision[], opts: { failEvery?: boolean } = {}) {
+		let turnAt = 1_000;
+		let lastTurn: CodingPaneSnapshot["lastTurn"];
+		const seen: string[][] = [];
+		const sent: string[] = [];
+		const events: Array<[string, string]> = [];
+		let i = 0;
+		const snap = (): CodingPaneSnapshot => ({
+			pane: `\n❯ [08:40:52] ${sent[sent.length - 1] ?? ""}\nReading additional input from stdin...\n${REFUSAL}\n[codex exited with code 1]`,
+			runState: "idle",
+			ready: true,
+			alive: true,
+			...(lastTurn ? { lastTurn } : {}),
+		});
+		const deps: CodingDeps = {
+			snapshot: async () => snap(),
+			waitIdle: async () => snap(),
+			act: async (a) => {
+				sent.push(a.kind === "message" ? a.text : a.kind);
+				// The turn ran and the engine exited 1 — a NEW turn each time, so the streak counts
+				// turns rather than sightings of one.
+				turnAt += 1000;
+				lastTurn = opts.failEvery === false
+					? { verdict: "ok", exitCode: 0, signal: null, at: turnAt }
+					: { verdict: "failed", exitCode: 1, signal: null, at: turnAt, detail: REFUSAL };
+				return snap();
+			},
+			decide: async (p) => {
+				seen.push([...p.actionLog]);
+				return decisions[Math.min(i++, decisions.length - 1)];
+			},
+			onEvent: (type, message) => {
+				events.push([type, message]);
+			},
+		};
+		return { deps, seen, sent, events };
+	}
+
+	it("tells the BRAIN the engine refused, in the step log it already reads, before the next decision", async () => {
+		const { deps, seen, events } = refusingEngine([
+			{ action: { kind: "message", text: "Run `git pull` in the repository at dev/aipa." } },
+			{ action: { kind: "message", text: "cd dev/aipa && git pull" } },
+			{ finish: { status: "failed", detail: "cannot run" } },
+		]);
+		await runCodingLoop(deps, GOAL);
+		// Decision 1 saw an empty log (nothing had run yet). Decision 2 is told what happened —
+		// which is the whole difference: the production brain had to infer it from the pane and
+		// inferred a path problem.
+		expect(seen[0]).toEqual([]);
+		const told = seen[1].join("\n");
+		expect(told).toContain("exited with code 1");
+		expect(told).toContain(REFUSAL);
+		expect(told).toMatch(/refusing to run/i);
+		expect(events.some(([t]) => t === "engine_failed")).toBe(true);
+	});
+
+	it("ends the run FAILED after three consecutive failed turns — not stuck, and not on the first", async () => {
+		// `failed`, not `stuck`: the production run raised a handoff nobody answered and closed
+		// "failed — stuck not resolved in time" fifteen minutes later. No human takeover fixes a CLI
+		// that refuses on every invocation.
+		// The production run's three actual instructions — DIFFERENT each time, which is why #522's
+		// repetition guard correctly did not fire and why this needed its own bound. Repeating one
+		// instruction would trip that older guard instead and prove nothing about this one.
+		const { deps, sent } = refusingEngine([
+			{ action: { kind: "message", text: "Run `git pull` in the repository at dev/aipa." } },
+			{ action: { kind: "message", text: "Run the following shell command: cd dev/aipa && git pull" } },
+			{ action: { kind: "message", text: "Run the shell command: cd ~/dev/aipa && git pull" } },
+			{ action: { kind: "message", text: "Try the pull from the parent directory instead" } },
+		]);
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(r.outcome).toBe("failed");
+		expect(r.detail).toContain("3 consecutive turns");
+		expect(r.detail).toContain(REFUSAL);
+		// Three turns ran, and the fourth instruction was never sent. The production run reached
+		// three too — this one STOPS there instead of handing off and waiting a quarter of an hour.
+		expect(sent).toHaveLength(3);
+		expect(r.steps).toBeLessThan(5);
+	});
+
+	it("does NOT end a run on ONE failed turn — a CLI can exit and be relaunched", async () => {
+		// The opposite error, and the more expensive one: a run killed on a transient exit strands
+		// work exactly the way a false `ready` does.
+		const { deps } = refusingEngine([
+			{ action: { kind: "message", text: "run the failing suite" } },
+			{ finish: { status: "done", detail: "fixed it" } },
+		]);
+		const r = await runCodingLoop(deps, GOAL);
+		expect(r.outcome).toBe("done");
+	});
+
+	it("a run whose engine works is byte-for-byte unaffected", async () => {
+		const { deps, seen } = refusingEngine(
+			[{ action: { kind: "message", text: "write the test" } }, { finish: { status: "done", detail: "green" } }],
+			{ failEvery: false },
+		);
+		const r = await runCodingLoop(deps, GOAL);
+		expect(r.outcome).toBe("done");
+		// No note of any kind reached the brain: an `ok` turn says nothing to report.
+		expect(seen[1].some((l) => /engine/i.test(l))).toBe(false);
+	});
+
+	it("a runner too old to report the field behaves exactly as it did before (#545)", async () => {
+		// Every machine below the minimum CLI sends no `lastTurn`. Absence must read as "not
+		// measured" — a cloud that read it as failure would end three runs on every un-updated
+		// laptop the day it deployed.
+		const idle: CodingPaneSnapshot = { pane: "[codex exited with code 1]", runState: "idle", ready: true, alive: true };
+		let i = 0;
+		const decisions: CodingDecision[] = [
+			{ action: { kind: "message", text: "one" } },
+			{ action: { kind: "message", text: "two" } },
+			{ action: { kind: "message", text: "three" } },
+			{ action: { kind: "message", text: "four" } },
+			{ finish: { status: "done", detail: "ok" } },
+		];
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async () => idle,
+			decide: async () => decisions[Math.min(i++, decisions.length - 1)],
+		};
+		const r = await runCodingLoop(deps, GOAL);
+		// Four instructions went out and the run finished on the brain's own verdict — the pane says
+		// "exited with code 1" and is deliberately NOT parsed for it.
+		expect(r.outcome).toBe("done");
+	});
+});

@@ -11,6 +11,15 @@ import {
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
+import {
+	EMPTY_STREAK,
+	type EngineTurnReport,
+	engineFailureDetail,
+	engineFailureNote,
+	MAX_ENGINE_FAILURES,
+	observeTurn,
+	type TurnStreak,
+} from "./coding-turn-outcome.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -68,6 +77,19 @@ export interface CodingPaneSnapshot {
 	alive: boolean;
 	/** True when the user pressed Stop — the loop halts immediately. */
 	cancelled?: boolean;
+	/**
+	 * How the Engine's LAST COMPLETED TURN ended (#545), straight from the runner.
+	 *
+	 * Beside `alive`/`runState`, never instead of them: this session can still take a turn and is
+	 * not taking one right now even when the last turn exited 1 — both were true in the production
+	 * capture, and both would still be true if the platform reported them honestly today. What was
+	 * missing is this field, so `runCodingLoop`'s two liveness guards correctly did not fire and
+	 * the brain was left to work an exit code out of the pane's prose.
+	 *
+	 * Optional because a runner older than CLI `TURN_REPORT_MIN_CLI` (coding-turn-outcome.ts) does
+	 * not send it, and absent must read as "not measured" — see `classifyTurn`.
+	 */
+	lastTurn?: EngineTurnReport;
 	/**
 	 * Why the run was stopped, when it was stopped by something other than the user's Stop button.
 	 *
@@ -174,6 +196,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	const sentKeys: string[] = [];
 	/** The instruction this run was warned about repeating, if any — read by the `finish` branch. */
 	let repeatedInstruction: string | null = null;
+	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545). */
+	let turns: TurnStreak = EMPTY_STREAK;
 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
@@ -184,6 +208,36 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		if (snap.runState !== "idle") {
 			snap = await deps.waitIdle();
 			if (snap.cancelled) return { outcome: "cancelled", detail: snap.stopReason, steps: step, transcript };
+		}
+
+		// THE ENGINE'S OWN VERDICT ON THE LAST TURN (#545), read BEFORE the brain is asked what to
+		// do next — so the note lands in the step log this decision renders, not the one after it.
+		//
+		// The two guards above (`cancelled`, `!alive`) are the only things that ever stopped this
+		// loop for an engine problem, and neither fires for a turn that exited 1: the session can
+		// still take a turn, which is what `alive` means. So a Codex session refusing every
+		// invocation looked exactly like a healthy one and the brain was handed the refusal as
+		// prose, in the pane, three times.
+		//
+		// Deduped on the turn's end-instant because the same report is re-read on every poll —
+		// the top-of-step snapshot, the `waitIdle` result and the next step's snapshot are three
+		// sightings of ONE turn, and counting sightings would trip the bound on a single failure.
+		const seen = observeTurn(turns, snap.lastTurn);
+		turns = seen.streak;
+		if (seen.newFailure) {
+			const note = engineFailureNote(turns);
+			actionLog.push(note);
+			transcript.push(note);
+			await deps.onEvent?.("engine_failed", note);
+			// `failed`, not `stuck`: no human takeover fixes a CLI that refuses on every
+			// invocation, and the production run's ending — a `request_human` nobody answered,
+			// timing out to "failed — stuck not resolved in time" fifteen minutes later — is the
+			// worst available one. The bound is CONSECUTIVE, so a run that recovers is untouched.
+			if (turns.consecutive >= MAX_ENGINE_FAILURES) {
+				const detail = engineFailureDetail(turns, goal.repo);
+				transcript.push(`finish: failed — ${detail}`);
+				return { outcome: "failed", detail, steps: step, transcript };
+			}
 		}
 
 		const decision = await deps.decide({ goal, actionLog, snapshot: snap });
