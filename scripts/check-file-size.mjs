@@ -524,7 +524,15 @@ const PINS = {
 	// notice would be written where nobody is looking — the first placement here, caught by
 	// reading the JSX rather than by a test). The seam this file wants is still #305's
 	// landing-view/session-view split, not a slice taken under a bug fix.
-	"agents/coder/web/src/CodingTab.tsx": 1392,
+	// +43 at #545: the engine's own verdict on its last turn. It is a hoisted `const` beside
+	// `reusedEngineBanner`, not inline JSX, and the extra lines are what that costs: this file has
+	// TWO session views — the single-repo surface returns ~120 lines above the multi-repo one — and
+	// the first attempt put the banner in the multi-repo view only, where most Coder subscribers
+	// would never have seen it. The phone spec for the solo surface is what caught it. The part
+	// worth testing, the WORDING and the four cases where it must say nothing, is outside the file
+	// in ./engine-turn-view.ts. The seam this file wants is still #305's landing/session split —
+	// which is also what would stop a third notice repeating this.
+	"agents/coder/web/src/CodingTab.tsx": 1435,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1011,7 +1019,7 @@ const PINS = {
 	// this self-ref. Landed the same hour as #549 above, on the same number, which is the third
 	// time this map has been raised twice concurrently — the split named at the top (PINS into its
 	// own data module) is what stops it.
-	"scripts/check-file-size.mjs": 1095,
+	"scripts/check-file-size.mjs": 1103,
 };
 
 /**

@@ -73,6 +73,19 @@ describe("terminalPlaceholder — four causes had one sentence between them (#43
 		expect(terminalPlaceholder({ runnerConnected: true, alive: true, runState: "idle" })).toMatch(/No output yet/);
 	});
 
+	it("distinguishes a REFUSED turn from nothing having been sent (#545)", () => {
+		// The owner's own words on the tab: "There is nothing there yet, it just says no output yet,
+		// send the engine an instruction to get started." One HAD been sent; the engine exited 1 and
+		// produced nothing. The sentence invited exactly the wrong next move.
+		const refused = terminalPlaceholder({ runnerConnected: true, alive: true, runState: "idle", lastTurnFailed: true });
+		expect(refused).toMatch(/last turn failed/i);
+		expect(refused).not.toMatch(/No output yet/);
+		// A turn RUNNING right now outranks a report about one that has ended.
+		expect(terminalPlaceholder({ runnerConnected: true, alive: true, runState: "thinking", lastTurnFailed: true })).toMatch(/working/i);
+		// And an offline runner still outranks everything: it is the only cause with a command.
+		expect(terminalPlaceholder({ runnerConnected: false, lastTurnFailed: true })).toContain("pags up");
+	});
+
 	it("does not claim the runner is offline when the poll has not answered yet", () => {
 		// `runnerConnected` is undefined before the first /capture. `=== false` rather than a
 		// falsy check is what stops the first frame accusing a healthy machine.

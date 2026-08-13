@@ -5303,3 +5303,108 @@ test.describe("mobile — a reused session names the engine it is actually runni
 		await expect(page.locator("#inst-coding-reused-engine")).toHaveCount(0);
 	});
 });
+
+/**
+ * #545 — the engine's exit code was in the pane and read as ordinary output.
+ *
+ * The production capture of `csess_22d08431`, replayed: three Codex turns, three
+ * `[codex exited with code 1]` lines, `alive/ready/idle` all true and honest. The owner read this
+ * tab and reported the engine as broken; nothing on the page told a refusal from an answer.
+ *
+ * Pinned on a phone because that is where a two-sentence warning above a `<pre>` goes wrong, and
+ * because the pane itself is a horizontal-overflow machine — the evidence line is a raw engine
+ * sentence with a `--flag` in it, which is exactly what does not wrap.
+ */
+test.describe("mobile — the engine's refusal is a sentence, not a line in the pane (#545)", () => {
+	const soloCoder = [
+		{
+			id: "inst-1",
+			name: "Repo Coder",
+			slug: "repo-coder",
+			category: "code",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", surfaceOptions: { coding: { repos: "single" } } },
+		},
+	];
+	const REPO = { id: "repo-1", name: "aipa", githubRepo: "serge-ivo/aipa", provider: "github", cloneStatus: "ready" };
+	const LIVE = { id: "csess-1", repoId: "repo-1", clientType: "codex", status: "active", launchCommand: "codex exec --sandbox danger-full-access" };
+	const REFUSAL = "Not inside a trusted directory and --skip-git-repo-check was not specified.";
+	/** The pane exactly as production returned it, three refused turns deep. */
+	const PANE = [
+		"❯ [08:40:52] Run `git pull` in the repository at dev/aipa.",
+		"Reading additional input from stdin...",
+		REFUSAL,
+		"[codex exited with code 1]",
+	].join("\n");
+
+	async function openSession(page: Page, width: number, capture: Record<string, unknown>) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, { instances: soloCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (route.request().method() === "POST" && url.includes("/sessions")) return json({ session: LIVE, runnerConnected: true, reused: true });
+			// BEFORE the `/sessions` list: the capture path is `/coding/sessions/<id>/capture`, so a
+			// bare `includes("/sessions")` answers it with an empty session list and the pane the
+			// whole spec is about never arrives.
+			if (url.includes("/capture")) return json(capture);
+			if (url.includes("/timeline")) return json({ entries: [] });
+			if (url.includes("/repos")) return json({ repos: [REPO] });
+			if (url.includes("/engines")) return json({ engines: [{ id: "codex", label: "Codex", command: "codex exec --sandbox danger-full-access" }], defaultEngineId: "codex" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/builds")) return json({ builds: [] });
+			if (url.includes("/issues")) return json({ repo: REPO.githubRepo, issues: [] });
+			if (url.includes("/pulls")) return json({ repo: REPO.githubRepo, pulls: [] });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await page.locator("#coding-solo-tabs").waitFor();
+		await page.locator("[placeholder='Send a message to the Engine...']").waitFor();
+	}
+
+	for (const width of [320, 390]) {
+		test(`the refusal is stated above the pane and fits ${width}px`, async ({ page }) => {
+			await openSession(page, width, {
+				pane: PANE,
+				runState: "idle",
+				alive: true,
+				ready: true,
+				runnerConnected: true,
+				lastTurn: { verdict: "failed", exitCode: 1, signal: null, at: Date.now(), detail: REFUSAL },
+			});
+			const banner = page.locator("#inst-coding-engine-turn");
+			await expect(banner).toBeVisible();
+			await expect(banner).toContainText("exited with code 1");
+			await expect(banner).toContainText(REFUSAL);
+			// The line that stops the reader rewording their instruction, which is what the Pilot
+			// did three times in eight seconds against this same engine.
+			await expect(banner).toContainText(/refusing to run/i);
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("mobile — a healthy session shows no banner at all", async ({ page }) => {
+		// The four silent cases live in engine-turn-view.ts; this pins the most important of them on
+		// the page, because a warning that appears on ordinary turns is a warning nobody reads.
+		await openSession(page, 390, {
+			pane: "❯ [08:40:52] run the tests\nall green",
+			runState: "idle",
+			alive: true,
+			ready: true,
+			runnerConnected: true,
+			lastTurn: { verdict: "ok", exitCode: 0, signal: null, at: Date.now() },
+		});
+		await expect(page.locator("#inst-coding-engine-turn")).toHaveCount(0);
+	});
+
+	test("mobile — a runner too old to report the turn shows no banner", async ({ page }) => {
+		// Every machine below CLI 0.4.51 sends no `lastTurn`, and its pane may well contain the very
+		// words this banner is about. Absence is not a verdict, and the pane is deliberately not
+		// parsed for one.
+		await openSession(page, 390, { pane: PANE, runState: "idle", alive: true, ready: true, runnerConnected: true });
+		await expect(page.locator("#inst-coding-engine-turn")).toHaveCount(0);
+	});
+});

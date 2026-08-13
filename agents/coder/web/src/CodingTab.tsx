@@ -27,7 +27,8 @@ import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
 import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
-import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
+import { type EngineTurnReport, engineTurnNotice } from "./engine-turn-view";
+import { AlertTriangle, ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 import Button from "./Button";
 
 interface Props {
@@ -354,6 +355,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [authPrompt, setAuthPrompt] = useState<AuthPrompt | null>(null);
 	/** Which credential the engine actually ran on, straight from /capture (#248). */
 	const [engineAuth, setEngineAuth] = useState<EngineAuthReport | null>(null);
+	/** How the engine's LAST TURN ended, straight from /capture (#545). Null on an older runner. */
+	const [lastTurn, setLastTurn] = useState<EngineTurnReport | null>(null);
 	const [signinMsg, setSigninMsg] = useState("");
 	const startSignin = useCallback(async () => {
 		if (!openSession) return;
@@ -374,15 +377,25 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ pane?: string; runState?: string; alive?: boolean; authPrompt?: AuthPrompt; runnerConnected?: boolean; auth?: EngineAuthReport }>(
-				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`,
-			);
+			const d = await api<{
+				pane?: string;
+				runState?: string;
+				alive?: boolean;
+				authPrompt?: AuthPrompt;
+				runnerConnected?: boolean;
+				auth?: EngineAuthReport;
+				lastTurn?: EngineTurnReport;
+			}>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
 			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
 			// idle state, a pane that stops changing, no error anywhere.
 			setAuthPrompt(d.authPrompt ?? null);
 			// Which credential this engine actually ran on (#248). MUST be set before the
 			// unchanged-pane early return below, or an idle session would never report it.
 			setEngineAuth(d.auth ?? null);
+			// How the last turn ended (#545). BEFORE the unchanged-pane early return for the same
+			// reason: a refusing engine's pane stops changing the moment it starts refusing, which
+			// is precisely when this has something to say.
+			setLastTurn(d.lastTurn ?? null);
 			// The header badge reads `repoStatuses[repoId]`, and the only other writer
 			// (`pollStatuses`) is DISABLED while a session is open — so the badge added to say
 			// Working/Idle sat on "Idle" for the whole session while the pane visibly scrolled.
@@ -991,6 +1004,34 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 * the same tick — a notice there would be written and never seen. The one place the user is
 	 * certain to be looking after pressing start is the terminal they were just taken to.
 	 */
+	/**
+	 * The ENGINE refused its last turn (#545).
+	 *
+	 * Hoisted beside {@link reusedEngineBanner} rather than written inline, because there are TWO
+	 * session views — the single-repo surface returns ~120 lines above the multi-repo one — and a
+	 * notice in only one of them is a notice most Coder subscribers never see. That is not
+	 * hypothetical: the first placement was inline in the multi-repo view alone, and the phone spec
+	 * for the solo surface found it missing.
+	 *
+	 * Above the pane in both, because the whole finding is that this fact WAS on the page — three
+	 * times, as `[codex exited with code 1]` — and read as ordinary output. A pane is something a
+	 * person has to parse; this is the sentence.
+	 */
+	const engineTurnBanner = (() => {
+		const turn = engineTurnNotice(lastTurn);
+		if (!turn) return null;
+		return (
+			<div id="inst-coding-engine-turn" className="rounded-lg border border-warning-line bg-warning-soft px-3 py-2 m-2">
+				<div className="flex items-center gap-1.5 text-sm font-semibold">
+					<AlertTriangle size={13} className="text-warning shrink-0" />
+					<span>{turn.label}</span>
+				</div>
+				<p className="text-xs text-muted mt-0.5">{turn.detail}</p>
+				{turn.evidence && <pre className="text-2xs text-muted mt-1 whitespace-pre-wrap break-all">{turn.evidence}</pre>}
+			</div>
+		);
+	})();
+
 	const reusedEngineBanner = openNotice ? (
 		<div id="inst-coding-reused-engine" className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-xs font-semibold">{openNotice}</div>
 	) : null;
@@ -1059,6 +1100,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				</div>
 
 				{reusedEngineBanner}
+				{engineTurnBanner}
 
 				{claudeSignedOut && soloView === "terminal" && (
 					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
@@ -1174,6 +1216,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					</div>
 				)}
 				{reusedEngineBanner}
+				{engineTurnBanner}
 				{workModeMsg && (
 					<div data-testid="work-mode-error" className="bg-danger-soft border border-danger-line text-danger rounded-lg p-2.5 m-2 text-xs font-semibold">
 						{workModeMsg}

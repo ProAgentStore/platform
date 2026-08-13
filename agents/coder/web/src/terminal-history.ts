@@ -90,6 +90,16 @@ export interface TerminalState {
 	runState?: string;
 	/** True between opening a session and the persisted snapshots arriving. */
 	loadingHistory?: boolean;
+	/**
+	 * The engine's last turn FAILED — it exited non-zero, or reported the turn as an error (#545).
+	 *
+	 * An empty pane has one more cause than the four below, and it is the one the owner hit: a turn
+	 * that ran, produced nothing, and refused. "No output yet — send the engine an instruction"
+	 * invites exactly the wrong next move there, because an instruction WAS sent and the engine
+	 * threw it out. Absent on any runner older than CLI 0.4.51, which is why it is a separate
+	 * boolean and not inferred from the pane.
+	 */
+	lastTurnFailed?: boolean;
 }
 
 /**
@@ -104,5 +114,9 @@ export function terminalPlaceholder(s: TerminalState): string {
 	if (s.loadingHistory) return "Loading saved output…";
 	if (s.alive === false) return "This session isn't running on the runner — reopen it, or start a new one.";
 	if (s.runState && s.runState !== "idle") return "The engine is working — nothing has been captured yet. The first snapshot lands shortly.";
+	// Ranked BELOW "working" and above the empty state: a failed last turn is a fact about a turn
+	// that has ended, so a turn running right now outranks it, and it is strictly more informative
+	// than "nothing has been sent" — which is the opposite of what happened.
+	if (s.lastTurnFailed) return "The engine's last turn failed and produced no output — it refused the instruction rather than answering it.";
 	return "No output yet — send the engine an instruction to get started.";
 }

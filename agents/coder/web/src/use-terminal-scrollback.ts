@@ -16,6 +16,8 @@ export interface CaptureSnapshot {
 	runState?: string;
 	alive?: boolean;
 	runnerConnected?: boolean;
+	/** How the engine's last turn ended (#545). Absent on a runner older than CLI 0.4.51. */
+	lastTurn?: { verdict?: string };
 }
 
 export function useTerminalScrollback(instanceId: string, termRef: RefObject<HTMLPreElement | null>) {
@@ -185,7 +187,16 @@ export function useTerminalScrollback(instanceId: string, termRef: RefObject<HTM
 			setLive(!!pane);
 			const next =
 				appendSnapshot(savedRef.current, pane) ||
-				terminalPlaceholder({ runnerConnected: snap.runnerConnected, alive: snap.alive, runState: snap.runState, loadingHistory: loadingRef.current });
+				terminalPlaceholder({
+					runnerConnected: snap.runnerConnected,
+					alive: snap.alive,
+					runState: snap.runState,
+					loadingHistory: loadingRef.current,
+					// A turn that ran, produced nothing and refused is a FIFTH cause of an empty
+					// pane, and the only one where "send the engine an instruction" is the wrong
+					// advice — one was sent (#545).
+					lastTurnFailed: snap.lastTurn?.verdict === "failed",
+				});
 			if (next === textRef.current) return;
 			// Never redraw under a live text selection — the user is copying something.
 			const sel = window.getSelection();
