@@ -12,7 +12,7 @@ import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayCon
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
 import { runWatchSession } from "./coding-watch.js";
 import type { CodingSessionParams } from "./coding-session-params.js";
-import { isRunnerGone, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../lib/runner-availability.js";
+import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../lib/runner-availability.js";
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
 import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../lib/coding-pause.js";
@@ -27,8 +27,8 @@ import { appendTimeline } from "../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { codingSessionLink } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
-import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
-import { instanceSpendMicros, recordEngineUsage } from "../lib/usage.js";
+import { recordEngineUsage } from "../lib/usage.js";
+import { decideWithinBudget } from "../lib/coding-decide-budget.js";
 import type { EngineAuthResolved } from "../lib/usage-payer.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineActs, sanitizeEngineActs, summarizeActs } from "../lib/engine-acts.js";
@@ -43,14 +43,13 @@ import {
 import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
+import { codingCrashReport, runOutcomeNote } from "../lib/coding-run-report.js";
+import type { LoopStopReason } from "../lib/agent-loop.js";
 import { CodingRunProbe, recordCodingFailure } from "../lib/coding-failure.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
 
 export type { CodingSessionParams } from "./coding-session-params.js";
-
-/** Bounded worst case for one Pilot decide step, in USD micros. Settle refunds the rest. */
-const CODING_RESERVE_MICROS = 150_000; // $0.15
 
 /**
  * The coding orchestrator's remote brain: a durable Cloudflare Workflow that
@@ -140,6 +139,14 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		let ownerTurns = 0;
 
 		const probe = new CodingRunProbe(); // Where this run was, and how big its payload, if it dies (#529).
+		/**
+		 * The reason a PLATFORM interruption is reported under, overriding the outcome's own (#546).
+		 *
+		 * A `let` in the run's scope rather than a field on `CodingResult`: the outcome is what the
+		 * loop reported about the objective, and an interruption is a statement about the invocation.
+		 * Folding them would let a future edit "improve" the outcome and silently change the reason.
+		 */
+		let crashReason: LoopStopReason | null = null;
 
 		/**
 		 * Put a line in the OWNER'S CHAT THREAD.
@@ -178,24 +185,25 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				? await actsInWindow(env, userId, instanceId, runStartedAt, Date.now()).catch(() => [])
 				: [];
 			const actLine = summarizeActs(acts);
-			// Merge authority, in the two places a supervisor actually reads (#314 item 2). A breach is
-			// named AHEAD of the ordinary act summary — buried after "and 3 more" it would be the same
-			// invisibility the issue is about — and the policy line rides along whenever one is in
-			// force, so even a run that behaved shows the authority it ran under.
-			const breach = unauthorizedActs(mergePolicy, acts).map((a) => describeViolation(mergePolicy, a)).join(" ");
 			// #505: the report is the Pilot's own account of the run, and it reaches the owner
 			// unmodified. When it says the human decided something and the platform knows the human
 			// said nothing, that fact is stamped on. Annotated, never rewritten — the owner has to
-			// see the claim in order to distrust it.
+			// see the claim in order to distrust it. The composition around it is `runOutcomeNote`.
 			const detail = annotateOwnerAttribution(outcome.detail ?? "", ownerTurns);
-			const head = `outcome: ${outcome.outcome}${detail ? ` — ${detail}` : ""}`;
-			const note = [head, breach && `POLICY VIOLATION: ${breach}`, authorityNote, actLine].filter(Boolean).join(" | ");
+			const note = runOutcomeNote({
+				outcome: outcome.outcome,
+				detail,
+				breach: unauthorizedActs(mergePolicy, acts).map((a) => describeViolation(mergePolicy, a)).join(" "),
+				authorityNote,
+				actLine,
+			});
 			if (event.payload.loopRunId) {
 				await step.do(`delegation-run-done${suffix}`, async () => {
 					// A pure table (#541) — `stopReasonFor`. The chain this replaces mapped every
 					// non-failed, non-cancelled, non-max_steps outcome to `done`, which was true only
-					// while `stuck` could never survive to here.
-					const reason = stopReasonFor(outcome.outcome);
+					// while `stuck` could never survive to here. `crashReason` overrides it for the
+					// deaths that are not the objective failing at all (#546) — see `coding-run-report`.
+					const reason = crashReason ?? stopReasonFor(outcome.outcome);
 					// The Pilot drives its own loop and never called `recordIteration`, so
 					// `check_delegation` reported "iteration: 0 of 10" for a run that took a dozen
 					// steps — the supervisor's only progress signal, permanently reading zero.
@@ -392,7 +400,6 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					: Promise.resolve(false),
 			]);
 			const { usage, acts, ...pane } = snap;
-			probe.saw(pane.pane);
 			// The SAME snapshot carries how the engine authenticated (runtime.ts sets it on every
 			// capture), so the payer is in hand here exactly as it is on the route drain. Dropping
 			// it made the Pilot-driven sessions — the longest and most expensive the platform runs —
@@ -441,53 +448,36 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			return stop.stop ? { ...pane, cancelled: true, stopReason: stop.reason } : pane;
 		};
 
-		const deps: CodingDeps = {
-			snapshot: () => guard(runRetry, `s${n++}-snapshot`, capture) as Promise<CodingPaneSnapshot>,
-			act: (a: CodingActionKind) =>
-				guard(runRetry, `s${n++}-act`, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a })) as Promise<CodingPaneSnapshot>,
-			// The LLM call is the one place this loop spends money, so it is the one place the
-			// budget has to sit. Delegated runs (#159) previously reached the Pilot with a pool id
-			// and never drew on it — unbounded spend on exactly the path a supervisor can trigger
-			// without a human watching. Wrapping `decide` keeps runCodingLoop untouched.
-			decide: (p) =>
-				step.do(probe.at(`s${n++}-decide`), retry, async () => {
-					const budgetId = event.payload.budgetId ?? null;
-					if (!budgetId) return decideCodingAction(env, userId, p, { kind: "coding", instanceId });
+		/**
+		 * Measure the pane on the way OUT of the durable step (#546).
+		 *
+		 * `probe.saw` used to sit inside `capture`, i.e. inside the step callback — which a replay
+		 * never runs, so a resumed attempt filed `paneChars: 0` and read as "it died on an empty
+		 * pane". Here it sees the JOURNALLED result, which a replay does return, so the size is
+		 * re-measured on every attempt exactly as {@link CodingRunProbe}'s docblock promises.
+		 */
+		const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {
+			const pane = (await p) as CodingPaneSnapshot;
+			probe.saw(pane?.pane);
+			return pane;
+		};
 
-					const draw = await reserve(env, userId, budgetId, {
-						depth: event.payload.depth ?? 0,
-						estimatedCostMicros: CODING_RESERVE_MICROS,
-					});
-					if (!draw.ok) {
-						// `account_ceiling` is the ACCOUNT's rolling 24h backstop tripping, not this
-						// tree's pool being spent. Closing the shared budget for it stops every
-						// sibling drawing on the same pool and survives the window rolling off.
-						if (draw.reason && draw.reason !== "not_found" && draw.reason !== "closed" && draw.reason !== "account_ceiling") {
-							await markExhausted(env, userId, budgetId, draw.reason, event.payload.depth ?? 0).catch(() => undefined);
-						}
-						// A clean terminal decision rather than a throw: the loop stops with a reason
-						// the human can read on the board, and the session is left intact to resume.
-						return { finish: { status: "failed" as const, detail: draw.message ?? "This run hit its spend limit." } };
-					}
-					const before = await instanceSpendMicros(env, userId, instanceId);
-					try {
-						return await decideCodingAction(env, userId, p, { kind: "coding", instanceId });
-					} finally {
-						// Settled in `finally` so a throwing decide still charges what it burned —
-						// otherwise a failing loop would run free. The read may itself fail, and a
-						// `finally` must not throw (it would replace the decide's real error), so an
-						// unreadable ledger charges the whole reservation: over-charging stops a run
-						// early, under-charging lets a runaway continue.
-						const after = await instanceSpendMicros(env, userId, instanceId).catch(
-							() => before + (draw.reserved ?? CODING_RESERVE_MICROS),
-						);
-						await settle(env, userId, budgetId, draw.reserved ?? CODING_RESERVE_MICROS, Math.max(0, after - before)).catch(() => undefined);
-					}
-				}) as Promise<CodingDecision>,
+		const deps: CodingDeps = {
+			snapshot: () => measured(guard(runRetry, `s${n++}-snapshot`, capture)),
+			act: (a: CodingActionKind) =>
+				measured(guard(runRetry, `s${n++}-act`, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a }))),
+			// The spend gate lives in `coding-decide-budget.ts` — the LLM call is the only place this
+			// loop spends money, so it is the only place a budget has to sit (#159).
+			decide: (p) =>
+				step.do(probe.at(`s${n++}-decide`), retry, () =>
+					decideWithinBudget(env, { userId, instanceId, budgetId: event.payload.budgetId, depth: event.payload.depth }, () =>
+						decideCodingAction(env, userId, p, { kind: "coding", instanceId }),
+					),
+				) as Promise<CodingDecision>,
 			// Poll capture until the CLI goes idle (the pane stops "thinking"/"responding").
 			// Bounded so the loop can't outrun idleRetry's 10-minute step timeout.
 			waitIdle: () =>
-				guard(runIdle, `s${n++}-waitidle`, async () => {
+				measured(guard(runIdle, `s${n++}-waitidle`, async () => {
 					// Settle first: a just-sent instruction may not have flipped the pane
 					// to "thinking" yet, so an immediate capture could read a stale idle.
 					await sleep(1500);
@@ -497,12 +487,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						snap = await capture();
 					}
 					return snap;
-				}) as Promise<CodingPaneSnapshot>,
+				})),
 			onEvent: (type, message, data) => {
 				// Incremented OUTSIDE step.do: a step that exhausts its retries re-runs its body,
 				// and `++` inside would double-count every retry into the progress figure.
 				// `runCodingLoop` emits exactly one "action" per step, so this counts steps.
 				const at = type === "action" ? ++pilotSteps : pilotSteps;
+				// Which instruction was driven — read here, OUTSIDE the step, for the probe's replay
+				// property (#546) and because the step body below needs the same value anyway.
+				const driven = type === "action" && (data as CodingActionKind | undefined)?.kind === "message" ? (data as { text: string }).text : "";
+				probe.drove(driven);
 				// Throttled: the first thought lands immediately (so a watcher sees SOMETHING right
 				// away) and then every 4th. Counted outside step.do for the same retry reason as
 				// pilotSteps — a re-run body would otherwise skew the cadence.
@@ -543,13 +537,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// here; driving the engine directly would have made the repo's own record of an
 					// autonomous run silently empty. Ungated by `loopRunId` for the same reason the
 					// refusal above is: it records what was driven, not who asked.
-					const driven = type === "action" && (data as CodingActionKind | undefined)?.kind === "message"
-						? (data as { text: string }).text
-						: "";
-					if (driven) {
-						probe.drove(driven);
-						await appendTimeline(env, { sessionId, instanceId, userId, type: "command", content: driven }).catch(() => undefined);
-					}
+					if (driven) await appendTimeline(env, { sessionId, instanceId, userId, type: "command", content: driven }).catch(() => undefined);
 					// Heartbeat the single-flight claim. Without it a run longer than
 					// STALE_DRIVER_MS would expire its OWN claim and a second Pilot could take the
 					// session out from under it — the exact collision the claim exists to prevent.
@@ -664,11 +652,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// A step exhausted its retries and threw — record it so the finally still
 			// syncs the session + notifies, instead of letting the run vanish.
 			//
-			// A waited-out runner is reported as ITSELF, without the "run error:" prefix — that
-			// prefix reads as a crash, and "the runner did not come back" is a finding, not one.
-			// This is the sentence that replaces "run error: No runner connected — run `pags up`".
-			const message = e instanceof Error ? e.message : String(e);
-			result = { outcome: "failed", detail: isRunnerGone(e) ? message : `run error: ${message}`, steps: result.steps, transcript: result.transcript };
+			// WHAT the owner is told, and under which reason, is `coding-run-report.ts`: a waited-out
+			// runner reads as itself (#341), a platform interruption reads as an interruption and gets
+			// its own stop reason (#546), and only a genuine crash keeps the "run error:" prefix.
+			const crash = codingCrashReport(e);
+			crashReason = crash.stopReason;
+			result = { outcome: "failed", detail: crash.detail, steps: result.steps, transcript: result.transcript };
 			// …and it is RECORDED (#529). Every peer workflow logs its own crash; this one logged
 			// nothing, so three runs that died on one instruction existed only as chat bubbles, and
 			// nobody could say whether that was a provider stall or an exhausted balance. The class,

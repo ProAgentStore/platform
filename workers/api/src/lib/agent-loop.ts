@@ -20,7 +20,8 @@ export type LoopStopReason =
 	| "budget" // the tree ran out of money/delegations (#184)
 	| "cancelled" // a human stopped it
 	| "no_progress" // repeating itself — a loop that cannot terminate on its own
-	| "engine_limit"; // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
+	| "engine_limit" // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
+	| "interrupted"; // the PLATFORM cut the invocation off — the objective never reported (#546)
 
 export interface LoopState {
 	iteration: number;
@@ -198,18 +199,32 @@ export function nextStep(
 
 /** Does this ending need a human? Drives whether the run notifies rather than closing quietly. */
 export function needsHuman(reason: LoopStopReason): boolean {
-	return reason === "escalated" || reason === "failed" || reason === "budget" || reason === "no_progress" || reason === "engine_limit";
+	return statusFor(reason) === "needs_human" || reason === "failed" || reason === "budget" || reason === "no_progress";
 }
 
-/** Terminal status for the run record — mirrors the vocabulary pipeline runs already use. */
-export function statusFor(reason: LoopStopReason): "completed" | "failed" | "needs_human" | "cancelled" {
+/**
+ * The terminal status a run record carries.
+ *
+ * This is the platform's ONE mapping from "why did it stop" to "which column is it in": the loop
+ * run row, the delegation card and the coding session card all read it, so they cannot disagree
+ * about a run they are all describing (#553). {@link LoopRunStatus} is deliberately the exact set
+ * a board card may hold at rest.
+ */
+export type LoopRunStatus = "completed" | "failed" | "needs_human" | "cancelled";
+
+export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	if (reason === "done") return "completed";
 	if (reason === "cancelled") return "cancelled";
 	// `engine_limit` sits with `escalated` rather than with `failed` (#541): the run did not fail, it
 	// ran out of the time it was allowed to wait for somebody else's usage window. The remedy is the
 	// OWNER's — wait for the next window, upgrade the plan, or switch engine — so "needs you" is the
 	// honest column, and the distinct REASON is what keeps it tellable apart from a human handoff.
-	if (reason === "escalated" || reason === "engine_limit") return "needs_human";
+	//
+	// `interrupted` joins them for the same reason and a sharper one (#546): the platform cut the
+	// invocation off, so the objective never reported EITHER way — and two of the five occurrences
+	// had already pushed to `origin main`. "Failed" tells the owner to re-run work that may already
+	// be on the trunk. Somebody has to look, which is what this column is for.
+	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted") return "needs_human";
 	return "failed";
 }
 

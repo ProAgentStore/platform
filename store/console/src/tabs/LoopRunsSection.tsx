@@ -39,6 +39,10 @@ const REASON_LABEL: Record<string, string> = {
 	budget: "Hit its spend limit",
 	cancelled: "You stopped it",
 	no_progress: "Was repeating itself",
+	// #546. Deliberately not "Failed": the platform cut the invocation off and the objective never
+	// reported, so the run may well have pushed. The word has to send the owner to the repo rather
+	// than to the Retry button.
+	interrupted: "Cut off by the platform",
 };
 
 const TONE: Record<string, string> = {

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectionLostMessage, deadlineMessage } from "./ai-deadlines.js";
-import { classifyCodingFailure, CodingRunProbe, codingFailureLevel, recordCodingFailure } from "./coding-failure.js";
+import { classifyCodingFailure, CodingRunProbe, codingFailureLevel, recordCodingFailure, splitCfReference } from "./coding-failure.js";
 import { RunnerGoneError, RunnerUnreachableError } from "./runner-unreachable.js";
 import type { Env } from "../types.js";
 
@@ -275,5 +275,149 @@ describe("the CODING_SESSION throw path writes it (#529 AC 4)", () => {
 		// Assembled rather than written out: a literal `${…}` inside a plain string trips
 		// `noTemplateCurlyInString`, and the placeholder is the part that has to match.
 		expect(source).toContain(["step.do(probe.at(`s$", "{n++}-decide`)"].join(""));
+	});
+});
+
+describe("WorkflowInternalError — the largest live class, and it was `unknown` (#546)", () => {
+	// The two wordings, verbatim from production. The first is what five `agent_loop_runs.detail`
+	// rows carry (a step exhausting its retries); the second is what three post-#529 `error_log`
+	// rows carry (the runtime's own error, at phase `s6-decide`, on instance a1d3522f). Both are
+	// the same event through different surfaces, and a reworded Cloudflare message must fail HERE
+	// rather than silently degrade the class back to `unknown`.
+	const PRODUCTION_WORDINGS = [
+		"WorkflowInternalError: Attempt failed due to internal workflows error",
+		"internal error; reference = 4f2c8a1b9de04c6fa1e2b3c4d5e6f708",
+	];
+
+	it("classifies both wordings, as `warn`, and says which retry it means", () => {
+		expect(PRODUCTION_WORDINGS.length, "the population this class was measured on").toBe(2);
+		for (const wording of PRODUCTION_WORDINGS) {
+			const f = classifyCodingFailure(new Error(wording));
+			expect(f.class, wording).toBe("workflow_internal");
+			// TRUE of the ATTEMPT — which Cloudflare has already retried, journalled, on its own.
+			// It is not a licence to re-dispatch the run; see the branch comment for why.
+			expect(f.retryable, wording).toBe(true);
+			// Explained, so it stops being counted as an unexplained bug. It only earns that
+			// because `splitCfReference` makes it countable — see the collapse test below.
+			expect(codingFailureLevel(f.class), wording).toBe("warn");
+		}
+	});
+
+	it("is not read from `unknown` any more — which is the measurement the ticket was filed on", () => {
+		// Before this, 3 of the 4 `coding:session` rows that existed since #529 were this, and all
+		// three fell through to `at("unknown")`. Re-deleting the branch turns this red.
+		for (const wording of PRODUCTION_WORDINGS) {
+			expect(classifyCodingFailure(new Error(wording)).class).not.toBe("unknown");
+		}
+		// …and a genuine unknown is still unknown, so the class did not simply swallow the bucket.
+		expect(classifyCodingFailure(new Error("Cannot read properties of undefined")).class).toBe("unknown");
+	});
+
+	it("collapses two occurrences whose only difference is Cloudflare's reference id", () => {
+		// AC 3. `collapseRepeat` keys on the exact message, so a per-occurrence `reference = <id>`
+		// made every row unique and all three production rows read `repeat_count: 1` — the repeat
+		// machinery #522/#538 built was inert for the one class that most needed a count.
+		const a = splitCfReference("internal error; reference = aaaa1111bbbb2222");
+		const b = splitCfReference("internal error; reference = cccc3333dddd4444");
+		expect(a.message).toBe(b.message);
+		expect(a.reference).toBe("aaaa1111bbbb2222");
+		expect(b.reference).toBe("cccc3333dddd4444");
+		// Every OTHER message is untouched, which is what keeps the collapse lossless for them.
+		for (const other of ["run error: boom", "Anthropic (400): Your credit balance is too low", ""]) {
+			expect(splitCfReference(other)).toEqual({ message: other, reference: null });
+		}
+	});
+
+	it("carries the reference into the row's context, so moving it out of the headline loses nothing", async () => {
+		const { env, inserts } = mockDb();
+		await recordCodingFailure(env, {
+			err: new Error("internal error; reference = 4f2c8a1b9de04c6fa1e2b3c4d5e6f708"),
+			userId: "u1",
+			instanceId: "a1d3522f",
+			sessionId: "csess_2dd3124c",
+			runId: "82739cb6",
+			steps: 6,
+			probe: new CodingRunProbe(),
+			startedAt: Date.now(),
+		});
+		const row = inserts.find((i) => i.sql.includes("error_log"))!;
+		expect(row.args[4], "the reference must not stay in the collapse key").not.toContain("4f2c8a1b");
+		const ctx = JSON.parse(row.args[5] as string);
+		expect(ctx.cfReference).toBe("4f2c8a1b9de04c6fa1e2b3c4d5e6f708");
+		expect(ctx.failureClass).toBe("workflow_internal");
+		// `warn`, because it is explained — and countable, because of the two lines above.
+		expect(row.args[6]).toBe("warn");
+	});
+
+	it("adds no key at all when there is no reference to carry", async () => {
+		const { env, inserts } = mockDb();
+		await recordCodingFailure(env, {
+			err: new Error("WorkflowInternalError: Attempt failed due to internal workflows error"),
+			userId: "u1",
+			instanceId: "i1",
+			sessionId: "csess_1",
+			steps: 0,
+			probe: new CodingRunProbe(),
+			startedAt: Date.now(),
+		});
+		const ctx = JSON.parse(inserts.find((i) => i.sql.includes("error_log"))!.args[5] as string);
+		expect("cfReference" in ctx).toBe(false);
+	});
+});
+
+describe("the probe measures what a REPLAY re-measures (#546)", () => {
+	const source = readFileSync(join(__dirname, "../workflows/coding-session.ts"), "utf8");
+
+	/**
+	 * Every `probe.<setter>(` call site in the workflow, and whether it sits inside a `step.do`
+	 * callback. Depth is counted over braces from the last `step.do(` opening before the call —
+	 * crude, and deliberately so: it is the same shape the #529 guard above uses, and the thing it
+	 * has to notice is a setter moving back INSIDE a callback, which changes that nesting.
+	 *
+	 * G1: the denominator is asserted below. A regex that matched nothing would otherwise pass.
+	 */
+	const calls = [...source.matchAll(/probe\.(saw|drove|at)\(/g)].map((m) => ({ setter: m[1], at: m.index }));
+
+	it("has the call sites this guard exists to watch", () => {
+		// 1 × saw (inside `measured`), 1 × drove (in `onEvent`, before its step), 2 × at (the step
+		// wrapper and the decide step). If this number moves, the guard below is measuring a
+		// different program and has to be re-read, not re-pinned.
+		expect(calls.map((c) => c.setter).sort().join(",")).toBe("at,at,drove,saw");
+	});
+
+	it("keeps `saw` and `drove` out of the journalled callbacks", () => {
+		// The defect: `probe.saw(pane.pane)` sat inside `capture`, the snapshot step's body. A
+		// replay returns the journalled result WITHOUT running the body, so a resumed attempt filed
+		// `paneChars: 0` — production row 82739cb6-B — which reads as "it died on an empty pane".
+		//
+		// Both setters now run on the step's RESULT: `measured()` awaits the guarded promise and
+		// `onEvent` reads `driven` before `step.do`. Move either back inside and this goes red.
+		expect(source).toContain("const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {");
+		expect(source).not.toContain("probe.saw(pane.pane)");
+		const onEvent = source.slice(source.indexOf("onEvent: (type, message, data) => {"));
+		const drove = onEvent.indexOf("probe.drove(driven)");
+		const firstStep = onEvent.indexOf("return step.do(");
+		expect(drove, "probe.drove no longer appears in onEvent").toBeGreaterThan(-1);
+		expect(drove, "probe.drove moved back inside the journalled step").toBeLessThan(firstStep);
+	});
+
+	it("re-measures a journalled pane on replay", async () => {
+		// The behaviour the two source assertions above stand for, exercised directly: a replay
+		// hands back the recorded result and runs no callback.
+		const probe = new CodingRunProbe();
+		const journal = { pane: "x".repeat(4_096), runState: "idle" };
+		let callbackRuns = 0;
+		const replayedStep = async (_name: string, cb: () => Promise<unknown>) => {
+			void cb; // a replay never invokes it
+			return journal;
+		};
+		const measured = async (p: Promise<unknown>) => {
+			const pane = (await p) as { pane: string };
+			probe.saw(pane?.pane);
+			return pane;
+		};
+		await measured(replayedStep("s0-snapshot", async () => { callbackRuns++; return journal; }));
+		expect(callbackRuns, "a replay must not run the step body").toBe(0);
+		expect(probe.paneChars, "the size came from the journalled result, not the callback").toBe(4_096);
 	});
 });

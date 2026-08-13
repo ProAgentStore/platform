@@ -61,6 +61,18 @@ export type CodingFailureClass =
 	| "platform_ceiling"
 	/** A Durable Object / isolate reset, usually a deploy landing mid-run. */
 	| "infra_transient"
+	/**
+	 * A Cloudflare WORKFLOWS attempt error — the orchestrator failed, not the run (#546).
+	 *
+	 * The largest live class after `stuck`, and until this it landed in `unknown` along with
+	 * everything genuinely unexplained, which made "is `unknown` shrinking?" unanswerable.
+	 *
+	 * It is NOT terminal, and that is measured rather than argued: run `82739cb6` filed its own
+	 * death twice, eight minutes apart, with the same `runId` and the same `runStartedAt` and
+	 * `elapsedMs` differing by exactly the wall-clock gap. One run, two attempts — Cloudflare had
+	 * already retried it. See {@link CodingRunProbe} for the replay signature that confirms it.
+	 */
+	| "workflow_internal"
 	/** Nothing matched. Deliberately its own class — see `unknown` in the record. */
 	| "unknown";
 
@@ -113,6 +125,44 @@ const STALL_MARKERS = [
 /** The one deadline that is deterministic: the reply was too LONG, so a retry ends the same way. */
 const OVERRUN_MARKERS = ["was still being written after", "too long to finish"];
 
+/**
+ * Cloudflare Workflows failing its own attempt. TWO wordings, one event (#546).
+ *
+ * The surface decides which one reaches us: a step that exhausts its retries throws
+ * `WorkflowInternalError: Attempt failed due to internal workflows error` (what the five
+ * pre-#529 `agent_loop_runs.detail` rows carry), while the runtime's own error carries
+ * `internal error; reference = <id>` (what the three post-#529 `error_log` rows carry). Both are
+ * matched, and `coding-failure.test.ts` feeds this the literal production strings, so a reworded
+ * Cloudflare message fails a test instead of silently degrading the class back to `unknown`.
+ */
+const WORKFLOW_INTERNAL_MARKERS = [
+	"attempt failed due to internal workflows error",
+	"workflowinternalerror",
+	"internal error; reference =",
+];
+
+/**
+ * Cloudflare's per-occurrence support handle, split off the message it is embedded in (#546).
+ *
+ * `reference = <random id>` makes every occurrence's message byte-unique, and `collapseRepeat`
+ * keys on exact message text — so all three production rows read `repeat_count: 1` and the
+ * frequency of the single most common coding failure was not countable off the log at all. The
+ * repeat machinery #522/#538 built was inert for the one class that most needed a count.
+ *
+ * Moved rather than deleted, and moved into `context` rather than normalised away: the reference
+ * is a DATUM (it is what a Cloudflare support ticket is opened with), and it was only ever
+ * uncollapsible because a caller had put a unique id into prose. `error-log.ts`'s own rule —
+ * "exact text carries no extra information by definition, which is what makes collapsing it
+ * lossless" — is true of every message that does not do this, so the fix belongs at the caller
+ * that broke the premise and not in the collapse. Both ends survive: `context` keeps the first
+ * occurrence's reference, `last_context` the latest (#538).
+ */
+export function splitCfReference(message: string): { message: string; reference: string | null } {
+	const m = /\breference\s*=\s*([0-9a-f-]{6,})/i.exec(message);
+	if (!m) return { message, reference: null };
+	return { message: message.replace(m[0], "reference = (see context)"), reference: m[1] };
+}
+
 function numeric(v: unknown): number | null {
 	return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
@@ -146,6 +196,14 @@ export function classifyCodingFailure(err: unknown): CodingFailure {
 	// invocation ran out, and it is not a statement about the model.
 	if (CEILING_MARKERS.some((k) => m.includes(k))) return at("platform_ceiling", false);
 	if (isTransientInfraError(message)) return at("infra_transient", true);
+	// Before the provider branches for the same reason the ceiling is: this is the ORCHESTRATOR
+	// failing, and its message can quote whatever the run happened to be doing. `retryable: true`
+	// is a statement about the ATTEMPT — the thing Cloudflare has already retried, safely, because
+	// journalled `step.do` results replay and the Engine is not re-driven. It is NOT a licence to
+	// re-dispatch the RUN: two of the five occurrences had already pushed to `origin main`, and a
+	// fresh run has no journal, so every act would repeat. Nothing reads this field but a human
+	// (`coding-failure.test.ts` pins that), and it stays honest by saying which retry it means.
+	if (WORKFLOW_INTERNAL_MARKERS.some((k) => m.includes(k))) return at("workflow_internal", true);
 	// Credit/credentials BEFORE the generic provider branch: `Anthropic (400): Your credit balance
 	// is too low` is a 4xx that says nothing about transport, and reporting it as a stall is exactly
 	// the confusion #529 was filed over.
@@ -177,6 +235,10 @@ const EXPLAINED: ReadonlySet<CodingFailureClass> = new Set<CodingFailureClass>([
 	"provider_credentials",
 	"provider_rate_limit",
 	"provider_overrun",
+	// #546. Explained AND countable — the two have to land together. Demoting it to `warn` without
+	// {@link splitCfReference} would make the largest live coding failure class both quiet and
+	// uncountable, which is strictly worse than the noisy `unknown` it replaces.
+	"workflow_internal",
 ]);
 
 export function codingFailureLevel(cls: CodingFailureClass): "error" | "warn" {
@@ -186,10 +248,28 @@ export function codingFailureLevel(cls: CodingFailureClass): "error" | "warn" {
 /**
  * The moving parts of a run, carried so a death can name WHERE it happened.
  *
- * Everything here is set from code OUTSIDE `step.do`, which a Workflow replay re-executes while
+ * Every setter is called from code OUTSIDE `step.do`, which a Workflow replay re-executes while
  * replaying the journalled step results — the same property `pilotSteps` in the workflow relies on.
  * So a run resumed after an eviction still reports the phase and payload sizes it actually died at,
  * rather than the zeroes a step-journalled counter would give.
+ *
+ * ── This was a claim before it was a fact (#546)
+ *
+ * It held for {@link CodingRunProbe.at}, which the workflow calls when it NAMES a step. It did not
+ * hold for {@link CodingRunProbe.saw} or {@link CodingRunProbe.drove}, which were called from
+ * INSIDE the step callbacks — `probe.saw(pane.pane)` sat in `capture`, the body of the snapshot
+ * step. A replay returns the journalled result without running the callback, so a resumed attempt
+ * reported `paneChars: 0, instructionChars: 0` while faithfully reporting its phase.
+ *
+ * Production row `82739cb6`-B is exactly that: `0 / 0` at `s6-decide`, eight minutes after the
+ * same run's first record. Left alone it reads as "the run died looking at an empty pane" — a
+ * wrong diagnosis, which is worse than a missing one, and the next reader had this docblock
+ * telling them to trust it.
+ *
+ * The workflow now calls both setters on the step's RESULT, outside the step, so the value crosses
+ * the journal boundary and a replay re-measures it. `coding-session-probe.test.ts` asserts that by
+ * replaying a journalled step, and `probe-outside-steps.test.ts` asserts no call site drifts back
+ * inside one.
  */
 export class CodingRunProbe {
 	/** The durable step that was running: `s12-decide`, `s13-waitidle`, `start`, … */
@@ -249,7 +329,10 @@ export interface CodingFailureRecord {
  */
 export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Promise<CodingFailure> {
 	const f = classifyCodingFailure(r.err);
-	const message = r.err instanceof Error ? r.err.message : String(r.err ?? "");
+	const raw = r.err instanceof Error ? r.err.message : String(r.err ?? "");
+	// Classify on the RAW text, collapse on the stable text (#546). The order matters: the
+	// reference is stripped only after the class has been read off the message it is embedded in.
+	const { message, reference } = splitCfReference(raw);
 	await logError(env, {
 		source: "coding:session",
 		userId: r.userId,
@@ -267,6 +350,10 @@ export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Pro
 			failureClass: f.class,
 			retryable: f.retryable,
 			upstreamStatus: f.upstreamStatus,
+			// Cloudflare's support handle, out of the headline so the row can collapse and into a
+			// field so it survives. Omitted entirely when there is none, rather than written as null:
+			// a key that is present on every row is one more thing to read past.
+			...(reference ? { cfReference: reference } : {}),
 			phase: r.probe.phase,
 			steps: r.steps,
 			instructionChars: r.probe.instructionChars,

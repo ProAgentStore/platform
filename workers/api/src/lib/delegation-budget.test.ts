@@ -183,12 +183,40 @@ describe("account ceiling vs pool exhaustion — distinguishable, because they m
 		expect(ceilingBlock).not.toContain('reason: "cost_exhausted"');
 	});
 
-	it("both workflows refuse to close the shared pool for an account-level trip", async () => {
+	it("nothing that can close the shared pool does so for an account-level trip", async () => {
+		// Follows the PREDICATE, not the file. This used to name `workflows/agent-loop.ts` and
+		// `workflows/coding-session.ts` by hand, and the coding one stopped being the right file
+		// when #546 extracted its spend gate to `lib/coding-decide-budget.ts` — the workflow sits
+		// on an 800-line ratchet. A hardcoded path turns a legitimate move into a red test, and
+		// (worse) a future move into a guard that quietly measures a file nobody calls.
+		//
+		// So: every caller of `markExhausted` in the Worker, found rather than listed. ADR 0002 G1
+		// — the denominator is asserted below, because a walker that found nothing would otherwise
+		// pass exactly as loudly as one that found everything.
 		const fs = await import("node:fs");
 		const path = await import("node:path");
-		for (const f of ["agent-loop.ts", "coding-session.ts"]) {
-			const src = fs.readFileSync(path.join(import.meta.dirname, "..", "workflows", f), "utf8");
-			expect(src, `${f} must not markExhausted on account_ceiling`).toMatch(/draw\.reason !== "account_ceiling"/);
+		const root = path.join(import.meta.dirname, "..");
+		const files: string[] = [];
+		const walk = (dir: string) => {
+			for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+				const full = path.join(dir, e.name);
+				if (e.isDirectory()) walk(full);
+				else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) files.push(full);
+			}
+		};
+		walk(root);
+		expect(files.length, "the source walk found no files — this guard has stopped measuring").toBeGreaterThan(100);
+		const callers = files.filter((f) => /\bmarkExhausted\(/.test(fs.readFileSync(f, "utf8")) && !f.endsWith("delegation-budget-store.ts"));
+		// Two today: the chat loop's workflow and the coding Pilot's spend gate. A third arriving
+		// without the predicate is exactly what this is for.
+		expect(callers.map((f) => path.relative(root, f)).sort(), "callers of markExhausted").toEqual([
+			"lib/coding-decide-budget.ts",
+			"workflows/agent-loop.ts",
+		]);
+		for (const f of callers) {
+			expect(fs.readFileSync(f, "utf8"), `${path.relative(root, f)} must not markExhausted on account_ceiling`).toMatch(
+				/draw\.reason !== "account_ceiling"/,
+			);
 		}
 	});
 });
