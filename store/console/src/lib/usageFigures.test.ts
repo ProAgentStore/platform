@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel } from "./usageFigures";
+import { CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
 
 describe("chargedCell (#543)", () => {
 	it("distinguishes a measured zero from a figure that was never measured", () => {
@@ -76,5 +76,28 @@ describe("tokenSplitLabel", () => {
 	it("says nothing about cache on a day that reported zero of it", () => {
 		// Reported-and-zero is a real answer, but "+ 0 cache" is noise on every pre-engine day.
 		expect(tokenSplitLabel({ inputTokens: 200, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 }, raw)).toBe("300 tokens");
+	});
+});
+
+describe("unknownPayerRemedy (#551)", () => {
+	const usd = (m: number) => `$${(m / 1_000_000).toFixed(2)}`;
+
+	it("states the size of the gap and the one action that closes it", () => {
+		// The production bucket: 3,462 calls, $9,584.87, 99.62% of the account's notional value.
+		const s = unknownPayerRemedy([{ key: "unknown", costMicros: 9_584_865_793, calls: 3_462 }], usd);
+		expect(s).toContain("3,462 calls");
+		expect(s).toContain("$9584.87");
+		expect(s).toContain("Profile → API Keys");
+	});
+
+	it("says nothing to an account whose spend is all attributed", () => {
+		// Every row here has a payer. Offering a remedy for a problem the reader does not have is
+		// how a page teaches people to skip its notices.
+		expect(unknownPayerRemedy([{ key: "byok-api", costMicros: 100, calls: 4 }], usd)).toBeNull();
+		expect(unknownPayerRemedy(undefined, usd)).toBeNull();
+	});
+
+	it("says nothing about a bucket with no calls in it", () => {
+		expect(unknownPayerRemedy([{ key: "unknown", costMicros: 0, calls: 0 }], usd)).toBeNull();
 	});
 });

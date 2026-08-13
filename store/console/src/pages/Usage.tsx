@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import Page from "../components/Page";
 import Button from "../components/Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
-import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel } from "../lib/usageFigures";
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number }
 /** Cache fields optional: an API older than #547 does not report them, which is not the same as zero. */
@@ -403,6 +404,19 @@ export default function Usage() {
 										<li key={b.key}><b>{b.label || b.key}</b> — {PAYER_NOTE[b.key]}</li>
 									))}
 								</ul>
+								{/* The note above says why the bucket is unknown. This says what to do about
+								    it (#551) — the platform can make it knowable, it takes one stored token,
+								    and no surface said so while 99.6% of this account's value sat in that
+								    bucket. Rendered only for an account that HAS the gap, and given the
+								    accent border the payer notes do not have, because it is an action rather
+								    than a caveat. */}
+								{unknownPayerRemedy(data.byPayer, usd) && (
+									<p className="mt-3 pt-3 border-t border-line text-xs text-muted" data-testid="usage-unknown-remedy">
+										<b className="text-ink">Make this attributable.</b>{" "}
+										{unknownPayerRemedy(data.byPayer, usd)}{" "}
+										<Link to="/profile" className="text-accent font-semibold underline underline-offset-2">Go to Profile → API Keys</Link>.
+									</p>
+								)}
 							</Card>
 						)}
 						<Card>

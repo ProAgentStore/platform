@@ -61,6 +61,36 @@ export const CHARGED_COVERAGE_NOTE =
 	"Charged is only recorded for calls made since payer tracking began, so a longer range understates it.";
 
 /**
+ * What the reader can DO about the unattributed bucket (#551).
+ *
+ * On the account this was measured on, 99.62% of the notional value sits under "Payer not
+ * established" — 3,462 calls worth $9,584.87 — because a coding engine in `auto` mode with no
+ * stored `claude setup-token` runs on the machine's own login, which resolves to `machine-login`
+ * and therefore to a NULL payer. The NULL is correct and must not be guessed at (migration 0092
+ * exists to remove exactly that inference).
+ *
+ * What was missing is that the platform KNOWS how to make it knowable, and no surface said so.
+ * Storing one token flips the largest row on the page from "Payer not established" to "Drawn from
+ * a subscription" — which is the sentence that separates a $36 API bill from a subscription's
+ * session limit, the two independent ceilings this owner is hitting.
+ *
+ * `null` when there is nothing to say: no unknown bucket, or one with no calls. A remedy offered
+ * to someone who does not have the problem is noise, and it would appear on every account.
+ */
+export function unknownPayerRemedy(
+	rows: readonly { key: string; costMicros: number; calls: number }[] | undefined,
+	fmtUsd: (micros: number) => string,
+): string | null {
+	const b = rows?.find((r) => r.key === "unknown");
+	if (!b || b.calls <= 0) return null;
+	return (
+		`${b.calls.toLocaleString()} ${b.calls === 1 ? "call" : "calls"} (${fmtUsd(b.costMicros)} of value) ran on a login stored on your machine, ` +
+		"so we cannot tell whether they were billed. Store a Claude Code sign-in token under Profile → API Keys, " +
+		"or set an engine's sign-in to your API key in the Coder's CLI engines panel, and this becomes attributable."
+	);
+}
+
+/**
  * A day in the chart's series (#547).
  *
  * The cache fields are optional because a response from an API older than #547 does not carry

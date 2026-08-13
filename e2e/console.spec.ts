@@ -2431,6 +2431,46 @@ test.describe("Usage — value and charged are two numbers (#543)", () => {
 });
 
 /**
+ * The unattributed bucket says what to do about itself (#551).
+ *
+ * 99.62% of the measured account's notional value sits under "Payer not established", because a
+ * coding engine in `auto` mode with no stored `claude setup-token` runs on the machine's own login.
+ * The NULL is correct and must not be guessed at. What was missing is that the platform knows how
+ * to make it knowable — one stored token — and no surface said so.
+ */
+test.describe("Usage — the unknown payer row states the remedy (#551)", () => {
+	test("names the size of the gap, the action, and where to take it", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		const remedy = page.getByTestId("usage-unknown-remedy");
+		await expect(remedy).toContainText("3,462 calls");
+		await expect(remedy).toContainText("$9,585");
+		await expect(remedy).toContainText("Claude Code sign-in token");
+		await expect(remedy.getByRole("link", { name: /Profile/ })).toHaveAttribute("href", "/console/profile");
+	});
+
+	test("says nothing to an account whose spend is all attributed", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			usage: {
+				range: "30d",
+				totals: { inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 },
+				daily: [{ date: "2026-08-11", inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 6000, calls: 3 }],
+				byModel: [], byKind: [],
+				byAgent: [{ key: "agent-1", label: "Test Agent", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 }],
+				byPayer: [{ key: "byok-api", label: "Billed to your API key", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 }],
+			},
+		});
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByText("Billed to your API key").first()).toBeVisible();
+		await expect(page.getByTestId("usage-unknown-remedy")).toHaveCount(0);
+	});
+});
+
+/**
  * The chart plots the quantity the ceiling is denominated in (#547).
  *
  * The token metric summed `input + output` while the daily circuit breaker counts those plus cache

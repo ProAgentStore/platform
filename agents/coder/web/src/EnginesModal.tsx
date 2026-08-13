@@ -3,8 +3,9 @@ import { api } from "@proagentstore/sdk/client";
 import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
 import { engineContinuityNote } from "./engine-continuity";
+import { engineAttributionNote } from "./engine-attribution-note";
 import { engineMeteringNote } from "./engine-metering-note";
-import { Cpu, Gauge, History, Trash2 } from "lucide-react";
+import { Cpu, Gauge, History, Trash2, Wallet } from "lucide-react";
 import Button from "./Button";
 
 /** The engine's vault-key name shown in the api-key option label. */
@@ -34,12 +35,35 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 	const [engines, setEngines] = useState<CodingEngine[]>(initial.map((e) => ({ ...e })));
 	const [defaultId, setDefaultId] = useState(initialDefault);
 	const [saving, setSaving] = useState(false);
+	/**
+	 * Is a `claude setup-token` stored? (#551)
+	 *
+	 * `null` until the lookup lands, and it STAYS null if the lookup fails — the attribution note
+	 * then states both outcomes instead of picking one. This is read rather than assumed because
+	 * `auto` is the default mode and it means two different things depending on this single fact:
+	 * with a token the engine runs on the subscription and Usage can name the payer; without one it
+	 * falls back to the machine's own login and every turn lands in "Payer not established", which
+	 * is where 99.62% of a real account's value ended up with nothing on any surface saying why.
+	 */
+	const [hasClaudeCodeToken, setHasClaudeCodeToken] = useState<boolean | null>(null);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose]);
+
+	useEffect(() => {
+		let live = true;
+		void api<{ providers?: Array<{ id: string; hasKey?: boolean }> }>("/v1/keys/status")
+			.then((d) => {
+				if (live) setHasClaudeCodeToken(!!d.providers?.find((p) => p.id === "claude-code")?.hasKey);
+			})
+			// A failed lookup leaves it null, which the note renders as "it depends" — the honest
+			// reading. Never false: "no token saved" is a claim, and a network error is not evidence.
+			.catch(() => {});
+		return () => { live = false; };
+	}, []);
 
 	const update = (i: number, patch: Partial<CodingEngine>) =>
 		setEngines((prev) => prev.map((e, j) => (j === i ? { ...e, ...patch } : e)));
@@ -77,6 +101,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
 						const continuity = engineContinuityNote(e.command);
+						const attribution = engineAttributionNote(e.command, e.auth, hasClaudeCodeToken);
 						const metering = engineMeteringNote(e.command);
 						return (
 							<div key={e.id} className="bg-paper border border-line rounded-lg p-2.5">
@@ -149,6 +174,21 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										<Gauge size={12} className="mt-0.5 shrink-0" aria-hidden />
 										<span>
 											<b>{metering.label}.</b> {metering.detail}
+										</span>
+									</div>
+								)}
+								{attribution && (
+									// Muted like the two notes above, for the third time and the same reason: every
+									// one of these modes is a legitimate choice. `machine`, and `auto` with no token
+									// saved, are not misconfigurations — the second is the DEFAULT, and it works. The
+									// only thing wrong was that nothing said what they cost the Usage page: three of
+									// the four modes can resolve to a login the platform cannot attribute, and on the
+									// account this was measured on that was 99.62% of the value. Warning styling stays
+									// reserved for the read-only flag below, which IS a thing to fix.
+									<div className="text-xs text-muted mt-1.5 flex items-start gap-1.5">
+										<Wallet size={12} className="mt-0.5 shrink-0" aria-hidden />
+										<span>
+											<b>{attribution.label}.</b> {attribution.detail}
 										</span>
 									</div>
 								)}

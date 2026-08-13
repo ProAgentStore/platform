@@ -918,7 +918,13 @@ const PINS = {
 	// 4.2M bar was drawn for a day that tripped a 250M ceiling at 268M. The arithmetic itself is
 	// pure in lib/usageFigures.ts (`dayTokens`, `tokenSplitLabel`) with the measured day as its
 	// fixture.
-	"store/console/src/pages/Usage.tsx": 932,
+	// +14 at #551: the "Payer not established" row now states the remedy — the call count, the
+	// value, what to store and where — for an account that HAS the gap. Rendered next to the payer
+	// notes but styled as an action rather than a caveat, and gated on the bucket existing, because
+	// a notice everyone sees is a notice everyone learns to skip. The sentence itself is pure in
+	// lib/usageFigures.ts (`unknownPayerRemedy`); what is here is the JSX, the router Link and the
+	// paragraph saying why it is an action.
+	"store/console/src/pages/Usage.tsx": 946,
 	// First entry at #291, crossing 800 by 5 lines. Recorded rather than squeezed, because the
 	// alternative on offer was deleting the paragraph that says why the change exists — and the
 	// change is the one that stops a dropped GET from arming "Save All Settings" over an empty
@@ -994,7 +1000,11 @@ const PINS = {
 	// code is one state slot and one banner — what a later reader needs is why a CORRECT outcome
 	// (a reused session) gets a notice at all, why it must not be folded into the error span, and
 	// why it is not rendered on the strip that span lives on. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1078,
+	// +9 at #551: the Usage.tsx raise above (the unattributed bucket states its own remedy). Plus
+	// this self-ref. Landed the same hour as #549 above, on the same number, which is the third
+	// time this map has been raised twice concurrently — the split named at the top (PINS into its
+	// own data module) is what stops it.
+	"scripts/check-file-size.mjs": 1088,
 };
 
 /**
