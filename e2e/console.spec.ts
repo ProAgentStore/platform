@@ -116,6 +116,18 @@ const DEFAULT_USAGE = {
 		{ key: "agent-coder", label: "Repo Coder", inputTokens: 56_035, outputTokens: 3_283_599, cacheReadTokens: 1_270_000_000, cacheWriteTokens: 14_000_000, costMicros: 9_566_686_384, chargedCostMicros: 0, calls: 3_462 },
 		{ key: "agent-1", label: "Test Agent", inputTokens: 5_851_440, outputTokens: 299_327, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 54_532_191, chargedCostMicros: 36_352_782, calls: 2_259 },
 	],
+	// The axis "By agent" cannot show (#526): the 3,462 coding calls above are ONE template and
+	// three workspaces. The third is un-renamed, so it takes the template's name plus a short id —
+	// the longest label the page can produce, which is what the 320px sweep needs to see.
+	//
+	// None of these labels may PREFIX-match a `byAgent` label. The by-agent specs locate a row with
+	// `/^Repo Coder/`, and this card renders above that one, so an instance called "Repo Coder ·
+	// 12ebf1f0" silently steals the locator and asserts the wrong row's money.
+	byInstance: [
+		{ key: "bd43f4de-ef35-4051-bdec-43f8571414a1", label: "Chess coder 2", inputTokens: 40_000, outputTokens: 2_400_000, cacheReadTokens: 900_000_000, cacheWriteTokens: 10_000_000, costMicros: 7_120_000_000, chargedCostMicros: 0, calls: 2_100 },
+		{ key: "5fab318d-2850-45a4-982c-958765c7261e", label: "Coder Lead", inputTokens: 16_035, outputTokens: 883_599, cacheReadTokens: 370_000_000, cacheWriteTokens: 4_000_000, costMicros: 2_446_686_384, chargedCostMicros: 0, calls: 1_362 },
+		{ key: "12ebf1f0-1111-2222-3333-444455556666", label: "Heartfull (tmux) · 12ebf1f0", inputTokens: 5_851_440, outputTokens: 299_327, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 54_532_191, chargedCostMicros: 36_352_782, calls: 2_259 },
+	],
 	byPayer: [
 		{ key: "unknown", label: "Payer not established", inputTokens: 56_035, outputTokens: 3_603_049, cacheReadTokens: 1_270_000_000, cacheWriteTokens: 14_000_000, costMicros: 9_584_865_793, chargedCostMicros: 0, calls: 3_462 },
 		{ key: "byok-api", label: "Billed to your API key", inputTokens: 5_800_000, outputTokens: 232_914, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 36_336_533, chargedCostMicros: 36_336_533, calls: 1_866 },
@@ -2503,6 +2515,59 @@ test.describe("Usage — value and charged are two numbers (#543)", () => {
 		await expect(header).toContainText("Value");
 		await expect(header).not.toContainText("charged");
 		await expect(page.getByTestId("usage-charged-legend")).toHaveCount(0);
+	});
+});
+
+/**
+ * "What did THIS agent cost me?" (#526)
+ *
+ * The page grouped only by TEMPLATE, so an owner running seven Repo Coders against seven
+ * repositories saw one row called "Repo Coder" carrying all seven — a five-figure total that could
+ * not be attributed to any of them. `ai_usage.instance_id` had carried the answer on every chat,
+ * Pilot and engine row since the ledger shipped; it was aggregated away.
+ */
+test.describe("Usage — per-instance spend (#526)", () => {
+	test("splits one template across the workspaces that spent the money, under their own names", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		const card = page.locator("div").filter({ hasText: /^By agent instance/ }).first();
+		await expect(card).toBeVisible();
+		// The owner's own name for a workspace, and its own money — not the template's.
+		const chess = page.locator("div").filter({ hasText: /^Chess coder 2/ }).first();
+		await expect(chess).toContainText("$7,120");
+		// Both figures, exactly as every other breakdown carries them (#543): the biggest consumer
+		// on the account is charged nothing, because its engine ran on a subscription.
+		await expect(chess).toContainText("$0.00");
+	});
+
+	test("keeps the two axes distinguishable, so a row is never read as the other one", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByRole("heading", { name: "By agent instance" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "By agent", exact: true })).toBeVisible();
+	});
+
+	test("omits the card for an account with one instance, where it would repeat 'By agent'", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			usage: {
+				range: "30d",
+				totals: { inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 },
+				daily: [{ date: "2026-08-11", inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 }],
+				byModel: [{ key: "claude-sonnet-4-6", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 }],
+				byKind: [{ key: "chat", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 }],
+				byAgent: [{ key: "agent-1", label: "Test Agent", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 }],
+				byInstance: [{ key: "i1", label: "Test Agent", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 6000, calls: 3 }],
+			},
+		});
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByRole("heading", { name: "By agent", exact: true })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "By agent instance" })).toHaveCount(0);
 	});
 });
 

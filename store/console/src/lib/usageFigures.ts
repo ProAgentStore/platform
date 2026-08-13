@@ -91,6 +91,22 @@ export function unknownPayerRemedy(
 }
 
 /**
+ * Whether a per-instance breakdown says anything the per-agent one does not (#526).
+ *
+ * The card exists because `byAgent` groups by template: seven Repo Coders collapse into one row and
+ * the owner cannot see which of them spent the money. That collapse needs at least two instances to
+ * exist — with one, the two cards carry identical rows under different names, and a second card
+ * that repeats the first is noise on every small account.
+ *
+ * Counted over instances that actually have a bucket, not over the account's instance list: an
+ * instance that did nothing in this range has nothing to show, and an owner with six idle coders
+ * and one busy one is looking at a page that can already answer him.
+ */
+export function showsInstanceBreakdown(rows: readonly { key: string }[] | undefined): boolean {
+	return (rows ?? []).filter((r) => r.key !== "unassigned").length >= 2;
+}
+
+/**
  * A day in the chart's series (#547).
  *
  * The cache fields are optional because a response from an API older than #547 does not carry

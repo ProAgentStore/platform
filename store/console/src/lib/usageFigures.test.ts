@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
+import { CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
 
 describe("chargedCell (#543)", () => {
 	it("distinguishes a measured zero from a figure that was never measured", () => {
@@ -99,5 +99,24 @@ describe("unknownPayerRemedy (#551)", () => {
 
 	it("says nothing about a bucket with no calls in it", () => {
 		expect(unknownPayerRemedy([{ key: "unknown", costMicros: 0, calls: 0 }], usd)).toBeNull();
+	});
+});
+
+describe("showsInstanceBreakdown (#526)", () => {
+	it("shows the card once there is more than one instance to compare", () => {
+		// The whole point: seven Repo Coders are one row on "By agent". Two is enough for that
+		// collapse to hide something.
+		expect(showsInstanceBreakdown([{ key: "i1" }, { key: "i2" }])).toBe(true);
+	});
+
+	it("stays hidden for a single instance, where it would repeat 'By agent' verbatim", () => {
+		expect(showsInstanceBreakdown([{ key: "i1" }])).toBe(false);
+		expect(showsInstanceBreakdown([{ key: "i1" }, { key: "unassigned" }])).toBe(false);
+	});
+
+	it("stays hidden when the API did not report the axis at all", () => {
+		// An older API has no byInstance. The page omits the card rather than rendering an empty one.
+		expect(showsInstanceBreakdown(undefined)).toBe(false);
+		expect(showsInstanceBreakdown([])).toBe(false);
 	});
 });

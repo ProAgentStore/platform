@@ -1,12 +1,19 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { aggregateUsage, type UsageRow } from "../lib/usage.js";
+import { instanceLabels, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "../lib/usage-ids.js";
+import { instanceListView } from "../lib/instance-config.js";
 import { unmeteredUsageSummary } from "../lib/engine-metering.js";
 import type { Env } from "../types.js";
 
 /**
  * Usage transparency — token usage + estimated value across ALL the user's agents,
- * broken down by model, modality (chat/apply/coding/…), agent, and PAYER, over time.
+ * broken down by model, modality (chat/apply/coding/…), agent, INSTANCE, and PAYER, over time.
+ *
+ * Agent and instance are different questions and the page needs both (#526): the agent is the
+ * template a creator published, the instance is the copy this owner subscribed to and named. Seven
+ * Repo Coders on seven repositories are one agent and seven instances, and "what did Chess coder 2
+ * cost me" is only answerable on the second axis.
  *
  * Every cost figure here is an estimate at published list prices (tokens × list rate; see
  * lib/ai-pricing.ts), including the coding-engine rows: Claude Code computes its own figure the
@@ -35,19 +42,10 @@ usageRoutes.get("/", async (c) => {
 	const range = c.req.query("range") || "30d";
 	const days = RANGE_DAYS[range]; // undefined for "all"
 
-	// Resolve each row's effective agent (chat rows carry only instance_id → look up
-	// the instance's template) and the agent's display name, in one query.
-	const where = days ? "AND u.created_at >= ?2" : "";
-	const stmt = c.env.DB.prepare(
-		`SELECT COALESCE(u.agent_id, i.agent_id) AS agent_id, u.instance_id, u.provider, u.model, u.kind,
-		        u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
-		        u.cost_micros, u.payer, u.created_at, a.name AS agent_name
-		 FROM ai_usage u
-		 LEFT JOIN agent_instances i ON i.id = u.instance_id
-		 LEFT JOIN agents a ON a.id = COALESCE(u.agent_id, i.agent_id)
-		 WHERE u.user_id = ?1 ${where}
-		 ORDER BY u.created_at ASC`,
-	);
+	// Both the agent and the instance are resolved BY LOOKUP, never by trusting which column an id
+	// arrived in — see `usageRowsSql`, which is executed by a test because that is the only way to
+	// prove which join wins.
+	const stmt = c.env.DB.prepare(usageRowsSql(Boolean(days)));
 	const bound = days ? stmt.bind(session.uid, `${dayUtc(days - 1)} 00:00:00`) : stmt.bind(session.uid);
 	const rows = (await bound.all<JoinedRow>()).results ?? [];
 
@@ -56,10 +54,18 @@ usageRoutes.get("/", async (c) => {
 		if (r.agent_id && r.agent_name) agentNames[r.agent_id] = r.agent_name;
 	}
 
-	const summary = aggregateUsage(
-		rows,
-		days ? { fromDay: dayUtc(days - 1), toDay: dayUtc(0), agentNames } : { agentNames },
+	const instRows = (await c.env.DB.prepare(USAGE_INSTANCE_NAMES_SQL)
+		.bind(session.uid)
+		.all<{ id: string; config: string | null; agent_name: string | null }>()).results ?? [];
+	const instanceNames = instanceLabels(
+		instRows.map((r) => ({ id: r.id, displayName: instanceListView(r.config).displayName, agentName: r.agent_name })),
 	);
+
+	const summary = aggregateUsage(rows, {
+		...(days ? { fromDay: dayUtc(days - 1), toDay: dayUtc(0) } : {}),
+		agentNames,
+		instanceNames,
+	});
 
 	// What the figures above LEAVE OUT, as a measured quantity rather than a silence (#348).
 	// A CLI driven through the terminal connector writes no ledger row, so without this the page

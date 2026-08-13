@@ -955,7 +955,16 @@ const PINS = {
 	// a notice everyone sees is a notice everyone learns to skip. The sentence itself is pure in
 	// lib/usageFigures.ts (`unknownPayerRemedy`); what is here is the JSX, the router Link and the
 	// paragraph saying why it is an action.
-	"store/console/src/pages/Usage.tsx": 946,
+	// +23 at #526: a fourth breakdown card, "By agent instance". `byAgent` groups by the TEMPLATE a
+	// creator published, so an owner running seven Repo Coders against seven repositories saw one
+	// row carrying all seven — the page could show a five-figure total and not attribute a cent of
+	// it to a workspace. The card reuses `Breakdown` verbatim (no new row shape, so the mobile
+	// widths and the two money figures come along unchanged); what is here is the card, its
+	// interface field, and the paragraph distinguishing the two axes at the point of comparison,
+	// which is the only place a reader can confuse them. The gate — show it only when there is more
+	// than one instance to compare, since with one it repeats "By agent" — is pure in
+	// lib/usageFigures.ts (`showsInstanceBreakdown`) with its own tests.
+	"store/console/src/pages/Usage.tsx": 970,
 	// First entry at #291, crossing 800 by 5 lines. Recorded rather than squeezed, because the
 	// alternative on offer was deleting the paragraph that says why the change exists — and the
 	// change is the one that stops a dropped GET from arming "Save All Settings" over an empty
@@ -1042,7 +1051,13 @@ const PINS = {
 	// +9 more at #528, landing beside it: the agent-think raise above, whose reason has to say what did NOT move here (the
 	// path rules, the wording, the sink table — all in lib/path-corroboration.ts) so the next reader
 	// can tell a two-line call site from a file nobody split. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1126,
+	// +15 at #526: the Usage.tsx raise above (a fourth breakdown card, per agent INSTANCE). Plus
+	// this self-ref. Worth noting WHY the raise is only ten lines for a change that also added a
+	// 128-line module and a 160-line test: usage.ts crossed the 800-line threshold during it and
+	// was SPLIT rather than pinned — the id-resolution concern (its SQL, its label rules) moved to
+	// lib/usage-ids.ts, which is a different job from aggregation and the one with the sharp edge.
+	// That is the outcome this ratchet is for, so it produced no PINS entry at all.
+	"scripts/check-file-size.mjs": 1141,
 };
 
 /**

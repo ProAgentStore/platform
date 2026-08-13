@@ -6,7 +6,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
-import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number }
 /** Cache fields optional: an API older than #547 does not report them, which is not the same as zero. */
@@ -37,6 +37,13 @@ interface UsageData {
 	byModel: Bucket[];
 	byKind: Bucket[];
 	byAgent: Bucket[];
+	/**
+	 * Per-INSTANCE spend (#526). Absent from an older API — the page simply omits the card.
+	 *
+	 * `byAgent` groups by the template a creator published, so seven Repo Coders working on seven
+	 * repositories are one row. This axis is the owner's own unit, carrying the names he gave them.
+	 */
+	byInstance?: Bucket[];
 	/** Sessions whose cost could not be read at all (#348) — absent, never zero. */
 	unmetered?: Unmetered;
 	/** Value split by who pays it (#346). Absent from an older API — the page degrades to totals. */
@@ -417,6 +424,23 @@ export default function Usage() {
 										<Link to="/profile" className="text-accent font-semibold underline underline-offset-2">Go to Profile → API Keys</Link>.
 									</p>
 								)}
+							</Card>
+						)}
+						{/* Per instance (#526) — full width and directly under "Who pays", because it is
+						    the axis the owner's actual question is asked on. "By agent" answers what a
+						    TEMPLATE cost across every copy of it; seven Repo Coders on seven
+						    repositories are one row there and seven here, under the names he gave
+						    them. Rendered only when there is more than one instance to compare, since
+						    with one the two cards are the same rows twice. */}
+						{showsInstanceBreakdown(data.byInstance) && (
+							<Card className="md:col-span-2">
+								<h3 className="text-sm font-bold mb-2">By agent instance</h3>
+								<Breakdown rows={data.byInstance ?? []} labelOf={(b) => b.label || b.key} />
+								<p className="text-xs text-muted-soft mt-3 pt-3 border-t border-line">
+									Your own copies of an agent, named as you named them. <b>By agent</b> below groups every copy of
+									the same template together — so a row here is what one workspace cost, and a row there is what
+									the template cost across all of them.
+								</p>
 							</Card>
 						)}
 						<Card>

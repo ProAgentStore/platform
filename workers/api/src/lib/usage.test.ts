@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aggregateUsage, denseDays, instanceSpendMicros, usageDay, type UsageRow } from "./usage.js";
+import { bucketLabel, instanceLabels } from "./usage-ids.js";
 import type { Env } from "../types.js";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
@@ -205,6 +206,102 @@ describe("charged value decomposes per bucket (#543)", () => {
 	});
 });
 
+
+// ── #526: what did THIS instance cost? ───────────────────────────────────────
+//
+// `byAgent` groups by template, which is the creator's unit. An owner running seven Repo Coders
+// against seven repositories saw one row called "Repo Coder" carrying all seven, so the page could
+// show a five-figure total and not answer the only question anybody asks it.
+describe("byInstance — the subscriber's unit, not the creator's (#526)", () => {
+	const sevenCoders = () => [
+		// One template, three instances. The expensive rows are engine rows, which have always
+		// carried instance_id and never agent_id — so this axis is populated on day one.
+		row({ agent_id: null, instance_id: "chess", kind: "engine", payer: "subscription", cost_micros: 3_000_000 }),
+		row({ agent_id: null, instance_id: "chess", kind: "chat", payer: "byok-api", cost_micros: 4000 }),
+		row({ agent_id: null, instance_id: "heartfull", kind: "engine", payer: "byok-api", cost_micros: 900_000 }),
+		row({ agent_id: null, instance_id: "lead", kind: "chat", payer: "byok-api", cost_micros: 1000 }),
+	];
+
+	it("splits one template's spend across the instances that actually did the work", () => {
+		const s = aggregateUsage(sevenCoders());
+		expect(s.byInstance.map((b) => b.key)).toEqual(["chess", "heartfull", "lead"]);
+		expect(s.byInstance.find((b) => b.key === "chess")).toMatchObject({ costMicros: 3_004_000, calls: 2 });
+		expect(s.byInstance.find((b) => b.key === "heartfull")).toMatchObject({ costMicros: 900_000, calls: 1 });
+	});
+
+	it("carries the charged figure per instance, so a row can never be read as a bill", () => {
+		// The #543 rule at finer granularity. "Chess coder 2" is the account's biggest consumer and
+		// owes nothing — its engine ran on a subscription. A per-instance card printing only the
+		// notional figure would reproduce the exact misreading #543 fixed, one level down.
+		const s = aggregateUsage(sevenCoders());
+		const chess = s.byInstance.find((b) => b.key === "chess");
+		expect(chess?.costMicros).toBe(3_004_000);
+		expect(chess?.chargedCostMicros).toBe(4000);
+	});
+
+	it("sums to the same totals as every other axis, including rows with no instance", () => {
+		// A creator's direct run against a template, and account-scoped voice, have no instance.
+		// Dropping them would make this axis quietly disagree with the headline.
+		const s = aggregateUsage([...sevenCoders(), row({ agent_id: "a1", instance_id: null, kind: "run", payer: "byok-api", cost_micros: 500 })]);
+		const sum = (bs: { costMicros: number; chargedCostMicros: number }[]) => bs.reduce((n, b) => n + b.costMicros, 0);
+		expect(sum(s.byInstance)).toBe(s.totals.costMicros);
+		expect(sum(s.byInstance)).toBe(sum(s.byAgent));
+		expect(s.byInstance.reduce((n, b) => n + b.chargedCostMicros, 0)).toBe(s.totals.chargedCostMicros);
+		expect(s.byInstance.find((b) => b.key === "unassigned")?.label).toBe("Not tied to an instance");
+	});
+
+	it("labels an instance from the subscriber's own name for it", () => {
+		const s = aggregateUsage(sevenCoders(), { instanceNames: { chess: "Chess coder 2" } });
+		expect(s.byInstance.find((b) => b.key === "chess")?.label).toBe("Chess coder 2");
+	});
+});
+
+describe("bucketLabel — an id that names nothing is a fact, not a missing lookup (#526)", () => {
+	it("uses the name when there is one", () => {
+		expect(bucketLabel("a1", { a1: "Repo Coder" }, "Unassigned")).toBe("Repo Coder");
+	});
+
+	it("says the thing was deleted instead of printing a raw UUID", () => {
+		// Measured on production: `26f71cd8-a376-4600-8522-ababd77d2b1f` carried 18 calls and matched
+		// no live instance — the instance was removed and its spend record deliberately survived it
+		// (`routes/analytics.ts`: "ai_usage rows survive, because they are the spend record").
+		expect(bucketLabel("26f71cd8-a376-4600-8522-ababd77d2b1f", {}, "Unassigned")).toBe("Deleted · 26f71cd8");
+	});
+
+	it("keeps two deleted things apart", () => {
+		// Collapsing them into one "Deleted" row would merge two accounts' worth of spend on screen.
+		expect(bucketLabel("aaaaaaaa-1", {}, "Unassigned")).not.toBe(bucketLabel("bbbbbbbb-1", {}, "Unassigned"));
+	});
+
+	it("keeps 'unassigned' meaning the row carried no id at all", () => {
+		expect(bucketLabel("unassigned", { unassigned: "wrong" }, "Unassigned")).toBe("Unassigned");
+	});
+});
+
+describe("instanceLabels — seven un-renamed coders must not become seven identical rows (#526)", () => {
+	it("prefers the subscriber's own name", () => {
+		expect(instanceLabels([{ id: "i1", displayName: "Chess coder 2", agentName: "Repo Coder" }]).i1).toBe("Chess coder 2");
+	});
+
+	it("falls back to the agent name, and disambiguates when that collides", () => {
+		// The failure this exists to prevent: splitting by instance and then labelling every split
+		// "Repo Coder" reproduces the collapse, with the rows now separated but unreadable.
+		const out = instanceLabels([
+			{ id: "aaaaaaaa-1", agentName: "Repo Coder" },
+			{ id: "bbbbbbbb-2", agentName: "Repo Coder" },
+			{ id: "cccccccc-3", agentName: "Language Buddy" },
+		]);
+		expect(out["aaaaaaaa-1"]).toBe("Repo Coder · aaaaaaaa");
+		expect(out["bbbbbbbb-2"]).toBe("Repo Coder · bbbbbbbb");
+		// A name that is already unique is left alone — renaming is the fix, and someone who has
+		// already renamed should not be punished with an id.
+		expect(out["cccccccc-3"]).toBe("Language Buddy");
+	});
+
+	it("still returns something for an instance with no name anywhere", () => {
+		expect(instanceLabels([{ id: "deadbeef-9", displayName: null, agentName: null }])["deadbeef-9"]).toBe("Instance deadbeef");
+	});
+});
 
 // ── #325: the one read in this module that is NOT observability ──────────────
 //

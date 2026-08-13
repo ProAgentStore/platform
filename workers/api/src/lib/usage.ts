@@ -9,6 +9,7 @@
 import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
 import { engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
+import { bucketLabel, UNASSIGNED_KEY } from "./usage-ids.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
 import type { Env } from "../types.js";
 
@@ -349,6 +350,20 @@ export interface UsageSummary {
 	byModel: UsageBucket[];
 	byKind: UsageBucket[];
 	byAgent: UsageBucket[];
+	/**
+	 * The same value split by INSTANCE — the subscriber's own copy of an agent (#526).
+	 *
+	 * `byAgent` groups by template, which is the creator's unit and not the owner's: seven Repo
+	 * Coders working on seven repositories collapse into one row called "Repo Coder". So the page
+	 * could show a five-figure total and not answer "what did Chess coder 2 cost me this week?",
+	 * which is the question it exists for. Nothing new is measured — `ai_usage.instance_id` has
+	 * carried this on every chat, Pilot and engine row since the ledger shipped; it was aggregated
+	 * away.
+	 *
+	 * Rows with no instance (a creator's direct run against a template, account-scoped voice) keep
+	 * their own bucket rather than being dropped, so this axis sums to the same totals as the others.
+	 */
+	byInstance: UsageBucket[];
 	/** Value split by who pays it — the axis the page needs to stop implying everything is a bill. */
 	byPayer: UsageBucket[];
 }
@@ -378,18 +393,23 @@ export function usageDay(ts: string): string {
 
 /**
  * Roll raw ledger rows into totals, a per-day series (dense across [fromDay,toDay]
- * inclusive when provided, so the chart has no gaps), and by-model/kind/agent
- * breakdowns sorted by cost then tokens. agentNames maps agent_id → display label.
+ * inclusive when provided, so the chart has no gaps), and by-model/kind/agent/instance
+ * breakdowns sorted by cost then tokens.
+ *
+ * `agentNames`/`instanceNames` map an id → display label. They are supplied by the caller rather
+ * than looked up here so that this stays pure — and so that an id ABSENT from the map means one
+ * definite thing (nothing by that id exists any more), which is what {@link bucketLabel} reports.
  */
 export function aggregateUsage(
 	rows: UsageRow[],
-	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string> } = {},
+	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string>; instanceNames?: Record<string, string> } = {},
 ): UsageSummary {
 	const totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 };
 	const dayMap = new Map<string, UsageBucket>();
 	const modelMap = new Map<string, UsageBucket>();
 	const kindMap = new Map<string, UsageBucket>();
 	const agentMap = new Map<string, UsageBucket>();
+	const instanceMap = new Map<string, UsageBucket>();
 	const payerMap = new Map<string, UsageBucket>();
 
 	const into = (map: Map<string, UsageBucket>, key: string, r: UsageRow) => {
@@ -409,7 +429,8 @@ export function aggregateUsage(
 		into(dayMap, usageDay(r.created_at), r);
 		into(modelMap, r.model || "unknown", r);
 		into(kindMap, r.kind || "unknown", r);
-		into(agentMap, r.agent_id || "unassigned", r);
+		into(agentMap, r.agent_id || UNASSIGNED_KEY, r);
+		into(instanceMap, r.instance_id || UNASSIGNED_KEY, r);
 		// NULL payer buckets as "unknown" rather than being dropped: a row we cannot attribute is
 		// still consumption the owner should see, and hiding it would make the page's own
 		// attribution look more complete than it is.
@@ -435,17 +456,16 @@ export function aggregateUsage(
 	const sortBuckets = (m: Map<string, UsageBucket>) =>
 		[...m.values()].sort((a, b) => b.costMicros - a.costMicros || (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens));
 
-	const byAgent = sortBuckets(agentMap).map((b) => ({
-		...b,
-		label: b.key === "unassigned" ? "Unassigned" : (opts.agentNames?.[b.key] || b.key),
-	}));
-
 	return {
 		totals,
 		daily,
 		byModel: sortBuckets(modelMap),
 		byKind: sortBuckets(kindMap),
-		byAgent,
+		byAgent: sortBuckets(agentMap).map((b) => ({ ...b, label: bucketLabel(b.key, opts.agentNames, "Unassigned") })),
+		// "Not tied to an instance" rather than "Unassigned": these rows ARE assigned, to a template
+		// — a creator's own run against their agent, or an account-scoped voice call. Reusing the
+		// other axis's word for it would say the platform lost track of them.
+		byInstance: sortBuckets(instanceMap).map((b) => ({ ...b, label: bucketLabel(b.key, opts.instanceNames, "Not tied to an instance") })),
 		byPayer: sortBuckets(payerMap).map((b) => ({ ...b, label: PAYER_LABEL[b.key] || b.key })),
 	};
 }
@@ -533,7 +553,7 @@ export function aggregateAdminUsage(
 		into(maps.provider, r.provider || "unknown", r);
 		into(maps.model, r.model || "unknown", r);
 		into(maps.kind, r.kind || "unknown", r);
-		into(maps.agent, r.agent_id || "unassigned", r);
+		into(maps.agent, r.agent_id || UNASSIGNED_KEY, r);
 		into(maps.user, r.user_id || "unknown", r);
 		addInto(r.provider === PLATFORM_PROVIDER ? split.platformPaid : split.byok, r);
 	}
@@ -562,7 +582,7 @@ export function aggregateAdminUsage(
 		byProvider: sortByCost(maps.provider),
 		byModel: sortByCost(maps.model),
 		byKind: sortByCost(maps.kind),
-		byAgent: sortByCost(maps.agent).map((b) => ({ ...b, label: b.key === "unassigned" ? "Unassigned" : opts.agentNames?.[b.key] || b.key })),
+		byAgent: sortByCost(maps.agent).map((b) => ({ ...b, label: bucketLabel(b.key, opts.agentNames, "Unassigned") })),
 		byUser: sortByCost(maps.user).map((b) => ({ ...b, label: opts.userNames?.[b.key] || b.key })),
 		split,
 	};
