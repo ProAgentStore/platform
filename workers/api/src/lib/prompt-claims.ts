@@ -66,6 +66,7 @@
 import { BASE, TOOL_CATALOG, toolNamesFor } from "../agent-do-tools.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { resolveSelfModel, tabsFor, type SelfModel } from "./agent-self-description.js";
+import { stripCommentsAndLiterals } from "./source-guard.js";
 
 // ── The vocabularies, all derived ────────────────────────────────────────────────────────────
 
@@ -498,4 +499,116 @@ export function findSourceClaims(source: string): SourceClaim[] {
 		}
 	}
 	return out;
+}
+
+// ── Which modules the ratchet must read (#557) ────────────────────────────────────────────────
+
+/**
+ * What a scan of the prompt ASSEMBLY site found, sizes included.
+ *
+ * The ratchet above is only as wide as the list of files handed to it, and until #557 that list was
+ * typed by hand: four modules whose text `agent-think.ts` concatenates straight onto `systemPrompt`
+ * were outside it, and #395 and #337 had both had to be REMEMBERED into it. A hand list cannot fail
+ * — it can only be short — which is the shape ADR 0002 exists to forbid.
+ *
+ * So the guard derives the set instead, and the sizes are returned rather than logged because
+ * ADR 0002 G1 makes the denominator an assertion: `appendSites` collapsing to a handful is what a
+ * move to a `parts.push(…)` assembly looks like from here, and it would otherwise present as a
+ * clean tree.
+ */
+export interface PromptReach {
+	/** Module paths relative to `workers/api/src`, e.g. `lib/memory-prompt.ts`. Sorted, unique. */
+	modules: string[];
+	/** `systemPrompt +=` statements parsed. */
+	appendSites: number;
+	/** Names the import map resolved to a relative module. */
+	importedNames: number;
+	/** RHS identifiers resolved to neither an import nor a one-hop local — see the limits below. */
+	unresolved: string[];
+}
+
+/**
+ * Every module whose exports reach `systemPrompt` in the given source.
+ *
+ * WHAT IT DOES NOT HANDLE, stated because a scanner's silence is otherwise read as coverage
+ * (ADR 0002 G3), and asserted one-by-one in `prompt-claims.test.ts`:
+ *
+ *   • TWO hops. `const a = fooPrompt(); const b = a; systemPrompt += b;` resolves `b` to `a` and
+ *     stops. One hop is what the real assembly needs (`settingsBlock`, `statsBlock`) and every
+ *     extra hop widens the false-positive surface for no case that exists.
+ *   • Anything not written as a `systemPrompt +=` statement — a `parts` array, a helper that takes
+ *     the prompt and returns it. `appendSites` is the assertion that this has not happened.
+ *   • Re-exports. A module that re-exports another's prompt text resolves to the barrel, not the
+ *     origin; the origin's claims would go unscanned.
+ *   • A local function defined in the same file (`toolBlurbFor`) — it is not an import, so it lands
+ *     in `unresolved`. That is correct here: the file is scanned anyway, by name.
+ *   • Default and namespace imports. Named imports only, which is what this file uses.
+ *
+ * Comments are blanked by the reference stripper (`source-guard.ts`) before the append scan, so the
+ * prose ABOUT the assembly does not enter it. The IMPORT scan runs over raw source, because that
+ * same stripper blanks the module specifier the scan is trying to read.
+ */
+export function promptModulesReachedBy(source: string): PromptReach {
+	const code = stripCommentsAndLiterals(source);
+	const imports = new Map<string, string>();
+	for (const m of source.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"(\.[^"]*)"/gm)) {
+		const mod = m[2].replace(/^\.\//, "").replace(/\.js$/, ".ts");
+		for (const raw of m[1].split(",")) {
+			const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()?.trim();
+			if (name) imports.set(name, mod);
+		}
+	}
+
+	const modules = new Set<string>();
+	const unresolved = new Set<string>();
+	const sites = statementsAfter(code, /systemPrompt\s*\+=/g);
+	for (const site of sites) {
+		for (const id of identifiersIn(site)) {
+			const direct = imports.get(id);
+			if (direct) {
+				modules.add(direct);
+				continue;
+			}
+			// One hop: the local the statement names may be the result of a prompt builder.
+			const init = statementsAfter(code, new RegExp(`\\b(?:const|let|var)\\s+${id}\\b[^=;()]*=`, "g"))[0];
+			const hopped = init ? identifiersIn(init).filter((n) => imports.has(n)) : [];
+			if (hopped.length) for (const n of hopped) modules.add(imports.get(n) as string);
+			else unresolved.add(id);
+		}
+	}
+	return {
+		modules: [...modules].sort(),
+		appendSites: sites.length,
+		importedNames: imports.size,
+		unresolved: [...unresolved].sort(),
+	};
+}
+
+/** The text between each match of `re` and the `;` that ends its statement, at bracket depth 0. */
+function statementsAfter(code: string, re: RegExp): string[] {
+	const out: string[] = [];
+	for (const m of code.matchAll(re)) {
+		let i = (m.index ?? 0) + m[0].length;
+		const start = i;
+		let depth = 0;
+		for (; i < code.length; i++) {
+			const c = code[i];
+			if (c === "(" || c === "[" || c === "{") depth++;
+			else if (c === ")" || c === "]" || c === "}") {
+				if (depth === 0) break;
+				depth--;
+			} else if (c === ";" && depth === 0) break;
+		}
+		out.push(code.slice(start, i));
+	}
+	return out;
+}
+
+/** Identifiers in already-stripped code, excluding property accesses (`x.foo` yields only `x`). */
+function identifiersIn(code: string): string[] {
+	const out = new Set<string>();
+	for (const m of code.matchAll(/(\.)?\b([A-Za-z_$][\w$]*)\b/g)) {
+		if (!m[1]) out.add(m[2]);
+	}
+	return [...out];
 }

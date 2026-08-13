@@ -15,7 +15,7 @@
  * it adjudicates claims keyed to a NAMED capability (a tab, a tool, a denial, a runtime) and
  * nothing else. Free-text advice is invisible to it, and that is a limit, not an oversight.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { toolBlurbFor } from "../agent-think.js";
@@ -31,6 +31,7 @@ import {
 	findTabMentions,
 	findToolMentions,
 	promptClaimViolations,
+	promptModulesReachedBy,
 	promptTextOf,
 } from "./prompt-claims.js";
 import { describeFacts } from "./runner-availability.js";
@@ -383,7 +384,7 @@ describe("the incidents that motivated this", () => {
 const SRC = new URL("../", import.meta.url).pathname;
 
 /**
- * The modules whose string literals become an agent's system prompt.
+ * The modules whose string literals become an agent's system prompt — DERIVED, not typed (#557).
  *
  * Scoped, not tree-wide, and the scan that established the scope is the argument for it: over all
  * of `workers/api/src` the same patterns report 105 hits, of which the overwhelming majority are
@@ -392,30 +393,51 @@ const SRC = new URL("../", import.meta.url).pathname;
  * has nothing true to say about them. Tool descriptions ARE in scope (`tool-registry.ts`): the
  * model reads them in the same context, and a tool description naming a tab the agent lacks is
  * the same bug in a different string.
+ *
+ * ── Why the list is no longer a list
+ *
+ * It was thirteen file names someone had to remember, and four modules had already fallen out of
+ * it: `memory-prompt`, `repo-status-prompt`, `deployment-prompt` and `connector-tool-prompt` are
+ * each concatenated straight onto `systemPrompt` in `agent-think.ts` and none was scanned. Nothing
+ * could have reported that, because a hand-typed denominator cannot fail — it can only be short,
+ * and a short one prints the same green tick as a complete one (ADR 0002).
+ *
+ * So the set now comes from `promptModulesReachedBy`, which reads the assembly site itself: the
+ * modules whose exports appear in a `systemPrompt +=` statement, one hop through a local. The five
+ * below are the ones that derivation genuinely cannot see, each with the reason it is prompt text
+ * anyway — and a reason is required precisely because "this one is different" is the judgement that
+ * goes stale.
  */
-const PROMPT_MODULES = [
-	"agent-think.ts",
-	"agent-do-prompt.ts",
-	"agent-do-tools.ts",
-	"lib/agent-self-description.ts",
-	"lib/agent-style-prompt.ts",
-	"lib/agent-clock.ts",
-	"lib/agent-behaviour.ts",
-	// Added when #337 moved the `## Active Tasks` block out of `agent-think.ts` into a pure module.
-	// It names no capability today, and that is worth pinning rather than assuming: the block now
-	// carries provenance and withholding prose, which is the kind of text that grows a tab or tool
-	// name later.
-	"lib/agent-tasks.ts",
+const PROMPT_MODULES_BY_HAND: Record<string, string> = {
+	"agent-think.ts":
+		"the assembly site itself. It is the source the derivation reads, so it can never be in the derived output; the test below asserts separately that it hardcodes no claim at all.",
+	"agent-do-prompt.ts": "the base prompt and the model defaults — read by the model, assembled outside `runAgentThink`.",
+	"agent-do-tools.ts": "the tool catalog's own descriptions, which the model reads in the same context as the prompt.",
 	// #395. The correction handed back to a model that wrote its own tool result is prompt text the
 	// model acts on, so it belongs in the scan. It names no capability today and that is the point
 	// of pinning it: the honest wording of "here is what actually ran" is one edit away from naming
 	// a tool or a surface the agent does not have.
-	"lib/invented-results.ts",
-	"lib/instance-settings.ts",
-	"lib/stats-schema.ts",
-	"lib/tool-registry.ts",
-	"lib/work-report.ts",
-];
+	"lib/invented-results.ts":
+		"#395 — the correction handed back to a model that invented its own tool result is text the model acts on. It reaches the conversation, not `systemPrompt`, so no derivation over the assembly site can find it.",
+	// #557 step 4. The one file the audit found holding a claim outside the old list, decided
+	// deliberately rather than left as the only file that was neither in scope nor excused.
+	"lib/storage-tools.ts":
+		"#557 — storage tool DESCRIPTIONS and their results, on exactly the reasoning the entries above make for `agent-do-tools.ts` and `invented-results.ts`: the model reads them in the same context. Reached only through the tool dispatcher, never through `systemPrompt +=`.",
+};
+
+/**
+ * Modules that LOOK like prompt text and are not, each with the reason — the same exact-set-plus-
+ * reason discipline `security-invariants.test.ts` uses for `NON_AUTHORIZING`, staleness check
+ * included: an entry naming a file that no longer exists, or that has since joined the scan, fails.
+ */
+const NOT_PROMPT_TEXT: Record<string, string> = {
+	"lib/engine-auth-prompt.ts":
+		"named `-prompt` but it is not one: it builds the ENGINE's environment (which credential a CLI signs in with), and is imported by `routes/coding.ts`, not by the chat prompt builder. Nothing it returns is read by a model.",
+};
+
+const REACH = promptModulesReachedBy(readFileSync(join(SRC, "agent-think.ts"), "utf8"));
+
+const PROMPT_MODULES = [...new Set([...Object.keys(PROMPT_MODULES_BY_HAND), ...REACH.modules])].sort();
 
 /**
  * Every capability-naming literal in those modules, reviewed, with the reason it is honest.
@@ -458,16 +480,42 @@ const ALLOWED_CLAIMS: Record<string, number> = {
 	// `get_stats` description. Stats is universal in `tabsFor` — it was NOT, until this guard's
 	// first run found the console had shipped the tab (#311) and the table had not been updated.
 	"lib/tool-registry.ts — tab:Stats": 1,
+	// #557 — the ONE entry the widened scan added, and the reason it is honest rather than a pin
+	// bumped to make a number pass: `send_to_cli`'s failure path, "Runner offline — cannot send.
+	// Start it with `pags up`.". It is reached only after `getBoundRunnerConn` has returned null
+	// for a tool that only a `runtime`-declaring agent is granted, so `pags up` is advice its owner
+	// can act on. Every other module the scan gained holds zero claims and moved nothing.
+	"lib/storage-tools.ts — runtime:local-runner": 1,
 };
 
 describe("hardcoded capability claims in the prompt modules", () => {
 	const found: Record<string, number> = {};
+	const unreadable: string[] = [];
 	for (const rel of PROMPT_MODULES) {
-		for (const c of findSourceClaims(readFileSync(join(SRC, rel), "utf8"))) {
+		// G3: a module the scan resolves but cannot READ is reported, never skipped. Skipping it
+		// turns a bug in the resolver into a quietly smaller measurement, which is the whole
+		// failure mode this guard was widened to close.
+		let source: string;
+		try {
+			source = readFileSync(join(SRC, rel), "utf8");
+		} catch {
+			unreadable.push(rel);
+			continue;
+		}
+		for (const c of findSourceClaims(source)) {
 			const key = `${rel} — ${c.kind}:${c.claim}`;
 			found[key] = (found[key] ?? 0) + 1;
 		}
 	}
+
+	it("were all readable — an unreadable module is an unscanned module", () => {
+		expect(
+			unreadable,
+			"`promptModulesReachedBy` resolved an import to a path that is not a file. Either the resolver's\n" +
+				"`.js`→`.ts` rewrite has met a case it does not handle, or a module moved. Fix the resolver —\n" +
+				"do not drop the entry, because a dropped entry is a file nobody scans and nothing reports.",
+		).toEqual([]);
+	});
 
 	it("are exactly the reviewed set", () => {
 		expect(
@@ -483,5 +531,114 @@ describe("hardcoded capability claims in the prompt modules", () => {
 		// claim written there is a claim nothing can check; all of them now live in the pure modules
 		// above. This is the assertion that keeps it that way.
 		expect(findSourceClaims(readFileSync(join(SRC, "agent-think.ts"), "utf8"))).toEqual([]);
+	});
+});
+
+// ── 6. The denominator (#557, ADR 0002) ──────────────────────────────────────────────────────
+
+/**
+ * What the ratchet above MEASURED, asserted rather than assumed.
+ *
+ * The ratchet's own output cannot distinguish "no module holds an unreviewed claim" from "the set
+ * of modules is a third of what it should be", and for four modules it was the second. These are
+ * the assertions that make the two look different.
+ */
+describe("the modules the ratchet reads", () => {
+	it("reads every module `agent-think.ts` appends to the prompt", () => {
+		// The rule the four missing modules broke. Stated as containment, not equality, because
+		// `PROMPT_MODULES_BY_HAND` legitimately adds paths the assembly site cannot show.
+		const missing = REACH.modules.filter((m) => !PROMPT_MODULES.includes(m));
+		expect(missing, "a module whose text reaches `systemPrompt` is not being scanned").toEqual([]);
+	});
+
+	it("found the assembly it claims to have read", () => {
+		// G1. `agent-think.ts` builds the prompt with 42 `systemPrompt +=` statements over 91
+		// imported names. The bound is not those numbers — it is the shape: a move to a `parts`
+		// array or a builder helper takes the site count to near zero, and the derivation would
+		// then return a small, confident, wrong set. 25 is comfortably below honest churn and
+		// far above what any other assembly shape would leave behind.
+		expect(
+			REACH.appendSites,
+			"fewer than 25 `systemPrompt +=` statements in agent-think.ts. The prompt is no longer assembled\n" +
+				"the way this derivation reads it, so the module set below is measuring almost nothing.\n" +
+				"Teach `promptModulesReachedBy` the new shape before trusting another green run.",
+		).toBeGreaterThanOrEqual(25);
+		expect(
+			REACH.importedNames,
+			"agent-think.ts resolved fewer than 40 named imports. The import scan has stopped matching,\n" +
+				"so every identifier in the prompt assembly now resolves to nothing and the set is empty by\n" +
+				"construction rather than by cleanliness.",
+		).toBeGreaterThanOrEqual(40);
+		// The sharpest form of the same question: the derivation must find the module that carries
+		// most of the reviewed claims. If it cannot see `agent-style-prompt.ts`, it sees nothing.
+		expect(REACH.modules).toContain("lib/agent-style-prompt.ts");
+		expect(REACH.modules).toContain("lib/memory-prompt.ts");
+		expect(REACH.modules.length).toBeGreaterThanOrEqual(15);
+	});
+
+	it("scans every *-prompt.ts module, or says why not", () => {
+		// The name rule, which catches what the derivation cannot: a module written and named as
+		// prompt text but not yet wired in, or wired in through a shape the resolver misses.
+		const promptFiles = readdirSync(join(SRC, "lib"))
+			.filter((f) => f.endsWith("-prompt.ts"))
+			.map((f) => `lib/${f}`)
+			.sort();
+		// G1 again: this glob is an input set too, and an empty one would pass silently.
+		expect(
+			promptFiles.length,
+			"fewer than 5 `lib/*-prompt.ts` modules. The naming convention moved or the glob broke;\n" +
+				"either way this rule has stopped measuring rather than found a clean tree.",
+		).toBeGreaterThanOrEqual(5);
+		const unaccounted = promptFiles.filter((f) => !PROMPT_MODULES.includes(f) && !(f in NOT_PROMPT_TEXT));
+		expect(
+			unaccounted,
+			"a module named `*-prompt.ts` is neither scanned nor excused. Add it to the scan (it costs nothing\n" +
+				"if it holds no claim) or give it a NOT_PROMPT_TEXT entry saying why its text never reaches a model.",
+		).toEqual([]);
+	});
+
+	it("keeps NOT_PROMPT_TEXT honest — a stale excuse fails", () => {
+		// The same staleness check `security-invariants.test.ts` gives its exception maps. An excuse
+		// that outlives its subject is worse than no excuse: it reads as a reviewed decision.
+		for (const [rel, why] of Object.entries(NOT_PROMPT_TEXT)) {
+			expect(existsSync(join(SRC, rel)), `NOT_PROMPT_TEXT names ${rel}, which no longer exists`).toBe(true);
+			expect(why.length, `NOT_PROMPT_TEXT[${rel}] needs a reason, not a placeholder`).toBeGreaterThan(40);
+			expect(PROMPT_MODULES, `${rel} is excused AND scanned — delete the excuse`).not.toContain(rel);
+			expect(
+				REACH.modules,
+				`${rel} is excused as unreachable from the prompt, but the assembly site now appends it. The reason is false.`,
+			).not.toContain(rel);
+		}
+		for (const rel of Object.keys(PROMPT_MODULES_BY_HAND)) {
+			expect(existsSync(join(SRC, rel)), `PROMPT_MODULES_BY_HAND names ${rel}, which no longer exists`).toBe(true);
+		}
+	});
+
+	it("resolves a one-hop local, and stops at one — the limit, tested", () => {
+		// ADR 0002's obligation on a hand-rolled source scanner: G1 plus a test naming what it does
+		// NOT handle. Each of these is a real shape in `agent-think.ts` or a real way to escape it.
+		const of = (src: string) => promptModulesReachedBy(src).modules;
+
+		// Direct: the four modules #557 was filed about are all this shape.
+		expect(of(`import { memoryPrompt } from "./lib/memory-prompt.js";\nsystemPrompt += memoryPrompt(m);`)).toEqual(["lib/memory-prompt.ts"]);
+		// Through a template interpolation, which is how `settingsBlock` and `statsBlock` arrive.
+		// Spelled in halves for the same reason the lexer test above does it — the lint rule that
+		// objects to a placeholder inside a plain string would otherwise fire on the syntax under test.
+		const interpolated = `$${"{b}"}`;
+		expect(of(`import { p } from "./lib/a-prompt.js";\nconst b = p(x);\nsystemPrompt += \`\\n\\n${interpolated}\`;`)).toEqual([
+			"lib/a-prompt.ts",
+		]);
+		// NOT handled — two hops. Recorded so nobody reads a green run as coverage of it.
+		expect(of('import { p } from "./lib/a-prompt.js";\nconst b = p(x);\nconst c = b;\nsystemPrompt += c;')).toEqual([]);
+		// NOT handled — an assembly that does not go through `systemPrompt +=`.
+		expect(of('import { p } from "./lib/a-prompt.js";\nparts.push(p(x));')).toEqual([]);
+		// Comments are blanked before the append scan, so prose about the assembly cannot widen it.
+		expect(of('import { p } from "./lib/a-prompt.js";\n// systemPrompt += p(x)\n')).toEqual([]);
+		// A string that mentions the assembly is not the assembly.
+		expect(of('import { p } from "./lib/a-prompt.js";\nconst s = "systemPrompt += p(x)";')).toEqual([]);
+		// A property access is not a reference to an import of the same name.
+		expect(of('import { p } from "./lib/a-prompt.js";\nsystemPrompt += ctx.p;')).toEqual([]);
+		// Bare packages are not modules of ours; only relative specifiers resolve.
+		expect(of('import { p } from "hono";\nsystemPrompt += p(x);')).toEqual([]);
 	});
 });
