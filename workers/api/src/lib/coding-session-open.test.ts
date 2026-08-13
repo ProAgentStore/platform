@@ -43,6 +43,7 @@ const store = await import("./coding-store.js");
 const runner = await import("./runner-client.js");
 const connectivity = await import("./instance-connectivity.js");
 const sweeper = await import("./coding-session-sweeper.js");
+const engines = await import("./coding-engines.js");
 const { ensureActiveSession, ensureSessionForChat, sessionOpenedNotice } = await import("./coding-session-open.js");
 
 const env = {} as Env;
@@ -53,7 +54,6 @@ const repo: CodingRepo = {
 	name: "fws/platform",
 	branch: "",
 	cloneStatus: "ready",
-	defaultClient: "claude",
 	workdir: "/Users/x/dev/fws",
 	createdAt: "",
 	updatedAt: "",
@@ -470,5 +470,24 @@ describe("a successful spawn is not a look at the checkout (#548)", () => {
 		}) as never);
 		const res = await ensureActiveSession(env, "inst", "u", repo);
 		expect(res).toMatchObject({ ok: true, opened: true });
+	});
+});
+
+describe("an agent-opened session picks the engine the OWNER set, not a column nobody can edit (#549)", () => {
+	it("resolves from the instance default, never from `coding_repos.default_client`", () => {
+		// The bug, measured: the owner set the ⚙ CLI engines default to Codex and `start_work`
+		// opened a CLAUDE session at 12:08:30. `default_client` is written once at create as
+		// "claude", has no UI, is not accepted by the repo PUT route, and is never sent by the
+		// console — so on this path it was a hardcoded constant outranking the control he used.
+		//
+		// It is also the wrong TYPE for the job: it holds a `CodingClientType`, while `resolveEngine`
+		// matches PRESET ids, so it only ever worked because the seeded ids happen to equal the
+		// client types. Passing null falls through to `defaultEngineId` — the same thing the
+		// console's own open path sends as `engineId`.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		return ensureActiveSession(env, "inst", "u", repo).then(() => {
+			expect(engines.resolveEngine).toHaveBeenCalledWith(env, "inst", "u", null);
+		});
 	});
 });

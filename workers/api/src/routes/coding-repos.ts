@@ -22,7 +22,6 @@ import { logError } from "../lib/error-log.js";
 // Pilot's pause both report, so this surface cannot invent a third wording for one state (#440).
 import { describeFacts } from "../lib/runner-availability.js";
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
-import { asClient } from "../lib/coding-engines.js";
 import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
 import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
@@ -284,7 +283,6 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 				name: name || lastTwoSegments(localPath) || "repo",
 				workdir: localPath,
 				provider: "local",
-				defaultClient: asClient(body.defaultClient),
 			});
 			// `createRepo` optimistically calls any local path `ready`. Ask the machine that will
 			// run in it BEFORE letting that stand (#405): the runner is connected at this moment
@@ -328,7 +326,6 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			webUrl: ref?.webUrl || undefined,
 			cloneUrl,
 			branch: typeof body.branch === "string" ? body.branch : undefined,
-			defaultClient: asClient(body.defaultClient),
 		});
 		return c.json({ repo }, 201);
 	});

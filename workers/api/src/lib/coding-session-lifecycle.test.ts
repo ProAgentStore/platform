@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { noSessionMessage, pilotStopSignal, shouldEndSessionAfterRun } from "./coding-session-lifecycle.js";
+import { noSessionMessage, pilotStopSignal, reusedSessionEngineNotice, shouldEndSessionAfterRun } from "./coding-session-lifecycle.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 
 const NOW = Date.parse("2026-08-06T06:00:00Z");
@@ -154,5 +154,58 @@ describe("noSessionMessage", () => {
 		const msg = noSessionMessage({ repoName: "r", connectivity: connected, startError: "fatal: repository not found" });
 		expect(msg).toContain("fatal: repository not found");
 		expect(msg).not.toMatch(/\brun `pags up/i);
+	});
+});
+
+describe("reusedSessionEngineNotice — a reuse that silently keeps the old engine (#549)", () => {
+	const base = { repoName: "dev/aipa", runningLabel: "claude", wouldLaunchLabel: "codex" };
+
+	it("says which engine is actually running, and how to change it", () => {
+		// The owner's report: "hit the session limit again even after I thought I had switched to
+		// Codex". `POST …/coding/sessions` reuses a live session and returns BEFORE `resolveEngine`
+		// is called, so `launch_command` — fixed when the session was created — wins over every
+		// control. Correctly: a running child process cannot change which binary it is. But the
+		// route had returned `reused: true` since it was written and nothing showed it.
+		const note = reusedSessionEngineNotice({
+			...base,
+			runningCommand: "claude --dangerously-skip-permissions",
+			wouldLaunchCommand: "codex exec --sandbox danger-full-access",
+		});
+		expect(note).toContain("claude --dangerously-skip-permissions");
+		expect(note).toContain("codex");
+		// The remedy has to be there or the notice is just bad news.
+		expect(note).toMatch(/end this session|Fresh/i);
+	});
+
+	it("says nothing when the live session already IS the engine that would launch", () => {
+		// A notice on every open is noise, and noise is not read.
+		expect(
+			reusedSessionEngineNotice({ ...base, runningCommand: "codex exec --sandbox danger-full-access", wouldLaunchCommand: "codex exec --sandbox danger-full-access" }),
+		).toBeNull();
+		// Whitespace is not a difference.
+		expect(reusedSessionEngineNotice({ ...base, runningCommand: " claude ", wouldLaunchCommand: "claude" })).toBeNull();
+	});
+
+	it("compares the COMMAND, so two presets that differ only in flags are not called the same engine", () => {
+		// `deriveClientType` maps every non-Claude binary to `codex` so the runner spawns it raw, so
+		// comparing client types would call a Grok session and a Codex session identical. And the
+		// flags are not cosmetic: `--sandbox workspace-write` blocks the network, so `git pull` and
+		// `pnpm install` fail — see ENGINE_WRITE_FLAGS. Switching between them is a real change to
+		// what the agent may do.
+		const note = reusedSessionEngineNotice({
+			...base,
+			runningLabel: "codex",
+			runningCommand: "codex exec --sandbox workspace-write",
+			wouldLaunchCommand: "codex exec --sandbox danger-full-access",
+		});
+		expect(note).toContain("workspace-write");
+	});
+
+	it("stays SILENT for a session with no recorded launch command", () => {
+		// A row written before `launch_command` existed. Unknown is not "different", and claiming a
+		// mismatch nobody can see would send someone to end a session running exactly what they
+		// wanted.
+		expect(reusedSessionEngineNotice({ ...base, runningCommand: null, wouldLaunchCommand: "codex exec" })).toBeNull();
+		expect(reusedSessionEngineNotice({ ...base, runningCommand: "", wouldLaunchCommand: "codex exec" })).toBeNull();
 	});
 });

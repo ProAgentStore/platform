@@ -55,7 +55,6 @@ export interface CodingRepo {
 	 * row (rename, launch URLs, merge policy) bumps that.
 	 */
 	cloneCheckedAt?: string;
-	defaultClient: CodingClientType;
 	/** Launch links — open-in-new-tab icons on the list + session view. */
 	urls?: { dev?: string; staging?: string; prod?: string };
 	/** Per-repo special instructions (injected into co-pilot + Overseer prompts). */

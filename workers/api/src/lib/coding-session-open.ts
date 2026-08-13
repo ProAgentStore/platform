@@ -294,7 +294,22 @@ export async function ensureActiveSession(
 	if (existing) return reattach(existing);
 
 	const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
-	const { command, clientType } = await resolveEngine(env, instanceId, userId, repo.defaultClient);
+	// The instance's engine default, NOT `repo.defaultClient` (#549).
+	//
+	// This line is where the owner's Claude limit kept burning after he had switched to Codex.
+	// `coding_repos.default_client` is written once at create as `"claude"`, has no UI, is not
+	// accepted by the repo PUT route, and is never sent by the console — so on the AGENT-opened
+	// path (`start_work`, the Loop button, `delegate_goal`) it was a hardcoded constant that
+	// outranked `config.defaultEngineId`, the control he had actually set. Measured: a Claude
+	// session opened at 12:08:30 on an instance whose engine default read `codex`.
+	//
+	// It is also the wrong TYPE to be the authority. `default_client` is a `CodingClientType`,
+	// while `resolveEngine` matches `engines.find(e => e.id === engineId)` against PRESET ids — it
+	// only ever matched by the coincidence that the seeded ids equal the client types, and a
+	// renamed preset would have missed silently. Passing null falls through to `defaultEngineId`,
+	// which is what the console's own open path (`engineId: defaultEngine`) already sends, so both
+	// doors now open the same engine.
+	const { command, clientType } = await resolveEngine(env, instanceId, userId, null);
 	let session: CodingSessionRecord;
 	try {
 		session = await createSession(env, instanceId, userId, {

@@ -10,6 +10,7 @@ import {
 	engineAuthReport,
 	readEngines,
 	resolveEngine,
+	reusedEngineNotice,
 	type CodingEngine,
 	type EngineAuth,
 	type EngineAuthResolved,
@@ -139,12 +140,14 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	const existing = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 	if (existing) {
 		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, existing, repo)).conn != null;
-		return c.json({ session: existing, runnerConnected, reused: true }, 200);
+		// SAY it was reused, and which engine is running (#549 — reasoning in `reusedEngineNotice`).
+		const notice = await reusedEngineNotice(c.env, instanceId, uid, repo.name, existing, body.engineId ?? body.clientType);
+		return c.json({ session: existing, runnerConnected, reused: true, notice }, 200);
 	}
 
-	// Resolve which engine to launch: the chosen preset (engineId), else the repo's
-	// remembered default, else the instance default engine.
-	const { command, clientType } = await resolveEngine(c.env, instanceId, uid, body.engineId ?? body.clientType ?? repo.defaultClient);
+	// The preset the caller named, else the INSTANCE default. `repo.defaultClient` used to end this
+	// chain; it is gone from both doors (#549 — the measurement is in `coding-session-open.ts`).
+	const { command, clientType } = await resolveEngine(c.env, instanceId, uid, body.engineId ?? body.clientType);
 	// Which machine runs this session: an explicit request wins, else the instance's
 	// node PIN (config.runnerNode) so the Coding tab honors "Runs on" exactly like chat/
 	// apply do, else the legacy default runtime. A pinned/requested node that's offline is

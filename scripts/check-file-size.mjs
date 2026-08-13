@@ -512,7 +512,19 @@ const PINS = {
 	// that cannot. Raised rather than split: the added lines are one state slot, one banner and
 	// the reason, and the seam this file actually wants (the landing view vs the session view)
 	// is #305's, not something to take under a bug fix.
-	"agents/coder/web/src/CodingTab.tsx": 1367,
+	// +25 at #549: one state slot, one banner declared once and rendered at the TWO places a
+	// session view exists (solo and multi-repo), and the reasons — which are the deliverable here,
+	// not the code. `POST …/coding/sessions` has returned `reused: true` since it was written and
+	// nothing ever rendered it, so pressing start after changing the CLI engine gave back the OLD
+	// engine with no message; that is half of how "I switched to Codex" and "Claude is still
+	// burning" were both true. Two paragraphs have to survive: why the notice is not an ERROR
+	// (reuse is correct — one engine per checkout, so folding it into the `openError` span beside
+	// it would colour a correct outcome red), and why it is NOT on that strip at all (a reuse
+	// always returns a session, so `openTerminal` unmounts the strip in the same tick and the
+	// notice would be written where nobody is looking — the first placement here, caught by
+	// reading the JSX rather than by a test). The seam this file wants is still #305's
+	// landing-view/session-view split, not a slice taken under a bug fix.
+	"agents/coder/web/src/CodingTab.tsx": 1392,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -978,7 +990,11 @@ const PINS = {
 	// raise has a cheaper option than this one. Plus this self-ref.
 	// +7 at #547: the Usage.tsx raise above (the chart's token metric now counts cache, which is
 	// 98% of what the ceiling beside it counts). Plus this self-ref.
-	"scripts/check-file-size.mjs": 1062,
+	// +12 at #549: the CodingTab raise above. Its reason is far longer than the code because the
+	// code is one state slot and one banner — what a later reader needs is why a CORRECT outcome
+	// (a reused session) gets a notice at all, why it must not be folded into the error span, and
+	// why it is not rendered on the strip that span lives on. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1078,
 };
 
 /**

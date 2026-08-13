@@ -243,10 +243,10 @@ describe("leg 1 — an agent with repo-local tools has somewhere to put the path
 	it("resolves coder-repo's settings to exactly what production returns", () => {
 		// The resolver's own check, against measured reality: `GET /v1/instances/:id/settings` on
 		// all three live coder-repo instances returned engine/autonomy/merge_policy and nothing else
-		// (2026-08-12). engine+autonomy come from 0063's seed, merge_policy from 0091's
-		// surface-scoped append, and `repo` is gone because of 0102 — so all three shapes this walk
-		// understands are exercised by this one expectation.
-		expect(seededAgents().get("coder-repo")?.settingsIds).toEqual(["engine", "autonomy", "merge_policy"]);
+		// (2026-08-12). autonomy comes from 0063's seed, merge_policy from 0091's surface-scoped
+		// append, `repo` is gone because of 0102 and `engine` because of 0126 — so all three shapes
+		// this walk understands are exercised by this one expectation.
+		expect(seededAgents().get("coder-repo")?.settingsIds).toEqual(["autonomy", "merge_policy"]);
 	});
 
 	it("every agent declaring a repo-local tool has a reachable writer for its repo path", () => {
@@ -267,6 +267,41 @@ describe("leg 1 — an agent with repo-local tools has somewhere to put the path
 		}
 		// A rule that matches no agent passes forever while meaning nothing.
 		expect(checked, "no seeded agent declares a repo-local tool — the tools walk is broken").toBeGreaterThanOrEqual(2);
+	});
+
+	it("no seeded setting claims a name the ENGINE resolver owns (#549)", () => {
+		// The general form of the bug, and the reason this file is the right place for it: the walk
+		// already resolves what each slug's `settingsSchema` declares TODAY, across every migration.
+		//
+		// `coder-repo` declared a select called `engine`, labelled "Coding CLI", with zero functional
+		// readers — `resolveEngine` consults `config.defaultEngineId` and the caller's `engineId`,
+		// never `config.settings`. It was not merely inert: `agent-think.ts` injects resolved
+		// settings into the prompt, so the AGENT told its owner the Settings had Codex configured
+		// while `start_work` opened a Claude session (measured in production D1, 12:08:30). A dead
+		// control that the model reads back is worse than no control.
+		//
+		// A DENYLIST of the names for the one control that lives elsewhere, not a general
+		// "is it read" check — that cannot be automated honestly. `engine` is here because it
+		// shipped; the near-misses are here because re-adding this field under a slightly different
+		// name is the obvious way to reintroduce it.
+		const OWNED_BY_ENGINE_RESOLUTION = ["engine", "cli", "coding_cli", "coding_engine", "default_engine", "default_client", "engine_id"];
+		const agents = seededAgents();
+		for (const [slug, state] of agents) {
+			for (const id of state.settingsIds) {
+				expect(
+					OWNED_BY_ENGINE_RESOLUTION.includes(id.toLowerCase()),
+					`${slug} declares a settings field \`${id}\`, but which CLI a coding session launches is decided by ` +
+						`\`agent_instances.config.defaultEngineId\` (the console's ⚙ CLI engines panel) and by the \`engineId\` a caller passes — ` +
+						`never by \`config.settings\`. A typed select cannot express a preset either: a preset is a real argv ` +
+						`(\`codex exec --sandbox danger-full-access\`) and ENGINE_WRITE_FLAGS documents why the flag matters. ` +
+						`So this field would have no reader, AND agent-think.ts would put it in the prompt, which is how the agent ` +
+						`came to assert an engine it was not running (#549). Touched by: ${state.files.join(", ")}. ` +
+						`Put the choice in the engines panel, or wire a NEW reader before you declare it here.`,
+				).toBe(false);
+			}
+		}
+		// Not vacuous: the walk must actually be resolving fields.
+		expect([...agents.values()].reduce((n, s) => n + s.settingsIds.length, 0)).toBeGreaterThan(5);
 	});
 
 	it("names the two agents it is really about, so a rename cannot silently empty the set", () => {

@@ -65,7 +65,6 @@ const repo: CodingRepo = {
 	provider: "github",
 	branch: "",
 	cloneStatus: "ready",
-	defaultClient: "claude",
 	workdir: "/Users/x/dev/chess-academy",
 	createdAt: "",
 	updatedAt: "",

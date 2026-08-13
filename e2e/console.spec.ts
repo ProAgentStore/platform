@@ -5083,3 +5083,107 @@ test.describe("mobile — the Runner card separates connected from attached (#53
 		});
 	}
 });
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * mobile — a reused session says which engine is actually running (#549)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * `POST /v1/instances/:id/coding/sessions` reuses a live session rather than opening a second one
+ * against the same working directory, and has returned `reused: true` since it was written. The
+ * console ignored it. So a user who changed their CLI engine and pressed Open got a terminal, work
+ * happening in it, and the PREVIOUS engine — which is half of how "I switched to Codex" and "the
+ * Claude limit is still being hit" were both true (the other half was `coding_repos.default_client`
+ * outranking the engine default on the agent-opened path, fixed in the same commit).
+ *
+ * The placement is what this spec is really pinning. The first attempt put the notice on the
+ * landing strip beside `openError`, which is dead markup for this case: a reuse always returns a
+ * session, so `openTerminal` unmounts that strip in the same tick. It is asserted AFTER the
+ * terminal has opened for exactly that reason.
+ */
+test.describe("mobile — a reused session names the engine it is actually running (#549)", () => {
+	const soloCoder = [
+		{
+			id: "inst-1",
+			name: "Repo Coder",
+			slug: "repo-coder",
+			category: "code",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", surfaceOptions: { coding: { repos: "single" } } },
+		},
+	];
+	const REPO = { id: "repo-1", name: "platform", githubRepo: "ProAgentStore/platform", provider: "github", cloneStatus: "ready" };
+	const LIVE = { id: "csess-1", repoId: "repo-1", clientType: "claude", status: "active", launchCommand: "claude --dangerously-skip-permissions" };
+	const NOTICE =
+		"platform already has a live session running `claude --dangerously-skip-permissions` (claude) — that is what is being reused, not codex. " +
+		"A running engine cannot change which binary it is: end this session (or press Fresh) to start one on codex.";
+
+	async function openReused(page: Page, width: number) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, { instances: soloCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			// The reuse itself. The server has already decided the live session's engine is not the
+			// one that would launch now, and says so.
+			if (route.request().method() === "POST" && url.includes("/sessions")) return json({ session: LIVE, runnerConnected: true, reused: true, notice: NOTICE });
+			if (url.includes("/repos")) return json({ repos: [REPO] });
+			if (url.includes("/engines")) return json({ engines: [{ id: "codex", label: "Codex", command: "codex exec --sandbox danger-full-access" }], defaultEngineId: "codex" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/timeline")) return json({ entries: [] });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			if (url.includes("/builds")) return json({ builds: [] });
+			if (url.includes("/issues")) return json({ repo: REPO.githubRepo, issues: [] });
+			if (url.includes("/pulls")) return json({ repo: REPO.githubRepo, pulls: [] });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		// No click: the ONE-repo surface opens its own session on arrival (#408,
+		// `shouldAutoOpenSoloSession`), so this is the path a real user takes — land on the tab,
+		// get a terminal. Which is also why the notice cannot live on the landing strip: with the
+		// runner up, that strip is never rendered at all.
+		await page.locator("#coding-solo-tabs").waitFor();
+		await page.locator("[placeholder='Send a message to the Engine...']").waitFor();
+	}
+
+	for (const width of [320, 390]) {
+		test(`the notice survives into the terminal and fits ${width}px`, async ({ page }) => {
+			await openReused(page, width);
+			const banner = page.locator("#inst-coding-reused-engine");
+			await expect(banner).toBeVisible();
+			// The two facts that make it actionable: what IS running, and what to do about it.
+			await expect(banner).toContainText("claude --dangerously-skip-permissions");
+			await expect(banner).toContainText("codex");
+			await expect(banner).toContainText("end this session");
+			// A sentence this long on a phone is exactly where a horizontal scrollbar comes from.
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("mobile — an open that changes nothing shows no banner", async ({ page }) => {
+		// A notice on every open is noise, and noise is not read. The server returns `notice: null`
+		// when the live session already IS the engine that would launch.
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockSignedInConsole(page, { instances: soloCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (route.request().method() === "POST" && url.includes("/sessions")) return json({ session: LIVE, runnerConnected: true, reused: true, notice: null });
+			if (url.includes("/repos")) return json({ repos: [REPO] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await page.locator("#coding-solo-tabs").waitFor();
+		// Waited for the TERMINAL, so the absence is asserted after the surface that would carry
+		// the banner has actually rendered — otherwise "no banner" would pass on a blank page.
+		await page.locator("[placeholder='Send a message to the Engine...']").waitFor();
+		await expect(page.locator("#inst-coding-reused-engine")).toHaveCount(0);
+	});
+});

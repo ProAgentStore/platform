@@ -97,3 +97,45 @@ export function noSessionMessage(input: {
 	const detail = input.startError ? ` The runner refused to start it: ${input.startError}` : "";
 	return `Could not open a coding session for ${repoName}. The runner is connected${connectivity.node ? ` on ${connectivity.node}` : ""}, so this is not a \`pags up\` problem.${detail}`;
 }
+
+/**
+ * What to say when "start a session" silently handed back the one already running (#549).
+ *
+ * `POST …/coding/sessions` reuses a live session and has returned `reused: true` since it was
+ * written; nothing ever showed it. That is the half of the four-controls bug that survives even
+ * after there is only ONE control: `coding_sessions.launch_command` is fixed at create time and
+ * the reuse branch returns BEFORE `resolveEngine` is called, so a user who changes their engine
+ * default and presses start gets the old engine and no message saying so. Correctly — a live
+ * child process cannot change what binary it is — but silently, which is how "I switched to
+ * Codex" and "Claude is still running" were both true at once.
+ *
+ * Null when they agree, which is the common case. A notice printed on every open would be noise,
+ * and noise is not read.
+ *
+ * Compares the COMMAND, not the client type. `deriveClientType` maps every non-Claude binary to
+ * `codex` so the runner knows to spawn it raw, so comparing types would call a Grok session and a
+ * Codex session the same engine — and a user switching between two presets that differ only in
+ * flags (`--sandbox workspace-write` vs `danger-full-access`) is making a real change to what the
+ * agent may do (see `ENGINE_WRITE_FLAGS`). The LABEL is what the sentence names, because that is
+ * the word on the control they just changed.
+ */
+export function reusedSessionEngineNotice(input: {
+	repoName: string;
+	/** The command the live session's engine was actually launched with. */
+	runningCommand?: string | null;
+	/** Its client type — the fallback label for a session that predates `launch_command`. */
+	runningLabel: string;
+	/** What `resolveEngine` would pick for a NEW session right now. */
+	wouldLaunchCommand: string;
+	wouldLaunchLabel: string;
+}): string | null {
+	const running = (input.runningCommand || "").trim();
+	// An older row has no `launch_command`. Unknown is not "different": claiming a mismatch we
+	// cannot see would send someone to end a session that is running exactly what they wanted.
+	if (!running) return null;
+	if (running === input.wouldLaunchCommand.trim()) return null;
+	return (
+		`${input.repoName} already has a live session running \`${running}\` (${input.runningLabel}) — that is what is being reused, ` +
+		`not ${input.wouldLaunchLabel}. A running engine cannot change which binary it is: end this session (or press Fresh) to start one on ${input.wouldLaunchLabel}.`
+	);
+}

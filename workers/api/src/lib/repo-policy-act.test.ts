@@ -25,7 +25,6 @@ const REPO: CodingRepo = {
 	branch: "main",
 	workdir: "~/dev/fws/platform",
 	cloneStatus: "ready",
-	defaultClient: "claude",
 	createdAt: "2026-08-08T00:00:00Z",
 	updatedAt: "2026-08-08T00:00:00Z",
 } as CodingRepo;
@@ -219,7 +218,7 @@ function fakeEnv(repo: CodingRepo | null, conn: RunnerConn, writes: Array<{ sql:
 								branch: repo.branch,
 								workdir: repo.workdir,
 								clone_status: repo.cloneStatus,
-								default_client: repo.defaultClient,
+								default_client: "claude",
 								policies: JSON.stringify(repo.policies ?? {}),
 								created_at: repo.createdAt,
 								updated_at: repo.updatedAt,

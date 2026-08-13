@@ -10,6 +10,7 @@
 // Pure move — no behaviour changed.
 
 import { getUserProviderKey } from "./user-ai.js";
+import { reusedSessionEngineNotice } from "./coding-session-lifecycle.js";
 import { payerForEngineAuth, type EngineAuthResolved, type PayerOrUnknown } from "./usage-payer.js";
 import type { CodingClientType, CodingSessionRecord } from "./coding-types.js";
 import type { Env } from "../types.js";
@@ -321,4 +322,35 @@ export async function resolveEngine(env: Env, instanceId: string, userId: string
 	// Derive the client type from the command's real binary, so the runner knows
 	// whether to use the structured Claude engine or run the CLI raw.
 	return { command: eng.command, clientType: deriveClientType(eng.command) };
+}
+
+/**
+ * The notice a REUSED session owes its caller (#549) — the lookup half of
+ * {@link reusedSessionEngineNotice}, whose sentence is pure and lives with the rest of the
+ * session-lifecycle wording.
+ *
+ * Here rather than at the route because this is where "which engine would launch" is decided, and
+ * the answer has to come from the same resolver a real open would use: a second reading of the
+ * config in the route is how the message and the behaviour drift apart. Only ever called on the
+ * reuse branch, so it costs one config read and only when there is a live session to disagree with.
+ *
+ * Never throws — a config read that fails must not turn a successful reuse into a failed open.
+ */
+export async function reusedEngineNotice(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	repoName: string,
+	running: { clientType?: string | null; launchCommand?: string | null },
+	requestedEngineId: unknown,
+): Promise<string | null> {
+	const wanted = await resolveEngine(env, instanceId, userId, requestedEngineId).catch(() => null);
+	if (!wanted) return null;
+	return reusedSessionEngineNotice({
+		repoName,
+		runningCommand: running.launchCommand,
+		runningLabel: running.clientType || "claude",
+		wouldLaunchCommand: wanted.command,
+		wouldLaunchLabel: wanted.clientType,
+	});
 }

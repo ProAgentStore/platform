@@ -222,7 +222,6 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				workdir: r.workdir ?? null,
 				cloneStatus: r.cloneStatus,
 				cloneError: r.cloneError ?? null,
-				defaultClient: r.defaultClient,
 				urls: r.urls ?? null,
 				activeSessions: activeSessions.length,
 				issue: r.cloneStatus === "error" ? `clone failed: ${r.cloneError || "unknown error"}`

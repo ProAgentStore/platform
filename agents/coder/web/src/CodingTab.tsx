@@ -102,6 +102,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 */
 	const [openingRepoId, setOpeningRepoId] = useState<string | null>(null);
 	const [openError, setOpenError] = useState<string | null>(null);
+	/**
+	 * The open SUCCEEDED and did something other than what the button implies (#549).
+	 *
+	 * Separate from `openError` because it is not one: the server returns `reused: true` when a
+	 * live session already exists, which is correct — one engine per checkout — and that field has
+	 * been in the response since it was written with nothing rendering it. So a user who changed
+	 * their CLI engine and pressed start got the previous engine, silently. A running child
+	 * process cannot change which binary it is, so the honest fix is to say so and let them end it.
+	 */
+	const [openNotice, setOpenNotice] = useState<string | null>(null);
 	// With no Co-pilot there is only one view, and it is the terminal.
 	const [view, setView] = useState<"summary" | "terminal">(copilot ? "summary" : "terminal");
 	// The REPO's history, across every session it has ever had (#257).
@@ -660,12 +670,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		const active = activeSessionFor(sessionsRef.current, repoId);
 		if (active) return openTerminal(active);
 		setOpenError(null);
+		setOpenNotice(null);
 		setOpeningRepoId(repoId);
 		try {
-			const d = await api<{ session: CodingSession }>(`/v1/instances/${instanceId}/coding/sessions`, {
+			const d = await api<{ session: CodingSession; notice?: string | null }>(`/v1/instances/${instanceId}/coding/sessions`, {
 				method: "POST",
 				body: JSON.stringify({ repoId, engineId: defaultEngine }),
 			});
+			// Set BEFORE `openTerminal`, and kept when it succeeds: the case worth reporting is
+			// precisely the one where nothing looks wrong — a terminal opens, work happens, and it
+			// is the engine the user thought they had stopped using.
+			setOpenNotice(d.notice ?? null);
 			if (d.session) {
 				loadCoding();
 				openTerminal(d.session);
@@ -969,6 +984,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			})()
 		: null;
 
+	/**
+	 * Rendered in the SESSION view, not on the landing strip beside `openError` (#549).
+	 *
+	 * A reuse always returns a session, so `openTerminal` runs and the landing strip unmounts in
+	 * the same tick — a notice there would be written and never seen. The one place the user is
+	 * certain to be looking after pressing start is the terminal they were just taken to.
+	 */
+	const reusedEngineBanner = openNotice ? (
+		<div id="inst-coding-reused-engine" className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-xs font-semibold">{openNotice}</div>
+	) : null;
+
 	// Claude Code signed-out CTA — the headless engine surfaces a login error in its transcript
 	// when the runner machine has no (or expired) Claude credentials. The pattern (and the
 	// engine gate that keeps a Codex user from being told to run `claude setup-token`) is in
@@ -1031,6 +1057,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						{openSession && <Button variant="danger" size="icon" onClick={endSession} title="End session" aria-label="End session"><Square size={13} /></Button>}
 					</div>
 				</div>
+
+				{reusedEngineBanner}
 
 				{claudeSignedOut && soloView === "terminal" && (
 					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
@@ -1145,6 +1173,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
 					</div>
 				)}
+				{reusedEngineBanner}
 				{workModeMsg && (
 					<div data-testid="work-mode-error" className="bg-danger-soft border border-danger-line text-danger rounded-lg p-2.5 m-2 text-xs font-semibold">
 						{workModeMsg}

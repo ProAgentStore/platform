@@ -83,7 +83,6 @@ function toRepo(r: RepoRow): CodingRepo {
 		// looked at since. Both mean the same thing — nobody has checked — which is why there is no
 		// backfill and no default (#440).
 		cloneCheckedAt: r.clone_checked_at ?? undefined,
-		defaultClient: client(r.default_client),
 		urls: parseRepoUrls(r.urls),
 		instructions: r.instructions || undefined,
 		// '' means "inherit" — resolved by `resolveMergePolicy`, never defaulted here, so there is
@@ -106,7 +105,6 @@ export interface NewRepoInput {
 	webUrl?: string;
 	cloneUrl?: string;
 	branch?: string;
-	defaultClient?: CodingClientType;
 	/** Absolute path to an existing local checkout on the runner machine (no clone). */
 	workdir?: string;
 }
@@ -189,7 +187,13 @@ export async function createRepo(env: Env, instanceId: string, userId: string, i
 			input.branch ?? "",
 			input.workdir ?? null,
 			cloneStatus,
-			input.defaultClient ?? "claude",
+			// `default_client` is a LEGACY column, NOT NULL, and nothing reads it any more (#549).
+			// It used to sit at the end of the engine-resolution chain, where — written once here
+			// and settable by no UI — it was a hardcoded constant that outranked the instance's own
+			// engine default. Left in the table rather than dropped: SQLite column drops rewrite
+			// the table, and an unread column costs nothing while a migration on `coding_repos`
+			// (which `coding_sessions` and `coding_timeline` hang off) is not free.
+			"claude",
 		)
 		.run();
 	const repo = await getRepo(env, instanceId, userId, id);
