@@ -34,6 +34,7 @@ import { runUserWorkersAi } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
 import { templatePreviewNote, withholdConstrainedConnectorTools, type TemplatePreviewCapabilities } from "./lib/template-preview-tools.js";
 import { capToolResult, toolLogLine } from "./lib/tool-result-cap.js";
+import { corroborateToolPaths, createPathLedger } from "./lib/path-corroboration.js";
 import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
@@ -894,6 +895,10 @@ export async function runAgentThink(opts: {
 	// display string, and a check that has to re-parse its own evidence is one rename from
 	// silently passing everything.
 	const executedTools: string[] = [...(resume?.executedTools ?? [])];
+	// The path-shaped strings this turn's tool RESULTS contained (#528), read back when the model
+	// writes one into a filed issue or a run objective. Turn-scoped and declared here, beside the
+	// other accumulators, because the read and the write are usually different rounds.
+	const pathLedger = createPathLedger();
 
 	/**
 	 * The ONE way a model-authored reply leaves this function (#395).
@@ -1099,6 +1104,11 @@ export async function runAgentThink(opts: {
 					configuredRepo: instanceCfg.githubRepo,
 				});
 			}
+			// Evidence, not a rule (#528): a path written into a durable artifact — a filed issue, a run
+			// objective — against the paths this turn's results actually contained. Checks then absorbs
+			// in one call, so a result can never corroborate itself; `success` is untouched, and the
+			// note lands before both the model's copy and the owner's pill. lib/path-corroboration.ts.
+			toolResult = corroborateToolPaths(pathLedger, toolResult, tc.name, tc.arguments);
 			// The pill the OWNER reads — not the copy `record` hands the model. A FAILURE gets a wider
 			// budget there: its remedy is its last clause, and a flat 120 cut into that word (#517).
 			allToolLog.push(toolLogLine(tc.name, toolResult.content, toolResult.success));

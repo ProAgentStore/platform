@@ -806,7 +806,15 @@ const PINS = {
 	// case that must not fall through to FULL, and the sentence that replaces what was withheld —
 	// in lib/template-preview-tools.ts with its tests, which pin the no-op for every other agent by
 	// reference equality rather than by inspection.
-	"workers/api/src/agent-think.ts": 1180,
+	// +10 at #528, of which three are code (an import, a turn-scoped ledger of the paths this turn's
+	// tool RESULTS contained, and one call that checks a sink's arguments against it before folding).
+	// It has to live here because it spans ROUNDS — the read and the issue it gets written into are
+	// usually different rounds of one turn — and this loop is the only place that owns a turn. All of
+	// the thinking is pure and sits in lib/path-corroboration.ts with its tests: what counts as a
+	// path, why a basename collision is the signal (a model creating a new file picks a name; one
+	// mis-remembering keeps the name and loses the directory), and why the notice is appended to a
+	// SUCCESSFUL result instead of failing the call.
+	"workers/api/src/agent-think.ts": 1190,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -1031,7 +1039,10 @@ const PINS = {
 	// than the one that grew — the listing, the owner's off-switch and the invoker were three
 	// answers to one question, and a pin note that mentioned only the listing would leave the next
 	// reader thinking the other two were always right. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1115,
+	// +9 more at #528, landing beside it: the agent-think raise above, whose reason has to say what did NOT move here (the
+	// path rules, the wording, the sink table — all in lib/path-corroboration.ts) so the next reader
+	// can tell a two-line call site from a file nobody split. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1126,
 };
 
 /**
