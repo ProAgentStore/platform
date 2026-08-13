@@ -28,6 +28,7 @@ import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { optionsFor } from "../lib/surface-options.js";
 import { logEvent } from "../lib/events.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
+import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
 import { ensureSessionForChat, startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingGoal } from "../lib/coding-loop.js";
@@ -66,6 +67,10 @@ async function driveClaude(
 		if (relocated) conn = relocated;
 		snap = await act();
 	}
+	// A headless drive of an engine that reports no token counts is unmetered, and the absence is
+	// recorded rather than left to read as zero (#556). Same rule #348 applied to the terminal
+	// driver; this is the other row of its 2x2.
+	if (snap !== null) await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
 	// Finish watcher (one per send: stamp the session so only the latest notifies).
 	const watchId = `cw-${sessionId}-${Date.now()}`;
 	// A lost stamp does not cost a watcher, it MIS-ATTRIBUTES one: the column still names the
@@ -180,6 +185,10 @@ async function delegateToTarget(
 			depth: 0,
 		},
 	});
+	// The Overseer's delegation is a headless drive too, and it is the one nobody is watching
+	// (#556) — the Pilot it just started will act against this engine repeatedly from inside the
+	// Workflow, and the day-coarse row covers all of it from here.
+	await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: taskId }, session);
 	// The notice is only set when THIS call opened the session (#407/#408), and it is news the
 	// user has to have: a child process just appeared on their machine, and whether it kept the
 	// previous conversation decides whether the objective above needed the context it carries.

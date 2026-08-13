@@ -32,6 +32,7 @@ import { logEvent } from "../lib/events.js";
 import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
+import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineUsage } from "../lib/usage.js";
 import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-session-open.js";
@@ -557,6 +558,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action }).catch(() => null);
 	}
 	if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
+	await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
 
 	// Drove the CLI with a real instruction → spin up a durable watcher that waits
 	// for it to finish, then summarizes + notifies (reaches the user even if they
@@ -655,6 +657,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 			depth: 0,
 		},
 	});
+	// The Pilot's own act loop lives in the Workflow and drives the same engine forty more times;
+	// the day-coarse row id means this one observation at the handoff covers all of them (#556).
+	await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
 	return c.json({ workflowId: wf.id, sessionId, budgetId: budget.id });
 });
 

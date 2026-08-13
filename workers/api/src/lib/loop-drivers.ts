@@ -25,6 +25,7 @@ import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from 
 import { ensureActiveSession } from "./coding-session-open.js";
 import { admitRepoForRun } from "./coding-repo-admission.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
+import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
@@ -302,6 +303,10 @@ const codingDriver: LoopDriver = {
 				sessionOpenedByRun: opened,
 			},
 		});
+		// The last of the Pilot's entry points (#556). Everything the Workflow subsequently drives
+		// through this engine happens inside `workflows/coding-session.ts`; recording the absence
+		// at every entry means the day's row exists before the first of those acts runs.
+		await noteUnmeteredHeadlessDrive(env, { userId, instanceId, traceId: runId }, session);
 		return { ok: true, runId, driver: codingDriver.id };
 	},
 };

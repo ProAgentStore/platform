@@ -50,6 +50,27 @@ The **⚙ CLI engines** editor states this per preset, derived from the command'
 listed per engine (`engine-continuity.ts`, mirroring `deriveClientType`), so it stays right for
 `npx claude` and for a custom wrapper.
 
+### What one-shot also costs: a raw engine's spend cannot be measured
+
+The same structural difference decides whether you can see what an engine costs. Claude Code ends
+each turn with a structured event carrying its own token counts and cost; the runner reads it and
+the platform banks a measured row, which is what the **Usage** page adds up. A raw engine ends a
+turn with plain stdout and reports no numbers at all, so there is nothing to bank.
+
+**A missing row is not a zero.** An unmeasured engine is not cheaper than a measured one — the
+transport does not change what is sent to the model's API — it is *invisible*, and on a page of
+dollars invisible reads as free. So every drive of an unmeasurable engine records the absence
+instead: a `usage.unmetered` entry on the instance's trace (`GET /v1/instances/:id/trace`, or the
+MCP `agent_trace` tool), which the Usage page counts as what its total leaves out. The entry is
+keyed per session per day, so a Pilot's forty instructions produce one observation, not forty.
+
+Metering is a property of the **(driver, engine) pair**, not of the engine: Claude Code is measured
+when the platform spawns it and unmeasured when it is driven through a terminal pane, because a
+pane carries rendered characters and its own usage record never crosses the relay. Nothing anywhere
+parses a cost out of terminal output — a dollar figure scraped from rendered text would be a guess
+wearing a measurement's clothes. The **⚙ CLI engines** editor states the verdict per preset, beside
+the continuity line and derived the same way.
+
 #### Why no shipped preset resumes, though three CLIs offer it
 
 A resume subcommand looks like the fix — multi-turn memory by editing one text field, no platform

@@ -3,7 +3,8 @@ import { api } from "@proagentstore/sdk/client";
 import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
 import { engineContinuityNote } from "./engine-continuity";
-import { Cpu, History, Trash2 } from "lucide-react";
+import { engineMeteringNote } from "./engine-metering-note";
+import { Cpu, Gauge, History, Trash2 } from "lucide-react";
 import Button from "./Button";
 
 /** The engine's vault-key name shown in the api-key option label. */
@@ -76,6 +77,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
 						const continuity = engineContinuityNote(e.command);
+						const metering = engineMeteringNote(e.command);
 						return (
 							<div key={e.id} className="bg-paper border border-line rounded-lg p-2.5">
 								<div className="flex gap-1.5 items-center flex-wrap">
@@ -132,6 +134,21 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										<History size={12} className="mt-0.5 shrink-0" aria-hidden />
 										<span>
 											<b>{continuity.label}.</b> {continuity.detail}
+										</span>
+									</div>
+								)}
+								{metering && (
+									// Muted for BOTH answers, like the continuity line above and for the same
+									// reason (#556): an unmeasurable engine is a legitimate choice, not a
+									// misconfiguration — `DEFAULT_ENGINES` ships codex and grok deliberately —
+									// so it must not shout next to the read-only warning below, which IS
+									// something to fix. Saying nothing for the measured case would leave the
+									// difference to be inferred from silence, which is how "tmux is cheaper"
+									// nearly became a conclusion somebody drew from a missing row.
+									<div className="text-xs text-muted mt-1.5 flex items-start gap-1.5">
+										<Gauge size={12} className="mt-0.5 shrink-0" aria-hidden />
+										<span>
+											<b>{metering.label}.</b> {metering.detail}
 										</span>
 									</div>
 								)}

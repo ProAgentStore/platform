@@ -180,10 +180,19 @@ export function describeUnmetered(obs: UnmeteredObservation): string {
 	if (isAiCli(obs.activeCommand)) {
 		return `Drove ${cmd} in ${obs.target} — its token spend is NOT measured and is missing from your usage total.`;
 	}
+	// A PANE is a terminal-driver notion. Opening the headless row (#556) made these two sentences
+	// reachable for a child process the platform spawned itself, where "the pane's command could
+	// not be read" would describe machinery that is not there — and a record whose wording implies
+	// the wrong mechanism sends the reader to the wrong file, which is the cost this whole module
+	// exists to avoid. Unreachable in practice today (a session's `clientType` is always one of the
+	// four the cloud derives, all of them AI CLIs, so the branch above takes every headless drive),
+	// which is exactly why it would have gone unnoticed.
+	const where = obs.driver === "headless" ? "the engine did not name itself" : "the pane's command could not be read";
 	if (!cmd) {
-		return `Drove ${obs.target} — the pane's command could not be read, so any AI CLI spend inside it is NOT measured.`;
+		return `Drove ${obs.target} — ${where}, so any AI CLI spend inside it is NOT measured.`;
 	}
-	return `Drove ${obs.target} (pane running ${cmd}) — any AI CLI spend inside it is NOT measured.`;
+	const running = obs.driver === "headless" ? `running ${cmd}` : `pane running ${cmd}`;
+	return `Drove ${obs.target} (${running}) — any AI CLI spend inside it is NOT measured.`;
 }
 
 /**
@@ -262,6 +271,48 @@ export async function noteUnmeteredDrive(
 	} catch {
 		/* observability, never load-bearing */
 	}
+}
+
+/**
+ * The other row of the 2x2: a HEADLESS drive of an engine that reports no token counts (#556).
+ *
+ * #348 built the classifier over both axes and then wired the recorder to one of them — the two
+ * terminal connectors, where the reported problem was. That left the cell the classifier is most
+ * needed for: under `terminal` the verdict is a CONSTANT (a pane carries rendered characters, so
+ * nothing is measurable whatever runs in it), which is exactly why those six sites could call
+ * `noteUnmeteredDrive` unconditionally and never consult `classifyEngineMetering` at all. Under
+ * `headless` the verdict VARIES by engine — Claude Code reports each turn, codex/grok/gemini end a
+ * turn with plain stdout — so this is the one place a call is load-bearing rather than decorative.
+ * That is the whole reason the function had no production caller: not a call site that turned out
+ * to be hard, just the one row of the table nobody wired.
+ *
+ * Called from the DRIVE sites, not from the capture drain. The drain is a 3s poll and a poll is
+ * not a drive: recording one would claim spend on an idle session somebody merely has open, which
+ * is the same class of overclaim `describeUnmetered` refuses when it declines to read a quiet pane
+ * as "nothing was spent". The terminal half records on `run`/`send`/`send_message` for the same
+ * reason, and the row id's day granularity means one drive covers the day either way — including
+ * a Pilot handoff, whose forty subsequent instructions collapse into the row its `/run` opened.
+ *
+ * A metered pair records nothing at all: `ai_usage` already carries the measured figure, and a
+ * "this was not measured" row beside a measurement would be false.
+ */
+export async function noteUnmeteredHeadlessDrive(
+	env: Env,
+	ctx: { userId?: string; instanceId?: string; traceId?: string },
+	session: { id: string; clientType?: string | null },
+): Promise<void> {
+	if (classifyEngineMetering("headless", session.clientType).metered) return;
+	await noteUnmeteredDrive(env, ctx, {
+		// The runner's own `engineLabel` shape (`<engine>:<session id>`), rebuilt from the two
+		// fields the cloud holds so the trace names the same thing both sides call it.
+		target: `${normalizePaneCommand(session.clientType) || "engine"}:${session.id}`,
+		driver: "headless",
+		// The engine is a CHILD PROCESS this platform spawned, so unlike a pane's foreground
+		// command this is not an observation that can fail — we chose the binary. It is passed so
+		// `isAiCli` can recognise it and the row lands as `aiCli: true`, which is what separates
+		// "an AI CLI ran unmeasured" from "we could not see what was in there".
+		activeCommand: session.clientType,
+	});
 }
 
 // ---------------------------------------------------------------------------

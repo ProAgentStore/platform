@@ -53,6 +53,10 @@ function callArgs(code: string, name: string): string[] {
 	const out: string[] = [];
 	const re = new RegExp(`(?<![.\\w$])${name}\\s*\\(`, "g");
 	for (let m = re.exec(code); m; m = re.exec(code)) {
+		// Not the declaration. `export function foo(` and `const foo = (` both contain the name
+		// followed by a paren, and counting them is how a "this must have a caller" guard passes
+		// against a function nobody calls — the exact failure being guarded against.
+		if (/(?:function|const|let|var)\s+$/.test(code.slice(Math.max(0, m.index - 24), m.index))) continue;
 		let depth = 1;
 		let i = m.index + m[0].length;
 		for (; i < code.length && depth > 0; i++) {
@@ -64,15 +68,13 @@ function callArgs(code: string, name: string): string[] {
 	return out;
 }
 
-/** Call sites outside the definition's own module — the definition mentions its own name. */
-function callSites(name: string, definedIn: string): Array<{ rel: string; args: string }> {
-	return sources()
-		.filter((s) => s.rel !== definedIn)
-		.flatMap((s) => callArgs(s.code, name).map((args) => ({ rel: s.rel, args })));
+/** Every non-test call site of `name`, with the module it sits in. */
+function callSites(name: string): Array<{ rel: string; args: string }> {
+	return sources().flatMap((s) => callArgs(s.code, name).map((args) => ({ rel: s.rel, args })));
 }
 
 describe("every engine-usage ledger write carries the payer observation (#554)", () => {
-	const SITES = callSites("recordEngineUsage", "lib/usage.ts");
+	const SITES = callSites("recordEngineUsage").filter((s) => s.rel !== "lib/usage.ts");
 
 	it("finds the call sites at all — a rename must fail loudly, not silently pass", () => {
 		// A guard that greps for a name is only as good as the name still existing. Zero hits is
@@ -87,5 +89,36 @@ describe("every engine-usage ledger write carries the payer observation (#554)",
 		// to say who paid. That has now happened twice (#356, #554).
 		const missing = SITES.filter((s) => !/\bauthResolved\b/.test(s.args)).map((s) => s.rel);
 		expect(missing).toEqual([]);
+	});
+});
+
+describe("the metering classifier is wired to something (#556)", () => {
+	it("has at least one production caller", () => {
+		// It shipped with #348, ten unit assertions, a docstring describing the exact case this
+		// guard now covers — and zero call sites. A classifier nobody consults cannot classify
+		// anything, and the gap it described stayed open for the eight months it existed. The unit
+		// tests could not notice: they call it themselves.
+		//
+		// Not asserted here: WHICH module calls it. Pinning the caller would make this fail on a
+		// legitimate move, and the invariant is that the verdict reaches a decision somewhere, not
+		// that it reaches it from a particular file.
+		expect(callSites("classifyEngineMetering").length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("has a recorder wired to BOTH rows of the 2x2, in different modules", () => {
+		// #348 built the classifier over (driver x engine) and wired the recorder to the terminal
+		// row only — the six connector sites. The composition is what produced the bug: a table
+		// half-wired looks finished from either end. So the invariant is not "a recorder exists",
+		// it is that each driver has one.
+		//
+		// Asserted by MODULE rather than by the `driver:` argument on purpose: the scan blanks
+		// string literals, so `driver: "terminal"` is not visible to it — a test that greps for a
+		// blanked literal is a test that can only pass by accident.
+		const terminal = callSites("noteUnmeteredDrive").filter((s) => s.rel.startsWith("lib/connectors/"));
+		expect(terminal.length).toBeGreaterThanOrEqual(1);
+		// The headless row goes through `noteUnmeteredHeadlessDrive`, which is where the classifier
+		// is consulted. Its callers are the doors that hand a coding engine work.
+		const headless = callSites("noteUnmeteredHeadlessDrive").filter((s) => s.rel !== "lib/engine-metering.ts");
+		expect(headless.length).toBeGreaterThanOrEqual(1);
 	});
 });

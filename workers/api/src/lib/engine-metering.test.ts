@@ -5,6 +5,7 @@ import {
 	emptyUnmeteredSummary,
 	isAiCli,
 	noteUnmeteredDrive,
+	noteUnmeteredHeadlessDrive,
 	normalizePaneCommand,
 	recordUnmeteredEngineActivity,
 	unmeteredRowId,
@@ -207,6 +208,64 @@ describe("noteUnmeteredDrive", () => {
 			},
 		} as unknown as Env;
 		await expect(noteUnmeteredDrive(env, { userId: "u1", instanceId: "i1" }, { driver: "terminal", target: "t" })).resolves.toBeUndefined();
+	});
+});
+
+describe("noteUnmeteredHeadlessDrive — the other row of the 2x2 (#556)", () => {
+	/** The trace row's `context` blob, as it was bound. */
+	const contextOf = (run: { args: unknown[] }) => JSON.parse(String(run.args[9])) as Record<string, unknown>;
+
+	it("records the absence for a raw engine, naming the CLI and the driver", async () => {
+		// The measured case #556 is about: `AIPA coder` runs `codex exec --sandbox
+		// danger-full-access` and produced zero ledger rows and zero absence rows, so its engine
+		// read as costless on the Usage page.
+		const { runs, env } = fakeDb();
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "codex" });
+		expect(runs).toHaveLength(1);
+		const ctx = contextOf(runs[0]);
+		expect(ctx.driver).toBe("headless");
+		// `aiCli: true` is what separates "an AI CLI ran unmeasured" from "we could not see what
+		// was in there" — and unlike a pane's foreground command it cannot be an unreadable
+		// observation here, because the platform chose the binary it spawned.
+		expect(ctx.aiCli).toBe(true);
+		expect(ctx.paneCommand).toBe("codex");
+		expect(String(runs[0].args[8])).toMatch(/NOT measured/);
+	});
+
+	it("targets the runner's own engineLabel shape, so the trace names what both sides call it", async () => {
+		const { runs, env } = fakeDb();
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "grok" });
+		expect(contextOf(runs[0]).target).toBe("grok:csess-9");
+	});
+
+	it("records NOTHING for Claude Code — a measured turn already has a real ledger row", async () => {
+		// The distinction the classifier exists to draw. Writing "this was not measured" beside a
+		// measurement would be false, and would inflate the figure the Usage page prints as what
+		// its total leaves out.
+		const { runs, env } = fakeDb();
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "claude" });
+		expect(runs).toHaveLength(0);
+	});
+
+	it("keys one row per session-day, so a Loop's forty drives do not become forty rows", async () => {
+		// The volume guard. `unmeteredRowId` is coarse on purpose and `logEvent` is
+		// ON CONFLICT DO NOTHING, so repeated drives collapse. Making the id finer — per drive,
+		// per turn — is what would turn a day of Codex work into a trace nobody can read.
+		const { runs, env } = fakeDb();
+		for (let i = 0; i < 40; i++) {
+			await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "codex" });
+		}
+		expect(new Set(runs.map((r) => String(r.args[0]))).size).toBe(1);
+	});
+
+	it("says something honest about an engine whose clientType is missing", async () => {
+		// Never "nothing was spent". An unknown engine is unmeasurable until proven otherwise —
+		// the asymmetry `AI_CLI_COMMANDS` is documented to preserve.
+		const { runs, env } = fakeDb();
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: null });
+		expect(runs).toHaveLength(1);
+		expect(contextOf(runs[0]).aiCli).toBe(false);
+		expect(contextOf(runs[0]).target).toBe("engine:csess-9");
 	});
 });
 

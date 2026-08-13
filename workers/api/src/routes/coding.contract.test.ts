@@ -673,6 +673,84 @@ describe("the payer observation survives (#348/#356)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 6b. The unmeasurable engine records its own absence (#556)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The `("headless", "codex")` cell, driven.
+ *
+ * All four cells of `classifyEngineMetering` were unit-tested from the day it shipped, and two of
+ * them were unreachable — the function had no production caller at all. So the unit tests could
+ * not have failed, and the gap they describe stayed open. Driving the route is what tells them
+ * apart: this asserts a trace row exists after a real drive of a real Codex session.
+ */
+describe("driving an engine that reports no token counts records the absence (#556)", () => {
+	/** Drive `POST …/message` against a session running `clientType`, and return what D1 was told. */
+	async function drive(clientType: string) {
+		const { DB, runs, relayFor } = ownerEnv({
+			session: {
+				id: "csess-1",
+				instance_id: "inst-1",
+				repo_id: "repo-1",
+				user_id: "owner-uid",
+				client_type: clientType,
+				status: "active",
+				tmux_session: `${clientType}:csess-1`,
+				runner_node: "laptop",
+				launch_command: clientType,
+				started_at: "2026-08-13T00:00:00.000Z",
+				ended_at: null,
+				updated_at: "2026-08-13T00:00:00.000Z",
+			},
+		});
+		const env = {
+			SESSION_SIGNING_KEY: SECRET,
+			DB,
+			RELAY: relayFor(() => ({ pane: "$ ", runState: "running", alive: true })),
+			CODING_SESSION: { create: async () => ({ id: "wf-1" }) },
+		} as unknown as Env;
+		const token = await signSession("owner-uid", SECRET, { roles: ["user"] });
+		const res = await ownerApp().request(
+			"/v1/instances/inst-1/coding/sessions/csess-1/message",
+			{
+				method: "POST",
+				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+				body: JSON.stringify({ text: "fix the failing test" }),
+			},
+			env,
+		);
+		expect(res.status).toBe(200);
+		const traced = runs.filter((r) => /INSERT INTO agent_events/.test(r.sql));
+		return { traced };
+	}
+
+	it("a Codex drive writes a `usage.unmetered` row with driver `headless`", async () => {
+		// Before this, a Codex session produced neither an `ai_usage` row nor an absence row: the
+		// engine ends its turn with plain stdout, `takeUsage()` returns nothing, and
+		// `recordEngineUsage` no-ops on an empty list. The Usage page then read the whole engine as
+		// costless — the same way a tmux-driven session did before #348.
+		const { traced } = await drive("codex");
+		const row = traced.find((r) => r.binds.includes("usage.unmetered"));
+		expect(row).toBeDefined();
+		const ctx = JSON.parse(String(row?.binds[9])) as Record<string, unknown>;
+		expect(ctx.driver).toBe("headless");
+		expect(ctx.metered).toBe(false);
+		// A KNOWN AI CLI, not an unreadable observation. The runner has to guess at a pane's
+		// foreground command; here the platform spawned the binary itself.
+		expect(ctx.aiCli).toBe(true);
+		expect(ctx.paneCommand).toBe("codex");
+	});
+
+	it("a Claude Code drive writes none — its spend has a real ledger row instead", async () => {
+		// The half that keeps the count honest. `unmeteredUsageSummary` feeds the "what this total
+		// leaves out" figure on the Usage page, so recording an absence beside a measurement would
+		// inflate exactly the number that exists to be trusted.
+		const { traced } = await drive("claude");
+		expect(traced.filter((r) => r.binds.includes("usage.unmetered"))).toEqual([]);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 7. Merge authority (#314) — the per-repo half
 // ─────────────────────────────────────────────────────────────────────────────
 
