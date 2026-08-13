@@ -853,7 +853,14 @@ const PINS = {
 	// telling users it remembers things it does not. The DECISION — when continuing is still
 	// appropriate — is not here at all: it is pure, tested, and in
 	// workers/api/src/lib/coding-session-continuity.ts.
-	"packages/browser-runner/src/coding/headless.ts": 917,
+	// +41 at #545: the last turn's outcome stops being prose. The exit code was already in this
+	// file — pushed into the transcript as `[codex exited with code 1]` and then discarded — so a
+	// session whose every turn exited 1 reported alive/ready/idle three times running. What lands
+	// here is only the CAPTURE (the per-turn last line, the two recording sites, the getter); the
+	// TYPE and the rule that turns an exit into a verdict were split into coding/engine-turn.ts,
+	// beside engine-usage/engine-acts/engine-auth, where they are unit-tested without spawning a
+	// process. The raise is the residue after that split, not an alternative to it.
+	"packages/browser-runner/src/coding/headless.ts": 959,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge
@@ -1004,7 +1011,7 @@ const PINS = {
 	// this self-ref. Landed the same hour as #549 above, on the same number, which is the third
 	// time this map has been raised twice concurrently — the split named at the top (PINS into its
 	// own data module) is what stops it.
-	"scripts/check-file-size.mjs": 1088,
+	"scripts/check-file-size.mjs": 1095,
 };
 
 /**

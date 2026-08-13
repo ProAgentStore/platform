@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
+import { type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 
 /**
  * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
@@ -164,6 +165,16 @@ export class HeadlessSession {
 	private turnStartedAt = 0;
 	/** Set by stop() — the only thing that ends a one-shot session (see `alive`). */
 	private stopped = false;
+	/** How the last COMPLETED turn ended (#545). Null until one has. See {@link EngineTurnReport}. */
+	private turnReport: EngineTurnReport | null = null;
+	/**
+	 * The engine's own last output line of the turn in flight (#545).
+	 *
+	 * Recorded as it is written, so the failure detail is the engine's sentence rather than
+	 * something parsed back out of a rendered pane. Reset when a turn starts, so a report can never
+	 * carry a previous turn's line.
+	 */
+	private turnLastLine = "";
 	/** Measured engine spend not yet handed to the cloud (#267). Drained by {@link takeUsage}. */
 	private pendingUsage: EngineUsageRecord[] = [];
 	/**
@@ -294,6 +305,16 @@ export class HeadlessSession {
 	get alive(): boolean {
 		if (this.oneShot) return !this.stopped && !this.spawnFailed;
 		return this.procAlive;
+	}
+
+	/**
+	 * How the last completed turn ended (#545) — NOT whether the session can take another.
+	 *
+	 * Read by the snapshot and carried to the cloud. Null means no turn has completed on this
+	 * session; it is never a claim that a turn went well.
+	 */
+	get lastTurn(): EngineTurnReport | null {
+		return this.turnReport;
 	}
 
 	/** Is a process running THIS instant? The persistent engine's liveness, and the spawn guard. */
@@ -476,6 +497,9 @@ export class HeadlessSession {
 	 * preset decides what runs and what it costs; the platform does not need to know the engine.
 	 */
 	private runOneShot(text: string): void {
+		// Arm the per-turn line capture BEFORE the spawn, so a report can only ever carry a line
+		// this turn produced (#545).
+		this.turnLastLine = "";
 		const proc = spawn(this.cmdBin, [...this.cmdArgs, text], {
 			cwd: this.config.workDir,
 			env: mergeEnv(process.env, this.config.env),
@@ -525,7 +549,7 @@ export class HeadlessSession {
 			}
 		}, maxTurnMs);
 		ceiling.unref();
-		proc.on("close", (code: number | null) => {
+		proc.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
 			clearTimeout(ceiling); // cleared before the staleness guard: the timer belongs to THIS process
 			// A non-zero exit is the engine's own failure (bad flags, not signed in) and the
 			// operator needs to see it — silently going idle is how "stdin is not a terminal"
@@ -538,6 +562,14 @@ export class HeadlessSession {
 			// codex process still editing the repo, invisible to `alive`, diagnostics and
 			// kill-tmux.
 			if (this.proc !== proc) return;
+			// THE EXIT CODE STOPS BEING ONLY PROSE HERE (#545). Recorded after the staleness guard
+			// on purpose: a turn aborted by its successor (see the kill above) must not overwrite
+			// the report of the turn that replaced it — the loser's outcome is about a turn nobody
+			// is waiting on any more.
+			//
+			// A signal means WE ended it (the wedge ceiling, an interrupt), which is the `killed`
+			// verdict: evidence about this platform's timers, not about the engine's health.
+			this.turnReport = turnReportFromExit(code, signal, this.turnLastLine);
 			this.run = "idle";
 			this.proc = null;
 		});
@@ -609,7 +641,12 @@ export class HeadlessSession {
 	/** Raw-engine stdout: strip ANSI control codes and append to the transcript. */
 	private pushRaw(line: string): void {
 		const clean = stripAnsi(line);
-		if (clean.trim()) this.push(clean);
+		if (clean.trim()) {
+			this.push(clean);
+			// The engine's own words, kept for the turn's report (#545) — captured on the way in,
+			// never scraped back out of the rendered pane.
+			this.turnLastLine = clean.trim();
+		}
 		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
 	}
 
@@ -646,7 +683,13 @@ export class HeadlessSession {
 				}
 				break;
 			case "result": {
-				if (ev.is_error) this.push(`[error] ${ev.result ?? ev.subtype ?? "failed"}`);
+				const failure = ev.is_error ? String(ev.result ?? ev.subtype ?? "failed") : "";
+				if (failure) this.push(`[error] ${failure}`);
+				// The structured path's ANALOGUE of a non-zero exit (#545). Claude has no process
+				// per turn, so `exitCode` is honestly null and the verdict comes from the protocol's
+				// own `is_error` — the same claim, in the words the engine states it in. Without
+				// this the field would exist for three engines and silently not for the flagship.
+				this.turnReport = turnReportFromResult(ev.is_error === true, failure);
 				// The same event that ends the turn also reports what the turn COST (#267). It was
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.
 				// An errored turn still burned tokens, so this is recorded regardless of is_error.

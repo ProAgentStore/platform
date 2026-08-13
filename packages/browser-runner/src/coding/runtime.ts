@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { RunnerInputError } from "../errors.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
+import type { EngineTurnReport } from "./engine-turn.js";
 import type { EngineActRecord } from "./engine-acts.js";
 import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
@@ -87,6 +88,18 @@ export interface CodingSnapshot {
 	 */
 	authResolved: EngineAuthResolved;
 	engineRuntime: "child-process";
+	/**
+	 * How the last COMPLETED turn ended (#545) — the outcome the pane used to hold only as prose.
+	 *
+	 * Rides beside `alive`/`runState` rather than changing either: this session can still take a
+	 * turn (`alive`) and is not taking one right now (`runState: "idle"`) even when the last turn
+	 * exited 1. Both of those were true and correct in the production capture that filed this
+	 * issue; what was missing is this field, so nothing in the platform could see three consecutive
+	 * exit-1s that were printed in the pane each time.
+	 *
+	 * Absent = not measured (no turn has finished, or the runner predates the field). Never "fine".
+	 */
+	lastTurn?: EngineTurnReport;
 	/**
 	 * Measured engine spend since the last drain (#267) — present ONLY when the caller asked to
 	 * drain, so the many read-only capture callers (chat context, sign-in detection, repo status)
@@ -260,6 +273,10 @@ export class CodingRuntime {
 			// exactly the question asked about a session that just stopped.
 			authResolved: session.authResolved,
 			engineRuntime: session.engineRuntime,
+			// Reported on EVERY capture, including one where the session is not alive: "how did the
+			// last turn end" is exactly the question asked about a session that just stopped, and
+			// the omitted-when-null shape keeps "not measured" distinguishable from a verdict.
+			...(session.lastTurn ? { lastTurn: session.lastTurn } : {}),
 			...(opts.drainUsage ? { usage: session.takeUsage(), acts: session.takeActs() } : {}),
 		};
 	}

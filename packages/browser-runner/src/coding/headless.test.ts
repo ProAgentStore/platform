@@ -40,6 +40,30 @@ process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
 setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
 `;
 
+/**
+ * A raw CLI that REFUSES the turn: prints its reason and exits 1 (#545).
+ *
+ * The production shape, verbatim — `codex exec` outside a git work tree prints exactly these two
+ * lines and exits 1, and did so three times on the session that filed the issue while the platform
+ * reported `alive/ready/idle`.
+ */
+const FAKE_REFUSER = `#!/usr/bin/env node
+process.stdout.write("Reading additional input from stdin...\\n");
+process.stderr.write("Not inside a trusted directory and --skip-git-repo-check was not specified.\\n");
+setTimeout(() => process.exit(1), 30);
+`;
+
+/** A stream-json engine whose turn comes back as an ERROR — Claude's own analogue of exit 1. */
+const FAKE_CLAUDE_ERR = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-err-1" }) + "\\n");
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, result: "the engine could not complete the turn" }) + "\\n");
+});
+`;
+
 /** A raw CLI that prints its own argv — to prove preset flags reach the engine verbatim. */
 const FAKE_ARGV = `#!/usr/bin/env node
 process.stdout.write("argv: " + JSON.stringify(process.argv.slice(2)) + "\\n");
@@ -220,6 +244,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let pauserBin: string;
 	let argvBin: string;
 	let wedgedBin: string;
+	let refuserBin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-raw-"));
@@ -228,16 +253,19 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		pauserBin = join(dir, "fake-pauser.js");
 		argvBin = join(dir, "fake-argv.js");
 		wedgedBin = join(dir, "fake-wedged.js");
+		refuserBin = join(dir, "fake-refuser.js");
 		writeFileSync(codexBin, FAKE_CODEX);
 		writeFileSync(slowBin, FAKE_SLOW);
 		writeFileSync(pauserBin, FAKE_PAUSER);
 		writeFileSync(argvBin, FAKE_ARGV);
 		writeFileSync(wedgedBin, FAKE_WEDGED);
+		writeFileSync(refuserBin, FAKE_REFUSER);
 		chmodSync(codexBin, 0o755);
 		chmodSync(slowBin, 0o755);
 		chmodSync(pauserBin, 0o755);
 		chmodSync(argvBin, 0o755);
 		chmodSync(wedgedBin, 0o755);
+		chmodSync(refuserBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -385,6 +413,117 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		const snap = s.snapshot().toLowerCase();
 		expect(snap).toContain("codex");
 		expect(snap).not.toContain("claude");
+		s.stop();
+	}, 15_000);
+
+	// ── #545: a non-zero exit was prose in the pane and nothing else ─────────────────────────
+	//
+	// Production capture of csess_22d08431, three turns, three `[codex exited with code 1]` lines,
+	// reported as `alive: true, ready: true, runState: "idle"`. The exit code was in hand on this
+	// side each time and set no field, so nothing downstream could see it.
+
+	it("reports the last turn's FAILURE — while alive/ready/idle stay exactly as they were (#545)", async () => {
+		const s = new HeadlessSession({ id: "raw-refuse", workDir: dir, clientType: "codex", command: "codex", bin: refuserBin });
+		s.start();
+		// Nothing has run: absent, never a verdict. "Not measured" and "fine" must not look alike.
+		expect(s.lastTurn).toBeNull();
+
+		s.input("Run `git pull` in the repository at dev/aipa.");
+		await until(() => s.lastTurn !== null, 8000, "the refusing turn to exit");
+
+		expect(s.lastTurn).toMatchObject({ verdict: "failed", exitCode: 1, signal: null });
+		// The engine's OWN sentence, captured as it was written — not scraped back out of the pane,
+		// which is the regex-over-prose guess #391 removed from runState.
+		expect(s.lastTurn?.detail).toContain("Not inside a trusted directory");
+		expect(s.lastTurn?.at).toBeGreaterThan(0);
+
+		// The production triple, DELIBERATELY unchanged. A failing turn does not make the session
+		// unable to take another; conflating outcome with liveness once killed every delegated goal
+		// on codex/grok/gemini at iteration 0.
+		expect(s.alive).toBe(true);
+		expect(s.ready).toBe(true);
+		expect(s.runState()).toBe("idle");
+		s.stop();
+	}, 15_000);
+
+	it("a turn that SUCCEEDS reports ok, and replaces the previous failure (#545)", async () => {
+		// The bound the cloud applies is CONSECUTIVE failures, so a session that recovers has to be
+		// able to say so. A report that only ever accumulated failures would strand a working
+		// session on the strength of one bad turn.
+		const s = new HeadlessSession({ id: "raw-recover", workDir: dir, clientType: "codex", command: "codex", bin: refuserBin });
+		s.start();
+		s.input("refuse this");
+		await until(() => s.lastTurn?.verdict === "failed", 8000, "the refusing turn");
+
+		const ok = new HeadlessSession({ id: "raw-recover-2", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
+		ok.start();
+		ok.input("hi");
+		await until(() => ok.lastTurn !== null, 12_000, "the succeeding turn to exit");
+		expect(ok.lastTurn).toMatchObject({ verdict: "ok", exitCode: 0 });
+		expect(ok.lastTurn?.detail).toContain("done: hi"); // the engine's last line, whatever it was
+		s.stop();
+		ok.stop();
+	}, 25_000);
+
+	it("a turn WE ended is `killed`, not a failure — the wedge ceiling is not evidence about the engine (#545)", async () => {
+		// The ceiling SIGTERMs a process that never exits. That says something about this platform's
+		// timers, not about whether the engine can work, so it must not feed the consecutive-failure
+		// bound: three slow builds are not a broken CLI.
+		const s = new HeadlessSession({ id: "raw-killed", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 500 });
+		s.start();
+		s.input("hang");
+		await until(() => s.lastTurn !== null, 8000, "the ceiling to end the wedged turn");
+		expect(s.lastTurn?.verdict).toBe("killed");
+		expect(s.lastTurn?.signal).not.toBeNull();
+		expect(s.alive).toBe(true);
+		s.stop();
+	}, 15_000);
+
+	it("a turn ABORTED by its successor does not overwrite the successor's report (#545)", async () => {
+		// `runOneShot` kills a turn still running when a new instruction arrives, and that dead
+		// process's `close` fires LATER — after the replacement's. Recording before the staleness
+		// guard would file the loser's outcome as the session's latest, which is a report about a
+		// turn nobody is waiting on.
+		const s = new HeadlessSession({ id: "raw-abort", workDir: dir, clientType: "codex", command: "codex", bin: pauserBin });
+		s.start();
+		s.input("slow one");
+		await until(() => s.snapshot().includes("part 1: slow one"), 6000, "the first turn to start");
+		s.input("second"); // pre-empts the first — the first's close will arrive with a signal
+		await until(() => s.snapshot().includes("part 1: second"), 6000, "the second turn to start");
+		await until(() => s.lastTurn !== null, 12_000, "the second turn to finish");
+		// Whatever the second turn's own verdict is, the report must belong to IT: the aborted
+		// first turn produced a SIGTERM close that arrived while the second was still running.
+		expect(s.lastTurn?.verdict).toBe("ok");
+		s.stop();
+	}, 25_000);
+});
+
+describe("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
+	let dir: string;
+	let bin: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-turn-err-"));
+		bin = join(dir, "fake-claude-err.js");
+		writeFileSync(bin, FAKE_CLAUDE_ERR);
+		chmodSync(bin, 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("takes the verdict from the `result` event's is_error, with no exit code to take it from", async () => {
+		// The two engine mechanisms know different things, and each must report only what it can:
+		// a raw engine's turn IS a process (exit code), Claude's turn ends with a protocol event
+		// (`is_error`). Leaving the structured path out would give the field to three engines and
+		// silently not to the flagship.
+		const s = new HeadlessSession({ id: "sjerr", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+		expect(s.lastTurn).toBeNull();
+
+		s.input("do the thing");
+		await until(() => s.lastTurn !== null, 8000, "the errored result event");
+		expect(s.lastTurn).toMatchObject({ verdict: "failed", exitCode: null, signal: null });
+		expect(s.lastTurn?.detail).toContain("could not complete the turn");
 		s.stop();
 	}, 15_000);
 });
