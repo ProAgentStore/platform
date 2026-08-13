@@ -6,7 +6,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
-import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, chargedCoverageNote, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy, type PayerCoverage } from "../lib/usageFigures";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number }
 /** Cache fields optional: an API older than #547 does not report them, which is not the same as zero. */
@@ -48,6 +48,13 @@ interface UsageData {
 	unmetered?: Unmetered;
 	/** Value split by who pays it (#346). Absent from an older API — the page degrades to totals. */
 	byPayer?: Bucket[];
+	/**
+	 * How far the charged figure's window actually reaches (#544).
+	 *
+	 * `Est. billed` was identical at 7d, 30d and all-time because `payer` shipped without a
+	 * backfill. Absent from an older API, in which case the page keeps the prose hedge.
+	 */
+	payerCoverage?: PayerCoverage;
 }
 
 /**
@@ -371,7 +378,13 @@ export default function Usage() {
 						    said. Total list value is the answer to "what would this have cost on the
 						    API?" — a genuinely useful number, and not one anybody owes. */}
 						{totals.chargedCostMicros !== undefined && totals.chargedCostMicros !== totals.costMicros && (
-							<>{usd(totals.costMicros)} of list-price value in total (<b>value</b> = notional list price of all AI; <b>charged</b> = real payer money), of which {usd(totals.chargedCostMicros)} is charged to someone. {CHARGED_COVERAGE_NOTE}</>
+							<>{usd(totals.costMicros)} of list-price value in total (<b>value</b> = notional list price of all AI; <b>charged</b> = real payer money), of which {usd(totals.chargedCostMicros)} is charged to someone.{" "}
+								{/* The counts when the API can supply them (#544), the prose hedge when it cannot.
+								    "A longer range understates it" was the truthful minimum while the page could
+								    not compute the gap; it can now, and $36.42 of value across 2,351 calls is a
+								    different sentence from "understates". */}
+								<span data-testid="usage-coverage-note">{chargedCoverageNote(data.payerCoverage, usd) ?? CHARGED_COVERAGE_NOTE}</span>
+							</>
 						)}
 					</div>
 

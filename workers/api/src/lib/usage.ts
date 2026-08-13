@@ -10,6 +10,7 @@ import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js"
 import { engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
 import { bucketLabel, UNASSIGNED_KEY } from "./usage-ids.js";
+import { payerCoverage, type PayerCoverage } from "./usage-coverage.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
 import type { Env } from "../types.js";
 
@@ -366,6 +367,15 @@ export interface UsageSummary {
 	byInstance: UsageBucket[];
 	/** Value split by who pays it — the axis the page needs to stop implying everything is a bill. */
 	byPayer: UsageBucket[];
+	/**
+	 * What the charged figure does not cover, counted (#544).
+	 *
+	 * `Est. billed` read $36.35 at 7d, 30d AND all-time, because `payer` shipped without a backfill
+	 * and every older row resolves to NULL. The sum was right; the range it implied was not. This
+	 * says which rows are outside the payer's coverage and by how much, without asserting a start
+	 * date the page cannot derive — see `usage-coverage.ts` for what is derivable and what is not.
+	 */
+	payerCoverage: PayerCoverage;
 }
 
 const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 });
@@ -467,6 +477,9 @@ export function aggregateUsage(
 		// other axis's word for it would say the platform lost track of them.
 		byInstance: sortBuckets(instanceMap).map((b) => ({ ...b, label: bucketLabel(b.key, opts.instanceNames, "Not tied to an instance") })),
 		byPayer: sortBuckets(payerMap).map((b) => ({ ...b, label: PAYER_LABEL[b.key] || b.key })),
+		// Over the SAME rows the totals were computed from, never a second query with its own
+		// WHERE — that is how a coverage figure and the total it qualifies start to disagree.
+		payerCoverage: payerCoverage(rows),
 	};
 }
 

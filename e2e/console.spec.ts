@@ -133,6 +133,15 @@ const DEFAULT_USAGE = {
 		{ key: "byok-api", label: "Billed to your API key", inputTokens: 5_800_000, outputTokens: 232_914, cacheReadTokens: 8_844_405, cacheWriteTokens: 548_104, costMicros: 36_336_533, chargedCostMicros: 36_336_533, calls: 1_866 },
 		{ key: "platform", label: "Paid by ProAgentStore", inputTokens: 51_440, outputTokens: 16_202, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 16_249, chargedCostMicros: 16_249, calls: 393 },
 	],
+	// How far the charged figure's window actually reaches (#544). Measured: widening 7d → 30d added
+	// 2,351 calls worth $36.42 and moved `Est. billed` by nothing, because `payer` shipped without a
+	// backfill. The three slices sum to `totals.calls`.
+	payerCoverage: {
+		firstAttributedAt: "2026-08-07 04:12:09",
+		attributed: { calls: 3_370, costMicros: 36_352_782 },
+		unattributedBefore: { calls: 2_351, costMicros: 36_422_440 },
+		unattributedSince: { calls: 0, costMicros: 0 },
+	},
 	unmetered: { drives: 0, aiCliDrives: 0, instances: 0, lastAt: null, windowDays: 14 },
 };
 
@@ -2515,6 +2524,54 @@ test.describe("Usage — value and charged are two numbers (#543)", () => {
 		await expect(header).toContainText("Value");
 		await expect(header).not.toContainText("charged");
 		await expect(page.getByTestId("usage-charged-legend")).toHaveCount(0);
+	});
+});
+
+/**
+ * The charged figure says how far its own window reaches (#544).
+ *
+ * `Est. billed` read $36.35 at 7d, at 30d and at all-time — identical to the cent — while 2,351
+ * extra calls appeared between the first two windows. `payer` (migration 0092) shipped with a
+ * deliberate no-backfill, so every older row is NULL and cannot be charged. The page understated
+ * 30-day charged spend by ~55% and said nothing about it.
+ */
+test.describe("Usage — the charged figure states its own coverage (#544)", () => {
+	test("names the boundary and the calls outside it, instead of hedging in prose", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		const note = page.getByTestId("usage-coverage-note");
+		await expect(note).toContainText("7 Aug 2026");
+		await expect(note).toContainText("2,351 calls");
+		await expect(note).toContainText("$36.42");
+	});
+
+	test("does not claim to know when payer tracking began", async ({ page }) => {
+		// The page can derive the earliest call it could attribute; it cannot derive the migration's
+		// date, and NULL has a second cause that has nothing to do with time.
+		await mockSignedInConsole(page);
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByTestId("usage-coverage-note")).toContainText("earliest in this range");
+	});
+
+	test("keeps the prose hedge when the API cannot report coverage", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			usage: {
+				range: "30d",
+				totals: { inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 1000, calls: 3 },
+				daily: [{ date: "2026-08-11", inputTokens: 1000, outputTokens: 500, costMicros: 6000, calls: 3 }],
+				byModel: [{ key: "claude-sonnet-4-6", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 1000, calls: 3 }],
+				byKind: [{ key: "chat", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 1000, calls: 3 }],
+				byAgent: [{ key: "agent-1", label: "Test Agent", inputTokens: 1000, outputTokens: 500, costMicros: 6000, chargedCostMicros: 1000, calls: 3 }],
+			},
+		});
+		await page.goto("/console/usage");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByTestId("usage-coverage-note")).toContainText("since payer tracking began");
 	});
 });
 

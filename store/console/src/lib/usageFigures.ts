@@ -56,9 +56,69 @@ export function hasChargedFigures(rows: readonly UsageFigures[]): boolean {
 export const CHARGED_LEGEND =
 	"Value is the list price of everything in a row; charged is the part of it someone is actually billed for. A row showing $0.00 charged is not free — it ran on a subscription, which costs tokens rather than dollars, or on a credential the platform could not attribute. Charged is only recorded for calls made since payer tracking began, so a longer range understates it.";
 
-/** The same understatement caveat, next to the headline that carries the charged total. */
+/**
+ * The same understatement caveat, next to the headline that carries the charged total.
+ *
+ * Kept as the FALLBACK once #544 landed: an API that does not report `payerCoverage` leaves the
+ * page unable to say how much is missing, and a vague true sentence beats a specific invented one.
+ * When coverage IS reported, {@link chargedCoverageNote} replaces this with the counts.
+ */
 export const CHARGED_COVERAGE_NOTE =
 	"Charged is only recorded for calls made since payer tracking began, so a longer range understates it.";
+
+/** What `/v1/usage` reports about the gap between the range and the payer's coverage (#544). */
+export interface PayerCoverage {
+	firstAttributedAt: string | null;
+	attributed: { calls: number; costMicros: number };
+	unattributedBefore: { calls: number; costMicros: number };
+	unattributedSince: { calls: number; costMicros: number };
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A D1 timestamp as a short UTC date — "2026-08-07 04:12:09" → "7 Aug 2026".
+ *
+ * Formatted by hand rather than through `toLocaleDateString`, which would make the sentence depend
+ * on the browser's locale and the test's, and this string is asserted.
+ */
+export function coverageDate(ts: string): string {
+	const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ts || "");
+	if (!m) return ts || "";
+	return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[1]}`;
+}
+
+/**
+ * The sentence that says how far the charged figure's window actually reaches (#544).
+ *
+ * `Est. billed` read $36.35 at 7d, 30d and all-time — identical to the cent — because `payer`
+ * shipped without a backfill, so every older row is NULL and cannot be charged. The arithmetic was
+ * right and the implied range was not: real 30-day charged spend was roughly $81.
+ *
+ * What this says is deliberately narrow. It reports the earliest call IN THIS RANGE that carried a
+ * payer, and the count and value of the calls before it — both literal facts about the rows the
+ * totals were computed from. It does NOT say when payer tracking began, and it does not say WHY
+ * those rows have no payer: NULL has two causes (older than the column, or a coding engine on a
+ * machine login) and they are not distinguishable per row. Blaming the date for all of it would
+ * replace one confident wrong number with another, on an account where the second cause is 99.6%
+ * of the value. That half has its own note and its own remedy (#551).
+ *
+ * `null` when there is nothing before the boundary — the range is fully inside the payer's
+ * coverage, and a caveat offered to someone who does not have the problem is how a page teaches
+ * people to skip its notices.
+ */
+export function chargedCoverageNote(
+	coverage: PayerCoverage | undefined,
+	fmtUsd: (micros: number) => string,
+): string | null {
+	if (!coverage || coverage.unattributedBefore.calls <= 0 || !coverage.firstAttributedAt) return null;
+	const { calls, costMicros } = coverage.unattributedBefore;
+	return (
+		`Charged counts only calls whose payer we could establish, and the earliest in this range is ` +
+		`${coverageDate(coverage.firstAttributedAt)}. ${calls.toLocaleString()} ${calls === 1 ? "call" : "calls"} ` +
+		`before that (${fmtUsd(costMicros)} of value) carry no payer at all, so none of them is counted above.`
+	);
+}
 
 /**
  * What the reader can DO about the unattributed bucket (#551).

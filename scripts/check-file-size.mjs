@@ -964,7 +964,14 @@ const PINS = {
 	// which is the only place a reader can confuse them. The gate — show it only when there is more
 	// than one instance to compare, since with one it repeats "By agent" — is pure in
 	// lib/usageFigures.ts (`showsInstanceBreakdown`) with its own tests.
-	"store/console/src/pages/Usage.tsx": 970,
+	// +13 at #544: the note under the charged headline stops hedging and states its own coverage —
+	// the earliest call in range we could attribute, and the count and value of the calls before it
+	// that therefore cannot be in the figure. `Est. billed` had read $36.35 at 7d, 30d AND all-time.
+	// The sentence, the date formatting and the four cases in which it must say NOTHING are pure in
+	// lib/usageFigures.ts (`chargedCoverageNote`, `coverageDate`); what is here is the span, its
+	// test id, the fallback to the old prose for an API that cannot report coverage, and the
+	// paragraph saying why the two differ.
+	"store/console/src/pages/Usage.tsx": 983,
 	// First entry at #291, crossing 800 by 5 lines. Recorded rather than squeezed, because the
 	// alternative on offer was deleting the paragraph that says why the change exists — and the
 	// change is the one that stops a dropped GET from arming "Save All Settings" over an empty
@@ -1057,7 +1064,11 @@ const PINS = {
 	// was SPLIT rather than pinned — the id-resolution concern (its SQL, its label rules) moved to
 	// lib/usage-ids.ts, which is a different job from aggregation and the one with the sharp edge.
 	// That is the outcome this ratchet is for, so it produced no PINS entry at all.
-	"scripts/check-file-size.mjs": 1141,
+	// +13 at #544: the Usage.tsx raise above (the charged figure states its own coverage). Plus this
+	// self-ref. Same shape as #526 an hour earlier — the coverage computation went to its own module
+	// (lib/usage-coverage.ts, 127 lines) rather than into usage.ts, which is 52 lines under the
+	// threshold and would have crossed it.
+	"scripts/check-file-size.mjs": 1152,
 };
 
 /**

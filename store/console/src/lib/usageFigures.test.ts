@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHARGED_LEGEND, chargedCell, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
+import { CHARGED_LEGEND, chargedCell, chargedCoverageNote, coverageDate, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
 
 describe("chargedCell (#543)", () => {
 	it("distinguishes a measured zero from a figure that was never measured", () => {
@@ -118,5 +118,60 @@ describe("showsInstanceBreakdown (#526)", () => {
 		// An older API has no byInstance. The page omits the card rather than rendering an empty one.
 		expect(showsInstanceBreakdown(undefined)).toBe(false);
 		expect(showsInstanceBreakdown([])).toBe(false);
+	});
+});
+
+describe("chargedCoverageNote (#544)", () => {
+	const usd = (m: number) => `$${(m / 1_000_000).toFixed(2)}`;
+	// The production shape: `Est. billed` identical at 7d, 30d and all-time, because 2,351 calls
+	// worth $36.42 predate the payer column and cannot be charged.
+	const measured = {
+		firstAttributedAt: "2026-08-07 04:12:09",
+		attributed: { calls: 3_370, costMicros: 36_352_782 },
+		unattributedBefore: { calls: 2_351, costMicros: 36_422_440 },
+		unattributedSince: { calls: 3_462, costMicros: 9_584_865_793 },
+	};
+
+	it("states the boundary and the size of what is outside it", () => {
+		const s = chargedCoverageNote(measured, usd);
+		expect(s).toContain("7 Aug 2026");
+		expect(s).toContain("2,351 calls");
+		expect(s).toContain("$36.42");
+	});
+
+	it("never claims to know when payer tracking began", () => {
+		// The page can derive the earliest call it could attribute. It cannot derive the migration's
+		// date, and the two are not the same: an account idle for a week after 0092 has a later one.
+		// NULL also has a second cause (a machine login) that has nothing to do with time.
+		const s = chargedCoverageNote(measured, usd) ?? "";
+		expect(s).toContain("earliest in this range");
+		expect(s).not.toMatch(/since|began|tracking started/i);
+	});
+
+	it("says nothing to an account whose whole range is inside the coverage", () => {
+		expect(chargedCoverageNote({ ...measured, unattributedBefore: { calls: 0, costMicros: 0 } }, usd)).toBeNull();
+	});
+
+	it("says nothing when there is no boundary to report", () => {
+		// Nothing in the range carried a payer, so there is no "before" — that account has a
+		// credential problem (#551), not a coverage one, and this note must not invent a date.
+		expect(chargedCoverageNote({ ...measured, firstAttributedAt: null }, usd)).toBeNull();
+	});
+
+	it("falls back to nothing when the API does not report coverage at all", () => {
+		// The page then keeps CHARGED_COVERAGE_NOTE — vague and true beats specific and invented.
+		expect(chargedCoverageNote(undefined, usd)).toBeNull();
+	});
+});
+
+describe("coverageDate", () => {
+	it("formats a D1 timestamp as a short UTC date, independent of locale", () => {
+		expect(coverageDate("2026-08-07 04:12:09")).toBe("7 Aug 2026");
+		expect(coverageDate("2026-12-25 00:00:00")).toBe("25 Dec 2026");
+	});
+
+	it("returns the input unchanged rather than inventing a date it cannot parse", () => {
+		expect(coverageDate("not a timestamp")).toBe("not a timestamp");
+		expect(coverageDate("")).toBe("");
 	});
 });
