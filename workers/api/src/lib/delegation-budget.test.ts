@@ -207,9 +207,10 @@ describe("account ceiling vs pool exhaustion — distinguishable, because they m
 		walk(root);
 		expect(files.length, "the source walk found no files — this guard has stopped measuring").toBeGreaterThan(100);
 		const callers = files.filter((f) => /\bmarkExhausted\(/.test(fs.readFileSync(f, "utf8")) && !f.endsWith("delegation-budget-store.ts"));
-		// Two today: the chat loop's workflow and the coding Pilot's spend gate. A third arriving
-		// without the predicate is exactly what this is for.
+		// Three today: the chat loop's workflow, the coding Pilot's spend gate, and the apply run's
+		// (#516, the third arriving exactly the way this predicate was written to catch).
 		expect(callers.map((f) => path.relative(root, f)).sort(), "callers of markExhausted").toEqual([
+			"lib/apply-decide-budget.ts",
 			"lib/coding-decide-budget.ts",
 			"workflows/agent-loop.ts",
 		]);

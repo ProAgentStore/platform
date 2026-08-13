@@ -4,6 +4,7 @@ import { requirePro } from "../lib/billing.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
+import { openBudget } from "../lib/delegation-budget-store.js";
 import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
 import { parseResumeIntoProfile } from "../lib/resume-parse.js";
 import { timingSafeEqualStr } from "../lib/crypto.js";
@@ -186,7 +187,28 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			throw new ApplyError(msg, 502);
 		}
 
-		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job } });
+		// Open the run's spend pool BEFORE handing the work over (#516). An apply is unattended by
+		// construction — a durable Workflow driving a browser with BYOK Claude for as long as the
+		// ATS takes — and until now it started with no `delegation_budgets` row at all: nothing
+		// reserved, nothing settled, and no row for a stop to act on when a run wedged on a handoff.
+		//
+		// Failing to open one must not fail the application: `JobApplyParams.budgetId` is optional
+		// and the gate runs the decide untouched without it, so a D1 blip costs the accounting for
+		// one run rather than the run itself. It is logged rather than swallowed, because an apply
+		// that silently ran unpooled is exactly the state this ticket exists to end.
+		const budgetId = await openBudget(env, userId, instanceId).then(
+			(b) => b.id,
+			async (e) => {
+				await logError(env, {
+					source: "job-apply",
+					userId,
+					message: `could not open a spend pool for this application; it will run unmetered by the budget: ${e instanceof Error ? e.message : String(e)}`,
+					context: { instanceId, taskId },
+				}).catch(() => undefined);
+				return null;
+			},
+		);
+		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0 } });
 		return { workflowId: instance.id, taskId };
 	} finally {
 		await dropClaim();

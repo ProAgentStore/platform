@@ -1,5 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { decideAction, describeAction, dryRunBlockReason, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
+import { decideWithinBudget } from "../lib/apply-decide-budget.js";
 import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
@@ -19,6 +20,17 @@ export interface JobApplyParams {
 	/** The runner task id this application drives (created by the trigger route). */
 	taskId: string;
 	job: ApplyJob;
+	/**
+	 * Delegation budget this run draws against (#516), mirroring `CodingSessionParams`.
+	 *
+	 * Optional so an older queued run (or a test) still executes — `decideWithinBudget` runs the
+	 * decide untouched when it is absent. `startJobApply` always opens one: unlike the Pilot, whose
+	 * pool is only opened for a DELEGATED run, every apply is unattended by construction, so there
+	 * is no "human is watching this one" path to leave unmetered.
+	 */
+	budgetId?: string | null;
+	/** Depth in the supervision tree; the budget refuses past its cap. */
+	depth?: number;
 }
 
 /** Max minutes to wait for a human to solve a CAPTCHA before giving up. */
@@ -152,7 +164,17 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		let n = 0;
 		const deps: ApplyDeps = {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
-			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p, { kind: "apply", instanceId })) as Promise<ApplyDecision>,
+			// The spend gate lives in `apply-decide-budget.ts` — the LLM call is the only place this
+			// loop spends money, so it is the only place the budget has to sit (#516). Reserve and
+			// settle both happen INSIDE this step, so no reservation is ever held across a handoff:
+			// the captcha/stuck/needs_input pauses below (up to CAPTCHA_WAIT_POLLS × 5s = 15 min of
+			// `step.sleep`) all happen after `runApplyLoop` has returned, with the pool at rest.
+			decide: (p) =>
+				step.do(`s${n++}-decide`, retry, () =>
+					decideWithinBudget(env, { userId, instanceId, budgetId: event.payload.budgetId, depth: event.payload.depth }, () =>
+						decideAction(env, userId, p, { kind: "apply", instanceId }),
+					),
+				) as Promise<ApplyDecision>,
 			// Capture the step index OUTSIDE step.do so it's the SAME on a resume (n
 			// increments deterministically every execution). Using it as the screenshot
 			// seq keeps R2 keys unique + stable across handoff/resume — a plain counter

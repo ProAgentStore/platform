@@ -19,9 +19,20 @@
  * The rule this file enforces: if you hand work to a workflow that drives a model in a LOOP,
  * you hand it a pool. Exemptions are listed with a reason and compared exactly, so removing one
  * fails the test too — the list can only shrink deliberately.
+ *
+ * ── Two halves, because a pool has two ends (#516)
+ *
+ * The guard above only asks whether the CALLER passed a `budgetId`. `JOB_APPLY` passed that test
+ * for a while by being exempted, because the argument would have gone nowhere: the apply workflow
+ * had no `reserve()` anywhere in it, so the pool would have been handed over and never drawn on —
+ * which looks identical, from the call site, to a pool that works. So the second guard below asks
+ * the RECEIVING side's question, and asks it by PREDICATE rather than from a list: every workflow
+ * class that can reach a model call has `reserve()` somewhere in its admission path. A list is how
+ * `JOB_APPLY` was missed by #502 in the first place; the predicate found `BROWSER_TASK` the moment
+ * it was written, which is the whole argument for it.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { stripCommentsAndLiterals } from "./source-guard.js";
 
@@ -109,17 +120,14 @@ const SITES = createSites();
  * makes exactly ONE `copilotSummary` call at the end. Pooling a single bounded call would add a
  * `delegation_budgets` row per instruction sent and buy nothing the ledger does not already have.
  *
- * `JOB_APPLY` is a REAL gap, recorded rather than hidden. The apply loop drives BYOK Claude for
- * as many steps as the ATS takes, and `reserve()` has no caller inside it at all — so unlike the
- * coding sites this is not a missing argument, it is missing wiring in `lib/apply-loop.ts`. That
- * is its own change and its own issue; naming it here is what keeps it from being rediscovered as
- * a surprise by the next person who reads #184's promise.
+ * `JOB_APPLY` used to be exempted here as a recorded gap. It is not one any more: #516 wired
+ * `lib/apply-decide-budget.ts` into the loop's `decide` and `startJobApply` now opens the pool, so
+ * the entry is gone rather than updated — an exemption that stops being true has to leave.
  */
 const isWatch = (s: Site) => /mode:\s*["']watch["']/.test(s.rawArgs);
 
 const EXEMPT: Array<{ match: (s: Site) => boolean; why: string }> = [
 	{ match: isWatch, why: "watch mode: one bounded summary call, not a loop" },
-	{ match: (s) => s.binding === "JOB_APPLY", why: "apply loop has no reserve() wiring at all — separate change (see the docblock)" },
 ];
 
 describe("every autonomous entry point opens a budget pool (#184, #502)", () => {
@@ -153,6 +161,192 @@ describe("every autonomous entry point opens a budget pool (#184, #502)", () => 
 		const coding = SITES.filter((s) => s.binding === "CODING_SESSION" && !isWatch(s));
 		expect(coding.length).toBeGreaterThanOrEqual(3);
 		for (const s of coding) expect(s.args, `${s.rel} starts a Pilot with no pool`).toMatch(/\bbudgetId\b/);
+	});
+
+	it("the apply entry point passes one too (#516)", () => {
+		const apply = SITES.filter((s) => s.binding === "JOB_APPLY");
+		expect(apply.length).toBe(1);
+		expect(apply[0].args, `${apply[0].rel} starts an apply with no pool`).toMatch(/\bbudgetId\b/);
+	});
+});
+
+// ── The receiving side: does the pool get DRAWN on? ─────────────────────────────────────────────
+//
+// Everything below is found, not listed. `JOB_APPLY` was handed no pool for as long as it was, and
+// the guard above could not have said so, because the argument it checks would have been passed
+// into a workflow with no `reserve()` in it — indistinguishable, from the call site, from one that
+// draws every iteration.
+
+const ALL_TS = tsFiles(SRC);
+const RAW = new Map(ALL_TS.map((f) => [f, readFileSync(f, "utf-8")] as const));
+const STRIPPED = new Map<string, string>();
+
+/** Local files one file imports, resolved to real paths. Memoized — the walk revisits hubs a lot. */
+const IMPORTS = new Map<string, string[]>();
+function importsOf(file: string): string[] {
+	let out = IMPORTS.get(file);
+	if (out) return out;
+	out = [];
+	for (const m of (RAW.get(file) ?? readFileSync(file, "utf-8")).matchAll(/(?:^|\n)\s*import[\s\S]*?from\s*["']([^"']+)["']/g)) {
+		const spec = m[1];
+		if (!spec.startsWith(".")) continue;
+		const base = join(dirname(file), spec.replace(/\.js$/, ""));
+		for (const cand of [`${base}.ts`, join(base, "index.ts")]) {
+			if (existsSync(cand)) {
+				out.push(cand);
+				break;
+			}
+		}
+	}
+	IMPORTS.set(file, out);
+	return out;
+}
+
+/**
+ * Every file the entry reaches through RELATIVE imports, transitively, inside workers/api/src.
+ *
+ * TYPE-ONLY imports count, deliberately. `import-graph.test.ts` makes the same call for the same
+ * reason: an erased edge is still the edge a reader follows, and a workflow that reaches the model
+ * through one is still the workflow that spends the money.
+ */
+const REACH = new Map<string, Set<string>>();
+function reachableFrom(entry: string): Set<string> {
+	const memo = REACH.get(entry);
+	if (memo) return memo;
+	const seen = new Set<string>();
+	const stack = [entry];
+	while (stack.length) {
+		const file = stack.pop() as string;
+		if (seen.has(file)) continue;
+		seen.add(file);
+		for (const next of importsOf(file)) stack.push(next);
+	}
+	seen.delete(entry);
+	REACH.set(entry, seen);
+	return seen;
+}
+
+/** Comment/literal-stripped source, computed on demand — stripping all ~400 files costs 20s. */
+function stripped(file: string): string {
+	let s = STRIPPED.get(file);
+	if (s === undefined) {
+		s = stripCommentsAndLiterals(RAW.get(file) ?? readFileSync(file, "utf-8"));
+		STRIPPED.set(file, s);
+	}
+	return s;
+}
+/** Raw hit first (cheap), confirmed against the stripped source (correct). */
+const callsFn = (file: string, re: RegExp) => re.test(RAW.get(file) ?? "") && re.test(stripped(file));
+
+/**
+ * Files that actually call a model.
+ *
+ * `runUserWorkersAi` is the single BYOK choke point (it is what records usage), so "can this
+ * workflow spend the user's tokens" is exactly "does it reach a file that calls it".
+ */
+const MODEL_CALLERS = new Set(ALL_TS.filter((f) => callsFn(f, /\brunUserWorkersAi\s*\(/)));
+
+/**
+ * Files that draw on a pool. Comments are stripped first, deliberately: `connectors/supervision.ts`
+ * mentions `reserve()` in prose and calls nothing, and a guard fooled by a comment is a guard that
+ * reports admission control which does not exist.
+ */
+const RESERVE_CALLERS = new Set(
+	ALL_TS.filter((f) => !f.endsWith("delegation-budget-store.ts") && callsFn(f, /\breserve\s*\(/)),
+);
+
+/** The workflow CLASSES — `coding-session-params.ts` is a type leaf, not an entry point. */
+const WORKFLOWS = tsFiles(join(SRC, "workflows")).filter((f) => callsFn(f, /extends\s+WorkflowEntrypoint\b/));
+
+const rel = (f: string) => f.slice(SRC.length);
+
+/**
+ * Workflow classes that reach a model and legitimately draw on no pool.
+ *
+ * Each entry is a claim about the workflow's SHAPE, and each is re-checked below against what the
+ * walk actually found — an exemption that no longer matches a model-driving workflow is stale
+ * config pretending to be a decision.
+ */
+const UNPOOLED: Array<{ file: string; why: string }> = [
+	{
+		file: "workflows/pipeline-run.ts",
+		why: "a pipeline is a definition-bounded step list, not an open-ended loop, and #382 decided deliberately that the run opens a pool only when the DEFINITION names a tool that can open a delegation tree (`pipelineOpensDelegations`) — opening one for every 5-minute sweep would leave three D1 ops and a permanent unused row behind to bound a delegation that will never happen",
+	},
+	{
+		file: "workflows/browser-task.ts",
+		why: "a REAL gap, recorded rather than hidden — surfaced by this guard the first time it was written (#516). BROWSER_TASK runs the SAME `runApplyLoop` engine as the apply path, 12 rounds × 60 steps of BYOK Claude, started from `routes/instances-browse.ts` with no pool. The fix is the apply one applied to a second binding and a second params type; it is its own change and its own issue, and naming it here is what stops it being rediscovered as a surprise",
+	},
+];
+
+describe("a workflow that can spend the user's tokens draws on a pool (#516)", () => {
+	it("the walk found the workflows and the model callers at all — it is not vacuous", () => {
+		expect(ALL_TS.length, "the source walk found almost nothing — this guard has stopped measuring").toBeGreaterThan(100);
+		// 5 workflow classes today. The denominator is asserted (ADR 0002 G1) because a walk that
+		// found nothing would pass exactly as loudly as one that found everything. `coding-watch.ts`
+		// is deliberately absent: it is watch MODE, a plain function `coding-session.ts` calls, not a
+		// class with a binding — which is why the `watch` exemption lives on the call site above,
+		// where the mode is actually chosen.
+		expect(WORKFLOWS.map(rel).sort()).toEqual([
+			"workflows/agent-loop.ts",
+			"workflows/browser-task.ts",
+			"workflows/coding-session.ts",
+			"workflows/job-apply.ts",
+			"workflows/pipeline-run.ts",
+		]);
+		expect(MODEL_CALLERS.size, "no file calls runUserWorkersAi — the choke point was renamed").toBeGreaterThan(5);
+		expect([...RESERVE_CALLERS].map(rel).sort(), "callers of reserve()").toEqual([
+			"lib/apply-decide-budget.ts",
+			"lib/coding-decide-budget.ts",
+			"workflows/agent-loop.ts",
+		]);
+	});
+
+	it("every workflow that reaches a model has reserve() in its admission path", () => {
+		const offenders: string[] = [];
+		for (const wf of WORKFLOWS) {
+			const reach = reachableFrom(wf);
+			if (![...reach].some((f) => MODEL_CALLERS.has(f))) continue; // spends nothing
+			if (UNPOOLED.some((e) => rel(wf) === e.file)) continue;
+			if (![wf, ...reach].some((f) => RESERVE_CALLERS.has(f))) offenders.push(rel(wf));
+		}
+		expect(
+			offenders,
+			"This workflow can spend the user's BYOK tokens in a loop and nothing reserves against a\n" +
+				"pool: no admission check, no settle, no account ceiling consulted, and no row for a stop\n" +
+				"to act on when the run wedges. Wrap the model call the way `lib/apply-decide-budget.ts`\n" +
+				"and `lib/coding-decide-budget.ts` do — reserve, run, settle in a `finally` — and thread\n" +
+				"`budgetId` + `depth` onto the params from the entry point.",
+		).toEqual([]);
+	});
+
+	it("the guard is measuring the workflows it claims to — the model-driving set is stated", () => {
+		const driving = WORKFLOWS.filter((wf) => [...reachableFrom(wf)].some((f) => MODEL_CALLERS.has(f))).map(rel).sort();
+		// All five drive a model. If one drops out of this list, the walk stopped resolving its
+		// imports — and the guard above would silently pass it.
+		expect(driving).toEqual([
+			"workflows/agent-loop.ts",
+			"workflows/browser-task.ts",
+			"workflows/coding-session.ts",
+			"workflows/job-apply.ts",
+			"workflows/pipeline-run.ts",
+		]);
+	});
+
+	it("each unpooled workflow is still real — the file exists and still reaches a model", () => {
+		for (const e of UNPOOLED) {
+			const wf = WORKFLOWS.find((f) => rel(f) === e.file);
+			expect(wf, `${e.file} is exempted and is not a workflow class: ${e.why}`).toBeTruthy();
+			expect([...reachableFrom(wf as string)].some((f) => MODEL_CALLERS.has(f)), e.why).toBe(true);
+		}
+	});
+
+	it("the apply path draws on the pool it is handed (#516)", () => {
+		// The specific wiring this ticket added, asserted where a reader looks for it: the workflow
+		// reads `budgetId` off its payload and routes its decide through the gate, rather than
+		// accepting the parameter and ignoring it.
+		const src = stripped(join(SRC, "workflows/job-apply.ts"));
+		expect(src).toMatch(/decideWithinBudget\(/);
+		expect(src).toMatch(/budgetId:\s*event\.payload\.budgetId/);
 	});
 });
 
