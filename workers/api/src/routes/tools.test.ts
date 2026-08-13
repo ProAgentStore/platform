@@ -612,8 +612,38 @@ describe("tool policy gate (undeclared tools are refused on every surface)", () 
 		expect(allowed).toContain("github_workflow_runs");
 		expect(allowed).not.toContain("http_request");
 		expect(rows(body.tools).find((t) => t.name === "http_request")?.reason).toBe("not_declared");
-		// No write tool survives for a read-only agent — the assertion an auditor actually wants.
-		expect(rows(body.tools).filter((t) => t.allowed && t.scope === "write")).toEqual([]);
+		// No write that leaves the PLATFORM survives for a read-only agent — the assertion an
+		// auditor actually wants, and the one this line used to make without the qualifier.
+		expect(rows(body.tools).filter((t) => t.allowed && t.scope === "write" && t.connector)).toEqual([]);
+	});
+
+	// #525. The assertion above used to read `t.allowed && t.scope === "write"` with no connector
+	// clause, and it passed — because the listing enumerated the registry only. The same instance
+	// wrote to its own memory while `list_instance_tools` was telling an operator that a tool absent
+	// from the allowed set cannot be invoked "by chat or by call_instance_tool". The built-in rows
+	// are what make that sentence true, so a read-only agent now honestly reports the writes it has.
+	it("lists the built-in tools every agent runs, and says which surface can reach them", async () => {
+		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1")));
+		const byName = new Map(rows(body.tools).map((t) => [t.name as string, t]));
+		for (const name of ["read_memory", "write_memory", "delete_memory", "get_tasks", "create_task", "update_task", "fetch_url", "get_activity", "get_user_context", "set_user_preference", "configure_board"]) {
+			expect(byName.get(name), `${name} absent from the listing`).toBeDefined();
+			expect(byName.get(name)?.allowed, `${name} runs in chat but reads as not runnable`).toBe(true);
+		}
+		expect(byName.get("write_memory")?.scope).toBe("write");
+		// `invocableBy` is the distinction the old sentence flattened: chat runs it, this route can't.
+		expect(byName.get("write_memory")?.invocableBy).toEqual(["chat"]);
+		expect(byName.get("write_memory")?.tier).toBe("base");
+		expect(byName.get("github_workflow_runs")?.invocableBy).toEqual(["chat", "call_instance_tool"]);
+	});
+
+	it("refuses a built-in tool on the invoker, and says it is a surface limit rather than an unknown name", async () => {
+		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
+		const res = await req(app, env, "/v1/instances/i1/tools/write_memory", { method: "POST", body: JSON.stringify({ key: "k", type: "knowledge", content: "c" }) }, await tok("u1"));
+		expect(res.status).toBe(404);
+		const err = String((await jsonBody(res)).error);
+		expect(err).toContain("built-in");
+		expect(err).not.toContain("Unknown tool");
 	});
 
 	it("?allowed=true narrows to just the runnable set", async () => {
@@ -649,6 +679,38 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 		// Targeted json_set on $.disabledTools, not a whole-blob rewrite (#231) — a whole-blob
 		// write here would drop a Settings change saved from another tab between read and write.
 		expect(written).toEqual(JSON.stringify(["http_request"]));
+	});
+
+	// #525: the switch used to gate on `getRegistryTool`, so the owner's veto — the one control a
+	// creator's declaration must not outrank — could not reach the tools every agent has. The chat
+	// runtime has always honoured `config.disabledTools` for them; only the route that sets it did not.
+	it("switches off a built-in tool the agent never declared but always runs", async () => {
+		let written = "";
+		const { app, env } = testApp({ agentConfig: AGENT });
+		fake(env.DB).prepare = (sql: string) => ({
+			bind: (...args: unknown[]) => ({
+				first: async () =>
+					sql.includes("JOIN agents")
+						? { slug: "fixture", category: "general", config: AGENT, instance_config: "{}" }
+						: sql.includes("FROM agent_instances")
+							? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" }
+							: null,
+				run: async () => {
+					if (sql.includes("json_set(") && args[0] === "$.disabledTools") written = String(args[1]);
+					return { meta: { changes: 1 } };
+				},
+				all: async () => ({ results: [] }),
+			}),
+		});
+		const res = await req(app, env, "/v1/instances/i1/tools/write_memory", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		expect(written).toEqual(JSON.stringify(["write_memory"]));
+	});
+
+	it("still 404s a name no listing contains", async () => {
+		const { app, env } = testApp({ agentConfig: AGENT });
+		const res = await req(app, env, "/v1/instances/i1/tools/not_a_tool", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+		expect(res.status).toBe(404);
 	});
 
 	it("refuses to record an off-switch for a tool the agent never had", async () => {

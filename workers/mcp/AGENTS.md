@@ -57,9 +57,14 @@ Connection methods and the full tool table: [`README.md`](./README.md).
 9. **Connector writes are gated per instance.** `call_instance_tool` is a generic
    invoker, so it is scope-checked as `write` even when the underlying connector tool
    reads. The instance's own write-consent gate applies on top. Call
-   `list_instance_tools` first: it returns every registry tool with this instance's
-   verdict (`allowed`, `scope`, `disabled`, `reason`). A tool absent from the allowed set
-   cannot be invoked — by chat or by MCP.
+   `list_instance_tools` first: it returns every tool the instance could run — built-in
+   facilities as well as connector tools — with this instance's verdict (`allowed`,
+   `scope`, `disabled`, `reason`, `tier`, `invocableBy`). A tool absent from the allowed
+   set cannot be invoked — by chat or by MCP. `invocableBy` says which of the two: a
+   built-in tool reports `["chat"]` and is not reachable through `call_instance_tool` at
+   all. Before #525 the listing covered only the registry while claiming to answer for
+   the agent, so eleven universal tools — six of them writes — were invisible to an
+   audit that was told it could establish an agent is read-only.
 
 10. **Instance state is the user's, not the template's.** Writing to an instance never
     touches the creator's agent, and reading a creator's agent tells you nothing about a

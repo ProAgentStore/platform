@@ -1,4 +1,4 @@
-import { AGENT_TOOLS } from "./lib/tools.js";
+import { AGENT_TOOLS, legacyToolSchema } from "./lib/tools.js";
 import { optionsFor } from "./lib/surface-options.js";
 import { STORAGE_TOOLS } from "./lib/storage-tools.js";
 import { registryConnectorGroups, registryToolDefs, type JsonSchema } from "./lib/tool-registry.js";
@@ -299,21 +299,10 @@ export function buildAgentToolDefinitions(opts?: {
 		function: {
 			name: t.name,
 			description: t.description,
-			parameters:
-				"jsonSchema" in t
-					? t.jsonSchema
-					: {
-							type: "object",
-							properties: Object.fromEntries(
-								Object.entries(t.parameters).map(([k, v]) => [
-									k,
-									{ type: v.type, description: v.description },
-								]),
-							),
-							required: Object.entries(t.parameters)
-								.filter(([, v]) => v.required)
-								.map(([k]) => k),
-						},
+			// `legacyToolSchema` (lib/tools.ts) rather than the conversion this used to inline: the
+			// tool listing reports the same schema from the same converter (#525), so the audit
+			// surface and the model cannot be shown different tools.
+			parameters: "jsonSchema" in t ? t.jsonSchema : legacyToolSchema(t),
 		},
 	}));
 }

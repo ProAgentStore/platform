@@ -18,6 +18,24 @@ export interface ToolDef {
 	>;
 }
 
+/**
+ * The draft-07 object schema for a legacy `ToolDef`, built from its ad-hoc `parameters` map.
+ *
+ * ONE converter, called by both readers of these definitions: `buildAgentToolDefinitions` (what the
+ * model is shown) and `builtinToolPolicyInputs` (what the tool listing reports, #525). A second copy
+ * would let the audit surface describe a different schema from the one the agent is offered, which
+ * is the drift the listing exists to make impossible.
+ */
+export function legacyToolSchema(def: ToolDef): { type: "object"; properties: Record<string, { type: string; description: string }>; required: string[] } {
+	return {
+		type: "object",
+		properties: Object.fromEntries(Object.entries(def.parameters).map(([k, v]) => [k, { type: v.type, description: v.description }])),
+		required: Object.entries(def.parameters)
+			.filter(([, v]) => v.required)
+			.map(([k]) => k),
+	};
+}
+
 export interface ToolCallRequest {
 	name: string;
 	input: Record<string, unknown>;

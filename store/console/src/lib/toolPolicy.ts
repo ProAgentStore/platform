@@ -35,6 +35,10 @@ export interface ToolPolicyEntry {
 	disabled: boolean;
 	reason: "ok" | "not_declared" | "disabled_by_owner";
 	writeConsent?: ToolWriteConsent;
+	/** Catalog group (#525): `base` is a universal facility, `connector` reaches another system. */
+	tier?: "base" | "standard" | "runtime" | "connector";
+	/** Surfaces that can reach it (#525). A built-in tool is `["chat"]` — the agent's own loop. */
+	invocableBy?: readonly ("chat" | "call_instance_tool")[];
 }
 
 /**
@@ -79,19 +83,39 @@ export function writeConnectors(policy: readonly ToolPolicyEntry[]): string[] {
 }
 
 /**
+ * Does this agent hold a write that changes ITS OWN data — memory, tasks, board, files, records?
+ *
+ * A separate question from {@link writeConnectors}, which asks about other people's systems. It
+ * became askable in #525, when the listing stopped covering only connector tools: before that, a
+ * connector-less write tool was necessarily a defective registry entry (`runRegistryTool` refuses
+ * one outright), so counting it as read-only was right. Now the usual holder of that shape is
+ * `write_memory`, and it runs.
+ */
+export function writesOwnData(policy: readonly ToolPolicyEntry[]): boolean {
+	return listedTools(policy).some((t) => t.scope === "write" && !t.connector);
+}
+
+/**
  * The sentence above the switches. Leading space: it is appended to the paragraph before it.
  *
- * Derived from {@link writeConnectors} — the checkbox set — and not from `scope`, so the claim and
- * the controls it points at ("granted below") are the same fact read twice rather than two facts.
+ * The external claim is derived from {@link writeConnectors} — the checkbox set — and not from
+ * `scope`, so the claim and the controls it points at ("granted below") are the same fact read
+ * twice rather than two facts.
  *
- * A write-capable tool with NO connector falls on the read side here, and that is correct rather
- * than a gap: `runRegistryTool` refuses a connector-less write tool outright, so operationally the
- * agent cannot use it to change anything, and there is no grant to offer for it either.
+ * The read-only sentence is the one #525 made dangerous. "This agent has no tools that can change
+ * anything" was written when the list held only connector tools; the same instance that rendered it
+ * had `write_memory` in its chat and used it. So the two cases are now stated apart: reaching
+ * OUTSIDE the platform is the one with a grant behind it, changing its own data is a capability
+ * every agent has and an auditor still has to be told about.
  */
 export function toolScopeSummary(policy: readonly ToolPolicyEntry[]): string {
-	return writeConnectors(policy).length > 0
-		? " This agent has tools that can change things; each one also needs its connector granted below."
-		: " This agent has no tools that can change anything — it can only read.";
+	if (writeConnectors(policy).length > 0) {
+		return " This agent has tools that can change things; each one also needs its connector granted below.";
+	}
+	if (writesOwnData(policy)) {
+		return " This agent can change its own data — its memory, tasks and stored documents — but has no tool that reaches outside the platform.";
+	}
+	return " This agent has no tools that can change anything — it can only read.";
 }
 
 /**

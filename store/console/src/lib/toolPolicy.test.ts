@@ -93,6 +93,33 @@ describe("toolScopeSummary", () => {
 		}
 	});
 
+	// #525, on the console side. The API listing now carries the agent's built-in tools, so the
+	// read-only sentence would otherwise have been rendered over a switch labelled `write_memory` —
+	// the same false assurance `list_instance_tools` was giving an operator over MCP.
+	it("does not say 'only read' for an agent that can write its own memory", () => {
+		const writeMemory = tool({ name: "write_memory", scope: "write", tier: "base", invocableBy: ["chat"], writeConsent: "n/a" });
+		const summary = toolScopeSummary([repoTree, writeMemory]);
+		expect(summary).not.toMatch(/only read/);
+		// …and does not point at a checkbox either: there is no connector to grant.
+		expect(summary).not.toMatch(/granted below/);
+		expect(writeConnectors([repoTree, writeMemory])).toEqual([]);
+	});
+
+	it("keeps the external claim for an agent that has both", () => {
+		const writeMemory = tool({ name: "write_memory", scope: "write", tier: "base", invocableBy: ["chat"] });
+		expect(toolScopeSummary([writeMemory, tmuxRun])).toMatch(/granted below/);
+	});
+
+	it("still says read-only when the built-in tools it holds are reads", () => {
+		const readMemory = tool({ name: "read_memory", scope: "read", tier: "base", invocableBy: ["chat"] });
+		expect(toolScopeSummary([repoTree, readMemory])).toMatch(/only read/);
+	});
+
+	it("ignores a write the owner never had — a not_declared row is not this agent's", () => {
+		const foreign = tool({ name: "write_memory", scope: "write", tier: "base", allowed: false, disabled: false, reason: "not_declared" });
+		expect(toolScopeSummary([foreign])).toMatch(/only read/);
+	});
+
 	it("does not promise a grant 'below' for a connector-less write tool", () => {
 		// Defective tool (the server refuses it outright), so "it can only read" is the operative
 		// truth and there is no checkbox to point at.

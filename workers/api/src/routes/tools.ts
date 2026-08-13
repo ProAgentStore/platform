@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
+import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
@@ -89,12 +90,16 @@ function matchesType(val: unknown, type: string): boolean {
 export const toolRoutes = new Hono<{ Bindings: Env }>();
 
 /**
- * GET /v1/instances/:id/tools — EVERY registry tool with this instance's verdict on it.
+ * GET /v1/instances/:id/tools — EVERY tool this instance could run, with its verdict on each.
  *
  * Returns the full list rather than only the runnable ones: "what can this agent do" is only answerable
  * if the answer also says what it can't and why. Each entry carries `allowed`, `disabled` and `reason` —
  * plus `writeConsent` (#351), the separate #90 gate that used to be invisible here, so a write-gated tool
  * read `allowed:true, reason:"ok"` until a call failed. `?allowed=true` narrows to the runnable set.
+ *
+ * "EVERY tool" became true in #525: it listed the REGISTRY only while being described as the way to
+ * verify an agent is read-only, so eleven universal BASE tools — six of them writes — were missing
+ * from that audit. `tier` and `invocableBy` keep the narrower question answerable by filtering.
  */
 toolRoutes.get("/:id/tools", async (c) => {
 	const session = await requireUser(c);
@@ -113,18 +118,22 @@ toolRoutes.get("/:id/tools", async (c) => {
  * refuses it on this route, because a control that only covers one surface isn't control.
  * Undeclared tools are rejected rather than stored, so the list can't fill with names this
  * agent could never run anyway.
+ *
+ * The gate is the LISTING, not the registry (#525): `getRegistryTool` meant this veto could not
+ * reach `write_memory`, `create_task` or `fetch_url`, though `agent-think.ts` has always subtracted
+ * `config.disabledTools` from every resolved name. The switch worked everywhere but where it is set.
  */
 toolRoutes.put("/:id/tools/:name", async (c) => {
 	const session = await requireUser(c);
 	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
 	const name = c.req.param("name");
-	if (!getRegistryTool(name)) throw new HttpError(404, `Unknown tool: ${name}`);
 	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown };
 	if (typeof body.enabled !== "boolean") throw new HttpError(400, "`enabled` must be true or false.");
 
 	const policy = await instanceToolPolicy(c.env, instance.id, session.uid, instance.config);
 	const entry = policy.find((t) => t.name === name);
-	if (!entry || entry.reason === "not_declared") {
+	if (!entry) throw new HttpError(404, `Unknown tool: ${name}`);
+	if (entry.reason === "not_declared") {
 		throw new HttpError(403, explainRefusal(name, "not_declared"));
 	}
 
@@ -145,7 +154,10 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
 	const name = c.req.param("name");
 	const tool = getRegistryTool(name);
-	if (!tool) throw new HttpError(404, `Unknown tool: ${name}`);
+	// A BUILT-IN name gets its own answer rather than "unknown" (#525): the listing now carries
+	// `write_memory` and `fetch_url` as `invocableBy:["chat"]`, so "Unknown tool" would be a false
+	// statement about a tool this same API just described. Wording in lib/builtin-tool-policy.ts.
+	if (!tool) throw new HttpError(404, builtinToolRouteRefusal(name) ?? `Unknown tool: ${name}`);
 	// The capability gate. Owning the instance is NOT authority to run anything on it —
 	// without this, `capabilities.tools` bounded only the chat, and a read-only agent's
 	// instance could still be driven to any tool in the registry from here or via MCP.

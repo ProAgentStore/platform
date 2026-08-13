@@ -911,7 +911,15 @@ const PINS = {
 	// it anyway; the enforcing gate is in `runRegistryTool`, not here.
 	// +2 at #477: `resolveAccountCeilings` imported and called in the loop route so the per-account
 	// loop-iterations ceiling is passed to `sanitizeMaxIterations`. One import, one await, one arg.
-	"workers/api/src/routes/tools.ts": 1059,
+	// +12 at #525: one import and one net line of code; the rest is why. Three gates on this route
+	// each answered "which tools does this cover", and two of them answered the registry when the
+	// listing above them claimed to answer for the agent — so `write_memory` and `fetch_url` could
+	// be run by chat, could not be switched off by their owner, and did not appear in the audit an
+	// operator is told to trust before handing an agent sensitive data. The rules and the wording
+	// went to `lib/builtin-tool-policy.ts` (that is why this is +11 and not +26); what has to stay
+	// here is the record of which surface each gate actually covers, because the defect was
+	// precisely a route-level guarantee being described as an agent-level one.
+	"workers/api/src/routes/tools.ts": 1071,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1019,7 +1027,11 @@ const PINS = {
 	// this self-ref. Landed the same hour as #549 above, on the same number, which is the third
 	// time this map has been raised twice concurrently — the split named at the top (PINS into its
 	// own data module) is what stops it.
-	"scripts/check-file-size.mjs": 1103,
+	// +12 at #525: the routes/tools.ts raise above, whose reason has to name all three gates rather
+	// than the one that grew — the listing, the owner's off-switch and the invoker were three
+	// answers to one question, and a pin note that mentioned only the listing would leave the next
+	// reader thinking the other two were always right. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1115,
 };
 
 /**

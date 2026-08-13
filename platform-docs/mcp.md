@@ -306,7 +306,11 @@ looking and tells the user which console screen to use instead.
 - Private instance runtime uses caller-owned AI credentials.
 - Connector tools are gated twice: the instance must declare the tool, and its owner must
   not have switched it off. `list_instance_tools` returns that verdict per tool, so it is
-  also how you audit what an agent can reach.
+  also how you audit what an agent can reach. It covers the agent's **built-in** tools
+  (memory, tasks, board, `fetch_url`, knowledge, files, collections) as well as its
+  connector tools, each carrying `tier` and `invocableBy` — a built-in reports
+  `["chat"]`, meaning the agent runs it in conversation and `call_instance_tool` cannot
+  reach it. To audit reach into external systems specifically, filter on `connector`.
 - Prefer read-only tools unless the user explicitly requests changes.
 
 The scope, read-only, confirmation, dry-run, audit, and redaction logic all live in one

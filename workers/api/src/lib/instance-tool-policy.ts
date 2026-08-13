@@ -28,6 +28,7 @@
 // separately what the consent machinery will do to the same tool.
 import { agentCapabilities, type AgentCapabilities } from "./agent-capabilities.js";
 import { toolNamesFor } from "../agent-do-tools.js";
+import { builtinToolPolicyInputs, type ToolInvocation, type ToolTier } from "./builtin-tool-policy.js";
 import { registryTools } from "./tool-registry.js";
 import { listConsents } from "./connector-consent.js";
 import type { Env } from "../types.js";
@@ -66,10 +67,30 @@ export interface ToolPolicyEntry {
 	reason: ToolPolicyReason;
 	/** The SEPARATE write-consent verdict (#351). Never folded into `allowed`. */
 	writeConsent: ToolWriteConsent;
+	/** Which catalog group it comes from — `base` is universal, `connector` reaches another system. */
+	tier: ToolTier;
+	/**
+	 * The surfaces that can actually reach this tool (#525).
+	 *
+	 * Every tool here runs in the agent's own chat loop. Only a REGISTRY tool additionally answers
+	 * to `POST /v1/instances/:id/tools/:name` and its MCP proxy `call_instance_tool`, because that
+	 * route dispatches through `getRegistryTool` and cannot reach the DO's own executors. Stated
+	 * per row because the description that flattened the two claimed a guarantee for chat that only
+	 * held for the invoker.
+	 */
+	invocableBy: readonly ToolInvocation[];
 }
 
 /** A tool as this module reads it — the fields of `ToolDef` the two verdicts are computed from. */
-type PolicyInput = { name: string; connector?: string; scope?: "read" | "write"; description: string; jsonSchema: unknown };
+export type PolicyInput = {
+	name: string;
+	connector?: string;
+	scope?: "read" | "write";
+	description: string;
+	jsonSchema: unknown;
+	tier?: ToolTier;
+	invocableBy?: readonly ToolInvocation[];
+};
 
 /**
  * Does a further gate decide this tool call-by-call, after (or instead of) the connector-level
@@ -108,6 +129,23 @@ export function writeConsentOf(t: PolicyInput, granted: ReadonlySet<string>): To
 /** Where the owner's per-instance off-switches live in `agent_instances.config`. */
 export const DISABLED_TOOLS_KEY = "disabledTools";
 
+/** A registry tool answers to both surfaces; a built-in one answers only to the chat loop. */
+const REGISTRY_INVOCATION: readonly ToolInvocation[] = ["chat", "call_instance_tool"];
+
+/**
+ * EVERY tool an instance could run, registry and built-in alike — the input the listing is
+ * resolved from (#525).
+ *
+ * The listing used to be handed `registryTools()` and described as reporting on the agent, so the
+ * eleven BASE names with no registry entry — `write_memory`, `fetch_url`, `create_task` and the
+ * rest — were invisible to an operator auditing what an agent may do, while the chat ran them.
+ * Exported so a test can assert the containment that would have caught it:
+ * `toolNamesFor(caps) ⊆ names(allToolPolicyInputs())`.
+ */
+export function allToolPolicyInputs(): PolicyInput[] {
+	return [...registryTools(), ...builtinToolPolicyInputs()];
+}
+
 /**
  * Resolve the policy for every registry tool. Pure — the caller supplies the agent's
  * capabilities and the owner's disabled list, so this is exhaustively testable and the two
@@ -120,7 +158,7 @@ export const DISABLED_TOOLS_KEY = "disabledTools";
 export function resolveToolPolicy(
 	capabilities: AgentCapabilities,
 	disabledTools: readonly string[] = [],
-	tools: ReadonlyArray<PolicyInput> = registryTools(),
+	tools: ReadonlyArray<PolicyInput> = allToolPolicyInputs(),
 	consentedConnectors: readonly string[] = [],
 ): ToolPolicyEntry[] {
 	const declared = toolNamesFor(capabilities);
@@ -140,6 +178,11 @@ export function resolveToolPolicy(
 			disabled,
 			reason,
 			writeConsent: writeConsentOf(t, granted),
+			// Defaults describe a REGISTRY tool, because `registryTools()` is this function's own
+			// default argument and every registry entry carries `tier`. A built-in row states both
+			// fields explicitly (`builtinToolPolicyInputs`), so neither default can describe it.
+			tier: t.tier ?? "connector",
+			invocableBy: t.invocableBy ?? REGISTRY_INVOCATION,
 		};
 	});
 }
@@ -203,5 +246,5 @@ export async function instanceToolPolicy(
 	// the failure mode matches the gate itself — `listConsents` returning nothing reports
 	// `required`, which is what runRegistryTool would then do (#90 is fail-closed).
 	const consented = (await listConsents(env, instanceId).catch(() => [])).filter((r) => r.scope === "write").map((r) => r.connector);
-	return resolveToolPolicy(capabilities, disabled, registryTools(), consented);
+	return resolveToolPolicy(capabilities, disabled, allToolPolicyInputs(), consented);
 }
