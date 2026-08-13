@@ -93,6 +93,40 @@ the disclosure. Manage them at `GET/PUT/DELETE /v1/instances/:id/mcp/credentials
 never readable back, an expired one fails closed with a reconnect prompt rather than being sent, and
 the pre-#286 account-wide token is reported so it can be bound to one server or discarded.
 
+**The default is "send this endpoint's credential", and it stays that way (#552).** Every MCP tool
+takes an `auth` input; omitting it means *send the credential stored for this endpoint*, and only
+`auth:"none"` sends nothing (`readEndpoint` in `connectors/mcp.ts`). An agent built around one MCP
+server usually mirrors that as a creator-declared `auth_mode` setting defaulting to `bearer`. The
+consequence is real: the first call from a fresh subscription to a server that needs **no** auth
+refuses for a missing credential. Flipping the default to "send nothing" was considered and
+rejected — it fails **open** on a server that does want a credential, and #258/#286 were careful in
+the other direction, where a decision that errs toward not sending is the one that cannot leak. The
+cost of the fail-closed default is one confusing refusal, so the refusal is where the work went.
+
+**A missing credential says how to get one for *that* server.** The refusal used to be a constant
+naming two remedies — paste a token, or `auth:"none"` — written before browser sign-in existed, and
+it went on saying that for a week after #258 shipped the Connect button. An agent relaying it told
+its owner, correctly quoting the platform, that PAGS could not sign in through a browser. So the
+missing-credential path now runs the same RFC 9728/8414 discovery `authFailureGuidance` already runs
+on a 401, and names only the remedy the answer supports:
+
+| What the server publishes | What the refusal says |
+|---|---|
+| OAuth metadata with dynamic client registration **and** PKCE S256 | browser sign-in is available — test the address under Settings → Permissions & Connections → MCP connections and click **Connect** (exactly the condition `canAuthorize` gates that button on) |
+| OAuth metadata without both of those | no Connect button is offered for it; paste an access token |
+| no OAuth metadata, and it answered | there is nothing to sign in to and it may be open — retry with `auth:"none"` |
+| nothing — it never answered, or discovery ran out of time | all three remedies, in the order worth trying |
+
+The last row is the point of the design: a probe that fails looks identical to a server that
+publishes nothing, so an unanswered discovery is reported as *unknown* rather than as "open". Saying
+"try `auth:"none"`" about an OAuth-protected server we simply could not reach would be the same
+confidently-wrong message one step along. Discovery is capped at 2.5s for the whole walk (a race,
+not only an abort — an abort makes every probe fail, which is indistinguishable from a 404) and the
+verdict is cached per endpoint for 10 minutes, one minute when unknown, so a retrying agent pays the
+probe once. What did **not** change: the connector still refuses to retry unauthenticated when a
+credential is missing. That is the fail-closed decision from #286, and turning "your token is gone"
+into an opaque 401 from the server teaches users to blame the server.
+
 **Connecting a server** (`POST /v1/instances/:id/mcp/test`, console → Settings → MCP connections):
 enter a URL → it is validated and normalized → the protocol era is negotiated → the server's own
 `tools/list` is read (read-scoped, no consent needed — you cannot approve tools you cannot

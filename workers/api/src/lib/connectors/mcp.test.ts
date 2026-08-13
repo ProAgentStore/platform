@@ -4,6 +4,7 @@ import type { RegistryToolCtx } from "../tool-registry.js";
 import type { ConnectorClient } from "./client.js";
 import { ALL_TOOLS } from "../mcp-consent.js";
 import { encryptKey } from "../crypto.js";
+import { resetMcpAuthAdviceCache } from "../mcp-credentials.js";
 
 /** A throwaway 256-bit KEK in the hex form lib/crypto.ts expects. */
 const TEST_KEK = "0".repeat(64);
@@ -130,10 +131,19 @@ interface ScriptEntry {
  * script answer the FIRST attempt at a method differently from the retry, which is how the
  * era-detection and version-negotiation paths are exercised.
  */
-function mockRpc(script: Record<string, ScriptEntry | ScriptEntry[]>, opts: { sessionId?: string } = {}) {
+function mockRpc(script: Record<string, ScriptEntry | ScriptEntry[]>, opts: { sessionId?: string; wellKnown?: unknown } = {}) {
 	const calls: Array<{ url: string; headers: Headers; body: unknown }> = [];
 	const seen = new Map<string, number>();
 	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+		// OAuth discovery (#180 on a 401, #552 on a missing credential) is GETs at the well-known
+		// paths — no JSON-RPC body — so it is answered separately. `wellKnown: undefined` is the
+		// server that publishes nothing, which is the common case and the one #552 measured.
+		if (!init?.body) {
+			calls.push({ url: String(url), headers: new Headers(init?.headers), body: {} });
+			return opts.wellKnown && String(url).includes("oauth-authorization-server")
+				? new Response(JSON.stringify(opts.wellKnown), { status: 200, headers: { "Content-Type": "application/json" } })
+				: new Response("<html>not found</html>", { status: 404, headers: { "Content-Type": "text/html" } });
+		}
 		const parsedBody = JSON.parse(String(init?.body ?? "{}"));
 		calls.push({ url: String(url), headers: new Headers(init?.headers), body: parsedBody });
 		const method = parsedBody.method;
@@ -171,9 +181,12 @@ function unsupportedVersion(supported: string[]): ScriptEntry {
 	return { status: 400, body: { jsonrpc: "2.0", id: 1, error: { code: -32022, message: "Unsupported protocol version", data: { supported, requested: MODERN_VERSION } } } };
 }
 
-// The era verdict is cached in module state, so one test's server must not decide the next
-// test's transport.
-beforeEach(() => resetEraCache());
+// The era verdict and the #552 auth-advice verdict are both cached in module state, so one
+// test's server must not decide the next test's transport — or the next test's refusal wording.
+beforeEach(() => {
+	resetEraCache();
+	resetMcpAuthAdviceCache();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("parseRpcBody — both Streamable-HTTP response shapes", () => {
@@ -613,7 +626,11 @@ describe("mcp_call_tool — credentials, errors and input validation", () => {
 		// exists. Falling back to an unauthenticated call is equally wrong — the server's opaque 401
 		// teaches the user to blame the server for a missing token.
 		expect(r.content).toMatch(/No credential stored for https:\/\/example\.com\/mcp/);
-		expect(calls).toHaveLength(0); // nothing hit the network
+		// The fail-closed property, restated precisely now that #552 probes the server's PUBLIC
+		// metadata to write the refusal: no JSON-RPC call is attempted, and nothing carries a
+		// credential. The discovery GETs are neither.
+		expect(calls.map((c) => (c.body as { method?: string }).method).filter(Boolean)).toEqual([]);
+		expect(calls.every((c) => c.headers.get("Authorization") === null)).toBe(true);
 	});
 
 	it("fails the step when the server reports the TOOL failed (isError), not just RPC errors", async () => {
@@ -701,8 +718,17 @@ describe("mcp credentials are per endpoint, not per connector (#286)", () => {
 
 		const toB = await callTool.handler(ctx, { url: "https://b.example.com/mcp", tool: "create_site" });
 		expect(toB.success).toBe(false);
+		// B's message names B. Since #552 the wording also depends on what B publishes, so assert
+		// the endpoint, not the sentence — the isolation property is that A's credential and A's
+		// name never appear here, not that the remedy text is a constant.
 		expect(toB.content).toMatch(/No credential stored for https:\/\/b\.example\.com\/mcp/);
-		expect(calls).toHaveLength(0); // and nothing reached B at all
+		expect(toB.content).not.toMatch(/a\.example\.com/);
+		// No JSON-RPC call reached B, and nothing sent to B carried tok-for-A. The #552 discovery
+		// GETs at B's well-known paths are unauthenticated by construction — there is no credential
+		// for B, which is why we are in this branch at all.
+		expect(calls.map((c) => (c.body as { method?: string }).method).filter(Boolean)).toEqual([]);
+		expect(calls.some((c) => c.headers.get("Authorization"))).toBe(false);
+		calls.length = 0;
 
 		const toA = await callTool.handler(ctx, { url: "https://a.example.com/mcp", tool: "create_site" });
 		expect(toA.success).toBe(true);
@@ -727,9 +753,87 @@ describe("mcp credentials are per endpoint, not per connector (#286)", () => {
 		const { ctx } = makeCtx({ token: null, legacy: true });
 		const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
 		expect(r.success).toBe(false);
-		expect(calls).toHaveLength(0);
+		expect(calls.map((c) => (c.body as { method?: string }).method).filter(Boolean)).toEqual([]);
 		expect(r.content).toMatch(/older account-wide MCP token/);
 		expect(r.content).toMatch(/not bound to any server/);
+	});
+
+	/**
+	 * #552 — the refusal names the remedy that EXISTS for this server.
+	 *
+	 * The old text predated #258 and never mentioned the browser sign-in that had shipped a week
+	 * earlier, so an agent relaying it told its owner PAGS could not sign in through a browser. The
+	 * fix is not a longer constant: it asks the server the same question `authFailureGuidance`
+	 * already asks on a 401, one step earlier, and says only what the answer supports.
+	 */
+	describe("the refusal is derived from what the server publishes (#552)", () => {
+		/** A server whose metadata satisfies exactly what `canAuthorize` gates the Connect button on. */
+		const CONNECTABLE = {
+			issuer: "https://example.com",
+			authorization_endpoint: "https://example.com/authorize",
+			token_endpoint: "https://example.com/token",
+			registration_endpoint: "https://example.com/register",
+			grant_types_supported: ["authorization_code", "refresh_token"],
+			code_challenge_methods_supported: ["S256"],
+		};
+
+		it("offers Connect when the server supports DCR + PKCE S256", async () => {
+			mockRpc({}, { wellKnown: CONNECTABLE });
+			const { ctx } = makeCtx({ token: null });
+			const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			expect(r.success).toBe(false);
+			expect(r.content).toMatch(/browser sign-in is available/);
+			expect(r.content).toMatch(/click Connect/);
+		});
+
+		it("does NOT offer Connect when the server publishes no OAuth metadata", async () => {
+			// The measured case: glassdocs.site answers every .well-known path with SPA HTML and
+			// needs no auth. The console would render no Connect button for it, so the message must
+			// not name one — and auth:"none" is the remedy that would actually have worked.
+			mockRpc({}); // no wellKnown → 404s, i.e. a server that publishes nothing
+			const { ctx } = makeCtx({ token: null });
+			const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			expect(r.content).toMatch(/auth:"none"/);
+			expect(r.content).not.toMatch(/click Connect/);
+		});
+
+		it("does NOT offer Connect to an OAuth server without dynamic registration", async () => {
+			const { registration_endpoint, ...noDcr } = CONNECTABLE;
+			mockRpc({}, { wellKnown: noDcr });
+			const { ctx } = makeCtx({ token: null });
+			const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			expect(r.content).not.toMatch(/click Connect/);
+			expect(r.content).toMatch(/no Connect button is offered/);
+		});
+
+		it("records the verdict that produced the wording", async () => {
+			mockRpc({}, { wellKnown: CONNECTABLE });
+			const { ctx, events } = makeCtx({ token: null });
+			await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			expect(events.at(-1)?.context.reason).toBe("auth-advice:connect");
+			expect(events.at(-1)?.context.failure).toBe("no_credential");
+		});
+
+		it("asks the server once — a retrying agent must not re-probe on every refusal", async () => {
+			// The regression this guards: the missing-credential path was free, and it is the hot
+			// path for a misconfigured agent. Discovery is cached per endpoint like the era verdict.
+			const calls = mockRpc({}, { wellKnown: CONNECTABLE });
+			const { ctx } = makeCtx({ token: null });
+			await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			const afterFirst = calls.length;
+			expect(afterFirst).toBeGreaterThan(0);
+			await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			expect(calls.length).toBe(afterFirst);
+		});
+
+		it("does not probe at all for an expired credential", async () => {
+			// Reconnect is the answer whatever the metadata says, so the probe would buy nothing.
+			const calls = mockRpc({});
+			const { ctx } = makeCtx({ expiresAt: "2020-01-01T00:00:00Z" });
+			await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+			expect(calls).toHaveLength(0);
+		});
 	});
 
 	it("fails closed on an expired credential instead of sending it", async () => {
@@ -747,6 +851,7 @@ describe("mcp credentials are per endpoint, not per connector (#286)", () => {
 	it("keeps a credential out of the refusal text and the trace row", async () => {
 		// A refusal is rendered into a chat transcript and written to agent_events. Naming the
 		// endpoint is diagnosis; echoing any part of the token would put a credential in both.
+		mockRpc({}); // the #552 discovery probe is a real fetch — script it rather than leave the network live
 		const { ctx, events } = makeCtx({ token: "sk-live-should-never-appear", credentialFor: ["https://a.example.com/mcp"] });
 		const r = await callTool.handler(ctx, { url: "https://b.example.com/mcp", tool: "create_site" });
 		expect(r.content).not.toContain("sk-live-should-never-appear");

@@ -20,7 +20,10 @@
 // WHAT THIS IS NOT. It is not a connection record. #266 decided a connection is derived from
 // grants on an endpoint and that health is never cached, because a stored "connected" is the
 // console's favourite lie. Nothing here has a nickname, an id, or a status column. This module
-// answers one question — what credential, if any, may be sent to THIS endpoint — and nothing else.
+// answers one question — what credential, if any, may be sent to THIS endpoint — plus, since #552,
+// the question a refusal has to answer to be worth reading: how one is OBTAINED for that endpoint.
+// It still stores no connection state; the auth-advice cache at the bottom holds a public fact
+// about a server (what it publishes), never anything about a user.
 //
 // Encryption is the platform's existing envelope scheme, unchanged (lib/crypto.ts): a per-row
 // AES-256-GCM DEK wrapped with AES-KW under KEY_ENCRYPTION_KEY. Plaintext exists only inside
@@ -29,6 +32,8 @@
 import type { Env } from "../types.js";
 import { decryptKey, encryptKey } from "./crypto.js";
 import { HttpError } from "./auth.js";
+import { discoverAuthServer, type DiscoveryResult } from "./connectors/discovery.js";
+import { safeFetch } from "./ssrf.js";
 
 /** The legacy provider-wide vault slot this replaces. Read only to REPORT it, never to send it. */
 export const LEGACY_MCP_PROVIDER = "mcp";
@@ -372,17 +377,197 @@ export async function adoptLegacyMcpCredential(env: Env, userId: string, endpoin
 }
 
 /**
+ * How this server says a credential is OBTAINED — the one thing the old refusal could not say.
+ *
+ * Derived from the server's own RFC 9728/8414 metadata (connectors/discovery.ts), because the
+ * three remedies are not interchangeable and naming the wrong one is worse than naming none:
+ *
+ *   • "connect"    — OAuth metadata WITH dynamic registration and PKCE S256. This is exactly the
+ *                    condition the console gates its Connect button on (`canAuthorize`,
+ *                    store/console/src/lib/mcpConnections.ts), so it is the only state in which
+ *                    the message may name that button. A message that names a control the user
+ *                    cannot see is the defect this exists to stop.
+ *   • "token-only" — OAuth-protected, but no DCR or no S256. `/v1/mcp/oauth/start` would refuse
+ *                    and the button is not rendered, so browser sign-in must NOT be offered.
+ *   • "open"       — no OAuth metadata at all. There is nothing to sign in to, and the server may
+ *                    well need no credential, so `auth:"none"` leads.
+ *   • "unknown"    — we did not get an answer (no attempt, or the attempt ran out of time). All
+ *                    three remedies are listed, in the order worth trying. NEVER inferred from a
+ *                    failed probe: a discovery that times out looks identical to "publishes
+ *                    nothing", and reporting it as "open" would tell a user to call an
+ *                    OAuth-protected server with auth:"none".
+ */
+export type McpAuthAdvice = "connect" | "token-only" | "open" | "unknown";
+
+const PANEL = "Settings → Permissions & Connections → MCP connections";
+
+/**
  * The refusal text, written to be actionable. A "no credential" that doesn't say WHICH server
  * needs one gets read as "MCP is broken" — and, since #286, a user who previously had a working
  * global token needs to be told their token still exists and where to bind it, or the change
  * reads as data loss.
+ *
+ * #552: it also has to name the remedies that EXIST. This string predated #258 — it offered a
+ * pasted token or `auth:"none"` and never mentioned the browser sign-in that had shipped a week
+ * earlier — so an agent reading it told its owner, in good faith, that PAGS could not sign in to
+ * an MCP server through a browser. The wording is therefore derived from what the platform can
+ * actually do for THIS server (`advice`), not from a constant.
+ *
+ * Two things are deliberately NOT claimed here: that Connect is one click (the panel wants the
+ * address tested first, which is what renders the button), and that any of this is automatic. The
+ * flow ends at a browser the agent is not sitting in front of.
  */
-export function mcpCredentialDenial(endpoint: string, r: Extract<McpCredentialResolution, { status: "missing" | "expired" }>): string {
+export function mcpCredentialDenial(
+	endpoint: string,
+	r: Extract<McpCredentialResolution, { status: "missing" | "expired" }>,
+	advice: McpAuthAdvice = "unknown",
+): string {
 	if (r.status === "expired") {
-		return `The credential for ${endpoint} expired at ${r.expiresAt}. Reconnect that server under Settings → Permissions & Connections → MCP connections.`;
+		return `The credential for ${endpoint} expired at ${r.expiresAt}. Reconnect that server under ${PANEL}.`;
 	}
 	const legacy = r.legacy
 		? " You still have an older account-wide MCP token, but it is not bound to any server — for safety it is no longer sent automatically. Bind it to this server (or replace it) in the same panel."
 		: "";
-	return `No credential stored for ${endpoint}. Add that server's access token under Settings → Permissions & Connections → MCP connections, or pass auth:"none" for an open server.${legacy}`;
+	return `No credential stored for ${endpoint}. ${remedy(endpoint, advice)}${legacy}`;
+}
+
+function remedy(endpoint: string, advice: McpAuthAdvice): string {
+	switch (advice) {
+		case "connect":
+			return `That server publishes OAuth metadata with dynamic client registration and PKCE S256, so browser sign-in is available for it: open ${PANEL}, test ${endpoint} there and click Connect. Pasting a machine token in the same panel also works, for a server that issues one.`;
+		case "token-only":
+			return `That server is OAuth-protected but offers no dynamic client registration with PKCE S256, so the browser sign-in flow cannot run against it and no Connect button is offered for it. Paste an access token that server accepts under ${PANEL}.`;
+		case "open":
+			return `That server publishes no OAuth metadata, so there is no browser sign-in flow to run against it — and it may need no credential at all: call this tool again with auth:"none". If it does issue a machine token, paste it under ${PANEL}.`;
+		default:
+			return `Three remedies, in the order worth trying: if that server supports browser sign-in, open ${PANEL}, test ${endpoint} there and click Connect; if it issues a machine token instead, paste the token in the same panel; if it needs no credential at all, call this tool again with auth:"none".`;
+	}
+}
+
+// ─── Auth advice: asking the server, cheaply (#552) ─────────────────────────────────────
+//
+// The refusal above can only be specific if something asks the server how it wants to be
+// authenticated. `authFailureGuidance` (connectors/discovery.ts) already asks exactly that on a
+// 401 — "ask the server what auth model it wants instead of guessing (#180)" — but the
+// missing-credential path short-circuits before any request, so it never reached that machinery
+// and had to list every possibility blindly. This is that same discovery, one step earlier.
+//
+// The cost is that a path which was FREE now makes a network call, and it is a hot path for a
+// misconfigured agent that retries. Two bounds, mirroring `rememberEra`/`recallEra` in
+// connectors/mcp.ts:
+//
+//   CACHED per endpoint. The answer is a property of the SERVER — what it publishes at two
+//   well-known URLs — not of a request or a user, so the entry holds no credential and nothing
+//   user-identifying and is safe to share across an isolate, exactly like the era verdict. A
+//   retry loop pays once.
+//
+//   DEADLINED, which the era probe does not need because it rides the request the user is already
+//   waiting on. This one does not, and `discoverAuthServer` walks up to six sequential GETs with
+//   no timeout anywhere beneath it (grep at the time of writing: zero AbortControllers in
+//   mcp-credentials.ts, connectors/mcp.ts, connectors/discovery.ts and ssrf.ts). A refusal that
+//   hangs is worse than a vague one.
+//
+// The deadline is a RACE, not only an abort, and that is load-bearing. Aborting makes every
+// probe fail, and a failed probe is indistinguishable from a 404: `discoverAuthServer` would
+// walk the remaining URLs instantly and return `{protected:false}` — "publishes nothing, try
+// auth:"none"". Telling a user to call an OAuth-protected server unauthenticated because OUR
+// probe was slow is the same class of confidently-wrong message this ticket exists to fix.
+// Losing the race yields "unknown", which offers all three remedies and claims nothing.
+
+const ADVICE_TTL_MS = 10 * 60_000;
+/** A lost race is a fact about our attempt, not about the server — expire it quickly and re-ask. */
+const ADVICE_FAIL_TTL_MS = 60_000;
+const ADVICE_CACHE_MAX = 200;
+/** Budget for the whole discovery walk, not per request. */
+export const ADVICE_BUDGET_MS = 2_500;
+const ADVICE_CACHE = new Map<string, { advice: McpAuthAdvice; expires: number }>();
+
+/** Test seam — the cache is module state, so a test that pins a verdict must be able to undo it. */
+export function resetMcpAuthAdviceCache(): void {
+	ADVICE_CACHE.clear();
+}
+
+/** Map a discovery result onto the remedy the console can actually offer for it. */
+export function adviceFromDiscovery(d: DiscoveryResult): McpAuthAdvice {
+	if (!d.protected) return "open";
+	// Exactly the condition `canAuthorize` gates the console's Connect button on. Anything else
+	// must not name that button: `/v1/mcp/oauth/start` would refuse and no button is rendered.
+	return d.dcr && d.pkceS256 ? "connect" : "token-only";
+}
+
+/** Resolve `p`, or reject at `ms`. Ours, not the runtime's — an abort is only advisory. */
+function withBudget<T>(p: Promise<T>, ms: number): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`discovery deadline exceeded after ${ms}ms`)), ms);
+		p.then(
+			(v) => {
+				clearTimeout(timer);
+				resolve(v);
+			},
+			(e) => {
+				clearTimeout(timer);
+				reject(e);
+			},
+		);
+	});
+}
+
+/** What this endpoint's own metadata says about getting a credential. Never throws. */
+export async function mcpAuthAdvice(url: string, key: string): Promise<McpAuthAdvice> {
+	const hit = ADVICE_CACHE.get(key);
+	if (hit && hit.expires > Date.now()) return hit.advice;
+
+	const ctrl = new AbortController();
+	const timer = setTimeout(() => ctrl.abort(), ADVICE_BUDGET_MS);
+	let advice: McpAuthAdvice = "unknown";
+	// Did the server answer AT ALL? `discoverAuthServer` tolerates every probe failure — correctly,
+	// since a 404 there is information — but that makes a host we could not reach (DNS failure,
+	// SSRF refusal, an aborted socket) return `{protected:false}`, which reads as "publishes
+	// nothing, try auth:"none"". Counting real HTTP responses is the difference between "this
+	// server has no OAuth metadata" and "we never got to ask", and only the first may be said out
+	// loud. The `open` verdict therefore requires at least one answer.
+	let answered = 0;
+	try {
+		// safeFetch, like every other outbound request on this path: the endpoint is user-supplied,
+		// so these metadata GETs are exactly as attacker-influenceable as the call itself. No
+		// credential is attached — there is none, which is why we are here — so the probe cannot
+		// leak one, and it is never a JSON-RPC call to the server's own endpoint.
+		const fetchImpl = async (u: string) => {
+			const res = await safeFetch(u, { method: "GET", headers: { Accept: "application/json" }, signal: ctrl.signal });
+			answered++;
+			return res;
+		};
+		const found = adviceFromDiscovery(await withBudget(discoverAuthServer(url, fetchImpl), ADVICE_BUDGET_MS));
+		advice = found === "open" && answered === 0 ? "unknown" : found;
+	} catch {
+		advice = "unknown";
+	} finally {
+		clearTimeout(timer);
+		ctrl.abort(); // free anything still in flight once the race is lost
+	}
+
+	// Bounded the same way the era cache is: wholesale clear rather than LRU bookkeeping, because
+	// re-asking costs one bounded probe.
+	if (ADVICE_CACHE.size >= ADVICE_CACHE_MAX) ADVICE_CACHE.clear();
+	ADVICE_CACHE.set(key, { advice, expires: Date.now() + (advice === "unknown" ? ADVICE_FAIL_TTL_MS : ADVICE_TTL_MS) });
+	return advice;
+}
+
+/**
+ * The refusal a connector should return, with the server already asked.
+ *
+ * Discovery runs for "missing" only. An expired credential already knows its auth model — the
+ * remedy is Reconnect either way — so paying a probe there would buy nothing.
+ *
+ * `advice` comes back alongside the text so the caller can record WHICH verdict produced the
+ * wording. "The message told me to use auth:\"none\"" is only debuggable if the trace row says
+ * what the server was found to publish.
+ */
+export async function mcpCredentialRefusal(
+	rawUrl: string,
+	endpoint: string,
+	r: Extract<McpCredentialResolution, { status: "missing" | "expired" }>,
+): Promise<{ content: string; advice: McpAuthAdvice }> {
+	const advice = r.status === "missing" ? await mcpAuthAdvice(rawUrl, endpoint) : "unknown";
+	return { content: mcpCredentialDenial(endpoint, r, advice), advice };
 }

@@ -99,7 +99,7 @@ import { safeFetch, SsrfError } from "../ssrf.js";
 import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from "./discovery.js";
 import { consentInstanceOf } from "../execution-authority.js";
 import { hasMcpConsent, mcpConsentDenial, normalizeMcpEndpoint } from "../mcp-consent.js";
-import { mcpCredentialDenial } from "../mcp-credentials.js";
+import { mcpCredentialRefusal } from "../mcp-credentials.js";
 import { MAX_ROUNDS, parseElicitation, pausedForInputNotice } from "../mcp-elicitation.js";
 import { openMcpInputRequest } from "../mcp-input-requests.js";
 import { ensureMcpAccessToken } from "../mcp-oauth-store.js";
@@ -727,9 +727,9 @@ async function mcpCall(
 			// vulnerability), and no silent unauthenticated retry (which turns "your token is gone"
 			// into an opaque 401 from the server and teaches the user to blame the server).
 			const failure: McpFailureClass = cred.status === "expired" ? "credential_expired" : "no_credential";
-			const content = mcpCredentialDenial(key, cred);
-			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure });
-			return { content, success: false, failure, durationMs: Date.now() - started };
+			const denial = await mcpCredentialRefusal(endpoint.url, key, cred);
+			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure, reason: `auth-advice:${denial.advice}` });
+			return { content: denial.content, success: false, failure, durationMs: Date.now() - started };
 		}
 		token = cred.token;
 	}
