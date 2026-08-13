@@ -351,13 +351,6 @@ describe("0107 — the Lead can actually hand you over (#279)", () => {
 		expect(toolNamesFor({ surfaces: [], runtime: null, workflow: null, tools } as never).has("transfer_conversation")).toBe(true);
 	});
 
-	it("keeps everything the Lead could already do — 0107 restates the whole object", () => {
-		const { tools } = effectiveDeclared("coder-lead");
-		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation", "github_list_pulls"]) {
-			expect(tools, n).toContain(n);
-		}
-	});
-
 	it("grants it to nobody else — every other seeded agent has no subordinates to resolve", () => {
 		// The tool refuses any destination outside the caller's supervision graph, so declaring it
 		// on an agent without one is a capability that cannot resolve a single target. It would also
@@ -397,17 +390,6 @@ describe("0108 — the Lead can propose a direction, the Repo Coder can read CI 
 		const { tools } = effectiveDeclared("coder-repo");
 		expect(tools).toContain("github_workflow_runs");
 		expect(toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools } as never).has("github_workflow_runs")).toBe(true);
-	});
-
-	it("neither agent lost anything — 0108 restates both whole objects", () => {
-		const lead = effectiveDeclared("coder-lead").tools;
-		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation", "transfer_conversation", "github_list_pulls"]) {
-			expect(lead, n).toContain(n);
-		}
-		const repo = effectiveDeclared("coder-repo").tools;
-		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_create_issue", "github_read_pull"]) {
-			expect(repo, n).toContain(n);
-		}
 	});
 
 	it("the Repo Coder still has ONE chat — the surfaceOption a whole-object set would drop", () => {
@@ -492,26 +474,6 @@ describe("0119 — the Lead can FILE an issue, not just read one (#506)", () => 
 		// Declaration is necessary, not sufficient — a name outside CREATOR_SELECTABLE_TOOLS is
 		// declared and still invisible. Same second leg as 0107/0108.
 		expect(toolNamesFor({ surfaces: [], runtime: null, workflow: null, tools } as never).has("github_create_issue")).toBe(true);
-	});
-
-	it("keeps everything the Lead could already do — 0119 restates the whole object", () => {
-		// The realistic way this migration goes wrong. 0107 restated this exact object and lost
-		// `set_direction`; no tools assertion elsewhere would have noticed.
-		const { tools } = effectiveDeclared("coder-lead");
-		for (const n of [
-			"list_subordinates",
-			"subordinate_status",
-			"delegate_goal",
-			"check_delegation",
-			"github_list_issues",
-			"github_read_issue",
-			"github_list_pulls",
-			"github_read_pull",
-			"transfer_conversation",
-			"set_direction",
-		]) {
-			expect(tools, n).toContain(n);
-		}
 	});
 
 	it("the Lead stays cloud-only — filing an issue is not a reason to grow a runtime", () => {
@@ -639,21 +601,6 @@ describe("0120 — an agent that can OPEN an issue can follow it up (#507)", () 
 		expect(tools).not.toContain("github_update_issue");
 	});
 
-	it("nobody lost anything — 0120 restates three whole objects", () => {
-		const repo = effectiveDeclared("coder-repo").tools;
-		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_create_issue", "github_read_pull", "github_workflow_runs"]) {
-			expect(repo, n).toContain(n);
-		}
-		const lead = effectiveDeclared("coder-lead").tools;
-		for (const n of ["list_subordinates", "subordinate_status", "delegate_goal", "check_delegation", "transfer_conversation", "set_direction", "github_create_issue"]) {
-			expect(lead, n).toContain(n);
-		}
-		const coder = effectiveDeclared("coder").tools;
-		for (const n of ["github_create_issue", "github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull"]) {
-			expect(coder, n).toContain(n);
-		}
-	});
-
 	it("passes the validator the create/update routes apply, like every seeded object", () => {
 		const sql = readFileSync(join(MIGRATIONS, "0120_coder_issue_mutation_tools.sql"), "utf8");
 		const objs = [...sql.matchAll(/'\$\.capabilities'\s*,\s*json\('(\{[\s\S]*?\})'\)/g)];
@@ -683,23 +630,6 @@ describe("0121 — the Repo Coder can FIND a file (#508)", () => {
 		}
 	});
 
-	it("keeps every tool 0120 granted — a whole-object set drops what it does not restate", () => {
-		// The trap 0108 wrote down after 0107 lost `set_direction` exactly this way, and the reason
-		// the pin above exists. 0121 is another whole-object set over coder-repo.
-		const repo = effectiveDeclared("coder-repo").tools;
-		for (const n of [
-			"repo_tree", "repo_read_file", "repo_git", "repo_remote",
-			"github_list_issues", "github_read_issue", "github_create_issue",
-			"github_list_pulls", "github_read_pull", "github_workflow_runs",
-			"github_comment_issue", "github_update_issue",
-		]) {
-			expect(repo, n).toContain(n);
-		}
-		// local-repo-chat keeps its original four (0066), which are its whole surface.
-		const chat = effectiveDeclared("local-repo-chat").tools;
-		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote"]) expect(chat, n).toContain(n);
-	});
-
 	it("does NOT give them to the agents that reach code through an Engine instead", () => {
 		// `coder` and `coder-lead` declare no repo_* tool at all — they do not use this connector,
 		// so a search tool with no companion read tools would be noise in their prompt.
@@ -717,6 +647,277 @@ describe("0121 — the Repo Coder can FIND a file (#508)", () => {
 		for (const m of objs) {
 			const caps = JSON.parse(m[1]) as Record<string, unknown>;
 			expect(sanitizeDeclaredCapabilities(caps)).toEqual(caps);
+		}
+	});
+});
+
+// ── The general rule the six longhand assertions were each a copy of (#558) ───────────────────
+
+/**
+ * A migration that narrows an agent ON PURPOSE.
+ *
+ * Every entry names what was removed and why. A removal with no entry is the accident this exists
+ * to catch — and the map is checked in BOTH directions, so an entry that no longer describes a real
+ * removal fails too. An exception list nobody rechecks is how a guard turns into a comment.
+ */
+const INTENTIONAL_REMOVALS: Record<string, { slug: string; tools: string[]; why: string }> = {
+	"0099_tmux_operator_backend_exclusive_tools.sql": {
+		slug: "tmux-operator",
+		tools: ["terminal_list_targets", "terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_new_target", "terminal_kill_target"],
+		why: "swapped for the backend-exclusive tmux_* tools; the generic terminal connector is for creator-built agents (#482). `tool-reachability.test.ts`'s UNREACHABLE_BY_DESIGN entry for terminal_send_message explains the same split in prose.",
+	},
+};
+
+/**
+ * Writes to `agents.config` that do NOT go through a `json_set` at a named JSON path.
+ *
+ * The replay below reads `json_set(… '$.capabilities' …)` and `json_set(… '$.capabilities.tools' …)`.
+ * Everything else that touches `config` therefore has to be accounted for, because a write the
+ * replay cannot read is a narrowing the replay cannot see — the regression risk #558 names. A
+ * `json_set`/`json_insert` at some OTHER path (`$.settingsSchema`, `$.pipelines`, `$.identity`)
+ * cannot reach a tools array and needs no entry. A raw text edit can, and needs one.
+ */
+const OPAQUE_CONFIG_WRITES: Record<string, string> = {
+	"0092_coder_repo_engine_copy.sql":
+		"a `REPLACE(config, …)` over the config TEXT, swapping one settingsSchema description ('drives in tmux' -> 'drives on your machine', #348). It names no tool and no capabilities path, but a text REPLACE is the one shape that could edit a tools array without a JSON path, so it is named here rather than trusted.",
+};
+
+interface Declaration {
+	file: string;
+	slug: string;
+	tools: string[];
+	/** `seed` for an `INSERT OR IGNORE`, `update` for a `json_set` on `$.capabilities…`. */
+	via: "seed" | "update";
+}
+
+/** Split a SQL tuple body on top-level commas, honouring `''` escapes. */
+function splitTuple(body: string): string[] {
+	const out: string[] = [];
+	let cur = "";
+	let depth = 0;
+	let quoted = false;
+	for (let i = 0; i < body.length; i++) {
+		const c = body[i];
+		if (quoted) {
+			if (c === "'" && body[i + 1] === "'") {
+				cur += "''";
+				i++;
+				continue;
+			}
+			if (c === "'") quoted = false;
+			cur += c;
+			continue;
+		}
+		if (c === "'") {
+			quoted = true;
+			cur += c;
+			continue;
+		}
+		if (c === "(") depth++;
+		else if (c === ")") depth--;
+		if (c === "," && depth === 0) {
+			out.push(cur.trim());
+			cur = "";
+			continue;
+		}
+		cur += c;
+	}
+	if (cur.trim()) out.push(cur.trim());
+	return out;
+}
+
+/**
+ * The tools a seeding `INSERT OR IGNORE INTO agents` declares, or null if it declares none.
+ *
+ * Columns are read BY NAME, which is the whole reason this can be trusted. #558's first attempt at
+ * the seed path took the nearest preceding quoted token in the VALUES tuple as the slug — that is
+ * the `status` column, and it attributed several agents to a slug called `active`. The analyst
+ * caught it and re-ran restricted to the UPDATE path rather than trust the parse, which left the
+ * seed path as the ticket's stated open gap. All ten seeds share one explicit column list, so
+ * mapping name -> position is exact, and `throwOnUnparsable` below refuses to let a shape it cannot
+ * read pass as "no tools here".
+ */
+function seedDeclaration(stmt: string): { slug: string; tools: string[] | null } | null {
+	const m = stmt.match(/insert\s+or\s+ignore\s+into\s+agents\s*\(([\s\S]*?)\)\s*values\s*\(([\s\S]*)\)/i);
+	if (!m) return null;
+	const cols = m[1].split(",").map((c) => c.trim());
+	const vals = splitTuple(m[2]);
+	const at = (name: string): string | null => {
+		const i = cols.indexOf(name);
+		return i === -1 ? null : (vals[i] ?? null);
+	};
+	const unquote = (v: string) => v.replace(/^'|'$/g, "").replace(/''/g, "'");
+	const slugRaw = at("slug");
+	if (!slugRaw) throw new Error("an INSERT INTO agents has no `slug` column — the seed parser cannot read this shape");
+	const cfgRaw = at("config");
+	let tools: string[] | null = null;
+	if (cfgRaw?.startsWith("'")) {
+		const caps = (JSON.parse(unquote(cfgRaw)) as { capabilities?: { tools?: string[] } }).capabilities;
+		tools = caps?.tools ?? null;
+	}
+	return { slug: unquote(slugRaw), tools };
+}
+
+/**
+ * Every declaration of a slug's tool set, in the order wrangler applies them.
+ *
+ * The seed is included, and that is what closes #558's acceptance criterion 3. An `INSERT OR
+ * IGNORE` is a no-op on a slug that already exists, so it can only ever be a FIRST declaration —
+ * never a narrowing — but it is also the BASELINE the first UPDATE is measured against, and
+ * without it a migration that dropped a seeded tool in its very first rewrite would be invisible.
+ * `repo-chat`'s three tools and `local-repo-chat`'s four arrive this way and no UPDATE precedes them.
+ */
+function replayToolDeclarations(): { declarations: Declaration[]; files: number } {
+	const files = readdirSync(MIGRATIONS)
+		.filter((n) => n.endsWith(".sql"))
+		.sort();
+	const seen = new Set<string>();
+	const declarations: Declaration[] = [];
+	for (const f of files) {
+		for (const stmt of readFileSync(join(MIGRATIONS, f), "utf8").split(/;\s*\n/)) {
+			const seed = seedDeclaration(stmt);
+			if (seed) {
+				// OR IGNORE: only the first seed for a slug does anything at all.
+				if (seed.tools && !seen.has(seed.slug)) declarations.push({ file: f, slug: seed.slug, tools: seed.tools, via: "seed" });
+				seen.add(seed.slug);
+				continue;
+			}
+			if (!stmt.includes("$.capabilities")) continue;
+			const m = stmt.match(/slug\s*=\s*'([^']+)'/);
+			if (!m) continue;
+			const tools = toolsFromStatement(stmt);
+			if (!tools) continue;
+			seen.add(m[1]);
+			declarations.push({ file: f, slug: m[1], tools, via: "update" });
+		}
+	}
+	return { declarations, files: files.length };
+}
+
+/** Every tool a declaration dropped relative to the previous declaration for the same slug. */
+function replayRemovals(declarations: Declaration[]): { file: string; slug: string; tools: string[]; from: string }[] {
+	const state = new Map<string, Declaration>();
+	const out: { file: string; slug: string; tools: string[]; from: string }[] = [];
+	for (const d of declarations) {
+		const prev = state.get(d.slug);
+		if (prev) {
+			const lost = prev.tools.filter((t) => !d.tools.includes(t));
+			if (lost.length) out.push({ file: d.file, slug: d.slug, tools: lost, from: prev.file });
+		}
+		state.set(d.slug, d);
+	}
+	return out;
+}
+
+/**
+ * "Nobody lost anything", derived (#558).
+ *
+ * Six assertions in this file were the same rule written out longhand, each a literal array of tool
+ * names someone remembered to type — and between them they named the tools of four slugs. The other
+ * six slugs any migration declares had NO such assertion: 32 declarations, including all three of
+ * `repo-chat`'s and all sixteen of the lead finder's, would have been dropped in silence by a
+ * migration that restated their capabilities object. `json_set(config, '$.capabilities', json('{…}'))`
+ * drops what it does not restate; 0107 is the migration that proved it, by losing `set_direction`.
+ *
+ * Replaying all 126 migrations found exactly ONE narrowing in the entire history, and it was
+ * deliberate. So the general rule costs a one-entry exception map, and covers every slug and every
+ * tool rather than the ones four separate tickets each remembered to re-type.
+ */
+describe("no migration narrows an agent by accident", () => {
+	const { declarations, files } = replayToolDeclarations();
+	const removals = replayRemovals(declarations);
+	const slugs = [...new Set(declarations.map((d) => d.slug))].sort();
+
+	it("read the migrations it claims to read", () => {
+		// ADR 0002 G1, and the same assertion `tool-reachability.test.ts:219` makes for the same
+		// reason: a parser that stops matching a new `json_set` shape turns this into a guard over
+		// nothing, and an empty replay reports exactly what a clean history reports.
+		expect(files, "fewer than 100 migration files — the replay is not reading the migrations directory").toBeGreaterThanOrEqual(100);
+		expect(
+			declarations.length,
+			"fewer than 20 tool declarations across the whole history. `toolsFromStatement` or the seed parser\n" +
+				"has stopped matching the shape migrations are written in, so 'no narrowing found' means 'nothing looked at'.",
+		).toBeGreaterThanOrEqual(20);
+		expect(slugs.length, "fewer than 8 slugs declare tools — the slug match has stopped resolving").toBeGreaterThanOrEqual(8);
+		expect(slugs).toContain("coder-lead");
+		// The three slugs whose ONLY declaration is a seed. If the seed parser regresses they vanish
+		// silently, and with them the half of criterion 3 this file exists to have closed.
+		expect(declarations.filter((d) => d.via === "seed").length, "the seed INSERT path is no longer being parsed").toBeGreaterThanOrEqual(3);
+	});
+
+	it("never removes a tool from a slug without a recorded reason", () => {
+		const unexplained = removals.filter((r) => {
+			const entry = INTENTIONAL_REMOVALS[r.file];
+			return !entry || entry.slug !== r.slug || r.tools.some((t) => !entry.tools.includes(t));
+		});
+		expect(
+			unexplained.map((r) => `${r.file}: ${r.slug} lost ${r.tools.join(", ")} (last declared in ${r.from})`),
+			"A migration took a tool away from an agent. A whole-object `json_set(config, '$.capabilities', …)`\n" +
+				"drops everything it does not restate, which is how 0107 lost `set_direction`. If the removal is\n" +
+				"deliberate, add an INTENTIONAL_REMOVALS entry naming the slug, the tools and why.",
+		).toEqual([]);
+	});
+
+	it("keeps INTENTIONAL_REMOVALS honest — an entry that stops describing a real removal fails", () => {
+		// The direction that rots. Deleting the 0099 entry fails the test above; leaving it behind
+		// after the migration is edited or the tools come back would otherwise fail nothing at all.
+		for (const [file, entry] of Object.entries(INTENTIONAL_REMOVALS)) {
+			const actual = removals.find((r) => r.file === file && r.slug === entry.slug);
+			expect(actual, `INTENTIONAL_REMOVALS names ${file} / ${entry.slug}, which removes nothing today`).toBeTruthy();
+			expect((actual as { tools: string[] }).tools.slice().sort(), `${file} no longer removes exactly what its entry claims`).toEqual(
+				entry.tools.slice().sort(),
+			);
+			expect(entry.why.length, `INTENTIONAL_REMOVALS[${file}] needs a reason, not a placeholder`).toBeGreaterThan(40);
+		}
+	});
+
+	it("the seed INSERT path cannot narrow a declaration — criterion 3, closed rather than assumed", () => {
+		// #558 left this as its stated open gap: an `INSERT OR IGNORE` is a slug's first declaration
+		// and cannot shrink one, but that argument only holds while every seed IS an `OR IGNORE`.
+		// `INSERT OR REPLACE` / `REPLACE INTO` rewrites the whole row and CAN narrow, invisibly to a
+		// replay that treats seeds as baselines. So the shape is asserted rather than believed.
+		let inserts = 0;
+		for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()) {
+			for (const stmt of readFileSync(join(MIGRATIONS, f), "utf8").split(/;\s*\n/)) {
+				const s = stmt.replace(/--[^\n]*/g, "");
+				if (!/\b(?:insert|replace)\b[\s\S]{0,40}\binto\s+agents\b/i.test(s)) continue;
+				inserts++;
+				expect(
+					/insert\s+or\s+ignore\s+into\s+agents/i.test(s),
+					`${f} writes a row into agents with something other than INSERT OR IGNORE. That can REPLACE an\n` +
+						"existing declaration, which the replay reads as a baseline and would never report as a narrowing.\n" +
+						"Teach the replay this shape before using it.",
+				).toBe(true);
+			}
+		}
+		expect(inserts, "no INSERT INTO agents found at all — the seed scan has stopped matching").toBeGreaterThanOrEqual(8);
+	});
+
+	it("every write to agents.config goes through a path the replay can read, or is reviewed", () => {
+		// The regression risk #558 names in its own words: "a future migration that narrows an agent
+		// through a path this does not parse (a raw `UPDATE agents SET config = …`, say) would be
+		// invisible and the guard would still print a confident number".
+		const opaque: string[] = [];
+		for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()) {
+			for (const stmt of readFileSync(join(MIGRATIONS, f), "utf8").split(/;\s*\n/)) {
+				const s = stmt.replace(/--[^\n]*/g, "");
+				if (!/\bupdate\s+agents\b/i.test(s) || !/\bset\b[\s\S]*\bconfig\s*=/i.test(s)) continue;
+				// A json_set/json_insert names the path it writes; one outside `$.capabilities` cannot
+				// reach a tools array, and the capabilities ones are exactly what the replay reads.
+				if (/config\s*=\s*json_(?:set|insert|replace|remove)\(/i.test(s)) continue;
+				if (f in OPAQUE_CONFIG_WRITES) continue;
+				opaque.push(`${f}: ${s.trim().split("\n")[0].slice(0, 80)}`);
+			}
+		}
+		expect(
+			opaque,
+			"A migration rewrites `agents.config` without naming a JSON path, so the replay above cannot tell\n" +
+				"whether it narrowed an agent. Give it an OPAQUE_CONFIG_WRITES entry saying why it cannot touch\n" +
+				"`capabilities.tools`, or write it as a `json_set` the replay reads.",
+		).toEqual([]);
+		for (const [file, why] of Object.entries(OPAQUE_CONFIG_WRITES)) {
+			expect(readdirSync(MIGRATIONS), `OPAQUE_CONFIG_WRITES names ${file}, which no longer exists`).toContain(file);
+			expect(why.length, `OPAQUE_CONFIG_WRITES[${file}] needs a reason, not a placeholder`).toBeGreaterThan(40);
 		}
 	});
 });
