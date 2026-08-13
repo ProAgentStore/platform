@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
 import { findControls, findMouseOnlyClickTargets, findPlaceholderOnlyControls, findUnlabeledControls } from "./control-labels.js";
+import { TREES, assertMeasurable, tsxFiles } from "./tsx-trees.js";
 
 /**
  * The regression guard for the real half of #292, and now of #324.
@@ -30,24 +31,14 @@ import { findControls, findMouseOnlyClickTargets, findPlaceholderOnlyControls, f
  * scanner is a pure function; this file both unit-tests it and points it at the real trees.
  */
 
-const CONSOLE_SRC = resolve(__dirname, "..");
-const ADMIN_SRC = resolve(__dirname, "../../../admin/src");
 /**
- * The third React tree, and the one that was invisible to this sweep until #324: the Coding tab
- * is its own package (`@proagentstore/coder-web`) that the console imports, so "the console" as
- * a directory was never all of the console as a screen. It was already at zero on both counts —
- * which is exactly why it is worth pinning, since nothing was holding it there.
+ * The three trees, and the walk, moved to `tsx-trees.ts` at #536 — where the assertion that they
+ * were actually READ lives too. The third of them is the one that was invisible to this sweep
+ * until #324: the Coding tab is its own package (`@proagentstore/coder-web`) that the console
+ * imports, so "the console" as a directory was never all of the console as a screen. It was
+ * already at zero on both counts — which is exactly why it is worth pinning, since nothing was
+ * holding it there.
  */
-const CODER_WEB_SRC = resolve(__dirname, "../../../../agents/coder/web/src");
-
-function tsxFiles(dir: string, out: string[] = []): string[] {
-	for (const entry of readdirSync(dir)) {
-		const p = join(dir, entry);
-		if (statSync(p).isDirectory()) tsxFiles(p, out);
-		else if (/\.tsx$/.test(entry)) out.push(p);
-	}
-	return out;
-}
 
 /**
  * Controls whose only name is a `placeholder`. A weak name, not an absent one — the control is
@@ -72,13 +63,26 @@ function sweep(root: string, pick: (source: string) => { line: number; excerpt: 
 	return tsxFiles(root).flatMap((file) => pick(readFileSync(file, "utf8")).map((c) => ({ file, line: c.line, excerpt: c.excerpt })));
 }
 
-const TREES: [string, string][] = [
-	["store/console", CONSOLE_SRC],
-	["store/admin", ADMIN_SRC],
-	["agents/coder/web", CODER_WEB_SRC],
-];
+describe.each(TREES)("%s", (name, root) => {
+	/**
+	 * ADR 0002 G1/G2 — the denominator. The three assertions below are emptiness assertions, and
+	 * an empty offender list is indistinguishable from an empty input set. #536 is the measured
+	 * case: a lexer that lost a backtick made 33 tags invisible, one of them a `<label>`/`<input>`
+	 * pair in the admin that no a11y sweep had ever looked at, and all three of these stayed green.
+	 *
+	 * The label-balance arm of `assertMeasurable` matters most HERE, and it is the reason it exists
+	 * rather than the tag floor: `findControls` scores a control as named when it sits inside a
+	 * `<label>`. A swallow that eats a `</label>` and not its `<label>` leaves that depth stuck
+	 * above zero and quietly exempts every control after it in the file — turning one lost tag into
+	 * false negatives for the rest of the file, which is worse than losing the tag.
+	 */
+	it("measured a tree the size of a real one, and one with balanced labels", () => {
+		const { denominator, files } = assertMeasurable(name, root);
+		const controls = files.reduce((n, f) => n + findControls(readFileSync(f, "utf8")).length, 0);
+		console.log(`  ↳ ${denominator}, ${controls} named-or-not form controls`);
+		expect(controls, `${name}: ${controls} form controls found — an a11y sweep over no controls is green and means nothing.`).toBeGreaterThan(10);
+	});
 
-describe.each(TREES)("%s", (_name, root) => {
 	it("has no form control with no name at all", () => {
 		const found = sweep(root, findUnlabeledControls);
 		expect(found, `unlabeled controls:\n${format(root, found)}`).toEqual([]);
@@ -192,5 +196,24 @@ describe("comments are not markup", () => {
 		// The reason masking is anchored to line starts: a mid-line `//` here is string content,
 		// and blanking to end-of-line would eat the aria-label that follows it.
 		expect(findControls(`<input placeholder="https://x" aria-label="Repo URL" />`)[0].via).toBe("aria-label");
+	});
+
+	it("still sees the controls after a template literal holding an apostrophe (#536)", () => {
+		// The admin's real shape, shrunk: a `<DangerAction description={`Deletes this user's …`}>`
+		// swallowed 3491 characters over 79 lines, and the `<label>`/`<input>` pair inside it had
+		// never been read by this sweep at all. Pre-fix this returned one finding for the outer
+		// tag's own attributes; now it returns the control that was hidden behind it.
+		// Assembled from pieces so this file holds no literal interpolation inside a plain string,
+		// which biome's noTemplateCurlyInString flags — the same dodge control-shapes.test.ts uses.
+		const src = ["<DangerAction description={`Deletes this user", "'s $", "{k} key`} />\n<input aria-label=\"Confirm\" />\n<textarea />"].join("");
+		expect(findControls(src).map((c) => `${c.tag}:${c.via}`)).toEqual(["input:aria-label", "textarea:none"]);
+	});
+
+	it("does not let a swallowed </label> exempt every control after it", () => {
+		// The second-order hazard. `labelDepth` is what makes a wrapped control count as named, so
+		// a lost close tag silently names everything downstream. `assertMeasurable` asserts this
+		// balance across all three real trees; this is the unit-level statement of the same thing.
+		const src = ["<label>Name <input id=\"n\" /></label>\n<input title={`it", "'s here`} />\n<textarea />"].join("");
+		expect(findControls(src).map((c) => `${c.tag}:${c.via}`)).toEqual(["input:id", "input:title", "textarea:none"]);
 	});
 });

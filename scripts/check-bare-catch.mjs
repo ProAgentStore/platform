@@ -108,11 +108,21 @@ function sources(dir, out = []) {
 let failed = false;
 for (const [tree, pin] of Object.entries(PINNED)) {
 	const found = [];
-	for (const file of sources(resolve(ROOT, tree))) {
+	// ADR 0002 G1: eight of the nine trees below are gated at ZERO, and "no offenders" is exactly
+	// what a walk that found no files says too. A renamed directory or a tightened `isSource` would
+	// otherwise turn this gate off one tree at a time, in silence.
+	const files = sources(resolve(ROOT, tree));
+	if (!files.length) {
+		failed = true;
+		console.error(`\n✗ ${tree}: the walk found no source files. This gate is reporting clean over an empty set (ADR 0002 G1).\n`);
+		continue;
+	}
+	for (const file of files) {
 		for (const line of bareCatches(readFileSync(file, "utf-8"))) found.push(`${relative(ROOT, file)}:${line}`);
 	}
 	if (found.length === pin) {
-		console.log(`✓ ${tree}: ${pin === 0 ? "no bare catch blocks" : `${pin} bare catch block(s), at its pin`}.`);
+		// G2: the denominator rides in the passing line, so the next shrink is visible in a green build.
+		console.log(`✓ ${tree}: ${pin === 0 ? "no bare catch blocks" : `${pin} bare catch block(s), at its pin`} over ${files.length} source file(s).`);
 		continue;
 	}
 	failed = true;

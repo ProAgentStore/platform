@@ -61,6 +61,21 @@ describe("bareCatches", () => {
 	it("counts every catch in a file, not just the first", () => {
 		expect(lines("try{a()}catch{}\ntry{b()}catch{}\ntry{c()}catch{ /* fine */ }")).toEqual([1, 2]);
 	});
+
+	it("throws on a catch block whose brace never closes, instead of skipping it (ADR 0002 G3)", () => {
+		// This used to be `if (close === -1) continue;` — the same line, in the same position, as
+		// the one in `store/console/src/lib/jsx-tags.ts` that hid 33 tags and made a pinned count
+		// wrong for months (#536). An unclosed block means the stripper lost its place, so every
+		// catch after it in the file is unmeasured; the gate must say so rather than shrink.
+		expect(() => lines("try { a(); } catch { if (x) {\n")).toThrow(/never closed/);
+		expect(() => lines("try { a(); } catch { if (x) {\n")).toThrow(/G3/);
+	});
+
+	it("still skips the `catch` METHOD, which is not the same shape", () => {
+		// `\bcatch\b` matches `p.catch(fn)` too. Skipping those is the guard working — the
+		// distinction the throw above must not blur.
+		expect(lines("p.catch((e) => log(e));\nq.catch(noop);")).toEqual([]);
+	});
 });
 
 describe("stripCommentsAndLiterals", () => {

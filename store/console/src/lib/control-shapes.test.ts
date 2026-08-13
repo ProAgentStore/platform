@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findHandAuthoredCards, findHandAuthoredControls } from "./control-shapes.js";
+import { TREES, assertMeasurable, tsxFiles } from "./tsx-trees.js";
 
 /**
  * The ratchet that stops the fifteenth button shape (#366).
@@ -22,19 +23,6 @@ import { findHandAuthoredCards, findHandAuthoredControls } from "./control-shape
  * the console tree was migrated in #366; the other two are pinned where they stand so they
  * cannot grow while their turn waits.
  */
-
-const CONSOLE_SRC = resolve(__dirname, "..");
-const ADMIN_SRC = resolve(__dirname, "../../../admin/src");
-const CODER_WEB_SRC = resolve(__dirname, "../../../../agents/coder/web/src");
-
-function tsxFiles(dir: string, out: string[] = []): string[] {
-	for (const entry of readdirSync(dir)) {
-		const p = join(dir, entry);
-		if (statSync(p).isDirectory()) tsxFiles(p, out);
-		else if (/\.tsx$/.test(entry)) out.push(p);
-	}
-	return out;
-}
 
 function sweep(root: string, find = findHandAuthoredControls) {
 	return tsxFiles(root).flatMap((file) => find(readFileSync(file, "utf8")).map((c) => `${relative(root, file)}:${c.line}  ${c.shape.join(" ")}`));
@@ -181,20 +169,46 @@ function sweep(root: string, find = findHandAuthoredControls) {
 //
 // All three trees are now at the floor of what this vocabulary can express. What is pinned is no
 // longer a migration backlog; it is the list of shapes the table does not have.
-const PINNED = { "store/console": 42, "store/admin": 4, "agents/coder/web": 23 };
+//
+// ── 42 → 43 at #536, and this is a RE-PIN, not a regression
+//
+// The console pin was set against an under-count. `jsx-tags.ts` did not treat a backtick as a
+// string delimiter, so the apostrophe in `` setError(`Couldn't remember ${key} …`) `` at
+// `tabs/TmuxTab.tsx:413` opened a quote state the closing backtick never cleared — and swallowed
+// the button 23 lines ABOVE it, at `tabs/TmuxTab.tsx:390  px-2 py-2 rounded-lg`. That button has
+// been there the whole time. Nobody added a shape; the scanner could not see one, and every
+// sentence above about the console being "DONE" was written over a subset.
+//
+// The other two trees are unchanged (admin 4, coder/web 23) and so are all three card pins, even
+// though the admin is where the mis-lex was WORST — one `<DangerAction>` in `UserDetail.tsx`
+// swallowed 3491 characters over 79 lines. Its 32 hidden tags simply contained no `<button>` with
+// both padding and a radius. That is luck, not coverage, which is the argument for the
+// denominator assertion below rather than for a bigger pin.
+const PINNED = { "store/console": 43, "store/admin": 4, "agents/coder/web": 23 };
 
-describe.each([
-	["store/console", CONSOLE_SRC],
-	["store/admin", ADMIN_SRC],
-	["agents/coder/web", CODER_WEB_SRC],
-] as const)("%s holds its count of buttons that draw their own box", (name, root) => {
+describe.each(TREES)("%s holds its count of buttons that draw their own box", (name, root) => {
+	/**
+	 * ADR 0002 G1/G2 — the denominator. Every assertion in this file is over the tags this sweep
+	 * managed to read, and #536 is what happens when that set silently shrinks: the pin above read
+	 * 42 for months while the tree held 43, and nothing changed colour. `assertMeasurable` fails
+	 * when the walk loses the tree, when one opening tag spans more lines than an attribute list
+	 * plausibly can (the mis-lex signature), when `<label>` opens and closes stop balancing, and
+	 * when `scanTags` cannot close a tag at all.
+	 */
+	it("measured a tree the size of a real one", () => {
+		const { denominator } = assertMeasurable(name, root);
+		console.log(`  ↳ ${denominator}`);
+	});
+
 	it("is exactly at its pin", () => {
 		const found = sweep(root);
+		const { files, tags } = assertMeasurable(name, root);
 		expect(
 			found.length,
-			`${name}: ${found.length} hand-authored button shape(s), pinned at ${PINNED[name]}.\n${found.map((f) => `  ${f}`).join("\n")}\n\n` +
+			`${name}: ${found.length} hand-authored button shape(s) over ${tags} tags in ${files.length} files, pinned at ${PINNED[name]}.\n${found.map((f) => `  ${f}`).join("\n")}\n\n` +
 				"Over the pin: use <Button variant size> from components/Button.tsx instead of writing padding + radius.\n" +
-				"Under it: you migrated some — lower the pin here in the same commit, or the ground is left as headroom.",
+				"Under it: you migrated some — lower the pin here in the same commit, or the ground is left as headroom.\n" +
+				"If the TAG count fell too, suspect the scanner before the tree (#536, ADR 0002).",
 		).toBe(PINNED[name]);
 	});
 });
@@ -214,11 +228,7 @@ describe.each([
 // +3 for #488: DeploymentCard.tsx adds 3 hand-written cards; AgentDetail/McpInputRequests also added.
 const PINNED_CARDS = { "store/console": 33, "store/admin": 3, "agents/coder/web": 9 };
 
-describe.each([
-	["store/console", CONSOLE_SRC],
-	["store/admin", ADMIN_SRC],
-	["agents/coder/web", CODER_WEB_SRC],
-] as const)("%s holds its count of hand-written cards", (name, root) => {
+describe.each(TREES)("%s holds its count of hand-written cards", (name, root) => {
 	it("is exactly at its pin", () => {
 		const found = sweep(root, findHandAuthoredCards);
 		expect(
@@ -287,6 +297,19 @@ describe("findHandAuthoredControls", () => {
 		// which biome's noTemplateCurlyInString flags inside an ordinary string.
 		const tag = ["<button className={`text-xs $", "{on ? 'px-3 py-1.5 rounded-lg' : 'text-muted'}`}>x</button>"].join("");
 		expect(shapes(tag)).toEqual(["px-3 py-1.5 rounded-lg"]);
+	});
+
+	it("sees a shape on a button whose title is a template literal holding an apostrophe (#536)", () => {
+		// The under-count itself, as a fixture. Against the pre-fix lexer the apostrophe in
+		// `agent's` opened a quote state the backtick could not close, the tag was scanned to the
+		// end of the input, and this returned [] — which is how `tabs/TmuxTab.tsx:390` stayed out
+		// of the pin above. The second control proves the loss did not stop at the one tag.
+		const src = [
+			"<button title={`the agent",
+			"'s runner`} className=\"px-2 py-2 rounded-lg\">Restart</button>\n",
+			"<button className=\"px-3 py-1.5 rounded-lg\">After</button>",
+		].join("");
+		expect(shapes(src)).toEqual(["px-2 py-2 rounded-lg", "px-3 py-1.5 rounded-lg"]);
 	});
 
 	it("counts a responsive or state prefix as the same decision", () => {
