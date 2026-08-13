@@ -219,7 +219,12 @@ const codingDriver: LoopDriver = {
 			return {
 				ok: false,
 				status: 409,
-				error: `${repo.name} is already being worked on — wait for the current run to finish, or stop it first.`,
+				// Names WHO can do the stopping (#540). The owner read this sentence at 12:07, in a
+				// bubble produced by the agent's own `start_work` call, and the only actor in the room
+				// who could act on it was him — twelve minutes later he asked the agent to stop and was
+				// told a machine on his desk owned the control. `stop_work` is in BASE, so the agent
+				// reading this refusal has the tool it names.
+				error: `${repo.name} is already being worked on — wait for the current run to finish, or stop it first with stop_work.`,
 			};
 		}
 

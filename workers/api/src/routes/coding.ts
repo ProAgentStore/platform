@@ -21,7 +21,6 @@ import { logError } from "../lib/error-log.js";
 import {
 	claimSessionDriver,
 	createSession,
-	endSession,
 	getActiveSessionForRepo,
 	getRepo,
 	getSession,
@@ -36,6 +35,7 @@ import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
 import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineUsage } from "../lib/usage.js";
+import { endCodingSession } from "../lib/coding-session-end.js";
 import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
@@ -688,60 +688,20 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/resume", async (c) =>
 	return c.json({ ok: true });
 });
 
-/** End a session: stop the runner's tmux + close the D1 record. */
+/**
+ * End a session: stop the engine on the machine + close the D1 record.
+ *
+ * The body moved to `lib/coding-session-end.ts` at #540, unchanged, because the agent's own
+ * `end_coding_session` tool has to end a session exactly the way this button does — and the four
+ * things this route does beyond flipping the row (drain the closing turn's spend #267, record who
+ * paid #554, drain the closing acts #294, refuse to report a stop the engine did not confirm) are
+ * each here because they were once missing. A second copy would restate them today and stop
+ * restating them at the next change. The response shape is unchanged.
+ */
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
-	const sessionId = c.req.param("sessionId");
-	const session = await getSession(c.env, instanceId, uid, sessionId);
-	const conn = session ? await getSessionRunnerConn(c.env, instanceId, uid, session) : null;
-	// Ending returns whatever spend has not been drained yet (#267). The last turn of a session
-	// routinely completes after the final capture poll, so without this the ledger would lose the
-	// closing turn of EVERY session — a bias, not noise.
-	// Stopping the engine is the POINT of ending a session; closing only the D1 row tidies the
-	// database and leaves the child process running (`coding-session-sweeper` says exactly this).
-	// The failure used to be swallowed into `null`, so the row flipped to `ended`, the route
-	// answered `{ok:true}`, and an orphaned CLI kept editing the repo with its session id no
-	// longer in `coding_sessions` — nothing could find it again. The row still has to close (a
-	// session the user ended must stop claiming to be active), so: close it, but say so honestly
-	// and durably rather than reporting a clean stop that did not happen.
-	let stopError: string | null = null;
-	const ended = conn
-		? await callRunner<{ usage?: unknown; acts?: unknown; authResolved?: unknown }>(conn, "/coding/end", { sessionId }).catch((e) => {
-				stopError = e instanceof Error ? e.message : String(e);
-				return null;
-			})
-		: null;
-	if (stopError) {
-		await logError(c.env, {
-			source: "coding",
-			userId: uid,
-			message: `Failed to stop the engine while ending session ${sessionId}: ${stopError}`,
-			context: { instanceId, sessionId, runnerNode: session?.runnerNode ?? null },
-		});
-	}
-	// …and WHO paid for it (#554). This was the fourth `recordEngineUsage` site and the only one
-	// that dropped the observation, so the closing turns above — the ones the comment calls a bias
-	// rather than noise — landed with `payer` NULL however the engine had actually signed in.
-	// `?? null`, never a fallback to the preset: what was CONFIGURED is not what was resolved.
-	await recordEngineUsage(
-		c.env,
-		{ userId: uid, sessionId, instanceId, authResolved: (ended?.authResolved ?? null) as EngineAuthResolved | null },
-		sanitizeEngineUsage(ended?.usage),
-	);
-	// Same tail problem, sharper consequence (#294): a coding session very often ENDS with the
-	// consequential act — push, open the PR, merge it — so acts drained only on capture would
-	// systematically miss the last and most important one of every session.
-	await recordEngineActs(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
-	const ok = await endSession(c.env, instanceId, uid, sessionId);
-	return c.json(
-		stopError
-			? {
-					ok,
-					engineStopped: false,
-					warning: `The session is closed, but the engine on ${session?.runnerNode || "your machine"} did not confirm it stopped — it may still be running. Check Diagnostics → Sessions, or \`ps\`, if the repo keeps changing.`,
-				}
-			: { ok },
-	);
+	const ended = await endCodingSession(c.env, { instanceId, userId: uid, sessionId: c.req.param("sessionId") });
+	return c.json(ended.warning ? { ok: ended.ok, engineStopped: false, warning: ended.warning } : { ok: ended.ok });
 });
 
 /**

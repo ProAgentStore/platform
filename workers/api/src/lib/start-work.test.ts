@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { registryToolNameSet, getRegistryTool } from "./tool-registry.js";
+import { registryToolNameSet, getRegistryTool, registryTools } from "./tool-registry.js";
 import { CREATOR_SELECTABLE_TOOLS } from "../agent-do-tools.js";
 import { toolNamesFor } from "../agent-do-tools.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 
 const caps = (over: Partial<AgentCapabilities> = {}) =>
 	({ surfaces: [], runtime: null, workflow: null, ...over }) as AgentCapabilities;
+
+/**
+ * ONE object, three verbs (#540).
+ *
+ * `start_work` (#210) and `check_work` (#256) shipped a year apart and the third was never built,
+ * which is not a cosmetic asymmetry: the owner asked five times to finish a session and got
+ * *"that's controlled by the app on your device"* — a fabrication produced by an agent that had a
+ * verb it could not complete. The list is stated once and every assertion below reads it, so adding
+ * a fourth lifecycle verb without granting it fails here rather than in production.
+ */
+const WORK_LIFECYCLE = ["start_work", "check_work", "stop_work"] as const;
 
 describe("start_work — the chat's only way to actually DO something", () => {
 	it("exists in the registry", () => {
@@ -51,6 +62,59 @@ describe("start_work — the chat's only way to actually DO something", () => {
 		const tool = getRegistryTool("start_work");
 		const res = await tool?.handler({ env: {} as never, instanceId: "i1", userId: "u1" } as never, { objective: "   " });
 		expect(res).toMatchObject({ success: false });
+	});
+});
+
+describe("the work lifecycle travels together — start, check, stop (#540)", () => {
+	/**
+	 * Every capability profile the platform actually resolves. The point of the matrix is that the
+	 * gap #540 reports is a PER-AGENT one, and `tool-reachability.test.ts` is structurally blind to
+	 * that: it asks "does SOME agent declare this tool", which is green while the one agent that
+	 * needs it goes without (that is how #506 stayed green).
+	 */
+	const PROFILES: Array<[string, AgentCapabilities]> = [
+		["a generic agent with no declared anything", caps()],
+		["Repo Chat (repo surface, read-only KB)", caps({ surfaces: ["repo"] })],
+		[
+			"a Repo Coder — declared allowlist, drive:false, the agent in #540",
+			caps({
+				surfaces: ["coding"],
+				runtime: "coding",
+				workflow: "CODING_SESSION",
+				tools: ["repo_git", "github_read_issue"],
+				surfaceOptions: { coding: { repos: "single", drive: false, copilot: false } },
+			} as Partial<AgentCapabilities>),
+		],
+		["a driving Coder", caps({ surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" })],
+		["an apply agent", caps({ surfaces: ["apply"], runtime: "browser", workflow: "JOB_APPLY" })],
+	];
+
+	it.each(PROFILES)("%s can start, check AND stop", (_label, profile) => {
+		const tools = toolNamesFor(profile);
+		for (const verb of WORK_LIFECYCLE) expect(tools.has(verb), `${verb} missing`).toBe(true);
+	});
+
+	it("every verb is base tier and none is creator-selectable", () => {
+		// Creator-selectable would put the stop behind the same decision that already lost tools on
+		// the agents that most needed them: a declared `capabilities.tools` is an AUTHORITATIVE
+		// allowlist, so a creator who forgot the verb ships an agent that cannot be told to stop.
+		for (const verb of WORK_LIFECYCLE) {
+			expect(registryToolNameSet().has(verb), `${verb} is not registered`).toBe(true);
+			expect(getRegistryTool(verb)?.tier, `${verb} tier`).toBe("base");
+			expect(CREATOR_SELECTABLE_TOOLS.has(verb), `${verb} should not be selectable`).toBe(false);
+		}
+	});
+
+	it("no fourth `*_work` verb exists outside the family", () => {
+		// The assertion that makes the list above a rule rather than a comment: a `pause_work` added
+		// to the registry and granted to nobody would pass every test in this file without this one.
+		const family = registryTools()
+			.map((t) => t.name)
+			.filter((n) => n.endsWith("_work"))
+			.sort();
+		expect(family, "add it to WORK_LIFECYCLE, and to BASE, or name it something that is not a work verb").toEqual(
+			[...WORK_LIFECYCLE].sort(),
+		);
 	});
 });
 
@@ -196,5 +260,124 @@ describe("check_work — the other half: an agent must be able to OBSERVE what i
 			const res = await getRegistryTool("check_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "r1" });
 			expect(res?.success).toBe(false);
 		});
+	});
+});
+
+describe("stop_work — the third verb, and the one the owner asked for five times (#540)", () => {
+	/**
+	 * Mock D1 that also records WRITES, because the whole tool is a write. Reads dispatch on the SQL
+	 * the way `check_work`'s mock does; `run()` reports `meta.changes`, which is how `requestCancel`
+	 * distinguishes "a running run took the flag" from "there was no running run to take it".
+	 */
+	function mockEnv(opts: { rows?: unknown[]; delegated?: unknown[]; first?: unknown; changes?: number; capabilities?: unknown } = {}) {
+		const writes: { sql: string; args: unknown[] }[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						if (sql.includes("UPDATE")) writes.push({ sql, args });
+						return {
+							async all() {
+								if (sql.includes("delegated_by")) return { results: opts.delegated ?? [] };
+								return { results: opts.rows ?? [] };
+							},
+							async first() {
+								// `capabilitiesForInstance` joins agents; everything else here reads a run row.
+								if (sql.includes("agent_instances")) return opts.capabilities ?? { slug: "coder-repo", category: "developer", config: "{}" };
+								return opts.first ?? null;
+							},
+							async run() {
+								return { meta: { changes: opts.changes ?? 1 } };
+							},
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as never, writes };
+	}
+
+	const runRow = (over: Record<string, unknown> = {}) => ({
+		run_id: "r1",
+		user_id: "u1",
+		instance_id: "i1",
+		objective: "refactor the parser",
+		status: "running",
+		stop_reason: null,
+		detail: null,
+		iteration: 4,
+		max_iterations: 10,
+		cancel_requested: 0,
+		budget_id: null,
+		started_at: Date.now() - 120_000,
+		finished_at: null,
+		last_progress_at: Date.now() - 5_000,
+		...over,
+	});
+
+	it("asks the running run to stop, and says ASKED rather than STOPPED", async () => {
+		const { env, writes } = mockEnv({ rows: [runRow()] });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		expect(res?.success).toBe(true);
+		expect(String(res?.content)).toMatch(/Asked run r1 to stop/);
+		expect(String(res?.content)).toMatch(/REQUEST, not a completed stop/);
+		// The write that actually happened: the cooperative flag, scoped to owner + running.
+		expect(writes.some((w) => w.sql.includes("cancel_requested = 1") && w.args.includes("r1") && w.args.includes("u1"))).toBe(true);
+	});
+
+	it("with nothing running, answers plainly instead of fabricating a stop", async () => {
+		// The sentence this replaces, verbatim from production: "I can't stop or end your session
+		// from here — that's controlled by the app on your device." No app on his device owns this.
+		const { env, writes } = mockEnv({ rows: [] });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		// Success, not an error: an error reads as "could not tell", which is what produces a guess.
+		expect(res?.success).toBe(true);
+		expect(String(res?.content)).toMatch(/Nothing is running/);
+		expect(writes).toEqual([]);
+	});
+
+	it("does not cancel a run that has already finished", async () => {
+		const { env, writes } = mockEnv({ first: runRow({ status: "completed", stop_reason: "done", finished_at: Date.now() }) });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "r1" });
+		expect(res?.success).toBe(true);
+		expect(String(res?.content)).toMatch(/had already ended/);
+		expect(writes).toEqual([]);
+	});
+
+	it("reuses check_work's ownership test exactly — a sibling agent's run is not stoppable", async () => {
+		// Relaxing this would give a Lead the power to cancel runs on agents it does not supervise,
+		// which is strictly worse than the read it already has.
+		const { env, writes } = mockEnv({ first: runRow({ instance_id: "other" }) });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "r1" });
+		expect(res?.success).toBe(false);
+		expect(String(res?.content)).toMatch(/nothing was stopped/i);
+		expect(writes).toEqual([]);
+	});
+
+	it("stops a run it DELEGATED — the other way a run is yours (#318)", async () => {
+		const { env, writes } = mockEnv({ first: runRow({ run_id: "d1", instance_id: "sub-1", delegated_by: "i1" }) });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "d1" });
+		expect(res?.success).toBe(true);
+		expect(String(res?.content)).toContain("sub-1");
+		expect(writes.some((w) => w.args.includes("d1"))).toBe(true);
+	});
+
+	it("stops the delegated runs too when no runId is given", async () => {
+		const { env, writes } = mockEnv({ rows: [runRow()], delegated: [runRow({ run_id: "d1", instance_id: "sub-1", delegated_by: "i1" })] });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		expect(writes.map((w) => w.args.find((a) => a === "r1" || a === "d1")).sort()).toEqual(["d1", "r1"]);
+		expect(String(res?.content)).toContain("d1");
+	});
+
+	it("reports a run that finished between the read and the write as exactly that", async () => {
+		// `requestCancel` matched no row. That is not a failure and it is not a stop.
+		const { env } = mockEnv({ rows: [runRow()], changes: 0 });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		expect(String(res?.content)).toMatch(/finished on its own/);
+	});
+
+	it("needs an owned instance context", async () => {
+		const res = await getRegistryTool("stop_work")?.handler({ env: {} as never } as never, {});
+		expect(res?.success).toBe(false);
 	});
 });

@@ -12,7 +12,8 @@ import { hasConsent } from "./connector-consent.js";
 import { undeclaredToolRefusal } from "./tool-refusal.js";
 import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
-import { getLoopRun, listDelegatedRuns, listLoopRuns, type LoopRunView } from "./agent-loop-store.js";
+import { getLoopRun, listDelegatedRuns, listLoopRuns, requestCancel, type LoopRunView } from "./agent-loop-store.js";
+import { classifyBeforeStop, describeNothingToStop, describeStopResult, stoppableRuns, type StopOutcome } from "./work-stop.js";
 import { subordinateIdsOf } from "./supervision.js";
 import { describeWorkCheck } from "./work-report.js";
 import { describeTerminal, type TerminalView } from "./terminal-label.js";
@@ -105,6 +106,34 @@ async function resolveEngineViews(
 		}),
 	);
 	return views;
+}
+
+/**
+ * Ask ONE run to stop, and report which of the four things actually happened (#540).
+ *
+ * The classification is read from the row BEFORE the write, so "it had already ended" and "a stop
+ * was already asked for" are answers rather than a cancel that silently no-ops and gets reported as
+ * a stop. `requestCancel` only matches `status = 'running'`, so a `false` return after we read the
+ * run as running means it finished in between — which is a fourth, distinct sentence and not a
+ * failure.
+ */
+async function stopOneRun(
+	env: import("../types.js").Env,
+	userId: string,
+	run: LoopRunView,
+	delegated: boolean,
+): Promise<StopOutcome> {
+	const base = {
+		runId: run.runId,
+		objective: run.objective,
+		status: run.status,
+		stopReason: run.stopReason,
+		delegated,
+		instanceId: run.instanceId,
+	};
+	const before = classifyBeforeStop(run);
+	if (before !== "stoppable") return { ...base, kind: before };
+	return { ...base, kind: (await requestCancel(env, userId, run.runId)) ? "requested" : "vanished" };
 }
 
 /**
@@ -206,6 +235,75 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				(await subordinateIdsOf(ctx.env, ctx.userId, ctx.instanceId).catch(() => [])).length > 0;
 			const engineViews = await resolveEngineViews(ctx.env, ctx.instanceId, ctx.userId, runs);
 			return { content: describeWorkCheck(runs, Date.now(), { delegated: delegatedRuns, supervises, timeZone, engineViews }), success: true };
+		},
+	},
+	{
+		name: "stop_work",
+		description:
+			"Stop work YOU started — call this the moment the user says stop, halt, cancel, abort, that's enough, or finish. With no runId it stops everything of yours that is currently running. Stopping is COOPERATIVE: the step in flight finishes first, so say you have ASKED it to stop, never that it has stopped. It is the user's decision to relay, not your own tidying up — never stop a run because you think it is stuck or taking too long.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				runId: { type: "string", description: "A specific run id (as returned by start_work, check_work or delegate_goal). Omit to stop everything of yours that is running." },
+			},
+			required: [],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "stop_work needs an owned instance context.", success: false };
+			const runId = typeof input.runId === "string" ? input.runId.trim() : "";
+			if (runId) {
+				const run = await getLoopRun(ctx.env, ctx.userId, runId);
+				// The SAME ownership test `check_work` applies, and it must stay the same one: relaxing
+				// it here would let a Lead cancel runs on agents it does not supervise, which is a
+				// strictly worse power than reading them. `delegatedBy` is the other way a run is
+				// yours (#318) — a supervisor's runs are never on its own instance.
+				const own = !!run && run.instanceId === ctx.instanceId;
+				if (!run || !(own || run.delegatedBy === ctx.instanceId)) {
+					return { content: `No run ${runId} belongs to you, so nothing was stopped. Do not tell the user you stopped it.`, success: false };
+				}
+				return { content: describeStopResult([await stopOneRun(ctx.env, ctx.userId, run, !own)]), success: true };
+			}
+			const [runs, delegatedRuns] = await Promise.all([
+				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 20),
+				// Tolerated exactly as in `check_work`: an API deployed ahead of migration 0090 has no
+				// `delegated_by` column, and a supervisor losing its delegations is a better failure
+				// than every agent losing `stop_work`.
+				listDelegatedRuns(ctx.env, ctx.userId, ctx.instanceId, 20).catch(() => [] as LoopRunView[]),
+			]);
+			const targets = [
+				...stoppableRuns(runs).map((r) => ({ run: r, delegated: false })),
+				...stoppableRuns(delegatedRuns).map((r) => ({ run: r, delegated: true })),
+			];
+			if (!targets.length) {
+				// A real answer, not an error. This sentence is what replaces the fabricated "that's
+				// controlled by the app on your device" (#540) — and it points at the session tool only
+				// on an agent that actually has one, because "nothing is running" and "a session is
+				// still open" are both true at once on a coding agent, and the owner's "finish the
+				// session" usually means the second.
+				const caps = await capabilitiesForInstance(ctx.env, ctx.instanceId, ctx.userId).catch(() => null);
+				return { content: describeNothingToStop({ canEndSession: !!caps?.surfaces?.includes("coding") }), success: true };
+			}
+			const outcomes = await Promise.all(targets.map((t) => stopOneRun(ctx.env, ctx.userId!, t.run, t.delegated)));
+			return { content: describeStopResult(outcomes), success: true };
+		},
+	},
+	{
+		name: "end_coding_session",
+		description:
+			"End a coding session — the engine (Claude Code / Codex / …) running on the user's machine for one repository. Use it when the user says to finish, close or end the session. This is NOT how you stop a run in progress: stop_work does that, and it leaves the session open. If a run is driving the session, this asks that run to stop too and says so. Only ever do this because the user asked — a session left open costs nothing and keeps its conversation.",
+		tier: "runtime",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				repo: { type: "string", description: "Which repository's session to end, by name. Omit when there is only one." },
+			},
+			required: [],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "end_coding_session needs an owned instance context.", success: false };
+			const { endAgentCodingSession } = await import("./end-coding-session-tool.js");
+			return endAgentCodingSession(ctx.env, ctx.instanceId, ctx.userId, typeof input.repo === "string" ? input.repo : undefined);
 		},
 	},
 	{

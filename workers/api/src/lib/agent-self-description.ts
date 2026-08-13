@@ -198,6 +198,13 @@ export function executionAuthorityPrompt(model: SelfModel): string {
 				" and it really does drive the coding engine on the user's machine — running commands, editing files," +
 				" making commits. That is real work, done by you, through it.",
 			"- DO say plainly when you have started work, and report what the run reports back.",
+			// Not a behavioural instruction — a statement of which tool exists (#540). The agent that
+			// invented "that's controlled by the app on your device" was not being careless; it had a
+			// verb it could not complete, and two rounds of prompt sentences lost to that pattern this
+			// week (#493/#494). `stop_work` is in BASE, so this line is true for every agent that
+			// reaches it, and it names the one thing the tool result must not say.
+			"- When the user says stop, halt, cancel or finish, call `stop_work`. Stopping is cooperative — the step in" +
+				" flight finishes first — so say you have ASKED it to stop, never that it has stopped.",
 		);
 	}
 	if (model.canDelegate) {

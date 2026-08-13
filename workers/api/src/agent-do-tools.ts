@@ -46,6 +46,19 @@ export const BASE = [
 	// Base rather than creator-selectable for the same reason `start_work` is: a creator who forgot
 	// to declare it would ship an agent that can only guess about its own work.
 	"check_work",
+	// STOP what `start_work` started (#540) — the third verb of the same object's lifecycle.
+	//
+	// Base for a reason the other two only imply: an agent that can start work and cannot stop it is
+	// not a smaller agent, it is a broken one. The owner asked five times to finish a session and was
+	// told *"that's controlled by the app on your device"* — a fabrication he then reported twice
+	// through `record_feedback`. The model did not invent that because it was careless; it invented
+	// it because it had no tool and no true remedy to offer, and a prompt sentence cannot supply one
+	// (the lesson of #493/#494 and the fix that worked, 644e5e2: give it the missing fact).
+	//
+	// Creator-selectable would put the stop behind the same decision that already lost `check_work`
+	// on the agents that most needed it: the Repo Coder in #540 declares fourteen tools, none of
+	// which stops anything, and its declaration is an AUTHORITATIVE allowlist.
+	"stop_work",
 	// Read and change how the agent communicates (#224).
 	//
 	// Base rather than creator-selectable because the alternative is what actually happened: asked
@@ -225,6 +238,20 @@ export function toolNamesFor(capabilities?: AgentCapabilities): Set<string> {
 	// unaffected, since neither goes through chat tools. Default stays true, so every existing
 	// agent is untouched.
 	if (optionsFor(capabilities, "coding")?.drive) for (const t of CODING) set.add(t);
+	// Invariant (#540): an agent with a coding surface can END its coding session, whatever else it
+	// may or may not do.
+	//
+	// Gated on the SURFACE and deliberately not on `drive`, unlike the CODING block above. `drive`
+	// answers "may this chat type into the engine", and ending a session is not typing into it — it
+	// is relinquishing it. The agent this ticket is about is a Repo Coder with `drive:false`, so a
+	// drive-gated stop would have been withheld from the exact instance whose owner asked five times.
+	//
+	// Not in `CODING`, and therefore not in `FULL`: every generic agent inherits FULL, and a doc-chat
+	// agent that has never had a session does not need a tool for ending one — that is the leak class
+	// the capability registry closes. Not in `TOOL_CATALOG` either, for the reason
+	// `find_confirmation_link` is not: it is granted by what the agent IS, so a declaration could only
+	// add noise, and an authoritative allowlist that omitted it would recreate this very bug.
+	if (surfaces.includes("coding")) set.add("end_coding_session");
 	return set;
 }
 
