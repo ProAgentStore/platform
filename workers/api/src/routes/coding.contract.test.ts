@@ -938,7 +938,11 @@ describe("GET …/timeline?terminal=1 — a page of snapshots, not the whole ses
 			{ headers: { Authorization: `Bearer ${token}` } },
 			env,
 		);
-		return { status: res.status, body: (await res.json()) as { terminal?: Array<{ seq: number }>; hasMore?: boolean; oldestSeq?: number | null }, issued };
+		return {
+			status: res.status,
+			body: (await res.json()) as { terminal?: Array<{ seq: number }>; hasMore?: boolean; oldestSeq?: number | null; newestSeq?: number | null; tail?: boolean },
+			issued,
+		};
 	}
 
 	it("returns the newest page oldest→newest, with the cursor for the next one back", async () => {
@@ -989,6 +993,29 @@ describe("GET …/timeline?terminal=1 — a page of snapshots, not the whole ses
 		const { issued } = await read("?terminal=1&limit=9999", []);
 		const q = issued.find((s) => /type = 'terminal'/.test(s.sql));
 		expect(q?.binds[2]).toBe(51); // 50 (the cap) + the has-more probe row
+	});
+
+	it("turns `after` into a keyset the OTHER way, and labels the reply a tail (#550)", async () => {
+		// The reload path. The console holds the page it rendered last time, so this request is
+		// "what has been appended since seq 20" — 41 KB of measured payload becomes a delta.
+		const { status, body, issued } = await read("?terminal=1&after=20", [{ seq: 30, content: "new output" }]);
+		expect(status).toBe(200);
+		const q = issued.find((s) => /type = 'terminal'/.test(s.sql));
+		expect(q?.sql).toContain("seq > ?2");
+		expect(q?.binds[1]).toBe(20);
+		expect(body.tail).toBe(true);
+		expect(body.newestSeq).toBe(30);
+		// Absent, not null: a delta says nothing about how far back the caller's history reaches,
+		// and a client applying these would replace a good "load older" cursor with the newest row.
+		expect("hasMore" in body).toBe(false);
+		expect("oldestSeq" in body).toBe(false);
+	});
+
+	it("still answers a first load with the newest page, now carrying the cursor to come back with", async () => {
+		const { body } = await read("?terminal=1", [{ seq: 30, content: "c" }, { seq: 10, content: "a" }]);
+		expect(body.tail).toBe(false);
+		expect(body.newestSeq).toBe(30); // what the next load sends as `after=`
+		expect(body.oldestSeq).toBe(10);
 	});
 });
 

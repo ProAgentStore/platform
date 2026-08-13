@@ -8,6 +8,7 @@
 
 import { useCallback, useRef, useState, type RefObject } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { readTerminalCache, writeTerminalCache } from "./terminal-cache";
 import { appendSnapshot, stitchSnapshots, type TerminalPage, terminalPlaceholder } from "./terminal-history";
 
 export interface CaptureSnapshot {
@@ -45,21 +46,39 @@ export function useTerminalScrollback(instanceId: string, termRef: RefObject<HTM
 	loadingRef.current = loadingHistory;
 	/** Which session the state currently belongs to — reopening the SAME one keeps it. */
 	const sessionRef = useRef<string | null>(null);
+	/**
+	 * Where the rendered history reaches, in `seq`, as refs rather than state (#550).
+	 *
+	 * `open` needs all three — the newest row it holds (the `after=` cursor), and the two that
+	 * describe the far end (what `before=` would ask for, and whether the control shows) — and
+	 * reading them from state would put them in the callback's deps, rebuilding `open` on every
+	 * page load and with it the `openTerminal` identity the auto-open effect keys on.
+	 */
+	const newestSeqRef = useRef<number | null>(null);
+	const oldestSeqRef = useRef<number | null>(null);
+	const hasOlderRef = useRef(false);
 
 	const page = useCallback(
-		async (sessionId: string, before?: number) => {
-			const q = before === undefined ? "" : `&before=${before}`;
+		async (sessionId: string, cursor?: { before?: number; after?: number }) => {
+			const q = cursor?.before !== undefined ? `&before=${cursor.before}` : cursor?.after !== undefined ? `&after=${cursor.after}` : "";
 			return await api<TerminalPage>(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/timeline?terminal=1${q}`);
 		},
 		[instanceId],
 	);
 
 	/**
-	 * A session is being opened: reset if it is a DIFFERENT one, then load the newest page.
+	 * A session is being opened: paint what we already have, then ask only for what is new.
 	 *
 	 * The previous fallback is kept only when the same session is reopened. Keeping it across a
 	 * switch would show one repo's output under another repo's header, which is worse than the
-	 * flash it would remove.
+	 * flash it would remove. A DIFFERENT session therefore starts from its OWN cached page or from
+	 * nothing — never from what is on screen.
+	 *
+	 * The cache read is synchronous and happens before the first `await`, which is the whole point:
+	 * the pane paints its history in the same frame the session opens (#550). Then the fetch goes
+	 * out anyway, as a tail — `after=` the newest row we hold — so anything appended while the tab
+	 * was closed still lands (#550 AC 2), and a page the server says does not join what we hold
+	 * (`tail:false`) replaces it wholesale rather than being stitched over a gap.
 	 */
 	const open = useCallback(
 		async (sessionId: string) => {
@@ -69,20 +88,48 @@ export function useTerminalScrollback(instanceId: string, termRef: RefObject<HTM
 			loadingRef.current = true;
 			setLive(false);
 			if (!reopening) {
-				setSaved("");
-				savedRef.current = "";
-				setText(terminalPlaceholder({ loadingHistory: true }));
+				const cached = readTerminalCache(instanceId, sessionId);
+				setSaved(cached?.text ?? "");
+				savedRef.current = cached?.text ?? "";
+				setText(cached?.text || terminalPlaceholder({ loadingHistory: true }));
+				newestSeqRef.current = cached?.newestSeq ?? null;
+				oldestSeqRef.current = cached?.oldestSeq ?? null;
+				hasOlderRef.current = cached?.hasOlder ?? false;
+				setOldestSeq(oldestSeqRef.current);
+				setHasOlder(hasOlderRef.current);
 			}
 			try {
-				const p = await page(sessionId);
+				const from = newestSeqRef.current;
+				const p = await page(sessionId, from === null ? undefined : { after: from });
 				const stitched = stitchSnapshots(p.terminal || []);
-				setOldestSeq(p.oldestSeq ?? null);
-				setHasOlder(!!p.hasMore);
-				if (stitched) {
-					setSaved(stitched);
-					savedRef.current = stitched;
-					setText(stitched);
+				if (p.tail) {
+					// A delta. It EXTENDS what is on screen, and says nothing about how far back
+					// that reaches, so the "load older" cursor is left exactly as it was.
+					if (stitched) {
+						const merged = appendSnapshot(savedRef.current, stitched);
+						setSaved(merged);
+						savedRef.current = merged;
+						setText(merged);
+					}
+					newestSeqRef.current = p.newestSeq ?? from;
+				} else {
+					oldestSeqRef.current = p.oldestSeq ?? null;
+					hasOlderRef.current = !!p.hasMore;
+					setOldestSeq(oldestSeqRef.current);
+					setHasOlder(hasOlderRef.current);
+					newestSeqRef.current = p.newestSeq ?? null;
+					if (stitched) {
+						setSaved(stitched);
+						savedRef.current = stitched;
+						setText(stitched);
+					}
 				}
+				writeTerminalCache(instanceId, sessionId, {
+					text: savedRef.current,
+					newestSeq: newestSeqRef.current,
+					oldestSeq: oldestSeqRef.current,
+					hasOlder: hasOlderRef.current,
+				});
 			} catch (e) {
 				console.error("[coding] terminal history load failed:", e);
 			} finally {
@@ -90,23 +137,32 @@ export function useTerminalScrollback(instanceId: string, termRef: RefObject<HTM
 				loadingRef.current = false;
 			}
 		},
-		[page],
+		[instanceId, page],
 	);
 
-	/** Walk one page further back and PREPEND it, without yanking the view to the bottom. */
+	/**
+	 * Walk one page further back and PREPEND it, without yanking the view to the bottom.
+	 *
+	 * Deliberately does NOT write the cache (#550). What it produces is a scrollback, not a page:
+	 * it grows with every click, and the cache caps one entry — so caching it would mean trimming
+	 * the head, which leaves `oldestSeq` pointing past a hole and makes the next "load older"
+	 * prepend a page that does not join what is on screen. The cache stays what `open` stored.
+	 */
 	const loadOlder = useCallback(
 		async (sessionId: string) => {
 			if (oldestSeq === null || loadingOlder) return;
 			setLoadingOlder(true);
 			try {
-				const p = await page(sessionId, oldestSeq);
+				const p = await page(sessionId, { before: oldestSeq });
 				const older = stitchSnapshots(p.terminal || []);
 				if (older) {
 					setSaved((prev) => appendSnapshot(older, prev));
 					setText((prev) => appendSnapshot(older, prev));
 				}
-				setOldestSeq(p.oldestSeq ?? oldestSeq);
-				setHasOlder(!!p.hasMore);
+				oldestSeqRef.current = p.oldestSeq ?? oldestSeq;
+				hasOlderRef.current = !!p.hasMore;
+				setOldestSeq(oldestSeqRef.current);
+				setHasOlder(hasOlderRef.current);
 			} catch (e) {
 				console.error("[coding] load older terminal failed:", e);
 			} finally {

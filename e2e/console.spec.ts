@@ -2076,7 +2076,23 @@ test.describe("ProAgentStore Console smoke", () => {
 	 * runner offline, history not loaded, engine busy with nothing persisted, and genuinely no
 	 * output. The first is the only one with a command attached, and it was never named.
 	 */
-	const codingRoutes = (page: import("@playwright/test").Page, opts: { capture: unknown; pages: Record<string, unknown> }) =>
+	const codingRoutes = (
+		page: import("@playwright/test").Page,
+		opts: {
+			capture: unknown;
+			pages: Record<string, unknown>;
+			/** Answers to `?after=<seq>` — the delta a cached client asks for on reload (#550). */
+			tails?: Record<string, unknown>;
+			/** Every terminal query string the app issued, in order. The evidence for "no full page". */
+			seen?: string[];
+			/**
+			 * A gate the delta reply waits on. While it is unresolved the network CANNOT be the
+			 * source of anything on screen, which is how "painted from cache" is asserted without
+			 * racing a timeout.
+			 */
+			holdTail?: () => Promise<void> | null;
+		},
+	) =>
 		page.route("**/v1/instances/inst-1/coding/**", async (route) => {
 			const url = route.request().url();
 			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
@@ -2085,7 +2101,15 @@ test.describe("ProAgentStore Console smoke", () => {
 			if (url.includes("/capture")) return json(opts.capture);
 			if (url.includes("/start")) return json({ ok: true });
 			if (url.includes("terminal=1")) {
-				const before = new URL(url).searchParams.get("before") ?? "";
+				const params = new URL(url).searchParams;
+				opts.seen?.push(url.split("?")[1] ?? "");
+				const after = params.get("after");
+				if (after !== null) {
+					const gate = opts.holdTail?.();
+					if (gate) await gate;
+					return json(opts.tails?.[after] ?? { terminal: [], tail: true, newestSeq: Number(after) });
+				}
+				const before = params.get("before") ?? "";
 				return json(opts.pages[before] ?? { terminal: [], hasMore: false, oldestSeq: null });
 			}
 			if (url.includes("/timeline")) return json({ chat: [] });
@@ -2125,6 +2149,58 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.locator("pre").getByText("step-two-output")).toBeVisible();
 		// Nothing older left → the control goes away rather than paging forever into nothing.
 		await expect(page.locator("#term-load-older")).toBeHidden();
+	});
+
+	/**
+	 * The terminal keeps its own page and asks only for what was appended (#550).
+	 *
+	 * The owner: "when I'm looking at the terminal it always loads it from the server every time I
+	 * load the page. It should be caching it locally." Measured on production, one session's newest
+	 * page was 41,767 bytes over 0.156 s, paid on every load, for rows that only ever get appended.
+	 *
+	 * Both halves are asserted here because either alone is a bug: painting from cache without a
+	 * delta is a terminal that stops updating, and a delta without the cached paint is the empty-
+	 * state flash #432 removed.
+	 */
+	test("the terminal paints from cache on reload and asks only for the delta (#550)", async ({ page }) => {
+		await openTerminalTab(page);
+		const seen: string[] = [];
+		let gate: Promise<void> | null = null;
+		let openGate = () => {};
+		await codingRoutes(page, {
+			capture: { pane: "", runState: "idle", alive: true, runnerConnected: true },
+			pages: { "": { terminal: [{ seq: 20, type: "terminal", content: "output-from-first-load" }], hasMore: false, oldestSeq: 20, newestSeq: 20, tail: false } },
+			// What was appended while the tab was closed. It arrives as a delta on top of the cache.
+			tails: { "20": { terminal: [{ seq: 30, type: "terminal", content: "output-from-first-load\nappended-while-away" }], tail: true, newestSeq: 30 } },
+			seen,
+			holdTail: () => gate,
+		});
+		await page.goto("/console/instances/inst-1");
+		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Open", exact: true }).click();
+		await page.getByRole("button", { name: "Terminal", exact: true }).click();
+		await expect(page.locator("pre").getByText("output-from-first-load")).toBeVisible();
+		// A first load has nothing cached, so it is the full page — unchanged behaviour.
+		expect(seen.every((q) => !q.includes("after="))).toBe(true);
+
+		seen.length = 0;
+		gate = new Promise<void>((resolve) => {
+			openGate = resolve;
+		});
+		await page.reload();
+		await page.getByRole("button", { name: "Terminal", exact: true }).click();
+		// Painted while the only request for it is still blocked at the gate: this text cannot have
+		// come from the network, and the "Loading saved output…" placeholder never got a frame.
+		await expect(page.locator("pre").getByText("output-from-first-load")).toBeVisible();
+		await expect(page.locator("pre").getByText("Loading saved output")).toBeHidden();
+
+		// And when the delta lands, output appended since the cache was written is there — a cache
+		// that cannot do this is worse than no cache.
+		openGate();
+		await expect(page.locator("pre").getByText("appended-while-away")).toBeVisible();
+		// The whole point: every request this load made was a delta. Not one full page.
+		expect(seen.length).toBeGreaterThan(0);
+		expect(seen.every((q) => q.includes("after=20"))).toBe(true);
 	});
 
 	test("an empty terminal names which of the four causes applies (#432)", async ({ page }) => {

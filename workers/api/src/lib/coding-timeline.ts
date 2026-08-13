@@ -147,13 +147,46 @@ export async function loadRepoTimeline(
  * primary key, so it is stable, gapless-enough and already indexed by `(session_id, type, seq)` —
  * no offset scan, and a row appended mid-scroll cannot shift a page. Deliberately the same
  * `before`/`limit`/`hasMore` shape the chat thread needs (#428), so one convention covers both.
+ *
+ * ── `after`: the other half of the cursor, and why a gap answers with the whole page (#550)
+ *
+ * The console keeps the page it last rendered (`terminal-cache.ts`), so the read it makes on the
+ * next load is "what has been appended since `seq`" — the same query with the comparison flipped.
+ * For the common case that is an empty array instead of ~41 KB.
+ *
+ * The failure mode of a tail is a GAP: more rows were appended than one page holds, so the delta
+ * does not join what the client is holding, and stitching it would weld two moments together with
+ * an hour missing between them. That is answered here, by falling through to the newest page and
+ * saying `tail:false` — one query more in the rare case, rather than a second round trip in it,
+ * and the client's two branches stay "extend what I have" and "replace what I have".
+ *
+ * `hasMore`/`oldestSeq` are deliberately UNDEFINED on a tail reply. They describe how far back a
+ * page reaches, which a delta does not know; returning the delta's own values would let a client
+ * overwrite a good "load older" cursor with one pointing at the newest rows, and silently lose the
+ * scrollback it was caching in the first place.
  */
 export async function loadTerminalSnapshots(
 	env: Env,
-	args: { sessionId: string; before?: number; limit?: number },
-): Promise<{ entries: TimelineEntry[]; hasMore: boolean; oldestSeq: number | null }> {
+	args: { sessionId: string; before?: number; after?: number; limit?: number },
+): Promise<{ entries: TimelineEntry[]; hasMore?: boolean; oldestSeq?: number | null; newestSeq: number | null; tail: boolean }> {
 	const limit = Math.max(1, Math.min(50, args.limit ?? 5));
 	const before = Number.isFinite(args.before) && (args.before as number) > 0 ? (args.before as number) : Number.MAX_SAFE_INTEGER;
+	const after = Number.isFinite(args.after) && (args.after as number) > 0 ? (args.after as number) : null;
+	if (after !== null) {
+		// Ascending from the cursor, one row over the limit to detect the gap.
+		const { results } = await env.DB.prepare(
+			"SELECT seq, type, content, created_at, audio_key FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
+		)
+			.bind(args.sessionId, after, limit + 1)
+			.all<Row>();
+		const rows = results ?? [];
+		if (rows.length <= limit) {
+			const entries = rows.map(toEntry);
+			// `newestSeq` falls back to the cursor when nothing was appended: the client's cache is
+			// still current, and answering `null` would make it re-ask from the beginning next time.
+			return { entries, newestSeq: entries.length ? entries[entries.length - 1].seq : after, tail: true };
+		}
+	}
 	// One row over the limit, purely to answer `hasMore` without a second COUNT query.
 	const { results } = await env.DB.prepare(
 		"SELECT seq, type, content, created_at, audio_key FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
@@ -163,7 +196,7 @@ export async function loadTerminalSnapshots(
 	const rows = results ?? [];
 	const hasMore = rows.length > limit;
 	const page = (hasMore ? rows.slice(0, limit) : rows).map(toEntry).reverse();
-	return { entries: page, hasMore, oldestSeq: page.length ? page[0].seq : null };
+	return { entries: page, hasMore, oldestSeq: page.length ? page[0].seq : null, newestSeq: page.length ? page[page.length - 1].seq : null, tail: false };
 }
 
 /** The most recent stored terminal snapshot (used to dedupe before storing a new one). */

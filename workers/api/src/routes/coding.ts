@@ -439,16 +439,18 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) =
 	// keep the last `terminal` row and throw the rest away. A long run at 8000 chars a snapshot
 	// is a large payload for one visible pane, and there was no way to ask for the older ones.
 	// `before` is an exclusive `seq` cursor, `limit` is bounded in the store, and `hasMore` says
-	// whether "Load older" has anything to load.
+	// whether "Load older" has anything to load. `after` is the same cursor the other way (#550):
+	// the console keeps the page it last rendered, so its next load asks only for what was appended
+	// since — an empty array rather than 41 KB on a session nobody has touched. The reply is then
+	// `tail:true` + the delta, or the whole newest page (`tail:false`) when more was appended than
+	// one page holds. Both cursors and the gap rule are in `loadTerminalSnapshots`, with the why.
 	if (c.req.query("terminal") === "1") {
-		const before = Number.parseInt(c.req.query("before") ?? "", 10);
-		const limit = Number.parseInt(c.req.query("limit") ?? "", 10);
-		const page = await loadTerminalSnapshots(c.env, {
-			sessionId: session.id,
-			before: Number.isFinite(before) ? before : undefined,
-			limit: Number.isFinite(limit) ? limit : undefined,
-		});
-		return c.json({ terminal: page.entries, hasMore: page.hasMore, oldestSeq: page.oldestSeq });
+		const num = (q: string) => {
+			const n = Number.parseInt(c.req.query(q) ?? "", 10);
+			return Number.isFinite(n) ? n : undefined;
+		};
+		const page = await loadTerminalSnapshots(c.env, { sessionId: session.id, before: num("before"), after: num("after"), limit: num("limit") });
+		return c.json({ terminal: page.entries, hasMore: page.hasMore, oldestSeq: page.oldestSeq, newestSeq: page.newestSeq, tail: page.tail });
 	}
 	// ?full=1 → the full typed timeline (chat + terminal snapshots + brain decisions + commands
 	// + outcomes). Kept unpaged on purpose: its one caller is the ⧉ "copy this session as JSON"

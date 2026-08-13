@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline, pruneTerminalSnapshots, sweepTerminalSnapshots, TERMINAL_KEEP_PER_SESSION } from "./coding-timeline.js";
+import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline, loadTerminalSnapshots, pruneTerminalSnapshots, sweepTerminalSnapshots, TERMINAL_KEEP_PER_SESSION } from "./coding-timeline.js";
 import type { Env } from "../types.js";
 
 interface Write { sql: string; args: unknown[] }
@@ -350,5 +350,102 @@ describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#4
 			},
 		};
 		expect(await sweepTerminalSnapshots({ DB } as unknown as Env)).toBe(0);
+	});
+});
+
+describe("loadTerminalSnapshots — `after` is the cursor that makes a reload a delta (#550)", () => {
+	/** A D1 that answers each terminal query from `rows`, applying the cursor itself, and records the SQL. */
+	function pagedEnv(rows: Array<{ seq: number; content: string }>) {
+		const issued: Array<{ sql: string; args: unknown[] }> = [];
+		const DB = {
+			prepare(sql: string) {
+				const flat = sql.replace(/\s+/g, " ").trim();
+				return {
+					bind(...args: unknown[]) {
+						issued.push({ sql: flat, args });
+						return {
+							async all() {
+								const [, cursor, limit] = args as [string, number, number];
+								const asc = flat.includes("seq > ?2");
+								const hit = rows.filter((r) => (asc ? r.seq > cursor : r.seq < cursor));
+								hit.sort((a, b) => (asc ? a.seq - b.seq : b.seq - a.seq));
+								const page = hit.slice(0, limit);
+								return { results: page.map((r) => ({ seq: r.seq, type: "terminal", content: r.content, created_at: "2026-08-12 12:00:00", audio_key: null })) };
+							},
+							async run() { return { meta: { changes: 0 } }; },
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, issued };
+	}
+
+	const three = [
+		{ seq: 10, content: "a" },
+		{ seq: 20, content: "b" },
+		{ seq: 30, content: "c" },
+	];
+
+	it("asks only for rows NEWER than the cursor — the whole point of the ticket", async () => {
+		// The measured cost this replaces: 41,767 bytes and 0.156 s, paid on every page load, for
+		// append-only rows the client was already holding.
+		const { env, issued } = pagedEnv(three);
+		const page = await loadTerminalSnapshots(env, { sessionId: "s1", after: 20 });
+		expect(issued[0].sql).toContain("seq > ?2");
+		expect(issued[0].args[1]).toBe(20);
+		expect(page.tail).toBe(true);
+		expect(page.entries.map((e) => e.seq)).toEqual([30]);
+		expect(page.newestSeq).toBe(30);
+	});
+
+	it("answers an untouched session with an empty delta, and hands the cursor straight back", async () => {
+		// Nothing appended. `newestSeq: null` here would make the client re-ask from the beginning
+		// on the load after this one — the cache would then work exactly once.
+		const { env } = pagedEnv(three);
+		const page = await loadTerminalSnapshots(env, { sessionId: "s1", after: 30 });
+		expect(page.entries).toEqual([]);
+		expect(page.tail).toBe(true);
+		expect(page.newestSeq).toBe(30);
+	});
+
+	it("leaves `hasMore`/`oldestSeq` undefined on a delta, so a client cannot lose its scrollback cursor", async () => {
+		const { env } = pagedEnv(three);
+		const page = await loadTerminalSnapshots(env, { sessionId: "s1", after: 20 });
+		expect(page.hasMore).toBeUndefined();
+		expect(page.oldestSeq).toBeUndefined();
+	});
+
+	it("returns the whole newest PAGE when more was appended than one page holds", async () => {
+		// The gap. Stitching a delta that does not join the cached text would weld two moments
+		// together with the middle missing — so the reply becomes a replacement, in the same trip.
+		const many = Array.from({ length: 9 }, (_, i) => ({ seq: 100 + i * 10, content: `s${i}` }));
+		const { env, issued } = pagedEnv([...three, ...many]);
+		const page = await loadTerminalSnapshots(env, { sessionId: "s1", after: 30, limit: 5 });
+		expect(page.tail).toBe(false);
+		expect(issued).toHaveLength(2); // the tail probe, then the newest page
+		expect(issued[1].sql).toContain("seq < ?2");
+		expect(page.entries.map((e) => e.seq)).toEqual([140, 150, 160, 170, 180]);
+		expect(page.hasMore).toBe(true);
+		expect(page.oldestSeq).toBe(140);
+	});
+
+	it("reports `newestSeq` on the ordinary page too — a first load has to seed the cursor", async () => {
+		const { env } = pagedEnv(three);
+		const page = await loadTerminalSnapshots(env, { sessionId: "s1" });
+		expect(page.tail).toBe(false);
+		expect(page.entries.map((e) => e.seq)).toEqual([10, 20, 30]);
+		expect(page.newestSeq).toBe(30);
+		expect(page.oldestSeq).toBe(10);
+	});
+
+	it("ignores a junk or zero cursor rather than answering a delta nobody asked for", async () => {
+		const { env } = pagedEnv(three);
+		for (const after of [0, -5, Number.NaN]) {
+			const page = await loadTerminalSnapshots(env, { sessionId: "s1", after });
+			expect(page.tail).toBe(false);
+			expect(page.entries).toHaveLength(3);
+		}
 	});
 });

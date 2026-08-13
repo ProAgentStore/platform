@@ -61,13 +61,24 @@ export function stitchSnapshots(entries: Array<TimelineEntry | string>): string 
 	return out;
 }
 
-/** What `GET …/timeline?terminal=1[&before=<seq>]` answers with. */
+/** What `GET …/timeline?terminal=1[&before=<seq>|&after=<seq>]` answers with. */
 export interface TerminalPage {
 	terminal?: TimelineEntry[];
+	/**
+	 * Is this a DELTA on top of what the caller already holds, rather than a page (#550)?
+	 *
+	 * Only ever true for an `after=` request, and then `hasMore`/`oldestSeq` are absent — a delta
+	 * knows nothing about how far back the caller's history reaches, and a client that applied
+	 * their absence as "no older output" would throw its own scrollback cursor away. So the two
+	 * branches are: `tail` extends what is on screen, anything else replaces it.
+	 */
+	tail?: boolean;
 	/** Are there snapshots older than this page? Drives the "Load older" control. */
 	hasMore?: boolean;
 	/** The `seq` of the OLDEST row in this page — the cursor for the next page back. */
 	oldestSeq?: number | null;
+	/** The `seq` of the NEWEST row this reply accounts for — the cursor for the next `after=`. */
+	newestSeq?: number | null;
 }
 
 export interface TerminalState {
