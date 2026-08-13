@@ -35,7 +35,15 @@ import type { AgentCapabilities } from "./agent-capabilities.js";
 /** What an agent can truthfully say about itself. Every field derived, none configured. */
 export interface SelfModel {
 	surfaces: readonly string[];
-	/** Console tabs this agent actually renders — the only ones it may name. */
+	/**
+	 * The page this conversation is on (#519) — a fact about the TURN, not about the agent.
+	 *
+	 * Every other field here answers "what am I?"; this one answers "where is the person I am
+	 * talking to?", and the two were silently assumed to be the same question. See
+	 * {@link ChatSurface}.
+	 */
+	surface: ChatSurface;
+	/** Console tabs the page this turn is on actually renders — the only ones it may name. */
 	tabs: readonly string[];
 	/** Can it hand a goal to a SEPARATE executor (its Pilot) via `start_work`? */
 	canStartWork: boolean;
@@ -143,12 +151,80 @@ export function tabsFor(capabilities: AgentCapabilities): string[] {
 	return tabs;
 }
 
-/** Resolve what this agent actually is. */
-export function resolveSelfModel(capabilities: AgentCapabilities): SelfModel {
+/**
+ * WHICH page the turn is happening on — the fix for #519.
+ *
+ * `tabsFor` answers "what does an INSTANCE of this agent look like?", and `agent-think.ts` injected
+ * its answer on every surface. Only one of the four surfaces IS that console:
+ *
+ *   instance        `/v1/instances/:id/chat` — the subscriber console. `tabsFor` is exactly right.
+ *   agent-template  `/v1/agents/:id/chat` — the CREATOR's agent page, which renders a fixed and
+ *                   completely different set of tabs ({@link AGENT_PAGE_TABS}). For a tmux Operator
+ *                   six of the eight names `tabsFor` produced did not exist on it, and five of the
+ *                   seven that did were forbidden by the NEVER that closes the list.
+ *   trial           `/v1/public/agents/:id/try` — a public trial chat, on the store page or inside
+ *                   an embedded widget. There is no console there AT ALL.
+ *   unknown         no row matched and the id is not a trial key, or the lookup threw. We do not
+ *                   know what the reader is looking at, so nothing is claimed. A transient D1
+ *                   failure on a real instance lands here, which is why "unknown" is silent rather
+ *                   than assuming the smallest surface.
+ *
+ * The discriminator carries no capability meaning — `previewWithheld` is NOT a substitute for it
+ * (it is empty unless the agent declares a constrained connector's tools, i.e. for almost every
+ * agent on the template surface).
+ */
+export type ChatSurface = "instance" | "agent-template" | "trial" | "unknown";
+
+/**
+ * The Durable Object key prefix a trial chat is minted under.
+ *
+ * `routes/public.ts` keys the trial DO `trial:{agentId}:{ipHash}`, which matches neither
+ * `agent_instances.id` nor `agents.id` — so a trial resolves through `resolveAgentCapabilities`'
+ * final fall-through, not through the agent-row join. Pinned to that source by
+ * `agent-self-description.test.ts`, because a prefix nobody checks is a surface silently
+ * reclassified as "unknown" the day it changes.
+ */
+export const TRIAL_DO_PREFIX = "trial:";
+
+/**
+ * The tabs the creator's agent page renders — `store/console/src/pages/AgentDetail.tsx`.
+ *
+ * A second copy of a console list, with the same justification and the same mitigation as
+ * `tabsFor`: the Worker cannot import a React page, so what is shared is the LIST, and
+ * `agent-self-description.test.ts` reads `AgentDetail.tsx` and fails when the two disagree. That
+ * test also asserts the page renders this literal unconditionally — no `filter`, no `show()`
+ * predicate — which is what makes a closed NEVER honest here. `tabsFor`'s list is conditional and
+ * this one is not, so the guard checks the property rather than assuming it.
+ */
+export const AGENT_PAGE_TABS: readonly string[] = ["Chat", "Knowledge", "Memory", "Tasks", "Settings", "Analytics", "Ops"];
+
+/** Classify a DO key that matched no row: a trial chat, or genuinely unknown. */
+export function chatSurfaceForDoKey(id: string): ChatSurface {
+	return id.startsWith(TRIAL_DO_PREFIX) ? "trial" : "unknown";
+}
+
+/**
+ * The tabs the READER can actually see, which is what every consumer of `SelfModel.tabs` wants.
+ *
+ * Resolving it here rather than at the one prompt that names them is deliberate: `tabClause` in
+ * `agent-style-prompt.ts` also gates on `model.tabs`, so a Coder previewed from its template would
+ * otherwise still have been pointed at a Coding tab the agent page does not have. One answer, every
+ * caller.
+ */
+export function tabsForSurface(surface: ChatSurface, capabilities: AgentCapabilities): string[] {
+	if (surface === "instance") return tabsFor(capabilities);
+	if (surface === "agent-template") return [...AGENT_PAGE_TABS];
+	// trial: there is no console on a public trial page. unknown: we cannot name one honestly.
+	return [];
+}
+
+/** Resolve what this agent actually is, as seen from the page the turn is on. */
+export function resolveSelfModel(capabilities: AgentCapabilities, surface: ChatSurface = "instance"): SelfModel {
 	const tools = toolNamesFor(capabilities);
 	return {
 		surfaces: capabilities.surfaces ?? [],
-		tabs: tabsFor(capabilities),
+		surface,
+		tabs: tabsForSurface(surface, capabilities),
 		// BOTH conditions: `start_work` is in BASE so every agent HAS the tool, but its handler
 		// refuses on an agent whose only executor is this same chat ("recursion dressed as
 		// delegation"). Telling such an agent it can hand work to an executor would be exactly the
@@ -308,14 +384,60 @@ export function selfDescriptionPrompt(
 		}
 	}
 
-	if (model.tabs.length) {
-		lines.push(
-			`Your console has exactly these tabs: ${model.tabs.join(", ")}. NEVER refer the user to any other tab —` +
-				" if a tab is not in that list, it does not exist for you, and sending them there is a wrong answer.",
-		);
-	}
+	const tabClaim = consoleTabClaim(model);
+	if (tabClaim) lines.push(tabClaim);
 
 	return lines.length ? `\n\n## What you are\n${lines.map((l) => `- ${l}`).join("\n")}` : "";
+}
+
+/**
+ * What the agent may say about the console — one sentence per surface (#519).
+ *
+ * The NEVER is the reason this has to be right rather than roughly right: it tells the model the
+ * list is exhaustive, so a wrong closed list is worse than no list. Each branch therefore claims
+ * only what is guaranteed:
+ *
+ *   instance        the resolved `tabsFor` list. UNCHANGED, byte for byte — the string below is the
+ *                   one that shipped, and `agent-self-description.test.ts` asserts the whole prompt
+ *                   for a subscribed instance against a literal so it cannot drift by a comma.
+ *   agent-template  the agent page's fixed list, plus what to say when the question is about the
+ *                   OTHER console. Suppressing the block instead (issue option 1) was rejected:
+ *                   "where would I find this?" is a fair question on a preview, and the honest
+ *                   answer is the page the asker is on.
+ *   trial           no list, because there is no console — and, explicitly, no invitation to invent
+ *                   one. A trial user asking where something is done is told it belongs to a
+ *                   subscribed instance, which is both true and the only action available to them.
+ *   unknown         nothing. Silence is the only claim that cannot be wrong.
+ *
+ * Deliberately NOT emitted on the template surface: the subscriber console's tab names. They are
+ * reachable there (`tabsFor` still resolves) but they are what the model reached for in the first
+ * place, and on this surface the declared tool list has already been narrowed by
+ * `withholdConstrainedConnectorTools`, so the list would be computed from capabilities the reader's
+ * future instance will not have.
+ */
+function consoleTabClaim(model: SelfModel): string {
+	if (model.surface === "trial") {
+		return (
+			"This is a TRIAL chat on a public page, not a subscribed instance of you. Whoever you are talking to" +
+			" is looking at a page with no console on it: nothing to open, nothing to configure, and no place to" +
+			" put a document. NEVER send them to a console page or name one of its tabs. If they ask where" +
+			" something is done, say plainly that it happens on a subscribed instance of this agent, after they" +
+			" subscribe."
+		);
+	}
+	if (!model.tabs.length) return "";
+	if (model.surface === "agent-template") {
+		return (
+			"This conversation is on the creator's agent page in the console — you are the agent TEMPLATE here, not a" +
+			` subscribed instance. That page has exactly these tabs: ${model.tabs.join(", ")}. NEVER refer the user to any` +
+			" other tab: a subscribed instance has a different console, and none of its tabs exist on the page they" +
+			" are on. If the question is about that console, say so plainly rather than naming something from this page."
+		);
+	}
+	return (
+		`Your console has exactly these tabs: ${model.tabs.join(", ")}. NEVER refer the user to any other tab —` +
+		" if a tab is not in that list, it does not exist for you, and sending them there is a wrong answer."
+	);
 }
 
 /**

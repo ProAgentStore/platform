@@ -42,7 +42,7 @@ import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import { runtimeConnectivityWithConn } from "./lib/instance-connectivity.js";
 import { describeFacts } from "./lib/runner-availability.js";
-import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
+import { chatSurfaceForDoKey, executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
 import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance, voiceControlPrompt } from "./lib/agent-style-prompt.js";
 import { listDelegatedRuns, listLoopRuns } from "./lib/agent-loop-store.js";
 import { recentWorkPrompt } from "./lib/work-report.js";
@@ -65,14 +65,14 @@ import type { Env } from "./types.js";
  *
  * WHICH join matched is returned, not discarded (#517): the second one IS the agent-template
  * surface, where a constrained connector's tools are refused by decision on every call, so they
- * are withheld there rather than offered and explained. lib/template-preview-tools.ts.
+ * are withheld there rather than offered and explained (lib/template-preview-tools.ts) — and it is what picks WHICH CONSOLE the prompt may describe (#519, lib/agent-self-description.ts).
  */
 async function resolveAgentCapabilities(env: Env, id: string): Promise<TemplatePreviewCapabilities> {
 	try {
 		const inst = await env.DB.prepare(
 			"SELECT a.slug AS slug, a.category AS category, a.config AS config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1",
 		).bind(id).first<{ slug: string | null; category: string | null; config: string | null }>();
-		if (inst) return { capabilities: agentCapabilities(inst), previewWithheld: [] };
+		if (inst) return { capabilities: agentCapabilities(inst), previewWithheld: [], surface: "instance" };
 		const agent = await env.DB.prepare(
 			"SELECT slug, category, config FROM agents WHERE id = ?1",
 		).bind(id).first<{ slug: string | null; category: string | null; config: string | null }>();
@@ -80,7 +80,7 @@ async function resolveAgentCapabilities(env: Env, id: string): Promise<TemplateP
 	} catch {
 		/* fall through to the permissive default */
 	}
-	return { capabilities: agentCapabilities({}), previewWithheld: [] };
+	return { capabilities: agentCapabilities({}), previewWithheld: [], surface: chatSurfaceForDoKey(id) };
 }
 
 /**
@@ -212,7 +212,7 @@ export async function runAgentThink(opts: {
 
 	// Authoritative capabilities → gate tools to what this agent type can actually use
 	// (e.g. a Coder never gets search_knowledge, so it can't hallucinate an empty index).
-	const { capabilities, previewWithheld } = await resolveAgentCapabilities(env, state.agentId);
+	const { capabilities, previewWithheld, surface } = await resolveAgentCapabilities(env, state.agentId);
 
 	// Subscriber instance config (typed settings values + Rules & Tips). state.agentId
 	// is the INSTANCE id for instance DOs; a template/preview DO has no row → stays
@@ -411,7 +411,7 @@ export async function runAgentThink(opts: {
 	// is narrative rather than authoritative — which is how an agent whose declared surfaces are
 	// `["coding"]` told a user to "attach a repository in the Repo tab". It has no Repo tab.
 	// `repos:"single"` was read ONLY by the console; nothing ever told the agent.
-	const selfModel = resolveSelfModel(capabilities);
+	const selfModel = resolveSelfModel(capabilities, surface);
 	// Fetched ONCE and threaded into both the self-description and the "Attached Repositories"
 	// block below — a second listRepos would be a second answer to the same question on every turn.
 	//

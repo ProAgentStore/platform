@@ -49,6 +49,7 @@
  * way, and the array says so where the empty one would have lied.
  */
 import { BASE } from "../agent-do-tools.js";
+import type { ChatSurface } from "./agent-self-description.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { CONNECTOR_CONSTRAINTS } from "./surface-options.js";
 import { registryTools } from "./tool-registry.js";
@@ -58,6 +59,15 @@ export interface TemplatePreviewCapabilities {
 	capabilities: AgentCapabilities;
 	/** Connector ids whose tools were withheld — empty when nothing was, which is the usual case. */
 	previewWithheld: string[];
+	/**
+	 * WHICH surface this is (#519) — stated, because `previewWithheld` cannot stand in for it.
+	 *
+	 * That field is empty unless the agent declares a constrained connector's tools, so it is empty
+	 * on the agent-template surface for nearly every agent; reading it as "am I a template?" would
+	 * answer "no" almost always. The prompt has to describe the page the reader is looking at, and
+	 * the join that matched is the only thing that knows which page that is.
+	 */
+	surface: ChatSurface;
 }
 
 /**
@@ -81,17 +91,20 @@ export function constrainedConnectorOf(toolName: string): string | null {
  */
 export function withholdConstrainedConnectorTools(capabilities: AgentCapabilities): TemplatePreviewCapabilities {
 	const declared = capabilities.tools;
-	if (!declared?.length) return { capabilities, previewWithheld: [] };
+	// The surface is fixed, not derived: this function is reached from exactly one place — the
+	// `agents`-row fallback — and that join IS the agent-template surface.
+	if (!declared?.length) return { capabilities, previewWithheld: [], surface: "agent-template" };
 	const withheld = new Set<string>();
 	const kept = declared.filter((name) => {
 		const connector = constrainedConnectorOf(name);
 		if (connector) withheld.add(connector);
 		return !connector;
 	});
-	if (withheld.size === 0) return { capabilities, previewWithheld: [] };
+	if (withheld.size === 0) return { capabilities, previewWithheld: [], surface: "agent-template" };
 	return {
 		capabilities: { ...capabilities, tools: kept.length ? kept : [...BASE] },
 		previewWithheld: [...withheld].sort(),
+		surface: "agent-template",
 	};
 }
 
