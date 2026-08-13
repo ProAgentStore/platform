@@ -30,11 +30,18 @@ export async function upsertWorkCard(
 }
 
 /**
- * Move existing cards to a terminal status, patching the payload rather than rebuilding it.
+ * Move existing cards to another status, patching the payload rather than rebuilding it.
  *
  * Bulk close paths generally don't hold the detail the open path had (a reaper knows a session id
  * and nothing else), so patching keeps whatever title was already written instead of inventing one
  * or wiping it.
+ *
+ * `openOnly` restricts the write to cards that have NOT already reached a terminal status (#553).
+ * A domain uses it where the caller's authority is weaker than whatever wrote the card first: the
+ * coding reapers close a session six hours after a run died, and their `"ended"` is a fact about
+ * the session being untouched, not about how the work went. Without it, a cron overwrote a run's
+ * own `failed` with `completed`. Opt-in, because the pipeline domain has one writer and needs no
+ * such rule; see `coding-board.ts` for the full argument.
  */
 export async function closeWorkCards(
 	env: Env,
@@ -42,15 +49,19 @@ export async function closeWorkCards(
 	userId: string,
 	cardIds: readonly string[],
 	status: string,
+	opts?: { openOnly?: boolean },
 ): Promise<void> {
 	if (!cardIds.length) return;
 	const placeholders = cardIds.map((_, i) => `?${i + 4}`).join(",");
+	// The statuses a card is passing THROUGH. Anything else is a verdict somebody recorded, and an
+	// `openOnly` caller does not outrank it.
+	const guard = opts?.openOnly ? " AND status IN ('running', 'needs_human')" : "";
 	await env.DB.prepare(
 		`UPDATE instance_runtime_tasks
 		    SET status = ?1,
 		        payload = json_set(json_set(payload, '$.status', ?1), '$.updatedAt', datetime('now')),
 		        updated_at = datetime('now')
-		  WHERE instance_id = ?2 AND user_id = ?3 AND id IN (${placeholders})`,
+		  WHERE instance_id = ?2 AND user_id = ?3 AND id IN (${placeholders})${guard}`,
 	)
 		.bind(status, instanceId, userId, ...cardIds)
 		.run()

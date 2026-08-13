@@ -5,7 +5,7 @@ import type { Env } from "../types.js";
 const NOW = Date.parse("2026-08-05T12:00:00.000Z");
 
 /** D1 stub: SELECTs return the rows queued per table, UPDATEs are recorded. */
-function stubEnv(open: { loop?: string[]; pipeline?: string[] } = {}) {
+function stubEnv(open: { loop?: string[]; pipeline?: string[]; loopSessions?: Record<string, string | null> } = {}) {
 	const updates: Array<{ sql: string; args: unknown[] }> = [];
 	const selects: Array<{ sql: string; args: unknown[] }> = [];
 	const env = {
@@ -17,7 +17,14 @@ function stubEnv(open: { loop?: string[]; pipeline?: string[] } = {}) {
 							async all() {
 								selects.push({ sql, args });
 								const ids = sql.includes("agent_loop_runs") ? open.loop : open.pipeline;
-								return { results: (ids ?? []).map((run_id) => ({ run_id })) };
+								return {
+									results: (ids ?? []).map((run_id) => ({
+										run_id,
+										instance_id: `inst-${run_id}`,
+										user_id: `user-${run_id}`,
+										session_id: open.loopSessions?.[run_id] ?? null,
+									})),
+								};
 							},
 							async run() {
 								updates.push({ sql, args });
@@ -92,5 +99,34 @@ describe("sweepStaleRuns — a run nobody will ever close", () => {
 		// its subordinate failed while it is still working — the expensive direction of the error.
 		expect(STALE_RUN_MS).toBeGreaterThanOrEqual(60 * 60_000);
 		expect(STALE_RUN_MS).toBe(3 * 60 * 60_000);
+	});
+});
+
+describe("a dead run's BOARD CARD closes with it (#553 AC 3)", () => {
+	it("closes the coding card of every stale run that had a session", async () => {
+		// `csess_22d08431` sat in "Running" 16 HOURS after its run died: the sweeper closed the run
+		// row and nothing touched the card, so the board — the surface somebody actually looks at —
+		// showed an in-flight job for a workflow that no longer existed.
+		const { env, updates } = stubEnv({ loop: ["r1", "r2"], loopSessions: { r1: "csess_a", r2: null } });
+		await sweepStaleRuns(env, NOW);
+		const cards = updates.filter((u) => u.sql.includes("instance_runtime_tasks"));
+		// EXACTLY one: `r2` is a chat or pipeline run with no `session_id`, and inventing a card id
+		// for it would patch a row belonging to something else.
+		expect(cards.length, "one card write, for the one run that had a coding session").toBe(1);
+		expect(cards[0].args).toEqual(["failed", "inst-r1", "user-r1", "csess-csess_a"]);
+	});
+
+	it("cannot overwrite a card the run itself already closed", async () => {
+		// The sweeper is a backstop, not an authority: if the workflow turns out to be alive after
+		// all, its own terminal write wins. Same rule this file's header states for the run rows.
+		const { env, updates } = stubEnv({ loop: ["r1"], loopSessions: { r1: "csess_a" } });
+		await sweepStaleRuns(env, NOW);
+		expect(updates.find((u) => u.sql.includes("instance_runtime_tasks"))?.sql).toContain("status IN ('running', 'needs_human')");
+	});
+
+	it("writes no card at all when nothing was stale", async () => {
+		const { env, updates } = stubEnv({ loop: [] });
+		await sweepStaleRuns(env, NOW);
+		expect(updates.filter((u) => u.sql.includes("instance_runtime_tasks"))).toHaveLength(0);
 	});
 });

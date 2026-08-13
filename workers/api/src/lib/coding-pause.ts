@@ -66,6 +66,19 @@ export interface PauseDeps {
 	/** One line into the owner's chat thread. A pause nobody can see looks like a hang (#252). */
 	announce: (message: string) => Promise<void>;
 	/**
+	 * Move the run's board card (#553).
+	 *
+	 * The notification and the chat line are both PUSHES — they land once, in a tray or a scroll,
+	 * and are gone. The board is the durable surface, and it is the one with a column named "Needs
+	 * you". While three runs sat parked here for 15 minutes each it stayed empty: `notifyUser` was
+	 * called and `pushed_at` was set on every row (verified), so the information existed and was
+	 * nowhere anybody would look for it later. #349 is the same defect on apply and browser-task.
+	 *
+	 * Injected like every other effect in this module, so the whole pause machine still tests with
+	 * no D1, no relay and no Workflow.
+	 */
+	card: (status: "needs_human" | "running") => Promise<void>;
+	/**
 	 * Heartbeat the claims a parked run holds, and report whether it should still be running.
 	 *
 	 * Returns FALSE when the owner has asked the run to stop. Folding cancellation into the same
@@ -102,6 +115,10 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	const label = reason === "needs_input" ? (result.fieldNeeded ?? "a value") : (result.detail ?? "this step");
 
 	await deps.takeover(label, reason);
+	// The board FIRST, before the two pushes. It is the surface that persists, so if anything after
+	// this throws, the durable record still says the run is waiting on somebody — rather than the
+	// state that produced #553, where the notification fired and the board said everything was fine.
+	await deps.card("needs_human");
 	// The Engine is stopped until someone answers — `alert`, so muting "Coder" silences the
 	// finished/stopped updates and never this.
 	await deps.notify("🙋 Coder needs you", `${deps.repo}: ${label}`, `coding-handoff:${reason}:${round}`, true);
@@ -137,6 +154,11 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	}
 
 	await deps.endTakeover();
+	// Somebody answered — the run is working again, so it leaves "Needs you". Not left for the
+	// terminal write: a run can take several handoffs across its 12 rounds, and a card that stayed
+	// in "Needs you" through the working stretches would ask for attention it does not need, which
+	// is how a column stops being read.
+	await deps.card("running");
 	return {
 		resume: true,
 		ownerTurn: true,

@@ -1,7 +1,8 @@
 // Shared shape for a delegated-goal board task (#155). ONE source of truth for the observable
 // "Overseer delegated on your behalf" card — used by both the route that CREATES it (running,
-// routes/coding.ts) and the durable Pilot that CLOSES it (completed/failed,
-// workflows/coding-session.ts). Kept in lib/ so the workflow doesn't import a routes module.
+// routes/coding.ts) and the durable Pilot that CLOSES it (workflows/coding-session.ts). Kept in
+// lib/ so the workflow doesn't import a routes module.
+import type { LoopRunStatus } from "./agent-loop.js";
 
 /** Build the board-task record for a delegated goal. Attributed to the Overseer on the user's
  *  behalf — never a user turn. `note` (e.g. the terminal outcome) is appended to the reasoning. */
@@ -12,7 +13,16 @@ export function delegationTaskRecord(opts: {
 	 *  kind; the rendered text is unchanged for repos. */
 	targetLabel: string;
 	objective: string;
-	status: "running" | "completed" | "failed";
+	/**
+	 * The run's status, from `statusFor` — NOT a local ok/fail judgement (#553).
+	 *
+	 * It was `"running" | "completed" | "failed"` off `runSucceeded(outcome)`, which meant a
+	 * delegated run that stopped waiting on the owner was closed `failed` on the board while its
+	 * own loop-run row said `needs_human`. Two records of one run, in different columns. `#541`
+	 * made that reachable by letting an unanswered handoff survive as `stuck` instead of being
+	 * rewritten to `failed` first, and `#546` added a second way in.
+	 */
+	status: "running" | LoopRunStatus;
 	now: string;
 	note?: string;
 }): Record<string, unknown> {

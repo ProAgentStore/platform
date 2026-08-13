@@ -13,8 +13,10 @@ import { runtimeConnectivity } from "../lib/instance-connectivity.js";
 import { runWatchSession } from "./coding-watch.js";
 import type { CodingSessionParams } from "./coding-session-params.js";
 import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../lib/runner-availability.js";
-import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
+import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
+import { setCodingSessionCardStatus } from "../lib/coding-board.js";
+import { startSessionOnRunnerConn } from "../lib/coding-session-relaunch.js";
 import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../lib/coding-pause.js";
 import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
@@ -22,7 +24,6 @@ import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "
 import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
-import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline } from "../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { codingSessionLink } from "../lib/console-links.js";
@@ -44,7 +45,7 @@ import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
 import { codingCrashReport, runOutcomeNote } from "../lib/coding-run-report.js";
-import type { LoopStopReason } from "../lib/agent-loop.js";
+import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
 import { CodingRunProbe, recordCodingFailure } from "../lib/coding-failure.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
@@ -228,14 +229,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			}
 			if (event.payload.boardTaskId) {
 				await step.do(`delegation-task-done${suffix}`, async () => {
-					const ok = runSucceeded(outcome.outcome);
 					// Same shared record shape as the route that opened the card (#155) — only the
 					// status + outcome note change. Inline upsert keeps the workflow off a routes import.
 					const task = delegationTaskRecord({
 						id: event.payload.boardTaskId as string,
 						targetLabel: goal.repo,
 						objective: goal.objective,
-						status: ok ? "completed" : "failed",
+						// `statusFor`, not a local ok/fail test (#553): the supervisor's card and the
+						// loop-run row describe ONE run, and this is what stops them landing in
+						// different columns for it.
+						status: statusFor(crashReason ?? stopReasonFor(outcome.outcome)),
 						now: new Date().toISOString(),
 						note,
 					});
@@ -289,34 +292,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		const runIdle = runWith(idleRetry);
 		let n = 0;
 
-		/**
-		 * Make sure the session exists on whatever machine we are talking to.
-		 *
-		 * Hoisted out of the "start" step because a RECONNECT needs the same thing: a runner that
-		 * dropped may have restarted, or the agent may be live on a different machine, and either way
-		 * the engine must be (re)launched before the loop can carry on. `/coding/start` is idempotent.
-		 */
-		const startOnRunner = async () => {
-			// Resolve the session's exact CLI command, its workDir, and its engine env
-			// (API key / OAuth token) FRESH here — the same fields startSessionOnRunner
-			// passes. Without them, a runner that must re-create the session after a restart
-			// would relaunch the DEFAULT cli with NO auth (wrong binary / auth failure). Env
-			// is resolved inside the step (not journaled) so the key never lands in workflow
-			// state — matching how the runner token is kept out of state elsewhere.
-			const [sess, repo] = await Promise.all([
-				getSession(env, instanceId, userId, sessionId),
-				getRepo(env, instanceId, userId, repoId),
-			]);
-			const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
-			return callRunner<{ sessionId?: string }>(conn, "/coding/start", {
-				sessionId, repoId,
-				workDir: repo?.workdir || undefined,
-				cloneUrl, branch, token, tokenUsername,
-				clientType: goal.clientType,
-				command: sess?.launchCommand || undefined,
-				env: engineEnv,
-			});
-		};
+		// (Re)launch the engine on the machine `conn` points at. `lib/coding-session-relaunch.ts` —
+		// called once at the start and again by the runner guard on every heal, which is why it is not
+		// inline in the "start" step.
+		const startOnRunner = () =>
+			startSessionOnRunnerConn(env, conn, { instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername });
 
 		/**
 		 * A DISCONNECT IS A PAUSE, NOT AN ENDING (#341).
@@ -567,6 +547,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					return await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), opts).then(() => null, () => null);
 				}).then(() => undefined),
 			announce: postToChat,
+			// The board, which is where the owner would look for "does anything want me?" (#553).
+			// Best-effort like every other card write: losing a card is a visibility bug, failing the
+			// handoff is a work bug. Not a `step.do` — an idempotent patch is cheaper to repeat than
+			// to journal, and a replay re-running it lands the same row.
+			card: (status) => setCodingSessionCardStatus(env, instanceId, userId, sessionId, status).catch(() => undefined),
 			// Outside `step.do`, like the runner guard's own tick: idempotent writes whose only job is to be
 			// recent. `recordIteration` writes `last_progress_at`, without which `sweepStaleRuns` closes a
 			// parked run as dead at 3h.
@@ -625,6 +610,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// actually in force — a line saying "may merge" on every run would be noise, and worse,
 				// would read as a decision somebody made.
 				if (authorityNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: authorityNote });
+				// The card follows the RUN, and this is where a run claims it (#553). Needed because a
+				// session outlives its run since #271: a second run on a session a previous run left
+				// `failed` would otherwise start under a card still reading "Failed", and a card has to
+				// be able to come back out of "Needs you". `createSession` only opens a card for a
+				// session it CREATES, so nothing else does this.
+				await setCodingSessionCardStatus(env, instanceId, userId, sessionId, "running").catch(() => undefined);
 				return null;
 			});
 
@@ -755,6 +746,22 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// "delegation is single-use" into "delegation is once every quarter hour".
 					await releaseSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
 				}
+				// THE RUN'S VERDICT, LAST AND UNCONDITIONAL (#553).
+				//
+				// The card used to reach a terminal status only as a side effect of `endSession`, i.e.
+				// only inside the branch above and only when that call actually MOVED the row. Both
+				// conditions failed routinely. A session the HUMAN opened skips the branch entirely, so
+				// `csess_22d08431` sat "running" 16 hours after its run died; and where a cron reaper had
+				// already closed the row, `endSession` changed nothing and the card kept the reaper's
+				// `completed` — which is how two failed runs read as successes. Since #271 a session
+				// outliving its run is NORMAL, so a card keyed to session lifetime is structurally wrong
+				// rather than occasionally stale.
+				//
+				// Written from `statusFor`, the same table the loop-run row uses, so the two surfaces
+				// describing one run cannot disagree. Unconditional, while every session-side writer is
+				// `openOnly` — that asymmetry is what makes "the run outranks the session" a rule rather
+				// than a race.
+				await setCodingSessionCardStatus(env, instanceId, userId, sessionId, statusFor(crashReason ?? stopReasonFor(result.outcome))).catch(() => undefined);
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
 				return null;
 			});

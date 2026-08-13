@@ -21,6 +21,8 @@ interface Spy {
 	ticks: number;
 	takeovers: number;
 	endTakeovers: number;
+	/** Every board-card transition the pause machine asked for, in order (#553). */
+	cards: string[];
 }
 
 function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string }> = {}): Spy {
@@ -31,6 +33,7 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		ticks: 0,
 		takeovers: 0,
 		endTakeovers: 0,
+		cards: [],
 		deps: null as unknown as PauseDeps,
 	};
 	let polls = 0;
@@ -53,6 +56,9 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		},
 		announce: async (m) => {
 			s.announced.push(m);
+		},
+		card: async (status) => {
+			s.cards.push(status);
 		},
 		tick: async () => {
 			s.ticks++;
@@ -194,6 +200,47 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		const s = spy({ cancelAfterTicks: 2 });
 		const v = await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
 		expect(v.resume === false && v.result.outcome).toBe("cancelled");
+	});
+
+	it("puts the card in Needs you the moment the handoff opens, and back when it resolves (#553)", async () => {
+		// The defect this closes: `notifyUser` fired for all four handoffs (`pushed_at` set on every
+		// row, verified in production) and "Needs you" stayed EMPTY the whole time three runs sat
+		// waiting. The notification is a push — it lands in a tray and is gone. The board is the
+		// durable surface, and it is the one with a column named for this state.
+		const s = spy({ resolveAfter: 2 });
+		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		expect(s.cards).toEqual(["needs_human", "running"]);
+	});
+
+	it("writes the card BEFORE the two pushes, so a later throw cannot lose the durable half", async () => {
+		// Ordering matters, and it is the ordering the incident argues for: if the notify or the
+		// announce throws, the record still says the run is waiting on somebody. Reverse them and a
+		// failure reproduces #553 exactly — the tray knows and the board does not.
+		const order: string[] = [];
+		const s = spy({ resolveAfter: 1 });
+		const deps = {
+			...s.deps,
+			card: async (st: "needs_human" | "running") => {
+				order.push(`card:${st}`);
+			},
+			notify: async () => {
+				order.push("notify");
+			},
+			announce: async () => {
+				order.push("announce");
+			},
+		};
+		await resolvePause(deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		expect(order.slice(0, 3)).toEqual(["card:needs_human", "notify", "announce"]);
+	});
+
+	it("leaves the card alone for a usage-limit park — nothing is being asked of anyone", async () => {
+		// #541 is explicit that an engine-limit wait must not ping like a question. The same
+		// reasoning applies to the column: it reopens by itself, so "Needs you" would be a lie and
+		// a column that asks for attention it does not need stops being read.
+		const s = spy();
+		await resolvePause(s.deps, { round: 0, result: waitingResult(), state: { waits: 0, spentMs: 0 } });
+		expect(s.cards).toEqual([]);
 	});
 
 	it("hands a terminal outcome straight back without pausing anything", async () => {

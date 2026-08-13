@@ -14,6 +14,7 @@
 //
 // It also weakens the case for ever unifying the run tables: more write paths into one table means
 // more ways to strand a row, and a stranded row is permanent data.
+import { closeCodingSessionCards } from "./coding-board.js";
 import { logUnhandled } from "./on-error.js";
 import type { Env } from "../types.js";
 
@@ -57,13 +58,14 @@ async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<num
 	// died before its first iteration) — fall back to when it started, which is the same rule
 	// `summarizeSubordinates` uses so the sweeper and the supervisor agree on what "quiet" means.
 	const { results } = await env.DB.prepare(
-		`SELECT run_id FROM agent_loop_runs
+		`SELECT run_id, instance_id, user_id, session_id FROM agent_loop_runs
 		  WHERE status = 'running' AND COALESCE(last_progress_at, started_at) < ?1
 		  LIMIT ?2`,
 	)
 		.bind(cutoff, SWEEP_LIMIT)
-		.all<{ run_id: string }>();
-	const ids = (results ?? []).map((r) => r.run_id);
+		.all<{ run_id: string; instance_id: string; user_id: string; session_id: string | null }>();
+	const rows = results ?? [];
+	const ids = rows.map((r) => r.run_id);
 	if (!ids.length) return 0;
 	// `failed`, not `escalated`: nothing about a dead workflow says a human can resolve it by
 	// answering a question. `statusFor("failed")` is the `failed` status, which is honest.
@@ -74,6 +76,21 @@ async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<num
 	)
 		.bind(DETAIL, now, ...ids)
 		.run();
+	// …and the BOARD CARD the same run left open (#553 AC 3).
+	//
+	// This closed the run row and left its card alone, so `csess_22d08431` sat in "Running" 16
+	// hours after its run had died — the board, which is the surface somebody actually looks at,
+	// showing an in-flight job for a workflow that no longer existed. The link is
+	// `agent_loop_runs.session_id` (0116, #465), written once by `codingDriver` at run-create time
+	// and null for chat and pipeline runs, which is exactly the rows that have no coding card.
+	//
+	// `failed` because that is what was just recorded for the run, and through the OPEN-ONLY close:
+	// if the workflow turns out to be alive after all, its own terminal write lands afterwards and
+	// wins — the same rule this file's header already states for the run rows themselves.
+	const coding = rows.filter((r) => r.session_id);
+	for (const r of coding) {
+		await closeCodingSessionCards(env, r.instance_id, r.user_id, [r.session_id as string], "failed").catch(() => undefined);
+	}
 	return res.meta?.changes ?? 0;
 }
 
