@@ -7,6 +7,27 @@ workers_dev = false
 [triggers]
 crons = ["* * * * *"]
 
+# Subrequests, raised from Cloudflare's 10,000 default (#523).
+#
+# The Pilot is a durable Workflow that drives a coding CLI for hours, and Cloudflare applies this
+# ceiling PER WORKFLOW INSTANCE — not per invocation, so neither a `step.do` boundary nor a
+# `step.sleep` resets it (workflows/reference/limits). Three runs hit 10,000 at ~2 hours and were
+# reported to their owner as `outcome: failed`; one of them had closed ten issues and pushed to
+# `main` fifteen times.
+#
+# This is the THIRD lever and deliberately not the only one: `lib/coding-idle-poll.ts` cut the same
+# run's idle-poll spend from 14,768 to 3,978, which already fits under the default. Raising the
+# ceiling alone would only have let the next run of that shape go further unsupervised before it
+# died. What it buys is that a legitimately longer run — the Coder is built for these — stops
+# meeting a platform default nobody chose for this workload.
+#
+# 100,000 is 1% of the documented 10,000,000 maximum: roughly 25 hours of Engine waiting at the new
+# poll cost, and still small enough that a genuine runaway is stopped rather than merely slowed. The
+# API Worker's other subrequest-heavy path (repo ingestion) has always carried its own chunk budget
+# rather than relying on this number, so raising it does not remove that path's only guard.
+[limits]
+subrequests = 100_000
+
 [[routes]]
 pattern = "api.proagentstore.online"
 zone_name = "proagentstore.online"

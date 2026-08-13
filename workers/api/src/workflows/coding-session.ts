@@ -18,6 +18,7 @@ import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session
 import { setCodingSessionCardStatus } from "../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../lib/coding-session-relaunch.js";
 import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../lib/coding-pause.js";
+import { awaitEngineIdle, shouldTouchActivity } from "../lib/coding-idle-poll.js";
 import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
@@ -148,6 +149,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 * Folding them would let a future edit "improve" the outcome and silently change the reason.
 		 */
 		let crashReason: LoopStopReason | null = null;
+
+		/** When the activity heartbeat last cost a subrequest (#523) — see `shouldTouchActivity`. */
+		let lastActivityTouchAt = 0;
 
 		/**
 		 * Put a line in the OWNER'S CHAT THREAD.
@@ -414,9 +418,14 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// A Pilot capturing is the session being USED (#275). The claim heartbeat already says
 			// so on every action, but a single round can sit in `waitIdle` for minutes with no
 			// action at all — so the invariant "anything driving the engine keeps it alive" is
-			// stated here too rather than inferred from the loop's step budget. Throttled in the
-			// store, so a 2-second poll writes a row once a minute.
-			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+			// stated here too rather than inferred from the loop's step budget. ASKED before it is
+			// paid for (#523): the store throttles the WRITE to once a minute in a WHERE clause,
+			// which left the SUBREQUEST unconditional — a quarter of every poll's cost buying a row
+			// update one time in thirty, against a ceiling spent for the life of the whole run.
+			if (shouldTouchActivity(lastActivityTouchAt, Date.now())) {
+				lastActivityTouchAt = Date.now();
+				await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+			}
 			// Which signals stop a run, which deliberately do not (`suspended`, an unreadable
 			// status), and which reason the human is given when both fire — all of it is the pure
 			// `pilotStopSignal`, so it can be stated as a table rather than as a comment defending
@@ -454,20 +463,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						decideCodingAction(env, userId, p, { kind: "coding", instanceId }),
 					),
 				) as Promise<CodingDecision>,
-			// Poll capture until the CLI goes idle (the pane stops "thinking"/"responding").
-			// Bounded so the loop can't outrun idleRetry's 10-minute step timeout.
-			waitIdle: () =>
-				measured(guard(runIdle, `s${n++}-waitidle`, async () => {
-					// Settle first: a just-sent instruction may not have flipped the pane
-					// to "thinking" yet, so an immediate capture could read a stale idle.
-					await sleep(1500);
-					let snap = await capture();
-					for (let poll = 0; poll < 240 && snap.runState !== "idle" && snap.alive && !snap.cancelled; poll++) {
-						await sleep(2000);
-						snap = await capture();
-					}
-					return snap;
-				})),
+			// Poll capture until the CLI goes idle, BACKING OFF as the turn proves long (#523). A
+			// flat 2-second poll spent 2 subrequests per second of Engine work against a ceiling
+			// Cloudflare applies per WORKFLOW INSTANCE — never reset by a step or a sleep — so three
+			// runs exhausted it at ~2 hours and reported their pushed work as `failed`. The
+			// schedule, the arithmetic and the boundary it preserves are `lib/coding-idle-poll.ts`.
+			waitIdle: () => measured(guard(runIdle, `s${n++}-waitidle`, () => awaitEngineIdle({ capture, sleep }))),
 			onEvent: (type, message, data) => {
 				// Incremented OUTSIDE step.do: a step that exhausts its retries re-runs its body,
 				// and `++` inside would double-count every retry into the progress figure.
