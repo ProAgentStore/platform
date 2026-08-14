@@ -7,7 +7,7 @@ import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
-import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { annotationsFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
 	AGENT_ID,
 	agentTemplateFiles,
@@ -66,6 +66,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private installRegistrationPipeline(): void {
 		installRegistrationPipeline(this.server as unknown as RegistrationTarget, {
 			gate: (name, provided) => suspensionBlock(this.env, this.token(provided), name),
+			metadata: (name) => {
+				const annotations = annotationsFor(name);
+				return annotations ? { annotations } : undefined;
+			},
 		});
 	}
 

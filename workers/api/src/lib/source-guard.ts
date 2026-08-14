@@ -215,6 +215,22 @@ export function findIdentifier(code: string, name: string): Hit[] {
 }
 
 /**
+ * READS of a property — `x.name`, `x?.name`, or a bare mention such as a destructuring —
+ * but not the authoring of one, which is `name: value` in an object literal or `name?: T`
+ * in a type.
+ *
+ * The distinction is a direction across a trust boundary, and it is the whole content of
+ * the MCP annotation guard. Reading `destructiveHint` off a REMOTE server's tool listing is
+ * asking the party being defended against whether it should be trusted. Writing one on our
+ * OWN tools is the opposite act: a claim we make and are held to (#561 publishes them from
+ * `workers/mcp`, asserted against the scope each handler actually enforces). A guard that
+ * cannot tell those apart has to be either wrong about one of them or switched off.
+ */
+export function findPropertyRead(code: string, name: string): Hit[] {
+	return matchLines(code, new RegExp(`\\.\\s*${name}\\b|\\b${name}\\b(?!\\s*\\??\\s*:)`));
+}
+
+/**
  * Writes to a SQL table.
  *
  * `kind: "store"` narrows to the verbs that PUT a value in — INSERT / REPLACE / UPDATE —

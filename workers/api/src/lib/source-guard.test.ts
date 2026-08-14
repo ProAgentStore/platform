@@ -7,7 +7,7 @@
  * it produces silence, which is exactly what a passing guard looks like.
  */
 import { describe, expect, it } from "vitest";
-import { findCalls, findIdentifier, findTableWrites, matchLines, readsAsMutating, stripCommentsAndLiterals } from "./source-guard.js";
+import { findCalls, findIdentifier, findPropertyRead, findTableWrites, matchLines, readsAsMutating, stripCommentsAndLiterals } from "./source-guard.js";
 
 const strip = stripCommentsAndLiterals;
 
@@ -98,6 +98,21 @@ describe("findIdentifier", () => {
 	});
 	it("does not match a longer word containing it", () => {
 		expect(findIdentifier(strip("const notDestructiveHintish = 1;"), "destructiveHint")).toEqual([]);
+	});
+});
+
+describe("findPropertyRead", () => {
+	it("matches a property read and a destructured one", () => {
+		expect(findPropertyRead(strip("if (t.destructiveHint) {}"), "destructiveHint")).toHaveLength(1);
+		expect(findPropertyRead(strip("const { destructiveHint } = ann;"), "destructiveHint")).toHaveLength(1);
+		expect(findPropertyRead(strip("const x = ann?.destructiveHint ?? true;"), "destructiveHint")).toHaveLength(1);
+	});
+	it("does not match AUTHORING one — the other direction across the boundary", () => {
+		expect(findPropertyRead(strip("return { destructiveHint: false };"), "destructiveHint")).toEqual([]);
+		expect(findPropertyRead(strip("interface A { destructiveHint?: boolean }"), "destructiveHint")).toEqual([]);
+	});
+	it("does not match a longer word containing it", () => {
+		expect(findPropertyRead(strip("const notDestructiveHintish = 1;"), "destructiveHint")).toEqual([]);
 	});
 });
 

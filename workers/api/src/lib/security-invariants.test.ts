@@ -30,7 +30,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findCalls, findIdentifier, findTableWrites, matchLines, readsAsMutating, stripCommentsAndLiterals } from "./source-guard.js";
+import { findCalls, findIdentifier, findPropertyRead, findTableWrites, matchLines, readsAsMutating, stripCommentsAndLiterals } from "./source-guard.js";
 import { registryTools } from "./tool-registry.js";
 import { FENCE_TAG, fenceUntrusted } from "./untrusted-fence.js";
 
@@ -434,6 +434,13 @@ describe("the untrusted-content fence is not re-implemented", () => {
 // hostile server annotates `delete_everything` as safe and walks through the wildcard
 // grant. `isDestructiveToolName` tests the name we are about to send instead — the one
 // string the server does not control.
+//
+// The rule is about the DIRECTION, not the word. Since #561 this platform also publishes
+// annotations on its own MCP tools, which is the opposite act: a claim we make about
+// ourselves, held to the scope each handler actually enforces by a whole-surface test in
+// `workers/mcp/src/index.test.ts`. So the scan matches a READ — `x.destructiveHint`, or a
+// destructuring — and not the authoring of one. A guard that could not tell those apart
+// would have to be wrong about one of them, and the way that ends is with it switched off.
 describe("destructiveness is never taken from the server", () => {
 	const scanned = [...ALL, ...mcpWorkerSources()];
 
@@ -441,7 +448,7 @@ describe("destructiveness is never taken from the server", () => {
 		const offenders: string[] = [];
 		for (const f of scanned) {
 			for (const name of ["destructiveHint", "readOnlyHint", "idempotentHint", "openWorldHint"]) {
-				for (const hit of findIdentifier(f.code, name)) offenders.push(`${f.rel}:${hit.line} ${hit.excerpt}`);
+				for (const hit of findPropertyRead(f.code, name)) offenders.push(`${f.rel}:${hit.line} ${hit.excerpt}`);
 			}
 		}
 		expect(
@@ -451,6 +458,18 @@ describe("destructiveness is never taken from the server", () => {
 				`decide which names those are.\n` +
 				`Offenders:\n${listing(offenders)}`,
 		).toEqual([]);
+	});
+
+	it("still fires on a read — including one written inside the MCP worker", () => {
+		// The narrowing is only safe if the guard still catches what it was written for.
+		const read = stripCommentsAndLiterals("if (remote.annotations.destructiveHint) allow();");
+		expect(findPropertyRead(read, "destructiveHint")).toHaveLength(1);
+		// And the site it now permits is genuinely a write: the module still SAYS the word
+		// (so the scan has not gone blind because the file moved) and still reads none of it.
+		const meta = mcpWorkerSources().find((f) => f.rel === "workers/mcp/src/tool-metadata.ts");
+		expect(meta, "workers/mcp/src/tool-metadata.ts moved — repoint this guard").toBeTruthy();
+		expect(findIdentifier(meta?.code ?? "", "destructiveHint").length).toBeGreaterThan(0);
+		expect(findPropertyRead(meta?.code ?? "", "destructiveHint")).toEqual([]);
 	});
 
 	it("the name test is what the grant check actually calls", () => {

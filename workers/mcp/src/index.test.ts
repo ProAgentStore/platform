@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 // ── Test harness ────────────────────────────────────────────────────────────
 //
@@ -60,7 +61,7 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 
 const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } = await import("./tool-count.js");
-const { SERVER_INSTRUCTIONS } = await import("./tool-metadata.js");
+const { annotationsFor, MCP_RISK_COUNTS, SERVER_INSTRUCTIONS, TOOL_RISK } = await import("./tool-metadata.js");
 
 // A fetch stub with programmable per-path responses (shared shape with the
 // instance-tools test).
@@ -601,5 +602,220 @@ describe("registration pipeline", () => {
 		// OpenAI's guidance is that the most important details go in the first 512 characters,
 		// so the sequence has to survive the cut — not just appear somewhere in the string.
 		expect(instructions!.slice(0, 512)).toContain("my_instances");
+	});
+});
+
+// ── Tool annotations (#561) ──────────────────────────────────────────────────
+//
+// MCP's annotation defaults are the pessimistic ones (readOnlyHint false, destructiveHint
+// true), so publishing nothing presented `list_agents` and `delete_supervision` to a host
+// as equally dangerous. What the server now publishes is its OWN enforced classification —
+// and these tests hold the published line to the enforced one across the whole registered
+// surface, by driving every handler rather than reading the table back to itself.
+
+/** A value the tool's own schema would accept, so a probe fails on the thing it is probing
+ *  and not on a missing argument. Same technique as instance-tools/contract.test.ts —
+ *  duplicated rather than shared because that file probes the instance registrars directly
+ *  and this one probes the whole assembled server. */
+// biome-ignore lint/suspicious/noExplicitAny: reading zod's internals is the point
+function sampleValue(t: any, bools: boolean): unknown {
+	const d = t?._def;
+	switch (d?.typeName) {
+		case "ZodOptional":
+		case "ZodNullable":
+		case "ZodDefault":
+			return sampleValue(d.innerType, bools);
+		case "ZodNumber":
+			return 1;
+		case "ZodBoolean":
+			return bools;
+		case "ZodEnum":
+			return d.values[0];
+		case "ZodArray":
+			return [];
+		case "ZodRecord":
+		case "ZodObject":
+			return {};
+		case "ZodUnion":
+			return sampleValue(d.options[0], bools);
+		default:
+			return "x";
+	}
+}
+
+/** `token`, `confirm` and `dry_run` are the probe's own controls. Every other argument is
+ *  generated, and booleans are swept BOTH ways: a tool can pick its scope from its
+ *  arguments (`apply_to_job` escalates to destructive on a real submit), and the annotation
+ *  has to answer for the worst branch. */
+function probeArgs(schema: Record<string, unknown>, bools: boolean): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [key, t] of Object.entries(schema)) {
+		if (key === "token" || key === "confirm" || key === "dry_run") continue;
+		out[key] = sampleValue(t, bools);
+	}
+	return out;
+}
+
+interface ToolProbe {
+	/** The scope the handler actually demands, read out of its refusal. */
+	enforced: string;
+	/** The exact string it demands in `confirm`, or null. */
+	confirm: string | null;
+	/** Every HTTP method it issued when driven with full scopes. */
+	methods: string[];
+}
+
+const ALL_SURFACES = ["apply", "coding", "repo"];
+
+async function probeSurface(): Promise<Map<string, ToolProbe>> {
+	const probes = new Map<string, ToolProbe>();
+	const rank: Record<string, number> = { none: 0, read: 1, write: 2, runtime: 2, destructive: 3 };
+
+	// Refusals: hold only `read`, then hold everything BUT `read`, and read the demanded
+	// scope out of whichever denial comes back.
+	for (const scopes of [["read"], ["write", "runtime", "destructive"]]) {
+		const h = await setup({ groups: ALL_SURFACES, scopes });
+		for (const [name, tool] of h.tools) {
+			for (const bools of [false, true]) {
+				const res = await tool.handler(probeArgs(tool.schema, bools));
+				const demanded = res.content?.[0]?.text?.match(/requires MCP scope "(\w+)"/)?.[1] ?? "none";
+				const seen = probes.get(name);
+				if (!seen) probes.set(name, { enforced: demanded, confirm: null, methods: [] });
+				else if (rank[demanded] > rank[seen.enforced]) seen.enforced = demanded;
+			}
+		}
+	}
+
+	// Full scopes: what it demands in `confirm`, and what it does to the network.
+	const h = await setup({ groups: ALL_SURFACES });
+	for (const [name, tool] of h.tools) {
+		const probe = probes.get(name)!;
+		for (const bools of [false, true]) {
+			const before = h.fetchStub.calls.length;
+			const res = await tool.handler(probeArgs(tool.schema, bools));
+			probe.confirm ??= res.content?.[0]?.text?.match(/requires confirm="([^"]+)"/)?.[1] ?? null;
+			probe.methods.push(...h.fetchStub.calls.slice(before).map((c) => c.method));
+		}
+	}
+	return probes;
+}
+
+describe("tool annotations", () => {
+	let probes: Map<string, ToolProbe>;
+	beforeAll(async () => {
+		probes = await probeSurface();
+	});
+
+	it("classifies EVERY registered tool, and classifies nothing else", async () => {
+		// ADR 0002: the denominator is available, so use it. A tool added without a class
+		// would otherwise be published under the spec's defaults — read-only false,
+		// destructive true — silently, which is the state this issue exists to end.
+		expect(probes.size).toBe(MCP_TOOL_COUNT);
+		const unclassified = Array.from(probes.keys()).filter((name) => !TOOL_RISK[name]);
+		expect(unclassified).toEqual([]);
+		const orphans = Object.keys(TOOL_RISK).filter((name) => !probes.has(name));
+		expect(orphans).toEqual([]);
+	});
+
+	it("never announces a tool as safer than the gate it enforces", async () => {
+		// The load-bearing assertion. The announced class may be STRICTER than the gate —
+		// `remove_repo` is destructive on one argument path and gets the worse annotation —
+		// but never laxer, in either direction of the pair.
+		const allowed: Record<string, string[]> = {
+			none: ["read", "write", "runtime", "destructive"],
+			read: ["read", "write", "runtime", "destructive"],
+			write: ["write", "runtime", "destructive"],
+			runtime: ["runtime", "destructive"],
+			destructive: ["destructive"],
+		};
+		const lax: string[] = [];
+		for (const [name, probe] of probes) {
+			if (!allowed[probe.enforced].includes(TOOL_RISK[name])) {
+				lax.push(`${name}: enforces ${probe.enforced}, announces ${TOOL_RISK[name]}`);
+			}
+		}
+		expect(lax).toEqual([]);
+	});
+
+	it("lets no read-only tool touch the network with anything but a GET", async () => {
+		// The only mechanical check on the 58 tools that carry no gate at all: "ungated" is
+		// not "read-only", and this is what tells the two apart. It falsifies in the
+		// dangerous direction only — a GET-only probe proves nothing, a POST disproves the
+		// claim. `chat_with_agent` is ungated and POSTs, which is exactly why it is not
+		// announced read-only.
+		//
+		// Two exemptions, because the API expresses a vector query as a request BODY. Each
+		// is asserted to still be necessary, so it cannot outlive the POST that justified it.
+		const QUERY_BY_POST = ["search_agent_knowledge", "search_instance_knowledge"];
+		const writers: string[] = [];
+		for (const [name, probe] of probes) {
+			if (annotationsFor(name)?.readOnlyHint !== true) continue;
+			if (QUERY_BY_POST.includes(name)) continue;
+			const nonGet = probe.methods.filter((m) => m !== "GET");
+			if (nonGet.length > 0) writers.push(`${name}: ${nonGet.join(",")}`);
+		}
+		expect(writers).toEqual([]);
+		for (const name of QUERY_BY_POST) {
+			expect(TOOL_RISK[name]).toBe("read");
+			expect(probes.get(name)!.methods).toContain("POST");
+		}
+	});
+
+	it("promises non-destructive only where the server itself grants the call by default", async () => {
+		// `destructiveHint: false` is a claim, and this is what backs it: the tool is not
+		// destructive-scoped (so a DEFAULT connection may run it — `DEFAULT_SCOPES` excludes
+		// `destructive` deliberately) and it demands no confirmation string. Both were the
+		// server's own judgement long before a host could read it.
+		const overclaimed: string[] = [];
+		for (const [name, probe] of probes) {
+			if (annotationsFor(name)?.destructiveHint !== false) continue;
+			if (probe.enforced === "destructive" || probe.confirm) {
+				overclaimed.push(`${name}: enforced ${probe.enforced}, confirm ${probe.confirm}`);
+			}
+		}
+		expect(overclaimed).toEqual([]);
+	});
+
+	it("publishes the annotations on the registration itself", async () => {
+		const h = await setup({ groups: ALL_SURFACES });
+		expect(h.tools.get("list_agents")!.config.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
+		expect(h.tools.get("add_knowledge")!.config.annotations).toEqual({ readOnlyHint: false, destructiveHint: false });
+		// A runtime tool states only what it can stand behind: it drives a machine, so the
+		// spec's pessimistic destructiveHint default is left in place rather than denied.
+		expect(h.tools.get("coding_session_message")!.config.annotations).toEqual({ readOnlyHint: false });
+		expect(h.tools.get("cancel_instance")!.config.annotations).toEqual({ readOnlyHint: false, destructiveHint: true });
+		// Never guessed, anywhere on the surface: PAGS has no notion of idempotency and no
+		// per-tool record of which tools reach an external system.
+		for (const tool of h.tools.values()) {
+			expect(tool.config.annotations).not.toHaveProperty("idempotentHint");
+			expect(tool.config.annotations).not.toHaveProperty("openWorldHint");
+		}
+	});
+
+	it("keeps the split where it is, in both directions", async () => {
+		// Losing a read-only annotation is as much a regression as gaining a wrong one, and
+		// neither shows up in a per-tool assertion. A count has to be moved on purpose.
+		const counts: Record<string, number> = { read: 0, write: 0, runtime: 0, destructive: 0 };
+		for (const name of probes.keys()) counts[TOOL_RISK[name]]++;
+		expect(counts).toEqual(MCP_RISK_COUNTS);
+	});
+
+	it("is advisory: nothing that gates or handles a call reads the annotation", async () => {
+		// AC#5. The annotation is a claim ABOUT the gate, and the moment something consults
+		// it instead of `safety.ts`, a wrong table entry stops being a mislabelled tool and
+		// becomes an open door. Only the registration seam may import this module.
+		const dir = new URL(".", import.meta.url).pathname;
+		const files: string[] = [];
+		const walk = (path: string) => {
+			for (const entry of readdirSync(path, { withFileTypes: true })) {
+				if (entry.isDirectory()) walk(`${path}${entry.name}/`);
+				else if (entry.name.endsWith(".ts") && !entry.name.includes(".test.")) files.push(`${path}${entry.name}`);
+			}
+		};
+		walk(dir);
+		const importers = files
+			.filter((f) => readFileSync(f, "utf8").includes('from "./tool-metadata.js"'))
+			.map((f) => f.slice(dir.length));
+		expect(importers.sort()).toEqual(["index.ts", "registration.ts"]);
 	});
 });

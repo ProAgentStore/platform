@@ -2,8 +2,11 @@
  * What the server publishes ABOUT a tool, as opposed to what the tool does.
  *
  * Everything here is advisory metadata read by the calling host and model. None of it is a
- * check: `safety.ts` remains the only thing that decides whether a call runs.
+ * check: `safety.ts` remains the only thing that decides whether a call runs. Nothing in
+ * this module may ever be imported by a handler or by the safety layer — `index.test.ts`
+ * fails the build if it is.
  */
+import type { McpScope } from "./safety.js";
 
 /**
  * Sent once, in the `initialize` response, and read by the host alongside every tool's own
@@ -53,4 +56,253 @@ export function titleFor(name: string): string {
 			return index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word;
 		})
 		.join(" ");
+}
+
+// ── Tool annotations (#561) ──────────────────────────────────────────────────
+//
+// MCP's four hints are the channel a host reads to decide whether a call needs a
+// confirmation. This server declared none of them, and the spec's defaults are the
+// pessimistic ones — `readOnlyHint` false, `destructiveHint` true, `openWorldHint` true
+// (schema/2025-06-18 lines 890-922). So every tool presented as not-read-only, destructive
+// and open-world: `list_agents` and `usage_summary` on the same footing as `delete_agent`.
+//
+// The server already knows better than that. `safety.ts` classifies each tool read / write
+// / runtime / destructive, and the classification is ENFORCED: `DEFAULT_SCOPES` grants
+// read+write+runtime and never `destructive`, and a destructive tool additionally demands
+// an exact `confirm` string. What is published below is that same boundary, restated in
+// the vocabulary a host understands.
+//
+// Why this is a table and not a derivation. The enforced scope lives inside each handler,
+// as an argument to a `requirePermission` call that runs at INVOCATION time; `tools/list`
+// is answered at registration time, when no handler has run. Worse, the scope does not
+// cover the surface: 58 of the 135 tools never call `requirePermission` at all — a read
+// gate that can never deny is dead code — and "ungated" is not the same claim as
+// "read-only" (`chat_with_agent` is ungated and runs inference). A naive
+// ungated ⇒ readOnlyHint:true would have mislabelled it.
+//
+// So the risk class is written down here and then DERIVED BACK from the handlers in the
+// test, over the whole registered surface (ADR 0002):
+//
+//   · every registered tool has exactly one entry, and no entry has no tool;
+//   · the announced class is never LAXER than the scope the handler enforces;
+//   · a tool announced read-only must issue no non-GET request when driven;
+//   · a tool announced non-destructive must demand no `confirm` and must not be
+//     destructive-scoped — i.e. the published line is exactly the enforced one.
+//
+// Four entries are deliberately STRICTER than the gate, which the test permits and the
+// reverse of which it fails. They are marked below.
+
+/** What the server ANNOUNCES about a tool. Same vocabulary as `McpScope` on purpose: this
+ *  is the enforced classification restated, not a second one. */
+export const TOOL_RISK: Record<string, McpScope> = {
+	// ── read: only reads. Announced `readOnlyHint: true`. ──
+	agent_activity: "read",
+	agent_analytics: "read",
+	agent_deploy_status: "read",
+	agent_info: "read",
+	agent_trace: "read",
+	billing_status: "read",
+	check_instance_loop: "read",
+	coding_diagnostics: "read",
+	coding_loop_status: "read",
+	coding_repos_list: "read",
+	coding_session_capture: "read",
+	coding_sessions_list: "read",
+	connector_status: "read",
+	email_status: "read",
+	get_agent_board_config: "read",
+	get_agent_settings_schema: "read",
+	get_agent_stats_schema: "read",
+	get_apply_tips: "read",
+	get_budget_limits: "read",
+	get_instance_board_config: "read",
+	get_instance_instructions: "read",
+	get_instance_memory: "read",
+	get_instance_pipeline: "read",
+	get_instance_settings: "read",
+	get_instance_state: "read",
+	get_instance_stats: "read",
+	get_profile: "read",
+	get_translation_config: "read",
+	ingest_repo_status: "read",
+	instance_activity: "read",
+	instance_board: "read",
+	instance_messages: "read",
+	instance_runtime_status: "read",
+	instance_task_events: "read",
+	keys_status: "read",
+	list_agent_files: "read",
+	list_agent_repo_files: "read",
+	list_agents: "read",
+	list_collections: "read",
+	list_connections: "read",
+	list_errors: "read",
+	list_feedback: "read",
+	list_instance_collections: "read",
+	list_instance_connector_grants: "read",
+	list_instance_files: "read",
+	list_instance_knowledge: "read",
+	list_instance_tools: "read",
+	list_instance_trigger_events: "read",
+	list_instance_triggers: "read",
+	list_knowledge: "read",
+	list_pipeline_runs: "read",
+	list_supervision: "read",
+	mcp_audit_log: "read",
+	my_agents: "read",
+	my_instances: "read",
+	platform_guide: "read",
+	query_instance_records: "read",
+	query_records: "read",
+	read_agent_file: "read",
+	sdk_reference: "read",
+	// The two reads that POST: the API expresses a vector query as a request BODY, so the
+	// method says "write" and the tool does not. Named in the test's exemption list, which
+	// fails if either of them stops POSTing (a stale exemption is a hole).
+	search_agent_knowledge: "read",
+	search_instance_knowledge: "read",
+	system_status: "read",
+	ticket_thread: "read",
+	usage_summary: "read",
+	vector_stats: "read",
+
+	// ── write: adds to or updates PAGS state, and this server grants it on a default
+	//    connection. Announced `readOnlyHint: false, destructiveHint: false`. ──
+	add_instance_knowledge: "write",
+	add_knowledge: "write",
+	ask_ticket: "write",
+	clear_finished_tasks: "write",
+	coding_loop_stop: "write",
+	coding_repo_add: "write",
+	create_agent: "write",
+	create_collection: "write",
+	create_connection: "write",
+	create_instance_ticket: "write",
+	create_instance_trigger: "write",
+	create_supervision: "write",
+	grant_instance_connector_folder: "write",
+	hint_instance_task: "write",
+	ingest_repo: "write",
+	insert_instance_record: "write",
+	insert_record: "write",
+	rename_instance: "write",
+	resolve_feedback: "write",
+	scaffold_agent: "write",
+	set_agent_settings_schema: "write",
+	set_agent_stats_schema: "write",
+	set_board_item_status: "write",
+	set_budget_limits: "write",
+	set_instance_board_config: "write",
+	set_instance_instructions: "write",
+	set_instance_model: "write",
+	set_instance_settings: "write",
+	set_instance_stats: "write",
+	set_instance_tool: "write",
+	set_translation_config: "write",
+	stop_instance_loop: "write",
+	subscribe_agent: "write",
+	update_agent: "write",
+	update_agent_board_config: "write",
+	update_profile: "write",
+	update_record: "write",
+	upload_agent_file: "write",
+	upload_resume: "write",
+	write_instance_memory: "write",
+
+	// ── runtime: drives something whose effects this server does not model — a machine, a
+	//    deploy, an agent turn. Announced `readOnlyHint: false` and NO destructiveHint, so
+	//    the spec's pessimistic default stands: we cannot honestly promise these are
+	//    additive, and a host should keep asking. ──
+	approve_instance_task: "runtime",
+	// STRICTER than its gate (it has none): the trial-chat surface is public, so nothing
+	// gates it — but a trial chat runs inference and opens a session, and "ungated" is not
+	// "read-only". This is the tool a scope-shaped derivation would have got wrong.
+	chat_with_agent: "runtime",
+	chat_with_instance: "runtime",
+	// STRICTER than its gate (`write`): a generic invoker. What it does is decided by the
+	// registry entry for the tool it is handed, which this worker deliberately does not
+	// model — so it cannot promise the call is additive.
+	call_instance_tool: "runtime",
+	coding_loop_start: "runtime",
+	coding_overseer: "runtime",
+	coding_session_end: "runtime",
+	coding_session_fresh: "runtime",
+	coding_session_message: "runtime",
+	coding_session_restart: "runtime",
+	register_instance_runtime: "runtime",
+	run_instance_task: "runtime",
+	run_instance_trigger: "runtime",
+	// STRICTER than its gate (`write`): starting a loop hands the agent an objective and
+	// lets it act unattended until it stops.
+	start_instance_loop: "runtime",
+	trigger_agent_deploy: "runtime",
+
+	// ── destructive: deletes, overwrites, or commits an irreversible external action.
+	//    Announced `destructiveHint: true`. Every one of these also demands a `confirm`
+	//    string and a connection holding the `destructive` scope. ──
+	// STRICTER than its gate on one path: `write` for one repo, `destructive` for all
+	// (contract.test.ts). An annotation has one value per tool, so it takes the worse one.
+	remove_repo: "destructive",
+	// Gated `runtime` for a dry run and `destructive` for a real submit — a real submit
+	// sends an application to a third party and cannot be recalled.
+	apply_to_job: "destructive",
+	// Gated `write`, but both overwrite a file in a GitHub repo, which is why they were
+	// given confirmation strings. The confirm requirement is the honest discriminator here,
+	// not the scope name.
+	batch_write_agent_files: "destructive",
+	write_agent_file: "destructive",
+	cancel_instance: "destructive",
+	cancel_instance_task: "destructive",
+	clear_instance_messages: "destructive",
+	delete_instance_connector_grant: "destructive",
+	delete_instance_file: "destructive",
+	delete_instance_knowledge: "destructive",
+	delete_instance_memory: "destructive",
+	delete_instance_trigger: "destructive",
+	delete_supervision: "destructive",
+	unregister_instance_runtime: "destructive",
+};
+
+/** How the surface splits. A ratchet in BOTH directions: silently losing a read-only
+ *  annotation is as much a regression as silently gaining one. */
+export const MCP_RISK_COUNTS: Record<McpScope, number> = {
+	read: 66,
+	write: 40,
+	runtime: 15,
+	destructive: 14,
+};
+
+/** The subset of MCP's `ToolAnnotations` this server can state honestly.
+ *
+ *  `idempotentHint` and `openWorldHint` are deliberately absent, everywhere. PAGS has no
+ *  notion of idempotency, and no per-tool record of which tools reach an external system —
+ *  `tier` in `lib/builtin-tool-policy.ts` classifies an AGENT's tools, not this server's,
+ *  and does not map onto these names. Both spec defaults (idempotent false, open-world
+ *  true) err on the cautious side, so omitting them costs a host nothing; guessing them
+ *  would cost it exactly what this issue is about. */
+export interface ToolAnnotations {
+	readOnlyHint?: boolean;
+	destructiveHint?: boolean;
+}
+
+/**
+ * What `tools/list` publishes for one tool, or `undefined` for a tool with no entry — an
+ * unclassified tool falls back to the spec's pessimistic defaults rather than to a guess.
+ */
+export function annotationsFor(name: string): ToolAnnotations | undefined {
+	switch (TOOL_RISK[name]) {
+		case "read":
+			// destructiveHint is only meaningful when readOnlyHint is false, but it is stated
+			// anyway: a host that reads the two independently must not see the default `true`
+			// on a tool that cannot write.
+			return { readOnlyHint: true, destructiveHint: false };
+		case "write":
+			return { readOnlyHint: false, destructiveHint: false };
+		case "runtime":
+			return { readOnlyHint: false };
+		case "destructive":
+			return { readOnlyHint: false, destructiveHint: true };
+		default:
+			return undefined;
+	}
 }
