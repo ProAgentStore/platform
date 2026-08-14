@@ -210,9 +210,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	write_instance_memory: "write",
 
 	// ── runtime: drives something whose effects this server does not model — a machine, a
-	//    deploy, an agent turn. Announced `readOnlyHint: false` and NO destructiveHint, so
-	//    the spec's pessimistic default stands: we cannot honestly promise these are
-	//    additive, and a host should keep asking. ──
+	//    deploy, an agent turn. Announced `destructiveHint: true`, which reads "MAY perform
+	//    destructive updates": we cannot promise these are additive, so the honest value is
+	//    the pessimistic one, stated rather than left to the default. It lands on the same
+	//    annotation as `destructive` deliberately — the difference between those two is a
+	//    difference in the GATE (scope + confirm), not in what a host should ask a user. ──
 	approve_instance_task: "runtime",
 	// STRICTER than its gate (it has none): the trial-chat surface is public, so nothing
 	// gates it — but a trial chat runs inference and opens a session, and "ungated" is not
@@ -299,7 +301,11 @@ export function annotationsFor(name: string): ToolAnnotations | undefined {
 		case "write":
 			return { readOnlyHint: false, destructiveHint: false };
 		case "runtime":
-			return { readOnlyHint: false };
+			// `destructiveHint` reads "MAY perform destructive updates", and a tool that types
+			// into a live CLI or fires a deploy may. Stating the pessimistic value explicitly
+			// rather than leaving it to the spec's default is the same claim, and it is the one
+			// Anthropic's directory policy §5.E asks to be declared rather than implied.
+			return { readOnlyHint: false, destructiveHint: true };
 		case "destructive":
 			return { readOnlyHint: false, destructiveHint: true };
 		default:

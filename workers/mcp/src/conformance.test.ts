@@ -67,6 +67,7 @@ vi.mock("agents/mcp", () => ({
 
 const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_COUNT } = await import("./tool-count.js");
+const { annotationsFor, TOOL_RISK } = await import("./tool-metadata.js");
 const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
 const { LATEST_PROTOCOL_VERSION } = await import("@modelcontextprotocol/sdk/types.js");
@@ -257,31 +258,68 @@ describe(`MCP tool surface — spec ${SPEC_REVISION} + directory bar (#562)`, ()
 				`  annotations present: ${annotated}/${published.length} · outputSchema: ${withOutput}/${published.length}`,
 		);
 
-		// The tallies are printed, not asserted, for the three fields #561 owns — asserting
-		// them here would make this file red on main while that work is in flight. The
-		// assertions live in the pending block below and are the point of this file; this
-		// test exists so the number is in every green build in the meantime, which is what
-		// makes "still 0" impossible to miss (ADR 0002 G2).
+		// The tallies are printed, not asserted, for the three fields #561 owns: the
+		// assertions live in the block below and are the point of this file. This test exists
+		// so the numbers are in every green build — which is what made "0 annotations, 0
+		// titles" impossible to miss while #561 was in flight, and what will make a silent
+		// slide back down visible now that it has landed (ADR 0002 G2).
 		expect(published.length).toBe(MCP_TOOL_COUNT);
 	});
 });
 
 /**
- * ── The arms that catch #561's class, pending #561 ──────────────────────────────────────
+ * ── The arms that catch #561's class — armed, #561 landed ───────────────────────────────
  *
- * `todo`, not `skip`: a skipped test reads as passing in the reporter, and the whole subject
- * of this file is guards that look green while measuring nothing.
+ * These were `todo` (not `skip`: a skipped test reads as passing, and the subject of this
+ * file is guards that look green while measuring nothing) until the annotations shipped.
+ * They convert #561 from a fix into an invariant, and they run on the WIRE objects — what a
+ * host actually receives — where `index.test.ts` runs on the registration call.
  *
- * These are red until the annotations land, which is the point — they convert #561 from a fix
- * into an invariant. Arm 3 in particular is the check no external tool could perform, because
- * only PAGS knows `safety.ts` is the authority on what a tool is allowed to do. It deliberately
- * does NOT get a scope table written here: a second hand-maintained classification is precisely
- * what #561 AC1 forbids ("one source, not a second hand-maintained list"), so it must read the
- * one #561 produces. `remove_repo` is the known exception — its scope depends on its arguments.
+ * Arm 4 is the check no external tool could perform, because only PAGS knows `safety.ts` is
+ * the authority on what a tool may do. It deliberately writes NO scope table of its own: a
+ * second hand-maintained classification is what #561 AC1 forbids, so it reads the one #561
+ * produces and asserts the wire agrees with it. Holding that classification to the gate each
+ * handler enforces — by driving all 135 handlers under two scope sets — is `index.test.ts`'s
+ * job, and duplicating it here would produce a second, weaker answer to the same question.
  */
 describe("directory bar — annotations (#561)", () => {
-	it.todo("every tool declares annotations.readOnlyHint (Anthropic §5.E)");
-	it.todo("every tool declares annotations.destructiveHint (Anthropic §5.E)");
-	it.todo("every tool declares a title (Anthropic §5.E)");
-	it.todo("every annotation agrees with the scope safety.ts gates the tool under");
+	it("every tool declares annotations.readOnlyHint (Anthropic §5.E)", () => {
+		const missing = published.filter((t) => typeof t.annotations?.readOnlyHint !== "boolean");
+		expect(missing.map((t) => t.name)).toEqual([]);
+	});
+
+	it("every tool declares annotations.destructiveHint (Anthropic §5.E)", () => {
+		// Applicable to all 135 because a read-only tool answers it too — with `false`, which
+		// is the value that stops a host reading the two fields independently and seeing the
+		// spec's default `true` on a tool that cannot write.
+		const missing = published.filter((t) => typeof t.annotations?.destructiveHint !== "boolean");
+		expect(missing.map((t) => t.name)).toEqual([]);
+	});
+
+	it("every tool declares a title (Anthropic §5.E)", () => {
+		const missing = published.filter((t) => typeof t.title !== "string" || t.title.trim() === "");
+		expect(missing.map((t) => t.name)).toEqual([]);
+	});
+
+	it("every annotation agrees with the scope safety.ts gates the tool under", () => {
+		// The wire carries exactly the classification, tool for tool. `TOOL_RISK` is the
+		// single source; `index.test.ts` is where it is held to the enforced gate, including
+		// `remove_repo`, whose scope depends on its arguments and which is therefore annotated
+		// with the worse of its two branches.
+		const disagreements: string[] = [];
+		for (const tool of published) {
+			const expected = annotationsFor(tool.name);
+			if (!expected) {
+				disagreements.push(`${tool.name}: classified nowhere in TOOL_RISK`);
+				continue;
+			}
+			if (JSON.stringify(tool.annotations) !== JSON.stringify(expected)) {
+				disagreements.push(`${tool.name}: wire ${JSON.stringify(tool.annotations)} ≠ ${JSON.stringify(expected)}`);
+			}
+		}
+		expect(disagreements).toEqual([]);
+		// Non-vacuity: the classification covers the whole published surface, so "no
+		// disagreements" cannot mean "nothing was compared".
+		expect(published.filter((t) => TOOL_RISK[t.name]).length).toBe(MCP_TOOL_COUNT);
+	});
 });

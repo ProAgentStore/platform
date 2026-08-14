@@ -780,9 +780,10 @@ describe("tool annotations", () => {
 		const h = await setup({ groups: ALL_SURFACES });
 		expect(h.tools.get("list_agents")!.config.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
 		expect(h.tools.get("add_knowledge")!.config.annotations).toEqual({ readOnlyHint: false, destructiveHint: false });
-		// A runtime tool states only what it can stand behind: it drives a machine, so the
-		// spec's pessimistic destructiveHint default is left in place rather than denied.
-		expect(h.tools.get("coding_session_message")!.config.annotations).toEqual({ readOnlyHint: false });
+		// A runtime tool states only what it can stand behind: it types into a live CLI, so
+		// "MAY perform destructive updates" is true of it and is declared, not left to the
+		// spec's default — Anthropic's directory policy asks for the declaration.
+		expect(h.tools.get("coding_session_message")!.config.annotations).toEqual({ readOnlyHint: false, destructiveHint: true });
 		expect(h.tools.get("cancel_instance")!.config.annotations).toEqual({ readOnlyHint: false, destructiveHint: true });
 		// Never guessed, anywhere on the surface: PAGS has no notion of idempotency and no
 		// per-tool record of which tools reach an external system.
