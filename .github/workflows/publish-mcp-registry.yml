@@ -1,5 +1,21 @@
 name: Publish MCP Registry
 
+# Deliberately NOT triggered by `workers/mcp/**` (#573, AC5).
+#
+# This workflow publishes `server.json` — name, title, description, version, repository and
+# the remote endpoint. It does NOT publish the tool list: the registry entry is a POINTER to
+# https://mcp.proagentstore.online/mcp, so a change to the tool surface changes nothing in
+# the manifest except, when it is a surface change, the version.
+#
+# And that version cannot move without `server.json` moving. `MCP_SERVER_VERSION`
+# (`workers/mcp/src/server-version.ts`) is the one source; `scripts/docs-drift.mjs`'s
+# wire-surface check fails when `server.json` disagrees with it, and docs-drift is a required
+# CI gate. So "the advertised version bumped" and "server.json changed in this push" are the
+# same event, and the existing path already fires on it.
+#
+# Widening to `workers/mcp/**` would run `mcp-publisher publish` on every worker commit with
+# an unchanged version — a job that no-ops or fails on nearly every push, which is how a
+# workflow stops being read.
 on:
   workflow_dispatch:
   push:

@@ -67,6 +67,9 @@ const DOC = `
 - \`my_instances\`: \`structuredContent: {"instances": […]}\`
 `;
 
+const VERSION_BULLET = "- `serverInfo.version`: `0.1.1`\n";
+const MD = `${VERSION_BULLET}${DOC}`;
+
 describe("parseSpecHints", () => {
 	it("reads the four hints out of the vendored spec and leaves `title` out", () => {
 		// `title` lives in the same $defs object but is not a hint, and this server publishes
@@ -172,7 +175,11 @@ describe("parseStringConstant / parseJsonStringField", () => {
 const FILES = {
 	"workers/mcp/src/mcp-schema-2025-11-25.json": SPEC,
 	"workers/mcp/src/tool-metadata.ts": METADATA,
-	"platform-docs/mcp.md": DOC,
+	"workers/mcp/src/server-version.ts": 'export const MCP_SERVER_VERSION = "0.1.1";',
+	"workers/mcp/src/index.ts":
+		'server = new McpServer({ name: "ProAgentStore", version: MCP_SERVER_VERSION }, { instructions: S });',
+	"server.json": '{"name":"io.github.ProAgentStore/platform","version":"0.1.1"}',
+	"platform-docs/mcp.md": MD,
 };
 
 const run = (overrides = {}) => {
@@ -190,19 +197,22 @@ describe("checkWireSurface", () => {
 		const res = run();
 		expect(res.failures).toEqual([]);
 		expect(res.notes).toEqual([
+			"wire surface — advertised version: 1 version(s) from 1 code file(s) == server.json (1), platform-docs/mcp.md (1), advertised from workers/mcp/src/index.ts",
 			"wire surface — tool annotations: 4 hint(s) from 2 code file(s) == platform-docs/mcp.md (4)",
 			"wire surface — structured results: 2 output schema(s) from 1 code file(s) == platform-docs/mcp.md (2)",
 		]);
 	});
 
 	it("goes red when the documentation is deleted — not silent, which is the whole point", () => {
-		const res = run({ "platform-docs/mcp.md": "# MCP\n\nNothing about the wire.\n" });
+		const res = run({ "platform-docs/mcp.md": `${VERSION_BULLET}\nNothing else about the wire.\n` });
 		expect(res.failures).toHaveLength(2);
 		expect(messages(res)).toContain("tool annotations: platform-docs/mcp.md states nothing");
 		expect(messages(res)).toContain("structured results: platform-docs/mcp.md states nothing");
 		// And no ✓ line for either: a fact that failed must not also print a denominator, or
-		// the tick and the finding describe the same tree.
-		expect(res.notes).toEqual([]);
+		// the tick and the finding describe the same tree. The version fact, still documented,
+		// keeps its line — so the absence above is the finding and not a dead check.
+		expect(res.notes).toHaveLength(1);
+		expect(res.notes[0]).toContain("advertised version");
 	});
 
 	it("goes red when a new hint is declared and the docs still list it as omitted", () => {
@@ -226,8 +236,38 @@ describe("checkWireSurface", () => {
 	});
 
 	it("goes red when the docs claim a wrapper key the schema does not use", () => {
-		const res = run({ "platform-docs/mcp.md": DOC.replace('{"instances"', '{"agents"') });
+		const res = run({ "platform-docs/mcp.md": MD.replace('{"instances"', '{"agents"') });
 		expect(messages(res)).toContain('my_instances: says "agents", the code defines "instances"');
+	});
+
+	// ── #573: the two literals, edited apart ──
+	it("goes red when the manifest and the constant are edited apart", () => {
+		const res = run({ "server.json": '{"version":"0.1.2"}' });
+		expect(messages(res)).toContain(
+			'serverInfo.version: says "0.1.2", the code defines "0.1.1"',
+		);
+	});
+
+	it("goes red when someone types the version back into the McpServer constructor", () => {
+		// The state #573 is about. Note it fails even when the literal AGREES with the
+		// constant: two values that happen to match today is not a single source, and it is
+		// exactly how `0.1.0` and `0.1.1` got to sit side by side for two months.
+		for (const literal of ["0.1.0", "0.1.1"]) {
+			const res = run({
+				"workers/mcp/src/index.ts": `server = new McpServer({ name: "ProAgentStore", version: "${literal}" }, {});`,
+			});
+			expect(messages(res)).toContain(`advertises the literal "${literal}" instead of MCP_SERVER_VERSION`);
+		}
+	});
+
+	it("goes red when the docs state a version nobody serves", () => {
+		const res = run({ "platform-docs/mcp.md": MD.replace("`0.1.1`", "`0.2.0`") });
+		expect(messages(res)).toContain('serverInfo.version: says "0.2.0", the code defines "0.1.1"');
+	});
+
+	it("goes red when the constructor is gone entirely, rather than passing on an absence", () => {
+		const res = run({ "workers/mcp/src/index.ts": "// nothing constructs a server here" });
+		expect(messages(res)).toContain("the constructor moved");
 	});
 
 	it("fails rather than skips when a listed path is gone, and names the fact it stopped measuring", () => {
@@ -235,7 +275,8 @@ describe("checkWireSurface", () => {
 		delete files["workers/mcp/src/tool-metadata.ts"];
 		const res = checkWireSurface({ read: (f) => files[f], exists: (f) => files[f] !== undefined });
 		expect(messages(res)).toContain("listed path(s) do not exist: workers/mcp/src/tool-metadata.ts");
-		expect(res.notes).toEqual([]);
+		// Both facts that named the missing file lost their ✓; the one that did not keeps it.
+		expect(res.notes.map((n) => n.split(":")[0])).toEqual(["wire surface — advertised version"]);
 	});
 
 	it("fails when the authority parser stops measuring, rather than reporting agreement", () => {

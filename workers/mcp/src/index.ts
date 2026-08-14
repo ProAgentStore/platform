@@ -7,6 +7,7 @@ import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
+import { MCP_SERVER_VERSION } from "./server-version.js";
 import { annotationsFor, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
 	AGENT_ID,
@@ -40,7 +41,7 @@ type Props = {
 type Env = McpEnv;
 
 export class PagsMcp extends McpAgent<Env, unknown, Props> {
-	server = new McpServer({ name: "ProAgentStore", version: "0.1.0" }, { instructions: SERVER_INSTRUCTIONS });
+	server = new McpServer({ name: "ProAgentStore", version: MCP_SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
 	private userToken: string | null = null;
 	private scopes: string[] | null = null;
 	private subject: string | undefined;

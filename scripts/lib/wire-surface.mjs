@@ -273,6 +273,12 @@ export function parseJsonStringField(src, field) {
 const TOOL_METADATA = "workers/mcp/src/tool-metadata.ts";
 const MCP_DOC = "platform-docs/mcp.md";
 const SPEC_SCHEMA = "workers/mcp/src/mcp-schema-2025-11-25.json";
+const VERSION_SOURCE = "workers/mcp/src/server-version.ts";
+const MCP_INDEX = "workers/mcp/src/index.ts";
+const MANIFEST = "server.json";
+
+/** The one key the version fact is stated under, in all three files. */
+const VERSION_KEY = "serverInfo.version";
 
 /**
  * Every wire fact this repository is obliged to document, in one table.
@@ -283,6 +289,59 @@ const SPEC_SCHEMA = "workers/mcp/src/mcp-schema-2025-11-25.json";
  */
 export function wireFacts() {
 	return [
+		{
+			id: "advertised version",
+			unit: "version(s)",
+			wire: "`serverInfo.version`, the only thing `initialize` tells a client about the build it reached",
+			authority: {
+				files: [VERSION_SOURCE],
+				how: "the `MCP_SERVER_VERSION` constant",
+				floor: 1,
+				why: `${VERSION_SOURCE} exports exactly one constant; reading none means it was renamed or removed.`,
+				parse: (byFile) => {
+					const v = parseStringConstant(byFile.get(VERSION_SOURCE), "MCP_SERVER_VERSION");
+					return v ? new Map([[VERSION_KEY, v]]) : new Map();
+				},
+			},
+			// Not a restatement — a USE. index.ts must take the value from the constant, so
+			// this arm checks the binding rather than the value: two literals that happen to
+			// agree today is the state #573 is about, not the fix for it.
+			binding: {
+				file: MCP_INDEX,
+				why:
+					"`index.ts:43` and `server.json` were two hand-typed literals, `0.1.0` and `0.1.1`, and had\n" +
+					"  never agreed. Import the constant; do not re-type the value.",
+				check: (src) => {
+					const advertised = parseAdvertisedVersion(src);
+					if (!advertised) return "no `new McpServer({ … version: … })` found — the constructor moved.";
+					if (advertised.kind === "literal") {
+						return `advertises the literal "${advertised.token}" instead of MCP_SERVER_VERSION.`;
+					}
+					if (advertised.token !== "MCP_SERVER_VERSION") {
+						return `advertises \`${advertised.token}\`, which is not MCP_SERVER_VERSION.`;
+					}
+					return null;
+				},
+			},
+			restatements: [
+				{
+					file: MANIFEST,
+					how: "its `version` field",
+					parse: (src) => {
+						const v = parseJsonStringField(src, "version");
+						return v ? new Map([[VERSION_KEY, v]]) : new Map();
+					},
+				},
+				{
+					file: MCP_DOC,
+					how: "its `` - `serverInfo.version`: `x.y.z` `` bullet",
+					parse: (src) => {
+						const m = src.match(/^-\s+`serverInfo\.version`:\s*`([^`]+)`/m);
+						return m ? new Map([[VERSION_KEY, m[1]]]) : new Map();
+					},
+				},
+			],
+		},
 		{
 			id: "tool annotations",
 			unit: "hint(s)",

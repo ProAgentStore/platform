@@ -107,6 +107,16 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
+- `serverInfo.version`: `0.1.1`
+
+That is the same value the published MCP-registry manifest (`server.json`) carries, and both
+are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
+because two hand-typed literals had never agreed. It moves when the **served surface**
+changes: the set of registered tool names, a tool's input schema, its annotations, which
+tools declare an `outputSchema`, or the `instructions` below. It deliberately does not move
+for a reworded tool description or a change inside a handler. The constant's own comment is
+the full rule, and `pnpm docs:drift` fails if these three statements of it disagree.
+
 Alongside `serverInfo`, the server returns an `instructions` string. MCP sends it once, at
 `initialize`, and a host presents it to the model beside every tool's own description — so it
 is where guidance that applies **across** tools belongs, rather than being repeated into 135

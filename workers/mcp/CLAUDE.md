@@ -218,5 +218,12 @@ Deploys run from CI, not from a laptop. `.github/workflows/deploy-mcp.yml` fires
 push to `main` touching `workers/mcp/**`: install → `pnpm --filter proagentstore-mcp
 typecheck` → `wrangler deploy` → a `/health` smoke test (5 retries).
 `.github/workflows/publish-mcp-registry.yml` republishes `server.json` to the MCP
-registry when that file changes, via `mcp-publisher` with GitHub OIDC — so bump
-`server.json`'s `version` when the published metadata should change.
+registry when that file changes, via `mcp-publisher` with GitHub OIDC.
+
+The version is **one constant** — `MCP_SERVER_VERSION` in `src/server-version.ts` (#573).
+`index.ts` imports it for `serverInfo.version`; `server.json` and `platform-docs/mcp.md`
+restate it and `pnpm docs:drift` fails when any of the three disagree, including when
+someone re-types the literal back into the `McpServer` constructor. So bump the CONSTANT
+and let `server.json` follow it — never the other way round. That constant's own comment
+carries the rule for when a bump is due (the served surface changed: tool names, input
+schemas, annotations, output schemas or `instructions` — not a reworded description).
