@@ -54,7 +54,7 @@ src/
 ├── oauth-provider.ts     /authorize, /authorize/continue, /oauth/callback, /health, root
 ├── session.ts            verifyMcpSession (HMAC session → uid)
 ├── registration.ts       the one seam every `server.tool(...)` call passes through
-├── tool-metadata.ts      server instructions, derived titles (advisory, never a check)
+├── tool-metadata.ts      annotations, titles, output schemas (advisory, never a check)
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
@@ -162,7 +162,18 @@ tells you exactly what you changed about it.
   way `coding_session_message` does.
 - **No `isError`.** Nothing in this worker sets it; failures are text starting `Error: `
   or JSON carrying an `error` key. If you add structured error signalling, update
-  `AGENTS.md` rule 3 in the same change.
+  `AGENTS.md` rule 3 in the same change. The SDK *will* set it for you in one case, which
+  is why the pipeline exists: a tool that declares an `outputSchema` and returns no
+  `structuredContent` has its call rejected, so `registration.ts` attaches `{error: <the
+  refusal text>}` to any such result — otherwise "you are not signed in" would come back as
+  a protocol error instead of an answer.
+- **An `outputSchema` is a contract, not a hint (#561).** "Servers MUST provide structured
+  results that conform to this schema", enforced in `validateToolOutput`. Two tools declare
+  one — `list_agents` and `my_instances`, whose payload IS the id the next call needs — and
+  both answer with `structuredContent` on every path. Do not add a third without reading
+  the API handler that produces the shape: the response belongs to `workers/api`, which
+  this worker cannot import, so the schema is a copy and a wrong copy fails a working call.
+  Every field stays optional so a field added over there cannot break a call here.
 - **Models send JSON strings for object params.** `create_agent` / `update_agent` accept
   `z.union([z.record(z.unknown()), z.string()])` and parse a string, because rejecting it
   turns a working call into a retry loop. Do the same for any new object-shaped argument.

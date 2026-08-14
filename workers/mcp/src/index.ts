@@ -2,12 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
-import { apiCall, authedCall, authRequired, INVALID_JSON, type McpEnv, jsonText, parseJsonArg, text } from "./http.js";
+import { apiCall, authedCall, authRequired, INVALID_JSON, type McpEnv, jsonResult, jsonText, parseJsonArg, text } from "./http.js";
 import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
-import { annotationsFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { annotationsFor, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
 	AGENT_ID,
 	agentTemplateFiles,
@@ -68,7 +68,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			gate: (name, provided) => suspensionBlock(this.env, this.token(provided), name),
 			metadata: (name) => {
 				const annotations = annotationsFor(name);
-				return annotations ? { annotations } : undefined;
+				const outputSchema = outputSchemaFor(name);
+				return {
+					...(annotations ? { annotations } : {}),
+					...(outputSchema ? { outputSchema } : {}),
+				};
 			},
 		});
 	}
@@ -119,14 +123,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			{},
 			async () => {
 				const data = (await apiCall("/v1/agents", {}, this.env)) as { agents: unknown[] };
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: JSON.stringify(data.agents, null, 2),
-						},
-					],
-				};
+				// `{agents: […]}` rather than the bare array it used to answer with: this tool
+				// declares an outputSchema, and `structuredContent` must be an object (#561).
+				// The text block carries the same JSON, as the spec asks.
+				return jsonResult({ agents: data.agents ?? [] });
 			},
 		);
 

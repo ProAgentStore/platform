@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText, text } from "../http.js";
+import { authRequired, authedCall, jsonResult, jsonText, structuredText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import { findInstanceForAgent, type InstanceSummary, type InstanceToolsCtx } from "./shared.js";
 
@@ -165,10 +165,17 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 				{},
 				env,
 			)) as { instances?: InstanceSummary[]; error?: string };
-			if (data.error) return text(`Error: ${data.error}`);
+			// This tool declares an outputSchema (#561), so every path answers with structure as
+			// well as text: `structuredContent` must be an object, and the SDK rejects the call
+			// outright if a schema'd tool returns none. The prose is kept where it is the more
+			// useful answer — "none yet, subscribe first" tells a caller what to do next in a
+			// way `{instances: []}` does not.
+			if (data.error) return structuredText(`Error: ${data.error}`, { error: data.error });
 			const instances = data.instances || [];
-			if (instances.length === 0) return text("No subscribed instances yet. Use subscribe_agent with a published agent first.");
-			return jsonText(instances);
+			if (instances.length === 0) {
+				return structuredText("No subscribed instances yet. Use subscribe_agent with a published agent first.", { instances: [] });
+			}
+			return jsonResult({ instances });
 		},
 	);
 

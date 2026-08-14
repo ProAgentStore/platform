@@ -140,6 +140,44 @@ async function listPublishedTools(): Promise<WireTool[]> {
 /** Read once — every test below shares it, and a fresh init per test costs nothing useful. */
 const published = await listPublishedTools();
 
+/**
+ * A live client/server pair with the network stubbed, for CALLING a tool rather than
+ * listing one. This is the only harness in the repo that runs the SDK's own
+ * `validateToolOutput` — the check that rejects a call when a tool declares an
+ * `outputSchema` and its result does not conform. A schema is a promise the SDK enforces,
+ * so the promise has to be tested where it is enforced.
+ */
+async function withClient(
+	respond: (url: string) => unknown,
+	authToken: string | null,
+	// biome-ignore lint/suspicious/noExplicitAny: the SDK client type is not exported usefully here
+	fn: (client: any) => Promise<void>,
+): Promise<void> {
+	const kv = {
+		get: async () => null,
+		put: async () => {},
+		delete: async () => {},
+		list: async () => ({ keys: [], list_complete: true, cursor: undefined, cacheStatus: null }),
+	} as unknown as KVNamespace;
+	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+		const url = typeof input === "string" ? input : input.toString();
+		return new Response(JSON.stringify(respond(url) ?? {}), { status: 200, headers: { "Content-Type": "application/json" } });
+	});
+	// biome-ignore lint/suspicious/noExplicitAny: constructing the mocked-base subclass
+	const inst = new (PagsMcp as any)();
+	inst.env = { API_BASE: "https://api.test", OAUTH_KV: kv, GITHUB_ORG: "ProAgentStore" };
+	inst.props = { authToken, mcpScopes: ["read", "write", "runtime", "destructive"], mcpSubject: "user-1" };
+	await inst.init();
+	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+	const client = new Client({ name: "pags-conformance", version: "0.0.0" });
+	await Promise.all([client.connect(clientTransport), inst.server.connect(serverTransport)]);
+	try {
+		await fn(client);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+}
+
 const specSchema = JSON.parse(
 	readFileSync(new URL(`./mcp-schema-${SPEC_REVISION}.json`, import.meta.url), "utf-8"),
 ) as { $defs: Record<string, unknown>; $schema?: string };
@@ -321,5 +359,54 @@ describe("directory bar — annotations (#561)", () => {
 		// Non-vacuity: the classification covers the whole published surface, so "no
 		// disagreements" cannot mean "nothing was compared".
 		expect(published.filter((t) => TOOL_RISK[t.name]).length).toBe(MCP_TOOL_COUNT);
+	});
+});
+
+/**
+ * ── Output schemas: the promise the SDK enforces (#561) ─────────────────────────────────
+ *
+ * "If an output schema is provided: Servers MUST provide structured results that conform to
+ * this schema" — and `validateToolOutput` (mcp.js:185-207) turns a miss into a rejected
+ * call. So the risk a schema introduces is not a worse answer, it is NO answer, on a tool
+ * that worked yesterday. These call the real client and would fail if that happened.
+ */
+describe("output schemas (#561)", () => {
+	it("declares one only where the result is an identifier the next call needs", () => {
+		const withSchema = published.filter((t) => t.outputSchema).map((t) => t.name).sort();
+		expect(withSchema).toEqual(["list_agents", "my_instances"]);
+	});
+
+	it("returns structured content the SDK accepts, on the success path", async () => {
+		await withClient(
+			(url) => (url.endsWith("/v1/agents") ? { agents: [{ id: "a1", slug: "coder", name: "Coder" }] } : {}),
+			"session-token",
+			async (client) => {
+				const res = await client.callTool({ name: "list_agents", arguments: {} });
+				expect(res.structuredContent).toEqual({ agents: [{ id: "a1", slug: "coder", name: "Coder" }] });
+				// The serialized JSON stays in a text block, which the spec asks for explicitly
+				// so a client that reads only `content` is unaffected.
+				expect(JSON.parse((res.content as { text: string }[])[0].text)).toEqual(res.structuredContent);
+			},
+		);
+	});
+
+	it("answers a REFUSAL without a protocol error — the trap a schema sets", async () => {
+		// `authRequired()` returns before the handler runs, so nothing in the handler could
+		// have attached structure; the registration pipeline does it. Without that, declaring
+		// a schema would convert "you are not signed in" into a rejected call on the first
+		// tool a new caller reaches.
+		await withClient(
+			() => ({}),
+			null,
+			async (client) => {
+				const res = await client.callTool({ name: "my_instances", arguments: {} });
+				// Stated in this order so the failure names the cause: a missing
+				// `structuredContent` is what the SDK rejects the call over, and the rejection
+				// comes back as an error result rather than the refusal the user asked for.
+				expect(res.isError ?? false).toBe(false);
+				expect(res.structuredContent).toBeDefined();
+				expect((res.structuredContent as { error?: string }).error).toContain("authentication required");
+			},
+		);
 	});
 });

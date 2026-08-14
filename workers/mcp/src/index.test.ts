@@ -257,7 +257,11 @@ describe("public catalog tools", () => {
 		const res = await h.tools.get("list_agents")!.handler({});
 		const call = h.fetchStub.calls.find((c) => c.url.endsWith("/v1/agents"))!;
 		expect(call.headers.has("Authorization")).toBe(false);
-		expect(JSON.parse(res.content[0].text)).toEqual([{ id: "a1" }, { id: "a2" }]);
+		// `{agents: […]}`, not the bare array it answered with before #561: a tool that
+		// declares an outputSchema must return an OBJECT as structuredContent, and the text
+		// block carries the same JSON so an existing caller reads the same data.
+		expect(JSON.parse(res.content[0].text)).toEqual({ agents: [{ id: "a1" }, { id: "a2" }] });
+		expect((res as { structuredContent?: unknown }).structuredContent).toEqual({ agents: [{ id: "a1" }, { id: "a2" }] });
 	});
 
 	it("chat_with_agent posts to the public try endpoint and surfaces the session id", async () => {

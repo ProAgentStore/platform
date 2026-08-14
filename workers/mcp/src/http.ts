@@ -24,6 +24,27 @@ export function jsonText(value: unknown): TextResult {
 	return text(JSON.stringify(value, null, 2));
 }
 
+/** A result that carries BOTH the JSON text every client has always read and the parsed
+ *  object beside it (#561).
+ *
+ *  MCP 2025-06-18 pairs `outputSchema` with `structuredContent` so a caller can take an id
+ *  out of one result and put it into the next call without parsing prose — and the spec is
+ *  explicit that the serialized JSON stays in a text block for backwards compatibility, so
+ *  this ADDS a field rather than replacing one.
+ *
+ *  Only for tools that declare an `outputSchema`: the SDK REJECTS a call whose tool has a
+ *  schema and returns no structured content (`validateToolOutput`, mcp.js:197), and
+ *  validates what it is given against that schema. */
+export function jsonResult<T>(value: T): TextResult & { structuredContent: T } {
+	return { ...jsonText(value), structuredContent: value };
+}
+
+/** Prose for the human, structure for the caller — for the paths where the useful English
+ *  ("no instances yet, subscribe first") is not the useful data (`{instances: []}`). */
+export function structuredText(message: string, value: unknown): TextResult & { structuredContent: unknown } {
+	return { ...text(message), structuredContent: value };
+}
+
 /** What `parseJsonArg` returns for a string argument that is not valid JSON. */
 export const INVALID_JSON = Symbol("invalid-json");
 

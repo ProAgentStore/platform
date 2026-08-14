@@ -6,6 +6,7 @@
  * this module may ever be imported by a handler or by the safety layer — `index.test.ts`
  * fails the build if it is.
  */
+import { z } from "zod";
 import type { McpScope } from "./safety.js";
 
 /**
@@ -311,4 +312,71 @@ export function annotationsFor(name: string): ToolAnnotations | undefined {
 		default:
 			return undefined;
 	}
+}
+
+// ── Output schemas (#561, part 2) ────────────────────────────────────────────
+//
+// MCP 2025-06-18 pairs `outputSchema` with `structuredContent`: a caller reads a field out
+// of one result and puts it into the next call instead of parsing prose. OpenAI asks for
+// one "when the tool returns structured data" and its review scan imports them.
+//
+// Declared for TWO tools, and the restraint is the design. An output schema is a BINDING
+// contract — "Servers MUST provide structured results that conform to this schema", which
+// the pinned SDK enforces by rejecting the call (`validateToolOutput`, mcp.js:185-207). So
+// a schema that drifts from what the API actually returns does not degrade a result, it
+// fails one. And drift is the likely case here: the response shapes belong to
+// `workers/api`, a SEPARATE deployable this worker cannot import, so a transcribed schema
+// for something like `/v1/usage` — totals, six groupings, payer coverage, unmetered — would
+// be a copy with nothing able to hold it to its source. The `columnFor` comment in
+// `instance-tools/shared.ts` is what that costs when it goes wrong.
+//
+// The two below are the ones that pay for themselves anyway: their whole content is the
+// IDENTIFIER the next call needs (`agent_info`, `subscribe_agent`, and every instance tool
+// in the server). Every field is optional and the objects passthrough, so a field added or
+// renamed in `workers/api` cannot fail a call — the schema describes what a caller may rely
+// on finding, not everything it will receive.
+//
+// The rest of the surface deliberately declares none: a tool that returns a one-line
+// acknowledgement gains nothing from a schema and takes on the obligation anyway.
+
+/** Zod raw shapes, keyed by tool name. `undefined` for a tool that declares no schema. */
+export const TOOL_OUTPUT: Record<string, z.ZodRawShape> = {
+	list_agents: {
+		agents: z
+			.array(
+				z
+					.object({
+						id: z.string().optional(),
+						slug: z.string().optional(),
+						name: z.string().optional(),
+						category: z.string().optional(),
+						description: z.string().optional(),
+					})
+					.passthrough(),
+			)
+			.optional()
+			.describe("Published agents. `id` or `slug` is what agent_info and subscribe_agent take."),
+		error: z.string().optional().describe("Set instead of the payload when the call was refused."),
+	},
+	my_instances: {
+		instances: z
+			.array(
+				z
+					.object({
+						id: z.string().optional(),
+						agent_id: z.string().optional(),
+						slug: z.string().optional(),
+						name: z.string().optional(),
+						status: z.string().optional(),
+					})
+					.passthrough(),
+			)
+			.optional()
+			.describe("Your subscribed instances. `id` is the instance_id every instance tool takes."),
+		error: z.string().optional().describe("Set instead of the payload when the call was refused."),
+	},
+};
+
+export function outputSchemaFor(name: string): z.ZodRawShape | undefined {
+	return TOOL_OUTPUT[name];
 }

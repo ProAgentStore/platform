@@ -210,15 +210,31 @@ describe("authentication", () => {
 // ── Read proxies: correct route + method, bearer header ──────────────────────
 
 describe("read proxies", () => {
-	it("my_instances GETs the instances route and returns the array", async () => {
+	it("my_instances GETs the instances route and returns the instances, in text AND structured", async () => {
+		// The payload is `{instances: […]}` rather than the bare array this used to answer
+		// with: the tool declares an outputSchema (#561), and `structuredContent` has to be an
+		// object. The text block still carries the same JSON, which is what the spec asks for
+		// and what keeps every existing caller reading the same thing.
 		const h = setup();
 		const instances = [{ id: "i1", agent_id: "a1", status: "active" }];
 		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), { body: { instances } });
-		const res = await h.tools.get("my_instances")!.handler({});
+		const res = (await h.tools.get("my_instances")!.handler({})) as { content: { text: string }[]; structuredContent?: unknown };
 		expect(h.fetchStub.calls[0].url).toBe("https://api.test/v1/instances/my/instances");
 		expect(h.fetchStub.calls[0].method).toBe("GET");
 		expect(h.fetchStub.calls[0].headers.get("Authorization")).toBe("Bearer session-token");
-		expect(JSON.parse(res.content[0].text)).toEqual(instances);
+		expect(JSON.parse(res.content[0].text)).toEqual({ instances });
+		expect(res.structuredContent).toEqual({ instances });
+	});
+
+	it("my_instances answers an empty list with the advice in text and the shape in structure", async () => {
+		// Prose and structure disagree here on purpose: "subscribe first" is the useful answer
+		// for a reader, `{instances: []}` is the useful answer for a caller, and a schema'd
+		// tool must supply the second on every path or the SDK rejects the call.
+		const h = setup();
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), { body: { instances: [] } });
+		const res = (await h.tools.get("my_instances")!.handler({})) as { content: { text: string }[]; structuredContent?: unknown };
+		expect(res.content[0].text).toContain("subscribe_agent");
+		expect(res.structuredContent).toEqual({ instances: [] });
 	});
 
 	it("my_instances reports a friendly message when there are no instances", async () => {

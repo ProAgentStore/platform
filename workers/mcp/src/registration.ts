@@ -62,6 +62,7 @@ export function installRegistrationPipeline(
 			throw new Error("mcp: tool registration without a name or a handler");
 		}
 		const handler = args[i] as AnyFn;
+		const metadata = opts.metadata?.(name) ?? {};
 		const gated = async (...handlerArgs: unknown[]) => {
 			// A tool may carry its own `token` argument (acting as someone other than the
 			// connection), so gate the identity the handler will actually use, not just
@@ -69,7 +70,8 @@ export function installRegistrationPipeline(
 			const first = handlerArgs[0] as { token?: unknown } | undefined;
 			const provided = typeof first?.token === "string" ? first.token : undefined;
 			const blocked = await opts.gate(name, provided);
-			return blocked ?? handler(...handlerArgs);
+			const result = blocked ?? (await handler(...handlerArgs));
+			return metadata.outputSchema ? withStructuredContent(result) : result;
 		};
 
 		const description = typeof args[1] === "string" ? (args[1] as string) : undefined;
@@ -87,9 +89,29 @@ export function installRegistrationPipeline(
 				title: titleFor(name),
 				...(description === undefined ? {} : { description }),
 				...(inputSchema === undefined ? {} : { inputSchema }),
-				...(opts.metadata?.(name) ?? {}),
+				...metadata,
 			},
 			gated,
 		);
 	};
+}
+
+/**
+ * The safety net under an output schema.
+ *
+ * Declaring one is a promise the SDK enforces: a tool with an `outputSchema` that returns
+ * no `structuredContent` gets its call REJECTED (`validateToolOutput`, mcp.js:197). The
+ * handler supplies it on the paths it knows about — but two refusals do not come from the
+ * handler at all. `authRequired()` is returned before it runs, and the suspension gate
+ * above replaces the result entirely. Without this, adding a schema to a tool would turn
+ * "you are not signed in" into a protocol error, on the exact tools a caller reaches first.
+ *
+ * Every such text is a refusal (that is the only way a result reaches here without
+ * structure), so reporting it as `error` is what it is. Each schema declares that field.
+ */
+function withStructuredContent(result: unknown): unknown {
+	if (!result || typeof result !== "object") return result;
+	const shaped = result as { content?: Array<{ text?: string }>; structuredContent?: unknown };
+	if (shaped.structuredContent !== undefined) return result;
+	return { ...shaped, structuredContent: { error: shaped.content?.[0]?.text ?? "No result." } };
 }
