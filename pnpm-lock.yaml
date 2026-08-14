@@ -290,6 +290,12 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20250530.0
         version: 4.20260605.1
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
