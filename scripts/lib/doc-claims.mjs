@@ -93,15 +93,24 @@ export function parseConfirmBullets(src) {
 }
 
 /**
- * `workers/mcp/README.md`'s table form. Reads the column POSITION out of each header row
- * rather than assuming the last cell, so adding a column to the table cannot silently
- * shift what this reads.
+ * Read one column of a Markdown table, keyed by another. Reads the column POSITION out of
+ * each header row rather than assuming the last cell, so adding a column to the table
+ * cannot silently shift what this reads.
+ *
+ * Both cells are matched by an explicit pattern rather than by taking the raw text: a
+ * decorative cell (`—`, "n/a", a sentence) must produce NO entry, not an entry whose value
+ * is punctuation — that would arrive at the caller as a phantom claim and blame the docs
+ * for the parser's guess.
  *
  * @param {string} src
- * @returns {{tools: Map<string, string>, tables: number}} `tables` is the denominator: zero
+ * @param {{key: string, value: string, keyPattern?: RegExp, valuePattern?: RegExp}} spec
+ *   `key`/`value` are header names, compared case-insensitively.
+ * @returns {{rows: Map<string, string>, tables: number}} `tables` is the denominator: zero
  *   means the header shape moved and this parser is measuring nothing.
  */
-export function parseConfirmTable(src) {
+export function parseTableColumn(src, spec) {
+	const keyPattern = spec.keyPattern ?? /^`([a-z0-9_]+)`$/;
+	const valuePattern = spec.valuePattern ?? /`([a-z0-9_]+)`/;
 	const cells = (line) =>
 		line
 			.replace(/^\s*\|/, "")
@@ -110,29 +119,40 @@ export function parseConfirmTable(src) {
 			.map((c) => c.trim());
 
 	const out = new Map();
-	let confirmAt = -1;
-	let toolAt = -1;
+	let valueAt = -1;
+	let keyAt = -1;
 	let tables = 0;
 	for (const line of src.split("\n")) {
 		if (!/^\s*\|/.test(line)) {
-			confirmAt = -1;
+			valueAt = -1;
 			continue;
 		}
 		const row = cells(line);
-		const header = row.findIndex((c) => c.toLowerCase() === "confirm");
+		const header = row.findIndex((c) => c.toLowerCase() === spec.value.toLowerCase());
 		if (header !== -1) {
-			confirmAt = header;
-			toolAt = row.findIndex((c) => c.toLowerCase() === "tool");
+			valueAt = header;
+			keyAt = row.findIndex((c) => c.toLowerCase() === spec.key.toLowerCase());
 			tables++;
 			continue;
 		}
-		if (confirmAt === -1 || toolAt === -1) continue;
-		const tool = row[toolAt]?.match(/^`([a-z0-9_]+)`$/)?.[1];
-		if (!tool) continue;
-		const value = row[confirmAt]?.match(/`([a-z0-9_]+)`/)?.[1];
-		if (value) out.set(tool, value);
+		if (valueAt === -1 || keyAt === -1) continue;
+		const key = row[keyAt]?.match(keyPattern)?.[1];
+		if (!key) continue;
+		const value = row[valueAt]?.match(valuePattern)?.[1];
+		if (value) out.set(key, value);
 	}
-	return { tools: out, tables };
+	return { rows: out, tables };
+}
+
+/**
+ * `workers/mcp/README.md`'s table form: the Confirm column of its tool tables.
+ *
+ * @param {string} src
+ * @returns {{tools: Map<string, string>, tables: number}}
+ */
+export function parseConfirmTable(src) {
+	const { rows, tables } = parseTableColumn(src, { key: "tool", value: "confirm" });
+	return { tools: rows, tables };
 }
 
 const NUMBER_WORDS = [

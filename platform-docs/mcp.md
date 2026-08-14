@@ -105,6 +105,27 @@ Prefer read-only tools unless the task explicitly requires changes.
 Confirm before destructive actions.
 ```
 
+## What `initialize` Answers
+
+Alongside `serverInfo`, the server returns an `instructions` string. MCP sends it once, at
+`initialize`, and a host presents it to the model beside every tool's own description — so it
+is where guidance that applies **across** tools belongs, rather than being repeated into 135
+descriptions.
+
+ProAgentStore's says three things, in this order, because the first 512 characters are the
+part a host is most likely to keep:
+
+1. **Get an id first.** Almost every tool acts on one agent instance. `my_instances` lists
+   the ones you already run; `list_agents` is the public catalogue and `subscribe_agent`
+   creates an instance from it.
+2. **Debug with `agent_trace` first**, then `instance_messages` or `list_errors` for detail;
+   `usage_summary` reports spend.
+3. **The annotations are accurate**, a state-changing tool takes `dry_run`, and the
+   `confirm` + `destructive`-scope refusals below are real and cannot be argued past.
+
+The string itself is `SERVER_INSTRUCTIONS` in `workers/mcp/src/tool-metadata.ts`. A client
+that ignores it loses nothing but the ordering; nothing here is enforcement.
+
 ## Auth
 
 Two authentication paths resolve to the same ProAgentStore session:
@@ -148,12 +169,62 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `delete_supervision`: `confirm: "delete_supervision"`
 - `remove_repo`: `confirm: "remove_all_repos"`, and only when removing **all** indexed repos
 
+### Tool annotations
+
+`tools/list` publishes an `annotations` object on every tool. It is the one safety signal a
+host reads **before** it calls anything — scopes, `dry_run` and `confirm` all speak at call
+time, and by then the host has already decided whether to ask the user.
+
+| Hint | Published | What it means here |
+|---|---|---|
+| `readOnlyHint` | declared | `true` on a tool that only reads. `false` on everything else. |
+| `destructiveHint` | declared | `true` on a tool that may perform a destructive update — every `runtime` and `destructive` tool. `false` on reads and on additive writes. |
+| `idempotentHint` | omitted | ProAgentStore has no notion of idempotency to report, so any value would be a guess. |
+| `openWorldHint` | omitted | There is no per-tool record of which tools reach an external system. |
+
+The two published hints are **derived, not hand-maintained per tool**.
+`workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
+`destructive` in one table, and `annotationsFor()` maps that classification onto the two
+hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
+which drives all 135 tools under two different scope sets and reads the required scope out
+of each refusal — so a tool announced read-only that enforces a write gate fails the build
+rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
+`tools/list` response.
+
+Both spec defaults for the omitted pair (`idempotentHint` false, `openWorldHint` true) err
+on the cautious side, so leaving them out costs a host nothing. Declaring a guess would cost
+it exactly what the annotations are for.
+
 Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account. Audit events are redacted before storage — both by key name (`token`, `secret`, `password`, `credential`, `api_key`, …) and by value shape (`sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs, bearer headers) — and expire after 90 days.
 
-## Error Shape
+## Result And Error Shape
 
-Tools return a single text content block. This server does **not** set `isError`. A
-failure is one of:
+Every tool returns a text content block. Two tools **also** return `structuredContent`,
+because they declare an `outputSchema` — MCP pairs the two, and the pinned SDK enforces the
+pair, so a declared schema is a binding contract rather than a hint:
+
+- `list_agents`: `structuredContent: {"agents": […]}`
+- `my_instances`: `structuredContent: {"instances": […]}`
+
+The payload is an **object with a named key, not a bare array** — `my_instances` returned a
+bare array before this was declared, and that is a consumer-visible change. The same JSON
+stays in the text block, so a client that reads only `content` is unaffected. Every field
+inside is optional and the objects passthrough, so a field added or renamed in the platform
+API cannot fail a call: the schema says what a caller may rely on finding, not everything it
+will receive.
+
+Only these two declare a schema, and the restraint is deliberate. Their whole content is the
+identifier the next call needs (`agent_info`, `subscribe_agent`, and every instance tool take
+it). A tool that returns a one-line acknowledgement gains nothing from a schema and takes on
+the obligation anyway — and the obligation is real: a tool that declares a schema and returns
+no structured result has its call **rejected**, so a schema that drifts from what the platform
+API returns does not degrade an answer, it removes one.
+
+A refusal on a schema-carrying tool — not signed in, denied scope, a suspended operator —
+comes back as `structuredContent: {"error": "…"}`, so it is still an answer rather than a
+protocol error.
+
+This server does **not** set `isError`. A failure is one of:
 
 - text beginning `Error: ` — authentication required, a denied scope, a missing
   confirmation, or an upstream error message;

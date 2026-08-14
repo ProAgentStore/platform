@@ -22,8 +22,11 @@
  *   5. MCP tool surface     README's tool table == the tools actually registered
  *   6. MCP tool count       every "N tools" claim == workers/mcp/src/tool-count.ts
  *   7. confirm gates        every documented `confirm` value == a requireConfirmation site
- *   8. docs links           every /docs/<slug>/ URL resolves to a real page
- *   9. API surface          delegates to scripts/openapi-coverage.mjs (#209)
+ *   8. wire surface         every fact a client RECEIVES — tool annotations, output schemas,
+ *                           the advertised version — == the code defining it, and is named
+ *                           in the docs (#572, #573; scripts/lib/wire-surface.mjs)
+ *   9. docs links           every /docs/<slug>/ URL resolves to a real page
+ *  10. API surface          delegates to scripts/openapi-coverage.mjs (#209)
  *
  * ── Every check states its denominator (#555, and #559's proposed ADR 0002)
  *
@@ -60,6 +63,7 @@ import {
 	parseConfirmProse,
 	parseConfirmTable,
 } from "./lib/doc-claims.mjs";
+import { checkWireSurface } from "./lib/wire-surface.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const p = (...s) => resolve(ROOT, ...s);
@@ -652,7 +656,32 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. /docs/<slug>/ links resolve
+// 8. the wire surface — what a client RECEIVES vs the code that defines it
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Checks 5–7 all passed through #561's four commits, and were right to: the tool count did
+ * not move and no `confirm` value changed. What DID change is what the server puts on the
+ * wire — `readOnlyHint`/`destructiveHint` on all 135 tools, an `outputSchema` on two of
+ * them, a server `instructions` string — and no document mentioned any of it (#572). A
+ * capability could reach a caller carrying no documentation obligation while a `confirm`
+ * value could not, and the two are the same failure: a decision made from a signal the docs
+ * do not explain.
+ *
+ * The facts, their parsers, their floors and the reasoning are in
+ * scripts/lib/wire-surface.mjs, unit-tested against strings in wire-surface.test.mjs.
+ */
+{
+	const { failures: wireFailures, notes: wireNotes } = checkWireSurface({
+		read: (f) => read(p(f)),
+		exists: (f) => existsSync(p(f)),
+	});
+	for (const f of wireFailures) fail(f.check, f.message);
+	for (const n of wireNotes) ok(n);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. /docs/<slug>/ links resolve
 // ─────────────────────────────────────────────────────────────────────────────
 
 if (nav) {
@@ -690,7 +719,7 @@ if (nav) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. API surface — delegate, do not reimplement
+// 10. API surface — delegate, do not reimplement
 // ─────────────────────────────────────────────────────────────────────────────
 
 {
