@@ -12,6 +12,12 @@ import type { Env } from "../types.js";
 
 export type EventLevel = "debug" | "info" | "warn" | "error";
 
+/**
+ * The severity ladder, least to most interesting. Ordered, because `listEvents` filters on a FLOOR
+ * — see the note there — and a floor needs to know what sits above the level it was asked for.
+ */
+export const EVENT_LEVELS: readonly EventLevel[] = ["debug", "info", "warn", "error"];
+
 export interface EventInput {
 	/** Subsystem: 'chat' | 'apply' | 'coding' | 'voice' | 'tool' | … */
 	source: string;
@@ -99,6 +105,24 @@ export interface EventRow {
  * Read a slice of the trace. Always scoped to one owner + one instance. Returns the
  * most recent `limit` events in CHRONOLOGICAL order (oldest→newest) so the result
  * reads as a timeline. Optional `traceId`/`source`/`level` narrow it.
+ *
+ * `level` is a FLOOR, not an equality (#564). Both `GET /trace?level=` and the MCP `agent_trace`
+ * tool have documented it as one for as long as it has existed — "minimum-interest filter" — and
+ * it was implemented as `level = ?`, so `level:"warn"` silently HID every error, which is the
+ * exact opposite of a minimum. `level:"error"` behaved identically either way because `error` is
+ * the top of the ladder, which is why the disagreement went unnoticed: the only read anyone made
+ * was the one where the two agree.
+ *
+ * The floor is what wins rather than the doc being edited down to match the code, for two reasons:
+ * the documented behaviour is the contract a caller may already have written against, and it is
+ * the one that stays correct as levels are added below `error`. `engine-acts.ts` already relies on
+ * the band ordering in prose ("`warn` is the 'a human should look at this' one … `GET
+ * /trace?level=warn` … surface it with no new filter dimension"), and a floor keeps that read
+ * complete instead of quietly excluding the errors above it.
+ *
+ * `routes/admin-trace.ts` keeps its own equality builder deliberately and is untouched: that is an
+ * exact-match query surface (`eq("level", …)` beside `eq("event", …)` and `eq("source", …)`), where
+ * "show me exactly the warns" is the question being asked.
  */
 export async function listEvents(
 	env: Env,
@@ -116,8 +140,15 @@ export async function listEvents(
 		where.push(`source = ?${binds.length}`);
 	}
 	if (opts.level) {
-		binds.push(opts.level);
-		where.push(`level = ?${binds.length}`);
+		// Everything at or above the requested band. An unrecognised level is matched exactly rather
+		// than dropped — a filter nobody can parse must return nothing, never everything.
+		const from = EVENT_LEVELS.indexOf(opts.level);
+		const atOrAbove = from < 0 ? [opts.level] : EVENT_LEVELS.slice(from);
+		const placeholders = atOrAbove.map((lvl) => {
+			binds.push(lvl);
+			return `?${binds.length}`;
+		});
+		where.push(`level IN (${placeholders.join(", ")})`);
 	}
 	// Take the most recent `limit` by ts DESC, then flip to chronological for display.
 	const sql = `SELECT id, ts, created_at, user_id, instance_id, trace_id, source, level, event, message, context FROM agent_events WHERE ${where.join(" AND ")} ORDER BY ts DESC LIMIT ${limit}`;

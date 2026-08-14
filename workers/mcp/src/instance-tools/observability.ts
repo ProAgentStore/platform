@@ -128,7 +128,10 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			instance_id: z.string().describe("The instance (agent) to trace."),
 			trace_id: z.string().optional().describe("Narrow to one run/turn (e.g. an apply taskId or a chat turn id)."),
 			source: z.string().optional().describe("Filter by subsystem: chat | apply | coding | voice | tool."),
-			level: z.enum(["debug", "info", "warn", "error"]).optional().describe("Minimum-interest filter — e.g. \"error\" for just failures."),
+			// #564: this said "minimum-interest filter" while the query said `level = ?`, so asking for
+			// "warn" silently hid every error. It is a floor now; the wording says so explicitly
+			// because the two disagreeing for three days is what put this here.
+			level: z.enum(["debug", "info", "warn", "error"]).optional().describe("Minimum-interest FLOOR on the ladder debug < info < warn < error — returns that band AND everything above it, so \"warn\" includes the errors."),
 			limit: z.number().int().min(1).max(1000).optional().describe("Most-recent events to return (default 200), shown oldest→newest."),
 		},
 		async ({ token, instance_id, trace_id, source, level, limit }) => {

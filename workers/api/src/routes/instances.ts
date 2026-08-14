@@ -631,7 +631,7 @@ async function voiceSettingsBody(env: Env, instanceId: string, userId: string, c
  * Unified run trace — the complete time-ordered timeline of what this agent DID
  * (chat turns, tool calls, apply steps/handoffs/outcomes, and bridged failures),
  * so a run can be reconstructed and debugged from one place. Filter by `trace_id`
- * (one run/turn), `source`, or `level`; `limit` caps how many recent events.
+ * (one run/turn), `source`, or `level` — a FLOOR since #564, so `?level=warn` returns the warnings AND the errors above them (it read as an equality until then, excluding exactly the rows a caller asking for warnings most wanted); `limit` caps how many recent events.
  */
 instanceRoutes.get("/:instanceId/trace", async (c) => {
 	const session = await requireUser(c);
