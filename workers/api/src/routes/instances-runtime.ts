@@ -3,6 +3,7 @@ import { HttpError } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getBoundRunnerConn } from "../lib/runner-client.js";
+import { isOrphanedByRunnerReconnect, ORPHANABLE_TASK_TYPES, orphanedTaskReason } from "../lib/runtime-task-ownership.js";
 export { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -385,57 +386,55 @@ export async function clearFinishedRuntimeTasks(
 }
 
 /**
- * Task types driven by a durable remote Workflow, not by the runner process.
+ * When a runner (re)registers, a task the DEAD PROCESS was itself running is orphaned — its
+ * Playwright page / takeover session went with the process and can never be resumed. Mark those
+ * failed so they drop out of the live board instead of lingering as stale "Needs you" cards
+ * forever. Returns how many were expired.
  *
- * They own their own lifecycle and their own handoff timeout, so a runner reconnect does NOT
- * orphan them. Kept as one set because the predicate is needed in two places (the SQL filter and
- * the per-row guard) and they drifted: `browser.task` was in neither.
- */
-const WORKFLOW_DRIVEN_TASK_TYPES = new Set(["job.apply_agent", "browser.task"]);
-
-/**
- * When a runner (re)registers, any task that was mid-flight on the PREVIOUS
- * session is orphaned — its browser page / takeover session died with the old
- * process and can never be resumed. Mark those (needs_human / running) as failed
- * so they drop out of the live board instead of lingering as stale "Needs you"
- * cards forever. Returns how many were expired.
+ * ## What it may touch, and why that is an allowlist now (#567)
+ *
+ * This named its EXCEPTIONS for most of its life, and the exception list drifted three times —
+ * each drift silently killing a card type nobody had thought about. The production case: a live
+ * coding session was failed and stamped `completedAt`, then ran for two more hours and made 15
+ * irreversible pushes to `origin main`; a standing-policy card was failed with the same sentence,
+ * for a policy that deliberately has no actuator. Both were told their browser session was gone.
+ * Neither was a browser session.
+ *
+ * `ORPHANABLE_TASK_TYPES` inverts it: only work the runner process itself was executing is
+ * sweepable, so an unclassified card type is left alone rather than destroyed. The SQL filter and
+ * the per-row guard are both built from that one array — those two ARE what drifted first.
  */
 export async function expireOrphanedRuntimeTasks(
 	env: Env,
 	instanceId: string,
 	userId: string,
 ): Promise<number> {
+	const placeholders = ORPHANABLE_TASK_TYPES.map((_, i) => `?${i + 3}`).join(", ");
 	const { results } = await env.DB.prepare(
-		// Job-application tasks are driven by a DURABLE Cloudflare Workflow, not the
-		// runner process — they survive a runner reconnect (flaky tunnel / WiFi blip),
-		// and the workflow owns their lifecycle + its own handoff timeout. So they are
-		// NOT orphaned by a re-register and must NOT be expired here, or a network blip
-		// would kill a live "needs_human" apply task mid-takeover.
 		`SELECT id, payload FROM instance_runtime_tasks
      WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('needs_human', 'running')
-       AND type NOT IN ('job.apply_agent', 'browser.task')`,
+       AND type IN (${placeholders})`,
 	)
-		.bind(instanceId, userId)
+		.bind(instanceId, userId, ...ORPHANABLE_TASK_TYPES)
 		.all<RuntimeTaskMirrorRow>();
 	if (!results.length) return 0;
 	const now = new Date().toISOString();
-	const reason =
-		"Runner reconnected — this paused task was orphaned (its browser session is gone). Re-run it to try again.";
 	let expired = 0;
 	for (const row of results) {
 		const task = parsePayload(row.payload);
 		if (!isRecord(task)) continue;
-		// Workflow-driven tasks survive a runner reconnect — never expire them. `browser.task`
-		// was missing: BrowserTaskWorkflow is just as durable, so restarting `pags up` marked a
-		// live browse run "failed" on the board AND released the single-flight claim (which keys
-		// on queued/running/needs_human) — so a re-run started a SECOND workflow issuing actions
-		// against the same shared page the first was still driving. Interleaved clicks and types
-		// on a live page is exactly what that claim exists to prevent.
-		if (WORKFLOW_DRIVEN_TASK_TYPES.has(String(task.type))) continue;
+		const type = String(task.type ?? "");
+		// The same predicate as the SQL, applied to the PAYLOAD's type. The column and the payload
+		// are written together by `mirrorRuntimeTask`, but a row whose payload disagrees with its
+		// column must fall to the safe side rather than be expired on the column's word.
+		if (!isOrphanedByRunnerReconnect(type)) continue;
 		task.status = "failed";
-		task.error = reason;
+		task.error = orphanedTaskReason(type);
 		task.updatedAt = now;
-		task.completedAt = now;
+		// Deliberately NOT `completedAt`. That field is what the board and every reader treat as
+		// "this finished at" (`isCodingCardOpen` states the rule), and the sweep does not know when
+		// the work stopped — only when it gave up looking. Writing `now` put a completion time on a
+		// task two hours before its last act.
 		await mirrorRuntimeTask(env, instanceId, userId, task);
 		expired += 1;
 	}
