@@ -29,9 +29,35 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	/**
+	 * The description names every top-level key `/v1/usage` returns, in backticks, and
+	 * `account.test.ts` derives that key list from the API worker's own code and fails
+	 * when one is missing (#565).
+	 *
+	 * It did not, and the omission was not cosmetic. The old text said the coverage gap was
+	 * calls BEFORE `firstAttributedAt` and that `payerCoverage.unattributedBefore` was "by
+	 * how much" — which points a reader at a WINDOW problem whose implied remedy is to
+	 * narrow the range. On the account that prompted this, the other gap —
+	 * `unattributedSince`, calls sitting alongside attributed ones, which narrowing cannot
+	 * reach — was $9,494 against $92, i.e. 99% of the unattributed value and 103x the slice
+	 * the tool named. `usage-coverage.ts:58-71` splits the two precisely because they have
+	 * different remedies (a no-backfill you cannot undo, vs. #551's machine-login coding
+	 * engine, which one stored token fixes); a description that names only the first
+	 * tells the caller to blame the date for all of it.
+	 *
+	 * Two things the prose must NOT say, both of which the issue's own suggested wording
+	 * said and both of which contradict the module being described. `attributed` is not
+	 * "what `chargedCostMicros` counts" — `usage-coverage.ts:118-126` gates it on
+	 * `hasPayer`, not `isCharged`, and calls that difference the one the module turns on: a
+	 * `subscription` row is attributed and charged to nobody, so `attributed` is a strict
+	 * superset. And `unattributedBefore` is not "calls predating the payer column" — that
+	 * is the confident cause `usage-coverage.ts:24-28` refuses, since the two NULL causes
+	 * are indistinguishable per row and a machine-login row older than the boundary lands
+	 * there too. Both slices are defined by the boundary and by nothing else.
+	 */
 	server.tool(
 		"usage_summary",
-		"Token usage + ESTIMATED value across all your agents, broken down by agent, agent INSTANCE, model, activity (chat/apply/coding/voice/…) and PAYER, over a time range. `byAgent` groups by the published template, so every copy of one agent is a single row; `byInstance` is the subscriber's own unit and is what answers 'what did THIS workspace cost me'. Every dollar figure is tokens x published list price — ours for platform calls, Claude Code's own arithmetic for coding-engine rows — so none of it is a bill. `totals.chargedCostMicros` is the part someone is actually charged; the rest (a coding engine on a subscription, or one whose payer we could not establish) is real tokens at a notional price. `payerCoverage` says how far the charged figure's window actually reaches: the earliest call in the range whose payer could be established, and the count and value of the calls BEFORE it, which carry no payer and are therefore absent from `chargedCostMicros`. A range wider than that boundary understates charged spend, and by how much is `payerCoverage.unattributedBefore`.",
+		"Token usage + ESTIMATED value across all your agents over a time `range`: `totals`, a per-day `daily` series, and breakdowns `byModel`, `byKind` (chat/apply/coding/voice/…), `byAgent` (the published template — every copy of one agent is one row), `byInstance` (the subscriber's own unit: what did THIS workspace cost me) and `byPayer`. Every dollar figure is tokens x published list price — ours for platform calls, Claude Code's own arithmetic for coding-engine rows — so none of it is a bill. `totals.chargedCostMicros` is the part someone is actually charged, and `payerCoverage` splits the range in three because the two gaps have different remedies: `attributed` is every call whose payer is KNOWN — a superset of the charged figure, since a `subscription` row is attributed and charged to nobody; `unattributedBefore` is unattributed calls older than `firstAttributedAt`, so a wider range understates charged spend and a narrower one does not; `unattributedSince` is unattributed calls alongside attributed ones — typically a coding engine on the machine's own login, so narrowing the range recovers none of it and one stored `claude setup-token` fixes it (#551). Read both: on a heavy coding account `unattributedSince` is the larger by two orders of magnitude. `unmetered` counts work never metered at all (tmux/CLI drives the platform did not observe) over the last `windowDays`, not value.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			range: z.enum(["7d", "30d", "90d", "all"]).optional().describe("Time window (default 30d)."),
