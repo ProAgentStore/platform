@@ -53,6 +53,8 @@ src/
 ├── index.ts              PagsMcp (McpAgent DO) + 31 tool registrations + OAuthProvider export
 ├── oauth-provider.ts     /authorize, /authorize/continue, /oauth/callback, /health, root
 ├── session.ts            verifyMcpSession (HMAC session → uid)
+├── registration.ts       the one seam every `server.tool(...)` call passes through
+├── tool-metadata.ts      server instructions, derived titles (advisory, never a check)
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
@@ -106,7 +108,11 @@ tells you exactly what you changed about it.
    If nothing fits, add a group and register it from `instance-tools/index.ts`.
 2. Signature: `server.tool(name, description, zodShape, handler)`. `name` is
    `snake_case`. The description is what a calling model reads — say what it does, what
-   it does *not* do, and which tool to call first.
+   it does *not* do, and which tool to call first. That call is NOT the SDK's `tool()`:
+   `registration.ts` replaces the registrar, so every call site is translated into a
+   `registerTool(name, config, cb)` — the only path that can carry a `title`, `annotations`
+   or an `outputSchema`, because the SDK froze the tuple overload at protocol 2025-03-26
+   (#561). Keep using the tuple; add per-tool metadata in the pipeline, not at the call site.
 3. Every authenticated tool takes
    `token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.")`
    and starts with `const sessionToken = tokenFor(token); if (!sessionToken) return authRequired();`.

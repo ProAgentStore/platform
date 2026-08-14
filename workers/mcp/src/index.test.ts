@@ -15,9 +15,14 @@ interface CapturedTool {
 	name: string;
 	schema: Record<string, unknown>;
 	handler: Handler;
+	/** The full `registerTool` config — description, title, annotations, output schema. */
+	config: Record<string, unknown>;
 }
 
-const captured = vi.hoisted(() => ({ options: undefined as Record<string, unknown> | undefined }));
+const captured = vi.hoisted(() => ({
+	options: undefined as Record<string, unknown> | undefined,
+	serverOptions: undefined as Record<string, unknown> | undefined,
+}));
 
 vi.mock("@cloudflare/workers-oauth-provider", () => ({
 	OAuthProvider: class {
@@ -42,14 +47,20 @@ vi.mock("agents/mcp", () => ({
 
 vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 	// The real McpServer is replaced per-instance in the tests below with a capturing
-	// double; this stub just needs to exist so the field initializer doesn't throw.
+	// double; this stub just needs to exist so the field initializer doesn't throw — and
+	// to record the constructor's second argument, which is where server `instructions` go.
 	McpServer: class {
+		constructor(_info: unknown, options?: Record<string, unknown>) {
+			captured.serverOptions = options;
+		}
 		tool() {}
+		registerTool() {}
 	},
 }));
 
 const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } = await import("./tool-count.js");
+const { SERVER_INSTRUCTIONS } = await import("./tool-metadata.js");
 
 // A fetch stub with programmable per-path responses (shared shape with the
 // instance-tools test).
@@ -119,9 +130,21 @@ async function setup(opts: HarnessOpts = {}) {
 	);
 
 	const tools = new Map<string, CapturedTool>();
+	// The double implements `registerTool`, because that is the call the registration
+	// pipeline makes (#561) — the SDK's tuple `tool(...)` overload is frozen and cannot
+	// carry a title, annotations or an output schema. Capturing the config is what lets
+	// the tests below assert the published metadata, not just the handler.
 	const fakeServer = {
-		tool(name: string, _desc: string, schema: Record<string, unknown>, handler: Handler) {
-			tools.set(name, { name, schema, handler });
+		tool() {
+			throw new Error("registration must go through the pipeline, not server.tool");
+		},
+		registerTool(name: string, config: Record<string, unknown>, handler: Handler) {
+			tools.set(name, {
+				name,
+				schema: (config.inputSchema as Record<string, unknown>) ?? {},
+				handler,
+				config,
+			});
 		},
 	};
 
@@ -536,5 +559,47 @@ describe("suspension gate", () => {
 		h.fetchStub.respond((u) => u.endsWith("/v1/auth/me"), { status: 500, body: { error: "boom" } });
 		const res = await h.tools.get("platform_guide")!.handler({});
 		expect(res.content[0].text).toContain("ProAgentStore Platform Guide");
+	});
+});
+
+// ── Published tool metadata (#561) ───────────────────────────────────────────
+
+describe("registration pipeline", () => {
+	it("registers EVERY tool through registerTool, with a description and a title", async () => {
+		// The SDK froze the tuple `tool(name, description, shape, cb)` overload at protocol
+		// 2025-03-26: on that path `title` is unreachable and `outputSchema` is declared and
+		// never assigned. So this is not a style preference — a server registering through it
+		// cannot publish anything the spec added since, whatever its call sites say. The
+		// pipeline translates all 135 at once, and this asserts across the whole surface
+		// rather than a sample, because one tool registered the old way would silently lose
+		// its metadata AND its suspension gate.
+		const h = await setup({ groups: ["apply", "coding", "repo"] });
+		expect(h.tools.size).toBe(MCP_TOOL_COUNT);
+		const missing = Array.from(h.tools.values()).filter(
+			(t) => typeof t.config.description !== "string" || typeof t.config.title !== "string",
+		);
+		expect(missing.map((t) => t.name)).toEqual([]);
+	});
+
+	it("derives each title from the tool's own name", async () => {
+		// Derived, not written down: a renamed tool retitles itself, and no test has to hold
+		// 135 strings to the names they belong to.
+		const h = await setup({ groups: ["coding"] });
+		expect(h.tools.get("list_agents")!.config.title).toBe("List agents");
+		expect(h.tools.get("coding_session_capture")!.config.title).toBe("Coding session capture");
+		expect(h.tools.get("mcp_audit_log")!.config.title).toBe("MCP audit log");
+		expect(h.tools.get("sdk_reference")!.config.title).toBe("SDK reference");
+	});
+
+	it("publishes server instructions that name the id-first sequence", async () => {
+		// Before #561 the second McpServer argument was absent, so `initialize` carried no
+		// instructions at all: 135 tools with no stated ordering, and nothing telling a model
+		// that almost every one of them needs an instance id it can only get from my_instances.
+		await setup();
+		const instructions = captured.serverOptions?.instructions as string | undefined;
+		expect(instructions).toBe(SERVER_INSTRUCTIONS);
+		// OpenAI's guidance is that the most important details go in the first 512 characters,
+		// so the sequence has to survive the cut — not just appear somewhere in the string.
+		expect(instructions!.slice(0, 512)).toContain("my_instances");
 	});
 });

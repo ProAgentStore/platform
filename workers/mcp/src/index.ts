@@ -6,6 +6,8 @@ import { apiCall, authedCall, authRequired, INVALID_JSON, type McpEnv, jsonText,
 import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
+import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
+import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
 	AGENT_ID,
 	agentTemplateFiles,
@@ -38,7 +40,7 @@ type Props = {
 type Env = McpEnv;
 
 export class PagsMcp extends McpAgent<Env, unknown, Props> {
-	server = new McpServer({ name: "ProAgentStore", version: "0.1.0" });
+	server = new McpServer({ name: "ProAgentStore", version: "0.1.0" }, { instructions: SERVER_INSTRUCTIONS });
 	private userToken: string | null = null;
 	private scopes: string[] | null = null;
 	private subject: string | undefined;
@@ -57,42 +59,14 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	}
 
 	/**
-	 * Wrap EVERY tool registered on this server with the operator-suspension gate (#273),
-	 * once, before any registration happens.
-	 *
-	 * It is done at REGISTRATION time rather than inside each handler on purpose. The bug
-	 * this closes was a hole in a per-handler check: the GitHub-backed tools (scaffold,
-	 * repo files, deploy) never call the API, so they never met `requireUser`, and
-	 * `agent_deploy_status` took no token at all. Adding one more line to seven handlers
-	 * would fix those seven and leave the eighth tool — the one nobody has written yet —
-	 * exactly as exposed. Wrapping the registrar means a tool cannot opt out of the gate,
-	 * including the ~93 registered by `registerInstanceTools` / `registerStorageTools` and
-	 * anything added later in any file.
-	 *
-	 * The handler is always the last function argument across every `server.tool(...)`
-	 * overload (name+cb, name+desc+cb, name+desc+schema+cb), so it is found by scanning
-	 * from the end rather than by assuming an arity.
+	 * Route EVERY registration through the shared pipeline (`registration.ts`), once,
+	 * before any registration happens: it carries the operator-suspension gate (#273) and
+	 * the tool metadata this server publishes (#561).
 	 */
-	private installSuspensionGate(): void {
-		const server = this.server as unknown as { tool: (...args: unknown[]) => unknown };
-		const register = server.tool.bind(server);
-		server.tool = (...args: unknown[]) => {
-			let i = args.length - 1;
-			while (i >= 0 && typeof args[i] !== "function") i--;
-			if (i < 0) return register(...args);
-			const name = typeof args[0] === "string" ? args[0] : "this tool";
-			const handler = args[i] as (...handlerArgs: unknown[]) => unknown;
-			args[i] = async (...handlerArgs: unknown[]) => {
-				// A tool may carry its own `token` argument (acting as someone other than the
-				// connection), so gate the identity the handler will actually use, not just
-				// the connection's.
-				const first = handlerArgs[0] as { token?: unknown } | undefined;
-				const provided = typeof first?.token === "string" ? first.token : undefined;
-				const blocked = await suspensionBlock(this.env, this.token(provided), name);
-				return blocked ?? handler(...handlerArgs);
-			};
-			return register(...args);
-		};
+	private installRegistrationPipeline(): void {
+		installRegistrationPipeline(this.server as unknown as RegistrationTarget, {
+			gate: (name, provided) => suspensionBlock(this.env, this.token(provided), name),
+		});
 	}
 
 	/**
@@ -130,7 +104,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		this.toolsRegistered = true;
 
 		// Must precede every registration below — it wraps the registrar itself.
-		this.installSuspensionGate();
+		this.installRegistrationPipeline();
 
 		// Which agent-specific tool groups this user gets — scoped to their agents.
 		const groups = await this.userGroups();
