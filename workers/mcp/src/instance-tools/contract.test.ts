@@ -262,7 +262,9 @@ const TABLE: Record<string, Row> = {
 	ingest_repo_status: ["repo", "none", null, null, "instance_id,token"],
 	instance_activity: ["observability", "none", null, null, "instance_id,token"],
 	instance_board: ["board", "none", null, null, "instance_id,token"],
-	instance_messages: ["observability", "none", null, null, "instance_id,limit,token"],
+	// `before` added at #566: the response has always carried `nextCursor`/`hasMore` and no input
+	// could use either, so every message older than the newest page was unreachable over MCP.
+	instance_messages: ["observability", "none", null, null, "before,instance_id,limit,token"],
 	instance_runtime_status: ["runtime", "none", null, null, "instance_id,probe,token"],
 	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,token"],
 	keys_status: ["account", "none", null, null, "token"],

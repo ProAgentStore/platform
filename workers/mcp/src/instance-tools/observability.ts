@@ -17,17 +17,31 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"instance_messages",
-		"Read recent messages from one of your private subscribed instances.",
+		"Read recent messages from one of your private subscribed instances, newest page first. The response carries `nextCursor` and `hasMore`: when `hasMore` is true, call again with `before` set to that `nextCursor` to get the page OLDER than it, and repeat until `hasMore` is false. That is the only way to reach a message beyond the newest page — raising `limit` will not.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			limit: z.number().int().min(1).max(100).optional(),
+			// #566: the route has accepted `before` since #428 and the DO honours it, but this tool
+			// built its query string with `limit` alone — so every response advertised `nextCursor`
+			// and `hasMore: true` with no argument able to use either, and the whole conversation
+			// older than one page was unreachable over MCP. The `list_feedback` → `instance_messages`
+			// triage path (#514) dead-ended on exactly that.
+			before: z.string().optional().describe("Cursor from a previous call's `nextCursor` — returns the page OLDER than it. An unrecognised cursor is rejected, not silently answered with the newest page."),
+			// Deliberately 100 where the HTTP route allows 2000, and NOT raised to match. The route's
+			// ceiling exists so the console can export a whole conversation; an MCP response is spent
+			// as model context instead, where a 2000-message page is the payload problem #569 is
+			// separately shrinking. With `before` in place the ceiling is no longer what limits reach
+			// — paging is — so the smaller one costs nothing and bounds what one call can cost.
+			limit: z.number().int().min(1).max(100).optional().describe("Messages per page (default 50, max 100). Page with `before` for older ones; the HTTP route allows 2000 for whole-conversation export, MCP stays smaller because the page is spent as model context."),
 		},
-		async ({ token, instance_id, limit }) => {
+		async ({ token, instance_id, limit, before }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
+			// The DO's cursor is `msg:<iso>:<id>` — the colons are safe unencoded but the id is not
+			// guaranteed to be, so it is encoded rather than interpolated raw.
+			const cursor = before ? `&before=${encodeURIComponent(before)}` : "";
 			const data = await authedCall(
-				`/v1/instances/${instance_id}/messages?limit=${limit || 50}`,
+				`/v1/instances/${instance_id}/messages?limit=${limit || 50}${cursor}`,
 				sessionToken,
 				{},
 				env,

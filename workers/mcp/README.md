@@ -192,7 +192,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `subscribe_agent` | Subscribe to a published agent, creating your private instance | write | yes | |
 | `my_instances` | List your subscribed instances | — | | |
 | `chat_with_instance` | The real runtime chat path (your state, your credentials) | runtime | yes | |
-| `instance_messages` | Recent messages | — | | |
+| `instance_messages` | Recent messages, newest page first — page older ones with `before` = the previous call's `nextCursor` (#566) | — | | |
 | `clear_instance_messages` | Delete all messages and voice recordings | destructive | yes | `clear_instance_messages` |
 | `rename_instance` | Set or clear the display name | write | yes | |
 | `set_instance_model` | Change the instance's chat model | write | yes | |
