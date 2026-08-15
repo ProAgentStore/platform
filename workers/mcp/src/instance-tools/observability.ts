@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText } from "../http.js";
+import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
+import { fitPage } from "../wire-budget.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -122,7 +123,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"agent_trace",
-		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures, interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Failures sit in two bands: a tool call that FAILED is level=warn (one row per failed tool, carrying the tool name in `context` and its full refusal text), while level=error means the turn or run could not complete at all. Since level is a floor, level=\"warn\" is the read that shows both — use it, not \"error\", when the question is \"what went wrong\". Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level; limit caps recent events.",
+		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures, interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Failures sit in two bands: a tool call that FAILED is level=warn (one row per failed tool, carrying the tool name in `context` and its full refusal text), while level=error means the turn or run could not complete at all. Since level is a floor, level=\"warn\" is the read that shows both — use it, not \"error\", when the question is \"what went wrong\". Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level. `count` always describes the WHOLE window `limit` selected and is never reduced; `events` is a PAGE of it, so read `page.hasMore` and call again with `offset: page.nextOffset` to continue. A busy instance's default 200-event window measured 163,437 bytes, 2.5x a calling host's 64 KiB limit, so one reply cannot carry them all and never could — narrow with trace_id or source when you know what you are looking for.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The instance (agent) to trace."),
@@ -132,9 +133,14 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			// "warn" silently hid every error. It is a floor now; the wording says so explicitly
 			// because the two disagreeing for three days is what put this here.
 			level: z.enum(["debug", "info", "warn", "error"]).optional().describe("Minimum-interest FLOOR on the ladder debug < info < warn < error — returns that band AND everything above it, so \"warn\" includes the errors."),
-			limit: z.number().int().min(1).max(1000).optional().describe("Most-recent events to return (default 200), shown oldest→newest."),
+			// #614: `limit` selects the WINDOW of history the API reads back; `offset` walks the page
+			// within it. Two knobs, deliberately, because they answer different questions — "how far
+			// back do I want to look" is not "how much fits in one reply", and collapsing them would
+			// silently change what `limit` has always meant (most-recent N events).
+			limit: z.number().int().min(1).max(1000).optional().describe("How many of the most-recent events to READ BACK (default 200), shown oldest→newest. This selects the window of history, not the size of the reply: the window is then delivered in budgeted pages via `offset`, so raising it does not make one reply bigger."),
+			offset: z.number().int().min(0).optional().describe("Skip this many events within the window. Pass `page.nextOffset` from the previous reply; omit for the first page."),
 		},
-		async ({ token, instance_id, trace_id, source, level, limit }) => {
+		async ({ token, instance_id, trace_id, source, level, limit, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
@@ -143,7 +149,17 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			if (level) qs.set("level", level);
 			if (limit) qs.set("limit", String(limit));
 			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/trace${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
-			return jsonText(data);
+			// An `{error}` body carries no `events` and passes through untouched rather than being
+			// reshaped into a success with an empty timeline — the rule `vector_stats` follows, and
+			// for the same reason: an empty trace and an unreadable one are different answers.
+			const rec = data as { events?: unknown[] };
+			if (!Array.isArray(rec.events)) return jsonText(data);
+			const { events, ...head } = rec;
+			// `count` (the window's true size) rides in FRONT of the page, so "how much happened"
+			// survives a reply that carries a fifth of it — #503's rule that the count must never
+			// live in the part that gets cut.
+			const fitted = fitPage({ rows: events, offset, build: (rows, page) => ({ ...head, page, events: rows }) });
+			return text(fitted.text);
 		},
 	);
 

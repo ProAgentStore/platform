@@ -206,7 +206,7 @@ async function dryRunOf(name: string): Promise<string | null> {
 type Row = [string, string, string | null, string | null, string];
 const TABLE: Record<string, Row> = {
 	add_instance_knowledge: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,source,source_url,title,token"],
-	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,source,token,trace_id"],
+	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,offset,source,token,trace_id"],
 	apply_to_job: ["apply", "runtime", null, "envelope", "dry_run,instance_id,submit,token,url"],
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
@@ -265,7 +265,7 @@ const TABLE: Record<string, Row> = {
 	// `reasoning` (a BOOLEAN here, not the writer's string) added by #574: the field
 	// `create_instance_ticket` accepts had no reader, so this tool gained the argument that asks
 	// for it. Still ungated — it widens a read, and reads nothing the caller could not already see.
-	instance_board: ["board", "none", null, null, "instance_id,reasoning,token"],
+	instance_board: ["board", "none", null, null, "instance_id,limit,offset,reasoning,token"],
 	// `before` added at #566: the response has always carried `nextCursor`/`hasMore` and no input
 	// could use either, so every message older than the newest page was unreachable over MCP.
 	instance_messages: ["observability", "none", null, null, "before,instance_id,limit,token"],

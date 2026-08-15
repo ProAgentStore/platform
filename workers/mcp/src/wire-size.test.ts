@@ -52,7 +52,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { WIRE_LIMIT_BYTES } from "./wire-budget.js";
+import { WIRE_LIMIT_BYTES, wireBytes } from "./wire-budget.js";
 
 vi.mock("@cloudflare/workers-oauth-provider", () => ({ OAuthProvider: class {} }));
 vi.mock("agents/mcp", () => ({
@@ -159,26 +159,53 @@ const BODIES: { match: (url: string) => boolean; body: () => unknown }[] = [
 		}),
 	},
 	{
-		// 118 cards, 1,085 B mean. 128,692 B on the API; the tool regroups them through
-		// `groupBoard`, so what this file measures is the regrouped result.
+		/**
+		 * 118 cards on the Small Business Website Lead Finder — 128,692 B on the API, and the
+		 * field distribution below was RE-MEASURED live on 2026-08-16 because the original
+		 * fixture's was wrong in a way its own 5% total check could not see.
+		 *
+		 * It gave every card a 600-byte `description` and no `reasoning`, which sums to the right
+		 * total out of the wrong parts. Production is the other way round: `reasoning` is ~628 B
+		 * per card (69.4% of the opt-in read) and `detail` is ~15 B — five distinct values across
+		 * all 118 cards, mostly "No website". A guard calibrated on the total alone will happily
+		 * measure a payload composed of fields production does not send, which is #615's finding
+		 * arriving inside #595's own file.
+		 *
+		 * Two live facts the shape now carries, both verified on 118/118 cards:
+		 *   · `latestTaskId` is BYTE-IDENTICAL to `jobKey` — 19.1% of the default reply is a
+		 *     second copy of the field printed immediately before it (`lib/board.ts` returns the
+		 *     task id as the job key whenever the task carries no input URL). Recorded, not
+		 *     trimmed: #595's rule is that the bound belongs on the collection.
+		 *   · `url` is `""` and `runStatus` equals `status` on every card.
+		 *
+		 * What the TOOL serves is smaller than this body, and that matters: `reasoning` is opt-in
+		 * (#574), so the default read measured **33,363 B live — it fits**, and only
+		 * `reasoning:true` overruns, at **108,190 B**. The 128,692 B recorded here is the API
+		 * body, which the live sweep could not read back and so did not contradict.
+		 */
 		match: (u) => u.includes("/board"),
 		body: () => ({
 			view: "board",
 			columns: Array.from({ length: 7 }, (_, i) => ({ id: `col${i}`, title: `Column ${i}`, statuses: ["queued", "running"], color: "#1f2937" })),
-			items: Array.from({ length: 118 }, (_, i) => ({
-				jobKey: `job_${i}`,
-				title: pad(90, `Build a site for Business Number ${i} in the suburb it operates in `),
-				subtitle: pad(120, "small business, no website, rated 4.6 from 31 reviews, phone on file "),
-				description: pad(600, "The agent read this business's public listing and drafted a one-page site for it. "),
-				url: `https://maps.google.com/?cid=${i}`,
-				status: "needs_approval",
-				userStatus: null,
-				runStatus: "completed",
-				attempts: 1,
-				threadTurns: 3,
-				latestTaskId: `task_${i}`,
-				updatedAt: "2026-08-14T22:03:51.000Z",
-			})),
+			items: Array.from({ length: 118 }, (_, i) => {
+				// The duplicate, reproduced rather than described.
+				const taskId = `task_${String(i).padStart(30, "0")}`;
+				return {
+					jobKey: taskId,
+					latestTaskId: taskId,
+					title: `Business Number ${i} — Newtown NSW`,
+					subtitle: "",
+					description: "No website",
+					reasoning: pad(750, "The listing has no website field and the phone number resolves to a mobile. "),
+					url: "",
+					status: "completed",
+					userStatus: null,
+					runStatus: "completed",
+					attempts: 1,
+					threadTurns: 0,
+					updatedAt: "2026-08-14T22:03:51.000Z",
+				};
+			}),
 		}),
 	},
 	{
@@ -255,14 +282,35 @@ const MEASURED_IN_PRODUCTION: Record<string, number> = {
  * too.
  */
 const KNOWN_OVER: Record<string, { measured: number; why: string }> = {
-	agent_trace: { measured: 163_437, why: "200 events at 816 B mean; `limit` caps rows, nothing caps bytes (#595 follow-up)" },
-	instance_board: { measured: 128_692, why: "118 cards; `reasoning` is already opt-in and the remaining prose still overruns (#595 follow-up)" },
+	// EMPTY, and that is the assertion. #595 recorded `agent_trace` (163,437 B) and
+	// `instance_board` (128,692 B) here because both lived in files another change was holding
+	// open; #614 paged them, so the entries went with the fix — which is the removal this map's
+	// equality arm was built to demand, and it did demand it: paging the two handlers turned this
+	// file red at "expected [] to deeply equal ['agent_trace','instance_board']" before the
+	// entries were deleted.
+	//
+	// An entry here is a DEBT, never a permission. Adding one is how a tool measured over the
+	// limit gets recorded instead of hidden — and with the map empty, the arm below now says
+	// something stronger: no tool may exceed a calling host's limit at all unless someone writes
+	// down which one and why.
 };
 
 /** The tools this file measures — every read tool the live sweep found returning a collection with
  *  no intrinsic bound, minus the two that own dedicated files (`list_instance_tools` in
  *  `instance-tools/tool-listing-wire-size.test.ts`, `coding_timeline` in its neighbour). */
 const MEASURED = ["vector_stats", "my_agents", "agent_trace", "instance_board", "list_errors", "list_pipeline_runs"] as const;
+
+/** Which endpoint's body each tool serves — the link the non-vacuity arm needs to check a tool's
+ *  RAW size against the limit. Kept beside {@link MEASURED} so a tool added to one without the
+ *  other fails the arm that compares them. */
+const ENDPOINT_FOR: Record<(typeof MEASURED)[number], string> = {
+	vector_stats: "/vectors",
+	my_agents: "/v1/agents/my/agents",
+	agent_trace: "/trace",
+	instance_board: "/board",
+	list_errors: "/v1/errors",
+	list_pipeline_runs: "/pipeline-runs",
+};
 
 async function callAll(): Promise<{ bytes: Map<string, number>; unreached: string[] }> {
 	const kv = {
@@ -339,16 +387,22 @@ describe("wire size — the tools that return an unbounded collection (#595)", (
 	});
 
 	it("gave every tool a body at the scale production served, so a pass means something", () => {
-		// The non-vacuity bound. Each fixture is the worst real case for that tool; if one stops
-		// producing a large body the arm below passes by measuring nothing. Every UNBUDGETED tool
-		// here must still be enormous — that is the ground this guard walks.
-		for (const name of Object.keys(KNOWN_OVER)) {
-			expect(swept.bytes.get(name), `${name} fixture no longer produces an over-limit body`).toBeGreaterThan(WIRE_LIMIT_BYTES);
-		}
-		// And the fixtures the fix is measured against are genuinely over the limit BEFORE budgeting:
-		// 151,700 B and 66,013 B are what these two bodies serialise to unbudgeted.
-		const raw = BODIES.map((b) => JSON.stringify(b.body()).length);
-		expect(raw.filter((n) => n > WIRE_LIMIT_BYTES).length).toBeGreaterThanOrEqual(4);
+		// The non-vacuity bound, and the arm that had to change when KNOWN_OVER emptied (#614).
+		// While the two unfixed tools were listed there, "the fixture is still enormous" could be
+		// read off them. Now that every tool is budgeted, EVERY tool passes the limit arm — which
+		// is exactly what a guard measuring five short rows would also do.
+		//
+		// So the ground is stated directly instead: these four endpoints' RAW bodies, before any
+		// budgeting, are over what a calling host accepts. Their passing is therefore evidence
+		// that paging works, not evidence that the body was small. Named rather than counted, so
+		// a fixture that quietly stops being over-limit fails here with its own name.
+		const rawOver = Object.entries(ENDPOINT_FOR)
+			.filter(([, fragment]) => {
+				const entry = BODIES.find((b) => b.match(`https://api.test${fragment}`));
+				return entry !== undefined && wireBytes(JSON.stringify(entry.body())) > WIRE_LIMIT_BYTES;
+			})
+			.map(([name]) => name);
+		expect(rawOver.sort()).toEqual(["agent_trace", "instance_board", "my_agents", "vector_stats"]);
 	});
 
 	it("keeps every budgeted tool inside the host limit that produced #569", () => {

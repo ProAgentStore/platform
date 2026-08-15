@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { authedCall, type McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
+import { fitPage, type PageMeta } from "../wire-budget.js";
 
 export type TokenResolver = (provided?: string) => string | null;
 export type SafetyResolver = (provided?: string) => SafetyContext;
@@ -126,11 +127,13 @@ export function columnFor(cols: BoardColumn[], status: string): string | null {
  * of every board read is the payload mistake #569 was measured budgeting DOWN. The argument shape
  * is deliberately the same as that fix's `schemas`: a boolean named after the field it returns.
  */
-export function groupBoard(data: unknown, opts?: { reasoning?: boolean }): unknown {
+export function groupBoard(data: unknown, opts?: { reasoning?: boolean; offset?: number; limit?: number; budget?: number }): string {
 	const cols = (isRec(data) && Array.isArray(data.columns) ? data.columns : []) as BoardColumn[];
 	const items = (isRec(data) && Array.isArray(data.items) ? data.items : []) as BoardItem[];
-	const board: Record<string, unknown[]> = {};
-	const other: unknown[] = [];
+	/** Each card with the column it belongs in, in the API's order — the flat list the page walks.
+	 *  The grouping is rebuilt from whatever slice fits, so a page may span columns and a column
+	 *  absent from a page is not an empty column; `columns` in the head is the full list. */
+	const placed: { title: string; card: unknown }[] = [];
 	for (const it of items) {
 		const card = {
 			jobKey: it.jobKey,
@@ -155,12 +158,9 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean }): unkno
 			sessionEnded: it.sessionEnded ? true : undefined,
 		};
 		const colId = columnFor(cols, String(it.status ?? ""));
-		if (!colId) { other.push(card); continue; }
-		const title = cols.find((c) => c.id === colId)?.title ?? colId;
-		if (!board[title]) board[title] = [];
-		board[title].push(card);
+		const title = colId ? (cols.find((c) => c.id === colId)?.title ?? colId) : "Other";
+		placed.push({ title, card });
 	}
-	if (other.length) board.Other = other;
 	const truncated = isRec(data) && data.truncated === true;
 	// What is being WITHHELD says so, and only when it is actually being withheld (#574). A field
 	// the response silently omits is unreachable in practice however well the argument is
@@ -168,18 +168,43 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean }): unkno
 	// advertised a page nothing could ask for. Counted rather than assumed, so the sentence is a
 	// measurement: no card carries reasoning ⇒ no note.
 	const withheld = opts?.reasoning ? 0 : items.filter((it) => typeof it.reasoning === "string" && it.reasoning.trim()).length;
-	return {
+	/**
+	 * Everything that describes the WHOLE board, in front of the page that describes part of it.
+	 *
+	 * `jobCount` and the full `columns` list are computed from every item and are never reduced, so
+	 * "how much work is on this board" and "what columns exist" are answerable from any page —
+	 * #503's rule that the count must never live in the part that gets cut. A column with no card
+	 * in THIS page is simply absent from `board`, which is why the caller is told to read the count
+	 * rather than the shape.
+	 */
+	const head = (board: Record<string, unknown[]>, page: PageMeta) => ({
 		columns: cols.map((c) => c.title),
-		board,
 		jobCount: items.length,
+		page,
+		board,
 		...(truncated ? { truncated: true, truncatedNote: "Only the most recent runtime tasks were read — some older jobs may be missing." } : {}),
 		...(withheld ? { reasoningAvailable: withheld, reasoningNote: `${withheld} card(s) carry a longer \`reasoning\` (the decision/audit the agent recorded). Omitted here to keep the board small — call instance_board again with reasoning:true to read it.` } : {}),
 		// `attempts` = run count was a claim this could not make until #592: a coding card is one
 		// upserted row per session however many runs drove it, and the count was pinned at 1 on all
 		// 83 measured cards while one of them had nine runs and a failure behind it. The API now
 		// joins the runs at read time, so the sentence is true for both card families.
-		note: "One card per job (retries of the same job collapse into one; `attempts` = the runs behind it). `updatedAt` is when the card last moved. `moved:true` means a human set the status. `sessionEnded:true` means the coding session is over, so there is nothing left to take over. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
-	};
+		note: "One card per job (retries of the same job collapse into one; `attempts` = the runs behind it). `updatedAt` is when the card last moved. `moved:true` means a human set the status. `sessionEnded:true` means the coding session is over, so there is nothing left to take over. Failed = the run couldn't finish; Blocked = the agent stopped needing you. `board` is a PAGE of the cards — `jobCount` and `columns` describe the whole board, so a column missing from `board` may simply have no card in this page; continue with `offset: page.nextOffset` while `page.hasMore`.",
+	});
+	const fitted = fitPage({
+		rows: placed,
+		offset: opts?.offset,
+		limit: opts?.limit,
+		budget: opts?.budget,
+		build: (rows, page) => {
+			const board: Record<string, unknown[]> = {};
+			for (const { title, card } of rows) {
+				if (!board[title]) board[title] = [];
+				board[title].push(card);
+			}
+			return head(board, page);
+		},
+	});
+	return fitted.text;
 }
 
 export function isRec(v: unknown): v is Record<string, unknown> {

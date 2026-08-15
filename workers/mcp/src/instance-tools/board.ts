@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText } from "../http.js";
+import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
 import { clearFinishedSentence } from "../state-vocabulary.js";
 import { groupBoard, type InstanceToolsCtx, isRec } from "./shared.js";
@@ -20,7 +20,7 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 
 	server.tool(
 		"instance_board",
-		"Read a private instance's live kanban board — the agent's single work board. Cards are ONE per job (retries of the same job collapse into one card) grouped into the agent's configured columns (e.g. Waiting / Applying / Needs you / Failed / Blocked / Submitted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\". Each card carries a short `detail`; a ticket's fuller `reasoning` — the decision/audit its author recorded — is returned only when you pass reasoning:true, and the response counts how many cards have one.",
+		"Read a private instance's live kanban board — the agent's single work board. Cards are ONE per job (retries of the same job collapse into one card) grouped into the agent's configured columns (e.g. Waiting / Applying / Needs you / Failed / Blocked / Submitted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\". Each card carries a short `detail`; a ticket's fuller `reasoning` — the decision/audit its author recorded — is returned only when you pass reasoning:true, and the response counts how many cards have one. `jobCount` and `columns` always describe the WHOLE board and are never reduced; `board` is a PAGE of the cards, so a column with no card in this page is absent rather than empty — read `page.hasMore` and call again with `offset: page.nextOffset` to continue. The card count is bounded by nothing, and reasoning:true makes each card ~4x bigger: the largest measured board (118 cards) served 33 KB by default but 108 KB with reasoning:true, over a calling host's 64 KiB limit, so that read arrives in pages.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -28,8 +28,16 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 			// field could be written over MCP and never read back. Opt-in for the reason #569
 			// settled on the tool next door — see `groupBoard`.
 			reasoning: z.boolean().optional().describe("Include each card's full `reasoning` — the decision/audit the agent recorded when it filed the ticket. Off by default: it is unbounded prose per card and usually longer than `detail`. The response tells you how many cards have one."),
+			// #614: re-measured live, the DEFAULT read of the largest board (118 cards) is 33,363 B
+			// and fits — #595's `KNOWN_OVER` entry of 128,692 B was the raw API body, which carries
+			// `reasoning` for every card, not what this tool serves since #574 made it opt-in. What
+			// IS over the limit is `reasoning:true`, at 108,190 B. Paged for that, and because the
+			// card count is bounded by nothing. `reasoning:true` gets no separate budget — it makes
+			// each card bigger and `fitPage` answers with fewer cards, not a larger reply.
+			offset: z.number().int().min(0).optional().describe("Skip this many cards. Pass `page.nextOffset` from the previous reply; omit for the first page."),
+			limit: z.number().int().min(1).optional().describe("Cap the cards returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
 		},
-		async ({ token, instance_id, reasoning }) => {
+		async ({ token, instance_id, reasoning, offset, limit }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			// The API (lib/board.ts) is the single source of the board shape — one card
@@ -43,7 +51,7 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 				return jsonText({ error: `board unavailable: ${e instanceof Error ? e.message : String(e)}` });
 			}
 			if (isRec(data) && data.error) return jsonText({ error: data.error });
-			return jsonText(groupBoard(data, { reasoning }));
+			return text(groupBoard(data, { reasoning, offset, limit }));
 		},
 	);
 

@@ -100,4 +100,20 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// `{"instances":[…]}` under a frozen version, and it is why the bump is justified twice over
 	// here. Appended, never edited: 0.1.4 is published.
 	"0.1.5": "sha256:cf3a8e35a95a152601e5cea1fed4bcae56b15bcffd87651d8b499a6048d72951",
+	// 0.1.6 (#614): `agent_trace` gained `offset`, and `instance_board` gained `offset` and
+	// `limit`. Both were measured over a calling host's 64 KiB limit in production — 163,437 B and
+	// 128,692 B, the two #595 recorded as KNOWN_OVER and could not fix because their files were
+	// held open — so the collections they return are now paged, and an argument added to a tool
+	// lands in `inputSchema`, which IS in the fingerprint.
+	//
+	// `agent_trace` is the one that matters: the server's own `instructions` string tells a client
+	// to "call agent_trace first" when debugging an agent, so at 2.5x the ceiling the documented
+	// first step of debugging was the one call a conforming host could not make.
+	//
+	// Both result SHAPES also changed — each now leads with the totals it must never reduce
+	// (`count`; `jobCount` + `columns`) and carries a `page`. The fingerprint cannot see that: it
+	// hashes what a host is TOLD about a tool, not what the tool answers. Same gap #561 fell
+	// through when `my_instances` became `{"instances":[…]}` under a frozen version, so the bump
+	// is justified twice over here as it was for 0.1.5. Appended, never edited: 0.1.5 is published.
+	"0.1.6": "sha256:bdf6eb2efd98c4df362bbc6762537ca8b687dc9a03ce21a519326a73c21b9e98",
 };
