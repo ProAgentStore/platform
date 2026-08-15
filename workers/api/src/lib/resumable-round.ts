@@ -163,7 +163,31 @@ export function resumableRoundOf(err: unknown): ResumableRound | null {
 export function autoResumableRoundOf(err: unknown): ResumableRound | null {
 	const round = resumableRoundOf(err);
 	if (!round) return null;
-	return (err as { retryable?: unknown }).retryable === true ? round : null;
+	return isRetryableFailure(err) ? round : null;
+}
+
+/**
+ * "The site that knows said a retry could work" — ONE rule, for every driver (#583).
+ *
+ * Lifted out of {@link autoResumableRoundOf} rather than copied, because #583 is about a second
+ * driver that computes this verdict and then has nobody to hand it to. The Pilot classifies a DO
+ * reset as `retryable: true` (`coding-failure.ts`) and fails the run anyway; `coding-failure.ts:364`
+ * says so in a comment — *"The Pilot has no `thinkWithAutoResume` (#518) — this is expected to be
+ * false"* — and records the observation on every death.
+ *
+ * `thinkWithAutoResume` itself is NOT what the Pilot should reuse, and that is worth stating because
+ * it looks like it should be: it is a function over a chat TURN, and its gate is a stored
+ * {@link ResumableRound} that only `runAgentThink` ever attaches. A Pilot error carries none, so
+ * calling `autoResumableRoundOf` on one returns null by construction — a "reuse" that would compile,
+ * pass, and retry nothing. What genuinely generalises is the predicate, so it is the predicate that
+ * moved.
+ *
+ * Read structurally, off whatever carries the verdict: a thrown `UserAiProviderError` on the chat
+ * path, a classified `CodingFailure` on the Pilot's. Both have `retryable`; neither is imported here,
+ * for the purity reason this module's other reader already gives.
+ */
+export function isRetryableFailure(x: unknown): boolean {
+	return !!x && typeof x === "object" && (x as { retryable?: unknown }).retryable === true;
 }
 
 /**

@@ -35,8 +35,9 @@
  * `connectionLostMessage()`, so a reworded message fails the test instead of silently degrading
  * every future stall to `unknown`.
  */
+import { countInterruption } from "./agent-loop-store.js";
 import { logError } from "./error-log.js";
-import { resumableRoundOf } from "./resumable-round.js";
+import { isRetryableFailure, resumableRoundOf } from "./resumable-round.js";
 import { isRunnerGone, isRunnerUnreachable } from "./runner-unreachable.js";
 import { isTransientInfraError } from "./transient-error.js";
 import type { Env } from "../types.js";
@@ -243,6 +244,120 @@ const EXPLAINED: ReadonlySet<CodingFailureClass> = new Set<CodingFailureClass>([
 
 export function codingFailureLevel(cls: CodingFailureClass): "error" | "warn" {
 	return EXPLAINED.has(cls) ? "warn" : "error";
+}
+
+// ── Who consumes the `retryable` verdict, and at what cost (#583) ────────────
+
+/**
+ * How many PLATFORM interruptions one run may be resumed through.
+ *
+ * Bounded for #518's reason and sized against a different cost. #518 allows a chat turn exactly two
+ * attempts because *"a turn that retries until it succeeds spends someone else's credit deciding
+ * when to stop"*. A resume here spends none: the run is a durable Workflow, so letting the error
+ * escape `run()` replays a JOURNAL — every step that already succeeded returns its recorded result
+ * without re-executing, and only the step that died runs again. The owner pays for at most one
+ * re-executed step, and only if that step was the model call.
+ *
+ * So the bound is not about money, it is about a loop: an interruption that recurs on every attempt
+ * is not a deploy, it is a defect, and three is where "the platform is being deployed around this
+ * run" stops being a plausible explanation. The measured storm — seven API deploys in 48 minutes,
+ * one run killed 56 seconds after `4c0826b` landed — is covered several times over.
+ */
+export const MAX_PLATFORM_RESUMES = 3;
+
+export interface ResumeRule {
+	/** May a run that died this way be RESUMED, rather than ended? */
+	resume: boolean;
+	/** The reason, in the words a reader should get instead of inferring a rule from a boolean. */
+	why: string;
+}
+
+/**
+ * The consumer #583 says is missing, written as a TOTAL table over every failure class.
+ *
+ * The defect this closes is not "the Pilot does not retry". It is that `retryable` was computed,
+ * recorded on every death, and read by nobody — a verdict written for a reader that does not exist.
+ * A table is the form that cannot regress to that: `Record<CodingFailureClass, ResumeRule>` will not
+ * compile if a class is added without a decision, and `coding-failure.test.ts` asserts the
+ * denominator so a class cannot be added to the union and quietly omitted from the union type's
+ * enforcement by a cast.
+ *
+ * **Retryable and resumable are not the same claim, and conflating them is how this ships wrong.**
+ * `retryable: true` says an identical attempt could plausibly succeed. Resuming additionally
+ * requires that repeating the attempt is SAFE and CHEAP — which is a property of who caused the
+ * failure and what the run has already done, not of the transport that dropped.
+ */
+export const CODING_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
+	// THE ONE. Our own deploy evicted a Durable Object out from under a run that was working, and
+	// the owner experienced it as the agent dying for no reason. Terminating is not a viable policy
+	// at the measured deploy cadence: a platform that ships seven API deploys in 48 minutes cannot
+	// also treat a code update as a run-ending event and keep an hours-long agent usable. The
+	// journal makes the retry close to free, which is what makes this decidable rather than a
+	// trade-off.
+	infra_transient: { resume: true, why: "a platform deploy reset the isolate — ours, not the owner's, and the workflow journal makes replaying it free" },
+	// Retryable, and NOT resumable — the distinction this table exists to hold. Cloudflare has
+	// ALREADY retried the attempt (that is what the class means, and `82739cb6` filing itself twice
+	// eight minutes apart is the measurement). Re-dispatching the RUN is a different act: a fresh
+	// run has no journal, so every act repeats, and two of the five recorded occurrences had already
+	// pushed to `origin main`.
+	workflow_internal: { resume: false, why: "Cloudflare already retried this attempt; re-dispatching the run would repeat acts it has already committed" },
+	// #518's rule, unchanged and for its stated reason: every attempt costs the owner's credit. The
+	// chat path can retry cheaply because it carries a stored round of completed tool results; the
+	// Pilot has no such round (`resumableRound` is recorded false on every one of these), so a
+	// "retry" here would re-drive the engine from where it stood, not resume from what it had.
+	provider_stall: { resume: false, why: "each attempt spends the owner's credit and the Pilot carries no stored round to resume from (#518)" },
+	provider_overrun: { resume: false, why: "deterministic — the reply was too long, so an identical attempt ends identically" },
+	provider_credentials: { resume: false, why: "no key, a rejected key or an empty balance; only the owner can clear it" },
+	provider_rate_limit: { resume: false, why: "the provider is throttling this key and wants a backoff, not an immediate replay" },
+	provider_error: { resume: false, why: "the provider answered with an error we have not split out; retrying an unread error is a guess" },
+	// The runner guard (#341) has already waited for this machine and concluded it is gone. Resuming
+	// would re-enter a wait that already ran its full budget.
+	runner_gone: { resume: false, why: "the machine was waited for and never came back — the guard has already spent that budget" },
+	runner_unreachable: { resume: false, why: "the relay heals inside the runner guard; a death here means that wait was already exhausted" },
+	// A per-invocation ceiling belongs to the INVOCATION, and a replay is a new one — but the run
+	// would resume into the same unbounded poll that spent it. #523 fixed the cause; resuming here
+	// would paper over its return.
+	platform_ceiling: { resume: false, why: "a Cloudflare per-invocation limit; a replay would walk into the same ceiling rather than past it" },
+	unknown: { resume: false, why: "nothing established what happened, and a resume on an unread failure is exactly the guess `retryable: null` refuses to make" },
+};
+
+export interface ResumeDecision extends ResumeRule {
+	/** Interruptions this run has now been through, for the record and the bound. */
+	attempts: number;
+}
+
+/**
+ * Should this death resume the run instead of ending it?
+ *
+ * Three conditions, all necessary, and the order is the argument:
+ *
+ *  1. **The site that knows said a retry could work** — {@link isRetryableFailure}, the SAME
+ *     predicate `autoResumableRoundOf` gates the chat path on. One rule, two drivers.
+ *  2. **The class is safe and cheap to replay** — {@link CODING_RESUME_POLICY}. Retryable alone is
+ *     not enough; `workflow_internal` is retryable and would repeat a merge.
+ *  3. **The run can be BOUNDED** — the count is durable, because the resume works by replaying the
+ *     journal and every in-memory counter replays with it. A run with no loop-run row cannot be
+ *     counted, so it is not resumed: an unbounded resume is a worse failure than a terminated run.
+ *
+ * Called from the workflow's catch, where the alternative is the terminal teardown, so it MUST NOT
+ * throw — a failure to decide degrades to "do not resume", which is the pre-#583 behaviour.
+ */
+export async function codingResumePlan(
+	env: Env,
+	failure: CodingFailure | null,
+	runId: string | null,
+): Promise<ResumeDecision> {
+	const no = (why: string): ResumeDecision => ({ resume: false, why, attempts: 0 });
+	if (!failure) return no("the failure could not be classified, so nothing established that a replay is safe");
+	const rule = CODING_RESUME_POLICY[failure.class];
+	if (!rule.resume) return { ...rule, attempts: 0 };
+	if (!isRetryableFailure(failure)) return no(`${failure.class} is resumable in principle, but this one was not marked retryable`);
+	if (!runId) return no("no loop-run row, so the resume could not be bounded — an unbounded replay is worse than stopping");
+	const attempts = await countInterruption(env, runId).catch(() => Number.POSITIVE_INFINITY);
+	if (attempts > MAX_PLATFORM_RESUMES) {
+		return { resume: false, attempts, why: `interrupted ${attempts} times — past the ${MAX_PLATFORM_RESUMES} a deploy can plausibly explain, so this is a defect and not a deploy` };
+	}
+	return { ...rule, attempts };
 }
 
 /**

@@ -1023,6 +1023,27 @@ const PINS = {
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
 	// again and the split has a natural seam.
 	"workers/api/src/lib/connectors/supervision.ts": 867,
+	// First entry at #580/#583, crossing LIMIT from 799 — a file that had been sitting one line
+	// under it, which is not a coincidence: work kept being pushed out (`coding-pause.ts`,
+	// `coding-wait.ts`, `coding-run-report.ts` are all extractions from here) precisely because
+	// there was no room. Both issues put back what only the workflow can hold:
+	//
+	//   #580 — the run's LIFECYCLE trace. Its `logEvent` count was zero while its four peer
+	//          workflows averaged five, so a coding run that stopped without crashing left no
+	//          durable record at all. The event vocabulary went to `lib/coding-run-trace.ts`; the
+	//          call sites cannot leave, because only the workflow knows where a run's start and end
+	//          are.
+	//   #583 — the teardown had to become conditional, so a run interrupted by our own deploy is
+	//          replayed instead of torn down. That is +1 level of nesting over ~135 existing lines
+	//          and a dozen lines of catch. The DECISION is in `lib/coding-failure.ts`; what stayed
+	//          is the obedience.
+	//
+	// The seam, when the next raise makes it worth taking: `closeDelegation` (~80 lines) is a
+	// self-contained terminal writer over `{outcome, acts, mergePolicy, ownerTurns}` — a factory
+	// taking those as arguments would take this back under LIMIT and would also make the
+	// "loop-run row and board card cannot disagree" invariant unit-testable without a Workflow,
+	// which is the same argument that moved the pause machine out.
+	"workers/api/src/workflows/coding-session.ts": 872,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1114,7 +1135,7 @@ const PINS = {
 	// +5 at #569: the routes/tools.ts raise above (schemas became opt-in, so the listing fits a
 	// response) and this self-ref. Recorded on the way through a three-way rebase, where the two
 	// pin lines conflicted and the reasons were the only thing distinguishing them.
-	"scripts/check-file-size.mjs": 1198,
+	"scripts/check-file-size.mjs": 1219,
 };
 
 /**
