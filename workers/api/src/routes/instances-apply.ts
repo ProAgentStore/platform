@@ -5,6 +5,8 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { openBudget } from "../lib/delegation-budget-store.js";
+import { createLoopRun } from "../lib/agent-loop-store.js";
+import { BROWSER_RUN_ROUNDS, browserRunObjective } from "../lib/browser-run.js";
 import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
 import { parseResumeIntoProfile } from "../lib/resume-parse.js";
 import { timingSafeEqualStr } from "../lib/crypto.js";
@@ -208,7 +210,48 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 				return null;
 			},
 		);
-		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0 } });
+		// The run row #560 was missing, and it is NOT best-effort — the rule `loop-drivers.ts` states
+		// for the coding driver, for the reason it gives there, which is this run exactly: "an
+		// autonomous run editing the user's repo and spending their tokens that they could not see
+		// and could not stop." An apply is unattended by construction and now draws on a pool
+		// (#516); without this row `stop_work` resolves nothing (`lib/work-stop.ts` →
+		// `requestCancel` → `agent_loop_runs`) and the ONLY cancel path is the runner's own task,
+		// which needs `requireLiveRuntime` — so with the machine off the owner could watch the
+		// money go and had nothing that could end it.
+		//
+		// Failing the START is the right failure: the alternative is an application running with no
+		// handle on it, which is the state the ticket exists to end. It costs nothing in practice —
+		// `createBrowserRuntimeTask` above is also D1, so a database that cannot take this INSERT
+		// has already 502'd. The task row is closed on the way out so the board does not keep a
+		// "running" card for an application that never started (the wedge `job-apply.ts`'s
+		// `no-runner-close` documents).
+		const loopRunId = crypto.randomUUID();
+		try {
+			await createLoopRun(env, {
+				runId: loopRunId,
+				userId,
+				instanceId,
+				objective: browserRunObjective("apply", { url }),
+				// The OUTER round loop, not the per-round step counter: `runApplyLoop`'s own counter
+				// restarts at zero on every handoff, so recording it would make progress go backwards.
+				maxIterations: BROWSER_RUN_ROUNDS,
+				budgetId,
+				startedAt: Date.now(),
+			});
+		} catch (e) {
+			// Close AND hide the task row: `status` is what the single-flight claim above reads, so
+			// leaving it `running` would 409 every later application for the full 4h stale window,
+			// and `hidden` is what keeps a card for an application that never took a step off the
+			// board. Both, because they answer different questions.
+			await env.DB.prepare(
+				"UPDATE instance_runtime_tasks SET status = 'failed', hidden = 1, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+			)
+				.bind(taskId, instanceId, userId)
+				.run()
+				.catch(() => undefined);
+			throw new ApplyError(`Could not start the application: ${e instanceof Error ? e.message : String(e)}`, 500);
+		}
+		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0, loopRunId } });
 		return { workflowId: instance.id, taskId };
 	} finally {
 		await dropClaim();

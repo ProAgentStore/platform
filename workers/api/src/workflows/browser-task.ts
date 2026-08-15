@@ -6,6 +6,7 @@ import { instanceRunLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
+import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
 import { runShotKey } from "../lib/run-shots.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -16,6 +17,13 @@ export interface BrowserTaskParams {
 	/** The runner task id this run drives (created by the trigger route). */
 	taskId: string;
 	job: BrowserTaskJob;
+	/**
+	 * The `agent_loop_runs` row this task is recorded as (#560) — what makes it stoppable.
+	 *
+	 * Optional so a run queued before this shipped still executes: every consumer below no-ops on
+	 * null, which degrades to exactly the old behaviour (cancellable only through the runner).
+	 */
+	loopRunId?: string | null;
 }
 
 /** Max minutes to wait for a human to resolve a handoff before giving up. */
@@ -52,17 +60,24 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				const conn = await getBoundRunnerConn(this.env, instanceId, userId);
 				if (conn) await callRunner(conn, "/browser/complete", { taskId, outcome: "failed", detail: msg.slice(0, 300) });
 			} catch { /* best-effort */ }
-			return { outcome: "failed", detail: msg, steps: 0 };
+			// AFTER the transient rethrow above, never before it: a run the platform is about to
+			// replay must not be filed as dead (#546). Only a genuine crash closes the record.
+			const crashed: ApplyResult = { outcome: "failed", detail: msg, steps: 0 };
+			await finishBrowserRun(this.env, event.payload.loopRunId ?? null, crashed);
+			return crashed;
 		}
 	}
 
 	private async runInner(event: WorkflowEvent<BrowserTaskParams>, step: WorkflowStep): Promise<ApplyResult> {
 		const { instanceId, userId, taskId, job } = event.payload;
 		const env = this.env;
+		const loopRunId = event.payload.loopRunId ?? null;
 
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
 		if (!conn) {
-			return { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
+			const noRunner: ApplyResult = { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
+			await finishBrowserRun(env, loopRunId, noRunner);
+			return noRunner;
 		}
 
 		// Open the start URL FIRST — this initializes the runner's page for the task
@@ -72,7 +87,14 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
 		const deps: ApplyDeps<BrowserTaskJob> = {
-			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
+			// The durable cancel is read HERE, beside the runner's own flag, so the two answers meet
+			// at the one place `runApplyLoop` already halts on (#560). `browserRunTick` also
+			// heartbeats, which is what keeps `sweepStaleRuns` off a long-running task.
+			snapshot: () => step.do(`s${n++}-snapshot`, retry, async () => {
+				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId });
+				const stopped = await browserRunTick(env, loopRunId);
+				return stopped ? { ...snap, cancelled: true } : snap;
+			}) as Promise<PageSnapshot>,
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideBrowserTask(env, userId, p, { kind: "chat", instanceId })) as Promise<ApplyDecision>,
 			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, retry, async () => {
 				// The commit guard, enforced HERE and not in the prompt: a rehearsal (`dryRun`) or a
@@ -114,7 +136,11 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		let solvedChallengeUrl: string | undefined;
 		const tokens = { input: 0, output: 0 };
 		await step.do("trace-start", async () => { await logEvent(env, { source: "apply", event: "browse.start", message: `Browser task → ${job.url}${job.dryRun ? " (dry run)" : ""}`, userId, instanceId, traceId: taskId, context: { url: job.url, dryRun: !!job.dryRun } }).catch(() => undefined); return null; });
-		for (let round = 0; round < 12; round++) {
+		for (let round = 0; round < BROWSER_RUN_ROUNDS; round++) {
+			// The run row's iteration is the ROUND, not `runApplyLoop`'s step counter — that one
+			// restarts at zero every handoff, so recording it would freeze progress rather than
+			// advance it (see `lib/browser-run.ts`).
+			await browserRunAdvance(env, loopRunId, round + 1);
 			result = await runApplyLoop<BrowserTaskJob>(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens });
 			solvedChallengeUrl = undefined;
 			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
@@ -144,16 +170,37 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			});
 
 			let solved = false;
+			let stopped = false;
 			let providedValue: string | undefined;
-			for (let poll = 0; poll < HANDOFF_WAIT_POLLS && !solved; poll++) {
+			for (let poll = 0; poll < HANDOFF_WAIT_POLLS && !solved && !stopped; poll++) {
 				await step.sleep(`wait-${round}-${poll}`, "5 seconds");
-				const status = await step.do(`hstatus-${round}-${poll}`, () => callRunner<{ solved: boolean; value?: string }>(conn, "/browser/handoff-status", { taskId }));
+				const status = await step.do(`hstatus-${round}-${poll}`, async () => {
+					const s = await callRunner<{ solved: boolean; value?: string }>(conn, "/browser/handoff-status", { taskId });
+					// The 15-minute blind spot `cc17c1d` recorded and left (#560): this poll had no
+					// cancellation awareness, so a stop arriving while the run waited on a human was
+					// not seen until the wait expired. The park is written here too, so the run
+					// reports as WAITING with a give-up time rather than as working (#459/#596).
+					const cancelled = await browserRunPark(env, loopRunId, handoffGiveUpAt(Date.now(), HANDOFF_WAIT_POLLS - poll));
+					return { ...s, cancelled };
+				});
 				solved = status.solved;
+				stopped = status.cancelled;
 				if (solved) providedValue = status.value;
+			}
+			if (stopped) {
+				const cancelled: ApplyResult = { outcome: "cancelled", detail: "stopped by the user", steps: result.steps };
+				await step.do(`complete-cancelled-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "cancelled", detail: "stopped by the user" }));
+				await finishBrowserRun(env, loopRunId, cancelled);
+				return cancelled;
 			}
 			if (!solved) {
 				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
 				await step.do(`log-timeout-${round}`, async () => { await logEvent(env, { source: "apply", event: "browse.handoff_timeout", message: `browser task timed out: ${reason} not resolved in time`, userId, instanceId, traceId: taskId, context: { url: job.url, reason, steps: result.steps } }).catch(() => undefined); return null; });
+				const timedOut: ApplyResult = { outcome: reason === "challenge" ? "captcha" : reason === "needs_input" ? "needs_input" : "stuck", detail: `${reason} not resolved in time`, steps: result.steps };
+				// Recorded under the reason it actually stopped for, so the run lands in "Needs you"
+				// rather than "Failed" (#553): nobody answered — nothing failed. The task's own
+				// outcome above stays `failed`, which is the runner-task vocabulary, not the run's.
+				await finishBrowserRun(env, loopRunId, timedOut);
 				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
 			}
 			if (result.outcome === "needs_input" && providedValue && result.fieldNeeded) {
@@ -169,6 +216,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		if (["failed", "blocked", "expired", "max_steps"].includes(result.outcome)) {
 			await step.do("log-outcome", async () => { await logError(env, { source: "browser-task", userId, message: `browser task ${result.outcome}: ${result.detail ?? ""}`, context: { instanceId, taskId, url: job.url, outcome: result.outcome, steps: result.steps } }).catch(() => undefined); return null; });
 		}
+		await finishBrowserRun(env, loopRunId, result);
 		return result;
 	}
 }

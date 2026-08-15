@@ -9,6 +9,7 @@ import { instanceRunLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
+import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
 import { runShotKey } from "../lib/run-shots.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
@@ -31,6 +32,17 @@ export interface JobApplyParams {
 	budgetId?: string | null;
 	/** Depth in the supervision tree; the budget refuses past its cap. */
 	depth?: number;
+	/**
+	 * The `agent_loop_runs` row this application is recorded as (#560) — what makes it stoppable.
+	 *
+	 * #516 gave this workflow a spend pool and left it with no cancel path, which is half a fix: the
+	 * owner could watch an unattended run spend and had nothing that could end it. `stop_work`
+	 * resolves through `agent_loop_runs`, so this id is the whole of the reach.
+	 *
+	 * Optional so an application queued before this shipped still runs — every consumer no-ops on
+	 * null and degrades to the old behaviour (cancellable only through a live runner).
+	 */
+	loopRunId?: string | null;
 }
 
 /** Max minutes to wait for a human to solve a CAPTCHA before giving up. */
@@ -79,13 +91,18 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			} catch {
 				/* best-effort */
 			}
-			return { outcome: "failed", detail: msg, steps: 0 };
+			// AFTER the transient rethrow above, never before it: a run the platform is about to
+			// replay must not be filed as dead (#546). Only a genuine crash closes the record.
+			const crashed: ApplyResult = { outcome: "failed", detail: msg, steps: 0 };
+			await finishBrowserRun(this.env, event.payload.loopRunId ?? null, crashed);
+			return crashed;
 		}
 	}
 
 	private async runInner(event: WorkflowEvent<JobApplyParams>, step: WorkflowStep): Promise<ApplyResult> {
 		const { instanceId, userId, taskId, job } = event.payload;
 		const env = this.env;
+		const loopRunId = event.payload.loopRunId ?? null;
 
 		// Resolved fresh (not journaled) so the runner token never lands in state.
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
@@ -128,7 +145,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					.run();
 				return null;
 			});
-			return { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
+			const noRunner: ApplyResult = { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
+			await finishBrowserRun(env, loopRunId, noRunner);
+			return noRunner;
 		}
 
 		// Per-ATS cache: replay the known-good route from a prior success here.
@@ -163,7 +182,15 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
 		const deps: ApplyDeps = {
-			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
+			// The durable cancel is read HERE, beside the runner's own flag, so both answers meet at
+			// the one place `runApplyLoop` already halts on (#560) — no second way for an
+			// application to stop. `browserRunTick` also heartbeats, which keeps `sweepStaleRuns`
+			// off an application that is legitimately taking a while.
+			snapshot: () => step.do(`s${n++}-snapshot`, retry, async () => {
+				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId });
+				const stopped = await browserRunTick(env, loopRunId);
+				return stopped ? { ...snap, cancelled: true } : snap;
+			}) as Promise<PageSnapshot>,
 			// The spend gate lives in `apply-decide-budget.ts` — the LLM call is the only place this
 			// loop spends money, so it is the only place the budget has to sit (#516). Reserve and
 			// settle both happen INSIDE this step, so no reservation is ever held across a handoff:
@@ -271,7 +298,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		const tokens = { input: 0, output: 0 }; // running total across ALL rounds (handoffs re-enter the loop)
 		let filled = false; // did any field get typed in a prior round? carries the dry-run submit guard across handoffs
 		await step.do("trace-start", async () => { await logEvent(env, { source: "apply", event: "apply.start", message: `Apply → ${host}${job.dryRun ? " (dry run)" : ""}`, userId, instanceId, traceId: taskId, context: { url: job.url, dryRun: !!job.dryRun } }).catch(() => undefined); return null; });
-		for (let round = 0; round < 12; round++) {
+		for (let round = 0; round < BROWSER_RUN_ROUNDS; round++) {
+			// The run row's iteration is the ROUND, not `runApplyLoop`'s step counter — that one
+			// restarts at zero every handoff, so recording it would freeze progress rather than
+			// advance it (see `lib/browser-run.ts`).
+			await browserRunAdvance(env, loopRunId, round + 1);
 			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled });
 			solvedChallengeUrl = undefined;
 			filled = result.filled ?? filled; // once true, stays true for the rest of the application
@@ -316,12 +347,33 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			});
 
 			let solved = false;
+			let stopped = false;
 			let providedValue: string | undefined;
-			for (let poll = 0; poll < CAPTCHA_WAIT_POLLS && !solved; poll++) {
+			for (let poll = 0; poll < CAPTCHA_WAIT_POLLS && !solved && !stopped; poll++) {
 				await step.sleep(`wait-${round}-${poll}`, "5 seconds");
-				const status = await step.do(`hstatus-${round}-${poll}`, () => callRunner<{ solved: boolean; value?: string }>(conn, "/browser/handoff-status", { taskId }));
+				const status = await step.do(`hstatus-${round}-${poll}`, async () => {
+					const s = await callRunner<{ solved: boolean; value?: string }>(conn, "/browser/handoff-status", { taskId });
+					// The 15-minute blind spot `cc17c1d` recorded and left (#560): this poll had no
+					// cancellation awareness, so a stop arriving while the application waited on a
+					// human was not seen until the wait expired — and an unanswered captcha or
+					// `needs_input` is exactly the wedge an owner wants to end. The park is written
+					// here too, so the run reports as WAITING with a give-up time rather than as
+					// working (#459/#596).
+					const cancelled = await browserRunPark(env, loopRunId, handoffGiveUpAt(Date.now(), CAPTCHA_WAIT_POLLS - poll));
+					return { ...s, cancelled };
+				});
 				solved = status.solved;
+				stopped = status.cancelled;
 				if (solved) providedValue = status.value;
+			}
+			if (stopped) {
+				const cancelled: ApplyResult = { outcome: "cancelled", detail: "stopped by the user", steps: result.steps };
+				await step.do(`complete-cancelled-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "cancelled", detail: "stopped by the user" }));
+				// The partial run's learnings are still worth keeping — what got as far as the
+				// handoff is the same evidence a timeout saves (best-effort, as there).
+				if (transcript.length) await step.do(`save-cache-cancelled-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, "cancelled").catch(() => undefined); return null; });
+				await finishBrowserRun(env, loopRunId, cancelled);
+				return cancelled;
 			}
 			if (!solved) {
 				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
@@ -331,6 +383,10 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				await step.do(`log-timeout-${round}`, async () => { await logEvent(env, { source: "apply", event: "apply.handoff_timeout", message: `apply timed out: ${reason} not resolved in time`, userId, instanceId, traceId: taskId, context: { url: job.url, reason, steps: result.steps } }).catch(() => undefined); return null; });
 				// Save the partial run's learnings (incl. what got stuck) before bailing (best-effort).
 				if (transcript.length) await step.do(`save-cache-timeout-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, result.outcome).catch(() => undefined); return null; });
+				// Recorded under the reason it actually stopped for, so the run lands in "Needs you"
+				// rather than "Failed" (#553): nobody answered — nothing failed. The runner task's
+				// own outcome above stays `failed`, which is that vocabulary, not the run's.
+				await finishBrowserRun(env, loopRunId, { outcome: reason === "challenge" ? "captcha" : reason === "needs_input" ? "needs_input" : "stuck", detail: `${reason} not resolved in time`, steps: result.steps });
 				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
 			}
 			// Persist a supplied value to the Profile + feed it into the run so it's never asked again.
@@ -405,6 +461,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		if (transcript.length) {
 			await step.do("save-cache", async () => { await saveAtsCache(env, userId, host, transcript, result.outcome).catch(() => undefined); return null; });
 		}
+		await finishBrowserRun(env, loopRunId, result);
 		return result;
 	}
 }

@@ -6,6 +6,8 @@ import { resolveSettingsValues, settingsPromptBlock } from "../lib/instance-sett
 import { deriveFromUrl } from "../lib/board.js";
 import { logError } from "../lib/error-log.js";
 import { triggerActionDenial } from "../lib/trigger-capability.js";
+import { createLoopRun } from "../lib/agent-loop-store.js";
+import { BROWSER_RUN_ROUNDS, browserRunObjective } from "../lib/browser-run.js";
 import type { BrowserTaskJob } from "../lib/browser-task-loop.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
@@ -159,7 +161,34 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 		} catch (e) {
 			throw new BrowseError(e instanceof Error ? e.message : String(e), 502);
 		}
-		const instance = await env.BROWSER_TASK.create({ params: { instanceId, userId, taskId, job } });
+		// The run row #560 was missing on this driver too, and for the same reason it mattered more
+		// here than anywhere: the one runaway-shaped record in the whole error log is a browser task
+		// ("max_steps: stopped after 60 actions"), and it was ended by a structural cap rather than
+		// by anybody stopping it — because nobody could. `stop_work` resolves through
+		// `agent_loop_runs`; without a row it reached neither this driver nor apply.
+		//
+		// NOT best-effort, on the same reasoning as the apply route and `loop-drivers.ts` before it.
+		const loopRunId = crypto.randomUUID();
+		try {
+			await createLoopRun(env, {
+				runId: loopRunId,
+				userId,
+				instanceId,
+				objective: browserRunObjective("browse", { url: startUrl, objective }),
+				// The outer handoff-round loop; `runApplyLoop`'s per-round step counter restarts.
+				maxIterations: BROWSER_RUN_ROUNDS,
+				startedAt: Date.now(),
+			});
+		} catch (e) {
+			await env.DB.prepare(
+				"UPDATE instance_runtime_tasks SET status = 'failed', hidden = 1, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+			)
+				.bind(taskId, instanceId, userId)
+				.run()
+				.catch(() => undefined);
+			throw new BrowseError(`Could not start the browser task: ${e instanceof Error ? e.message : String(e)}`, 500);
+		}
+		const instance = await env.BROWSER_TASK.create({ params: { instanceId, userId, taskId, job, loopRunId } });
 		return { workflowId: instance.id, taskId };
 	} finally {
 		await dropClaim();
