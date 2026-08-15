@@ -18,7 +18,7 @@
 // Pure and exported: the same rendering serves the `check_work` tool result and the automatic
 // "recent work" context block, so the two can never tell different stories about one run.
 import { formatInZone } from "./agent-clock.js";
-import type { LoopRunView } from "./agent-loop-store.js";
+import type { LoopRunView, RunWaitReason } from "./agent-loop-store.js";
 import { type TerminalView } from "./terminal-label.js";
 
 /**
@@ -116,17 +116,17 @@ export type RunHealth = (typeof RUN_HEALTH_STATES)[number];
  * code has since changed, believed because it is right next to the data.
  */
 export const RUN_HEALTH_LEGEND =
-	// #596: `waitNote` says what a park is FOR in every case; it says when it ends only sometimes,
-	// and the exception is the one that matters most. `coding-pause.ts:146` deliberately writes no
-	// `waiting_until` for a HUMAN handoff, because that park's 15-minute deadline is the moment the
-	// run GIVES UP, not the moment it resumes — and `waitClause` renders the field under "expected
-	// to resume in". Promising "until when" unconditionally would tell an owner to sit and wait for
-	// something that is about to stop waiting for them. State what is true for every park reason.
+	// #596: a park's deadline is not one kind of thing. `waitNote` states when the wait ends AND
+	// which end it is — an `engine_limit` park resumes at its instant, a `human` handoff GIVES UP at
+	// it — because the two license opposite actions and a single verb cannot carry both. The earlier
+	// wording promised "until when" unconditionally, which was true of one producer and kept honest
+	// only because the other declined to publish anything at all. State what is true for EVERY park
+	// reason, and say that the verb is the part to read.
 	// The COUNT is computed, not typed. "three values" is the exact sentence that went stale in two
 	// MCP descriptions when `ended` arrived (#588); a hand-written number restating the size of an
 	// enum is the same claim as a hand-written list of it, and drifts the same way.
 	`\`health\` is the PLATFORM'S OWN verdict on a run and there are ${RUN_HEALTH_STATES.length} values: \`working\` (the orchestrator is ticking — it may legitimately be many minutes into ONE instruction), ` +
-	"`waiting` (deliberately parked — `waitNote` says what for, and gives a resume time only when one is knowable; read it, because one park is waiting for a PERSON and will not clear itself), `stalled` (nothing has ticked; the row will say `running` forever and the workflow is probably gone), " +
+	"`waiting` (deliberately parked — `waitNote` says what for and, when the end is knowable, when the wait runs out AND what running out means: a usage-limit park RESUMES then, a human handoff GIVES UP then. Read the verb before you decide it needs nothing, because one park is waiting for a PERSON and its clock is running against them, not for them), `stalled` (nothing has ticked; the row will say `running` forever and the workflow is probably gone), " +
 	"and `ended` (the run is CLOSED — read `status` and `stopReason` for what happened; `ended` makes NO claim that anything is running). " +
 	"Quote `health` rather than deriving your own from `status` or the timestamps: a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like, and that inference has told an owner a run was stuck while the engine was mid-edit. " +
 	"None of these speaks for the ENGINE — `health` is the orchestrator's state, never the CLI's output.";
@@ -193,24 +193,106 @@ export function isStalled(run: RunHealthInput, now: number): boolean {
 }
 
 /**
+ * What running out of time MEANS for a park — the distinction `waiting_until` alone cannot carry.
+ *
+ *   resume   — the clock runs out and the run continues by itself. The owner does nothing.
+ *   give_up  — the clock runs out and the run STOPS waiting. The owner has until then to act.
+ *
+ * The two demand opposite actions, so the verb is the load-bearing half of the sentence: "resuming
+ * in 12m" means sit still, "gives up in 12m" means go and answer it now.
+ */
+export type ParkDeadline = "resume" | "give_up";
+
+interface Park {
+	/** What the run is waiting FOR, in the second person where the reader is the one holding it up. */
+	why: string;
+	/** Which question this park's `waitingUntil` answers. */
+	deadline: ParkDeadline;
+}
+
+/**
+ * Every park reason, with what it waits for and which KIND of deadline it has (#596).
+ *
+ * ── The decision this table records, and the two alternatives it rejects
+ *
+ * #591 gave `waiting_until` a production writer and `waitClause` rendered it as "expected to resume
+ * in …". That was true of the one park that wrote it, and the field stayed coherent only because
+ * its other producer ABSTAINED: `coding-pause.ts`'s human handoff had a computable 15-minute
+ * deadline and deliberately published nothing, because publishing a give-up under a resume-time
+ * verb would sit an owner in front of a run that was about to stop waiting for them. A field kept
+ * honest by a writer declining to write is a gap held open by omission, and the cost was that the
+ * deadline the owner most needs — the one they can still beat — was knowable only by its absence.
+ *
+ * **Rejected: a second column** (`waiting_deadline_kind`, or a `waiting_giveup_at` beside
+ * `waiting_until`). The kind of a deadline is not an independent fact — it is entailed by WHY the
+ * run is parked, and that reason is already stored, already closed, already a platform enum. A
+ * column duplicating it is a second copy of one fact that a writer must keep in step and nothing
+ * can force to agree; this batch has spent four tickets (#580, #583, #588, #589) removing exactly
+ * that shape, where `status` and the timestamps each carried a piece of a verdict and readers
+ * derived a fifth answer of their own. It also costs a migration, which is not free here (#369),
+ * to store something derivable.
+ *
+ * **Rejected: a reason-aware `if` in the renderer.** That is what the ternary chain this replaces
+ * already was, and it is precisely the shape that let the human case be handled by omission — a
+ * chain has no denominator, so nothing goes red when a reason is added and falls through to the
+ * last branch. (It did fall through: any unrecognised reason was rendered as "a platform update
+ * interrupted it", asserting a specific park about a value nothing recognised.)
+ *
+ * **Chosen: one instant, one reason, and the verb derived from a table over ALL park reasons.**
+ * The record keeps one column; the semantics live where the vocabulary lives; and because the table
+ * is keyed by `RunWaitReason`, a new reason fails `run-health-readers.test.ts`'s sweep (which walks
+ * {@link RUN_WAIT_REASONS} at run time) rather than quietly inheriting someone else's verb.
+ *
+ * **Also rejected: publishing the kind as a payload field** (`waitDeadline: "resume"|"give_up"`
+ * beside `waitingUntil`). Nothing reads `waitingUntil` programmatically — every non-test reference
+ * in the tree either produces the column or hands it to this function — so it would add a third
+ * thing to keep in step for no reader that exists. If a client ever needs the kind without the
+ * prose, derive it here and export it; do not store it.
+ */
+const PARKS: Record<RunWaitReason, Park> = {
+	engine_limit: { why: "the coding CLI's own usage limit has to reset", deadline: "resume" },
+	human: { why: "it is waiting for YOU to answer a handoff", deadline: "give_up" },
+	platform_interrupt: { why: "a platform update interrupted it and it is being resumed", deadline: "resume" },
+};
+
+/**
+ * How each kind of deadline is SAID. One clause per kind, so the verb cannot be chosen per call
+ * site — the same reason `RUN_HEALTH_LEGEND` is a constant rather than a sentence each surface
+ * retypes.
+ *
+ * The give-up clause names the consequence as well as the instant, because the instant alone is
+ * what "expected to resume" already looked like: an owner who reads a bare time reads it as the
+ * good kind. It is also stated in the second person, because they are the only one who can beat it.
+ */
+const DEADLINE_CLAUSE: Record<ParkDeadline, (left: string) => string> = {
+	resume: (left) => `, expected to resume in ${left}`,
+	give_up: (left) => `, and it GIVES UP in ${left} if nobody does — that is a deadline for YOU, not a resume time`,
+};
+
+/**
  * The clause a parked run gets instead of a stall or a false all-clear.
  *
  * Takes {@link RunHealthInput} plus the park's end, for the same reason `runHealth` does: the
  * supervision reader holds these columns and nothing else, and a signature it cannot satisfy is
  * what sent it off to derive its own answer.
+ *
+ * `waitingUntil` is the instant this park's clock RUNS OUT. What running out means is read from
+ * {@link PARKS}, never assumed — see that table for why the kind is derived and not stored (#596).
+ * A deadline already in the past renders as no clause at all: "gives up in -3m" is not a sentence,
+ * and the next tick either clears the park or closes the run.
  */
 export function waitClause(run: RunHealthInput & { waitingUntil?: number | null }, now: number): string | null {
 	// A FINISHED run makes no liveness claim in either direction (#459) — and `finishLoopRun` does
 	// not clear the park columns, so a run that ended while parked still carries them. Reading them
 	// on a closed row would announce a wait that is over.
 	if (run.status !== "running" || !run.waitingReason) return null;
-	const why =
-		run.waitingReason === "engine_limit"
-			? "the coding CLI's own usage limit has to reset"
-			: run.waitingReason === "human"
-				? "it is waiting for YOU to answer a handoff"
-				: "a platform update interrupted it and it is being resumed";
-	const until = run.waitingUntil && run.waitingUntil > now ? `, expected to resume in ${ago(run.waitingUntil - now).replace(" ago", "")}` : "";
+	const park = PARKS[run.waitingReason as RunWaitReason] as Park | undefined;
+	// A park whose reason this build does not know is still a park (`coding-run-state.ts` takes the
+	// same line). What it does NOT get is a deadline clause: with no kind, the instant could only be
+	// rendered under a guessed verb, and a guessed verb is the entire defect.
+	const why = park?.why ?? `it is parked (${run.waitingReason})`;
+	const left = run.waitingUntil && run.waitingUntil > now ? ago(run.waitingUntil - now).replace(" ago", "") : "";
+	const until = park && left ? DEADLINE_CLAUSE[park.deadline](left) : "";
 	// Said out loud, because the whole defect is that this state was indistinguishable from working:
 	// nothing has advanced and that is CORRECT, so neither "stalled" nor a bare "running" is honest.
 	return `WAITING, not stalled and not working — ${why}${until}. No instruction has advanced since it parked, which is expected`;

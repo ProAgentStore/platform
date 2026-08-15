@@ -321,6 +321,27 @@ describe("describeLoopRun", () => {
 			expect(describeLoopRun(handoff, NOW)).toContain("waiting for YOU");
 		});
 
+		it("a human handoff's deadline is a GIVE-UP, never 'expected to resume' (#596)", () => {
+			// The two deadlines demand opposite actions: "resuming in 12m" means sit still, "gives up
+			// in 12m" means go and answer it now. Rendering the second under the first's verb is what
+			// #591 avoided by publishing nothing at all — which cost the owner the only deadline they
+			// could still beat. On the tree that shipped, this line reads "expected to resume in 12m".
+			const handoff = run({
+				status: "running",
+				finishedAt: null,
+				waitingReason: "human",
+				waitingUntil: NOW + 12 * 60_000,
+				lastAliveAt: NOW - 60_000,
+			});
+			const s = describeLoopRun(handoff, NOW);
+			expect(s).not.toContain("expected to resume");
+			expect(s).toContain("GIVES UP in 12m");
+			// Beside the engine park, at the same instant, so the difference is the VERB and not the
+			// presence of a number: one field, two meanings, told apart by the reason.
+			const limit = run({ status: "running", finishedAt: null, waitingReason: "engine_limit", waitingUntil: NOW + 12 * 60_000 });
+			expect(describeLoopRun(limit, NOW)).toContain("expected to resume in 12m");
+		});
+
 		it("says nothing about the engine — the caveat this file has always carried", () => {
 			// `waitClause` describes the ORCHESTRATOR's own state. The live `runState` is behind
 			// `/capture`; claiming it from a run row is the false all-clear facing the other way.

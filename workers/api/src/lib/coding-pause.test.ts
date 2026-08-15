@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	HANDOFF_GIVE_UP_MS,
 	HANDOFF_POLL_MS,
 	HANDOFF_WAIT_POLLS,
 	resolvePause,
@@ -188,6 +189,33 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
 		expect(s.announced.some((m) => m.includes("Coder needs you"))).toBe(true);
 		expect(s.notified).toEqual([{ title: "🙋 Coder needs you", alert: true }]);
+	});
+
+	it("tells the owner BY WHEN, because a handoff deadline they cannot see is one they cannot beat (#596 AC2)", async () => {
+		// The asymmetry this closes: the usage-limit park — which needs nothing from anybody —
+		// announced its resume time in this same thread, while the one wait a person can actually
+		// resolve said only "take over". The bound existed from the first line of the wait and was
+		// visible nowhere until it expired.
+		const s = spy({ resolveAfter: 1 });
+		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		const line = s.announced.find((m) => m.includes("Coder needs you")) ?? "";
+		expect(line, "the handoff announcement states no deadline").toContain(`${HANDOFF_GIVE_UP_MS / 60_000} minutes`);
+		// And says what happens at it. A bare time reads as the good kind of deadline — that is the
+		// whole of #596 — so the consequence is named beside it.
+		expect(line).toMatch(/stops and reports/);
+	});
+
+	it("states the same bound in the announcement and in the expiry, from one constant", async () => {
+		// Three hand-written "15 minutes" against a poll count is the drift this ticket is about,
+		// one level down: the number that is announced must be the number that is enforced.
+		const s = spy();
+		const v = await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		expect(HANDOFF_GIVE_UP_MS).toBe(s.slept.reduce((a, b) => a + b, 0));
+		const announced = s.announced.find((m) => m.includes("Coder needs you")) ?? "";
+		const expiry = (v.resume === false && v.result.detail) || "";
+		const minutes = `${HANDOFF_GIVE_UP_MS / 60_000} minutes`;
+		expect(announced).toContain(minutes);
+		expect(expiry).toContain(minutes);
 	});
 
 	it("heartbeats during the handoff wait too — the claim it holds expires at 15 minutes", async () => {

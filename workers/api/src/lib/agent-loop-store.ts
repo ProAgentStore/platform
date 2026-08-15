@@ -24,7 +24,11 @@ export interface LoopRunRow {
 	last_progress_at: number | null;
 	/** ms epoch of the orchestrator's last heartbeat (0127). Null before its first tick. */
 	last_alive_at: number | null;
-	/** When a deliberate park is expected to end (0127). Null when the run is not parked. */
+	/**
+	 * ms epoch this park's clock RUNS OUT (0127). Null when the run is not parked, or when the park
+	 * has no knowable end. Whether running out means "resumes" or "gives up" is entailed by
+	 * `waiting_reason` and is never stored twice — see `work-report.ts`'s `PARKS` (#596).
+	 */
 	waiting_until: number | null;
 	/** Why it is parked (0127) — a short platform enum, never free text. */
 	waiting_reason: string | null;
@@ -37,19 +41,33 @@ export interface LoopRunRow {
 }
 
 /**
- * Why a run is deliberately not advancing (#580).
+ * Why a run is deliberately not advancing (#580) — as a VALUE, so a guard can count it (#596).
  *
  * A closed enum rather than a sentence: the whole defect this replaces is that "running" was the
  * only word the record had for three different situations, and a free-text field would let the next
  * one be added without a reader ever learning to distinguish it.
+ *
+ *   engine_limit       — the engine's own subscription window is spent and reopens at a stated
+ *                        time (#541). Its deadline is a RESUME.
+ *   human              — a takeover or a needs-input handoff. Somebody has to answer before the run
+ *                        moves. Its deadline is a GIVE-UP (`coding-pause.ts`'s 15 minutes).
+ *   platform_interrupt — our own deploy evicted the isolate and Cloudflare is replaying the
+ *                        journal (#583). No knowable instant; when one exists it is a RESUME.
+ *
+ * ── Why this is an array and not only a union (#596)
+ *
+ * The same reason `RUN_HEALTH_STATES` is (#588), measured on this file's own denominator: a `type`
+ * union is erased, `workers/api/tsconfig.json` excludes `src/**\/*.test.ts`, and vitest transpiles
+ * without checking — so `run-health-readers.test.ts`'s `const REASONS: Record<RunWaitReason, true>`
+ * was an exhaustiveness check that COMPILES NOWHERE and could never have gone red. A fourth reason
+ * added tomorrow would have slipped past the one guard whose stated job is to count them.
+ *
+ * Every table keyed by a park reason — `work-report.ts`'s `PARKS`, `coding-run-state.ts`'s
+ * `PARK_GLOSS` — is a place a new member can go unhandled. This array is what lets a test walk them.
  */
-export type RunWaitReason =
-	/** The engine's own subscription window is spent and reopens at a stated time (#541). */
-	| "engine_limit"
-	/** A takeover or a needs-input handoff. Somebody has to answer before the run moves. */
-	| "human"
-	/** A platform event (our own deploy) interrupted the run and it is being resumed (#583). */
-	| "platform_interrupt";
+export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt"] as const;
+
+export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
 
 export interface LoopRunView {
 	runId: string;
@@ -83,7 +101,14 @@ export interface LoopRunView {
 	 * through `lastProgressAt` to `startedAt`, so absence never reads as death.
 	 */
 	lastAliveAt: number | null;
-	/** When a deliberate park should end, or null when the run is not parked (#580). */
+	/**
+	 * ms epoch this park's clock RUNS OUT, or null when the run is not parked (#580).
+	 *
+	 * NOT "when it resumes". Two parks can state an instant and they mean opposite things: an
+	 * `engine_limit` park resumes at it, a `human` handoff GIVES UP at it. The kind is entailed by
+	 * {@link waitingReason} — one fact, one column — and `work-report.ts`'s `waitClause` is the only
+	 * thing that renders it, so the verb can never be chosen by a reader that guessed (#596).
+	 */
 	waitingUntil: number | null;
 	/** Why the run is parked, or null when it is not (#580). */
 	waitingReason: RunWaitReason | null;

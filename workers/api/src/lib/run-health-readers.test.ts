@@ -31,7 +31,6 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runHealth, waitClause, type RunHealth } from "./work-report.js";
-import type { RunWaitReason } from "./agent-loop-store.js";
 import { summarizeSubordinates } from "./subordinate-observation.js";
 import { activityFromRuns, rosterLines } from "./subordinate-payload.js";
 import type { RunItem } from "./instance-work.js";
@@ -211,36 +210,99 @@ describe("no legend names fewer states than the code can produce (#594 AC5, scop
 	});
 
 	/**
-	 * No legend promises a resume time for a park that has none (#591/#596).
+	 * Every park's deadline is rendered with the verb matching its KIND (#596 AC4).
 	 *
-	 * `coding-pause.ts:146` deliberately writes no `waiting_until` for a HUMAN handoff: that
-	 * park's 15-minute deadline is the moment the run GIVES UP, not the moment it resumes, and
-	 * `waitClause` renders the column under "expected to resume in". So a legend that says a
-	 * parked run's note tells you "until when" is false for the one park that is waiting for the
-	 * reader — and "it resumes on its own" tells them to walk away from it.
+	 * The defect: `waiting_until` used to be rendered as "expected to resume in …" whatever the
+	 * park was, and stayed coherent only because its second producer ABSTAINED — the human handoff
+	 * had a computable 15-minute deadline and published nothing rather than publish a give-up under
+	 * a resume verb. So the field's honesty rested on a writer declining to write, and the one
+	 * deadline an owner can still beat was the one nobody was shown.
 	 *
-	 * The denominator is every park reason the record can hold, compile-time exhaustive.
+	 * Two deadlines, opposite actions: "resuming at 16:00" means do nothing, "giving up at 16:00"
+	 * means intervene now. The verb is therefore the load-bearing half of the sentence, and this
+	 * asserts it per reason rather than for the case that happens to be right.
+	 *
+	 * ── The denominator (ADR 0002 G1/G2)
+	 *
+	 * `RUN_WAIT_REASONS` is walked at RUN TIME. The previous version of this test wrote
+	 * `const REASONS: Record<RunWaitReason, true>` and called it compile-time exhaustive — it was
+	 * not, when it was written: `workers/api/tsconfig.json` excluded `src/**\/*.test.ts` and vitest
+	 * transpiles without checking, so that annotation compiled nowhere and could never have failed.
+	 * A fourth park reason would have walked straight past the one guard whose job is to count them.
+	 *
+	 * The array is the fix REGARDLESS of whether the tests are typechecked later: the assertions
+	 * below are about rendered strings, so the denominator has to exist at the moment they run.
+	 * Same lesson as `RUN_HEALTH_STATES` (#588), applied one enum over.
+	 */
+	it("renders EVERY park reason's deadline with the verb matching its kind", async () => {
+		const { waitClause } = await import("./work-report.js");
+		const { RUN_WAIT_REASONS } = await import("./agent-loop-store.js");
+		const NOW = 1_000_000;
+		const IN_12M = NOW + 12 * 60_000;
+		const noteFor = (reason: string, until: number | null) =>
+			waitClause({ status: "running", waitingReason: reason, waitingUntil: until, lastAliveAt: NOW, startedAt: 0 }, NOW) ?? "";
+
+		// G1 — a sweep over an empty or shrunken vocabulary is a broken guard, not a clean tree.
+		expect(RUN_WAIT_REASONS.length, `${RUN_WAIT_REASONS.length} park reasons swept`).toBeGreaterThanOrEqual(3);
+
+		/** The verb each reason's deadline must be said with — restated here, ON PURPOSE. */
+		const KIND: Record<string, "resume" | "give_up"> = { engine_limit: "resume", human: "give_up", platform_interrupt: "resume" };
+		const seen = new Set<string>();
+		for (const reason of RUN_WAIT_REASONS) {
+			const kind = KIND[reason];
+			// A reason with no entry here is a reason nobody decided the kind of. Failing is the
+			// point: the table in `work-report.ts` would otherwise silently give it a verb.
+			expect(kind, `no deadline kind decided for park reason \`${reason}\` — add it to work-report.ts's PARKS and here`).toBeDefined();
+			seen.add(kind);
+			const note = noteFor(reason, IN_12M);
+			expect(note, `\`${reason}\` renders no note at all`).not.toBe("");
+			expect(note, `\`${reason}\` states no deadline though one was given`).toContain("12m");
+			if (kind === "resume") {
+				expect(note, `\`${reason}\` is a resume and must say so`).toContain("expected to resume");
+				expect(note, `\`${reason}\` is a resume and must not say it gives up`).not.toContain("GIVES UP");
+			} else {
+				// G4, the red demonstrated: on the tree that shipped, `waitClause` rendered ANY
+				// `waitingUntil` as "expected to resume in …", so this line fails there — which is
+				// exactly the sentence that would tell an owner to wait for a run about to stop
+				// waiting for them.
+				expect(note, `\`${reason}\` is a give-up and must NOT be rendered as a resume`).not.toContain("expected to resume");
+				expect(note, `\`${reason}\` is a give-up and must say so`).toContain("GIVES UP");
+			}
+			// The park still names what it waits for when no end is knowable.
+			expect(noteFor(reason, null), `\`${reason}\` with no end`).not.toBe("");
+		}
+		// Both kinds are actually exercised: a table where every reason is a `resume` would satisfy
+		// every assertion above while testing only half the rule.
+		expect([...seen].sort(), `${seen.size} deadline kinds exercised across ${RUN_WAIT_REASONS.length} reasons`).toEqual(["give_up", "resume"]);
+
+		// A reason nothing recognises is still a park — and gets NO deadline clause, because with no
+		// kind the instant could only be printed under a guessed verb.
+		const unknown = noteFor("some_new_reason", IN_12M);
+		expect(unknown).toContain("some_new_reason");
+		expect(unknown).not.toContain("expected to resume");
+		expect(unknown).not.toContain("GIVES UP");
+	});
+
+	/**
+	 * No legend promises a resume time for every park (#591/#596).
+	 *
+	 * A give-up deadline is now published (the owner needs it most), so the legends must state
+	 * which kind a park's note carries rather than promising the good one. "It resumes on its own"
+	 * tells the reader to walk away from the one park that is waiting for THEM.
 	 */
 	it("no legend promises a resume time, or self-resolution, for every park", async () => {
-		const { RUN_HEALTH_LEGEND, waitClause } = await import("./work-report.js");
+		const { RUN_HEALTH_LEGEND } = await import("./work-report.js");
 		const { COMPLETENESS_LEGEND } = await import("./subordinate-payload.js");
-		const REASONS: Record<RunWaitReason, true> = { engine_limit: true, human: true, platform_interrupt: true };
-		const reasons = Object.keys(REASONS) as RunWaitReason[];
-
-		// The FACT the wording has to survive: a human handoff carries no `waitingUntil`, so its
-		// note names what it waits for and states no end.
-		const noteFor = (reason: RunWaitReason, until: number | null) =>
-			waitClause({ status: "running", waitingReason: reason, waitingUntil: until, lastAliveAt: 1_000, startedAt: 0 }, 1_000) ?? "";
-		expect(noteFor("human", null)).toContain("waiting for YOU");
-		expect(noteFor("human", null)).not.toContain("expected to resume");
-		expect(noteFor("engine_limit", 60_000)).toContain("expected to resume");
-		expect(reasons.length, `${reasons.length} park reasons, all producing a note`).toBe(3);
-		for (const r of reasons) expect(noteFor(r, null), r).not.toBe("");
+		const { RUN_WAIT_REASONS } = await import("./agent-loop-store.js");
+		expect(RUN_WAIT_REASONS.length, `${RUN_WAIT_REASONS.length} park reasons, not all of which resume`).toBeGreaterThanOrEqual(3);
 
 		for (const [name, legend] of [["RUN_HEALTH_LEGEND", RUN_HEALTH_LEGEND], ["COMPLETENESS_LEGEND", COMPLETENESS_LEGEND]] as const) {
-			expect(legend, `${name} promises a resume time for every park; one of the three has none`).not.toMatch(/what for and until when/i);
+			expect(legend, `${name} promises a resume time for every park; one of them gives up instead`).not.toMatch(/what for and until when/i);
 			expect(legend, `${name} says a park resolves itself; a human handoff does not`).not.toMatch(/resumes on its own/i);
 		}
+		// The canonical legend has to teach the distinction, not merely avoid the false promise: a
+		// reader who is not told the verb exists will read every instant as the good kind.
+		expect(RUN_HEALTH_LEGEND, "RUN_HEALTH_LEGEND does not say a park can GIVE UP").toMatch(/gives up/i);
 	});
 
 	it("the supervision legend names every activity word AND every health word", async () => {

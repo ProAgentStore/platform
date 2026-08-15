@@ -114,7 +114,13 @@ export interface EngineWaitPlan {
 	wait: true;
 	/** How long to park, already clamped into [MIN, MAX] and against the remaining budget. */
 	ms: number;
-	/** The instant the park ends, in epoch ms. */
+	/**
+	 * The instant the park ends, in epoch ms — a RESUME, which is the only kind this module plans.
+	 *
+	 * Worth naming because the other park in `coding-pause.ts` also states an instant and it means
+	 * the opposite (the run gives up on the human then). Both land in the same `waiting_until`
+	 * column and are told apart by the park REASON, never by the number (#596).
+	 */
 	until: number;
 	source: EngineWaitSource;
 	/** Set when the requested deadline was longer than this run could honour. */

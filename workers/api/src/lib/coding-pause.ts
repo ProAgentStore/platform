@@ -35,6 +35,15 @@ export const HANDOFF_WAIT_POLLS = 180;
 export const HANDOFF_POLL_MS = 5_000;
 
 /**
+ * How long the run waits for a person before it GIVES UP — the same 15 minutes, as one number.
+ *
+ * Derived, not retyped: the announcement, the expiry sentence and the published `waiting_until` all
+ * state this bound, and three hand-written "15 minutes" would be three things to keep in step with
+ * a poll count. That is the drift #596 is about, one level down.
+ */
+export const HANDOFF_GIVE_UP_MS = HANDOFF_WAIT_POLLS * HANDOFF_POLL_MS;
+
+/**
  * Keep the run's claims alive every this many handoff polls (60s).
  *
  * The handoff wait is 15 minutes and `STALE_DRIVER_MS` is 15 minutes, so a run parked in a handoff
@@ -85,15 +94,20 @@ export interface PauseDeps {
 	 * call is deliberate: a wait that heartbeats but cannot be cancelled is a run the Stop button
 	 * silently does not reach, which is how a six-hour park would otherwise become unstoppable.
 	 *
-	 * `park.until` is WHEN this park ends, and it is an argument because this module is the only
-	 * place that knows it (#591). `planEngineWait` computes `until: now + ms` and it was consumed for
-	 * the chat sentence and then dropped: `agent_loop_runs.waiting_until` had NO production writer,
-	 * and read null on 89 of 89 runs — including one parked 6h51m by its own wall clock. "Parked,
-	 * resuming 16:00" and "parked, indefinitely" are different decisions for an owner, and the
-	 * platform knew the first and reported the second.
+	 * `park.until` is WHEN this park's clock runs out, and it is an argument because this module is
+	 * the only place that knows it (#591). `planEngineWait` computes `until: now + ms` and it was
+	 * consumed for the chat sentence and then dropped: `agent_loop_runs.waiting_until` had NO
+	 * production writer, and read null on 89 of 89 runs — including one parked 6h51m by its own wall
+	 * clock. "Parked, resuming 16:00" and "parked, indefinitely" are different decisions for an
+	 * owner, and the platform knew the first and reported the second.
 	 *
-	 * Optional because not every park has a knowable end, and inventing one would be worse than
-	 * omitting it — see the call in {@link waitForHuman}, which deliberately passes nothing.
+	 * It is the instant, NOT what the instant means: both waits below pass one and they mean
+	 * opposite things (a resume, and a give-up). The kind is entailed by the park REASON, which the
+	 * caller already supplies, and is rendered from `work-report.ts`'s `PARKS` — so nothing here has
+	 * to describe it and nothing downstream has to guess (#596).
+	 *
+	 * Still optional, because a park can have no knowable end: `platform_interrupt` is parked until
+	 * Cloudflare replays a journal, and inventing an instant for that would be worse than omitting it.
 	 */
 	tick: (park?: { until?: number | null }) => Promise<boolean>;
 	now: () => number;
@@ -135,20 +149,30 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
 	// announced in chat; a handoff never was, so the conversation the owner started the run from said
 	// nothing at all while the run waited on him, and then reported that it had failed.
+	// The deadline is said OUT LOUD (#596 AC2). It was computable from the first line of this
+	// function and was never published anywhere, so the one wait an owner can still beat was the one
+	// that never stated its clock — while the usage-limit park, which needs nothing from anybody,
+	// announced its resume time in this same thread. "Take over" without "by when" is why three runs
+	// sat here for the full fifteen minutes and then reported that they had been waiting on someone.
 	await deps.announce(
-		`🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped.`,
+		`🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped. If nobody does within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`,
 	);
 
 	let resolved = false;
 	let value: string | undefined;
 	for (let poll = 0; poll < HANDOFF_WAIT_POLLS && !resolved; poll++) {
 		await deps.sleep(`wait-${round}-${poll}`, HANDOFF_POLL_MS);
-		// No `until`, on purpose (#591). This park has a computable deadline — 15 minutes — but it is
-		// the moment the run GIVES UP, not the moment it resumes, and `waiting_until` is read as the
-		// latter (`work-report.ts:127` renders it as "expected to resume in …"). Publishing a
-		// give-up time under a resume-time field would tell an owner to wait for something that is
-		// about to stop. The reason column already says `human`, which is the honest half.
-		if (poll % HANDOFF_TICK_EVERY === 0 && !(await deps.tick())) {
+		// The park's end, published (#596). It used to be withheld: `waiting_until` was rendered
+		// unconditionally as "expected to resume in …", so a give-up time under it would have told an
+		// owner to sit and wait for a run that was about to stop waiting for THEM. The renderer now
+		// reads the KIND of deadline off the park reason (`work-report.ts`'s `PARKS`), so the honest
+		// move flips: withholding it hides the only deadline the reader can still act on.
+		//
+		// Computed from the polls REMAINING rather than from a deadline captured before the loop, so
+		// it names the same absolute instant on every tick and stays right after a Workflow replay —
+		// where the loop restarts and a captured deadline would have slid forward by a whole wait.
+		const until = deps.now() + (HANDOFF_WAIT_POLLS - poll - 1) * HANDOFF_POLL_MS;
+		if (poll % HANDOFF_TICK_EVERY === 0 && !(await deps.tick({ until }))) {
 			return { resume: false, result: { ...result, outcome: "cancelled", detail: "Stopped by you." } };
 		}
 		const status = await deps.takeoverStatus().catch(() => ({ resolved: false }) as { resolved: boolean; value?: string });
@@ -164,7 +188,10 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 		// `needs_human`: the board column that was empty while these runs died.
 		return {
 			resume: false,
-			result: { ...result, detail: `Waiting on you: ${label}. Nobody took the session over within 15 minutes, so the run stopped here.` },
+			result: {
+				...result,
+				detail: `Waiting on you: ${label}. Nobody took the session over within ${HANDOFF_GIVE_UP_MS / 60_000} minutes, so the run stopped here.`,
+			},
 		};
 	}
 

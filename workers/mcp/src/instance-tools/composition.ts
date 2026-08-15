@@ -259,6 +259,16 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// `state-vocabulary.test.ts` derives from `work-report.ts`'s `RunHealth` union: a member added
 	// there fails this build. Do not retype the members back into this string — the test asserts
 	// the rendered sentence is present verbatim, in both tools that publish it.
+	//
+	// A PARK'S DEADLINE IS NOT ONE KIND OF THING (#596). `waitingUntil` is the instant a park's
+	// clock RUNS OUT, and what running out means is read off `waitingReason`: an `engine_limit` park
+	// resumes at it, a `human` handoff GIVES UP at it — the run stops waiting for the reader who is
+	// looking at the number. This description once promised the note said "what for and until when",
+	// which was true of one producer and stayed coherent only because the other published nothing at
+	// all. Do not re-derive a resume time from `waitingUntil` here or in a caller: `waitNote` carries
+	// the verb, and the verb is the half that decides whether anyone has to move. The gloss this
+	// tool publishes comes from `state-vocabulary.ts`'s `RUN_HEALTH_GLOSS`, which mirrors
+	// `work-report.ts`'s `RUN_HEALTH_LEGEND`; those two are the only place to change the wording.
 	server.tool(
 		"check_instance_loop",
 		`Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,

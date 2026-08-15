@@ -28,7 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { recordLiveness } from "./agent-loop-store.js";
-import { resolvePause, type PauseDeps } from "./coding-pause.js";
+import { HANDOFF_GIVE_UP_MS, resolvePause, type PauseDeps } from "./coding-pause.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
@@ -70,13 +70,22 @@ describe("the pause machine hands the park's END to the heartbeat", () => {
 		}
 	});
 
-	it("a human handoff ticks WITHOUT one, because its deadline is a give-up not a resume", async () => {
-		// Deliberate, and the reason is the point: this park has a computable 15-minute deadline, but
-		// it is when the run STOPS waiting. `waiting_until` is read as a resume time, so publishing a
-		// give-up time under it would tell an owner to wait for something about to end. `waiting_reason`
-		// already says `human`, which is the honest half of the answer.
+	it("a human handoff ticks WITH its give-up instant, which is the deadline the owner can beat", async () => {
+		// The inversion #596 argues for. This park publishes nothing until now, on the grounds that
+		// `waiting_until` was rendered unconditionally as "expected to resume in …" — true of the
+		// engine park, and a lie here, where the instant is when the run STOPS waiting for the
+		// reader. The renderer now reads the KIND off the park reason, so withholding the instant no
+		// longer protects anybody: it hides the only deadline anyone can still act on.
 		let polls = 0;
+		// A clock the sleeps actually move, because the property under test is about elapsed time:
+		// `step.sleep` really does advance the wall clock by what it was asked to wait, and a frozen
+		// `now()` would measure the fixture rather than the rule.
+		let clock = 1_000_000;
 		const deps = pauseDeps({
+			now: () => clock,
+			sleep: vi.fn(async (_label: string, ms: number) => {
+				clock += ms;
+			}),
 			takeoverStatus: vi.fn(async () => ({ resolved: ++polls > 20, value: "v" })),
 		});
 		await resolvePause(deps, {
@@ -86,7 +95,13 @@ describe("the pause machine hands the park's END to the heartbeat", () => {
 		});
 		const calls = (deps.tick as ReturnType<typeof vi.fn>).mock.calls;
 		expect(calls.length).toBeGreaterThan(0);
-		for (const [park] of calls) expect(park?.until ?? null).toBeNull();
+		// EXACTLY the instant the loop gives up at — 15 minutes after the wait opened — restated
+		// identically by every tick. Computed from the polls REMAINING, so it cannot slide: a
+		// deadline captured once before the loop would move a whole wait on a Workflow replay, and
+		// one computed as `now + 15min` per tick would never arrive at all.
+		const instants = new Set(calls.map(([park]) => park?.until));
+		expect(instants.size, `${instants.size} distinct give-up instants across ${calls.length} ticks`).toBe(1);
+		expect([...instants][0], "the published instant is not the moment the loop actually stops waiting").toBe(1_000_000 + HANDOFF_GIVE_UP_MS);
 	});
 });
 
