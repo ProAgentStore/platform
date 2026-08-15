@@ -86,6 +86,24 @@ export interface ActItem {
 	kind: string;
 	/** One sentence naming the act, its subject and whether it was observed to succeed. */
 	summary: string;
+	/**
+	 * Was the act OBSERVED to succeed (#594)?
+	 *
+	 * `true` succeeded · `false` FAILED · `null` was not observed either way — and the third is a
+	 * real state, not a gap: only a stream-json engine reports an outcome at all.
+	 *
+	 * This field is why #594 was filed. Two supervision legends (`subordinate-payload.ts`'s
+	 * `STATUS_LEGEND` and `check_delegation`'s `actsLegend`) have told the model for months that
+	 * "an act with `ok: false` FAILED and one with `ok: null` was not observed to succeed" — while
+	 * `toActItem` never read the key, so the payload never carried it. `engine-acts.ts:595` was
+	 * already WRITING it into `agent_events.context`; only this projection dropped it.
+	 *
+	 * A model instructed to check a key that is absent reads the absence as "fine", which inverts
+	 * the intended default for an unobserved act — the exact class the legend exists to prevent.
+	 * The outcome does survive inside `summary` (`describeEngineAct` appends " — FAILED" / " —
+	 * outcome not observed"), so carrying it here makes the two agree rather than adding a claim.
+	 */
+	ok: boolean | null;
 	/** The literal command, secret-redacted at capture. The evidence behind the summary. */
 	command: string;
 	/** Can this be walked back? False is the reason a supervisor is being shown it. */
@@ -315,6 +333,10 @@ function toActItem(r: ActRow): ActItem {
 		instanceId: r.instance_id,
 		kind: typeof ctx.act === "string" ? ctx.act : "unknown",
 		summary: (r.message ?? "").slice(0, 200),
+		// Anything that is not an explicit boolean is `null` — NOT `false`. "We did not see" and
+		// "it failed" are different claims, the legend distinguishes them, and a corrupt or
+		// pre-#582 `context` must land on the one that asserts less.
+		ok: ctx.ok === true ? true : ctx.ok === false ? false : null,
 		command: (typeof ctx.command === "string" ? ctx.command : "").slice(0, 400),
 		irreversible: ctx.irreversible === true,
 		traceId: r.trace_id,

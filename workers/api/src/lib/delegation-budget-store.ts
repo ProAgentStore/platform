@@ -353,7 +353,31 @@ export async function reserve(
 	// depth 3" is actionable; a bare failure is not.
 	const current = await getBudget(env, userId, budgetId);
 	if (!current) return { ok: false, reason: "not_found", message: "That delegation budget no longer exists." };
-	if (current.status !== "open") return { ok: false, reason: "closed", message: "This run's budget is already closed." };
+	// The message names the state the pool is ACTUALLY in; the reason code deliberately does not
+	// (#594).
+	//
+	// This line said "This run's budget is already closed" for both states, and it is only ever
+	// reached in ONE of them: `closed` has no production writer at all (see `closeBudget`), so
+	// every user who has ever seen that sentence had an EXHAUSTED budget. The two are different
+	// facts with different remedies — exhausted means a limit was reached and the work is intact,
+	// closed means the tree is over — and telling someone their pool is "closed" when it is
+	// exhausted sends them looking for the thing that closed it.
+	//
+	// The REASON stays `closed` for both, and that is not laziness: `workflows/agent-loop.ts:113`
+	// and `coding-decide-budget.ts:38` both read it as "do not call markExhausted", which is
+	// correct for either state — one is already exhausted, the other is finished. The reason code
+	// is control flow for two callers; the message is what a human reads. Splitting the reason to
+	// improve a sentence would change a branch in two workflows to say something neither of them
+	// asks.
+	if (current.status !== "open") {
+		const why =
+			current.status === "exhausted"
+				? `This run's delegation budget is EXHAUSTED — it reached its ${current.exhaustedReason === "delegations_exhausted" ? "limit on the number of delegations" : current.exhaustedReason === "too_deep" ? "maximum delegation depth" : "spend limit"}${
+						current.exhaustedAtDepth === null ? "" : ` at depth ${current.exhaustedAtDepth}`
+					}. Work already done is intact; nothing new can draw on this pool. There is no self-service way to raise it — ask your platform operator.`
+				: "This run's delegation budget has been closed, so no further work can draw on it.";
+		return { ok: false, reason: "closed", message: why };
+	}
 	const verdict = canAdmit(current, opts);
 	return {
 		ok: false,
@@ -393,8 +417,22 @@ export async function settle(
 /**
  * Record that the tree stopped because it ran out, and why.
  *
- * A distinct status from a failure: the work is intact and resumable once a human raises the
- * limit. Exhaustion must never destroy what was already paid for.
+ * A distinct status from a failure: the work already done is INTACT, and nothing here destroys
+ * what was paid for. That is the whole reason `exhausted` is not `failed`.
+ *
+ * ── What this docblock used to promise, and does not (#594)
+ *
+ * It said the work was "resumable once a human raises the limit". `raiseBudget` below is the only
+ * path out of `exhausted` and it is **reachable from no route** — `grep -rn "raiseBudget" workers
+ * store packages docs platform-docs` returns its definition and test callers, nothing else. So an
+ * exhausted pool is a terminal state in practice, and the sentence described a path a user cannot
+ * walk. `ReservationResult`'s own docblock records the consequence being hit for real: when the
+ * account backstop wrongly exhausted a shared pool with $4.90 of $5.00 left, "the pool was STILL
+ * exhausted with no route to reopen it".
+ *
+ * Wiring an exit is a product decision, not a missing line: who may raise a budget, by how much,
+ * through which surface, and whether approving it is itself an audited act. Until that is decided,
+ * `reserve` says so out loud rather than implying a self-service remedy exists.
  */
 export async function markExhausted(
 	env: Env,
@@ -417,6 +455,12 @@ export async function markExhausted(
  *
  * Only a human path may call this: it is the one place a budget goes UP, which is exactly why
  * agents draw through `reserve` and never touch limits.
+ *
+ * NO PRODUCTION CALLER TODAY (#594). The rule above is why: "only a human path may call this" was
+ * written before there was a human path, and none has been built, so this is a correct
+ * implementation of an action nobody can take. Kept rather than deleted because the *rule* is the
+ * valuable part and re-deriving it later is how an agent ends up raising its own ceiling — but
+ * `markExhausted` no longer promises it, and `reserve`'s refusal no longer implies it.
  */
 export async function raiseBudget(
 	env: Env,
@@ -438,7 +482,19 @@ export async function raiseBudget(
 	return (res.meta?.changes ?? 0) > 0;
 }
 
-/** Close a finished tree so late work cannot draw against it. */
+/**
+ * Close a finished tree so late work cannot draw against it.
+ *
+ * NO PRODUCTION CALLER TODAY, which makes `'closed'` a state the system cannot enter (#594) —
+ * every budget stays `open` or ends `exhausted`. That is why `reserve`'s refusal above branches on
+ * the status rather than naming one: the only sentence a user has ever seen from that branch
+ * described the state this function writes, and this function has never run.
+ *
+ * The gap is a lifecycle hook, not a line: nothing today knows when a delegation TREE is finished
+ * — a root run ending does not mean a sibling delegation is not still drawing — so closing on the
+ * first terminal run would refuse legitimate work. Left unwired deliberately, and said out loud
+ * here so the next reader does not take `'closed'` for a state they can observe.
+ */
 export async function closeBudget(env: Env, userId: string, budgetId: string): Promise<void> {
 	await env.DB.prepare(
 		"UPDATE delegation_budgets SET status = 'closed', updated_at = datetime('now') WHERE id = ?1 AND user_id = ?2",

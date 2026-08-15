@@ -239,6 +239,51 @@ describe("recentActsForInstances — what each subordinate actually DID (#294)",
 		expect(a.irreversible).toBe(false); // never ASSUMED true from an unreadable row
 	});
 
+	/**
+	 * #594 — the payload has to carry the field two legends tell the model to read.
+	 *
+	 * `subordinate-payload.ts`'s `STATUS_LEGEND` and `check_delegation`'s `actsLegend` have both
+	 * said, for months: "an act with `ok: false` FAILED and one with `ok: null` was not observed to
+	 * succeed". `ActItem` never declared `ok` and `toActItem` never read it, though
+	 * `engine-acts.ts` writes it into `context` at capture. A model instructed to check a key that
+	 * is ABSENT reads the absence as "fine" — which inverts the default for an unobserved act, in
+	 * exactly the direction the legend exists to prevent.
+	 */
+	describe("carries `ok` — the outcome both supervision legends promise (#594)", () => {
+		it("passes an observed success through", async () => {
+			const { env } = stubEnv([actRow()]);
+			expect((await recentActsForInstances(env, "u1", ["i1"]))[0]?.ok).toBe(true);
+		});
+
+		it("passes an observed FAILURE through as false, not as absent", async () => {
+			const { env } = stubEnv([actRow({ context: JSON.stringify({ act: "pr.merge", ok: false }) })]);
+			expect((await recentActsForInstances(env, "u1", ["i1"]))[0]?.ok).toBe(false);
+		});
+
+		it("reports an UNOBSERVED outcome as null — never as false, and never as fine", async () => {
+			// Three distinct states, and the third is real: only a stream-json engine reports an
+			// outcome at all. "We did not see" must not collapse into either of the other two.
+			for (const context of [JSON.stringify({ act: "pr.merge" }), JSON.stringify({ act: "pr.merge", ok: "yes" }), "{not json"]) {
+				const { env } = stubEnv([actRow({ context })]);
+				expect((await recentActsForInstances(env, "u1", ["i1"]))[0]?.ok, context).toBeNull();
+			}
+		});
+
+		it("agrees with the sentence in `summary`, which already encoded the same outcome", async () => {
+			// `describeEngineAct` appends " — FAILED" / " — outcome not observed", so the outcome
+			// was never lost, only unreadable as a field. The two must not now disagree.
+			const { env } = stubEnv([actRow({ message: "merged a pull request #42 — FAILED", context: JSON.stringify({ act: "pr.merge", ok: false }) })]);
+			const [a] = await recentActsForInstances(env, "u1", ["i1"]);
+			expect(a.ok).toBe(false);
+			expect(a.summary).toContain("FAILED");
+		});
+
+		it("is on the window read too, so `check_delegation` and `subordinate_status` agree", async () => {
+			const { env } = stubEnv([actRow({ context: JSON.stringify({ act: "pr.merge", ok: false }) })]);
+			expect((await actsInWindow(env, "u1", "i1", 0, 1000))[0]?.ok).toBe(false);
+		});
+	});
+
 	it("issues no query at all for an empty id list", async () => {
 		const { env, sqls } = stubEnv();
 		await expect(recentActsForInstances(env, "u1", [])).resolves.toEqual([]);

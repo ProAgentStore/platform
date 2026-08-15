@@ -544,7 +544,11 @@ describe("subordinate_status — the observe verb", () => {
 			// `at` is a wall clock, not the stored epoch (#345): an act is the thing a supervisor
 			// reports to a human unprompted, so its time is the most likely of all of these to be
 			// read out loud. Epoch 1700ms with no zone set ⇒ the honest, explicitly-labelled UTC.
-			{ kind: "pr.merge", summary: "merged a pull request #42", command: "gh pr merge 42 --squash", irreversible: true, traceId: "run-1", at: "Thu, 1 Jan 1970, 00:00 UTC" },
+			// `ok` is CARRIED, not dropped (#594). Two legends have told the model for months that
+			// `ok:false` FAILED and `ok:null` was not observed to succeed — while `toActItem` never
+			// read the key, so the payload never had it and an unobserved act read as a fine one.
+			// `engine-acts.ts` was already writing it into `context`; only this projection lost it.
+			{ kind: "pr.merge", summary: "merged a pull request #42", ok: true, command: "gh pr merge 42 --squash", irreversible: true, traceId: "run-1", at: "Thu, 1 Jan 1970, 00:00 UTC" },
 		]);
 	});
 

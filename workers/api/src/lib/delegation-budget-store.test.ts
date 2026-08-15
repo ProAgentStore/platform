@@ -131,6 +131,53 @@ describe("reserve — the atomic draw", () => {
 		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).reason).toBe("closed");
 	});
 
+	/**
+	 * #594 — the refusal named a state the system cannot enter.
+	 *
+	 * `closeBudget` is the only writer of `'closed'` and has no production caller, so EVERY user
+	 * who has ever seen "This run's budget is already closed" had an EXHAUSTED budget. Two
+	 * different facts with two different remedies, reported as one, and the one reported is the
+	 * one that cannot happen.
+	 */
+	describe("an exhausted pool is not told it was closed (#594)", () => {
+		const refuse = (over: Record<string, unknown>) =>
+			reserve(buildEnv({ changes: 0, row: openRow({ status: "exhausted", cost_micros_spent: 0, ...over }) }).env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
+
+		it("says EXHAUSTED, and does not say closed", async () => {
+			const r = await refuse({ exhausted_reason: "cost_exhausted", exhausted_at_depth: 3 });
+			expect(r.ok).toBe(false);
+			expect(r.message).toContain("EXHAUSTED");
+			expect(r.message).not.toMatch(/already closed/);
+		});
+
+		it("names WHICH limit ran out, and at what depth", async () => {
+			expect((await refuse({ exhausted_reason: "cost_exhausted", exhausted_at_depth: 3 })).message).toMatch(/spend limit.*depth 3/);
+			expect((await refuse({ exhausted_reason: "delegations_exhausted", exhausted_at_depth: 1 })).message).toMatch(/number of delegations/);
+			expect((await refuse({ exhausted_reason: "too_deep", exhausted_at_depth: 4 })).message).toMatch(/depth/);
+		});
+
+		it("promises no self-service remedy, because `raiseBudget` has no route", async () => {
+			// The docblock on `markExhausted` used to say the work was "resumable once a human
+			// raises the limit". Nothing can call `raiseBudget`, so that sentence sent an owner
+			// looking for a button that does not exist. Saying who to ask is the honest form.
+			const r = await refuse({ exhausted_reason: "cost_exhausted", exhausted_at_depth: 2 });
+			expect(r.message).toContain("platform operator");
+			expect(r.message).toContain("intact");
+		});
+
+		it("keeps the REASON code coarse, because two workflows branch on it", async () => {
+			// `workflows/agent-loop.ts:113` and `coding-decide-budget.ts:38` read `closed` as "do
+			// not call markExhausted", which is right for an exhausted pool too. The message is for
+			// the human; the reason is control flow, and splitting it would change their branches.
+			expect((await refuse({ exhausted_reason: "cost_exhausted", exhausted_at_depth: 1 })).reason).toBe("closed");
+		});
+
+		it("still says CLOSED for a genuinely closed pool", async () => {
+			const { env } = buildEnv({ changes: 0, row: openRow({ status: "closed", cost_micros_spent: 0 }) });
+			expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).message).toMatch(/closed/);
+		});
+	});
+
 	it("is owner-scoped", async () => {
 		const { env, writes } = buildEnv({ changes: 1 });
 		await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
