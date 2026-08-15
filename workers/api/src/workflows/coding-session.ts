@@ -573,12 +573,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// closes a run at 3h and a usage-limit park may legitimately last six. It was writing the
 			// wrong column, and 0127 gives it its own — plus the reason, so the record can finally say
 			// "parked until X" instead of leaving a reader to infer work from a fresh number.
-			tick: async () => {
+			tick: async (park) => {
 				const { driverId, loopRunId } = event.payload;
 				if (driverId) await touchSessionDriver(env, instanceId, userId, sessionId, driverId).catch(() => undefined);
 				await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
 				if (!loopRunId) return true;
-				await recordLiveness(env, loopRunId, Date.now(), { reason: wait }).catch(() => undefined);
+				await recordLiveness(env, loopRunId, Date.now(), { reason: wait, until: park?.until ?? null }).catch(() => undefined);
 				return !(await isCancelRequested(env, loopRunId).catch(() => false));
 			},
 		});

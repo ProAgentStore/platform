@@ -84,8 +84,18 @@ export interface PauseDeps {
 	 * Returns FALSE when the owner has asked the run to stop. Folding cancellation into the same
 	 * call is deliberate: a wait that heartbeats but cannot be cancelled is a run the Stop button
 	 * silently does not reach, which is how a six-hour park would otherwise become unstoppable.
+	 *
+	 * `park.until` is WHEN this park ends, and it is an argument because this module is the only
+	 * place that knows it (#591). `planEngineWait` computes `until: now + ms` and it was consumed for
+	 * the chat sentence and then dropped: `agent_loop_runs.waiting_until` had NO production writer,
+	 * and read null on 89 of 89 runs — including one parked 6h51m by its own wall clock. "Parked,
+	 * resuming 16:00" and "parked, indefinitely" are different decisions for an owner, and the
+	 * platform knew the first and reported the second.
+	 *
+	 * Optional because not every park has a knowable end, and inventing one would be worse than
+	 * omitting it — see the call in {@link waitForHuman}, which deliberately passes nothing.
 	 */
-	tick: () => Promise<boolean>;
+	tick: (park?: { until?: number | null }) => Promise<boolean>;
 	now: () => number;
 }
 
@@ -133,6 +143,11 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	let value: string | undefined;
 	for (let poll = 0; poll < HANDOFF_WAIT_POLLS && !resolved; poll++) {
 		await deps.sleep(`wait-${round}-${poll}`, HANDOFF_POLL_MS);
+		// No `until`, on purpose (#591). This park has a computable deadline — 15 minutes — but it is
+		// the moment the run GIVES UP, not the moment it resumes, and `waiting_until` is read as the
+		// latter (`work-report.ts:127` renders it as "expected to resume in …"). Publishing a
+		// give-up time under a resume-time field would tell an owner to wait for something that is
+		// about to stop. The reason column already says `human`, which is the honest half.
 		if (poll % HANDOFF_TICK_EVERY === 0 && !(await deps.tick())) {
 			return { resume: false, result: { ...result, outcome: "cancelled", detail: "Stopped by you." } };
 		}
@@ -187,7 +202,11 @@ async function waitForEngineReset(
 	const ticks = Math.max(1, Math.ceil(plan.ms / ENGINE_WAIT_TICK_MS));
 	for (let i = 0; i < ticks; i++) {
 		await deps.sleep(`ewait-${round}-${i}`, Math.min(ENGINE_WAIT_TICK_MS, plan.ms - i * ENGINE_WAIT_TICK_MS));
-		if (!(await deps.tick())) {
+		// THE production writer of `waiting_until` (#591). `plan.until` is already computed and was
+		// already being rendered into the chat sentence; it just never reached the record. Passed on
+		// every tick rather than once, because the ticks are what survive a replay — a park that
+		// re-heartbeats after an eviction must restate its end, not blank it.
+		if (!(await deps.tick({ until: plan.until }))) {
 			return {
 				resume: false,
 				result: { ...result, outcome: "cancelled", detail: "Stopped by you while waiting for the coding CLI's usage limit to reset." },

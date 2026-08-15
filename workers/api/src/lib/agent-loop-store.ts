@@ -258,6 +258,17 @@ export async function recordIteration(env: Env, runId: string, iteration: number
  *
  * Passing `wait: null` explicitly CLEARS a park; omitting `wait` leaves whatever is stored alone, so
  * a heartbeat that knows nothing about parks cannot erase one.
+ *
+ * ── `until` had no production writer for two releases (#591)
+ *
+ * The parameter below was implemented, bound into the UPDATE, and exercised only by
+ * `run-liveness.test.ts:166`. All three production call sites passed a `reason` and no `until`, so
+ * the column read null on **89 of 89 runs** — including one parked 6h51m by its own wall clock —
+ * while `planEngineWait` had computed the exact instant and `coding-wait.ts` was already printing it
+ * into the owner's chat. #570's pattern precisely: the helper is tested, the call sites are not, so
+ * the column reads as implemented and nothing populates it. `run-park-writers.test.ts` now drives
+ * the production path instead of this function, which is the only way that class of defect is
+ * visible.
  */
 export async function recordLiveness(
 	env: Env,
