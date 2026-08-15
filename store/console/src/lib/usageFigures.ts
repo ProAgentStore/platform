@@ -154,6 +154,33 @@ export function unknownPayerRemedy(
 }
 
 /**
+ * How many coding SESSIONS sit behind the payer breakdown, and how many of them are unattributed
+ * (#551, item 3).
+ *
+ * The dollars and the call count answer "how much". They do not answer the question the owner
+ * actually has, which is whether this is one stray session or every session he has ever run — and
+ * on his account it is the second: 449 engine calls, $9,541 of value, and not one row that ever
+ * resolved to a payer. Reaching that fact today means opening each session in turn and reading
+ * its credential (#248). One sentence beside the breakdown makes it the first thing he sees.
+ *
+ * `sessions` is absent on a response from an API older than this, and absent is not zero — a page
+ * that printed "0 coding sessions" from a field nobody sent would be a new confident wrong number
+ * in place of a missing one. Returns null in that case, and the card renders as it did.
+ */
+export function enginePayerSessionsNote(rows: readonly { key: string; sessions?: number }[] | undefined): string | null {
+	const measured = (rows ?? []).filter((r) => typeof r.sessions === "number");
+	if (!measured.length) return null;
+	const total = measured.reduce((n, r) => n + (r.sessions ?? 0), 0);
+	if (total <= 0) return null;
+	const unknown = measured.filter((r) => r.key === "unknown").reduce((n, r) => n + (r.sessions ?? 0), 0);
+	const s = (n: number) => `${n} coding session${n === 1 ? "" : "s"}`;
+	if (unknown === 0) return `${s(total)} ran in this range, every one on a credential we could identify.`;
+	// "All N" rather than "N of N": the whole point of the sentence is that it is not a stray row.
+	if (unknown === total) return `All ${s(total)} in this range ran on a credential we could not attribute.`;
+	return `${s(total)} ran in this range; ${unknown} of them on a credential we could not attribute.`;
+}
+
+/**
  * Whether a per-instance breakdown says anything the per-agent one does not (#526).
  *
  * The card exists because `byAgent` groups by template: seven Repo Coders collapse into one row and

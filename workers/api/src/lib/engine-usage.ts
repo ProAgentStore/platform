@@ -85,3 +85,25 @@ export function sanitizeEngineUsage(raw: unknown): EngineUsageReport[] {
 export function engineUsageRowId(sessionId: string, recordId: string): string {
 	return `engine:${sessionId}:${recordId}`.slice(0, 300);
 }
+
+/**
+ * The inverse: which coding session a ledger row belongs to (#551, item 3).
+ *
+ * The session id is already IN the key `engineUsageRowId` builds, which is what makes a per-session
+ * roll-up a query rather than a schema change. The last analysis of item 3 concluded the opposite —
+ * that `authResolved` is transient and `coding_sessions` has no column for it, so "a session-level
+ * roll-up needs a column". True about `coding_sessions`, and beside the point: `ai_usage` persists
+ * BOTH halves already, the resolved credential as `payer` and the session as the first segment of
+ * this key.
+ *
+ * A session id is a uuid and cannot contain `:`, so the second segment is unambiguous even though
+ * the record id that follows it comes from the CLI and may contain anything. Returns null for a row
+ * that is not an engine row, rather than guessing — a non-engine row has no session and saying so is
+ * the point of the whole payer axis.
+ */
+export function engineSessionFromRowId(rowId: string | null | undefined): string | null {
+	if (typeof rowId !== "string") return null;
+	const parts = rowId.split(":");
+	if (parts.length < 3 || parts[0] !== "engine") return null;
+	return parts[1] || null;
+}

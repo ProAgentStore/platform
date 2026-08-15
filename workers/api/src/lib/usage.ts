@@ -7,7 +7,7 @@
 // is `payer` (migration 0092) and the only thing a money ceiling may be denominated in.
 
 import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
-import { engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
+import { engineSessionFromRowId, engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
 import { bucketLabel, UNASSIGNED_KEY } from "./usage-ids.js";
 import { payerCoverage } from "./usage-coverage.js";
@@ -263,6 +263,13 @@ export async function recordPlatformUsage(
 export interface UsageRow {
 	agent_id: string | null;
 	instance_id: string | null;
+	/**
+	 * `ai_usage.id`. Optional because not every reader selects it — the admin aggregates do not.
+	 *
+	 * Carried for one reason: an ENGINE row's id is `engine:{sessionId}:{recordId}`, so the coding
+	 * session is already in the ledger and a per-session roll-up needs no new column (#551).
+	 */
+	row_id?: string | null;
 	provider: string;
 	model: string;
 	kind: string;
@@ -338,11 +345,24 @@ export function aggregateUsage(
 	const agentMap = new Map<string, UsageBucket>();
 	const instanceMap = new Map<string, UsageBucket>();
 	const payerMap = new Map<string, UsageBucket>();
+	/**
+	 * Distinct coding sessions behind each bucket, on EVERY axis (#551).
+	 *
+	 * A Set rather than a counter, because one session writes a row per engine turn and counting
+	 * rows would report turns as sessions. Held beside the buckets rather than on them so the
+	 * returned shape carries a number and not a Set — and so `emptyBucket`, which the admin
+	 * aggregates also use, stays a bucket that has not measured this.
+	 */
+	const sessionSets = new Map<UsageBucket, Set<string>>();
 
 	const into = (map: Map<string, UsageBucket>, key: string, r: UsageRow) => {
 		let b = map.get(key);
-		if (!b) { b = emptyBucket(key); map.set(key, b); }
+		if (!b) { b = emptyBucket(key); map.set(key, b); sessionSets.set(b, new Set()); }
 		bump(b, r);
+		// Engine rows only: every other kind is a cloud call with no session at all, and folding
+		// them in would report more "sessions" than exist.
+		const session = r.kind === "engine" ? engineSessionFromRowId(r.row_id) : null;
+		if (session) sessionSets.get(b)?.add(session);
 	};
 
 	for (const r of rows) {
@@ -363,6 +383,10 @@ export function aggregateUsage(
 		// attribution look more complete than it is.
 		into(payerMap, asPayer(r.payer) ?? UNKNOWN_PAYER_KEY, r);
 	}
+
+	// Sets → counts, once, after every row has been seen. Every bucket built above gets a number;
+	// a bucket with no engine rows reports 0, which here is a measurement and not an absence.
+	for (const [bucket, set] of sessionSets) bucket.sessions = set.size;
 
 	// Dense daily series so the chart shows empty days as zero rather than skipping.
 	const daily: UsageDay[] = [];

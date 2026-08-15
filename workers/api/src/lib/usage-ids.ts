@@ -39,6 +39,7 @@ export const UNASSIGNED_KEY = "unassigned";
 export function usageRowsSql(withRange: boolean): string {
 	return `SELECT COALESCE(ua.id, ia.agent_id, ub.agent_id, uc.id, u.agent_id) AS agent_id,
 	        COALESCE(ia.id, ub.id) AS instance_id,
+	        u.id AS row_id,
 	        u.provider, u.model, u.kind,
 	        u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
 	        u.cost_micros, u.payer, u.created_at, an.name AS agent_name

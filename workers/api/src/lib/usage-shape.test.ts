@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { aggregateUsage } from "./usage.js";
 import { emptyUnmeteredSummary } from "./engine-metering.js";
 import type { UsageResponse } from "./usage-shape.js";
 
-const USAGE_ROUTE = fileURLToPath(new URL("../routes/usage.ts", import.meta.url));
+// `dirname(fileURLToPath(import.meta.url))`, not `fileURLToPath(new URL(…))`: under the worker
+// test tsconfig the DOM `URL` and node's are different types, so the second form does not compile
+// (#599's gate). `account.test.ts` reads the same file this way.
+const USAGE_ROUTE = resolve(dirname(fileURLToPath(import.meta.url)), "../routes/usage.ts");
 
 /**
  * `UsageResponse` IS what `GET /v1/usage` returns (#608).

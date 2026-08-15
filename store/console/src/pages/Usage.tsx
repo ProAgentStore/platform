@@ -6,7 +6,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
-import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, chargedCoverageNote, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, chargedCoverageNote, dayTokens, enginePayerSessionsNote, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
 /**
  * The response shape, imported from the module that PRODUCES it (#608).
  *
@@ -397,6 +397,16 @@ export default function Usage() {
 								    bucket. Rendered only for an account that HAS the gap, and given the
 								    accent border the payer notes do not have, because it is an action rather
 								    than a caveat. */}
+								{/* How many SESSIONS are behind those numbers (#551, item 3). The dollars say
+								    how much could not be attributed; this says whether it is one stray session
+								    or every session the owner has ever run — which on the account this was
+								    measured on is the second, and was reachable only by opening nine sessions
+								    one at a time. Absent from an older API, in which case nothing renders. */}
+								{enginePayerSessionsNote(data.byPayer) && (
+									<p className="mt-3 pt-3 border-t border-line text-xs text-muted-soft" data-testid="usage-engine-sessions">
+										{enginePayerSessionsNote(data.byPayer)}
+									</p>
+								)}
 								{unknownPayerRemedy(data.byPayer, usd) && (
 									<p className="mt-3 pt-3 border-t border-line text-xs text-muted" data-testid="usage-unknown-remedy">
 										<b className="text-ink">Make this attributable.</b>{" "}

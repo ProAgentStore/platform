@@ -95,6 +95,24 @@ export interface UsageBucket {
 	 */
 	chargedCostMicros: number;
 	calls: number;
+	/**
+	 * Distinct coding SESSIONS behind this bucket's rows (#551, item 3) — absent when not measured.
+	 *
+	 * `calls` and value answer "how much could we not attribute". They cannot answer "is this one
+	 * stray session or every session I have ever run", and on the measured account it is the
+	 * second: 449 engine calls, $9,541 of value, and not one row that ever resolved to a payer.
+	 * Reaching that today means opening each session and reading `engineAuthReport` (#248).
+	 *
+	 * Counted from the ledger, not a new column. An engine row's id is `engine:{sessionId}:{id}`,
+	 * so `ai_usage` has persisted the session and the resolved credential together since #267 —
+	 * see `engineSessionFromRowId`. The last analysis of item 3 concluded a column was needed
+	 * because `coding_sessions` has none; true, and beside the point.
+	 *
+	 * `undefined` means NOT MEASURED, and is not zero: the admin aggregates share this shape and
+	 * do not select `ai_usage.id`, so they cannot count sessions and must not appear to have
+	 * counted none. `0` on a `/v1/usage` bucket IS a measurement — no coding engine ran in it.
+	 */
+	sessions?: number;
 }
 
 /**

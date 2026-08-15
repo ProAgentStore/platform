@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { aggregateUsage, type UsageRow } from "./usage.js";
 import { instanceLabels, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "./usage-ids.js";
+import { engineUsageRowId } from "./engine-usage.js";
 import { instanceListView } from "./instance-config.js";
 
 // The Usage page's id resolution is EXECUTED here against real SQLite, not text-matched.
@@ -171,5 +172,27 @@ describe("Usage id resolution (#526)", () => {
 		const db = seed();
 		insert(db, { user_id: OTHER, instance_id: "99999999-0000-0000-0000-000000000000" });
 		expect(summarize(db).rows).toHaveLength(0);
+	});
+});
+
+/**
+ * #551 item 3, against REAL SQL: the session behind a coding-engine row is already in the ledger.
+ *
+ * Executed rather than reasoned about, for the reason this file exists — a claim about what a
+ * query returns is only worth what running it says. The column added here (`u.id AS row_id`) is
+ * what turns "sessions per resolved credential" from a schema change into a query.
+ */
+describe("engine rows carry their coding session through the scan (#551)", () => {
+	it("returns row_id, and the aggregate counts distinct sessions from it", () => {
+		const db = seed();
+		insert(db, { id: engineUsageRowId("sess-a", "turn-1"), kind: "engine", payer: null });
+		insert(db, { id: engineUsageRowId("sess-a", "turn-2"), kind: "engine", payer: null });
+		insert(db, { id: engineUsageRowId("sess-b", "turn-1"), kind: "engine", payer: null });
+		const { rows, summary } = summarize(db);
+		// The column really is selected — not merely declared on the TypeScript row type.
+		expect(rows.every((r) => typeof r.row_id === "string")).toBe(true);
+		const unknown = summary.byPayer.find((b) => b.key === "unknown");
+		expect(unknown?.calls).toBe(3);
+		expect(unknown?.sessions).toBe(2);
 	});
 });

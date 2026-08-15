@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aggregateUsage, denseDays, instanceSpendMicros, usageDay, type UsageRow, type UsageSummary } from "./usage.js";
 import { bucketLabel, instanceLabels } from "./usage-ids.js";
+import { engineUsageRowId } from "./engine-usage.js";
 import type { Env } from "../types.js";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
@@ -374,5 +375,70 @@ describe("aggregateUsage's totals ARE the declared totals (#608)", () => {
 		expect(summary.totals.cacheReadTokens).toBe(42);
 		expect(summary.totals.cacheWriteTokens).toBe(7);
 		expect(summary.daily.reduce((n, d) => n + d.cacheReadTokens, 0)).toBe(summary.totals.cacheReadTokens);
+	});
+});
+
+// ── #551 item 3: sessions per resolved credential, WITHOUT a new column ──────
+//
+// The measured account: 449 engine calls, $9,541 of value, and not one row that ever resolved to
+// a payer. `byPayer` says how MUCH could not be attributed; it cannot say whether that is one
+// stray session or every session ever run, and reading that meant opening nine sessions and
+// checking each one's credential (#248).
+//
+// The last analysis concluded a roll-up needed a schema change, because `authResolved` is
+// transient and `coding_sessions` has no column for it. True about `coding_sessions`, and beside
+// the point: `ai_usage` already persists BOTH halves — the credential as `payer`, and the session
+// as the second segment of `engineUsageRowId`.
+describe("a bucket counts the coding SESSIONS behind it (#551)", () => {
+	const engineRow = (session: string, record: string, over: Partial<UsageRow> = {}) =>
+		row({ kind: "engine", row_id: engineUsageRowId(session, record), ...over });
+
+	it("counts DISTINCT sessions, not engine turns", () => {
+		// One session writes a row per turn. Counting rows would report turns as sessions, which on
+		// this account is 449 against 9 — off by fifty-fold, in the flattering direction.
+		const s = aggregateUsage([
+			engineRow("sess-a", "t1", { payer: null }),
+			engineRow("sess-a", "t2", { payer: null }),
+			engineRow("sess-a", "t3", { payer: null }),
+			engineRow("sess-b", "t1", { payer: null }),
+		]);
+		const unknown = s.byPayer.find((b) => b.key === "unknown");
+		expect(unknown?.calls).toBe(4);
+		expect(unknown?.sessions).toBe(2);
+	});
+
+	it("separates sessions by the credential they actually resolved to", () => {
+		const s = aggregateUsage([
+			engineRow("sess-a", "t1", { payer: null }),
+			engineRow("sess-b", "t1", { payer: "subscription" }),
+			engineRow("sess-b", "t2", { payer: "subscription" }),
+		]);
+		expect(s.byPayer.find((b) => b.key === "unknown")?.sessions).toBe(1);
+		expect(s.byPayer.find((b) => b.key === "subscription")?.sessions).toBe(1);
+	});
+
+	it("counts no session for a call that had none, rather than inventing one", () => {
+		// Every non-engine kind is a cloud request. Folding them in would report more sessions than
+		// exist, which is the same class of error as counting turns.
+		const s = aggregateUsage([row({ kind: "chat" }), row({ kind: "voice" }), row({ kind: "coding" })]);
+		for (const b of s.byPayer) expect(b.sessions).toBe(0);
+		expect(s.totals.calls).toBe(3);
+	});
+
+	it("counts on every axis, so an INSTANCE's session count is answerable too", () => {
+		const s = aggregateUsage([
+			engineRow("sess-a", "t1", { instance_id: "i1" }),
+			engineRow("sess-b", "t1", { instance_id: "i1" }),
+			engineRow("sess-c", "t1", { instance_id: "i2" }),
+		]);
+		expect(s.byInstance.find((b) => b.key === "i1")?.sessions).toBe(2);
+		expect(s.byInstance.find((b) => b.key === "i2")?.sessions).toBe(1);
+	});
+
+	it("does not count a session from a row id it did not write", () => {
+		// `row_id` is a primary key, not a session field: a non-engine id must yield nothing rather
+		// than a plausible-looking fragment.
+		const s = aggregateUsage([row({ kind: "engine", row_id: "3f0c1b2a-not-an-engine-key" })]);
+		expect(s.byPayer[0].sessions).toBe(0);
 	});
 });

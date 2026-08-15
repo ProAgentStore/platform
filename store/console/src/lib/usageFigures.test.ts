@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHARGED_LEGEND, chargedCell, chargedCoverageNote, coverageDate, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
+import { CHARGED_LEGEND, chargedCell, chargedCoverageNote, coverageDate, dayTokens, enginePayerSessionsNote, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "./usageFigures";
 
 describe("chargedCell (#543)", () => {
 	it("distinguishes a measured zero from a figure that was never measured", () => {
@@ -173,5 +173,50 @@ describe("coverageDate", () => {
 	it("returns the input unchanged rather than inventing a date it cannot parse", () => {
 		expect(coverageDate("not a timestamp")).toBe("not a timestamp");
 		expect(coverageDate("")).toBe("");
+	});
+});
+
+/**
+ * #551, item 3: how many SESSIONS are behind the payer breakdown.
+ *
+ * Measured on the owner's account: 449 engine calls and $9,541 of value, none of it attributable.
+ * The dollars say how much; they do not say whether it is one stray session or all of them, and
+ * finding that out meant opening nine sessions and reading each one's credential (#248).
+ */
+describe("enginePayerSessionsNote", () => {
+	it("says ALL of them when every session is unattributed — the case that was invisible", () => {
+		const note = enginePayerSessionsNote([{ key: "unknown", sessions: 9 }, { key: "byok-api", sessions: 0 }]);
+		expect(note).toBe("All 9 coding sessions in this range ran on a credential we could not attribute.");
+	});
+
+	it("splits the count when only some are unattributed", () => {
+		expect(enginePayerSessionsNote([{ key: "unknown", sessions: 2 }, { key: "subscription", sessions: 5 }])).toBe(
+			"7 coding sessions ran in this range; 2 of them on a credential we could not attribute.",
+		);
+	});
+
+	it("says so plainly when nothing is unattributed", () => {
+		expect(enginePayerSessionsNote([{ key: "subscription", sessions: 3 }])).toBe(
+			"3 coding sessions ran in this range, every one on a credential we could identify.",
+		);
+	});
+
+	it("is silent when no coding engine ran at all", () => {
+		// A sentence about coding sessions on an account that has none is noise on every chat-only
+		// account, and noise is how a page teaches people to skip its notices.
+		expect(enginePayerSessionsNote([{ key: "byok-api", sessions: 0 }])).toBeNull();
+	});
+
+	it("is silent — never zero — when the API did not report the count", () => {
+		// Absent is not zero. Printing "0 coding sessions" from a field nobody sent replaces a
+		// missing number with a confident wrong one, which is the failure this whole page is about.
+		expect(enginePayerSessionsNote([{ key: "unknown" }, { key: "byok-api" }])).toBeNull();
+		expect(enginePayerSessionsNote(undefined)).toBeNull();
+	});
+
+	it("gets the singular right", () => {
+		expect(enginePayerSessionsNote([{ key: "unknown", sessions: 1 }])).toBe(
+			"All 1 coding session in this range ran on a credential we could not attribute.",
+		);
 	});
 });
