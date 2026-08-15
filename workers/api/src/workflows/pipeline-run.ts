@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, executePipelineStep, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
+import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, executePipelineStep, partialFailure, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { closeRun } from "../lib/pipeline-runs.js";
@@ -100,6 +100,10 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			// console says "capped" where it says how the run went — a warn event alone is only
 			// found by someone who already suspects something.
 			const shortfalls: string[] = [];
+			// What a step failed on while still succeeding overall (#642, #630) — carried to the
+			// detail line for the same reason a cap is: it is the part of "how did this run go" that
+			// the counts alone cannot express, and `errors: 12` without a cause is not debuggable.
+			const partials: string[] = [];
 
 			for (let i = 0; i < pipeline.steps.length; i++) {
 				const s = pipeline.steps[i];
@@ -130,6 +134,23 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 					trail.push({ step: `step ${i}: coverage`, detail: shortfall, at: new Date().toISOString() });
 					await step.do(`s${i}-capped`, async () => {
 						await logEvent(env, { source: "pipeline", event: "pipeline.capped", level: "warn", message: shortfall, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, bind } }).catch(() => undefined);
+						return null;
+					});
+				}
+				// A step that succeeded on MOST of its records reported the failures in its own JSON
+				// body, behind a pretty-printed `items` array the 160-character trace excerpt never
+				// reaches — so a run where 40 of 83 probes hard-failed read as a normal step and a
+				// `completed / errors: 0` run row. The step's own count and the run's `errors`
+				// disagreed, and only the unreadable one was right (#642, #630).
+				const partial = partialFailure(s.tool, result.output, result.dispatched ? `${s.tool} → ${result.dispatched}` : s.tool);
+				if (partial) {
+					errors += partial.failed;
+					partials.push(partial.note);
+					trail.push({ step: `step ${i}: partial failure`, detail: partial.note, at: new Date().toISOString() });
+					await step.do(`s${i}-partial`, async () => {
+						// `context` is where the numbers go: unlike `message`, it is not truncated, so
+						// `firstError` — the one string that says WHAT went wrong — survives.
+						await logEvent(env, { source: "pipeline", event: "pipeline.partial", level: "warn", message: partial.note.slice(0, 400), userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, ...(result.dispatched ? { dispatched: result.dispatched } : {}), bind, failed: partial.failed, total: partial.total, firstError: partial.firstError } }).catch(() => undefined);
 						return null;
 					});
 				}
@@ -232,9 +253,10 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// so without this line a capped sweep of Sydney and a complete sweep of Hobart read
 				// identically — the run says it covered everything when it covered the first N.
 				const capNote = shortfalls.length ? `; ${shortfalls.join("; ")}` : "";
+				const partialNote = partials.length ? `; ${partials.join("; ")}` : "";
 				// NOT best-effort — see `run-close-fail`. Reporting `{outcome:"completed"}` from a step
 				// that failed to record the completion is the exact "success without the work" shape.
-				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}${capNote}`);
+				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}${capNote}${partialNote}`);
 				return null;
 			});
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };

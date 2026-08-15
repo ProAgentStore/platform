@@ -175,6 +175,60 @@ export function coverageShortfall(tool: string, output: unknown): string | null 
 }
 
 /**
+ * Steps that succeed as a whole while some of their records did not — and that report the count in
+ * their own JSON body, where no reader can reach it (#642, #630).
+ *
+ * `enrich` counts per-item tool failures deliberately (its comment says "so it is visible rather
+ * than silent") and puts the number after a pretty-printed `items` array: with only two records
+ * `"failed"` already sits at index 357 of a 407-character body, and the trace event carries the
+ * first 160. On a real run — the shipped lead-finder enriches the whole shaped list, 83 records on
+ * the live run — it lands tens of thousands of characters out.
+ *
+ * `parse_json` is the same shape and was found by the source-derived guard in
+ * `workflows/pipeline-run-accounting.test.ts`, not by the issue: a value that will not parse becomes
+ * `null` "and is counted in `failed`", into a body with the same problem. Which is why that guard
+ * derives this set from `steps.ts` rather than checking that one known tool is in it.
+ *
+ * So the count is lifted OUT of the body here, the same way `coverageShortfall` lifts a cap out of
+ * `slice`'s. Computed from the output rather than carried on `StepResult` because it is a fact
+ * about the data, not about the dispatch — and because a pure function over the body is what makes
+ * it testable without a Workflow harness.
+ */
+const PARTIAL_FAILURE_TOOLS = new Set(["enrich", "parse_json"]);
+
+export interface PartialFailure {
+	/** Records the step could not process. Folded into the run's `errors`. */
+	failed: number;
+	/** Records it looked at, so the note reads as a proportion rather than a bare count. */
+	total: number;
+	/** The first failure's message — the one string that says WHAT went wrong. */
+	firstError: string;
+	/** The sentence for the trace and the run's detail line. */
+	note: string;
+}
+
+/**
+ * What a step failed on, when it failed on part of its input but still returned success — null when
+ * it didn't (or when the tool does not report such a count).
+ *
+ * `label` is the step's "what actually ran" label (`enrich → http_reachable`), because the inner
+ * tool is the useful half: 40 failed `http_reachable` probes and 40 failed `web_search` calls are
+ * different problems and `enrich` names neither.
+ */
+export function partialFailure(tool: string, output: unknown, label = tool): PartialFailure | null {
+	if (!PARTIAL_FAILURE_TOOLS.has(tool) || !output || typeof output !== "object" || Array.isArray(output)) return null;
+	const o = output as Record<string, unknown>;
+	const failed = typeof o.failed === "number" && Number.isFinite(o.failed) ? Math.trunc(o.failed) : 0;
+	if (failed <= 0) return null;
+	const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : 0);
+	// `enrich` reports how many records it produced (`count`); a step reporting a size instead
+	// (`total`) reads the same way. Never below `failed`, so the proportion cannot read backwards.
+	const total = Math.max(num(o.total), num(o.count), failed);
+	const firstError = typeof o.firstError === "string" ? o.firstError.slice(0, 200) : "";
+	return { failed, total, firstError, note: `${label} failed on ${failed} of ${total} record(s)${firstError ? ` — ${firstError}` : ""}` };
+}
+
+/**
  * One entry in a record's audit trail (issue #98). Deliberately the SAME shape the /data
  * tab detail already renders for the lead-finder (`{step, detail, at}`), so generalizing
  * the console detail view means rendering this array unchanged. `step` is a short label

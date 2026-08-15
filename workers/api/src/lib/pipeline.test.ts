@@ -25,7 +25,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { attachAudit, auditStepEntry, collectReferences, coverageShortfall, declaredParamDefaults, executePipelineStep, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
+import { attachAudit, auditStepEntry, collectReferences, coverageShortfall, declaredParamDefaults, executePipelineStep, partialFailure, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -555,5 +555,53 @@ describe("coverageShortfall", () => {
 		expect(coverageShortfall("slice", null)).toBeNull();
 		expect(coverageShortfall("slice", [1, 2, 3])).toBeNull();
 		expect(coverageShortfall("slice", "nope")).toBeNull();
+	});
+});
+
+/**
+ * #642 — `enrich` counts its per-item failures and buries the count past the trace's 160-character
+ * cut, while the run reports `errors: 0`.
+ *
+ * The demonstration of unreachability, from the issue: `{items:[…],count:2,failed:1}` pretty-printed
+ * with two records puts `"failed"` at index 357 of a 407-character body. The shipped lead-finder
+ * enriches the whole shaped list (83 records on the live run), which puts it tens of thousands of
+ * characters out. So the count has to leave the body.
+ */
+describe("partialFailure (#642)", () => {
+	it("lifts the count and the first error out of a step body no reader can reach", () => {
+		const out = { items: [{ a: 1 }], count: 83, failed: 40, firstError: "No API key connected for the http connector" };
+		expect(partialFailure("enrich", out, "enrich → http_reachable")).toEqual({
+			failed: 40,
+			total: 83,
+			firstError: "No API key connected for the http connector",
+			note: "enrich → http_reachable failed on 40 of 83 record(s) — No API key connected for the http connector",
+		});
+	});
+
+	it("names the tool that actually RAN, not the step that dispatched it", () => {
+		// 40 failed `http_reachable` probes and 40 failed `web_search` calls are different problems,
+		// and `enrich` names neither (#396's reason, applied to the failure count).
+		const note = partialFailure("enrich", { count: 2, failed: 2 }, "enrich → web_search")?.note ?? "";
+		expect(note.startsWith("enrich → web_search")).toBe(true);
+	});
+
+	it("says nothing when every record succeeded", () => {
+		expect(partialFailure("enrich", { items: [], count: 3, failed: 0 })).toBeNull();
+		expect(partialFailure("enrich", { items: [], count: 3 })).toBeNull();
+	});
+
+	it("ignores a tool that reports no such count", () => {
+		expect(partialFailure("filter", { count: 3, failed: 9 })).toBeNull();
+	});
+
+	it("tolerates a body that isn't the envelope it expects", () => {
+		expect(partialFailure("enrich", null)).toBeNull();
+		expect(partialFailure("enrich", [1, 2, 3])).toBeNull();
+		expect(partialFailure("enrich", "nope")).toBeNull();
+	});
+
+	it("never reports a proportion that reads backwards", () => {
+		// A body claiming more failures than records is malformed, not a reason to print "9 of 3".
+		expect(partialFailure("enrich", { count: 3, failed: 9 })?.note).toContain("9 of 9");
 	});
 });
