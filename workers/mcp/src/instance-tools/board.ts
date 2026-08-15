@@ -19,12 +19,16 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 
 	server.tool(
 		"instance_board",
-		"Read a private instance's live kanban board — the agent's single work board. Cards are ONE per job (retries of the same job collapse into one card) grouped into the agent's configured columns (e.g. Waiting / Applying / Needs you / Failed / Blocked / Submitted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\".",
+		"Read a private instance's live kanban board — the agent's single work board. Cards are ONE per job (retries of the same job collapse into one card) grouped into the agent's configured columns (e.g. Waiting / Applying / Needs you / Failed / Blocked / Submitted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\". Each card carries a short `detail`; a ticket's fuller `reasoning` — the decision/audit its author recorded — is returned only when you pass reasoning:true, and the response counts how many cards have one.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
+			// #574: `create_instance_ticket` accepts `reasoning` and no reader returned it, so the
+			// field could be written over MCP and never read back. Opt-in for the reason #569
+			// settled on the tool next door — see `groupBoard`.
+			reasoning: z.boolean().optional().describe("Include each card's full `reasoning` — the decision/audit the agent recorded when it filed the ticket. Off by default: it is unbounded prose per card and usually longer than `detail`. The response tells you how many cards have one."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, reasoning }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			// The API (lib/board.ts) is the single source of the board shape — one card
@@ -38,7 +42,7 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 				return jsonText({ error: `board unavailable: ${e instanceof Error ? e.message : String(e)}` });
 			}
 			if (isRec(data) && data.error) return jsonText({ error: data.error });
-			return jsonText(groupBoard(data));
+			return jsonText(groupBoard(data, { reasoning }));
 		},
 	);
 

@@ -240,7 +240,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
-| `instance_board` | Read the live kanban board (one card per job) | — | | |
+| `instance_board` | Read the live kanban board (one card per job); `reasoning:true` also returns each ticket's recorded decision/audit | — | | |
 | `get_instance_board_config` | Read board columns + preferred view | — | | |
 | `set_instance_board_config` | Override columns / view per instance | write | yes | |
 | `set_board_item_status` | Move a card, or reset it to automation | write | yes | |

@@ -261,7 +261,10 @@ const TABLE: Record<string, Row> = {
 	ingest_repo: ["repo", "write", null, "envelope", "branch,dry_run,instance_id,repo_url,token"],
 	ingest_repo_status: ["repo", "none", null, null, "instance_id,token"],
 	instance_activity: ["observability", "none", null, null, "instance_id,token"],
-	instance_board: ["board", "none", null, null, "instance_id,token"],
+	// `reasoning` (a BOOLEAN here, not the writer's string) added by #574: the field
+	// `create_instance_ticket` accepts had no reader, so this tool gained the argument that asks
+	// for it. Still ungated — it widens a read, and reads nothing the caller could not already see.
+	instance_board: ["board", "none", null, null, "instance_id,reasoning,token"],
 	// `before` added at #566: the response has always carried `nextCursor`/`hasMore` and no input
 	// could use either, so every message older than the newest page was unreachable over MCP.
 	instance_messages: ["observability", "none", null, null, "before,instance_id,limit,token"],

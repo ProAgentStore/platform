@@ -93,7 +93,7 @@ export function normalizeTriggerConfig(
 }
 
 export interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll?: boolean }
-export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string }
+export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; reasoning?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string }
 
 /**
  * CANONICAL SOURCE: `workers/api/src/lib/agent-capabilities.ts` `columnForStatus`.
@@ -113,8 +113,20 @@ export function columnFor(cols: BoardColumn[], status: string): string | null {
  * Group the API's flat board items (already ONE card per job, with effective
  * status + attempts + human overrides) into the agent's configured columns for a
  * readable answer. The API (lib/board.ts) owns the board shape; this just buckets.
+ *
+ * `reasoning` is OPT-IN (#574). `create_instance_ticket` has always accepted a `reasoning`
+ * argument and described it as the audit record, and this function's fixed card list never
+ * carried it — so MCP could write the field and no MCP reader could fetch it back. `ask_ticket`
+ * reaches it, but that is a model call over one ticket, not a read.
+ *
+ * Off by default rather than simply added, for the reason #569 settled one tool earlier: a
+ * default response carries what a reader needs to DECIDE, and the long-form evidence behind the
+ * decision is fetched on request. `reasoning` is unbounded prose written per card — on the
+ * measured board it is 691 characters against `description`'s 375 — so returning it on every card
+ * of every board read is the payload mistake #569 was measured budgeting DOWN. The argument shape
+ * is deliberately the same as that fix's `schemas`: a boolean named after the field it returns.
  */
-export function groupBoard(data: unknown): unknown {
+export function groupBoard(data: unknown, opts?: { reasoning?: boolean }): unknown {
 	const cols = (isRec(data) && Array.isArray(data.columns) ? data.columns : []) as BoardColumn[];
 	const items = (isRec(data) && Array.isArray(data.items) ? data.items : []) as BoardItem[];
 	const board: Record<string, unknown[]> = {};
@@ -128,6 +140,9 @@ export function groupBoard(data: unknown): unknown {
 			moved: it.userStatus ? true : undefined,
 			attempts: Array.isArray(it.attempts) ? it.attempts.length : undefined,
 			detail: it.description,
+			// Undefined (not null) when not asked for, so it is absent from the JSON rather than
+			// present-and-empty — a null would read as "this ticket has no reasoning".
+			reasoning: opts?.reasoning ? it.reasoning : undefined,
 			url: it.url,
 			latestTaskId: it.latestTaskId,
 		};
@@ -139,11 +154,18 @@ export function groupBoard(data: unknown): unknown {
 	}
 	if (other.length) board.Other = other;
 	const truncated = isRec(data) && data.truncated === true;
+	// What is being WITHHELD says so, and only when it is actually being withheld (#574). A field
+	// the response silently omits is unreachable in practice however well the argument is
+	// documented — that is exactly how `reasoning` stayed invisible, and how #566's `nextCursor`
+	// advertised a page nothing could ask for. Counted rather than assumed, so the sentence is a
+	// measurement: no card carries reasoning ⇒ no note.
+	const withheld = opts?.reasoning ? 0 : items.filter((it) => typeof it.reasoning === "string" && it.reasoning.trim()).length;
 	return {
 		columns: cols.map((c) => c.title),
 		board,
 		jobCount: items.length,
 		...(truncated ? { truncated: true, truncatedNote: "Only the most recent runtime tasks were read — some older jobs may be missing." } : {}),
+		...(withheld ? { reasoningAvailable: withheld, reasoningNote: `${withheld} card(s) carry a longer \`reasoning\` (the decision/audit the agent recorded). Omitted here to keep the board small — call instance_board again with reasoning:true to read it.` } : {}),
 		note: "One card per job (retries of the same job collapse into one; `attempts` = run count). `moved:true` means a human set the status. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
 	};
 }
