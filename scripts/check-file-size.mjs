@@ -1131,7 +1131,15 @@ const PINS = {
 	// taking those as arguments would take this back under LIMIT and would also make the
 	// "loop-run row and board card cannot disagree" invariant unit-testable without a Workflow,
 	// which is the same argument that moved the pause machine out.
-	"workers/api/src/workflows/coding-session.ts": 872,
+	//
+	// +1 at #505, for one assignment: `goal.ownerTurns = ownerTurns`. The counter already existed
+	// here and the report stamp already read it; the instruction stamp in `runCodingLoop` read
+	// `goal.userHint` instead, which is one round's message and is cleared on the next resume — so a
+	// run the human answered in round 1 was told in round 3 that nobody had spoken to it. Only the
+	// workflow holds the run-scoped count, so the line cannot live anywhere else, and the file sat
+	// EXACTLY on its pin, so there was no line to spend. The reason is carried in `CodingGoal`'s
+	// docblock rather than here, and the seam above is unchanged and still the right one.
+	"workers/api/src/workflows/coding-session.ts": 873,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1257,7 +1265,10 @@ const PINS = {
 	// +4 at #537: the CodingTab raise above and its two-part reason (the entry, plus the self-ref
 	// in the ledger below), which is what this map costs when a raise is recorded rather than
 	// squeezed. Plus this note.
-	"scripts/check-file-size.mjs": 1341,
+	// +9 at #505: the coding-session.ts raise above is +1 of code and eight lines of why, because a
+	// file sitting EXACTLY on its pin makes every one-line wiring a pin decision — which is the
+	// ratchet working, and is worth the ledger entry it costs. Plus this note.
+	"scripts/check-file-size.mjs": 1352,
 };
 
 /**

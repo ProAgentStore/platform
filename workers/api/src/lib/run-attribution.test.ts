@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	annotateOwnerAttribution,
@@ -141,4 +144,38 @@ describe("instructionAttributionNote", () => {
 		expect(ownerAttributionMatch(STEP_5)).toContain("owner");
 	});
 
+});
+
+/**
+ * The two stamps read the SAME fact, and the wiring that makes that true is asserted (#505).
+ *
+ * `annotateOwnerAttribution` takes `ownerTurns` — the run-scoped count — while the instruction stamp
+ * in `runCodingLoop` reads `goal.ownerTurns`. Nothing but a call site connects them, and an optional
+ * field nobody writes is the failure this repo has now named repeatedly: the helper is tested, the
+ * call site is not, so the field reads as implemented and the behaviour never changes (#570, #591).
+ * `ownerTurns` sat unwired for exactly that reason — its author left it deliberately rather than
+ * edit a file another lane had open.
+ */
+describe("the workflow writes the counter both stamps read", () => {
+	// `fileURLToPath`, not a bare `new URL` — the Worker `lib` makes the global `URL` structurally
+	// incompatible with node's, which `tsc -p tsconfig.test.json` (#599) rejects and vitest would
+	// have run anyway. That gate exists for exactly this, and it caught it.
+	const SESSION = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../workflows/coding-session.ts"), "utf8");
+
+	it("sets goal.ownerTurns beside goal.userHint on every resume", () => {
+		expect(SESSION, "coding-session.ts no longer writes goal.ownerTurns — the instruction stamp is unwired again").toMatch(/goal\.ownerTurns\s*=/);
+		// Beside the hint, not somewhere else: the two are one resume's worth of state, and a
+		// counter written on a different path would go stale exactly when the hint is cleared.
+		const hint = SESSION.indexOf("goal.userHint = pause.userHint");
+		const turns = SESSION.indexOf("goal.ownerTurns =");
+		expect(hint, "the resume block moved — this guard has stopped measuring").toBeGreaterThan(-1);
+		expect(Math.abs(turns - hint), "goal.ownerTurns is no longer written in the resume block").toBeLessThan(600);
+	});
+
+	it("feeds it the same counter the report stamp uses", () => {
+		// One counter, incremented in one place. Two would be the defect this closes, restated.
+		expect(SESSION).toMatch(/if \(pause\.ownerTurn\) ownerTurns\+\+;/);
+		expect(SESSION).toMatch(/annotateOwnerAttribution\([^)]*ownerTurns\)/);
+		expect(SESSION.match(/ownerTurns\+\+/g) ?? [], "more than one writer for the owner-turn count").toHaveLength(1);
+	});
 });

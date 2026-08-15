@@ -46,6 +46,21 @@ export interface CodingGoal {
 	/** Live free-text message the user sent while the agent was paused/stuck. */
 	userHint?: string;
 	/**
+	 * How many times the OWNER has intervened in this run so far (#505).
+	 *
+	 * The difference from {@link userHint} is durability. `userHint` is one round's message and is
+	 * overwritten on the next resume — often with `undefined`, because a resolved captcha is an owner
+	 * turn that carries no words. So a run where the human answered a takeover in round 1 and the
+	 * Pilot claimed their authority in round 3 was told "no message from the owner has reached you",
+	 * which is true of that round and false of the run. The counter is the run-scoped fact, and it is
+	 * the same one `annotateOwnerAttribution` already reads on the report side — so the instruction
+	 * stamp and the completion stamp can no longer disagree about whether a human spoke.
+	 *
+	 * Written by `workflows/coding-session.ts` beside `userHint`; absent means none, which is the
+	 * pre-existing behaviour for any caller that does not set it.
+	 */
+	ownerTurns?: number;
+	/**
 	 * A fact the PLATFORM is telling the brain at the start of this round (#541).
 	 *
 	 * Deliberately not `userHint`, which renders as "The user just told you:" — attributing a
@@ -381,9 +396,16 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		//
 		// Annotated, never refused: whether an objective authorised a decision is a judgement over
 		// prose, and a false positive that halts a run is expensive where a false positive that costs
-		// one true sentence is not. `goal.userHint` is the only way a live human message reaches the
-		// Pilot, so its absence is exactly "no message from the owner has reached you".
-		const attribution = decision.action.kind === "message" ? instructionAttributionNote(decision.action.text, !!goal.userHint) : null;
+		// one true sentence is not.
+		//
+		// "Has the owner spoken to this RUN" is the question, and `goal.userHint` alone answered a
+		// narrower one: it holds a single round's message and is overwritten on the next resume,
+		// frequently with `undefined`, because a resolved captcha is an owner turn that carries no
+		// words. `ownerTurns` is the run-scoped count the workflow already keeps and the report-side
+		// stamp already reads (`annotateOwnerAttribution`), so wiring it here is what stops the two
+		// stamps disagreeing about the same fact.
+		const ownerSpoke = (goal.ownerTurns ?? 0) > 0 || !!goal.userHint;
+		const attribution = decision.action.kind === "message" ? instructionAttributionNote(decision.action.text, ownerSpoke) : null;
 		const label = attribution ? `${describe(decision.action)}\n${attribution}` : describe(decision.action);
 		actionLog.push(label);
 		transcript.push(label);

@@ -468,6 +468,33 @@ describe("an instruction that speaks for the owner is stamped where it is SAID (
 		await runCodingLoop(deps, goal, { maxSteps: 10 });
 		expect(events.filter(([t]) => t === "action").every(([, m]) => !m.includes("platform"))).toBe(true);
 	});
+
+	it("remembers an owner turn from an EARLIER round, not just this round's message", async () => {
+		// The gap the wiring closes. `userHint` is one round's words and is overwritten on every
+		// resume — with `undefined` whenever the owner turn carried none, which is what a resolved
+		// captcha or a plain "Resume" is. So a run the human answered in round 1 was told in round 3
+		// that nobody had spoken to it, while `annotateOwnerAttribution` read the run-scoped counter
+		// on the report side and reached the opposite conclusion about the same run.
+		//
+		// This is the state `workflows/coding-session.ts` writes after a resolved handoff that
+		// carried no text: the count is 1 and the hint is gone.
+		const goal: CodingGoal = { ...GOAL, ownerTurns: 1, userHint: undefined };
+		const { deps, events } = replay();
+		await runCodingLoop(deps, goal, { maxSteps: 10 });
+		expect(events.filter(([t]) => t === "action").every(([, m]) => !m.includes("platform"))).toBe(true);
+	});
+
+	it("still stamps when the counter says nobody has intervened", async () => {
+		// The negative control for the line above: an explicit zero must behave exactly like an
+		// absent one, or the wiring would have silenced the stamp for every run instead of for the
+		// runs a human actually spoke to.
+		const goal: CodingGoal = { ...GOAL, ownerTurns: 0 };
+		const { deps, events } = replay();
+		await runCodingLoop(deps, goal, { maxSteps: 10 });
+		const actions = events.filter(([t]) => t === "action").map(([, m]) => m);
+		expect(actions[1]).toMatch(/speaks for the owner/i);
+		expect(actions[2]).toMatch(/speaks for the owner/i);
+	});
 });
 
 describe("systemPrompt — the Pilot is told the size of its own window (#522 cause B)", () => {

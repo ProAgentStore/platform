@@ -673,6 +673,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// says "the user chose" may well be true and is left alone (#505).
 				if (pause.ownerTurn) ownerTurns++;
 				goal.userHint = pause.userHint;
+				goal.ownerTurns = ownerTurns; // run-scoped; userHint is not — a resume clears it (#505, see CodingGoal)
 				goal.resumeNote = pause.resumeNote;
 			}
 		} catch (e) {
