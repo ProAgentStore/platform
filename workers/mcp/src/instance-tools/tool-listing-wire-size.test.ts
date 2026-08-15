@@ -144,7 +144,9 @@ describe("list_instance_tools wire size (#569)", () => {
 		// assertions replace it, and together they are stronger:
 		//
 		//   1. the reply IS the compact serialisation, byte for byte. Size-independent, so it
-		//      catches a reverted `{compact:true}` however much headroom the payload has.
+		//      catches a regression to indented output however much headroom the payload has.
+		//      (The `{compact:true}` this line used to name is gone: #586 removed the option and
+		//      made compact the only behaviour, with a sweep over all 136 tools to hold it.)
 		//   2. even pretty-printed it fits, i.e. the payload no longer depends on serialisation
 		//      style at all — which is the property #569's fix never had.
 		expect(out.content[0].text).toBe(JSON.stringify(parsed));

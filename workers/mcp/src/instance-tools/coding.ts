@@ -73,11 +73,11 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				if (since_seq !== undefined) qs.set("since", String(since_seq));
 				if (limit !== undefined) qs.set("limit", String(limit));
 				const path = `/v1/instances/${encodeURIComponent(id)}/coding/timeline${qs.toString() ? `?${qs.toString()}` : ""}`;
-				// COMPACT, like `list_instance_tools` since #569. `jsonText` pretty-prints by default,
-				// which added ~22% to that tool's payload AFTER its budget test had passed — 54 KB
-				// asserted, 66,042 B served. A page of terminal tails is machine-read data with no
-				// human-formatting value, so the indentation buys nothing and costs 8 KB here.
-				return jsonText(await authedCall(path, sessionToken, {}, env), { compact: true });
+				// A page of terminal tails is machine-read data: this one measured 44,313 bytes
+				// pretty-printed against 40,304 compact (#581). `jsonText` is compact for every tool
+				// since #586 — the `{compact:true}` that used to be here is gone because the option
+				// is gone, not because this tool stopped caring about the 4 KB.
+				return jsonText(await authedCall(path, sessionToken, {}, env));
 			},
 		);
 	}

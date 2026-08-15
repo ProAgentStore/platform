@@ -564,3 +564,291 @@ describe("published surface vs the advertised version (#573 AC2)", () => {
 		);
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 4 — SERIALISATION: what a host actually receives, in bytes (#586)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Layers 1–3 measure the tool DEFINITIONS a host receives. This one measures the RESULTS,
+ * and it exists because the definitions were never where the bytes went wrong.
+ *
+ * `jsonText` indented its output by default. That cost ~22% of every JSON result and defeated
+ * two guards in a single day:
+ *
+ *   · **#569** asserted `list_instance_tools`'s API body at ~54 KB and passed. Production
+ *     served **66,042 bytes** and the calling host REFUSED it — the assertion was taken one
+ *     layer above the code that serialises, so it measured a number nobody receives.
+ *   · **#581** measured **44,313 bytes** for `coding_timeline`, then **40,304** with
+ *     `{compact:true}`. Caught only because that author had been told about #569.
+ *
+ * So this arm is deliberately placed where neither of those could be fooled: it CALLS all
+ * {@link MCP_TOOL_COUNT} registered tools through the real SDK client and reads the text a
+ * host would receive. Not the handler's return value, not the API's body — the wire.
+ *
+ * **Two detectors, because one of them alone is escapable.**
+ *
+ *  · The exact one: a result that parses as JSON must be byte-identical to
+ *    `JSON.stringify(parsed)`. That catches indentation, and it catches it precisely.
+ *  · The signature one: NO result — JSON or prose — may contain `\n` + indent + `"key":`,
+ *    the unmistakable fingerprint of `JSON.stringify(v, null, 2)`. This is what covers a
+ *    JSON blob embedded in a sentence, which `register_instance_runtime` did until #586, and
+ *    which the exact detector cannot see because the whole text does not parse.
+ *
+ * **It measures the tools, not `jsonText`.** Three of the pretty-printers #586 removed were
+ * hand-rolled `JSON.stringify(data, null, 2)` at the call site (`agent_info`,
+ * `list_agent_knowledge`, `agent_analytics` in `index.ts`), i.e. copies of the old default
+ * that would have survived changing the default. Anything that reaches the wire is in scope
+ * however it was produced.
+ *
+ * **The non-vacuity problem, stated because it is the real risk here.** `{}` and `[]`
+ * serialise identically pretty or compact, so a tool whose stubbed result is empty cannot
+ * fail this arm no matter what it does. The fixture therefore answers every API call with a
+ * nested body, and the sweep partitions its results into the ones that CAN discriminate and
+ * the ones that cannot — asserting the size of the first. A green run that measured two
+ * empty objects is exactly the shape ADR 0002 exists to forbid.
+ */
+
+/** Two rows, nested — deep enough that indenting them changes the bytes. */
+const SWEEP_ROWS = [
+	{ id: "r1", name: "One", status: "ready", nested: { k: 1, deeper: ["a", "b"] } },
+	{ id: "r2", name: "Two", status: "done", nested: { k: 2, deeper: ["c"] } },
+];
+
+/** The keys tools unwrap a list out of. Every one answers with {@link SWEEP_ROWS} so the
+ *  result is nested whichever key a given tool reads — the alternative is a per-tool fixture
+ *  table, which is a second hand-maintained restatement of the surface. */
+const SWEEP_COLLECTION_KEYS = [
+	"activity", "agents", "board", "cards", "collections", "columns", "connections", "connectors",
+	"deliveries", "documents", "entries", "errors", "events", "files", "grants", "instances",
+	"items", "keys", "loops", "messages", "models", "nodes", "notes", "profiles", "providers",
+	"records", "repos", "results", "runs", "sessions", "sources", "stats", "supervisions", "tasks",
+	"timeline", "tips", "tools", "triggers", "vectors",
+];
+
+function sweepBody(): Record<string, unknown> {
+	const body: Record<string, unknown> = {
+		ok: true,
+		id: "x1",
+		count: 2,
+		status: "ready",
+		agent: SWEEP_ROWS[0],
+		data: SWEEP_ROWS[0],
+		instance: SWEEP_ROWS[0],
+		memory: SWEEP_ROWS,
+		result: SWEEP_ROWS[0],
+		runtime: SWEEP_ROWS[0],
+		settings: { a: 1, b: { c: 2 } },
+		state: SWEEP_ROWS[0],
+		usage: SWEEP_ROWS[0],
+	};
+	for (const k of SWEEP_COLLECTION_KEYS) body[k] = SWEEP_ROWS;
+	return body;
+}
+
+/**
+ * Arguments good enough to get PAST the SDK's schema validation and into the handler,
+ * derived from the published `inputSchema` rather than from a table — a table would need an
+ * entry per new tool and would silently shrink the denominator when it did not get one.
+ *
+ * Optional arguments are left off (the default path is the one nobody thinks about, which is
+ * what this whole ticket is about) except `instance_id`/`agent_id`, which most handlers
+ * branch on. `confirm` gets the tool's own name because that is the convention `safety.ts`
+ * documents; where it is wrong the tool answers a refusal, which is still a wire result and
+ * still measured.
+ */
+function sweepArgs(tool: WireTool): Record<string, unknown> {
+	const schema = tool.inputSchema as { properties?: Record<string, Record<string, unknown>>; required?: string[] };
+	const props = schema.properties ?? {};
+	const required = new Set(schema.required ?? []);
+	const always = new Set(["agent_id", "instance_id"]);
+	const valueFor = (name: string, spec: Record<string, unknown>): unknown => {
+		if (name === "confirm") return tool.name;
+		if (Array.isArray(spec.enum)) return spec.enum[0];
+		if (Array.isArray(spec.anyOf)) return valueFor(name, spec.anyOf[0] as Record<string, unknown>);
+		switch (spec.type) {
+			case "number":
+			case "integer":
+				return 1;
+			case "boolean":
+				return false;
+			case "array": {
+				// `.min(1)` is a real constraint on at least one tool (`update_agent_board_config`),
+				// and an empty array there is a validation error, i.e. a handler never reached.
+				const min = typeof spec.minItems === "number" ? spec.minItems : 0;
+				const items = (spec.items ?? {}) as Record<string, unknown>;
+				return Array.from({ length: min }, () => valueFor(name, items));
+			}
+			case "object": {
+				const sub = (spec.properties ?? {}) as Record<string, Record<string, unknown>>;
+				const subRequired = new Set((spec.required as string[] | undefined) ?? []);
+				const out: Record<string, unknown> = {};
+				for (const [k, v] of Object.entries(sub)) if (subRequired.has(k)) out[k] = valueFor(k, v);
+				return out;
+			}
+			default:
+				return "x";
+		}
+	};
+	const args: Record<string, unknown> = {};
+	for (const [name, spec] of Object.entries(props)) {
+		if (required.has(name) || always.has(name)) args[name] = valueFor(name, spec);
+	}
+	return args;
+}
+
+/** The fingerprint of `JSON.stringify(v, null, 2)` surviving inside a larger string. */
+const INDENTED_JSON = /\n {2,}"[^"\n]*":/;
+
+type SweepResult = {
+	/** Handlers reached — the denominator every assertion below divides by. */
+	called: number;
+	/** Tools whose JSON result was NOT byte-identical to its compact serialisation. */
+	pretty: string[];
+	/** Any result, JSON or prose, carrying an indented-JSON block. */
+	indented: string[];
+	/** Tools whose result JSON is nested enough that pretty ≠ compact — the measurable set. */
+	discriminating: string[];
+	/** Tools whose result JSON is `{}`/`[]`/a scalar: unfalsifiable here, named on purpose. */
+	vacuous: string[];
+	/** Tools that answered prose. Covered by the signature detector only. */
+	prose: string[];
+	/** A call the SDK rejected or that threw — a handler NOT measured (ADR 0002 G3). */
+	unreached: string[];
+	/** Bytes served across the discriminating set, and what indenting them would have cost. */
+	bytes: { served: number; ifIndented: number };
+};
+
+async function callEveryTool(): Promise<SweepResult> {
+	const kv = {
+		get: async () => null,
+		put: async () => {},
+		delete: async () => {},
+		list: async () => ({ keys: [], list_complete: true, cursor: undefined, cacheStatus: null }),
+	} as unknown as KVNamespace;
+	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+		const url = typeof input === "string" ? input : input.toString();
+		const body = url.includes("/v1/instances/my/instances")
+			? { instances: ["apply", "repo", "coding"].map((s) => ({ id: "i1", capabilities: { surfaces: [s] } })) }
+			: sweepBody();
+		return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+	});
+	// biome-ignore lint/suspicious/noExplicitAny: constructing the mocked-base subclass
+	const inst = new (PagsMcp as any)();
+	inst.env = { API_BASE: "https://api.test", OAUTH_KV: kv, GITHUB_ORG: "ProAgentStore", GITHUB_TOKEN: "gh-token" };
+	inst.props = { authToken: "session-token", mcpScopes: ["read", "write", "runtime", "destructive"], mcpSubject: "user-1" };
+	await inst.init();
+	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+	const client = new Client({ name: "pags-serialisation", version: "0.0.0" });
+	await Promise.all([client.connect(clientTransport), inst.server.connect(serverTransport)]);
+
+	const out: SweepResult = {
+		called: 0,
+		pretty: [],
+		indented: [],
+		discriminating: [],
+		vacuous: [],
+		prose: [],
+		unreached: [],
+		bytes: { served: 0, ifIndented: 0 },
+	};
+	for (const tool of published) {
+		let res: { content?: { type: string; text?: string }[]; isError?: boolean };
+		try {
+			res = (await client.callTool({ name: tool.name, arguments: sweepArgs(tool) })) as typeof res;
+		} catch (err) {
+			// G3: a call that threw is reported, never skipped — skipping turns a broken
+			// fixture into a quietly smaller measurement.
+			out.unreached.push(`${tool.name}: threw ${(err as Error).message}`);
+			continue;
+		}
+		if (res.isError) {
+			// Nothing in this worker sets `isError`; the SDK sets it when argument validation
+			// fails, which means the handler never ran and this tool went unmeasured.
+			out.unreached.push(`${tool.name}: ${res.content?.[0]?.text?.slice(0, 120)}`);
+			continue;
+		}
+		out.called++;
+		for (const block of res.content ?? []) {
+			const body = block.text ?? "";
+			const signature = body.match(INDENTED_JSON);
+			if (signature) out.indented.push(`${tool.name}: …${signature[0].replace(/\n/g, "\\n")}…`);
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(body);
+			} catch {
+				out.prose.push(tool.name);
+				continue;
+			}
+			const compact = JSON.stringify(parsed);
+			if (JSON.stringify(parsed, null, 2) === compact) {
+				out.vacuous.push(tool.name);
+			} else if (body !== compact) {
+				out.pretty.push(`${tool.name}: ${body.length} bytes served, ${compact.length} compact`);
+			} else {
+				out.discriminating.push(tool.name);
+				out.bytes.served += compact.length;
+				out.bytes.ifIndented += JSON.stringify(parsed, null, 2).length;
+			}
+		}
+	}
+	vi.unstubAllGlobals();
+	return out;
+}
+
+/** Read once, like `published` — one sweep of 136 handlers serves every arm below. */
+const sweep = await callEveryTool();
+
+describe("result serialisation — every tool, on the wire (#586)", () => {
+	it("reached every registered handler, so nothing went unmeasured", () => {
+		// G1 + G3 together. An argument shape the SDK rejects looks identical to a clean pass
+		// from the outside: the tool answers, the loop moves on, and the denominator quietly
+		// drops by one. `update_agent_board_config` was exactly that until `sweepArgs` learned
+		// to honour `.min(1)` on a nested array.
+		expect(sweep.unreached, "these handlers never ran, so this file did not measure them").toEqual([]);
+		expect(sweep.called).toBe(MCP_TOOL_COUNT);
+	});
+
+	it("no tool pretty-prints its JSON result", () => {
+		// The assertion #569 needed and did not have. Before #586 removed the option this
+		// listed 92 tools; reinstating the indented default in `jsonText` puts them all back.
+		expect(sweep.pretty).toEqual([]);
+	});
+
+	it("no result embeds an indented JSON block inside prose", () => {
+		// The escape hatch the arm above cannot see, because such a result does not parse.
+		// `register_instance_runtime` answered `Runtime registered for X.\n` + an indented
+		// object until #586. Verified not to fire on the two Markdown results
+		// (`platform_guide`, `sdk_reference`), whose fenced examples are not JSON objects.
+		expect(sweep.indented).toEqual([]);
+	});
+
+	it("measured enough nested results for the arms above to mean anything", () => {
+		// The non-vacuity bound, and the reason it is a bound rather than an equality: whether
+		// a given tool answers JSON or prose against a stubbed API is a property of the
+		// fixture, and it moves for honest reasons. What must NOT move is the arms going quiet.
+		// `{}` and `[]` are byte-identical indented or not, so only the nested results can
+		// falsify anything — 92 of 136 did when this landed, against 42 prose and 2 empty. A
+		// fall below 80 means the fixture stopped producing nested bodies, not that the code
+		// got cleaner.
+		expect(sweep.discriminating.length).toBeGreaterThanOrEqual(80);
+	});
+
+	it("states what it measured", () => {
+		const total = sweep.discriminating.length + sweep.vacuous.length + sweep.prose.length;
+		const overhead = sweep.bytes.ifIndented - sweep.bytes.served;
+		console.log(
+			`✓ ${sweep.called}/${MCP_TOOL_COUNT} registered tools CALLED through a real client, ${total} result blocks read:\n` +
+				`  ${sweep.discriminating.length} nested JSON — all compact, 0 pretty-printed\n` +
+				`  ${sweep.vacuous.length} empty JSON (${sweep.vacuous.join(", ") || "none"}) — cannot discriminate, named not counted\n` +
+				`  ${sweep.prose.length} prose — checked for an embedded indented block only\n` +
+				`  bytes over the nested set: ${sweep.bytes.served} served vs ${sweep.bytes.ifIndented} if indented ` +
+				`(+${overhead}, +${((overhead / sweep.bytes.served) * 100).toFixed(0)}%)`,
+			// That percentage is the FIXTURE's shape, not production's: these rows are short keys
+			// around short values, which is the case indentation punishes hardest. The number to
+			// compare against a host limit is #569's measured one — 53,970 compact against 66,042
+			// indented on a real 104-row instance, i.e. ~22% on a payload made mostly of prose.
+		);
+		expect(sweep.called).toBe(MCP_TOOL_COUNT);
+	});
+});

@@ -152,12 +152,13 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			// are and why this is done here rather than in the route. An `{error}` body carries no
 			// `tools`, so it passes through untouched rather than being reshaped into a success.
 			const budgeted = Array.isArray(data.tools) ? { ...data, tools: budgetToolListing(data.tools) } : data;
-			// Compact (#569). The API body for a 104-row instance is ~54 KB; pretty-printing it here
-			// added ~22% and took the WIRE response to 66,042 bytes — still over the calling host's
-			// limit that this issue was filed about, after the payload had already been budgeted
-			// down. Measured in production, which is the only reason it was noticed at all: every
-			// test asserted the API's compact body, not what MCP actually sends.
-			return jsonText(budgeted, { compact: true });
+			// The API body for a 104-row instance is ~54 KB; pretty-printing it here added ~22% and
+			// took the WIRE response to 66,042 bytes — still over the calling host's limit this was
+			// filed about, after the payload had already been budgeted down. Measured in production,
+			// which is the only reason it was noticed at all: every test asserted the API's compact
+			// body, not what MCP sends. `jsonText` is compact for every tool since #586, so the
+			// `{compact:true}` this line carried is no longer expressible or needed.
+			return jsonText(budgeted);
 		},
 	);
 

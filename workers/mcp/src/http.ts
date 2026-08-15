@@ -21,23 +21,37 @@ export function authRequired(): TextResult {
 }
 
 /**
- * JSON as a text result. Indented by default — the output is read by people as often as by
- * models, and two spaces is what makes a nested board or trace legible.
+ * JSON as a text result. **Always compact — there is no indentation option, deliberately (#586).**
  *
- * `compact` drops the indentation, and exists because indentation is not free at scale (#569).
- * `list_instance_tools` on a 104-row instance measured **66,042 bytes** pretty-printed on the
- * wire against **53,970** compact: the indentation alone is ~22%, and it was the difference
- * between fitting a calling host's response limit and being refused by it. That was measured in
- * production AFTER the payload itself had been budgeted down, which is the point — the tool had
- * already dropped every schema it could and still did not fit.
+ * ── Why the knob is gone rather than merely inverted
  *
- * Opt-in per call site rather than a size threshold inside this function: a threshold would
- * change the output format of any of the other 134 tools the moment their data grew, and none
- * of them has been measured. If a second tool hits a limit, that is the moment to reconsider a
- * general rule — not before.
+ * It used to indent by default, with `{compact:true}` as an opt-in, on the reasoning that "the
+ * output is read by people as often as by models". That reasoning is wrong about who the reader
+ * is — an MCP result is delivered to a host and a model, and neither benefits from two spaces —
+ * and it cost two production misses in one day:
+ *
+ *   · **#569.** `list_instance_tools` on a 104-row instance was budgeted down until a test
+ *     asserted its body at ~54 KB, and passed. Production served **66,042 bytes** and the host
+ *     REFUSED the response, because `jsonText` indented it after the assertion had been taken.
+ *     Compact, the same payload is **53,970** — the indentation alone was ~22%, and it was the
+ *     entire difference between fitting the host's limit and being rejected by it.
+ *   · **#581.** `coding_timeline` measured **44,313 bytes** on its first pass and **40,304**
+ *     with `{compact:true}`. Caught only because that author had been told about #569; no guard
+ *     would have said a word.
+ *
+ * A default is the case nobody thinks about, so the cost was invisible at the point a tool
+ * author writes `jsonText(result)` — 112 of the 114 call sites took it without a decision. The
+ * knob is therefore REMOVED rather than inverted: an opt-in nobody has ever needed is one more
+ * thing for the next author to get wrong, and "pretty output is friendlier" is exactly the
+ * intuition that produced the old default and will occur to the next reader too.
+ *
+ * If a result genuinely needs prose formatting, that is what {@link text} is for — but note that
+ * the enforcement is on the WIRE, not on this function: `conformance.test.ts` calls every
+ * registered tool through a real client and fails any result whose text is pretty-printed JSON,
+ * however it was produced. Hand-rolling `JSON.stringify(v, null, 2)` does not escape it.
  */
-export function jsonText(value: unknown, opts?: { compact?: boolean }): TextResult {
-	return text(opts?.compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
+export function jsonText(value: unknown): TextResult {
+	return text(JSON.stringify(value));
 }
 
 /** A result that carries BOTH the JSON text every client has always read and the parsed

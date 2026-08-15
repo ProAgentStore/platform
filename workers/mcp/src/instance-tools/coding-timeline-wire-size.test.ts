@@ -105,9 +105,11 @@ describe("coding_timeline wire size (#581 AC4)", () => {
 
 		expect(bytes).toBeLessThan(HOST_LIMIT);
 
-		// The tool serialises COMPACT — `jsonText`'s default is two-space indentation, which is the
-		// ~22% that turned #569's asserted 54 KB into a served 66,042 B. Asserted directly, because
-		// "it happens to fit" is not the same claim as "it is sent the way the fix sends it".
+		// The tool serialises COMPACT. `jsonText` indented by default until #586 — the ~22% that
+		// turned #569's asserted 54 KB into a served 66,042 B, and 44,313 B into 40,304 here.
+		// Asserted directly rather than trusted to the helper, because "it happens to fit" is not
+		// the same claim as "it is sent the way the fix sends it"; #586's own sweep in
+		// `conformance.test.ts` makes the same assertion across all 136 tools.
 		expect(out.content[0].text).toBe(JSON.stringify(parsed));
 
 		// TWO bounds, and the second is the one #569's fix did not have. Re-introducing the

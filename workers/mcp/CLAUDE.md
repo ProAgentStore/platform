@@ -122,7 +122,11 @@ tells you exactly what you changed about it.
    purpose and in every tool: asking what a destructive call *would* do must not itself
    require the confirmation token. (This step used to claim the opposite order; #305's
    contract test drives every tool with `dry_run:true` and no `confirm`, and none of them
-   refuses.)
+   refuses.) **`jsonText` is compact and takes no formatting option (#586)** — the reader is
+   a host with a byte ceiling, not a person, and the indented default cost ~22% of every
+   result and defeated two byte guards in one day. Do not hand-roll
+   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 136 tools through a
+   real client and fails any result whose text is indented JSON, however it was produced.
 5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
    it, in a comment above the registration (#328). The caller is usually a model: without
    `dry_run` the only way to learn what a call would do is to perform it. Two tools are

@@ -75,7 +75,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "register_instance_runtime", action: "completed", input: { ...input, runner_token: runner_token ? "[provided]" : undefined }, result: data.runtime });
 			return data.error
 				? text(`Error: ${data.error}`)
-				: text(`Runtime registered for ${instance_id}.\n${JSON.stringify(data.runtime, null, 2)}`);
+				: text(`Runtime registered for ${instance_id}.\n${JSON.stringify(data.runtime)}`);
 		},
 	);
 

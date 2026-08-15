@@ -137,11 +137,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			{ agent_id: z.string().describe("Agent ID or slug") },
 			async ({ agent_id }) => {
 				const data = await apiCall(`/v1/public/agents/${agent_id}`, {}, this.env);
-				return {
-					content: [
-						{ type: "text" as const, text: JSON.stringify(data, null, 2) },
-					],
-				};
+				// Hand-rolled `JSON.stringify(data, null, 2)` until #586 — a copy of the old
+				// `jsonText` default that would have survived changing that default. `jsonText`
+				// is the one serialiser, and it is compact.
+				return jsonText(data);
 			},
 		);
 
@@ -807,14 +806,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					{},
 					this.env,
 				)) as { documents?: unknown[] };
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: JSON.stringify(data.documents || [], null, 2),
-						},
-					],
-				};
+				return jsonText(data.documents || []);
 			},
 		);
 
@@ -831,11 +823,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					{},
 					this.env,
 				);
-				return {
-					content: [
-						{ type: "text" as const, text: JSON.stringify(data, null, 2) },
-					],
-				};
+				return jsonText(data);
 			},
 		);
 
