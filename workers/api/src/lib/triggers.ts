@@ -1,6 +1,7 @@
 import { HttpError } from "./auth.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { runnerSkipMessage } from "./trigger-capability.js";
+import { activeInstanceSql } from "./trigger-eligibility.js";
 import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
 import { isValidTimeZone } from "./cron-time.js";
 import { advanceCron } from "./cron-schedule.js";
@@ -369,10 +370,23 @@ export async function dispatchTrigger(
 
 export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Promise<{ checked: number; dispatched: number; failed: number }> {
 	const dueIso = now.toISOString();
+	// #649: the join is the point. Without it this read knew nothing about cancellation, so an
+	// instance the owner had cancelled — hidden from the console nav, the roster, the dashboard
+	// and `pags up` — went on waking up every minute, running its pipelines and spending the
+	// owner's BYOK tokens, with no surface left anywhere to reach the trigger and stop it.
+	//
+	// Filtering HERE rather than at dispatch matters for a second reason: `LIMIT ?2` is a budget.
+	// Rows fetched and then rejected still consume it, so a user with a few dozen cancelled
+	// triggers could starve their live ones out of the sweep. Excluded in SQL, they cost nothing.
+	//
+	// `agent_triggers.instance_id` is `NOT NULL REFERENCES agent_instances(id)`
+	// (migration 0045:10), so an inner join drops no row that a correct outer join would keep.
 	const { results } = await env.DB.prepare(
-		`SELECT * FROM agent_triggers
-     WHERE type = 'cron' AND enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?1
-     ORDER BY next_run_at ASC
+		`SELECT t.* FROM agent_triggers t
+       JOIN agent_instances i ON i.id = t.instance_id
+     WHERE t.type = 'cron' AND t.enabled = 1 AND t.next_run_at IS NOT NULL AND t.next_run_at <= ?1
+       AND ${activeInstanceSql("i")}
+     ORDER BY t.next_run_at ASC
      LIMIT ?2`,
 	).bind(dueIso, limit).all<TriggerRow>();
 	let dispatched = 0;
