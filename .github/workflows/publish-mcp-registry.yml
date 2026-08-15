@@ -16,13 +16,28 @@ name: Publish MCP Registry
 # Widening to `workers/mcp/**` would run `mcp-publisher publish` on every worker commit with
 # an unchanged version — a job that no-ops or fails on nearly every push, which is how a
 # workflow stops being read.
+#
+# ── It no longer triggers on ITSELF, and it checks before it publishes (#573)
+#
+# This file used to list its own path, which is a trigger that can only ever fail: editing a
+# workflow cannot change the manifest's version, and the registry rejects a re-publish of a
+# version it already holds. Demonstrated on d4efd1d, whose only change here was the comment
+# block above — `publish failed: server returned status 400 … "invalid version: cannot publish
+# duplicate version"`. So the self-path is gone.
+#
+# That alone would leave the wider edge open: ANY `server.json` edit that does not move the
+# version — a reworded description, a changed title — fails the same way. The registry is
+# append-only per version, so "already published" is a correct outcome and must not be a red
+# build; a workflow that is red for a correct outcome is a workflow people stop reading. The
+# guard below therefore asks the registry what it already has and skips when it matches. It
+# does NOT swallow a failure: an unreachable or unparseable registry fails the step, because
+# "we could not ask" and "there is nothing to do" must not look the same (ADR 0002).
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - "server.json"
-      - ".github/workflows/publish-mcp-registry.yml"
 
 jobs:
   publish:
@@ -33,12 +48,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # States what it measured: the name it asked about, how many entries the registry holds
+      # under it, the version already marked latest, and the version this repo wants. A skip
+      # that printed nothing would be indistinguishable from a query that returned nothing.
+      - name: Is this version already published?
+        id: check
+        run: |
+          set -euo pipefail
+          name=$(jq -er .name server.json)
+          want=$(jq -er .version server.json)
+          resp=$(curl -sS --fail "https://registry.modelcontextprotocol.io/v0/servers?search=${name}")
+          seen=$(echo "$resp" | jq -er --arg n "$name" '[.servers[] | select(.server.name == $n)] | length')
+          have=$(echo "$resp" | jq -er --arg n "$name" \
+            '[.servers[] | select(.server.name == $n)
+                         | select(._meta["io.modelcontextprotocol.registry/official"].isLatest == true)
+                         | .server.version] | first // ""')
+          echo "registry holds ${seen} entry(ies) for ${name}; latest published = '${have}', server.json wants '${want}'"
+          if [ "$want" = "$have" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${want} is already the registry's latest — nothing to publish."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install mcp-publisher
+        if: steps.check.outputs.publish == 'true'
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Authenticate to MCP Registry
+        if: steps.check.outputs.publish == 'true'
         run: ./mcp-publisher login github-oidc
 
       - name: Publish server metadata
+        if: steps.check.outputs.publish == 'true'
         run: ./mcp-publisher publish
