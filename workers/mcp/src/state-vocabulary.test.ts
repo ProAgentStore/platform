@@ -241,13 +241,27 @@ describe("the cleared-task vocabulary is derived from the endpoint AND the runne
 		expect(clearFinishedSentence()).not.toContain("done");
 	});
 
-	it("does not publish `expired`, which the filter names and no writer can produce", () => {
-		// The other half of the same defect, and the reason the published set is an INTERSECTION.
-		// Advertising a status a row cannot hold is the `agent_trace level:"error"` failure (#564)
-		// pointed the other way. The filter keeps it (legacy rows); the description must not — #611.
-		expect(clearFilterFromSource(), "the filter still carries it — if not, drop this arm").toContain("expired");
-		expect(taskStatusFromSource()).not.toContain("expired");
+	it("names `expired` in NEITHER source — the filter stopped sweeping a status nothing writes", () => {
+		// This arm used to assert the opposite of its second line: that the filter DID still carry
+		// `expired` while the description did not, which is what an INTERSECTION buys you. #611
+		// settled the open question behind that split by asking production — 404 rows in
+		// `instance_runtime_tasks`, seven distinct statuses, none of them `expired` — so there was no
+		// legacy row to sweep and the member was dropped rather than narrowed away.
+		//
+		// The assertion is now the stronger one, and it is the one that would have caught the
+		// original defect: an unmatchable member of a live `WHERE … IN` filter is indistinguishable
+		// from a matchable one that finds nothing, so the filter must be checked against the union
+		// directly instead of being allowed to name whatever it likes and fixed up downstream.
+		expect(taskStatusFromSource(), "`expired` is not a TaskStatus and never was").not.toContain("expired");
+		expect(clearFilterFromSource(), "the filter may not name a status the column cannot hold").not.toContain("expired");
 		expect(clearFinishedSentence()).not.toContain("`expired`");
+	});
+
+	it("publishes the filter WHOLE now that it is clean, not a narrowing of it", () => {
+		// The intersection above still computes; what changed is that it no longer removes anything.
+		// Asserting the equality separately is what keeps "the narrowing is empty" a measured fact
+		// rather than an inference from the intersection arm passing.
+		expect([...CLEARED_TASK_STATUSES].sort()).toEqual(clearFilterFromSource().sort());
 	});
 
 	it("publishes exactly ONE claim the sweep can see, and it is the backed one", () => {

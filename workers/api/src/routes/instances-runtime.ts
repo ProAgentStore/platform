@@ -329,13 +329,13 @@ export async function deleteMirroredRuntimeTask(
  * array (parsed from source — the MCP worker is a separate deployable) and goes red on drift.
  *
  * `blocked` is deliberately absent: it means the agent is waiting on the user, so it counts as
- * active. `expired` is present and is NOT emittable here — every writer of this column produces a
- * `TaskStatus`, which has no such member (traced in #611, which decides whether it may go). So the
- * MCP description publishes the INTERSECTION, and advertises no status a task cannot hold.
+ * active. A fourth member, `expired`, went in #611: nothing emits it (both functions NAMED for
+ * expiry write `failed`) and the legacy rows #609 kept it for do not exist — a production census
+ * found none. The test pins this array as `readonly TaskStatus[]`, so it cannot come back.
  */
-export const CLEARED_RUNTIME_TASK_STATUSES = ["failed", "completed", "cancelled", "expired"] as const;
+export const CLEARED_RUNTIME_TASK_STATUSES = ["failed", "completed", "cancelled"] as const;
 
-/** Remove all finished (failed/completed/cancelled/expired) mirrored tasks for an instance. */
+/** Remove all finished (failed/completed/cancelled) mirrored tasks for an instance. */
 export async function clearFinishedRuntimeTasks(
 	env: Env,
 	instanceId: string,

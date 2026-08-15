@@ -3,8 +3,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_FRESH_MS } from "../lib/runtime-attachment.js";
 import { ORPHANABLE_TASK_TYPES } from "../lib/runtime-task-ownership.js";
-import { callRuntime, expireOrphanedRuntimeTasks, runtimeNodeResponse, type RuntimeRow } from "./instances-runtime.js";
+import {
+	CLEARED_RUNTIME_TASK_STATUSES,
+	callRuntime,
+	expireOrphanedRuntimeTasks,
+	runtimeNodeResponse,
+	type RuntimeRow,
+} from "./instances-runtime.js";
 import type { Env } from "../types.js";
+import type { TaskStatus } from "../../../../packages/browser-runner/src/types.js";
 
 interface Write {
 	sql: string;
@@ -75,6 +82,45 @@ function mockRelay(handler: (req: Request) => Promise<Response>) {
 		get: (_id: unknown) => ({ fetch: handler }),
 	};
 }
+
+describe("the clear-finished filter names only statuses the column can hold (#611)", () => {
+	/**
+	 * The whole fix, as a type.
+	 *
+	 * `CLEARED_RUNTIME_TASK_STATUSES` carried `expired` for six months. Nothing writes it:
+	 * `mirrorRuntimeTask` passes the runner's `TaskStatus` through, and both
+	 * `expireOrphanedRuntimeTasks` and the runner's `expireInFlightTasks` write `failed` in spite of
+	 * their names. So one quarter of a live `WHERE … IN` filter could never match a row, and no test
+	 * could see it — an unmatchable member behaves exactly like a matchable one that happens to find
+	 * nothing.
+	 *
+	 * This assignment is the guard, and it is a COMPILE error rather than a runtime one on purpose.
+	 * A `TaskStatus` union has no runtime representation to iterate, so the alternative was parsing
+	 * the runner's source with a regex (which `workers/mcp/src/state-vocabulary.test.ts` does, for
+	 * the separate reason that it is a different deployable and cannot import across). Here the
+	 * import is real, so the compiler can answer directly. Restoring `"expired"` to the array fails
+	 * `tsc -p tsconfig.test.json` — the gate #599 added precisely so a type-level assertion in a
+	 * worker test compiles somewhere and can actually go red.
+	 */
+	const _everyClearedStatusIsAReachableTaskStatus: readonly TaskStatus[] = CLEARED_RUNTIME_TASK_STATUSES;
+
+	it("sweeps the three terminal statuses, and not `blocked` — which means waiting on the user", () => {
+		expect([...CLEARED_RUNTIME_TASK_STATUSES].sort()).toEqual(["cancelled", "completed", "failed"]);
+		// `blocked` is a TaskStatus and is deliberately NOT swept: it is an ACTIVE card awaiting the
+		// human, and clearing the board must not hide the thing the board exists to surface.
+		expect([...CLEARED_RUNTIME_TASK_STATUSES]).not.toContain("blocked");
+	});
+
+	it("names nothing a production row has never held", () => {
+		// A full census of instance_runtime_tasks on 2026-08-16 (404 rows) returned exactly these
+		// seven statuses and no `expired`, which is what settled #611 AC1. Kept as the record of the
+		// measurement, so the next reader does not have to re-run it to know it was run.
+		const observedInProduction = ["completed", "failed", "cancelled", "running", "needs_human", "blocked", "queued"];
+		for (const status of CLEARED_RUNTIME_TASK_STATUSES) {
+			expect(observedInProduction, `\`${status}\` is swept but no row has ever carried it`).toContain(status);
+		}
+	});
+});
 
 describe("expireOrphanedRuntimeTasks", () => {
 	it("marks a task the dead runner process was running failed, with an orphan reason", async () => {

@@ -233,14 +233,21 @@ export function runHealthSentence(): string {
  * ── Why these three, derived from TWO files
  *
  * The endpoint's own filter is `CLEARED_RUNTIME_TASK_STATUSES` in
- * `workers/api/src/routes/instances-runtime.ts` — `failed`, `completed`, `cancelled`, `expired`.
- * Publishing that verbatim would re-commit the defect in the other direction: **`expired` is not
- * emittable on this table.** Measured 2026-08-15, the only writers of
+ * `workers/api/src/routes/instances-runtime.ts` — `failed`, `completed`, `cancelled`.
+ *
+ * It used to carry a fourth, `expired`, which is not emittable on this table: the only writers of
  * `instance_runtime_tasks.status` are `mirrorRuntimeTask` (a runner `TaskStatus`, no `expired`),
  * `expireOrphanedRuntimeTasks` (writes `failed`) and the runner's own `expireInFlightTasks` (also
- * `failed`). So the published set is the INTERSECTION of the filter with `TaskStatus`, and the
- * test derives it from both sources rather than trusting this array. `expired` staying in the
- * filter is deliberate (a legacy row carrying it must still be swept) and is #611.
+ * `failed`). #609 therefore published the INTERSECTION of the filter with `TaskStatus` rather than
+ * the filter verbatim, because publishing an unreachable value would have re-committed the defect
+ * pointing the other way. #611 then asked the DATA whether any legacy row justified keeping it —
+ * a full production census on 2026-08-16 found 404 rows, seven statuses, no `expired` — and
+ * dropped it from the filter.
+ *
+ * **So this array is no longer a narrowing: it is now equal to the filter**, and the test below
+ * asserts exactly that, still deriving it from both sources rather than trusting this literal. The
+ * intersection is kept as the DERIVATION because it is what makes the equality checkable; collapse
+ * it to a copy and the guard stops being able to tell the two files apart.
  */
 export const CLEARED_TASK_STATUSES = ["cancelled", "completed", "failed"] as const;
 
