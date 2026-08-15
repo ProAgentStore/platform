@@ -559,8 +559,22 @@ export function matchVoiceCommand(
 	// exactly "scrap that", so a destructive command must only ever be judged on a FINAL utterance,
 	// where the whole-utterance rule below can actually see the whole utterance.
 	if (state?.canScrap && hit(pick("scrap"), { whole: true })) return "scrap";
-	if (hit(pick("repeat"))) return "repeat";
+	// MUTE BEFORE REPEAT, and this order is ADR 0001 M1 rather than a preference (#469).
+	//
+	// The two lists are disjoint for every account that has not put the same phrase in both
+	// fields — an explicit binding strips that phrase from every other command's built-ins
+	// (#385 rule 2), and the built-in tables themselves share no phrase between any two commands
+	// in any language (asserted, with its denominator, in convo.test.ts). So this order is
+	// observable in exactly one situation: the user bound one phrase to BOTH. Nothing dedups
+	// across commands — `parseVoiceWords` reads each field independently — so that state is
+	// reachable from the console.
+	//
+	// Repeat-first made that phrase mean `repeat` on the always-on control listener, which is the
+	// only speech path alive while the agent talks or thinks and had no repeat branch: the word
+	// did nothing at all, in three of the five phases M1 says may never be dead zones. Mute is the
+	// invariant and repeat is a convenience, so the collision resolves toward the invariant.
 	if (hit(pick("mute"))) return "mute";
+	if (hit(pick("repeat"))) return "repeat";
 	return null;
 }
 

@@ -1278,3 +1278,84 @@ describe("a partial word set silently un-reserves a user's phrase (#469)", () =>
 		expect(matchVoiceCommand("unmute", FULL, "en", { muted: true })).toBe("unmute");
 	});
 });
+
+/**
+ * #469, the case the guard above stops one step short of — and it is an ADR 0001 M1 violation that
+ * ships today.
+ *
+ * The reasoning at `"leaves mute reachable … whatever the user bound repeat to"` is sound and its
+ * assertions pass, but it rests on a premise that only holds while the two bindings are DIFFERENT:
+ * *"an explicit binding only ever REMOVES built-ins from other commands, and 'mute' is not in it"*.
+ * Nothing removes anything when the user puts the SAME phrase in both fields. `parseVoiceWords`
+ * (`workers/api/src/lib/preferences.ts:287-289`) parses each command's list independently and there
+ * is no cross-command dedup anywhere, so `{ repeat: ["quiet"], mute: ["quiet"] }` is a state a user
+ * can save from the console today.
+ *
+ * `matchVoiceCommand` then checked `repeat` before `mute`, so that phrase resolved to `repeat` — and
+ * the always-on control listener, the ONLY speech path live while the agent talks or thinks, has no
+ * `repeat` branch. The word did **nothing** in three of the five phases ADR 0001 enumerates. Not
+ * "repeat instead of mute": nothing at all, silently, in exactly the phases M1 names as the ones
+ * that may never be dead zones.
+ *
+ * The order is now mute-first. It is observable ONLY here — the built-in phrase tables are pairwise
+ * disjoint in every language (asserted below, with its denominator), so for every account that has
+ * not double-bound a phrase the two orders are the same function.
+ */
+describe("a phrase bound to BOTH mute and repeat resolves to mute (#469, ADR 0001 M1)", () => {
+	const BOTH = { repeat: ["quiet"], mute: ["quiet"] };
+
+	it("gives the phrase to mute, in every phase the control listener carries", () => {
+		// The control listener judges partials AND finals, and raises the bar to whole-utterance
+		// while the agent's own voice may be in the mic (#386). Mute must survive all of it.
+		for (const state of [{ muted: false }, { muted: false, whole: true }]) {
+			expect(
+				matchVoiceCommand("quiet", BOTH, "en", state),
+				"a phrase the user bound to both is being read as repeat — mute has a dead zone while the agent speaks (ADR 0001 M1)",
+			).toBe("mute");
+		}
+		// The doubled emphatic a user reaches for when the first attempt appeared not to work (#456).
+		expect(matchVoiceCommand("quiet quiet", BOTH, "en", { muted: false })).toBe("mute");
+	});
+
+	it("still refuses repeat while muted, and still finds unmute there", () => {
+		// The muted branch never checked repeat (speaking while the user asked for silence), so the
+		// reorder must not have reached it.
+		expect(matchVoiceCommand("quiet", BOTH, "en", { muted: true })).toBeNull();
+		expect(matchVoiceCommand("unmute", BOTH, "en", { muted: true })).toBe("unmute");
+	});
+
+	it("leaves repeat alone when the user bound it to a phrase mute does not claim", () => {
+		expect(matchVoiceCommand("stop", { repeat: ["stop"] }, "en", { muted: false })).toBe("repeat");
+		expect(matchVoiceCommand("say that again", undefined, "en", { muted: false })).toBe("repeat");
+	});
+
+	/**
+	 * WHY the reorder is safe, as an assertion rather than a paragraph — and with the size of what
+	 * it examined, per ADR 0002. If any two commands shared a built-in phrase in any language, the
+	 * order of the checks would decide that language's behaviour for every default account, and
+	 * moving `mute` would be a silent behaviour change rather than a no-op.
+	 */
+	it("is a no-op for every account that has not double-bound a phrase — the built-in tables are pairwise disjoint", () => {
+		const langs = ["en", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko", "ar", "hi", "nl", "pl", "tr", "sv", "uk", "vi", "id", "th"];
+		let comparisons = 0;
+		let phrases = 0;
+		for (const lang of langs) {
+			for (const a of ALL_VOICE_COMMANDS) {
+				const left = commandPhrases(a, undefined, lang);
+				phrases += left.length;
+				for (const b of ALL_VOICE_COMMANDS) {
+					if (a >= b) continue;
+					comparisons += 1;
+					const shared = commandPhrases(b, undefined, lang).filter((p) => left.includes(p));
+					expect(shared, `${lang}: "${shared.join('", "')}" is a built-in phrase for both ${a} and ${b} — the matcher's ORDER now decides what it means`).toEqual([]);
+				}
+			}
+		}
+		// ADR 0002 — the denominator is the assertion. An empty command table, a `langKey` that
+		// stopped resolving, or a `commandPhrases` that started returning [] would otherwise make
+		// "no overlaps" true by measuring nothing.
+		expect(comparisons).toBe((langs.length * ALL_VOICE_COMMANDS.length * (ALL_VOICE_COMMANDS.length - 1)) / 2);
+		expect(comparisons).toBeGreaterThan(400);
+		expect(phrases, "the phrase tables resolved to almost nothing — this test is comparing empty sets").toBeGreaterThan(400);
+	});
+});

@@ -251,7 +251,16 @@ const PINS = {
 	// decision. The classification itself cost nothing — the twelve `client:voice` reports in this
 	// file swapped a string literal for one of two named constants (voice/report-source.ts), which is
 	// what lets `report-sources.test.ts` assert the whole set instead of one example.
-	"packages/sdk/src/voice/use-voice.ts": 2021,
+	// +25 for the second half of #469, and 20 of them are comment. The code is three statements: the
+	// control listener finally DISPATCHES `repeat` (it had been matching it and dropping it, so "say
+	// that again" did nothing in the one phase where the mic is closed — the agent talking), a
+	// `tts.cancel()` in `repeatLast` because `speak` queues and this is the first call site that can
+	// arrive mid-sentence, and one shared generation counter so the cancelled `speakAndResume` stops
+	// reopening the microphone underneath the utterance that replaced it. That last one is the whole
+	// reason this is not a one-liner, and it has nowhere else to live: `speak` already carried the
+	// guard, `speakAndResume` did not need one until something could interrupt it, and a mic opened
+	// during playback is the self-transcription loop every pause in this file exists to prevent.
+	"packages/sdk/src/voice/use-voice.ts": 2046,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets

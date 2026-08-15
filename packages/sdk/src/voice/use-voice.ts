@@ -845,6 +845,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Speak response, then re-open mic
 	const speakAndResume = useCallback(async (text: string) => {
+		// Generation, SHARED with the manual `speak` above — one TTS engine and one microphone, so
+		// "who owns the state when this await comes back" is one question (#469). Until the control
+		// listener could dispatch `repeat`, nothing could interrupt an auto-spoken reply and this
+		// invocation was always the only one; now a repeat mid-sentence cancels the playback, which
+		// resolves the `await` below in the OLD invocation, which would then walk on to reopen the
+		// microphone while the new utterance is still playing — and a mic open during TTS is the
+		// self-transcription loop every pause in this file exists to prevent.
+		const myGen = ++speakGenRef.current;
 		// Hard-STOP the recognizer while the agent talks so it can never transcribe its
 		// own voice. Critical for push-to-talk + auto-speak, where the recognizer keeps
 		// running (it only flips micOn) and would otherwise hear the agent and reply to
@@ -864,6 +872,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// and the fallback, and `setSpeaking(false)` below puts the UI back. Auto-speak also
 			// only READS a reply that is already on screen (#291).
 		}
+		if (speakGenRef.current !== myGen) return; // superseded — the newer utterance owns the state
 		setSpeaking(false);
 		speakEndedAtRef.current = Date.now();
 		// Now the agent is done — allow the mic to reopen. Only auto-resume in
@@ -898,6 +907,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const repeatLast = useCallback(() => {
 		const last = lastSpokenTextRef.current;
 		if (last) {
+			// START AGAIN, do not queue (#469). `tts.speak` appends — the manual word-tap path
+			// cancels first for exactly this reason — and since the control listener began
+			// dispatching `repeat` this is the one call site that can arrive WHILE the agent is
+			// still talking. Without the cancel, "say that again" makes the user sit through the
+			// rest of the sentence they already could not follow, and only then hear it repeated.
+			// `speakAndResume`'s generation guard is what stops the cancelled invocation reopening
+			// the microphone underneath the new one.
+			ttsRef.current?.cancel();
 			speakAndResume(last);
 		} else {
 			setPaused(false);
@@ -1033,6 +1050,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (cmd === "mute") muteFromCommandRef.current();
 		else if (cmd === "unmute") unmuteFromCommandRef.current();
 		else if (cmd === "exit") exitFromCommandRef.current();
+		// "Say that again" (#469). This listener MATCHED repeat and then dropped it: the one path
+		// alive while the agent talks or thinks was the one path where the command did nothing, and
+		// that is the phase in which a user asks to hear something again. The hazard the ticket
+		// named as the blocker — `repeat` swallowing a phrase the user also bound to `mute` — is
+		// gone at the matcher, which now resolves that collision to mute (ADR 0001 M1), so this
+		// branch cannot cost the invariant. The muted branch refuses repeat outright, so it also
+		// cannot speak while the user has asked for silence.
+		else if (cmd === "repeat") repeatLastRef.current();
 		// This listener is the ONLY one running while the agent speaks or thinks and the mic is
 		// closed — i.e. exactly when a hands-free user has nothing to look at and most wants out.
 		else if (cmd === "next") nextFromCommandRef.current();

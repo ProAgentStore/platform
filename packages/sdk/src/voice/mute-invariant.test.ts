@@ -35,7 +35,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { readAdr } from "../../../../scripts/lib/adr.mjs";
-import { commandStateFor, matchVoiceCommand, shouldRunControlListener, type TranscriptKind, type VoiceCommand } from "./convo.js";
+import { commandStateFor, matchVoiceCommand, shouldRunControlListener, type TranscriptKind, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
 import { classifyResult, isEchoing, planMuteTeardown, type Dictation } from "./machine.js";
 import { planMicRestart } from "./mic-retry.js";
 
@@ -96,14 +96,14 @@ const KINDS: TranscriptKind[] = ["partial", "final"];
  * matcher answers. Both halves are the shipped functions — this mirrors the composition, not the
  * decision, and the structural guard below is what keeps the mirror honest.
  */
-function dispatch(text: string, kind: TranscriptKind, p: Phase, muted: boolean): VoiceCommand | null {
-	return matchVoiceCommand(text, undefined, "en", commandStateFor(kind, { muted, echoing: isEchoing(p.guard, NOW) }));
+function dispatch(text: string, kind: TranscriptKind, p: Phase, muted: boolean, words?: VoiceCommandWords): VoiceCommand | null {
+	return matchVoiceCommand(text, words, "en", commandStateFor(kind, { muted, echoing: isEchoing(p.guard, NOW) }));
 }
 
 /** Is `command` reachable at all in this phase — by ANY transcript kind, for ANY of the words a
  *  user would deliberately say to reach it? */
-function reachable(command: "mute" | "unmute", p: Phase, muted: boolean, said: string[]): boolean {
-	return said.some((text) => KINDS.some((kind) => dispatch(text, kind, p, muted) === command));
+function reachable(command: "mute" | "unmute", p: Phase, muted: boolean, said: string[], words?: VoiceCommandWords): boolean {
+	return said.some((text) => KINDS.some((kind) => dispatch(text, kind, p, muted, words) === command));
 }
 
 /** What a user actually says. Both a bare word and the doubled emphatic the ADR uses as its
@@ -160,6 +160,60 @@ describe("M1 — reachable at every moment", () => {
 				).toBe(true);
 			}
 		}
+	});
+
+	/**
+	 * #469 — the vocabulary this guard was measuring, stated (ADR 0002).
+	 *
+	 * Every assertion above passes `undefined` words, so all of them are about the BUILT-IN English
+	 * phrase list. That is the vocabulary of an account that has configured nothing, and it is the
+	 * one vocabulary in which the invariant cannot be broken by configuration — which is the
+	 * opposite of the interesting case. `mute` was checked AFTER `repeat` and nothing dedups a
+	 * phrase across command fields, so `{ mute: ["quiet"], repeat: ["quiet"] }` — savable from the
+	 * console today — resolved to `repeat`, and the control listener had no repeat branch: three of
+	 * the five phases below became dead zones for a user who had done nothing wrong.
+	 *
+	 * So the guard is run again over CONFIGURED vocabularies, including the collisions. The
+	 * denominator is asserted for the same reason ADR 0002 gives: a `VOCABULARIES` table that
+	 * silently emptied would make this pass by measuring nothing.
+	 */
+	const VOCABULARIES: { name: string; words: VoiceCommandWords; saysMute: string[] }[] = [
+		{ name: "nothing configured (built-ins)", words: {}, saysMute: SAYS_MUTE },
+		{ name: "mute rebound", words: { mute: ["quiet"] }, saysMute: ["quiet", "quiet quiet"] },
+		{ name: "the same phrase bound to mute AND repeat", words: { mute: ["quiet"], repeat: ["quiet"] }, saysMute: ["quiet", "quiet quiet"] },
+		{ name: "repeat rebound onto a built-in exit phrase (#469's worked example)", words: { repeat: ["stop"] }, saysMute: SAYS_MUTE },
+		{ name: "repeat bound to the doubled emphatic mute is escalated with (#456)", words: { repeat: ["mute mute"] }, saysMute: ["mute"] },
+		{ name: "every other command switched off (#443)", words: { disabled: ["exit", "next", "scrap", "repeat"] }, saysMute: SAYS_MUTE },
+	];
+
+	it("dispatches mute in every phase for a CONFIGURED vocabulary too, collisions included", () => {
+		let checked = 0;
+		for (const v of VOCABULARIES) {
+			for (const p of PHASES) {
+				checked += 1;
+				expect(
+					reachable("mute", p, false, v.saysMute, v.words),
+					`${p.name}, with ${v.name}: nothing the user can say reaches mute. ADR 0001 M1 — no phase may be a dead zone, and a phase does not stop being one because the user configured a word.`,
+				).toBe(true);
+			}
+		}
+		// ADR 0002 — the size of what was examined is the assertion, not a by-product.
+		expect(checked).toBe(VOCABULARIES.length * PHASES.length);
+		expect(VOCABULARIES.length, "the vocabulary table shrank — this guard is measuring less than it says").toBeGreaterThanOrEqual(6);
+	});
+
+	/**
+	 * `exit` deliberately still wins its own collision, and that is not the same defect.
+	 *
+	 * M1 forbids a phase in which the user cannot stop the microphone. A phrase double-bound to
+	 * `exit` leaves the voice session outright — the mic closes, the agent stops being spoken to,
+	 * and the user is out of the situation the invariant exists to protect. A phrase double-bound
+	 * to `repeat` reached a listener with no repeat branch and did NOTHING, which leaves them
+	 * exactly where they were with one fewer way out. Recorded so the asymmetry is a decision on
+	 * the record rather than something the next reader has to re-derive from the check order.
+	 */
+	it("does not claim every collision for mute — an explicitly bound exit still leaves the session", () => {
+		expect(dispatch("quiet", "final", PHASES[3], false, { mute: ["quiet"], exit: ["quiet"] })).toBe("exit");
 	});
 
 	it("hands every mic-idle phase to the control listener, and yields only where the main path is already matching", () => {
