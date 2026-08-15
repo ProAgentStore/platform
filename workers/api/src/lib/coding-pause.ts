@@ -171,7 +171,7 @@ async function waitForEngineReset(
 	input: { round: number; result: CodingResult; state: EngineWaitState },
 ): Promise<PauseVerdict> {
 	const { result, round, state } = input;
-	const plan = planEngineWait({ resetsAt: result.waitUntil, now: deps.now(), state });
+	const plan = planEngineWait({ resetsAt: result.waitUntil, now: deps.now(), state, timeZone: deps.timeZone });
 	if (!plan.wait) {
 		return { resume: false, result: { ...result, detail: engineWaitExhausted(result.detail, plan.why) } };
 	}

@@ -7,12 +7,12 @@ import {
 	engineWaitExhausted,
 	enginePauseMessage,
 	formatLocal,
-	MAX_ENGINE_WAIT_MS,
 	MAX_ENGINE_WAITS,
 	MIN_ENGINE_WAIT_MS,
 	parseResetInstant,
 	planEngineWait,
 	type EngineWaitPlan,
+	type EngineWaitRefusal,
 } from "./coding-wait.js";
 
 /** The moment run 6550f673 started, to the second: 2026-08-12T11:34:00Z = 21:34 in Sydney. */
@@ -89,10 +89,38 @@ describe("planEngineWait — the deadline is a bound, never an authority", () =>
 		expect(p.ms).toBe(MIN_ENGINE_WAIT_MS);
 	});
 
-	it("caps a deadline further out than one park may last, and SAYS it capped", () => {
-		const p = planEngineWait({ resetsAt: "2026-08-20T00:00:00Z", now: RUN_START, state: fresh() }) as EngineWaitPlan;
-		expect(p.ms).toBe(MAX_ENGINE_WAIT_MS);
+	it("#580 — REFUSES a deadline no amount of waiting inside this run could reach", () => {
+		// This used to cap such a deadline at `MAX_ENGINE_WAIT_MS` and park. That was the mechanism
+		// behind run 70ea298e: its engine reported "You've hit your weekly limit · resets Aug 17 at
+		// 4pm", TWO DAYS out, and the run sat `running` on iteration 1 for 4.35 hours holding the
+		// repo's one active session. The park could never have helped — `ENGINE_WAIT_TOTAL_MS` is
+		// the same six hours, so on waking the run would have been refused anyway. The outcome was
+		// decided the moment the deadline was read; the wait bought nothing and hid everything.
+		const plan = planEngineWait({ resetsAt: "2026-08-20T00:00:00Z", now: RUN_START, state: fresh() });
+		expect(plan.wait).toBe(false);
+		// NAMED, per AC5: an owner told "the run stopped" learns nothing; one told when the limit
+		// resets knows to come back on Thursday.
+		expect((plan as EngineWaitRefusal).why).toContain("2026-08-20");
+		expect((plan as EngineWaitRefusal).why).toContain("does not reset until");
+	});
+
+	it("#580 — renders that reset in the OWNER's zone, not the Worker's", () => {
+		// #541's standing rule. `formatLocal` says which zone it printed either way, so an account
+		// with no zone still gets an honest UTC rather than a silently-assumed local time.
+		const plan = planEngineWait({ resetsAt: "2026-08-20T00:00:00Z", now: RUN_START, state: fresh(), timeZone: "Australia/Sydney" });
+		expect((plan as EngineWaitRefusal).why).toMatch(/\+10:00|\+11:00/);
+		expect((plan as EngineWaitRefusal).why).toContain("Australia/Sydney");
+	});
+
+	it("still CAPS a deadline that is merely longer than what is LEFT, and says it capped", () => {
+		// The case `capped` was written for is untouched: a reset the run could reach with a full
+		// budget but not with what remains. Waking early and looking again is right there — it is
+		// only the unreachable-in-principle deadline that is now refused up front.
+		const spent = ENGINE_WAIT_TOTAL_MS - 30 * 60_000;
+		const p = planEngineWait({ resetsAt: new Date(RUN_START + 2 * 60 * 60_000).toISOString(), now: RUN_START, state: { waits: 1, spentMs: spent } }) as EngineWaitPlan;
+		expect(p.wait).toBe(true);
 		expect(p.capped).toBe(true);
+		expect(p.ms).toBe(30 * 60_000);
 	});
 
 	it("clamps to what the run has left of its total budget", () => {

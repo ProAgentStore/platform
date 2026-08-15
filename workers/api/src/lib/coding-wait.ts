@@ -152,8 +152,14 @@ export function parseResetInstant(raw: unknown): number | null {
 	return Number.isFinite(ms) ? ms : null;
 }
 
-/** Plan one park, or refuse to take another. */
-export function planEngineWait(input: { resetsAt?: unknown; now: number; state: EngineWaitState }): EngineWaitPlan | EngineWaitRefusal {
+/**
+ * Plan one park, or refuse to take another.
+ *
+ * `timeZone` is the OWNER's, used only to render a refusal's reset instant. Optional and
+ * UTC-when-absent for this module's standing reason: `formatLocal` says which zone it printed, and
+ * a silently-assumed zone is the ten-hour error the whole file exists to avoid.
+ */
+export function planEngineWait(input: { resetsAt?: unknown; now: number; state: EngineWaitState; timeZone?: string }): EngineWaitPlan | EngineWaitRefusal {
 	const { now, state } = input;
 	if (state.waits >= MAX_ENGINE_WAITS) {
 		return { wait: false, why: `the run has already waited ${state.waits} times for this limit to clear` };
@@ -164,6 +170,26 @@ export function planEngineWait(input: { resetsAt?: unknown; now: number; state: 
 	}
 
 	const at = parseResetInstant(input.resetsAt);
+	// A DEADLINE THIS RUN CANNOT REACH IS A REFUSAL, NOT A PARK (#580).
+	//
+	// The clamp below is what produced the incident. Run 70ea298e's engine reported "You've hit your
+	// weekly limit · resets Aug 17 at 4pm" — a reset TWO DAYS out — and the plan clamped it to the
+	// 6h ceiling and parked. Six hours later it would have woken, read the same limit, and been
+	// refused anyway, because `ENGINE_WAIT_TOTAL_MS` is also 6h. So the terminal outcome was fixed
+	// the moment the deadline was read; the only thing the park bought was 4.35 hours of a run
+	// reporting `running` on iteration 1, holding the repo's one active session, while the owner
+	// could not tell it from work.
+	//
+	// `capped` remains for the case it was written for — a deadline slightly beyond what is LEFT of
+	// the budget, where waking early and looking again is genuinely better than giving up. This
+	// refuses only when the reset is past what the run could reach even with its FULL budget, which
+	// is a fact about the limit rather than about how much of the budget this run has spent.
+	if (at !== null && at - now > Math.min(MAX_ENGINE_WAIT_MS, ENGINE_WAIT_TOTAL_MS)) {
+		return {
+			wait: false,
+			why: `the limit does not reset until ${formatLocal(at, input.timeZone)}, which is beyond the ${formatDuration(ENGINE_WAIT_TOTAL_MS)} a run may wait — no amount of waiting inside this run can clear it`,
+		};
+	}
 	let requested: number;
 	let source: EngineWaitSource;
 	if (at !== null && at > now) {
