@@ -840,7 +840,13 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		const online = healthRes.ok && capabilitiesRes.ok;
 		// Persist offline only when the probe fails AND the heartbeat has gone stale.
 		const effective = online || recentlySeen ? "online" : "offline";
-		await updateRuntimeStatus(c.env, instanceId, session.uid, effective);
+		// Scoped to the machine we actually probed (#587). `runtime` here is the LIVE node's row
+		// whenever there is one, and `getLiveRuntime` returns a row from `instance_runtime_nodes` —
+		// so a node-less write recorded THIS machine's probe result on the shared row, which names
+		// whichever machine registered last, and never on the probed machine's own row. That is the
+		// same two-machine blend from the other direction, and it is also why the per-node table had
+		// no `offline` writer at all (#570): the one call site that passed a node passed "online".
+		await updateRuntimeStatus(c.env, instanceId, session.uid, effective, runtime.runner_node);
 		// #380: liveness is the PIN-AWARE answer or nothing. This used to ask `relayConnected`
 		// about `runtime.runner_node` — which, once `getLiveRuntime` returned null, is the FALLBACK
 		// row's node, a machine the pin excludes. So the pin-blind question overrode the pin-aware
@@ -872,7 +878,17 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 			liveNodeExcludedByPin,
 		});
 		return c.json({
-			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: new Date().toISOString() }),
+			// `last_seen_at` is echoed as the write above left it, NOT as `now` (#587). Stamping it
+			// `now` unconditionally was how this route bypassed the freshness derivation: an
+			// always-fresh timestamp makes `heartbeatFresh` true by construction, so the probe —
+			// the MORE thorough call — was the one that could not report a machine offline. When
+			// the probe succeeded the row genuinely is fresh, because `updateRuntimeStatus` just
+			// stamped it; when it failed, the honest answer is the last contact we actually had.
+			runtime: runtimeResponse({
+				...runtime,
+				status: effective,
+				last_seen_at: effective === "online" ? new Date().toISOString() : runtime.last_seen_at,
+			}),
 			health,
 			capabilities,
 			relay: {
@@ -889,7 +905,9 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		if (recentlySeen) {
 			return c.json({ runtime: runtimeResponse({ ...runtime, status: "online" }), transient: true });
 		}
-		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		// Same node scope as the success path (#587): the machine we failed to reach is the one
+		// being marked down, not whichever machine happens to own the shared row.
+		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline", runtime.runner_node);
 		return c.json({
 			runtime: runtimeResponse({ ...runtime, status: "offline" }),
 			error: error instanceof Error ? error.message : String(error),

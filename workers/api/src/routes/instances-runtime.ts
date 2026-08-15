@@ -823,20 +823,37 @@ export async function updateRuntimeStatus(
 	runnerNode?: string | null,
 ): Promise<void> {
 	const node = normalizeRunnerNode(runnerNode);
+	// `last_seen_at` means "when we last heard from this runner", and only that. It used to advance
+	// on EVERY write including `offline` — so the moment we concluded a machine was gone we also
+	// recorded having just heard from it, and `heartbeatFresh` read the row as live for the next
+	// 90 seconds. A stored `offline` out-ranks the derivation so the published status survived it,
+	// but `lastSeenAt` itself is shown to the user and fed to `diagnoseAttachment`, and it was a
+	// timestamp of our own conclusion rather than of any contact (#587).
+	const seen = status === "offline" ? "" : ", last_seen_at = datetime('now')";
 	if (node) {
 		await env.DB.prepare(
 			`UPDATE instance_runtime_nodes
-       SET status = ?1, last_seen_at = datetime('now'), updated_at = datetime('now')
+       SET status = ?1${seen}, updated_at = datetime('now')
        WHERE instance_id = ?2 AND user_id = ?3 AND runner_node = ?4`,
 		)
 			.bind(status, instanceId, userId, node)
 			.run();
 	}
-	await env.DB.prepare(
+	// Node-SCOPED, when the caller knows which machine it heard from (#587). This UPDATE carried no
+	// node filter while the one above did, and `instance_runtimes` is a SHARED row holding the LAST
+	// REGISTRANT's `runner_node`, `runner_version` and `capabilities` — so one machine's heartbeat
+	// refreshed the row's liveness while another machine's identity stayed on it. Not stale: two
+	// machines BLENDED. Measured 2026-08-15, two instances reported `RLs-MacBook-Air.local` online
+	// with `coding.repo-write` ten hours after it left, while the live Mac mini lacked that
+	// capability — a run dispatched on that reading fails for a reason the status screen denies.
+	//
+	// `runner_node = ''` is the pre-0030 default: a registration that never said which machine it
+	// was, and the only candidate row. Without that clause every pre-0030 row goes unheard-from.
+	const scope = node ? " AND (runner_node = ?4 OR runner_node = '')" : "";
+	const stmt = env.DB.prepare(
 		`UPDATE instance_runtimes
-     SET status = ?1, last_seen_at = datetime('now'), updated_at = datetime('now')
-     WHERE instance_id = ?2 AND user_id = ?3`,
-	)
-		.bind(status, instanceId, userId)
-		.run();
+     SET status = ?1${seen}, updated_at = datetime('now')
+     WHERE instance_id = ?2 AND user_id = ?3${scope}`,
+	);
+	await (node ? stmt.bind(status, instanceId, userId, node) : stmt.bind(status, instanceId, userId)).run();
 }

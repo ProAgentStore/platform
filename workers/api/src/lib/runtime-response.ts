@@ -15,7 +15,22 @@ export function safeParseArray(value: string): unknown[] {
 	}
 }
 
+/**
+ * A runtime registration, with `status` derived from its HEARTBEAT rather than read off the
+ * column — for the default row exactly as for a node row (#587).
+ *
+ * This is the ONE serialiser. It was not, and that is the whole bug: #570 put the derivation in
+ * `runtimeNodeResponse` and left this function publishing `row.status` raw, so `nodes[]` told the
+ * truth and the `runtime` field beside it in the SAME response did not. Measured 2026-08-15:
+ * `runtime.status === "online"` on 22 of 22 instances, including two naming a machine last seen
+ * 10h36m earlier. A derivation that lives in one of two serialisers is a derivation with a
+ * bypass, so it lives here, where every publisher of a runtime row already goes.
+ *
+ * A stored `offline` still wins, so the derivation can only ever move the answer TOWARD offline
+ * — a future writer that marks a runtime down is not undone here.
+ */
 export function runtimeResponse(row: RuntimeRow) {
+	const fresh = heartbeatFresh(row.last_seen_at);
 	return {
 		instanceId: row.instance_id,
 		placement: row.placement,
@@ -23,7 +38,7 @@ export function runtimeResponse(row: RuntimeRow) {
 		capabilities: safeParseArray(row.capabilities),
 		runnerVersion: row.runner_version,
 		runnerNode: row.runner_node || "",
-		status: row.status,
+		status: row.status === "offline" || !fresh ? "offline" : row.status,
 		lastSeenAt: row.last_seen_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
@@ -32,15 +47,17 @@ export function runtimeResponse(row: RuntimeRow) {
 }
 
 /**
- * One machine's registration, with a status derived from its HEARTBEAT rather than read off the
- * column (#570).
+ * One machine's registration: the same derived view, plus the relay name that only a per-node row
+ * has (#570).
  *
- * `instance_runtime_nodes.status` has no writer for any value but `"online"`: of eight
- * `updateRuntimeStatus` call sites exactly one passes a node, and it passes `"online"` at
- * registration — every `offline` write reaches `instance_runtimes` and never the per-node table.
+ * `instance_runtime_nodes.status` had no writer for any value but `"online"`: of eight
+ * `updateRuntimeStatus` call sites exactly one passed a node, and it passed `"online"` at
+ * registration — every `offline` write reached `instance_runtimes` and never the per-node table.
  * This function published that write-once column, so one instance reported four machines `online`
  * with three of them last seen 2-4 days earlier. That is the answer `instance_runtime_status`
- * gives over MCP and `pags runner status` prints.
+ * gives over MCP and `pags runner status` prints. (#587 gave the node table its `offline` writer
+ * as well, by passing the node from the probe path — the derivation is the second line of defence,
+ * not the only one.)
  *
  * Routing never trusted the column (`getBoundRunnerConn` is live-checked; `instance-connectivity.ts`
  * states why), which is exactly why this stayed invisible — its only consumer was the surface used
@@ -48,8 +65,7 @@ export function runtimeResponse(row: RuntimeRow) {
  *
  * Deliberately NOT a per-node relay probe: this is a serialiser, and making it async would put a
  * Durable Object fetch per node behind a list endpoint. `?probe=1` (`/runtime/status`) is where the
- * live check belongs and already is. A stored `offline` still wins, so the derivation can only ever
- * move the answer toward offline — a future writer that marks a node down is not undone here.
+ * live check belongs and already is.
  *
  * ## Exactly one parameter, deliberately
  *
@@ -61,11 +77,8 @@ export function runtimeResponse(row: RuntimeRow) {
  * instead; a one-argument function cannot be corrupted by the extra arguments `map` supplies.
  */
 export function runtimeNodeResponse(row: RuntimeRow) {
-	const base = runtimeResponse(row);
-	const fresh = heartbeatFresh(row.last_seen_at);
 	return {
-		...base,
-		status: base.status === "offline" || !fresh ? "offline" : base.status,
+		...runtimeResponse(row),
 		relayName: relayNameForInstance(row.instance_id, row.runner_node),
 	};
 }

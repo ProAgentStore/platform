@@ -191,14 +191,40 @@ describe("getRuntime / getRuntimeNode / getRuntimeForNode / listRuntimeNodes", (
 });
 
 describe("updateRuntimeStatus", () => {
-	it("updates BOTH the per-node row and the default row when a node is supplied", async () => {
+	it("updates BOTH the per-node row and the default row when a node is supplied, SCOPED to it", async () => {
 		const { env, writes } = mockEnv();
 		await updateRuntimeStatus(env, "inst-1", "u1", "online", "laptop-A");
 		expect(writes).toHaveLength(2);
 		expect(writes[0].sql).toContain("UPDATE instance_runtime_nodes");
 		expect(writes[0].args).toEqual(["online", "inst-1", "u1", "laptop-A"]);
 		expect(writes[1].sql).toContain("UPDATE instance_runtimes");
-		expect(writes[1].args).toEqual(["online", "inst-1", "u1"]);
+		// #587: the shared row's WHERE used to carry no node filter while the per-node one did, so
+		// one machine's heartbeat refreshed a row holding ANOTHER machine's identity, version and
+		// capability list. The published `runtime` was then two machines blended, and it reported
+		// `coding.repo-write` online on a machine that had been gone ten hours.
+		expect(writes[1].sql).toContain("runner_node = ?4");
+		expect(writes[1].args).toEqual(["online", "inst-1", "u1", "laptop-A"]);
+	});
+
+	it("still refreshes a pre-0030 default row that never recorded which machine it was", async () => {
+		// `instance_runtimes.runner_node` is `NOT NULL DEFAULT ''` (migration 0030). Scoping the
+		// write without this escape would leave every registration older than 0030 permanently
+		// unheard-from, which the freshness derivation would then publish as offline forever.
+		const { env, writes } = mockEnv();
+		await updateRuntimeStatus(env, "inst-1", "u1", "online", "laptop-A");
+		expect(writes[1].sql).toContain("runner_node = ''");
+	});
+
+	it("does not advance last_seen_at when marking a runtime offline", async () => {
+		// "Last seen" is when we last HEARD from the machine. Stamping it at the moment we conclude
+		// the machine is gone records contact that did not happen, and `heartbeatFresh` then reads
+		// the row as live for the next 90 seconds (#587).
+		const { env, writes } = mockEnv();
+		await updateRuntimeStatus(env, "inst-1", "u1", "offline", "laptop-A");
+		expect(writes.every((w) => !w.sql.includes("last_seen_at"))).toBe(true);
+		const online = mockEnv();
+		await updateRuntimeStatus(online.env, "inst-1", "u1", "online", "laptop-A");
+		expect(online.writes.every((w) => w.sql.includes("last_seen_at = datetime('now')"))).toBe(true);
 	});
 
 	it("updates ONLY the default row when no node is supplied", async () => {

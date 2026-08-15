@@ -302,11 +302,17 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 		expect(runtimeNodeResponse(mockRow({ status: "offline", last_seen_at: stamp(1_000) })).status).toBe("offline");
 	});
 
-	// The premise the fix rests on, measured rather than asserted from memory: the per-node UPDATE
-	// in `updateRuntimeStatus` only runs when a caller passes a node, and only one caller does.
-	// If that ever stops being true, this fails and whoever changed it gets to revisit whether the
-	// column should out-rank the heartbeat.
-	it("still has exactly one call site that writes a node status, and it writes 'online'", () => {
+	// The premise #570's fix rested on, measured rather than asserted from memory: the per-node
+	// UPDATE in `updateRuntimeStatus` only runs when a caller passes a node, and at the time only
+	// ONE caller did — so `"online"` was the only value the per-node column could ever hold.
+	//
+	// #587 changed that, deliberately: the two probe call sites now pass the node they actually
+	// probed, so `instance_runtime_nodes.status` finally has an `offline` writer and the shared
+	// `instance_runtimes` row can no longer be refreshed by a machine it does not name. The
+	// assertion below therefore checks the property that matters — every node-passing call site
+	// names its node rather than defaulting to the shared row — instead of the count, which was
+	// only ever evidence for it.
+	it("every node-passing call site writes a value the per-node column can hold", () => {
 		const dir = join(__dirname, "..");
 		const files: string[] = [];
 		const walk = (d: string) => {
@@ -331,7 +337,12 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 		// nothing.
 		expect(calls.length).toBeGreaterThanOrEqual(8);
 		const withNode = calls.filter((c) => c.split(",").length > 4);
-		expect(withNode).toHaveLength(1);
-		expect(withNode[0]).toContain('"online"');
+		// Three: the heartbeat (`"online"`, at registration) and the two probe outcomes (#587).
+		expect(withNode.length).toBeGreaterThanOrEqual(3);
+		// Both declared values of the per-node column are now written by application code. Before
+		// #587 only `"online"` was, which is what made the column a write-once field the serialiser
+		// had no business publishing.
+		expect(withNode.some((c) => c.includes('"online"'))).toBe(true);
+		expect(withNode.some((c) => c.includes('"offline"'))).toBe(true);
 	});
 });

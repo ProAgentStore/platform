@@ -111,7 +111,13 @@ const PINS = {
 	// +29 at #491: two terminal-session routes (GET + PUT) with their inline handlers and the
 	// `removeInstanceConfigKey` call — same pattern as runner-node, not splittable into a sub-module
 	// for two handlers. Growth is comment + two handler functions; the decision is sessionless.
-	"workers/api/src/routes/instances.ts": 981,
+	// +17 at #587, of which 15 are comment. The `/runtime/status` probe now passes the node it
+	// actually probed to `updateRuntimeStatus` (two call sites) and stops stamping `last_seen_at`
+	// at `now` on a FAILED probe — an always-fresh timestamp made `heartbeatFresh` true by
+	// construction, so the more thorough call was the only one that could not report a machine
+	// offline. Raised rather than split: the change is three expressions inside an existing
+	// handler, and the decision it feeds is pure and already lives in lib/runtime-response.ts.
+	"workers/api/src/routes/instances.ts": 998,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -854,7 +860,14 @@ const PINS = {
 	// `import-graph.test.ts` failed on the cycle — which is the guard doing its job on a split that
 	// looked finished. Both are re-exported from here, so no importer moved. Lowered rather than
 	// banked, per this guard's own rule: headroom left behind is how a removal gets silently spent.
-	"workers/api/src/routes/instances-runtime.ts": 843,
+	// +17 at #587, of which 14 are comment. `updateRuntimeStatus` scopes its `instance_runtimes`
+	// write to the node it heard from — that UPDATE had no node filter while the per-node one did,
+	// so on a multi-machine account the shared row became one machine's liveness under another's
+	// identity and capabilities — and stops advancing `last_seen_at` when the write is `offline`,
+	// because "last seen" must mean contact and not the moment we concluded there was none.
+	// Raised rather than split: this is two SQL strings in a function that is already the single
+	// choke point for the write, and splitting a choke point is how the bypass gets built.
+	"workers/api/src/routes/instances-runtime.ts": 860,
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
@@ -1149,7 +1162,11 @@ const PINS = {
 	// +14 at #580: the routes/tools.ts raise above (the loop reads now carry `health`/`waitNote`)
 	// and this self-ref. The reason is longer than the code it accounts for on purpose — a raise
 	// whose note is shorter than "because it grew" is the ratchet reading as a formality.
-	"scripts/check-file-size.mjs": 1233,
+	// +13 at #587: two raised entries and their reasons. Both are in the same file pair and both
+	// say the same thing — a status column was published without the derivation that makes it
+	// true — which is the case the split named above (PINS into its own data file) would make
+	// cheaper to read. Still not worth doing for two entries.
+	"scripts/check-file-size.mjs": 1250,
 };
 
 /**
