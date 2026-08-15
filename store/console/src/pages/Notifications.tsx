@@ -88,7 +88,11 @@ export default function Notifications() {
 								// only clickable outcome for one was a silent reload.
 								const route = notificationRoute(n.url);
 								if (route) navigate(route);
-								else if (n.instanceId) navigate(`/instances/${n.instanceId}`);
+								// An `else if (n.instanceId) navigate(...)` used to sit here and was DEAD (#617):
+								// the notifications table has no `instance_id` — its column is `agent_id`, and
+								// it holds an agent id, so even reading the right name would have routed
+								// `/instances/<an agent id>`. Removing it changes no behaviour; it stops the
+								// chain claiming a fallback it never had.
 								// A pre-#338 row points at GitHub Actions: open it where it lives.
 								else if (n.url?.startsWith("https://")) window.open(n.url, "_blank", "noopener");
 								else load();

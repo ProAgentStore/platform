@@ -1469,8 +1469,7 @@ function InstancePage() {
 						isCoding,
 						isRepo,
 						sessionId: urlSessionId,
-						boardColumns: instance?.capabilities?.boardColumns,
-						settingsSchema: instance?.capabilities?.settingsSchema,
+						// No boardColumns/settingsSchema: my/instances strips both (#617, see lib/types).
 						surfaceOptions: instance?.capabilities?.surfaceOptions,
 						// The same reading the header dot renders, handed to the surface (#378) — one
 						// poll, one answer, so a tab cannot contradict the dot directly above it.

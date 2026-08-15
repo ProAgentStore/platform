@@ -503,7 +503,8 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 									<Button variant="danger" onClick={() => deleteDoc(openDoc.id)}>Delete</Button>
 								</div>
 							</div>
-							{openDoc.source && <div className="text-xs text-muted-soft mb-2">{openDoc.source}{openDoc.createdAt ? ` · ${formatTime(openDoc.createdAt)}` : ""}</div>}
+							{/* `addedAt`: `createdAt` is never sent, so this stamp rendered for nobody (#617). */}
+							{openDoc.source && <div className="text-xs text-muted-soft mb-2">{openDoc.source}{openDoc.addedAt ? ` · ${formatTime(openDoc.addedAt)}` : ""}</div>}
 							<SafeHtmlView className="bg-paper border border-line rounded-xl p-4 msg-md" html={renderMd(openDoc.content || "_This document is empty. Click Edit to add content._")} />
 						</div>
 					);

@@ -15,6 +15,7 @@ import {
 // One zone list for the whole console (#345) — a trigger's schedule and the account preference
 // must offer the same vocabulary, or a zone you can schedule in is one you cannot set as yours.
 import { timeZoneOptions } from "../lib/accountTimezone";
+import type { TriggerAction } from "../lib/types";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import {
@@ -50,7 +51,12 @@ import {
  *    API, MCP); this makes the picker agree with it by reading the same answer.
  */
 
-type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
+/**
+ * Was a second hand-written copy of the same union. It happened to be the CORRECT one — the copy in
+ * `IndexingTab` had four of the seven — but two copies is how they came to disagree, so both now
+ * point at the one declaration in lib/types (#617).
+ */
+type TriggerActionType = TriggerAction;
 
 /** One row of `GET /v1/triggers/actions` — the vocabulary, judged against THIS instance. */
 interface TriggerActionOffer {

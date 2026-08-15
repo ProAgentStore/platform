@@ -368,7 +368,7 @@ export default function RunDetail() {
 		try {
 			const d = await api<{ events: RuntimeEvent[] }>(`/v1/instances/${instanceId}/task-events?limit=500`);
 			const mine = (d.events || []).filter((e) => String(e.taskId ?? (e.data as Record<string, unknown>)?.taskId ?? "") === taskId);
-			mine.sort((a, b) => new Date(a.createdAt ?? a.timestamp ?? 0).getTime() - new Date(b.createdAt ?? b.timestamp ?? 0).getTime());
+			mine.sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
 			setEvents(mine);
 		} catch { /* keep */ }
 		try {
@@ -383,7 +383,9 @@ export default function RunDetail() {
 	}, [instanceId, taskId]);
 
 	useEffect(() => { load(); }, [load]);
-	const running = task?.status === "running" || task?.status === "needs_human" || task?.needs_human;
+	// `|| task?.needs_human` used to trail this and was dead (#617): `needs_human` is a TaskStatus
+	// VALUE, not a boolean field on the task, so only the status check has ever done any work.
+	const running = task?.status === "running" || task?.status === "needs_human";
 	// Left on a plain interval on purpose (#272): it is already gated on the run being in
 	// flight, which is precisely the "busy" a tiered poll would compute — and busy beats hidden,
 	// so it would resolve to this same 3s anyway. It is also what keeps the run itself live
@@ -391,7 +393,7 @@ export default function RunDetail() {
 	// back to the right status. A finished run turns it off entirely.
 	usePolling(load, 3000, !!running);
 
-	const needsHuman = task?.status === "needs_human" || task?.needs_human;
+	const needsHuman = task?.status === "needs_human";
 	const isFinished = task ? ["completed", "cancelled", "failed", "blocked", "expired"].includes(task.status) : false;
 
 	// What the agent needs from you (from the handoff events) — same detection as the board.
@@ -402,7 +404,11 @@ export default function RunDetail() {
 		reason === "needs_input" || needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "") ? "value"
 		: reason === "challenge" || /captcha|verify you|human check/i.test(`${handoffEv?.message ?? ""}`) ? "captcha" : "stuck";
 	const detail = needsInputEv?.message ?? handoffEv?.message ?? "";
-	const field = task?.handoff_field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
+	// This opened with `task?.handoff_field ||`, which could never win: nothing in the platform or
+	// the runner has ever emitted that field (#617). So what the user is asked for has always come
+	// from scraping the handoff MESSAGE, and saying so is the point — the line below is the
+	// implementation, not a fallback, until a structured field actually exists to prefer.
+	const field = detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
 	const paren = detail.match(/\(([^)]*)\)/)?.[1] ?? "";
 	const fromIdx = paren.toLowerCase().indexOf("from:");
 	const options = fromIdx >= 0 ? paren.slice(fromIdx + 5).split(",").map((s) => s.trim()).filter((s) => s && s.length < 70).slice(0, 16) : [];
@@ -424,7 +430,7 @@ export default function RunDetail() {
 			.filter((e) => e.type === "agent.shot" && (e.data as Record<string, unknown>)?.seq != null)
 			.map((e) => {
 				const d = (e.data ?? {}) as Record<string, unknown>;
-				return { seq: Number(d.seq), action: String(d.action ?? ""), name: String(d.name ?? ""), url: String(d.url ?? ""), at: e.createdAt ?? e.timestamp, msg: e.message ?? "" };
+				return { seq: Number(d.seq), action: String(d.action ?? ""), name: String(d.name ?? ""), url: String(d.url ?? ""), at: e.createdAt, msg: e.message ?? "" };
 			})
 			.sort((a, b) => a.seq - b.seq),
 	[events]);
@@ -613,7 +619,7 @@ export default function RunDetail() {
 							const emailFrom = typeof data.from === "string" ? data.from : "";
 							return (
 								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
-									<span className="text-xs font-mono text-muted-soft shrink-0 w-[124px] pt-0.5">{fmtStamp(ev.createdAt ?? ev.timestamp)}</span>
+									<span className="text-xs font-mono text-muted-soft shrink-0 w-[124px] pt-0.5">{fmtStamp(ev.createdAt)}</span>
 									<div className="min-w-0 flex-1">
 										<div className={levelClass(ev.type)}>{linkify(humanEvent(ev))}</div>
 										{gmailUrl && (

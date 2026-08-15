@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatDateTime } from "@proagentstore/sdk/ui";
 import Button from "../components/Button";
-import type { KnowledgeDoc } from "../lib/types";
+import type { KnowledgeDoc, TriggerAction } from "../lib/types";
 
 type SourceType = "knowledge" | "message" | "file" | "collection" | "repo";
 type ConnectorProvider = "google_drive" | "zoho_workdrive";
@@ -40,7 +40,12 @@ interface InstanceTrigger {
 	id: string;
 	name: string;
 	type: "webhook" | "cron";
-	action: "create_task" | "add_knowledge" | "log_event" | "sync_connector";
+	// All seven of `TRIGGER_ACTIONS` (`workers/api/src/lib/trigger-types.ts:34`). This listed four
+	// and omitted `run_pipeline`, `insert_record` and `run_browse` (#617) — the sibling copy in
+	// TriggersSection.tsx had all seven, so the console disagreed with itself as well as the Worker.
+	// Nothing broke because the one comparison site (`:159`) is a plain string compare, but a
+	// `switch` over this union would have silently lacked three arms.
+	action: TriggerAction;
 	enabled: boolean;
 	schedule?: string | null;
 	config?: { provider?: ConnectorProvider; grantId?: string };
@@ -185,15 +190,17 @@ export default function IndexingTab({ instanceId }: { instanceId: string }) {
 		const vectorKeys = new Set((vectors?.sources || []).map((s) => `${s.sourceType}:${s.sourceId}`));
 		const docItems = docs.map((doc) => {
 			const indexed = vectorKeys.has(`knowledge:${doc.id}`);
-			const record = doc as KnowledgeDoc & { addedAt?: string; sourceUrl?: string };
+			// The `as KnowledgeDoc & { addedAt; sourceUrl }` cast that used to be here was a local
+			// workaround for the type being wrong (#617): the producer sends both fields, and it was
+			// this file noticing that which proved the declaration — not the wire — was at fault.
 			return {
 				id: doc.id,
 				kind: "Document",
 				name: doc.title || doc.id,
 				status: indexed ? "indexed" as const : "pending" as const,
 				reason: indexed ? "In vector index" : (doc.content || "").trim() ? "Waiting for vectors" : "No content yet",
-				source: doc.source || record.sourceUrl || "",
-				createdAt: doc.createdAt || record.addedAt,
+				source: doc.source || doc.sourceUrl || "",
+				createdAt: doc.addedAt,
 			};
 		});
 		const fileItems = files.map((file) => {
