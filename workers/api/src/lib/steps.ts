@@ -746,7 +746,16 @@ export const STEP_TOOLS: ToolDef[] = [
 				cursor = parsed.nextCursor;
 				if (cursor === undefined || cursor === null || cursor === "") { pages++; break; }
 			}
-			return ok(JSON.stringify({ mode, items: aggregated, count: aggregated.length, pages }, null, 2));
+			// The loop has two exits and they mean opposite things (#640): the one above means the
+			// SOURCE ran out, the one at the top means WE stopped asking with a live cursor still in
+			// hand. Nothing distinguished them — `cursor` was never read again, never returned and
+			// never compared — so a 5-page read of a 40-page source produced output identical to a
+			// complete sweep, and the run closed `completed` with counts that read as a full one.
+			// This is the #503/#394 shape: a cap treated as "all". Unlike `slice` a cursor API cannot
+			// say how many records were left, so the fact reported is the one the loop actually
+			// holds: the cursor was still live.
+			const hasMore = cursor !== undefined && cursor !== null && cursor !== "";
+			return ok(JSON.stringify({ mode, items: aggregated, count: aggregated.length, pages, maxPages, hasMore }, null, 2));
 		},
 	},
 

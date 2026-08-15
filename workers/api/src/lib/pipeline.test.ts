@@ -620,3 +620,27 @@ describe("partialFailure — a write that did not land (#630)", () => {
 		expect(partialFailure("dedupe_upsert", { inserted: 0, updated: 0, skipped: 45, failed: 0, total: 45 })).toBeNull();
 	});
 });
+
+describe("coverageShortfall — fan_out stopped at its page cap (#640)", () => {
+	it("reports a sweep that stopped early with the cursor still live", () => {
+		expect(coverageShortfall("fan_out", { mode: "pages", count: 120, pages: 5, maxPages: 5, hasMore: true })).toBe(
+			"fan_out stopped at its 5-page cap with more pages still available — 120 record(s) aggregated, and the source was NOT exhausted. Raise maxPages (max 50), or narrow the request, if you need the rest.",
+		);
+	});
+
+	it("says nothing when the source ran out on its own", () => {
+		expect(coverageShortfall("fan_out", { mode: "pages", count: 12, pages: 2, maxPages: 5, hasMore: false })).toBeNull();
+	});
+
+	it("says nothing for grid mode, which is exhaustive by construction", () => {
+		// The shipped lead-finder uses `grid`; it enumerates every cell, so there is no cap to warn
+		// about and a line on every run would be noise.
+		expect(coverageShortfall("fan_out", { mode: "grid", cells: [1, 2], count: 2 })).toBeNull();
+	});
+
+	it("never claims a number a cursor API cannot know", () => {
+		// `slice` knows what it dropped; a paginated source cannot. Inventing "N left" here would be
+		// the same defect pointed the other way.
+		expect(coverageShortfall("fan_out", { count: 120, pages: 5, hasMore: true })).not.toMatch(/of \d+ record/);
+	});
+});

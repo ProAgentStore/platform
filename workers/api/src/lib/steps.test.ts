@@ -437,6 +437,38 @@ describe("fan_out — pages (cursor drive + concurrency cap)", () => {
 		});
 		expect(parse(r.content).pages).toBe(3);
 	});
+
+	/**
+	 * #640 — the loop has two exits that mean opposite things, and the output used to be identical
+	 * either way. `cursor` was never read again, never returned and never compared, so "the API ran
+	 * out of pages" and "we stopped asking" produced the same JSON and the same `completed` run.
+	 * The default cap is 5, so the first paginated source a creator wires reads 5 pages of however
+	 * many there are and reports a full sweep.
+	 */
+	it("says the source was NOT exhausted when the cap fired with a live cursor", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+			new Response(JSON.stringify({ items: [{ id: 1 }], next: "always" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+		);
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", cursorParam: "pageToken", itemsPath: "data.items", maxPages: 3,
+			request: { method: "GET", url: "https://api.test/s", query: { pageToken: "{{pageToken}}" }, pagination: { type: "nextPageToken", path: "next" } },
+		});
+		expect(parse(r.content)).toMatchObject({ pages: 3, maxPages: 3, hasMore: true });
+	});
+
+	it("says it WAS exhausted when the source ran out first", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+			new Response(JSON.stringify({ items: [{ id: 1 }], next: null }), { status: 200, headers: { "Content-Type": "application/json" } }),
+		);
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", cursorParam: "pageToken", itemsPath: "data.items", maxPages: 3,
+			request: { method: "GET", url: "https://api.test/s", query: { pageToken: "{{pageToken}}" }, pagination: { type: "nextPageToken", path: "next" } },
+		});
+		// Same shape, opposite meaning — which is the whole point of reporting it.
+		expect(parse(r.content)).toMatchObject({ pages: 1, hasMore: false });
+	});
 });
 
 // ── 4b. enrich (issue #115) ─────────────────────────────────────────────────────

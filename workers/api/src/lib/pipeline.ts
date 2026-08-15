@@ -148,13 +148,19 @@ export function declaredParamDefaults(def: Pick<PipelineDef, "params">): Record<
 }
 
 /**
- * Steps whose job is to BOUND a list, and which therefore report a `dropped` count that means
+ * Steps whose job is to BOUND a list, and which therefore report coverage they did not achieve —
  * "records this run never looked at" rather than "records this run decided against".
  *
  * `filter` also reports `dropped` and is deliberately not here: dropping is the whole point of a
  * filter, and a warning per filtered record would be noise that trains a reader to ignore the line.
+ *
+ * `fan_out` joined in #640, and it bounds by a DIFFERENT signal. `slice` knows exactly how many it
+ * dropped; a cursor API cannot know what it never asked for, so `fan_out pages` reports `hasMore`
+ * instead — the fact its loop actually holds when the `maxPages` exit fires with a live cursor.
+ * Truncation there is the DEFAULT (5 pages) rather than an opt-in, which makes the silence worse:
+ * the first thing a creator builds on it is a sweep that reads 5 pages of a 40-page source.
  */
-const BOUNDING_TOOLS = new Set(["slice"]);
+const BOUNDING_TOOLS = new Set(["slice", "fan_out"]);
 
 /**
  * The sentence to publish when a bounding step left records unexamined — null when it didn't (#394).
@@ -168,8 +174,15 @@ const BOUNDING_TOOLS = new Set(["slice"]);
 export function coverageShortfall(tool: string, output: unknown): string | null {
 	if (!BOUNDING_TOOLS.has(tool) || !output || typeof output !== "object" || Array.isArray(output)) return null;
 	const o = output as Record<string, unknown>;
-	const dropped = typeof o.dropped === "number" ? o.dropped : 0;
 	const kept = typeof o.count === "number" ? o.count : 0;
+	// A paginated source stopped at its cap: how much was left is UNKNOWABLE, so the sentence says
+	// what is known — it stopped early, and there was more. Claiming a number here would be the same
+	// mistake in the other direction.
+	if (o.hasMore === true) {
+		const pages = typeof o.pages === "number" ? o.pages : 0;
+		return `${tool} stopped at its ${pages}-page cap with more pages still available — ${kept} record(s) aggregated, and the source was NOT exhausted. Raise maxPages (max 50), or narrow the request, if you need the rest.`;
+	}
+	const dropped = typeof o.dropped === "number" ? o.dropped : 0;
 	if (dropped <= 0) return null;
 	return `${tool} examined ${kept} of ${kept + dropped} record(s) — ${dropped} were left unexamined by the cap. Raise the cap, or narrow the search, if you need the rest.`;
 }
