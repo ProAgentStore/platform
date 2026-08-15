@@ -211,25 +211,92 @@ export function runHealthSentence(): string {
 	);
 }
 
+/**
+ * The statuses `clear_finished_tasks` actually sweeps.
+ *
+ * ── The defect (#609)
+ *
+ * `instance-tools/board.ts` advertised `(done/failed/cancelled)` for six months. **`done` is not
+ * a task status and never has been** — the runner's `TaskStatus`
+ * (`packages/browser-runner/src/types.ts:10`) has `completed`. A caller filtering on `done` gets
+ * nothing back and cannot tell an empty board from a wrong filter, which is the same failure as
+ * `agent_trace level:"error"` in #564.
+ *
+ * It is the first case that separates the two questions the #600 citation check conflated. That
+ * check asks "does this claim name a real source?" and this claim did — it was inventoried under
+ * `LoopStopReason`, which genuinely contains all of `cancelled`, `done` and `failed`. The claim's
+ * values matched its cited source **and the citation was still the wrong enum**, because the
+ * description is about runtime TASK status. So a values-match check would not have caught it
+ * either; what catches it is what the top of this file has said all along — GENERATION. A
+ * description rendered from a constant cannot name a member the constant does not have.
+ *
+ * ── Why these three, derived from TWO files
+ *
+ * The endpoint's own filter is `CLEARED_RUNTIME_TASK_STATUSES` in
+ * `workers/api/src/routes/instances-runtime.ts` — `failed`, `completed`, `cancelled`, `expired`.
+ * Publishing that verbatim would re-commit the defect in the other direction: **`expired` is not
+ * emittable on this table.** Measured 2026-08-15, the only writers of
+ * `instance_runtime_tasks.status` are `mirrorRuntimeTask` (a runner `TaskStatus`, no `expired`),
+ * `expireOrphanedRuntimeTasks` (writes `failed`) and the runner's own `expireInFlightTasks` (also
+ * `failed`). So the published set is the INTERSECTION of the filter with `TaskStatus`, and the
+ * test derives it from both sources rather than trusting this array. `expired` staying in the
+ * filter is deliberate (a legacy row carrying it must still be swept) and is #611.
+ */
+export const CLEARED_TASK_STATUSES = ["cancelled", "completed", "failed"] as const;
+
+/**
+ * The clear-finished vocabulary, rendered — never typed out.
+ *
+ * Leads with the bare chain for the reason {@link runHealthSentence} does: that is the shape
+ * {@link stateEnumClaims} can read, so this claim lands INSIDE the swept population instead of
+ * being checked by generation and invisible to detection at once.
+ *
+ * The statuses it does NOT clear are named with commas rather than a `` `a`/`b` `` chain, and
+ * that is load-bearing rather than styling: a second backticked chain in the same description
+ * parses as a second value-set claim, which would then demand its own backing entry. The kept
+ * set is a subset of the same `TaskStatus`, not a vocabulary of its own.
+ */
+export function clearFinishedSentence(): string {
+	const chain = CLEARED_TASK_STATUSES.map((s) => `\`${s}\``).join("/");
+	return (
+		`Clears every runtime task whose status is one of ${chain} from a subscribed instance's board. ` +
+		"A task that is `blocked`, `needs_human`, `queued` or `running` is KEPT — `blocked` means the " +
+		"agent is waiting on the user, so it counts as active rather than finished. Durable board " +
+		"cards in a terminal human status are cleared too."
+	);
+}
+
 /** A value set a description publishes, and where the code that emits it lives. */
 export interface StateVocabulary {
-	/** Repo-relative path of the emitting source, read by the guard rather than trusted. */
-	source: string;
+	/**
+	 * Repo-relative paths of the emitting source(s), read by the guard rather than trusted.
+	 *
+	 * A LIST since #609, because a published vocabulary is not always one file's: the cleared-task
+	 * set is the endpoint's filter narrowed to the statuses a task can actually hold, and naming
+	 * only one of the two would send a reader to a file that does not explain the members.
+	 */
+	sources: readonly string[];
 	values: readonly string[];
 }
 
 /** Vocabularies checked against the code that emits them. */
 export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"coding run state": {
-		source: "workers/api/src/lib/coding-run-state.ts",
+		sources: ["workers/api/src/lib/coding-run-state.ts"],
 		values: CODING_RUN_STATES,
 	},
 	// #588. Two tools publish this one — `check_instance_loop` and `coding_loop_status`, which call
 	// the SAME endpoint — and both restated it by hand, which is exactly how they came to disagree
 	// with the payload on the day `ended` was added.
 	"run health": {
-		source: "workers/api/src/lib/work-report.ts",
+		sources: ["workers/api/src/lib/work-report.ts"],
 		values: RUN_HEALTH_STATES,
+	},
+	// #609. Two sources, intersected: the endpoint's filter and the union a task's status is
+	// drawn from. See CLEARED_TASK_STATUSES for why publishing the filter alone would be wrong.
+	"cleared task status": {
+		sources: ["workers/api/src/routes/instances-runtime.ts", "packages/browser-runner/src/types.ts"],
+		values: CLEARED_TASK_STATUSES,
 	},
 };
 
@@ -246,6 +313,18 @@ export interface UnbackedClaim {
 	source: string | null;
 	/** The declaration in {@link source}. The guard looks for the members around it. */
 	symbol?: string;
+	/**
+	 * `false` when {@link symbol} is not a value set at all, so its members cannot be compared.
+	 *
+	 * One entry needs this and it is the one the #609 values-match arm found: `RunCounts` is an
+	 * `interface`, and the claim's four "members" are its FIELD NAMES. The arm parses the string
+	 * literals a declaration contains, which for an interface is none — so without an explicit
+	 * opt-out the choice is between failing an entry that is correctly recorded and silently
+	 * skipping every declaration the parser cannot read, which is the empty-set-passes trap this
+	 * whole file exists to avoid. Saying so in the entry keeps it in the denominator as
+	 * NOT-COMPARABLE rather than dropping it out of the count.
+	 */
+	valueSet?: false;
 }
 
 /**
@@ -293,6 +372,7 @@ export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
 			"pipeline run counter, and the tool that publishes it is `list_pipeline_runs`.",
 		source: "workers/api/src/lib/pipeline-runs.ts",
 		symbol: "RunCounts",
+		valueSet: false,
 	},
 	"dismissed|filed|open|triaged": {
 		reason: "feedback status",
@@ -314,18 +394,14 @@ export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
 		source: "workers/api/src/lib/instance-tool-policy.ts",
 		symbol: "ToolWriteConsent",
 	},
-	"cancelled|done|failed": {
-		reason:
-			"loop stop reasons — three of a nine-member union, which the sweep's subset rule covers. " +
-			"NOTE, and NOT fixed here because it is a defect in a description this file does not own: " +
-			"the only description publishing this set is `instance-tools/board.ts:273`, which is about " +
-			"runtime TASK status, not loop stop reasons. That vocabulary is `TaskStatus` in " +
-			"`packages/browser-runner/src/types.ts:10`, where the member is `completed` and `done` does " +
-			"not appear. So the citation below resolves and the description is still wrong — the limit " +
-			"of a mechanical citation check, stated rather than papered over.",
-		source: "workers/api/src/lib/agent-loop.ts",
-		symbol: "LoopStopReason",
-	},
+	// `cancelled|done|failed` lived here until #609 and is deliberately GONE rather than corrected.
+	// It was recorded against `LoopStopReason`, which really does contain all three — a citation
+	// that resolved AND matched its source while describing the wrong enum entirely, since the only
+	// description publishing it was `clear_finished_tasks`, about runtime TASK status. The fix was
+	// to render that description from {@link CLEARED_TASK_STATUSES}; the claim then leaves the
+	// surface, and the shrink arm below (`stale`) requires this entry to leave with it. That
+	// requirement is the mechanism worth naming: an inventory that only grows becomes an allowlist,
+	// and this is the first entry it has ever evicted.
 	"apply|chat|coding|voice": {
 		reason:
 			"trace source, and the field is genuinely OPEN — declared `source: string` with an " +

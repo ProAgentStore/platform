@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
+import { clearFinishedSentence } from "../state-vocabulary.js";
 import { groupBoard, type InstanceToolsCtx, isRec } from "./shared.js";
 
 /**
@@ -270,7 +271,9 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 
 	server.tool(
 		"clear_finished_tasks",
-		"Clear all finished (done/failed/cancelled) runtime tasks from a subscribed instance's board.",
+		// RENDERED from the endpoint's own vocabulary, never typed out (#609). This said
+		// "(done/failed/cancelled)" — and `done` is not a task status in any file of this repo.
+		clearFinishedSentence(),
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

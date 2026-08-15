@@ -255,7 +255,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `approve_instance_task` | Approve a task waiting for human approval | runtime | yes | |
 | `cancel_instance_task` | Cancel a runtime task | destructive | yes | `cancel_instance_task` |
 | `hint_instance_task` | Attach guidance the agent reads on its next step | write | yes | |
-| `clear_finished_tasks` | Clear done/failed/cancelled tasks from the board | write | yes | |
+| `clear_finished_tasks` | Clear cancelled/completed/failed tasks from the board (`blocked` is kept — it means the agent needs you) | write | yes | |
 | `instance_task_events` | Recent runtime events | — | | |
 | `ticket_thread` | Read one ticket's question-and-answer thread | — | | |
 | `ask_ticket` | Ask one ticket about its own record — explains, never acts | write | yes | |

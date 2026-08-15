@@ -30,10 +30,12 @@ const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_COUNT } = await import("./tool-count.js");
 const {
 	BACKED_VOCABULARIES,
+	CLEARED_TASK_STATUSES,
 	CODING_RUN_STATES,
 	RUN_HEALTH_STATES,
 	UNBACKED_CLAIMS,
 	claimKey,
+	clearFinishedSentence,
 	enumAnnouncements,
 	runHealthSentence,
 	runStateSentence,
@@ -190,6 +192,83 @@ describe("the run-health vocabulary is the API's RunHealth union, not a restatem
 			expect(tool?.description).not.toContain("three values");
 			expect(tool?.description).not.toContain("says what for and until when");
 		}
+	});
+});
+
+describe("the cleared-task vocabulary is derived from the endpoint AND the runner union (#609)", () => {
+	const REPO = join(import.meta.dirname, "../../..");
+
+	/** The endpoint's own filter — the array `clear-finished`'s SQL is built from. */
+	function clearFilterFromSource(): string[] {
+		const src = readFileSync(join(REPO, "workers/api/src/routes/instances-runtime.ts"), "utf8");
+		const m = src.match(/export const CLEARED_RUNTIME_TASK_STATUSES = \[([^\]]+)\]/);
+		return m ? [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]) : [];
+	}
+
+	/**
+	 * `TaskStatus`'s members, read out of the runner's source.
+	 *
+	 * Parsed from the TYPE union rather than an `as const` array, unlike `RunHealth`. #609 AC2
+	 * proposed converting it, and that was NOT done: nothing in this repo needs to ITERATE
+	 * `TaskStatus` at runtime (the iterable copy is `CLEARED_TASK_STATUSES`, right here), so the
+	 * conversion would have been a change to a package owned by another agent's work this batch
+	 * for no guarantee this parse does not already give. A reshape of that declaration fails the
+	 * floor below rather than passing quietly, which is the property that matters.
+	 */
+	function taskStatusFromSource(): string[] {
+		const src = readFileSync(join(REPO, "packages/browser-runner/src/types.ts"), "utf8");
+		const m = src.match(/export type TaskStatus =([^;]+);/);
+		return m ? [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]) : [];
+	}
+
+	it("publishes the filter narrowed to statuses a task can actually hold", () => {
+		const filter = clearFilterFromSource();
+		const statuses = taskStatusFromSource();
+		// G1/G3 — a parse that found nothing must fail as a broken guard, not pass as a clean tree.
+		expect(filter.length, "parsed no CLEARED_RUNTIME_TASK_STATUSES — the guard has stopped measuring")
+			.toBeGreaterThanOrEqual(3);
+		expect(statuses.length, "parsed no TaskStatus members — the guard has stopped measuring").toBeGreaterThanOrEqual(6);
+		expect([...CLEARED_TASK_STATUSES].sort()).toEqual(filter.filter((s) => statuses.includes(s)).sort());
+	});
+
+	it("never names `done` — the member that does not exist, in any of the three sources", () => {
+		// G4 on the exact string that shipped: "Clear all finished (done/failed/cancelled) runtime
+		// tasks from a subscribed instance's board." The assertion flips on the real defect without
+		// the fix being reverted, because `done` is absent from the code the sentence is built from.
+		expect(taskStatusFromSource(), "`done` is a LoopStopReason, never a TaskStatus").not.toContain("done");
+		expect(clearFilterFromSource()).not.toContain("done");
+		expect([...CLEARED_TASK_STATUSES]).not.toContain("done");
+		expect(clearFinishedSentence()).not.toContain("done");
+	});
+
+	it("does not publish `expired`, which the filter names and no writer can produce", () => {
+		// The other half of the same defect, and the reason the published set is an INTERSECTION.
+		// Advertising a status a row cannot hold is the `agent_trace level:"error"` failure (#564)
+		// pointed the other way. The filter keeps it (legacy rows); the description must not — #611.
+		expect(clearFilterFromSource(), "the filter still carries it — if not, drop this arm").toContain("expired");
+		expect(taskStatusFromSource()).not.toContain("expired");
+		expect(clearFinishedSentence()).not.toContain("`expired`");
+	});
+
+	it("publishes exactly ONE claim the sweep can see, and it is the backed one", () => {
+		// Two assertions in one, both load-bearing. The sentence must be detectable at all (the
+		// #600 lesson: a vocabulary rendered from a constant and invisible to the scanner is
+		// checked by generation and uncounted by detection at once) — and it must not publish a
+		// SECOND chain, because the kept statuses are a subset of the same union rather than a
+		// vocabulary of their own, and a second claim would demand its own backing entry.
+		const claims = stateEnumClaims(clearFinishedSentence());
+		expect(claims).toEqual([[...CLEARED_TASK_STATUSES].sort()]);
+		expect(enumAnnouncements(clearFinishedSentence()).length, "the sweep must count this as an announcement")
+			.toBeGreaterThanOrEqual(1);
+	});
+
+	it("is what clear_finished_tasks publishes, verbatim", async () => {
+		const tools = await registeredTools();
+		const tool = tools.find((t) => t.name === "clear_finished_tasks");
+		expect(tool, "clear_finished_tasks is not registered").toBeDefined();
+		expect(tool?.description).toBe(clearFinishedSentence());
+		// G4 on the shipped string, at the surface a model actually reads.
+		expect(tool?.description).not.toContain("(done/failed/cancelled)");
 	});
 });
 
@@ -351,59 +430,117 @@ describe("the inventory's own citations resolve (#600)", () => {
 	const REPO_ROOT = join(import.meta.dirname, "../../..");
 
 	/**
-	 * The lines around a declaration — a doc comment above it through the end of the statement.
+	 * The members a cited symbol actually DECLARES — not the words that appear near it (#609 AC3).
 	 *
-	 * A whole-file substring search would pass on almost anything (`ok`, `null` and `required`
-	 * appear in most files), which would make this guard agree with everything and therefore
-	 * measure nothing. Windowing is what makes it able to say no: `coding-engines.ts` contains
-	 * neither `account` nor `platform` near `EngineAuth`, which is how the third false citation is
-	 * caught rather than waved through.
+	 * Until #609 this was a substring test over a ±12/+16-line window, which answers a weaker
+	 * question than the one the inventory is for: "do these words appear near that symbol?" A
+	 * window of 28 lines around a function that formats a refusal contains the enum it takes as a
+	 * parameter, so citing the FUNCTION passes exactly as citing the enum does — and the record
+	 * exists so a future reader can go to the declaration and decide whether the claim can now be
+	 * backed. Sending them to a formatter is a softer version of sending them to a missing file.
+	 *
+	 * Two strategies, and which one answered is REPORTED rather than averaged away:
+	 *
+	 *   · `declaration` — a `type`/`const`/`enum` statement, read from its first line to the `;`
+	 *     that ends it. Tight: only literals inside the declaration count.
+	 *   · `doc-comment` — the comment immediately above a field, for the one entry whose members
+	 *     are documented rather than declared (`EventInput.source`, an explicitly OPEN field:
+	 *     `'chat' | 'apply' | … | …`). Looser by construction, so it is counted separately; a
+	 *     doc-comment citation certifies less than a declaration one and must not read as if it
+	 *     certified the same.
+	 *
+	 * `null` is collected as a member because `AgentRuntimeKind` has it unquoted.
 	 */
-	function declarationWindow(src: string, symbol: string): string | null {
+	function declaredMembers(src: string, symbol: string): { members: string[]; from: string } | null {
 		const lines = src.split("\n");
-		const at = lines.findIndex((l) => new RegExp(`\\b${symbol}\\b`).test(l) && !l.trim().startsWith("*"));
-		if (at === -1) return null;
-		return lines.slice(Math.max(0, at - 12), at + 16).join("\n");
+		const members = (chunk: string): string[] => {
+			const out = [...chunk.matchAll(/["']([a-z_][a-z_/.]*)["']/g)].map((m) => m[1]);
+			if (/[=|]\s*null\b/.test(chunk)) out.push("null");
+			return out;
+		};
+		const declAt = lines.findIndex((l) => new RegExp(`\\b(?:type|const|enum|interface)\\s+${symbol}\\b`).test(l));
+		if (declAt !== -1) {
+			// The STATEMENT, not a window: first line of the declaration through the `;` that ends
+			// it (capped, so an unterminated parse cannot swallow the rest of the file).
+			const slice = lines.slice(declAt, declAt + 24);
+			const end = slice.findIndex((l) => l.includes(";"));
+			return { members: members(slice.slice(0, end === -1 ? slice.length : end + 1).join("\n")), from: "declaration" };
+		}
+		// A field rather than a declaration: take the doc comment that documents it.
+		const fieldAt = lines.findIndex((l) => new RegExp(`^\\s*${symbol}\\s*[?:]`).test(l));
+		if (fieldAt === -1) return null;
+		let top = fieldAt;
+		while (top > 0 && /^\s*(\/\*\*|\*|\/\/)/.test(lines[top - 1])) top--;
+		if (top === fieldAt) return { members: [], from: "doc-comment" };
+		return { members: members(lines.slice(top, fieldAt + 1).join("\n")), from: "doc-comment" };
 	}
 
-	it("every citation names a file that exists and declares the members it is cited for", () => {
+	/** The one code path both the sweep and its red demonstration run. */
+	function citationProblem(key: string, entry: { source: string | null; symbol?: string; valueSet?: false }): string | null {
+		if (entry.source === null) return null;
+		const path = join(REPO_ROOT, entry.source);
+		if (!existsSync(path)) return `${key}: cites ${entry.source}, which does not exist`;
+		if (!entry.symbol) return null;
+		const declared = declaredMembers(readFileSync(path, "utf8"), entry.symbol);
+		if (declared === null) return `${key}: ${entry.source} does not declare \`${entry.symbol}\``;
+		if (entry.valueSet === false) return null;
+		if (!declared.members.length) {
+			return (
+				`${key}: ${entry.source} declares \`${entry.symbol}\`, but it holds no string members — ` +
+				"either the citation names the wrong symbol, or the symbol is not a value set and the " +
+				"entry should say so with `valueSet: false`."
+			);
+		}
+		const missing = key.split("|").filter((m) => !declared.members.includes(m));
+		return missing.length
+			? `${key}: \`${entry.symbol}\` in ${entry.source} declares [${declared.members.join(", ")}] — ` +
+				`${missing.map((m) => `\`${m}\``).join(", ")} is not among them, so the citation names the wrong symbol or file.`
+			: null;
+	}
+
+	it("every citation names a file that exists and a symbol that DECLARES the members", () => {
 		const entries = Object.entries(UNBACKED_CLAIMS);
 		// G1 — an inventory that parsed to nothing must fail rather than report nine clean
 		// citations over an empty map.
 		expect(entries.length, "UNBACKED_CLAIMS is empty — this guard is measuring nothing").toBeGreaterThanOrEqual(5);
 
 		const problems: string[] = [];
-		let checked = 0;
+		const modes: Record<string, number> = { declaration: 0, "doc-comment": 0, "not-a-value-set": 0, "file-only": 0 };
+		let cited = 0;
 		for (const [key, entry] of entries) {
 			if (entry.source === null) continue;
-			checked++;
-			const path = join(REPO_ROOT, entry.source);
-			if (!existsSync(path)) {
-				problems.push(`${key}: cites ${entry.source}, which does not exist`);
+			cited++;
+			const problem = citationProblem(key, entry);
+			if (problem) {
+				problems.push(problem);
 				continue;
 			}
-			const src = readFileSync(path, "utf8");
-			if (!entry.symbol) continue;
-			const window = declarationWindow(src, entry.symbol);
-			if (window === null) {
-				problems.push(`${key}: ${entry.source} does not declare \`${entry.symbol}\``);
-				continue;
-			}
-			// `n/a` is one member containing its own separator; `null` is unquoted in its union.
-			const missing = key.split("|").filter((m) => !window.includes(m));
-			if (missing.length) {
-				problems.push(
-					`${key}: ${entry.source} declares \`${entry.symbol}\`, but ${missing.map((m) => `\`${m}\``).join(", ")} ` +
-						"do not appear near it — the citation names the wrong symbol or the wrong file.",
-				);
+			if (!entry.symbol) modes["file-only"]++;
+			else if (entry.valueSet === false) modes["not-a-value-set"]++;
+			else {
+				const declared = declaredMembers(readFileSync(join(REPO_ROOT, entry.source), "utf8"), entry.symbol);
+				modes[declared?.from ?? "file-only"]++;
 			}
 		}
 
 		expect(problems, problems.join("\n")).toEqual([]);
 		// G2 — the denominator. "All citations valid" over zero citations is the failure this
 		// whole file is about.
-		expect(checked, "citations actually resolved against the tree").toBeGreaterThanOrEqual(8);
-		console.log(`✓ ${checked} of ${entries.length} UNBACKED_CLAIMS citations resolved against the tree (source + symbol + members)`);
+		expect(cited, "citations actually resolved against the tree").toBeGreaterThanOrEqual(7);
+		const compared = modes.declaration + modes["doc-comment"];
+		expect(compared, "citations whose MEMBERS were compared, not merely resolved").toBeGreaterThanOrEqual(6);
+		// AC4's denominator, and the distinction it exists to make: resolving is not comparing.
+		console.log(
+			`✓ ${cited} of ${entries.length} UNBACKED_CLAIMS entries carry a citation; all resolve against the tree.\n` +
+				`  ${compared} had their MEMBERS compared to the cited declaration — ` +
+				`${modes.declaration} against a type/const declaration, ${modes["doc-comment"]} against a documented (open) field.\n` +
+				`  ${modes["not-a-value-set"]} recorded \`valueSet: false\` (the members are field names, not values) · ` +
+				`${modes["file-only"]} cite a file with no symbol.\n` +
+				"  Members-match is new in #609 and is STRICTLY WEAKER than it sounds: `cancelled|done|failed` " +
+				"cited `LoopStopReason`, which contains all three, while describing runtime TASK status. Values " +
+				"matching a source does not make it the right source — only generation closes that, which is why " +
+				"that entry is gone rather than re-cited.",
+		);
 	});
 
 	it("goes red on a citation that does not resolve — all three of the ways the real ones failed", () => {
@@ -419,18 +556,43 @@ describe("the inventory's own citations resolve (#600)", () => {
 		};
 		const failures: string[] = [];
 		for (const [key, entry] of Object.entries(bad)) {
-			const path = join(REPO_ROOT, entry.source);
-			if (!existsSync(path)) {
-				failures.push(`${key}: missing file`);
-				continue;
-			}
-			const window = declarationWindow(readFileSync(path, "utf8"), entry.symbol);
-			const missing = window === null ? key.split("|") : key.split("|").filter((m) => !window.includes(m));
-			if (missing.length) failures.push(`${key}: ${missing.join(",")} absent`);
+			const problem = citationProblem(key, entry);
+			if (problem) failures.push(problem.includes("does not exist") ? `${key}: missing file` : `${key}: members absent`);
 		}
 		// All three must be rejected. If any passes, the check is too loose to have caught the
 		// citations that were actually wrong, which is the only thing it exists for.
 		expect(failures).toHaveLength(3);
 		expect(failures[0]).toContain("missing file");
+	});
+
+	it("goes red on the FOURTH shape — a symbol that merely MENTIONS the members (#609 AC3)", () => {
+		/** The check as it stood after #600: does the ±12/+16 window contain these words? */
+		function passedTheOldCheck(source: string, symbol: string, key: string): boolean {
+			const lines = readFileSync(join(REPO_ROOT, source), "utf8").split("\n");
+			const at = lines.findIndex((l) => new RegExp(`\\b${symbol}\\b`).test(l) && !l.trim().startsWith("*"));
+			if (at === -1) return false;
+			const window = lines.slice(Math.max(0, at - 12), at + 16).join("\n");
+			return key.split("|").every((m) => window.includes(m));
+		}
+
+		// The demonstration is on the REAL tree, and the two symbols are in the SAME file, four
+		// lines apart: `EventLevel` (`debug|info|warn|error`) is declared at events.ts:14, and the
+		// `source` field whose doc comment lists `'chat' | 'apply' | 'coding' | 'voice'` is at :23.
+		// A window that starts twelve lines above the type and runs sixteen below it swallows the
+		// comment, so citing the WRONG type in the right file passed the old check exactly as the
+		// right one did — the hole AC3 names, present on this tree today rather than invented.
+		const wrong = { source: "workers/api/src/lib/events.ts", symbol: "EventLevel" };
+		expect(passedTheOldCheck(wrong.source, wrong.symbol, "apply|chat|coding|voice"), "the old check rejected it, so this demo proves nothing — pick another pair").toBe(true);
+		expect(citationProblem("apply|chat|coding|voice", wrong), "the members-match arm must reject the wrong type").toContain("is not among them");
+
+		// The other shape the statement reader rejects: a symbol that is not a declaration at all.
+		// `explainRefusal` is a formatter taking `ToolPolicyReason` as a parameter, so all three
+		// members sit in its window — and it declares nothing.
+		expect(passedTheOldCheck("workers/api/src/lib/tool-refusal.ts", "explainRefusal", "disabled_by_owner|not_declared|ok")).toBe(true);
+		expect(citationProblem("disabled_by_owner|not_declared|ok", { source: "workers/api/src/lib/tool-refusal.ts", symbol: "explainRefusal" })).toContain("does not declare");
+
+		// And the correct citation, one symbol away, still passes — a guard that rejected both
+		// would be noise rather than a check, and noise is what gets a guard deleted.
+		expect(citationProblem("disabled_by_owner|not_declared|ok", { source: "workers/api/src/lib/tool-refusal.ts", symbol: "ToolPolicyReason" })).toBeNull();
 	});
 });

@@ -319,19 +319,37 @@ export async function deleteMirroredRuntimeTask(
 		.run();
 }
 
-/** Remove all finished (failed/completed/cancelled) mirrored tasks for an instance. */
+/**
+ * The statuses `clear-finished` sweeps — the ONE place that set is written down (#609).
+ *
+ * It was a literal inside the SQL, which is why the MCP tool driving this endpoint could publish
+ * `(done/failed/cancelled)` for six months: `done` is not a `TaskStatus` member and never was, and
+ * nothing could compare the sentence to the filter because the filter was not a value anything
+ * could read. `workers/mcp/src/state-vocabulary.ts` derives its published vocabulary from THIS
+ * array (parsed from source — the MCP worker is a separate deployable) and goes red on drift.
+ *
+ * `blocked` is deliberately absent: it means the agent is waiting on the user, so it counts as
+ * active. `expired` is present and is NOT emittable here — every writer of this column produces a
+ * `TaskStatus`, which has no such member (traced in #611, which decides whether it may go). So the
+ * MCP description publishes the INTERSECTION, and advertises no status a task cannot hold.
+ */
+export const CLEARED_RUNTIME_TASK_STATUSES = ["failed", "completed", "cancelled", "expired"] as const;
+
+/** Remove all finished (failed/completed/cancelled/expired) mirrored tasks for an instance. */
 export async function clearFinishedRuntimeTasks(
 	env: Env,
 	instanceId: string,
 	userId: string,
 ): Promise<number> {
 	// Tombstone (not DELETE) so the runner's re-sent copies stay off the board.
-	// 'blocked' is intentionally NOT here — it means the agent needs the user, so it's
-	// treated as active (kept), not finished. Individual blocked tasks can be Deleted.
+	// Built from the constant above rather than typed into the SQL, the same shape
+	// `expireOrphanedRuntimeTasks` uses for `ORPHANABLE_TASK_TYPES` a few lines below.
+	const placeholders = CLEARED_RUNTIME_TASK_STATUSES.map((_, i) => `?${i + 3}`).join(", ");
 	const res = await env.DB.prepare(
-		"UPDATE instance_runtime_tasks SET hidden = 1 WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0 AND status IN ('failed','completed','cancelled','expired')",
+		`UPDATE instance_runtime_tasks SET hidden = 1
+     WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0 AND status IN (${placeholders})`,
 	)
-		.bind(instanceId, userId)
+		.bind(instanceId, userId, ...CLEARED_RUNTIME_TASK_STATUSES)
 		.run();
 	return res.meta?.changes ?? 0;
 }

@@ -876,7 +876,14 @@ const PINS = {
 	// because "last seen" must mean contact and not the moment we concluded there was none.
 	// Raised rather than split: this is two SQL strings in a function that is already the single
 	// choke point for the write, and splitting a choke point is how the bypass gets built.
-	"workers/api/src/routes/instances-runtime.ts": 860,
+	// +18 at #609, 13 of them comment. The clear-finished status set left the SQL string and became
+	// `CLEARED_RUNTIME_TASK_STATUSES`, because a value set that exists only inside a query is one no
+	// other file can check itself against — and the MCP tool that drives this endpoint had been
+	// publishing `done`, a status no file in this repo declares, for six months. It stays HERE
+	// rather than moving to lib/: it is the endpoint's own filter, and the SQL two lines below is
+	// its only consumer in this worker. Raising 17 to delete a whole class of drift is the trade
+	// this ratchet exists to make visible, not to prevent.
+	"workers/api/src/routes/instances-runtime.ts": 878,
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
