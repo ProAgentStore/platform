@@ -363,16 +363,36 @@ Write:
 Deliberate exclusions. There is no tool for any of these — an agent that knows this stops
 looking and tells the user which console screen to use instead.
 
-| Not available via MCP | Why |
-|---|---|
-| The credentials vault — site logins, passwords, PINs, recovery codes | Secrets. Console → Knowledge → Credentials. |
-| API-key **values** | `keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key. Gmail refresh tokens are never revealable at all. |
-| Permission writes on instance state | `get_instance_state` is read-only; permission toggles stay in the console. The one carve-out is `set_instance_model`, which writes the `model` field and nothing else. |
-| Stripe checkout and the customer portal | Browser redirects — a redirect URL is useless to a headless caller. `billing_status` reads; nothing writes. |
-| Binary routes — voice-audio, R2 multipart upload parts, file byte download | MCP results are text. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not. `upload_agent_file` takes text only; `upload_resume` is the single binary path, and is apply-scoped. |
-| Arbitrary shell execution, or a generic API proxy | No shell tool, no open proxy. `call_instance_tool` reaches only the connector tools an instance declares and its owner has left enabled. |
-| User deletion | Not modelled. |
-| Another user's data | Every instance route is owner-scoped server-side. `list_errors` with `scope: "all"` is the only cross-user read and is admin-only. |
+<!-- BEGIN generated: mcp-exclusions (scripts/check-mcp-parity.mjs --write) -->
+
+<!-- Generated from EXCLUSIONS in scripts/check-mcp-parity.mjs. Do not edit by hand: the
+     check regenerates this block and fails when it drifts. -->
+
+| Not available via MCP | Why | Enforced by |
+|---|---|---|
+| The credentials vault — site logins, passwords, PINs, recovery codes | Secrets. Console → Knowledge → Credentials. | `check-mcp-parity.mjs` |
+| API-key **values** | `keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key, and there is no tool that WRITES one either — a key sent through a tool call is a secret in a transcript. Gmail refresh tokens are never revealable at all. | `check-mcp-parity.mjs` |
+| Credentials for an outbound MCP server | Same rule as the vault, on the newer surface: the console stores the bearer or OAuth secret an instance uses to reach someone else's MCP server, and it is never read back or written over MCP. `list_instance_tools` reports whether a connection HAS one. | `check-mcp-parity.mjs` |
+| Browser sign-in and account-link redirects | An OAuth start returns a URL for a human to open in a browser with cookies. A headless caller cannot complete one, so returning the URL would be an invitation to a dead end. | `check-mcp-parity.mjs` |
+| Web Push subscription plumbing | A push subscription is a browser object (a VAPID key and an endpoint minted by the user's own browser). There is nothing for a server-side caller to subscribe WITH. | `check-mcp-parity.mjs` |
+| Permission writes on instance state | `get_instance_state` is read-only for the permission block; toggles stay in the console. The one carve-out is `set_instance_model`, which writes the `model` field and nothing else. | — |
+| Stripe checkout and the customer portal | Browser redirects — a redirect URL is useless to a headless caller. `billing_status` reads; nothing writes. | — |
+| Binary routes — voice-audio, R2 multipart upload parts, file byte download | MCP results are text. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not. `upload_agent_file` takes text only; `upload_resume` is the single binary path, and is apply-scoped. | — |
+| Arbitrary shell execution, or a generic API proxy | No shell tool, no open proxy. `call_instance_tool` reaches only the connector tools an instance declares and its owner has left enabled. | — |
+| User deletion | Not modelled. | — |
+| Another user's data | Every instance route is owner-scoped server-side. `list_errors` with `scope: "all"` is the only cross-user read and is admin-only. | — |
+
+A row with no enforcer is a statement about the surface rather than a rule about routes —
+there is no console call for the check to compare it against. The rows that name the check
+are compared, every run, to what the console actually calls.
+
+<!-- END generated: mcp-exclusions -->
+
+**Not everything missing from MCP is on that list.** The console and this server are two clients
+of one API, so a capability the console has is structurally available here; where it is absent it
+is either the decision above or an accident. `scripts/check-mcp-parity.mjs` measures both, states
+how many console capabilities are reachable, and fails when a new one appears in neither list. The
+gaps it records today are exactly that — recorded, not accepted.
 
 ## Security
 

@@ -47,6 +47,8 @@
 		"test:e2e:headed": "playwright test --headed",
 		"test:watch": "vitest",
 		"openapi:coverage": "node scripts/openapi-coverage.mjs",
+		"mcp:parity": "node scripts/check-mcp-parity.mjs",
+		"mcp:parity:gaps": "node scripts/check-mcp-parity.mjs --gaps",
 		"size:check": "node scripts/check-file-size.mjs",
 		"branches:prune": "node scripts/prune-agent-branches.mjs",
 		"docs:drift": "node scripts/docs-drift.mjs",

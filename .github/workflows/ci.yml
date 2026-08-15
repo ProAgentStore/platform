@@ -73,6 +73,20 @@ jobs:
         # whole check IS the history comparison, so a shallow clone must fail rather than
         # skip. fetch-depth: 0 above.
         run: node scripts/check-surface-lock.mjs --require-history
+      - name: MCP parity — console capabilities are reachable or recorded (#610)
+        # The console and the MCP worker are two clients of ONE API, so a capability the
+        # console has is structurally available over MCP. Three projection losses were found
+        # by accident in one week — #593, #592, #574 — each of them the console having
+        # something MCP had dropped, and none of them findable by any gate that existed.
+        #
+        # This compares the two call surfaces and fails on a capability that is in neither
+        # the deliberate exclusion list nor the recorded-gap ratchet. It also fails when
+        # `platform-docs/mcp.md`'s published exclusion table drifts from the enforced one:
+        # the doc is GENERATED from it (`--write`), because a second hand-maintained copy of
+        # a list is precisely how #585 and #602 happened.
+        #
+        # First run: 161 console capabilities, 80 reachable, 10 excluded, 71 recorded (#613).
+        run: node scripts/check-mcp-parity.mjs
       - name: Design tokens — no dead colour utility (#367)
         # Tailwind v4 has no error state. A utility naming a token `@theme` does not declare
         # generates NO rule, so the element silently keeps the colour it inherited — and a
