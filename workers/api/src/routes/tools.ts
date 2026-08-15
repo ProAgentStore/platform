@@ -30,7 +30,7 @@ import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { pipelineDeclarationError } from "../lib/pipeline-tool-policy.js";
 import { listRuns } from "../lib/pipeline-runs.js";
-import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
+import { listConnections, createConnection, deleteConnection, setConnectionEnabled } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
@@ -356,6 +356,26 @@ toolRoutes.post("/:id/connections/deliveries/:did/replay", async (c) => {
 	const ok = await replayDelivery(c.env, session.uid, c.req.param("did"));
 	if (!ok) throw new HttpError(404, "no dead delivery with that id");
 	return c.json({ ok: true, status: "pending" });
+});
+
+/**
+ * Pause or resume one edge (#644). `enabled` gated every delivery and had no writer at all, so the
+ * only way to stop a chain was to DELETE the connection — which throws away its routing filter and
+ * its target pipeline, and orphans the outbox rows that say what is stuck. This is the reversible
+ * version of that: the edge, its config and its delivery history stay.
+ */
+toolRoutes.patch("/:id/connections/:cid", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown };
+	// Strictly a boolean: `"false"` and `0` are the shapes a hand-written body arrives in, and
+	// coercing them would silently do the opposite of what was asked on the one field whose whole
+	// job is to stop deliveries.
+	if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
+	const updated = await setConnectionEnabled(c.env, session.uid, c.req.param("cid"), body.enabled);
+	if (!updated) throw new HttpError(404, "connection not found");
+	return c.json(updated);
 });
 
 toolRoutes.delete("/:id/connections/:cid", async (c) => {

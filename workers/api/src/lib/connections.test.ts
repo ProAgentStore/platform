@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createConnection, deleteConnection, deliverEvent, listConnections, matchesConnectionFilter, validateConnectionFilter, type ConnectionRow } from "./connections.js";
+import { createConnection, deleteConnection, deliverEvent, listConnections, matchesConnectionFilter, setConnectionEnabled, validateConnectionFilter, type ConnectionRow } from "./connections.js";
 import type { Env } from "../types.js";
 
 /**
@@ -55,10 +55,12 @@ function buildEnv(
 								};
 							}
 							if (sql.includes("FROM agent_connections")) {
-								// deliverEvent: WHERE source_instance_id AND event_type AND enabled
+								// deliverEvent: WHERE source_instance_id AND event_type. NOT filtered on
+								// `enabled` — the real SELECT stopped filtering it in SQL (#644) so a paused
+								// edge can be counted and reported rather than looking like an unwired one.
 								if (sql.includes("source_instance_id = ?1 AND event_type = ?2")) {
 									const [src, ev] = args as [string, string];
-									return { results: rows.filter((r) => r.source_instance_id === src && r.event_type === ev && r.enabled) as unknown as T[] };
+									return { results: rows.filter((r) => r.source_instance_id === src && r.event_type === ev) as unknown as T[] };
 								}
 								return { results: rows as unknown as T[] };
 							}
@@ -66,6 +68,16 @@ function buildEnv(
 						},
 						async run() {
 							writes.push({ sql, args });
+							// The enabled toggle (#644) mutates the seeded row, so the function's own
+							// re-read sees what it just wrote — a stub that echoed the old row would
+							// report `enabled:true` from a call that disabled it.
+							if (sql.includes("UPDATE agent_connections SET enabled")) {
+								const [id, uid, enabled] = args as [string, string, number];
+								const row = rows.find((r) => r.id === id && r.user_id === uid);
+								if (!row) return { meta: { changes: 0 } };
+								row.enabled = enabled;
+								return { meta: { changes: 1 } };
+							}
 							// An idempotency-key collision surfaces as 0 changes from INSERT OR IGNORE.
 							if (sql.includes("INSERT OR IGNORE INTO agent_connection_deliveries")) {
 								return { meta: { changes: opts.insertChanges ?? 1 } };
@@ -372,5 +384,66 @@ describe("validateConnectionFilter — a clause that can NEVER match is a reject
 		expect(validateConnectionFilter([{ field: "x", op: "ne", value: 3 }])).toBeNull();
 		expect(validateConnectionFilter([{ field: "x", op: "exists" }])).toBeNull();
 		expect(validateConnectionFilter([{ field: "x", op: "truthy" }])).toBeNull();
+	});
+});
+
+// ── #644: a connection can be paused, and a paused connection says so ───────────────────
+describe("setConnectionEnabled (#644)", () => {
+	it("writes enabled=0 and reports it back — before this there was no UPDATE at all", async () => {
+		const { env, writes } = buildEnv({ connections: [conn()] });
+		const view = await setConnectionEnabled(env, "u1", "c1", false);
+		expect(view?.enabled).toBe(false);
+		const update = writes.find((w) => w.sql.includes("UPDATE agent_connections SET enabled"));
+		expect(update).toBeDefined();
+		expect(update?.args).toEqual(["c1", "u1", 0]);
+	});
+
+	it("re-enables, so the pause is reversible", async () => {
+		const { env } = buildEnv({ connections: [conn({ enabled: 0 })] });
+		expect((await setConnectionEnabled(env, "u1", "c1", true))?.enabled).toBe(true);
+	});
+
+	it("is owner-scoped — another user's id matches no row", async () => {
+		const { env } = buildEnv({ connections: [conn()] });
+		expect(await setConnectionEnabled(env, "someone-else", "c1", false)).toBeNull();
+	});
+
+	it("keeps the row, its config and its outbox history — that is the whole point vs delete", async () => {
+		const { env, writes } = buildEnv({ connections: [conn({ config: JSON.stringify({ collection: "prospects", filter: [{ field: "city", op: "eq", value: "Sydney" }] }) })] });
+		const view = await setConnectionEnabled(env, "u1", "c1", false);
+		// Deleting was the only pause available before this, and it destroys the routing filter and
+		// orphans `agent_connection_deliveries.connection_id`. Disabling must touch neither.
+		expect(view?.config).toMatchObject({ collection: "prospects" });
+		expect(writes.some((w) => w.sql.includes("DELETE FROM agent_connections"))).toBe(false);
+	});
+});
+
+describe("deliverEvent — a disabled connection (#644)", () => {
+	it("delivers nothing and counts it as disabled", async () => {
+		const { env, agentFetches } = buildEnv({ connections: [conn({ enabled: 0 })] });
+		const r = await deliverEvent(env, "finder", "u1", "lead.created", [{ name: "A" }]);
+		expect(r.delivered).toBe(0);
+		expect(r.connections).toBe(0);
+		expect(r.disabled).toBe(1);
+		expect(agentFetches.length).toBe(0);
+	});
+
+	it("logs a warn event, so a paused chain is not the same as an unwired one", async () => {
+		const { env, writes } = buildEnv({ connections: [conn({ enabled: 0 })] });
+		await deliverEvent(env, "finder", "u1", "lead.created", [{ name: "A" }]);
+		// The only difference between "paused" and "never built" used to be invisible: both
+		// returned zero and wrote nothing anywhere.
+		const logged = writes.filter((w) => JSON.stringify(w.args).includes("connection.paused"));
+		expect(logged.length).toBe(1);
+		expect(JSON.stringify(logged[0].args)).toContain("1 connection(s) disabled");
+	});
+
+	it("still delivers through the enabled edges beside it", async () => {
+		const { env, agentFetches } = buildEnv({ connections: [conn({ id: "c1", enabled: 0 }), conn({ id: "c2", enabled: 1 })] });
+		const r = await deliverEvent(env, "finder", "u1", "lead.created", [{ name: "A" }]);
+		expect(r.connections).toBe(1);
+		expect(r.delivered).toBe(1);
+		expect(r.disabled).toBe(1);
+		expect(agentFetches.length).toBe(1);
 	});
 });

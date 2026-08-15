@@ -7223,6 +7223,45 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/instances/{instanceId}/connections/{cid}:
+    patch:
+      summary: Pause or resume a connection
+      description: |
+        Sets `enabled`. Until this existed the column gated every delivery and had no writer at
+        all — one INSERT hard-coding `1`, four SELECTs and a DELETE — so a field reported as a
+        boolean state was a constant, and the only way to stop a chain was to delete the edge.
+
+        Deleting is not a pause: it throws away the edge's `config` (the routing filter, the
+        target pipeline) and orphans its outbox rows, so the pending retries and dead letters
+        that explain what is stuck stop resolving to a connection. Disabling keeps all of it.
+
+        While an edge is disabled its events are counted and logged as
+        `connection.paused` rather than silently dropped, so a paused chain is distinguishable
+        from one that was never wired.
+      operationId: setConnectionEnabled
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: cid, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+                  description: Strictly a boolean — `"false"` and `0` are rejected rather than coerced, since coercion would do the opposite of what was asked on the one field whose job is to stop deliveries.
+      responses:
+        "200":
+          description: The updated connection
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       summary: Delete a connection
       operationId: deleteConnection

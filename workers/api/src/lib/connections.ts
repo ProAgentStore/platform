@@ -307,6 +307,35 @@ async function unattendedWarningsFor(
 	}
 }
 
+/**
+ * Enable or disable one of the caller's connections (#644). Returns the updated view, or null when
+ * no row matched (wrong id, or not the caller's).
+ *
+ * `enabled` gated every delivery and had no writer: the INSERT set the literal `1`, four SELECTs
+ * read it, a DELETE removed the row, and no statement anywhere could ever set `0`. So a field the
+ * console and MCP report as a boolean state was a constant, and the ONLY way to stop a chain was
+ * to delete the edge.
+ *
+ * Deleting is not a pause. It destroys the edge's `config` — the routing filter, the target
+ * pipeline name — and orphans its outbox rows: `agent_connection_deliveries.connection_id` stops
+ * resolving, so the pending retries and dead letters that explain what is stuck lose the thing they
+ * refer to, and re-creating the edge mints a new id that nothing ties them back to. Pausing a chain
+ * while a consumer's connector is down is an ordinary operation; making it irreversible on the
+ * audit trail is the opposite of what the outbox was built for.
+ */
+export async function setConnectionEnabled(env: Env, userId: string, id: string, enabled: boolean): Promise<ConnectionView | null> {
+	const res = await env.DB.prepare("UPDATE agent_connections SET enabled = ?3, updated_at = datetime('now') WHERE id = ?1 AND user_id = ?2")
+		.bind(id, userId, enabled ? 1 : 0)
+		.run();
+	if ((res.meta?.changes ?? 0) === 0) return null;
+	const row = await env.DB.prepare("SELECT * FROM agent_connections WHERE id = ?1 AND user_id = ?2").bind(id, userId).first<ConnectionRow>();
+	if (!row) return null;
+	// A disabled edge keeps its warnings: it is still wired, and the reason it is broken does not
+	// stop being true because it is paused.
+	const facts = await targetFactsFor(env, userId, [row.target_instance_id]).catch(() => new Map<string, TargetFacts>());
+	return toView(row, storedWarnings(row, facts.get(row.target_instance_id)));
+}
+
 /** Delete one of the caller's connections. Returns whether a row was removed. */
 export async function deleteConnection(env: Env, userId: string, id: string): Promise<boolean> {
 	const res = await env.DB.prepare("DELETE FROM agent_connections WHERE id = ?1 AND user_id = ?2").bind(id, userId).run();
@@ -341,16 +370,34 @@ export async function deliverEvent(
 	eventType: string,
 	payloads: unknown[],
 	opts: { traceId?: string | null } = {},
-): Promise<{ connections: number; delivered: number; failed: number; queued: number; filtered: number; duplicate: number }> {
-	const empty = { connections: 0, delivered: 0, failed: 0, queued: 0, filtered: 0, duplicate: 0 };
+): Promise<{ connections: number; delivered: number; failed: number; queued: number; filtered: number; duplicate: number; disabled: number }> {
+	const empty = { connections: 0, delivered: 0, failed: 0, queued: 0, filtered: 0, duplicate: 0, disabled: 0 };
 	if (!payloads.length) return empty;
-	const { results } = await env.DB.prepare(
-		"SELECT * FROM agent_connections WHERE source_instance_id = ?1 AND event_type = ?2 AND enabled = 1",
-	)
+	// Selected UNFILTERED and partitioned here, so a paused edge (#644) is a fact this function can
+	// report. Filtered in SQL, an event with every connection disabled read exactly like an event
+	// with nothing wired — and now that disabling is possible, "the chain is paused" has to be
+	// distinguishable from "the chain was never built".
+	const { results } = await env.DB.prepare("SELECT * FROM agent_connections WHERE source_instance_id = ?1 AND event_type = ?2")
 		.bind(sourceInstanceId, eventType)
 		.all<ConnectionRow>();
-	const conns = results ?? [];
-	if (!conns.length) return empty;
+	const all = results ?? [];
+	const conns = all.filter((c) => !!c.enabled);
+	const disabled = all.length - conns.length;
+	if (!conns.length) {
+		if (disabled) {
+			await logEvent(env, {
+				source: "connection",
+				event: "connection.paused",
+				level: "warn",
+				message: `${eventType}: ${disabled} connection(s) disabled — ${payloads.length} event(s) not delivered`,
+				userId,
+				instanceId: sourceInstanceId,
+				traceId: opts.traceId ?? undefined,
+				context: { eventType, disabled, payloads: payloads.length },
+			}).catch(() => undefined);
+		}
+		return { ...empty, disabled };
+	}
 
 	let delivered = 0;
 	let failed = 0;
@@ -404,13 +451,13 @@ export async function deliverEvent(
 	await logEvent(env, {
 		source: "connection",
 		event: "connection.delivered",
-		message: `${eventType}: ${delivered}/${queued} delivered to ${conns.length} connection(s)${failed ? `, ${failed} queued for retry` : ""}${filtered ? `, ${filtered} filtered out` : ""}${duplicate ? `, ${duplicate} duplicate` : ""}`,
+		message: `${eventType}: ${delivered}/${queued} delivered to ${conns.length} connection(s)${failed ? `, ${failed} queued for retry` : ""}${filtered ? `, ${filtered} filtered out` : ""}${duplicate ? `, ${duplicate} duplicate` : ""}${disabled ? `, ${disabled} disabled` : ""}`,
 		userId,
 		instanceId: sourceInstanceId,
 		traceId: opts.traceId ?? undefined,
-		context: { eventType, connections: conns.length, delivered, failed, filtered, duplicate },
+		context: { eventType, connections: conns.length, delivered, failed, filtered, duplicate, disabled },
 	});
-	return { connections: conns.length, delivered, failed, queued, filtered, duplicate };
+	return { connections: conns.length, delivered, failed, queued, filtered, duplicate, disabled };
 }
 
 /**
