@@ -86,6 +86,25 @@ export function shouldRegisterOnOpen(reconnect: boolean, alreadyRegistered: bool
 	return reconnect || !alreadyRegistered;
 }
 
+/**
+ * Attached instances whose runtime registration never took — the retry nothing else owes them (#497).
+ *
+ * `registerRuntime` has exactly three callers: the startup loop, a discovery ATTACH, and a socket
+ * (re)open. None of them can reach an instance whose SOCKET is up and whose REGISTRATION failed:
+ * discovery's `attach` set excludes anything already attached, and `onOpen` only fires again if the
+ * socket drops — which, for a machine that stays awake, it may never do.
+ *
+ * That is §1a of #497 one layer down. The first fix made the register ride the reconnect, so a
+ * wake recovers; this covers the case where the wake's own register is the thing that failed
+ * (the API is briefly unreachable while the relay's CDN edge is already answering, which is exactly
+ * the asymmetry the original screenshot showed: "Secure link connected · ProAgentStore not
+ * registered"). The upsert is idempotent, so retrying costs one POST per broken instance per poll
+ * and nothing at all when registration is healthy.
+ */
+export function pendingRegistrations(attached: Iterable<string>, registered: ReadonlySet<string>): string[] {
+	return [...attached].filter((id) => !registered.has(id));
+}
+
 /** A short, stable label for log lines: enough to recognise, short enough to scan. */
 export function instanceLabel(inst: { id: string; name?: string }): string {
 	const short = `${inst.id.slice(0, 8)}…`;

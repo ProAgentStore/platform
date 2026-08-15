@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { diffMembership, instanceLabel, isEligible, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { diffMembership, instanceLabel, isEligible, pendingRegistrations, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -125,5 +127,52 @@ describe("shouldRegisterOnOpen", () => {
 		expect(shouldRegisterOnOpen(false, true)).toBe(false);
 		// `fetch failed` at boot, caught and logged and never retried — this is the second chance.
 		expect(shouldRegisterOnOpen(false, false)).toBe(true);
+	});
+});
+
+/**
+ * #497, one layer below `shouldRegisterOnOpen`: the case where the SOCKET came up and the
+ * REGISTER did not.
+ *
+ * `registerRuntime` has three callers and none of them can reach that state — a discovery attach
+ * skips anything already attached, and `onOpen` needs the socket to drop first. So the machine
+ * sits with a live relay and no `instance_runtime_nodes` row until someone restarts the CLI, which
+ * is precisely the asymmetry the original screenshot showed: secure link connected, ProAgentStore
+ * not registered.
+ */
+describe("pendingRegistrations", () => {
+	it("names the attached instances whose registration never took", () => {
+		expect(pendingRegistrations(["a", "b", "c"], new Set(["a", "c"]))).toEqual(["b"]);
+	});
+
+	it("is empty when registration is healthy, so a working runner writes nothing every 20s", () => {
+		expect(pendingRegistrations(["a", "b"], new Set(["a", "b"]))).toEqual([]);
+		expect(pendingRegistrations([], new Set())).toEqual([]);
+	});
+
+	// A registration held for an instance we have since DETACHED (unsubscribed, re-pinned) is not
+	// this function's business: it reads the attached set, so a detach removes it from the retry
+	// by construction rather than by a second rule that could disagree.
+	it("only ever proposes instances that are attached right now", () => {
+		expect(pendingRegistrations(["a"], new Set(["b"]))).toEqual(["a"]);
+		expect(pendingRegistrations([], new Set(["a", "b"]))).toEqual([]);
+	});
+});
+
+/**
+ * The wiring, not the rule — asserted against the source because the defect WAS the absence of a
+ * call site, and a pure function nobody calls passes every test it has.
+ */
+describe("the discovery poll actually performs the retry (#497)", () => {
+	const relaySrc = readFileSync(join(import.meta.dirname, "relay.ts"), "utf8");
+	const discovery = relaySrc.slice(relaySrc.indexOf("function startDiscovery"));
+
+	it("re-registers attached instances whose registration is missing, on every pass", () => {
+		expect(discovery).toContain("pendingRegistrations(attached.keys(), registered)");
+		expect(discovery).toContain("await registerRuntime(id)");
+	});
+
+	it("reports the new state to the pane, so the ✗ can clear without a restart", () => {
+		expect(discovery).toContain("reportRegistration()");
 	});
 });

@@ -4,7 +4,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION } from "./process.js";
-import { diffMembership, instanceLabel, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, pendingRegistrations, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 
@@ -135,7 +135,7 @@ export async function connectViaRelay(
 	reportRegistration();
 	writeLine(registered.size === instanceIds.length
 		? `Runtime registered with PAGS ✓ (${registered.size}/${instanceIds.length} agents)`
-		: `Runtime registration incomplete: ${registered.size}/${instanceIds.length} agents — retried on each relay (re)connect.`);
+		: `Runtime registration incomplete: ${registered.size}/${instanceIds.length} agents — retried on each relay (re)connect${watchInstances ? " and every 20s while this runs" : ""}.`);
 	writeLine("");
 	writeLine("═══════════════════════════════════════════════");
 	writeLine(`  ✅ CONNECTED — WebSocket relay · ${hostname()}`);
@@ -243,6 +243,16 @@ export async function connectViaRelay(
 						attach(inst.id, instanceLabel(inst));
 					}
 					for (const id of toDetach) detach(id);
+					// The registration retry nothing else performs (#497). A socket that came up while
+					// its `POST …/runtime` failed is the exact state the original report showed — the
+					// secure link connected, ProAgentStore "not registered" — and until this, the only
+					// thing that could clear it was the socket dropping again, which on a machine that
+					// stays awake may never happen. Silent when healthy: an empty list writes nothing.
+					const pending = pendingRegistrations(attached.keys(), registered);
+					if (pending.length) {
+						for (const id of pending) await registerRuntime(id);
+						reportRegistration();
+					}
 				} catch {
 					// A failed poll is not worth a log line every 20s — the next one retries, and
 					// a genuinely broken session already surfaces on the relay sockets.
