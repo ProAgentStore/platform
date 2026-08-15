@@ -601,6 +601,14 @@ describe("published surface vs the advertised version (#573 AC2)", () => {
  * that would have survived changing the default. Anything that reaches the wire is in scope
  * however it was produced.
  *
+ * **What it does NOT measure: one path per tool.** The sweep calls each tool once, so it reads
+ * whichever branch the stubbed API drives it down — a confirm-gated tool answers its refusal, a
+ * coding tool answers "no active session". A tool that serialises correctly on the path taken
+ * here and indents on an error path would pass. Closing that would need a per-tool table of
+ * response fixtures, which is a second hand-maintained restatement of the surface and the thing
+ * this file exists to avoid; the mitigation is that `jsonText` no longer HAS an indented mode,
+ * so a second path can only differ by hand-rolling one.
+ *
  * **The non-vacuity problem, stated because it is the real risk here.** `{}` and `[]`
  * serialise identically pretty or compact, so a tool whose stubbed result is empty cannot
  * fail this arm no matter what it does. The fixture therefore answers every API call with a
