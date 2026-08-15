@@ -230,7 +230,12 @@ agentRoutes.get("/", async (c) => {
 	const sort = c.req.query("sort") || "newest"; // newest, popular, name
 	const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
 
-	let sql = `SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model, a.status,
+	// `a.status` is deliberately NOT selected (#590). Nine seed migrations write `'active'` and no
+	// application code writes it at all, so the public catalogue was handing every caller a field
+	// whose only real content was "first-party or not": `status:"active"` for the nine seeded
+	// agents beside `status:"inactive"` for every agent a third-party creator could ever build.
+	// The store never rendered it; it was a structural distinction leaking through a SELECT list.
+	let sql = `SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model,
                     CASE WHEN instr(COALESCE(u.github_login, ''), '@') = 0 THEN u.github_login ELSE NULL END as creator_login,
                     COALESCE(NULLIF(u.display_name, ''), NULLIF(u.github_name, ''), CASE WHEN instr(COALESCE(u.github_login, ''), '@') = 0 THEN u.github_login ELSE 'Creator' END) as creator_name,
                     u.avatar_url as creator_avatar,

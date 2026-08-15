@@ -14,26 +14,43 @@ interface AgentRow {
 	slug: string;
 	name: string;
 	model: string;
-	status: string;
 	visibility: string;
 	owner_id: string;
 }
 
 /**
- * May this caller run this agent? (#219)
+ * May this caller run this agent? (#219, corrected by #590)
  *
  * The original check was `visibility !== "published" && status !== "active"`, which rejects only
- * an agent failing BOTH conditions. Two independent requirements need AND — as written, a DRAFT
- * agent with status 'active' (the state every agent sits in while its creator builds it) was
- * runnable by any authenticated user who knew its id or slug, and so was a published-but-inactive
- * one. Pure and exported so the rule is tested directly rather than re-implemented in a test.
+ * an agent failing BOTH conditions. Two independent requirements need AND, so #219 made it AND.
+ *
+ * `status` was the wrong second requirement, and #219's own comment records the belief that made
+ * it look right: "a DRAFT agent with status 'active' (the state every agent sits in while its
+ * creator builds it)". No agent has ever sat in that state. All three `INSERT INTO agents` write
+ * `'inactive'`, the update allowlist does not contain `status`, and no `UPDATE agents` anywhere
+ * sets it — only nine seed migrations write `'active'`, and `'error'` has no writer at all. So
+ * the AND was a gate on a field nothing could open: every third-party published agent 404'd for
+ * every non-owner, permanently, and 404 reads as "missing" rather than "not activated" (#590).
+ *
+ * `visibility` is now the whole public gate, which is what the rest of this Worker already
+ * believed: the catalogue query is `WHERE a.visibility = 'published'`, `GET /v1/agents/:id`
+ * requires ownership only when not published, and the clone source lookup takes
+ * `AND visibility = 'published'`. This endpoint was the single outlier, so it is the outlier that
+ * changes.
+ *
+ * Deliberately NOT the other repair — making publish write `status = 'active'`. That gives one
+ * fact two encodings in two columns, and a second encoding drifts: #587, in this same batch, is
+ * `instance_runtimes.status` disagreeing with the heartbeat it was supposed to summarise. The
+ * declared vocabulary `inactive | active | error` is a HEALTH vocabulary — `error` is not a
+ * publication state — and nothing in this platform computes an agent's health. A field the
+ * system does not compute must not gate access to it.
  *
  * `privileged` = the owner or an admin: they may run their own work in any state, which is the
  * creator workflow this endpoint exists for.
  */
-export function canRunAgent(a: { visibility: string; status: string; privileged: boolean }): boolean {
+export function canRunAgent(a: { visibility: string; privileged: boolean }): boolean {
 	if (a.privileged) return true;
-	return a.visibility === "published" && a.status === "active";
+	return a.visibility === "published";
 }
 
 /** Execute an agent — runs Workers AI with the agent's config. */
@@ -42,26 +59,23 @@ runRoutes.post("/:id/run", async (c) => {
 	const id = c.req.param("id");
 
 	const agent = await c.env.DB.prepare(
-		`SELECT id, slug, name, model, status, visibility, owner_id FROM agents WHERE (id = ?1 OR slug = ?1)`,
+		`SELECT id, slug, name, model, visibility, owner_id FROM agents WHERE (id = ?1 OR slug = ?1)`,
 	)
 		.bind(id)
 		.first<AgentRow>();
 
 	if (!agent) throw new HttpError(404, "Agent not found");
 
-	// Access gate (#219). The old check was `visibility !== "published" && status !== "active"`,
-	// which only rejects an agent failing BOTH conditions — so a DRAFT agent with status
-	// 'active' (the state every agent is in while its creator builds it) was runnable by any
-	// authenticated user who knew its id or slug, and a published-but-inactive one likewise.
-	// Two independent conditions need AND, not a negated AND.
+	// Access gate (#219, corrected by #590 — see `canRunAgent`). A non-owner needs the agent
+	// PUBLISHED; the `status === "active"` half was a gate on a column no application code can
+	// write, so it closed the platform to third-party creators entirely.
 	//
 	// The owner (and an admin) may run their own work in any state — that is the creator
-	// workflow this endpoint exists for. Everyone else needs it actually published and active.
-	// 404 rather than 403 for a non-owner: whether a private draft exists under a guessed slug
-	// is itself information the creator has not published.
+	// workflow this endpoint exists for. 404 rather than 403 for a non-owner: whether a private
+	// draft exists under a guessed slug is itself information the creator has not published.
 	const isOwner = agent.owner_id === session.uid;
 	const privileged = isOwner || (await isAdmin(c, session));
-	if (!canRunAgent({ visibility: agent.visibility, status: agent.status, privileged })) {
+	if (!canRunAgent({ visibility: agent.visibility, privileged })) {
 		throw new HttpError(404, "Agent not found");
 	}
 

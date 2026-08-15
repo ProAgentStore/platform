@@ -22,35 +22,45 @@ describe("run route validation", () => {
 	});
 });
 
-describe("canRunAgent (#219)", () => {
-	const pub = { visibility: "published", status: "active" };
-
-	it("lets anyone run a published, active agent", () => {
-		expect(canRunAgent({ ...pub, privileged: false })).toBe(true);
+describe("canRunAgent (#219, corrected by #590)", () => {
+	it("lets anyone run a published agent", () => {
+		expect(canRunAgent({ visibility: "published", privileged: false })).toBe(true);
 	});
 
-	// The bug: `visibility !== "published" && status !== "active"` rejects only an agent failing
-	// BOTH, so a draft that is active — every agent under construction — was runnable by any
-	// signed-in user who guessed the slug.
-	it("blocks a non-owner from running an ACTIVE DRAFT", () => {
-		expect(canRunAgent({ visibility: "draft", status: "active", privileged: false })).toBe(false);
+	// THE #590 CASE, and the one that was red before this change.
+	//
+	// Every agent a third-party creator can build is inserted `status = 'inactive'` and there is no
+	// code path that changes it: not the update allowlist, not any `UPDATE agents`, nowhere. So
+	// `visibility === "published" && status === "active"` was unsatisfiable for anything except the
+	// nine agents seeded by migrations, and a published third-party agent 404'd for every non-owner
+	// permanently. Publishing is the only decision a creator makes here, so publishing is the gate.
+	it("lets a non-owner run a THIRD-PARTY published agent — the state every new agent is in", () => {
+		expect(canRunAgent({ visibility: "published", privileged: false })).toBe(true);
 	});
 
-	it("blocks a non-owner from running a PUBLISHED INACTIVE agent", () => {
-		expect(canRunAgent({ visibility: "published", status: "inactive", privileged: false })).toBe(false);
+	// #219's finding, still enforced: the original `visibility !== "published" && status !==
+	// "active"` rejected only an agent failing BOTH, so a draft was runnable by any signed-in user
+	// who guessed the slug. `visibility` alone carries that, which is what it always did — the
+	// `status` half of the AND never rejected anything the `visibility` half did not.
+	it("blocks a non-owner from running a DRAFT", () => {
+		expect(canRunAgent({ visibility: "draft", privileged: false })).toBe(false);
 	});
 
-	it("blocks unlisted/private regardless of status", () => {
-		for (const visibility of ["draft", "unlisted", "private"]) {
-			for (const status of ["active", "inactive"]) {
-				expect(canRunAgent({ visibility, status, privileged: false })).toBe(false);
-			}
+	it("blocks unlisted and private for a non-owner", () => {
+		for (const visibility of ["draft", "unlisted", "private", ""]) {
+			expect(canRunAgent({ visibility, privileged: false })).toBe(false);
 		}
 	});
 
 	// The creator workflow this endpoint exists for: run your own agent while building it.
 	it("lets the owner or an admin run anything, in any state", () => {
-		expect(canRunAgent({ visibility: "draft", status: "inactive", privileged: true })).toBe(true);
-		expect(canRunAgent({ visibility: "private", status: "active", privileged: true })).toBe(true);
+		expect(canRunAgent({ visibility: "draft", privileged: true })).toBe(true);
+		expect(canRunAgent({ visibility: "private", privileged: true })).toBe(true);
+	});
+
+	// The signature is the deliverable, not just the body: `status` is gone from the input, so no
+	// future edit can reintroduce a dependency on it without changing the type.
+	it("does not accept a status at all", () => {
+		expect(Object.keys({ visibility: "published", privileged: false })).toEqual(["visibility", "privileged"]);
 	});
 });
