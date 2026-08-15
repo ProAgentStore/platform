@@ -54,11 +54,18 @@ import { findSplitClaims } from "./doc-claims.mjs";
 /**
  * Files that MUST state the split, and are therefore the denominator's other half.
  *
- * `store/llms-full.txt` is deliberately NOT here even though it does state it: it is
- * generated from the docs, so requiring a claim from it would fail the day its generator
- * changed shape, for a reason having nothing to do with the split. It is still SWEPT, so a
- * wrong number in it is caught — required-to-state and checked-if-present are different
- * obligations and this file needs only the second.
+ * `store/llms-full.txt` is deliberately NOT here even though it does state it. The reason
+ * given until #604 was that it is "generated from the docs", and that was simply false:
+ * `README.md:330` lists it as SOURCE, "edit by hand", and no generator exists anywhere in
+ * the tree (`workers/host/build.js` only reads it). A guard's own comment asserting a
+ * mechanism nobody built is the defect this whole cluster is about, so it is corrected
+ * rather than carried.
+ *
+ * The DECISION stands on its real footing: that file is already required to state the
+ * TOTAL — it is in check 6's `MUST_CLAIM` — and the split is a finer claim that a
+ * agent-facing summary may legitimately not make. It is still SWEPT, so a wrong number in
+ * it is caught. Required-to-state and checked-if-present are different obligations, and
+ * this file needs only the second.
  */
 export const SPLIT_MUST_CLAIM = [
 	"workers/mcp/CLAUDE.md",

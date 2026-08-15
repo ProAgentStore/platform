@@ -30,7 +30,7 @@ curl https://mcp.proagentstore.online/health
 Expected response:
 
 ```json
-{"ok":true,"service":"proagentstore-mcp","tools":41}
+{"ok":true,"service":"proagentstore-mcp","tools":136}
 ```
 
 ## Skills and Plugins
@@ -107,12 +107,13 @@ That response means the instance runtime path is working and correctly refusing 
 
 ## MCP Tool Groups
 
-The server currently has 120 `server.tool(...)` registrations across `workers/mcp/src`.
-Some are capability-gated and appear only for users with matching agent surfaces. The
-`/health` liveness marker reports a static `tools` count (`41`) — it is a heartbeat,
-not an authoritative inventory. Grep `workers/mcp/src/**/*.ts` for the full source
-surface. The families below are a
-representative slice, not the complete list.
+The server currently has 136 tool registrations across `workers/mcp/src`.
+Some are capability-gated and appear only for users with matching agent surfaces, so
+`tools/list` on your own connection is the authoritative surface — 19 of those
+registrations are gated. The `/health` marker reports the same total from
+`workers/mcp/src/tool-count.ts`; it said a hardcoded `41` when this page was written,
+which is the drift `scripts/docs-drift.mjs` now holds every statement of the number to.
+The families below are a representative slice, not the complete list.
 
 Creator tools:
 
@@ -178,7 +179,7 @@ Status: active
 
 Verified live:
 
-- MCP exposed its tool set (26 at the time of this 2026-06-11 record; 120 registrations in source today — see MCP Tool Groups above).
+- MCP exposed its tool set (26 at the time of this 2026-06-11 record; 136 tool registrations in source today — see MCP Tool Groups above).
 - Required instance tools were present.
 - `subscribe_agent` returned the existing active instance.
 - `add_instance_knowledge` saved a document to that private instance.

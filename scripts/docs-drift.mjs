@@ -66,6 +66,7 @@ import {
 	parseConfirmTable,
 } from "./lib/doc-claims.mjs";
 import { SUBSET_CLAIMS, checkClaimShape } from "./lib/claim-shape.mjs";
+import { docFiles as collectDocFiles, requireInputs, servedHtmlFiles as collectServedHtml } from "./lib/doc-files.mjs";
 import { checkMcpSplit } from "./lib/mcp-split.mjs";
 import { checkWireSurface } from "./lib/wire-surface.mjs";
 
@@ -79,85 +80,14 @@ const notes = [];
 const fail = (check, message) => failures.push({ check, message });
 const ok = (message) => notes.push(message);
 
-/** An input set this script cannot collect is not a clean tree — it is a check that has
- *  stopped running. Same construction as scripts/check-design-tokens.mjs:97-101, and for
- *  the same reason: the number a guard prints is trusted, so it must be a measurement. */
-const requireInputs = (what, got, floor, why) => {
-	if (got >= floor) return;
-	console.error(
-		`✗ ${what}: collected ${got}, expected at least ${floor}.\n  ${why}\n` +
-			"  This guard would pass by checking nothing. Fix the collector — do not lower the floor\n" +
-			"  to make today's number pass.",
-	);
-	process.exit(1);
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Inputs
+// Inputs — collectors + their ADR 0002 floors live in scripts/lib/doc-files.mjs (#604)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Everything a reader or an agent is expected to trust. */
-function docFiles() {
-	const files = [];
-	const add = (f) => {
-		if (existsSync(f) && statSync(f).isFile()) files.push(f);
-	};
-	for (const name of readdirSync(p("platform-docs"))) {
-		if (name.endsWith(".md")) add(p("platform-docs", name));
-	}
-	add(p("store/llms.txt"));
-	add(p("store/llms-full.txt"));
-	add(p("README.md"));
-	add(p("AGENTS.md"));
-	add(p("SECURITY.md"));
-	for (const dir of ["workers", "packages", "agents", "templates"]) {
-		const base = p(dir);
-		if (!existsSync(base)) continue;
-		for (const name of readdirSync(base)) {
-			// CLAUDE.md counts: it is guidance an agent acts on, and it drifted the same
-			// way everything else did — it carried "`/health` reports a hardcoded
-			// `tools: 41`" as a documented gotcha.
-			for (const doc of ["README.md", "AGENTS.md", "CLAUDE.md"]) {
-				add(join(base, name, doc));
-			}
-		}
-	}
-	requireInputs(
-		"docFiles()",
-		files.length,
-		20,
-		"platform-docs alone holds ten pages, and every worker and package carries a README.",
-	);
-	return files;
-}
+const docFiles = () => collectDocFiles(p);
+const servedHtmlFiles = () => collectServedHtml(p);
 
-/** The marketing site as it is SERVED. `workers/host/build.js` inlines each of these into
- *  `pages.ts`, so what is here is what a visitor reads — and none of it was in any input
- *  set until #555, which is why /about could carry a number nothing compared to anything.
- *
- *  `store/docs` is excluded because it is generated from platform-docs (already covered,
- *  and absent in a fresh checkout); `dist` is Vite output for the console and admin SPAs,
- *  whose source is .tsx. */
-function servedHtmlFiles() {
-	const files = [];
-	const walk = (dir) => {
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			if (["docs", "dist", "node_modules"].includes(entry.name)) continue;
-			const full = join(dir, entry.name);
-			if (entry.isDirectory()) walk(full);
-			else if (entry.name.endsWith(".html")) files.push(full);
-		}
-	};
-	walk(p("store"));
-	requireInputs(
-		"servedHtmlFiles()",
-		files.length,
-		8,
-		"store/ carries the homepage, about, get-started, skills, agent detail, developer profile,\n" +
-			"  changelog, 404 and the app/* legal pages — a walk that finds fewer has lost a directory.",
-	);
-	return files;
-}
 
 /** Lines that live inside a ``` fence — i.e. things a reader is meant to RUN. Prose
  *  may freely discuss a removed flag ("there is no `--tunnel` flag"); a code block

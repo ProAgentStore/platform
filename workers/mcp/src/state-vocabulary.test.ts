@@ -157,7 +157,15 @@ describe("the run-health vocabulary is the API's RunHealth union, not a restatem
 		// (the whole point of the member), and `waiting` promises a resume time only conditionally,
 		// because `coding-pause.ts:146` writes none for a human handoff (#596).
 		expect(sentence).toContain("makes NO claim that anything is running");
-		expect(sentence).toContain("only when one is knowable");
+		// `waiting` used to promise a resume time unconditionally, then (#596) only "when one is
+		// knowable". Neither described the field once `waiting_until` began carrying a GIVE-UP
+		// instant for a human handoff: the same column, under a different verb. So the gloss now
+		// has to name the verb, and that is what is pinned — a reader who takes a give-up
+		// deadline for a resume time has been told the run will continue on its own when the
+		// clock is in fact running against them.
+		expect(sentence).toContain("when the end is knowable");
+		expect(sentence, "a usage-limit park resumes at the instant").toContain("RESUMES then");
+		expect(sentence, "a human handoff gives up at the instant").toContain("GIVES UP then");
 	});
 
 	it("leads with a chain the sweep can actually see", () => {

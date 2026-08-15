@@ -179,8 +179,21 @@ export function findSplitClaims(src) {
 // Case-INSENSITIVE, and the filler admits a capital. Written lowercase-only first, which
 // silently failed to see "135 MCP tools" — the one phrasing this file's own header names as
 // the trap. Caught by the test below rather than in production, which is the point of it.
-const MENTION_NOUN = /\b(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,3}(?:tools?|registrations?)\b/gi;
-const MENTION_VERB = /\b(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,3}are\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:surface-)?(?:gated|always)\b/gi;
+//
+// A filler token is a word OR a backticked code span. Words-only missed
+// `docs/mcp-instance-runtime.md:110`, "120 `server.tool(...)` registrations" — a real stale
+// count, and the very line #604 named as its proof case (measured; it was reported to this
+// lane as already caught, and was not).
+const FILLER = "(?:(?:[A-Za-z][\\w-]*|`[^`]+`)\\s+)";
+// The NOUN. `registrations` is accepted bare only in the PLURAL, and that is the whole
+// defence against the one false-positive class measured over `docs/`: "RFC 7591 dynamic
+// client registration" is a number beside the word, twice, and is about OAuth client
+// registration rather than tool registration. Singular bare "registration" is too generic
+// to be a surface claim; `tool registration` stays readable in either number because the
+// qualifier is what makes it unambiguous.
+const MENTION_SUBJECT = "(?:tools?|tool\\s+registrations?|registrations)";
+const MENTION_NOUN = new RegExp(`\\b(\\d+)\\s+${FILLER}{0,3}${MENTION_SUBJECT}\\b`, "gi");
+const MENTION_VERB = new RegExp(`\\b(\\d+)\\s+${FILLER}{0,3}are\\s+${FILLER}{0,2}(?:surface-)?(?:gated|always)\\b`, "gi");
 
 export function findQuantityMentions(src) {
 	const out = [];

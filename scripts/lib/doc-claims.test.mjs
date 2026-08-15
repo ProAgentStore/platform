@@ -317,6 +317,27 @@ describe("findQuantityMentions — the population the parsers above are graded a
 		expect(findQuantityMentions("19 are surface-gated")[0].shape).toBe("verb");
 	});
 
+	it("reads across a backticked code span, which is where a real stale count hid", () => {
+		// docs/mcp-instance-runtime.md:110 — "120 `server.tool(...)` registrations", a genuinely
+		// stale number. A words-only filler could not cross the code span, so the detector missed
+		// it while reporting the file clean, and it was handed to this lane as already caught.
+		const m = findQuantityMentions("The server currently has 120 `server.tool(...)` registrations across `workers/mcp/src`.");
+		expect(m.map((x) => x.claimed)).toEqual([120]);
+	});
+
+	it("does not read `registration` as a tool registration when it is somebody else's noun", () => {
+		// The only false-positive class measured over docs/, twice in one file: RFC 7591 is a
+		// number beside the word "registration", and is about OAuth client registration.
+		// Bare `registration` is therefore a mention only in the PLURAL.
+		expect(findQuantityMentions("now RFC 7591 dynamic client registration (`lib/connectors/dcr.ts`)")).toEqual([]);
+		expect(findQuantityMentions("**RFC 7591 dynamic client registration**")).toEqual([]);
+		// ...and the discriminating half: the plural IS still read, or the fix would have
+		// silenced the sentence this whole guard exists for.
+		expect(findQuantityMentions("18 of the 124 registrations are gated")[0].claimed).toBe(124);
+		// A tool-qualified singular stays readable, because the qualifier removes the ambiguity.
+		expect(findQuantityMentions("1 tool registration")[0].claimed).toBe(1);
+	});
+
 	it("requires the number to QUANTIFY the subject, not merely share a line with it", () => {
 		// The line-level rule was measured and rejected: 75 lines matched, 50 with no claim on
 		// them. These four are the shapes that produced those false positives.

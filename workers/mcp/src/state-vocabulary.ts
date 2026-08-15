@@ -188,7 +188,7 @@ export const RUN_HEALTH_STATES = ["working", "waiting", "stalled", "ended"] as c
 const RUN_HEALTH_GLOSS: Record<string, string> = {
 	working: "the orchestrator is ticking; it may legitimately be many minutes into ONE instruction",
 	waiting:
-		"deliberately parked — `waitNote` says what for, and gives a resume time only when one is knowable; read it, because one park is waiting for a PERSON and will not clear itself",
+		"deliberately parked — `waitNote` says what for and, when the end is knowable, when the wait runs out AND what running out means: a usage-limit park RESUMES then, a human handoff GIVES UP then. Read the verb, because one park is waiting for a PERSON and its clock runs against them",
 	stalled: "nothing has ticked; the row will say `running` forever and the workflow is probably gone",
 	ended:
 		"the run is CLOSED — read `status` and `stopReason` for what happened; `ended` makes NO claim that anything is running",

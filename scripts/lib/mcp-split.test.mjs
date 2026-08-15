@@ -90,8 +90,10 @@ describe("checkMcpSplit", () => {
 	});
 
 	it("checks a file that is swept but not required, without demanding it speak", () => {
-		// store/llms-full.txt states the split today and is generated, so it is checked-if-present
-		// rather than required-to-state. Both halves asserted: a wrong number in it fails…
+		// store/llms-full.txt states the split today but is not REQUIRED to, so it is
+		// checked-if-present. (This comment said "and is generated" until #604. It is not:
+		// README.md:330 lists it as hand-edited source and no generator exists — see the
+		// corrected note in mcp-split.mjs.) Both halves asserted: a wrong number in it fails…
 		const bad = run({ "store/llms-full.txt": "117 are always present. The remaining 4 are gated to" });
 		expect(messages(bad)).toContain("store/llms-full.txt");
 		// …and its silence does not.
