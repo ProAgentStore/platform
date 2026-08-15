@@ -194,7 +194,7 @@ export function coverageShortfall(tool: string, output: unknown): string | null 
  * about the data, not about the dispatch — and because a pure function over the body is what makes
  * it testable without a Workflow harness.
  */
-const PARTIAL_FAILURE_TOOLS = new Set(["enrich", "parse_json"]);
+const PARTIAL_FAILURE_TOOLS = new Set(["enrich", "parse_json", "dedupe_upsert"]);
 
 export interface PartialFailure {
 	/** Records the step could not process. Folded into the run's `errors`. */
@@ -221,11 +221,14 @@ export function partialFailure(tool: string, output: unknown, label = tool): Par
 	const failed = typeof o.failed === "number" && Number.isFinite(o.failed) ? Math.trunc(o.failed) : 0;
 	if (failed <= 0) return null;
 	const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : 0);
-	// `enrich` reports how many records it produced (`count`); a step reporting a size instead
-	// (`total`) reads the same way. Never below `failed`, so the proportion cannot read backwards.
+	// `enrich`/`parse_json` report how many records they produced (`count`); `dedupe_upsert` how
+	// many it was given (`total`). Never below `failed`, so the proportion cannot read backwards.
 	const total = Math.max(num(o.total), num(o.count), failed);
 	const firstError = typeof o.firstError === "string" ? o.firstError.slice(0, 200) : "";
-	return { failed, total, firstError, note: `${label} failed on ${failed} of ${total} record(s)${firstError ? ` — ${firstError}` : ""}` };
+	// A write that did not land and a tool call that returned an error are not the same event, and
+	// the detail line is read by someone deciding whether data was LOST.
+	const what = tool === "dedupe_upsert" ? `could not write ${failed} of ${total} record(s)` : `failed on ${failed} of ${total} record(s)`;
+	return { failed, total, firstError, note: `${label} ${what}${firstError ? ` — ${firstError}` : ""}` };
 }
 
 /**

@@ -525,7 +525,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		// PUTs records, and it fires the agent-to-agent pump, which starts work on another instance.
 		mutates: true,
 		description:
-			"Insert-or-update records into an instance collection, deduped by a key field (e.g. place_id). For each item: look up an existing record where key matches; if found, either skip (mode 'skip') or update in place (mode 'update', default); if not, insert. Honors the collection's unique constraint on the key field. Returns {inserted, updated, skipped}.",
+			"Insert-or-update records into an instance collection, deduped by a key field (e.g. place_id). For each item: look up an existing record where key matches; if found, either skip (mode 'skip') or update in place (mode 'update', default); if not, insert. Honors the collection's unique constraint on the key field. Returns {inserted, updated, skipped, failed} — `skipped` means DELIBERATELY not written (no key, or already seen under mode 'skip'), `failed` means the write did not land; the step fails outright when every attempted write failed.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -563,8 +563,30 @@ export const STEP_TOOLS: ToolDef[] = [
 				.then((sc) => (sc?.fields?.length ? new Set(sc.fields.map((f) => f.name)) : undefined))
 				.catch(() => undefined);
 			let inserted = 0, updated = 0, skipped = 0;
+			// A write that DID NOT LAND is its own outcome (#630). It used to increment `skipped` —
+			// the same counter as "this item had no key" and "mode:skip, already seen" — so a run in
+			// which every write failed reported `completed, added: 0, skipped: N, errors: 0`, and a
+			// lost record was indistinguishable from one deliberately left alone. The concrete
+			// trigger is dated: `MAX_COLLECTION_RECORDS` is 10,000, enforced by a throw, and the live
+			// lead collection is filling. On the run that crosses it, and every run after it forever,
+			// the sweep would have reported success and stored nothing.
+			let failed = 0;
+			let attempted = 0;
+			let firstError = "";
 			const newRows: Record<string, unknown>[] = []; // net-new inserts
 			const changedRows: Record<string, unknown>[] = []; // updated-in-place records
+			// The DO answers a failed write with `{error: "…"}` — "Collection \"leads\" is full (max
+			// 10000 records)", "Duplicate value for unique field …". Reading only `res.ok` threw away
+			// the one sentence that says which.
+			const readError = async (res: Response): Promise<string> => {
+				try {
+					const body = (await res.text()).slice(0, 300);
+					const parsed = JSON.parse(body) as { error?: unknown };
+					return typeof parsed.error === "string" ? parsed.error.slice(0, 200) : body.slice(0, 200);
+				} catch {
+					return `HTTP ${res.status}`;
+				}
+			};
 			for (const item of items) {
 				const kv = item[key];
 				if (kv === undefined || kv === null) { skipped++; continue; }
@@ -581,34 +603,69 @@ export const STEP_TOOLS: ToolDef[] = [
 					// traceId — so the wired Outreach instance drafted a second pitch, and billed
 					// for it, for a site that had not changed.
 					const changed = differsFrom(found[0].data, item, schemaFields);
+					attempted++;
 					const res = await stub.fetch(new Request(`${base}/${encodeURIComponent(found[0].id)}`, {
 						method: "PUT",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ data: item }),
 					}));
-					if (res.ok) { updated++; if (changed) changedRows.push(item); } else skipped++;
+					if (res.ok) {
+						updated++;
+						if (changed) changedRows.push(item);
+					} else {
+						failed++;
+						if (!firstError) firstError = await readError(res);
+					}
 				} else {
+					attempted++;
 					const res = await stub.fetch(new Request(base, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ data: item }),
 					}));
-					if (res.ok) { inserted++; newRows.push(item); } else skipped++; // a 500 here = unique-constraint race; count as skipped
+					if (res.ok) {
+						inserted++;
+						newRows.push(item);
+					} else {
+						failed++;
+						if (!firstError) firstError = await readError(res);
+					}
 				}
+			}
+			// Every attempted write failing means the target is broken — the collection is full, the
+			// schema rejects the shape — not that the data was odd. The step says so, exactly as
+			// `enrich` does for the same shape, so the run closes `failed` with the reason instead of
+			// `completed` over a sweep that stored nothing. Partial failures stay successful: the
+			// records that DID land are real, and the count now leaves the body via `partialFailure`.
+			if (attempted > 0 && failed === attempted) {
+				return fail(`dedupe_upsert: all ${failed} write(s) to "${collection}" failed — ${firstError}`);
 			}
 			// Fire the agent-to-agent pump for the selected transitions (deferred import breaks
 			// the steps → connections → triggers cycle). Best-effort: a delivery failure must
 			// never fail the sweep — it's logged to the trace by deliverEvent.
 			const payloads = emitOn === "insert" ? newRows : emitOn === "update" ? changedRows : [...newRows, ...changedRows];
 			let emitted = 0;
+			// Why the rest of the pump's answer is kept (#630): `deliverEvent` returns
+			// {connections, delivered, failed, queued, filtered, duplicate, disabled} and only
+			// `delivered` was read. So an event that was PERSISTED to the outbox and is being retried
+			// read as not emitted, and `filtered`/`duplicate`/`disabled` — the three numbers that
+			// answer "why did my chain not fire?" — were computed and dropped on the floor.
+			let delivery: Record<string, number> | null = null;
 			if (emit && payloads.length && ctx.userId) {
 				try {
 					const { deliverEvent } = await import("./connections.js");
 					const r = await deliverEvent(ctx.env, ctx.instanceId, ctx.userId, emit, payloads, { traceId: ctx.traceId ?? null });
 					emitted = r.delivered;
+					delivery = { connections: r.connections, delivered: r.delivered, queued: r.queued, retrying: r.failed, filtered: r.filtered, duplicate: r.duplicate, disabled: r.disabled };
 				} catch { /* pump failure never breaks the sink */ }
 			}
-			return ok(JSON.stringify({ inserted, updated, skipped, total: items.length, ...(emit ? { emitted } : {}) }, null, 2));
+			return ok(
+				JSON.stringify(
+					{ inserted, updated, skipped, failed, total: items.length, ...(firstError ? { firstError } : {}), ...(emit ? { emitted } : {}), ...(delivery ? { delivery } : {}) },
+					null,
+					2,
+				),
+			);
 		},
 	},
 

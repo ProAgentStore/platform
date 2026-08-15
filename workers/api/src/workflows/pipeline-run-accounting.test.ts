@@ -75,9 +75,31 @@ describe("every step that reports a `failed` count is wired to the run", () => {
 		expect([...segments.keys()]).toContain("enrich");
 	});
 
+	/**
+	 * Every object literal a segment hands to `JSON.stringify` — brace-matched rather than
+	 * line-matched, because a handler is free to wrap its return across lines (`dedupe_upsert` now
+	 * does) and a regex that assumes one line would silently stop seeing it, which is this guard
+	 * failing open on exactly the step it was written for.
+	 */
+	function serialisedObjects(src: string): string[] {
+		const out: string[] = [];
+		for (const m of src.matchAll(/JSON\.stringify\(\s*/g)) {
+			let i = (m.index ?? 0) + m[0].length;
+			if (src[i] !== "{") continue;
+			let depth = 0;
+			const start = i;
+			for (; i < src.length; i++) {
+				if (src[i] === "{") depth++;
+				else if (src[i] === "}" && --depth === 0) break;
+			}
+			out.push(src.slice(start, i + 1));
+		}
+		return out;
+	}
+
 	it("PARTIAL_FAILURE_TOOLS lists exactly the steps whose output carries `failed`", () => {
 		const reporting = [...segments]
-			.filter(([, src]) => /return ok\(JSON\.stringify\(\{[^\n]*\bfailed\b/.test(src))
+			.filter(([, src]) => serialisedObjects(src).some((obj) => /[\s,{]failed\s*[,:}]/.test(obj)))
 			.map(([name]) => name)
 			.sort();
 		const declared = (PIPELINE.match(/const PARTIAL_FAILURE_TOOLS = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "")

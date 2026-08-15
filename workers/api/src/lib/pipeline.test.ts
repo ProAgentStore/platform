@@ -605,3 +605,18 @@ describe("partialFailure (#642)", () => {
 		expect(partialFailure("enrich", { count: 3, failed: 9 })?.note).toContain("9 of 9");
 	});
 });
+
+describe("partialFailure — a write that did not land (#630)", () => {
+	it("says 'could not write', because the reader is deciding whether data was LOST", () => {
+		const out = { inserted: 30, updated: 0, skipped: 0, failed: 15, total: 45, firstError: 'Collection "leads" is full (max 10000 records)' };
+		expect(partialFailure("dedupe_upsert", out)?.note).toBe(
+			'dedupe_upsert could not write 15 of 45 record(s) — Collection "leads" is full (max 10000 records)',
+		);
+	});
+
+	it("stays silent for a sweep that only skipped deliberately", () => {
+		// `skipped` is now exclusively "no key" / "mode:skip, already seen", and neither is a
+		// failure — reporting one would put a warn line on every healthy re-sweep.
+		expect(partialFailure("dedupe_upsert", { inserted: 0, updated: 0, skipped: 45, failed: 0, total: 45 })).toBeNull();
+	});
+});

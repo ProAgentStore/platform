@@ -188,7 +188,14 @@ describe("flatten", () => {
 // Mock the instance DO: GET records?where= returns a seen map keyed by place_id; POST
 // inserts; PUT updates. Proves insert-vs-update routing + that we never double-insert a
 // key that already exists (respecting the collection's unique constraint).
-function mockAgentStub(seen: Record<string, string>, stored: Record<string, Record<string, unknown>> = {}) {
+function mockAgentStub(
+	seen: Record<string, string>,
+	stored: Record<string, Record<string, unknown>> = {},
+	/** #630: make the DO REFUSE writes — the shape a full collection or a unique-constraint race
+	 *  has in production, and the one the old code counted as `skipped`. `failKeys` refuses only
+	 *  those records, so a PARTIAL failure can be told apart from a total one. */
+	writes: { status?: number; error?: string; failKeys?: string[] } = {},
+) {
 	const calls: Array<{ method: string; url: string; body?: unknown }> = [];
 	const fetch = vi.fn(async (req: Request) => {
 		const url = new URL(req.url);
@@ -202,6 +209,16 @@ function mockAgentStub(seen: Record<string, string>, stored: Record<string, Reco
 			// The real route answers full CollectionRecords (id + data) — `emitOn:"update"` has
 			// to compare against that data to know whether anything actually changed.
 			return new Response(JSON.stringify({ records: id ? [{ id, data: stored[kv] }] : [], total: id ? 1 : 0 }), { status: 200 });
+		}
+		const refused = (() => {
+			if (!writes.status && !writes.error) return false;
+			if (!writes.failKeys) return true;
+			const data = (body as { data?: Record<string, unknown> } | undefined)?.data ?? {};
+			return writes.failKeys.includes(String(data.place_id ?? ""));
+		})();
+		if (refused && (method === "POST" || method === "PUT")) {
+			// What the AgentDO actually answers with — `{error: message}` and a 500 (agent-do.ts).
+			return new Response(JSON.stringify({ error: writes.error ?? "boom" }), { status: writes.status ?? 500 });
 		}
 		if (method === "POST") return new Response(JSON.stringify({ id: "new1" }), { status: 201 });
 		if (method === "PUT") return new Response(JSON.stringify({ id: "existing" }), { status: 200 });
@@ -249,6 +266,107 @@ describe("dedupe_upsert", () => {
 		const r = await dedupeT.handler(baseCtx, { collection: "leads", key: "place_id", items: [] });
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/instance/i);
+	});
+});
+
+/**
+ * #630 — a write that FAILED used to increment `skipped`, the same counter as "this item had no
+ * key" and "mode:skip, already seen". The run then closed `completed` with `errors: 0`, so a sweep
+ * that stored nothing was indistinguishable from one that correctly changed nothing.
+ *
+ * The trigger is dated rather than hypothetical: `MAX_COLLECTION_RECORDS` is 10,000 and enforced by
+ * a throw, so on the run that crosses it — and every run after it, forever — the old code reported
+ * success and stored nothing, and emitted nothing, so the chain stopped with no dead letter to find
+ * (a delivery that is never enqueued has no row to replay).
+ */
+describe("dedupe_upsert — a failed write is not a skip (#630)", () => {
+	const FULL = 'Collection "leads" is full (max 10000 records)';
+
+	it("counts a refused write as `failed`, and carries the reason the DO gave", async () => {
+		const { env } = mockAgentStub({}, {}, { error: FULL, failKeys: ["p2"] });
+		const r = await dedupeT.handler({ env, instanceId: "inst1" } as RegistryToolCtx, {
+			collection: "leads",
+			key: "place_id",
+			items: [{ place_id: "p1" }, { place_id: "p2" }],
+		});
+		const res = parse(r.content);
+		expect(res).toMatchObject({ inserted: 1, failed: 1, skipped: 0 });
+		// The body carried this all along and `res.ok` was the only thing read.
+		expect(res.firstError).toBe(FULL);
+	});
+
+	it("keeps `skipped` for the two DELIBERATE cases only", async () => {
+		const { env } = mockAgentStub({ p1: "existing" });
+		const r = await dedupeT.handler({ env, instanceId: "inst1" } as RegistryToolCtx, {
+			collection: "leads",
+			key: "place_id",
+			mode: "skip",
+			items: [{ place_id: "p1" }, { name: "no key" }],
+		});
+		expect(parse(r.content)).toMatchObject({ skipped: 2, failed: 0 });
+	});
+
+	it("FAILS the step when every attempted write failed — the sweep stored nothing", async () => {
+		// The rule `enrich` already applies to the same shape: all-failed means the target is
+		// broken, not that the data was odd. Without it the run closes `completed` over a full
+		// collection, which is the sharpest form of this whole class.
+		const { env } = mockAgentStub({}, {}, { error: FULL });
+		const r = await dedupeT.handler({ env, instanceId: "inst1" } as RegistryToolCtx, {
+			collection: "leads",
+			key: "place_id",
+			items: [{ place_id: "p1" }, { place_id: "p2" }],
+		});
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("all 2 write(s)");
+		expect(r.content).toContain(FULL);
+	});
+
+	it("a partial failure still succeeds — the records that landed are real", async () => {
+		const { env } = mockAgentStub({}, {}, { error: FULL, failKeys: ["p2"] });
+		const r = await dedupeT.handler({ env, instanceId: "inst1" } as RegistryToolCtx, {
+			collection: "leads",
+			key: "place_id",
+			items: [{ place_id: "p1" }, { place_id: "p2" }],
+		});
+		expect(r.success).toBe(true);
+	});
+
+	it("does not emit for a record whose write failed", async () => {
+		// `payloads` is built from the rows that came back ok, which was already true — pinned here
+		// because a chain firing on a record that was never stored is the worse bug of the two.
+		const { env } = mockAgentStub({}, {}, { error: FULL, failKeys: ["p2"] });
+		const delivered: unknown[][] = [];
+		vi.doMock("./connections.js", () => ({
+			deliverEvent: async (_e: unknown, _i: string, _u: string, _ev: string, payloads: unknown[]) => {
+				delivered.push(payloads);
+				return { connections: 1, delivered: payloads.length, failed: 0, queued: payloads.length, filtered: 0, duplicate: 0, disabled: 0 };
+			},
+		}));
+		await dedupeT.handler({ env, instanceId: "inst1", userId: "u1" } as RegistryToolCtx, {
+			collection: "leads",
+			key: "place_id",
+			emit: "lead.created",
+			items: [{ place_id: "p1" }, { place_id: "p2" }],
+		});
+		vi.doUnmock("./connections.js");
+		expect(delivered[0]).toEqual([{ place_id: "p1" }]);
+	});
+
+	it("keeps the pump's other counters instead of reading only `delivered`", async () => {
+		// filtered/duplicate/disabled are the three numbers that answer "why did my chain not
+		// fire?", and `queued` is why a retrying delivery must not read as "not emitted".
+		const { env } = mockAgentStub({});
+		vi.doMock("./connections.js", () => ({
+			deliverEvent: async () => ({ connections: 3, delivered: 0, failed: 1, queued: 1, filtered: 1, duplicate: 1, disabled: 1 }),
+		}));
+		const r = await dedupeT.handler({ env, instanceId: "inst1", userId: "u1" } as RegistryToolCtx, {
+			collection: "leads",
+			key: "place_id",
+			emit: "lead.created",
+			items: [{ place_id: "p1" }],
+		});
+		vi.doUnmock("./connections.js");
+		expect(parse(r.content).delivery).toEqual({ connections: 3, delivered: 0, queued: 1, retrying: 1, filtered: 1, duplicate: 1, disabled: 1 });
 	});
 });
 
