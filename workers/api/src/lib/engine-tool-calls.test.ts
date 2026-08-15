@@ -14,11 +14,16 @@
  *   · anchoring on the FIRST occurrence would replay the second;
  *   · not de-duplicating at all would re-deliver 41% of every poll.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
 import { appendTimeline, FEED_TOOLCALL_BYTES, loadTimelineFeed } from "./coding-timeline.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { capToolCalls, type EngineToolCall, parseEngineToolCalls, toolCallsForSnapshot } from "./engine-tool-calls.js";
+import { capToolCalls, type EngineToolCall, parseEngineToolCalls, TOOL_OUTCOME_MIN_CLI, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import type { Env } from "../types.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Verbatim from production `coding_timeline` seq 8966 — four `Bash` calls with their results.
@@ -61,7 +66,7 @@ describe("parseEngineToolCalls", () => {
 		// The live state: the snapshot was taken while the tool was still running. `null` and `""`
 		// are different claims and a watcher acts on the difference.
 		const calls = parseEngineToolCalls('⚙ Read {"file_path":"/tmp/a.ts"}');
-		expect(calls).toEqual([{ tool: "Read", input: '{"file_path":"/tmp/a.ts"}', output: null }]);
+		expect(calls).toEqual([{ tool: "Read", input: '{"file_path":"/tmp/a.ts"}', output: null, ok: null }]);
 	});
 
 	it("ignores the fragment a raw character cut leaves at the top of a snapshot", () => {
@@ -70,12 +75,67 @@ describe("parseEngineToolCalls", () => {
 		// reported as a whole one.
 		const cut = `nd/repo && npm test","description":"run"}\n  ↳ 12 passing\n⚙ Bash {"command":"ls"}\n  ↳ a.ts b.ts`;
 		const calls = parseEngineToolCalls(cut);
-		expect(calls).toEqual([{ tool: "Bash", input: '{"command":"ls"}', output: "a.ts b.ts" }]);
+		expect(calls).toEqual([{ tool: "Bash", input: '{"command":"ls"}', output: "a.ts b.ts", ok: null }]);
 	});
 
 	it("a raw-spawn engine yields nothing, because it writes no such framing", () => {
 		// Codex/Grok are raw spawns with captured stdout — "not observed", never "nothing happened".
 		expect(parseEngineToolCalls("$ npm test\n> 12 passing\n$ git status\nnothing to commit")).toEqual([]);
+	});
+
+	it("reads the engine's own verdict off the arrow — succeeded, failed, and not observed (#597)", () => {
+		// The three states, and they are three different claims. The marker is welded to the arrow
+		// with no space, which is what makes the third one safe (see the arm below).
+		const pane = [
+			'⚙ Bash {"command":"npm test"}',
+			"  ↳✓ 12 passing",
+			'⚙ Read {"file_path":"missing.ts"}',
+			"  ↳✗ File does not exist.",
+			'⚙ Bash {"command":"sleep 30"}',
+		].join("\n");
+		const calls = parseEngineToolCalls(pane);
+		expect(calls.map((c) => c.ok)).toEqual([true, false, null]);
+		// The marker is stripped from the text it prefixes — a reader gets the result, not the frame.
+		expect(calls[0].output).toBe("12 passing");
+		expect(calls[1].output).toBe("File does not exist.");
+		// Never observed vs observed-and-failed: the pending call has no result AND no verdict.
+		expect(calls[2].output).toBeNull();
+	});
+
+	it("a row written by an OLDER runner reads unknown, even when its output starts with a tick", () => {
+		// AC2, and the reason the marker sits against the arrow rather than after the space. Every
+		// runner up to 0.4.51 wrote `↳ <result>`, and `toolResult()` collapses the result to one
+		// line — so a vitest run's `✓ src/a.test.ts` lands exactly where a space-separated marker
+		// would be read. That row must report NOT OBSERVED, never a pass.
+		const calls = parseEngineToolCalls('⚙ Bash {"command":"npm test"}\n  ↳ ✓ src/a.test.ts (3 tests) ✗ 0 failed');
+		expect(calls[0].ok).toBeNull();
+		// …and the text is delivered whole: nothing was mistaken for a frame and eaten.
+		expect(calls[0].output).toBe("✓ src/a.test.ts (3 tests) ✗ 0 failed");
+	});
+
+	it("names the CLI release that writes the marker, so 'all my calls are null' has an answer", () => {
+		// The pattern TURN_REPORT_MIN_CLI states: a version without a number is one somebody has to
+		// go and find. It must also be a version that HAS been published — a placeholder here sends
+		// a user to npm for a release that does not exist.
+		expect(TOOL_OUTCOME_MIN_CLI).toMatch(/^\d+\.\d+\.\d+$/);
+		const cliPkg = join(__dirname, "../../../../packages/cli/package.json");
+		const cliVersion = (JSON.parse(readFileSync(cliPkg, "utf8")) as { version: string }).version;
+		const cmp = (a: string, b: string) => {
+			const [pa, pb] = [a.split(".").map(Number), b.split(".").map(Number)];
+			for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+			return 0;
+		};
+		// Not equality — the CLI keeps moving and this constant must not. What it may never be is a
+		// version AHEAD of the one being published, which would send a user to a release that does
+		// not exist yet.
+		expect(cmp(TOOL_OUTCOME_MIN_CLI, cliVersion), `${TOOL_OUTCOME_MIN_CLI} vs published CLI ${cliVersion}`).toBeLessThanOrEqual(0);
+	});
+
+	it("every production fixture predating the marker reads unknown, not success", () => {
+		// The corpus this feature already serves. `ok` was added at read time, so the ~914 terminal
+		// rows in D1 on the day it shipped carry no marker at all — reporting them as passes would
+		// be the exact inversion #594 named, at the scale of the whole archive.
+		expect(parseEngineToolCalls(PRODUCTION_PANE).map((c) => c.ok)).toEqual([null, null, null]);
 	});
 
 	it("a result marker inside a result's own text cannot rewrite the call above it", () => {
@@ -109,9 +169,9 @@ describe("toolCallsForSnapshot — the cursor, at call granularity", () => {
 		const one = toolCallsForSnapshot(pending, null);
 		expect(one.calls.map((c) => c.output)).toEqual(["a.ts", null]);
 		// The anchor is the last SETTLED call, so the pending one is still ahead of the cursor.
-		expect(one.anchor).toEqual({ tool: "Bash", input: '{"command":"ls"}', output: "a.ts" });
+		expect(one.anchor).toEqual({ tool: "Bash", input: '{"command":"ls"}', output: "a.ts", ok: null });
 		const two = toolCallsForSnapshot(settled, one.anchor);
-		expect(two.calls).toEqual([{ tool: "Bash", input: '{"command":"npm test"}', output: "12 passing" }]);
+		expect(two.calls).toEqual([{ tool: "Bash", input: '{"command":"npm test"}', output: "12 passing", ok: null }]);
 	});
 
 	it("a command the engine genuinely ran twice is delivered twice", () => {
@@ -130,7 +190,7 @@ describe("toolCallsForSnapshot — the cursor, at call granularity", () => {
 		// 35 of 86 rows on the sampled production session: the engine did more than 8,000 chars of
 		// work between two snapshots, so the previous anchor is simply not in this one. Some calls
 		// are missing from the record entirely, and a reader is told that instead of inferring it.
-		const out = toolCallsForSnapshot(second, { tool: "Bash", input: '{"command":"long gone"}', output: "x" });
+		const out = toolCallsForSnapshot(second, { tool: "Bash", input: '{"command":"long gone"}', output: "x", ok: null });
 		expect(out.gap).toBe(true);
 		expect(out.calls).toHaveLength(3);
 	});
@@ -150,6 +210,7 @@ describe("capToolCalls", () => {
 		tool: "Bash",
 		input: `{"command":"${"x".repeat(150)}${i}"}`,
 		output: "y".repeat(240),
+		ok: true,
 	}));
 
 	it("keeps the NEWEST calls and says how many it dropped", () => {
@@ -176,7 +237,7 @@ describe("capToolCalls", () => {
 	});
 
 	it("always emits one call, so a single huge call cannot stall the record", () => {
-		const huge: EngineToolCall = { tool: "Bash", input: "z".repeat(50_000), output: null };
+		const huge: EngineToolCall = { tool: "Bash", input: "z".repeat(50_000), output: null, ok: null };
 		expect(capToolCalls([huge], 10).calls).toHaveLength(1);
 	});
 });
@@ -215,6 +276,20 @@ describe("the feed delivers each tool call exactly once, over the real schema", 
 		expect(page2.events).toHaveLength(1);
 		expect(page2.events[0].toolCalls?.map((c) => c.tool)).toEqual(["Edit"]);
 		expect(page2.events[0].toolCalls?.[0].output).toBe("applied");
+	});
+
+	it("carries the call's outcome to the reader, and reports null for an old-runner row (#597)", async () => {
+		// End to end over the real schema, because the field is only worth anything if it survives
+		// the feed: parse → cap → JSON. A new-runner snapshot and an old-runner one in the same
+		// session, which is exactly what a machine mid-upgrade produces.
+		await snap('⚙ Bash {"command":"npm test"}\n  ↳✓ 12 passing\n⚙ Read {"file_path":"x.ts"}\n  ↳✗ File does not exist.');
+		const page = await loadTimelineFeed(env, { sessionId: SESSION });
+		expect(page.events[0].toolCalls?.map((c) => c.ok)).toEqual([true, false]);
+		// `null` is SERIALISED, not dropped: a model told to check `ok` reads an absent key as fine,
+		// which is the inversion this field exists to prevent.
+		await snap('⚙ Bash {"command":"git push"}\n  ↳ ! [rejected] main -> main');
+		const page2 = await loadTimelineFeed(env, { sessionId: SESSION, sinceSeq: page.nextSeq });
+		expect(JSON.stringify(page2.events[0].toolCalls)).toContain('"ok":null');
 	});
 
 	it("a raw-engine snapshot carries no toolCalls key at all", async () => {

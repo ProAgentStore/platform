@@ -33,15 +33,26 @@
  *      (`headless.ts:899`) and 240 of result (`:910`) — which is a separate and much smaller
  *      decision than inventing a second record, and one this module reports rather than hides.
  *
- * ── What it deliberately does NOT carry
+ * ── Whether the call SUCCEEDED, and the three answers to it (#597)
  *
- * **Whether the call SUCCEEDED.** `settleAct` reads `block.is_error` (`headless.ts:750`) but
- * `toolResult()` never writes it into the transcript, so the pane does not contain it. Recording an
- * `ok` here would mean deriving it from the result text, which is the guess `describeEngineAct`
- * refuses on the same data ("outcome not observed" is a different claim from "it worked"). A
- * pending call reports `output: null` — the result had not come back when the snapshot was taken,
- * which is a REAL and live state — and a failed call reports its error text as its output, like any
- * other. Closing that gap is a runner change, and it is named on the issue rather than faked here.
+ * This module used to state that the outcome was unobtainable: `settleAct` read `block.is_error`
+ * (`headless.ts:750`) and the transcript line was written without it, so the pane did not carry it.
+ * The runner now welds the verdict onto the arrow — `↳✓` succeeded, `↳✗` failed — and it is read
+ * from the character at a FIXED offset, never derived from the result text. Deriving is the guess
+ * `describeEngineAct` refuses on the same data, and it stays refused.
+ *
+ * So {@link EngineToolCall.ok} has exactly three states and they are three different claims:
+ *
+ *   · `true` / `false` — the engine's own verdict, as the runner recorded it.
+ *   · `null` — **not observed.** The call had no result yet (`output: null`, a real and live state:
+ *     the snapshot was taken mid-call and the next one carries both), OR the row was written by a
+ *     runner predating the marker, which is most rows already in D1 and every row from a machine
+ *     that has not upgraded.
+ *
+ * `null` is emitted EXPLICITLY rather than omitted, and that is the point of the field. #594's
+ * supervision legend tells a model that `ok: null` "was not observed to succeed" — a reader told to
+ * check a key that is simply absent reads absence as *fine*, which inverts the default for exactly
+ * the calls whose outcome is unknown. An old-runner row must not read as a pass.
  *
  * ── Only the structured engine has this record at all
  *
@@ -52,8 +63,31 @@
 
 /** The line prefix `headless.ts` writes for a `tool_use` block. */
 const CALL_MARK = "⚙ ";
-/** The line prefix it writes for the matching `tool_result`. */
-const RESULT_MARK = "↳ ";
+/**
+ * The arrow `headless.ts` writes for the matching `tool_result`, WITHOUT the character after it.
+ *
+ * What follows the arrow is the outcome (#597): `✓`, `✗`, or — from any runner predating the
+ * marker — the space this constant used to include. Mirrors `toolResultMark` in
+ * `packages/browser-runner/src/coding/engine-acts.ts`; the two are separate declarations because a
+ * Worker must not import the runner's Node package (see `lib/engine-acts.ts`), so they are pinned
+ * by the fixtures below rather than by a shared constant.
+ */
+const RESULT_ARROW = "↳";
+/** The runner's marker for a call the engine reported as successful. */
+const OK_MARK = "✓";
+/** The runner's marker for a call the engine reported as failed (`is_error: true`). */
+const FAIL_MARK = "✗";
+
+/**
+ * The CLI release that first writes the outcome marker (#597).
+ *
+ * Named rather than "update the CLI", the pattern `TURN_REPORT_MIN_CLI`, `SWITCH_BRANCH_MIN_CLI`
+ * and `REPO_SEARCH_MIN_CLI` set — a version without a number is one somebody has to go and find.
+ * Nothing gates on it: the marker is read per LINE, out of panes already stored, so a row is judged
+ * by what it contains rather than by what its machine claimed at the time. This is the number to
+ * quote when someone asks why every `ok` on their machine is `null`.
+ */
+export const TOOL_OUTCOME_MIN_CLI = "0.4.52";
 
 /** One call the engine made, as the transcript recorded it. */
 export interface EngineToolCall {
@@ -69,6 +103,14 @@ export interface EngineToolCall {
 	 * also what makes the cursor safe.
 	 */
 	output: string | null;
+	/**
+	 * Whether the engine reported the call as succeeding — `null` when it was NOT OBSERVED (#597).
+	 *
+	 * Never omitted, and never guessed from the result text. `null` covers both a call still in
+	 * flight and a snapshot written by a runner older than the marker; see the header for why
+	 * absence would read as success and must not.
+	 */
+	ok: boolean | null;
 	/** The runner's 160-char input cap fired — the argument shown is not the whole one. */
 	inputCut?: true;
 	/** The runner's 240-char result cap fired. */
@@ -93,7 +135,7 @@ export function parseEngineToolCalls(pane: string): EngineToolCall[] {
 			const tool = (sp < 0 ? rest : rest.slice(0, sp)).trim();
 			if (!tool) continue;
 			const input = sp < 0 ? "" : rest.slice(sp + 1).trim();
-			const call: EngineToolCall = { tool, input, output: null };
+			const call: EngineToolCall = { tool, input, output: null, ok: null };
 			// The ellipsis is the runner's own cut marker (`shortInput`), not ours. Reporting it as a
 			// flag rather than leaving the character in place is what lets a reader tell "the argument
 			// was this" from "the argument started like this".
@@ -102,22 +144,39 @@ export function parseEngineToolCalls(pane: string): EngineToolCall[] {
 			continue;
 		}
 		const line = raw.trimStart();
-		if (!line.startsWith(RESULT_MARK)) continue;
+		if (!line.startsWith(RESULT_ARROW)) continue;
+		// The character AFTER the arrow is the outcome, and its position is what makes the reading
+		// unambiguous (#597): a runner predating the marker always wrote a space there, so an old
+		// row is `null` — not observed — however its own output happens to begin. Anything else
+		// (`↳foo`) is not a runner result line at all and is left alone.
+		const after = line.slice(RESULT_ARROW.length);
+		const marked = after.startsWith(OK_MARK) ? true : after.startsWith(FAIL_MARK) ? false : null;
+		if (marked === null && !after.startsWith(" ")) continue;
 		// A result belongs to the call immediately above it and to nothing else — the engine emits
 		// them paired and in order. An already-answered call is left alone rather than overwritten,
 		// so a stray marker inside a result's own text cannot rewrite history.
 		const last = out[out.length - 1];
 		if (!last || last.output !== null) continue;
-		const text = line.slice(RESULT_MARK.length).trim();
+		const text = after.slice(marked === null ? 0 : marked ? OK_MARK.length : FAIL_MARK.length).trim();
 		last.output = text;
+		last.ok = marked;
 		if (text.endsWith("…")) last.outputCut = true;
 	}
 	return out;
 }
 
-/** Two calls are the same occurrence when their name, argument and result all match. */
+/**
+ * Two calls are the same occurrence when their name, argument, result and outcome all match.
+ *
+ * The outcome joined the comparison with #597. It cannot make a genuine match miss: consecutive
+ * snapshots are tails of ONE append-only transcript, so a line — marker included — is byte-identical
+ * in every snapshot that still holds it, and a runner upgrade starts a new process and a new
+ * transcript rather than rewriting an old line. What it buys is that a repeated command whose two
+ * runs DIFFERED — `npm test` failing then passing, identical text on both sides of `↳` — is two
+ * occurrences, which is precisely the case the anchor must not collapse.
+ */
 function sameCall(a: EngineToolCall, b: EngineToolCall): boolean {
-	return a.tool === b.tool && a.input === b.input && a.output === b.output;
+	return a.tool === b.tool && a.input === b.input && a.output === b.output && a.ok === b.ok;
 }
 
 export interface SnapshotToolCalls {

@@ -8,6 +8,8 @@ import {
 	redactCommand,
 	resultText,
 	splitSegments,
+	toolCallOk,
+	toolResultMark,
 } from "./engine-acts.js";
 
 describe("classifySegment — the acts a supervisor must not miss", () => {
@@ -260,5 +262,26 @@ describe("commandFromToolInput — keyed on the input SHAPE, not the tool's name
 		expect(commandFromToolInput({ file_path: "/a/b.ts", content: "x" })).toBeNull();
 		expect(commandFromToolInput(null)).toBeNull();
 		expect(commandFromToolInput({ command: "   " })).toBeNull();
+	});
+});
+
+describe("toolCallOk / toolResultMark — the outcome the transcript used to drop (#597)", () => {
+	it("reads the protocol's own flag: absent is success, true is failure", () => {
+		// `is_error` is the only outcome a `tool_result` states, and the protocol omits it on
+		// success. This is the same reading `settleAct` publishes as a consequential act's `ok`, and
+		// it is one function now precisely so the two cannot drift apart.
+		expect(toolCallOk({})).toBe(true);
+		expect(toolCallOk({ is_error: false })).toBe(true);
+		expect(toolCallOk({ is_error: true })).toBe(false);
+		// Not truthiness: a non-boolean is not a failure claim.
+		expect(toolCallOk({ is_error: "yes" })).toBe(true);
+	});
+
+	it("marks the line so the cloud can tell a failed call from an unobserved one", () => {
+		// The marker goes against the arrow (`↳✓`), never after the space, because a runner
+		// predating it always wrote a space there — that offset is what lets an old row read as
+		// unknown instead of as a pass, whatever its output text begins with.
+		expect(toolResultMark({ is_error: true })).toBe("✗");
+		expect(toolResultMark({})).toBe("✓");
 	});
 });

@@ -56,14 +56,18 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// cutting ~95% of them away. `engine-tool-calls.ts` parses them; a `terminal` event now
 		// carries `toolCalls`.
 		//
-		// It still does NOT carry whether a call SUCCEEDED — the runner writes the result text into
-		// the transcript but not `is_error`, so an `ok` here would be derived rather than observed,
-		// which is the guess `describeEngineAct` refuses on the same data. A consequential act's
-		// verdict is in `agent_trace(source:"coding")`, which is also where an act is checked
-		// against the run that made it.
+		// Whether a call SUCCEEDED was the half that record could not answer — the runner computed
+		// `is_error` and wrote the result line without it. #597 welds the verdict onto the arrow, so
+		// `ok` is now OBSERVED rather than derived (deriving it from the result text is the guess
+		// `describeEngineAct` refuses on the same data, and stays refused). It is explicitly `null`
+		// for a call still in flight and for every snapshot written by a runner predating the marker
+		// — stated in the description, because a model told to check a key reads its ABSENCE as
+		// fine, which is the inversion #594 named. A consequential act's verdict is still in
+		// `agent_trace(source:"coding")`, which is also where an act is checked against the run that
+		// made it.
 		server.tool(
 			"coding_timeline",
-			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome, oldest→newest. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); use coding_session_capture for a live session's full pane. `toolCalls` does not say whether a call SUCCEEDED — the pane does not record that — and `output` is null for a call whose result had not come back yet; for a consequential act's verdict use agent_trace(source:\"coding\").",
+			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome, oldest→newest. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); use coding_session_capture for a live session's full pane. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\").",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),

@@ -99,8 +99,13 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 // `↳ <result>` framing**, a mean of **12.05 calls per row** — the argument/result pairs were in
 // every page this feed already served, and {@link FEED_TERMINAL_CHARS}'s 400-char tail of an
 // 8,000-char pane was cutting ~95% of them away. So a `terminal` row now carries `toolCalls`,
-// parsed by `engine-tool-calls.ts`, which states why deriving beats writing and what it will not
-// claim (whether a call SUCCEEDED is not in the pane, so it is not invented).
+// parsed by `engine-tool-calls.ts`, which states why deriving beats writing.
+//
+// Whether a call SUCCEEDED was the one field that record could not produce, and #597 closed it at
+// the source: the runner welds its verdict onto the arrow (`↳✓`/`↳✗`) instead of computing it and
+// dropping it. `ok` is `null` — explicitly, never absent — for a call still in flight and for every
+// row written by a runner predating the marker, which is every row already in D1. That is a runner
+// change, so it arrives with a CLI publish and each machine's upgrade, not retroactively.
 //
 // The tail STAYS beside them, and that is deliberate: #580's case is an engine error printed to the
 // pane, not a tool call, and a reader that only ever saw tool calls would have missed the one thing
@@ -176,7 +181,10 @@ export const FEED_BYTE_BUDGET = 40_000;
  *
  * 12,000 is the measured knee on that data, not a round number: omission reaches **0** and the
  * largest real row serialises to **11,331 B**. 16,000 and 24,000 deliver exactly the same 610 calls,
- * so nothing above this buys anything. A page of nothing but call-bearing snapshots simply returns
+ * so nothing above this buys anything. #597's `ok` adds a fixed 10-11 B per call (`,"ok":null`), and
+ * the number is not moved for it: 669 B of headroom on that largest row covers ~60 more calls than
+ * it held, and the knee is where it is because omission was already at zero, not because the fit was
+ * tight. A page of nothing but call-bearing snapshots simply returns
  * fewer rows with `hasMore: true` — which is the trade this is sized around, because a row dropped
  * by {@link FEED_BYTE_BUDGET} costs one more poll and a call dropped here is gone for good.
  */

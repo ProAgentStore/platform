@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult } from "./engine-acts.js";
+import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 
@@ -677,7 +677,7 @@ export class HeadlessSession {
 			case "user": // tool results come back as a synthetic user message
 				for (const block of ev.message?.content ?? []) {
 					if (block.type === "tool_result") {
-						this.push(`  ↳ ${toolResult(block.content)}`); // ↳
+						this.push(`  ↳${toolResultMark(block)} ${toolResult(block.content)}`); // ↳✓ / ↳✗ (#597)
 						this.settleAct(block);
 					}
 				}
@@ -748,7 +748,7 @@ export class HeadlessSession {
 		const acts = this.awaitingResult.get(id);
 		if (!acts) return;
 		this.awaitingResult.delete(id);
-		const ok = block.is_error !== true;
+		const ok = toolCallOk(block);
 		for (const a of fillTargetFromResult(acts, block.content)) this.publishAct({ ...a, ok });
 	}
 

@@ -85,6 +85,28 @@ setTimeout(() => process.stdout.write("part 2: " + line + "\\n"), 2000);
 setTimeout(() => {}, 4000);
 `;
 
+/**
+ * A stream-json engine that makes two tool calls per turn — one that works, one that fails (#597).
+ *
+ * The successful call's result text deliberately BEGINS with `✓`, which is what vitest prints and
+ * what `toolResult()` collapses to the head of the line. That is the ambiguity the outcome marker
+ * has to survive: it says whether the CALL succeeded, not whether its output happens to look
+ * cheerful.
+ */
+const FAKE_CLAUDE_TOOLS = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-tools-1" }) + "\\n");
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } }] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "✓ src/a.test.ts (3 tests)" }] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "Read", input: { file_path: "missing.ts" } }] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t2", is_error: true, content: "File does not exist." }] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done" }) + "\\n");
+});
+`;
+
 /** A raw CLI that never finishes — for the enforced turn ceiling. */
 const FAKE_WEDGED = `#!/usr/bin/env node
 process.stdout.write("wedged: " + (process.argv[2] || "") + "\\n");
@@ -928,4 +950,38 @@ describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
 		expect(parseCommand(`it's "a b" it's`)).toEqual({ bin: "it's", args: ["a b", "it's"] });
 		expect(parseCommand('claude "unclosed')).toEqual({ bin: "claude", args: ['"unclosed'] });
 	});
+});
+
+describe("HeadlessSession — a tool result records whether the call FAILED (#597)", () => {
+	let dir: string;
+	let bin: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-tool-ok-"));
+		bin = join(dir, "fake-claude-tools.js");
+		writeFileSync(bin, FAKE_CLAUDE_TOOLS);
+		chmodSync(bin, 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("welds the outcome onto the arrow, so the cloud's per-call record can state it", async () => {
+		// The transcript is the ONLY channel an ordinary tool call reaches the cloud through: a read
+		// or a grep leaves no `agent_events` row, so the #581 AC7 record could carry the argument and
+		// the result and never whether the call worked. `settleAct` read `is_error` and the line was
+		// written without it — computed, used locally, dropped.
+		const s = new HeadlessSession({ id: "tools-1", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+		s.input("run the tests and read the file");
+		await until(() => s.snapshot().includes("File does not exist."), 8000, "both tool results");
+
+		const pane = s.snapshot();
+		// The successful call, whose own output starts with `✓` — the marker is about the CALL.
+		expect(pane).toContain("↳✓ ✓ src/a.test.ts (3 tests)");
+		expect(pane).toContain("↳✗ File does not exist.");
+		// The unmarked shape every runner up to 0.4.51 wrote is gone: it is what the cloud reads as
+		// "not observed", and a new runner emitting it would report every call as unknown forever.
+		expect(pane).not.toContain("  ↳ ");
+		s.stop();
+	}, 15_000);
 });

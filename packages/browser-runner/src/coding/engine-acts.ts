@@ -135,6 +135,46 @@ export function splitSegments(command: string): string[] {
 		.filter(Boolean);
 }
 
+/**
+ * The engine's verdict on ONE tool call — the single expression of it (#597).
+ *
+ * `is_error` is the only outcome Claude Code's stream-json protocol states for a `tool_result`: it
+ * sets the flag when the call failed and omits it otherwise, so `!== true` is the protocol's own
+ * reading rather than an inference about the result text. This is the fact `settleAct` has always
+ * published as a consequential act's `ok`.
+ *
+ * It is a function because two call sites now need it — the act record and the transcript line the
+ * cloud parses — and a verdict stated twice is a verdict that can disagree with itself.
+ */
+export function toolCallOk(block: Record<string, unknown>): boolean {
+	return block.is_error !== true;
+}
+
+/**
+ * The outcome marker on the transcript's `↳` result line — `↳✓` succeeded, `↳✗` failed (#597).
+ *
+ * The runner computed this and threw it away: `settleAct` read `is_error` while the line pushed
+ * into the transcript carried only the result text. The transcript is the ONLY channel the cloud
+ * reads for an ordinary tool call (a read, a grep, a file open leaves no `agent_events` row), so
+ * the per-tool-call record of #581 AC7 could state the argument and the result and never whether
+ * the call worked.
+ *
+ * ── Why the marker is welded to the arrow, with no space
+ *
+ * The reader (`workers/api/src/lib/engine-tool-calls.ts`) takes the outcome from the character at a
+ * FIXED offset after `↳`, and every runner predating this wrote a space there. So a row written by
+ * an old runner reads *unknown* and can never read as a pass, whatever the tool's own output
+ * happens to start with — which is the property AC1 asks for and the reason a marker after the
+ * space would not do: `toolResult()` collapses a result to one line, and vitest's begins
+ * `✓ src/foo.test.ts`. An old row carrying that text must not be read as a success claim.
+ *
+ * `terminal-render.ts` and `engine-auth-prompt.ts`'s `QUOTED_LINE_RE` both match `↳` unanchored on
+ * its right, so the pane still renders and quoted-line filtering still fires.
+ */
+export function toolResultMark(block: Record<string, unknown>): string {
+	return toolCallOk(block) ? "✓" : "✗";
+}
+
 /** A token that is exactly the trunk, not a branch merely containing the word (`feature/main-fix`). */
 const TRUNK_TOKEN = /(?:^|\s)(?:HEAD:)?(?:refs\/heads\/)?(?:main|master)(?:\s|$)/;
 
