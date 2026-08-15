@@ -61,6 +61,18 @@ jobs:
         # comments excluded, because correcting a comment that says something untrue is the
         # one edit to a shipped migration that is always right (0080, 2026-08-07).
         run: node scripts/check-migrations.mjs --require-history
+      - name: Surface lock is append-only (#576)
+        # #573's fingerprint proves the MCP surface was NOTICED changing, not that the
+        # version moved: `SURFACE_LOCK["0.1.2"]` can be rewritten to the new hash instead of
+        # `["0.1.3"]` being added, and the version stays frozen. Measured 2026-08-15 — a
+        # sentence appended to SERVER_INSTRUCTIONS plus an in-place rewrite passed ALL TWELVE
+        # other gates, because nothing else compares SERVER_INSTRUCTIONS to anything. That is
+        # the silent surface change #573 was filed about, reachable through a green build.
+        #
+        # `--require-history` for the same reason the migration guard above passes it: the
+        # whole check IS the history comparison, so a shallow clone must fail rather than
+        # skip. fetch-depth: 0 above.
+        run: node scripts/check-surface-lock.mjs --require-history
       - name: Design tokens — no dead colour utility (#367)
         # Tailwind v4 has no error state. A utility naming a token `@theme` does not declare
         # generates NO rule, so the element silently keeps the colour it inherited — and a

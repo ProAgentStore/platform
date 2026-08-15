@@ -43,13 +43,18 @@
  * ── What this DOES and DOES NOT guarantee
  *
  * It makes a surface change impossible to ship SILENTLY: the build goes red and the failure
- * names the version bump as the fix. It does not mechanically prove that the version moved,
- * because someone can edit the entry below in place instead of adding one. That is why the
- * lock is keyed BY VERSION rather than being a bare hash — rewriting `"0.1.1"` reads in the
- * diff as what it is, changing the recorded surface of an already-published version, rather
- * than as an innocuous "update the fingerprint" line. Mechanically forcing the pair to move
- * together needs a git-history arm of the kind `check-migrations.mjs --require-history`
- * carries; that is a separate piece of work and is named here rather than left implied.
+ * names the version bump as the fix. On its own it did NOT prove the version moved, because
+ * the entries below could be edited in place instead of appended to — and that was not a
+ * theoretical hole. Measured on 2026-08-15 (#576): one sentence appended to
+ * `SERVER_INSTRUCTIONS` plus an in-place rewrite of the `0.1.2` entry passed all twelve
+ * other CI gates, because nothing else in the repo compares `SERVER_INSTRUCTIONS` to
+ * anything.
+ *
+ * `scripts/check-surface-lock.mjs --require-history` closes it: the map is APPEND-ONLY, and
+ * an entry that changes or disappears after being recorded fails CI. That is why the lock is
+ * keyed BY VERSION rather than being a bare hash — the shape is what makes the invariant
+ * expressible. Adding a version is free; rewriting one is a claim about an artefact already
+ * published to the MCP registry, and is refused.
  *
  * ── Regenerating
  *

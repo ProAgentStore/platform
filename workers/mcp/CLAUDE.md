@@ -232,4 +232,6 @@ You will not have to remember. `src/surface-lock.ts` records a hash of the publi
 surface per version, and `conformance.test.ts` recomputes it from a real `tools/list`; a
 surface change fails the build with the computed hash to paste and the bump named as the
 fix. Regenerate by running that test, never by hand-editing a hash — and add a NEW entry
-rather than editing the one for a version already published to the MCP registry.
+rather than editing the one for a version already published to the MCP registry. That last
+part is enforced, not advised: `scripts/check-surface-lock.mjs --require-history` (a CI
+gate) reads the file's git history and fails when a recorded entry changes or disappears.
