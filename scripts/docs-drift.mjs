@@ -68,6 +68,7 @@ import {
 import { SUBSET_CLAIMS, checkClaimShape } from "./lib/claim-shape.mjs";
 import { docFiles as collectDocFiles, requireInputs, servedHtmlFiles as collectServedHtml } from "./lib/doc-files.mjs";
 import { checkMcpSplit } from "./lib/mcp-split.mjs";
+import { checkRunLifecycle } from "./lib/run-lifecycle.mjs";
 import { checkWireSurface } from "./lib/wire-surface.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -515,6 +516,37 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 	const { failures: shapeFailures, notes: shapeNotes } = checkClaimShape({ files });
 	for (const f of shapeFailures) fail(f.check, f.message);
 	for (const n of shapeNotes) ok(n);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6d. run lifecycle — the published vocabulary is RENDERED from the enums (#601)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `RunHealth`, `waitingUntil`, `lastProgressAt` and `lastAliveAt` are how every supervision
+ * surface reports a run, and until #601 `grep -rl` over `platform-docs/` matched NONE of them.
+ *
+ * The page that closes that gap states two value sets, and a value set transcribed into prose
+ * is the drift this whole script exists to catch — #602 fixed four such numbers in one day, and
+ * `RUN_HEALTH_LEGEND`'s own comment records "three values" going stale in two MCP descriptions
+ * the moment `ended` was added (#588). So the sets are not checked here, they are GENERATED:
+ * the module renders them from `RUN_HEALTH_STATES`, `RUN_WAIT_REASONS` and `PARKS`, and this
+ * compares the rendered text to the delimited regions of the page.
+ *
+ * Only the value sets are generated. The prose around them is ordinary reference material — a
+ * golden file over hand-written explanation fails on every honest edit, which is the rule
+ * `wire-surface.mjs` states and follows.
+ */
+{
+	const doc = p("platform-docs/run-lifecycle.md");
+	const { failures: runFailures, notes: runNotes } = checkRunLifecycle({
+		workReport: read(p("workers/api/src/lib/work-report.ts")),
+		loopStore: read(p("workers/api/src/lib/agent-loop-store.ts")),
+		doc: existsSync(doc) ? read(doc) : null,
+		docName: "platform-docs/run-lifecycle.md",
+	});
+	for (const f of runFailures) fail(f.check, f.message);
+	for (const n of runNotes) ok(n);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

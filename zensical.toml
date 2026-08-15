@@ -16,6 +16,7 @@ nav = [
   { "Browser Runtime" = "browser-runtime.md" },
   { "Coder Multi-Machine" = "coder-multi-machine.md" },
   { "Architecture" = "architecture.md" },
+  { "Run Lifecycle" = "run-lifecycle.md" },
   { "Skill Publishing" = "skill-publishing.md" }
 ]
 
