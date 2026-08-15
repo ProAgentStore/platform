@@ -6,11 +6,13 @@
 // or a deploy landing mid-run. What is left is a row that says `running` forever, with an
 // `iteration` frozen at whatever it last reached.
 //
-// That is not merely untidy. `subordinate_status` reports it as work in flight, so a supervisor
-// keeps waiting on an agent that stopped hours ago — the same reasoning already written into
+// That is not merely untidy. `subordinate_status` reported it as work in flight, so a supervisor
+// kept waiting on an agent that stopped hours ago — the same reasoning already written into
 // `coding-session.ts`: "a `running` row nobody will ever close is worse than a failed one, because
-// the supervisor keeps waiting". #205 mitigates the symptom by deriving staleness from
-// `last_progress_at`; this removes it.
+// the supervisor keeps waiting". This removes the row; #589 removed the misreport that made it
+// dangerous while it lived, by making `subordinate_status` report `runHealth`'s verdict instead of
+// the raw column. The two are complementary and neither replaces the other: the sweeper needs 3
+// hours of silence before it will call a run dead, and the verdict is honest from minute 15.
 //
 // It also weakens the case for ever unifying the run tables: more write paths into one table means
 // more ways to strand a row, and a stranded row is permanent data.
@@ -63,8 +65,17 @@ async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<num
 	//
 	// The COALESCE chain is the compatibility story and the null story at once: `last_alive_at` is
 	// null on every row written before 0127 and on a run that died before its first tick, so it
-	// falls back to the column this used to read and then to `started_at` — the same rule
-	// `summarizeSubordinates` uses, so the sweeper and the supervisor still agree on "quiet".
+	// falls back to the column this used to read and then to `started_at` — the same fallback
+	// order `runHealth` uses, which is what keeps the sweeper and the platform's stall verdict
+	// reading the same signal.
+	//
+	// This comment used to claim the agreement was with `summarizeSubordinates`'s "quiet", and that
+	// was false (#589). That function computes `quietForMinutes` from `lastProgressAt ?? startedAt`
+	// — PROGRESS, deliberately, and now labelled as a fact rather than a verdict — while this reads
+	// the heartbeat first. The two measure different things ON PURPOSE (`work-report.ts:136-141`:
+	// a long healthy engine turn looks stale on progress and fresh on liveness), so an assertion
+	// that they agree was not merely wrong, it argued for making one of them worse. The agreement
+	// that does hold, and the one worth stating, is with `runHealth`.
 	const { results } = await env.DB.prepare(
 		`SELECT run_id, instance_id, user_id, session_id FROM agent_loop_runs
 		  WHERE status = 'running' AND COALESCE(last_alive_at, last_progress_at, started_at) < ?1

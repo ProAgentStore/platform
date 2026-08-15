@@ -33,6 +33,7 @@
 
 import { DIRECTION_LEGEND } from "./agent-direction.js";
 import { CONFIG_LEGEND } from "./subordinate-config.js";
+import type { RunHealth } from "./work-report.js";
 
 /**
  * The ceiling for the whole serialised payload, in characters.
@@ -135,6 +136,58 @@ function reduceValue(value: unknown, level: DetailLevel): unknown {
 const asObject = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 
 /**
+ * One agent's one-word state.
+ *
+ * Three of the five words ARE `RunHealth`, unchanged in meaning. `idle` is "no open run" — the
+ * normal ready state. `unknown` is "there are open runs and this reply could not read the
+ * platform's verdict on them", which is a real answer and NOT `idle`: the precedent is
+ * `engineClause`'s `capture-failed` ("do NOT infer idle or finished"), and the alternative — a
+ * plausible-looking guess — is the whole defect this file is fixing.
+ */
+export type Activity = Exclude<RunHealth, "ended"> | "idle" | "unknown";
+
+/**
+ * What one agent is doing, from its runs' HEALTH — not from the raw `status` column (#589).
+ *
+ * This function is the fix. Both call sites read `runs.some((r) => r.status === "running")` and
+ * called the result `working`, which is the platform's strongest positive word applied to the one
+ * column that provably cannot carry it: `status` stays `running` on a run parked on an engine
+ * limit, on a run whose Workflow died, and on a row nothing will ever close. Measured on one run
+ * at one instant, `check_instance_loop` answered `waiting` and `subordinate_status` answered
+ * `working` — and a Coder Lead kept waiting on a subordinate that had stopped hours before.
+ *
+ * ── Why `waiting` and `stalled` are words here rather than folded into `idle` or `working`
+ *
+ * Both were previously `working`, and both licence a DIFFERENT next action from the supervisor:
+ * `waiting` means leave it alone (a park is correct and self-resolving), `stalled` means somebody
+ * has to look, and `working` means neither. Folding either into `idle` would be the same over-claim
+ * facing the other way — a parked run IS in flight, and handing it more work is wrong.
+ *
+ * ── Precedence
+ *
+ * `working` first: an agent with one live run is working, whatever else is on its list. Then
+ * `stalled` over `waiting`, because a stall is the only one of the four that asks for a human and
+ * the roster line is a supervisor's triage. `idle` only when nothing is open at all — which stays
+ * the normal, ready state the legend has always said it is.
+ */
+export function activityFromRuns(runs: ReadonlyArray<{ health?: unknown; status?: unknown }>): Activity {
+	const of = (r: { health?: unknown; status?: unknown }): Activity | null => {
+		if (r.health === "working" || r.health === "waiting" || r.health === "stalled") return r.health;
+		if (r.health === "ended") return null; // closed: contributes nothing, in either direction
+		// No verdict on the record. `summarizeSubordinates` always computes one, so this is a run
+		// object from somewhere else — an older cached payload, a caller assembling its own shape.
+		// A CLOSED run is still safely closed; an OPEN one without a verdict is the case that must
+		// not silently become `idle`, because "give this agent work" is what a supervisor does next.
+		return r.status === "running" ? "unknown" : null;
+	};
+	const seen = new Set(runs.map(of).filter((h): h is Activity => h !== null));
+	// Precedence, strongest claim first. `unknown` sits below the three real verdicts (any one of
+	// them is knowledge this reply DID obtain) and above `idle` (which it must never collapse to).
+	for (const word of ["working", "stalled", "waiting", "unknown"] as const) if (seen.has(word)) return word;
+	return "idle";
+}
+
+/**
  * One agent in one line — the last rung, and the one that makes a ten-agent roster reportable.
  *
  * This is the ONLY place in this file that names fields, and it is named on purpose: the rung is an
@@ -174,10 +227,12 @@ function collapseSubordinate(sub: Record<string, unknown>, level: DetailLevel): 
 	const runs = Array.isArray(sub.runs) ? (sub.runs as Array<Record<string, unknown>>) : [];
 	const work = Array.isArray(sub.work) ? (sub.work as Array<Record<string, unknown>>) : [];
 	const acts = Array.isArray(sub.acts) ? (sub.acts as Array<Record<string, unknown>>) : [];
-	out.activity = runs.some((r) => r.status === "running") ? "working" : "idle";
+	out.activity = activityFromRuns(runs);
 	// The newest thing this agent is on, whichever record holds it. Not a substitute for the run
-	// record — it is the one string that keeps "what is it doing" answerable at this rung.
-	const running = runs.find((r) => r.status === "running") ?? runs[0];
+	// record — it is the one string that keeps "what is it doing" answerable at this rung. An OPEN
+	// run is the right one to name here whatever its health: a parked or stalled run is still the
+	// objective this agent is on, and `activity` beside it says how that is going.
+	const running = runs.find((r) => r.health !== "ended") ?? runs[0];
 	const latest = cut(typeof running?.objective === "string" ? running.objective : undefined) ?? cut(typeof work[0]?.title === "string" ? work[0].title : undefined);
 	if (latest) out.latest = latest;
 	if (acts.length) out.irreversibleActs = acts.filter((a) => a.irreversible === true).length;
@@ -199,8 +254,8 @@ export interface RosterLine {
 	instanceId: string;
 	name: string;
 	subscription: string;
-	/** `working` = a run is going right now; `idle` = nothing in flight. Absent when not read. */
-	activity?: "working" | "idle";
+	/** The platform's verdict across this agent's runs. Absent when this call did not read them. */
+	activity?: Activity;
 	/** `connectivity.canWork` — may it be given work now. Absent when not read. */
 	canWork?: boolean;
 }
@@ -214,7 +269,10 @@ export interface RosterLine {
  */
 export function rosterLines(input: {
 	roster: ReadonlyArray<{ instanceId: string; name: string; subscription: string }>;
-	observed: ReadonlyArray<{ instanceId: string; runs: ReadonlyArray<{ status: string }> }>;
+	// `health` is required, not optional (#589): this is the line a supervisor triages from, and
+	// the caller passes `summarizeSubordinates`'s output, which always carries the verdict. A
+	// caller that cannot supply one should not be producing an `activity` at all.
+	observed: ReadonlyArray<{ instanceId: string; runs: ReadonlyArray<{ status: string; health: RunHealth }> }>;
 	canWork: ReadonlyMap<string, boolean>;
 }): RosterLine[] {
 	const observedById = new Map(input.observed.map((o) => [o.instanceId, o] as const));
@@ -225,7 +283,7 @@ export function rosterLines(input: {
 			instanceId: r.instanceId,
 			name: r.name,
 			subscription: r.subscription,
-			...(seen ? { activity: (seen.runs.some((x) => x.status === "running") ? "working" : "idle") as "working" | "idle" } : {}),
+			...(seen ? { activity: activityFromRuns(seen.runs) } : {}),
 			...(typeof can === "boolean" ? { canWork: can } : {}),
 		};
 	});
@@ -238,7 +296,17 @@ export function rosterLines(input: {
  * second one is load-bearing for #159/#183 — a shortened `acts` list must not read as an all-clear.
  */
 export const COMPLETENESS_LEGEND =
-	" `total` and `roster` are the COMPLETE list of every agent you supervise and are NEVER shortened: answer \"how many agents do you have\" from `total` and \"which ones are idle\" from `roster[].activity` (`working` = a run is going now, `idle` = nothing in flight, which is the normal ready state). Never answer either question by counting `subordinates` — that is the DETAIL, and `coverage` says how much of it survived. " +
+	" `total` and `roster` are the COMPLETE list of every agent you supervise and are NEVER shortened: answer \"how many agents do you have\" from `total` and \"which ones are idle\" from `roster[].activity`. Never answer either question by counting `subordinates` — that is the DETAIL, and `coverage` says how much of it survived. " +
+	// #589: this said `working` = a run is going now, and it was computed from the raw `status`
+	// column — which reads `running` for a park, for a dead Workflow and for a row nothing will
+	// ever close. Five words, because a supervisor's next action differs for each.
+	"`roster[].activity` is the platform's verdict across that agent's runs: `working` (a run is genuinely advancing), `waiting` (a run is open but deliberately parked — leave it be, it resumes on its own), `stalled` (a run says it is running and nothing has ticked; somebody has to look), `idle` (nothing in flight — the normal ready state, NOT a fault), and `unknown` (there are open runs and this reply could not read the verdict on them — do NOT treat it as idle). Only `idle` means \"ready for more work\"; `waiting` and `stalled` are runs still in flight. " +
+	// The per-run field, in one clause rather than a second copy of RUN_HEALTH_LEGEND. That block
+	// is 856 characters and the legend is already the largest fixed item in a payload that has run
+	// out of room once (#503); the roster sentence above teaches three of its four words, so the
+	// clause only has to add `ended` and point at it. `run-health-legend.test.ts` asserts this
+	// sentence names every member of both enums, which is what keeps the shortcut from drifting.
+	"Each run in `runs` carries `health` — the same words, plus `ended` for a run that has CLOSED (read its `status` and `stopReason` for what happened; `ended` claims nothing about liveness). Quote `health`; never re-derive it from `status` or the timestamps. " +
 	"A `…Omitted` number beside a list (`workOmitted`, `actsOmitted`, …) means that list was SHORTENED to fit this reply: the items exist, nothing has been lost, and you can see them by calling subordinate_status with that agent's `instanceId`. A list is empty ONLY when there is genuinely nothing in it. " +
 	"An entry carrying `summarised` is ONE LINE about that agent, not its record: its lists are replaced by `…Count` numbers (`workCount`, `actsCount`), `latest` is the newest thing it is on, and `irreversibleActs` counts merges, pushes and deletes it made — a non-zero one is worth asking about by instanceId, and a zero one means none were OBSERVED, never that it changed nothing. " +
 	"Text ending in `…[+N chars]` or `…` was cut for length — say so rather than reading it as the whole sentence.";

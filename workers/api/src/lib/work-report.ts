@@ -73,8 +73,62 @@ export const STALLED_AFTER_MS = 15 * 60 * 1000;
  *   waiting  — it is deliberately parked, until a stated instant or a stated event. This is the
  *              state run 70ea298e was in for 4.35 hours while every surface said "running".
  *   stalled  — nothing has ticked. The Workflow is gone and the row will say `running` forever.
+ *   ended    — the run is CLOSED. No liveness claim is made in either direction (#459's rule),
+ *              and `status`/`stopReason` are the answer to what happened.
+ *
+ * ── Why `ended` is a member and not an absence (#588)
+ *
+ * The first three describe a `running` row, so the original enum simply had no word for a closed
+ * one and the classifier fell through to `working`. Measured live 2026-08-15: `health` was
+ * `"working"` on ALL 89 runs across 7 instances, including runs that had failed days earlier. The
+ * intent was right — a closed run makes no liveness claim — but "no claim" was folded onto the
+ * member that reads as the strongest possible POSITIVE claim, which is strictly worse than the two
+ * timestamps it replaced, because those at least disagreed visibly.
+ *
+ * Omitting the field on a closed run was the alternative and is rejected, on this batch's own
+ * evidence: #594 records two supervision legends telling the model to read `acts[].ok`, a key the
+ * payload never carried, and the failure mode it names is that **a model reads an absent key as
+ * "fine"**. An absence cannot carry a meaning; a word can.
  */
-export type RunHealth = "working" | "waiting" | "stalled";
+export type RunHealth = "working" | "waiting" | "stalled" | "ended";
+
+/**
+ * What `health` claims, said in the payload — because the payload is what the model reads (#259).
+ *
+ * Exported so every surface that ships the verdict ships the same explanation of it. A legend
+ * restated by hand at each call site is the #585/#594 failure: prose that describes a field the
+ * code has since changed, believed because it is right next to the data.
+ */
+export const RUN_HEALTH_LEGEND =
+	"`health` is the PLATFORM'S OWN verdict on a run and there are four values: `working` (the orchestrator is ticking — it may legitimately be many minutes into ONE instruction), " +
+	"`waiting` (deliberately parked, and `waitNote` says what for and until when), `stalled` (nothing has ticked; the row will say `running` forever and the workflow is probably gone), " +
+	"and `ended` (the run is CLOSED — read `status` and `stopReason` for what happened; `ended` makes NO claim that anything is running). " +
+	"Quote `health` rather than deriving your own from `status` or the timestamps: a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like, and that inference has told an owner a run was stuck while the engine was mid-edit. " +
+	"None of these speaks for the ENGINE — `health` is the orchestrator's state, never the CLI's output.";
+
+/**
+ * The fields a verdict is read from — a STRUCTURAL subset of `LoopRunView`, not that type (#589).
+ *
+ * `LoopRunView` is what `agent-loop-store` returns, and only two of the five readers of
+ * `agent_loop_runs` hold one. The supervision path reads its own narrower row shape
+ * (`instance-work.ts`'s `RunItem`, a cross-instance `UNION ALL`), and because it could not satisfy
+ * `LoopRunView` it derived activity from the raw `status` column instead — reporting a run parked
+ * 4.35 hours as `activity:"working"` while `check_instance_loop` said `waiting` about the same row
+ * at the same instant.
+ *
+ * So the input is the SIGNALS rather than a producer's record type. Anything holding these four
+ * fields gets the platform's verdict; nothing has an excuse to compute a second one. Every field
+ * but `status` is optional-and-nullable so a caller that genuinely has not read a column is a
+ * missing signal (falling back exactly as an unwritten column does) rather than a type error that
+ * pushes the caller into hand-rolling the rule again.
+ */
+export interface RunHealthInput {
+	status: string;
+	waitingReason?: string | null;
+	lastAliveAt?: number | null;
+	lastProgressAt?: number | null;
+	startedAt: number;
+}
 
 /**
  * Classify a run, from the run record alone.
@@ -97,8 +151,9 @@ export type RunHealth = "working" | "waiting" | "stalled";
  * minute line and read as stalled; `last_alive_at` is written by the pause tick and by the capture
  * poll, at most a minute apart, so silence on it is evidence rather than a slow step.
  */
-export function runHealth(run: LoopRunView, now: number): RunHealth {
-	if (run.status !== "running") return "working";
+export function runHealth(run: RunHealthInput, now: number): RunHealth {
+	// A CLOSED run makes no liveness claim in either direction (#459's rule, #588's member).
+	if (run.status !== "running") return "ended";
 	// A park OUTRANKS the heartbeat test, and deliberately so: a run parked on a platform
 	// interruption (#583) is mid-resume and has nothing ticking BY DESIGN, so reading its silence as
 	// death would report a recovery in progress as a failure.
@@ -108,12 +163,18 @@ export function runHealth(run: LoopRunView, now: number): RunHealth {
 }
 
 /** Is this run's `running` status believable right now? */
-export function isStalled(run: LoopRunView, now: number): boolean {
+export function isStalled(run: RunHealthInput, now: number): boolean {
 	return runHealth(run, now) === "stalled";
 }
 
-/** The clause a parked run gets instead of a stall or a false all-clear. */
-export function waitClause(run: LoopRunView, now: number): string | null {
+/**
+ * The clause a parked run gets instead of a stall or a false all-clear.
+ *
+ * Takes {@link RunHealthInput} plus the park's end, for the same reason `runHealth` does: the
+ * supervision reader holds these columns and nothing else, and a signature it cannot satisfy is
+ * what sent it off to derive its own answer.
+ */
+export function waitClause(run: RunHealthInput & { waitingUntil?: number | null }, now: number): string | null {
 	// A FINISHED run makes no liveness claim in either direction (#459) — and `finishLoopRun` does
 	// not clear the park columns, so a run that ended while parked still carries them. Reading them
 	// on a closed row would announce a wait that is over.

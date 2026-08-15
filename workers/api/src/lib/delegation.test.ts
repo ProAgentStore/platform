@@ -3,7 +3,7 @@ import { CARD_DETAIL_MAX } from "./card-detail.js";
 import { delegationTaskRecord } from "./delegation.js";
 import { runOutcomeNote } from "./coding-run-report.js";
 import { summarizeActs } from "./engine-acts.js";
-import { fitStatusPayload } from "./subordinate-payload.js";
+import { COMPLETENESS_LEGEND, fitStatusPayload } from "./subordinate-payload.js";
 
 /**
  * The delegation card's detail, held to what #568 measured.
@@ -132,7 +132,13 @@ describe("the count survives the SECOND trim (#568 regression risk)", () => {
 				runs: [],
 			}));
 		const roster = board("").map((s) => ({ instanceId: s.instanceId, name: s.name, subscription: "active" }));
-		const fit = (d: string) => fitStatusPayload({ asOf: null, roster, subordinates: board(d), legend: "", maxChars: 4_200 });
+		// The budget is stated as LEGEND + headroom, not as a bare 4,200 (#589). `fitStatusPayload`
+		// always prepends `COMPLETENESS_LEGEND`, so a fixed number silently measures a different
+		// rung every time that legend is edited — which is what happened here when #589 gave
+		// `activity` five words and had to say so. The 2,996 characters of headroom is the number
+		// that put six of these subordinates on `terse` when this test was written, and it is the
+		// quantity the assertion is actually about.
+		const fit = (d: string) => fitStatusPayload({ asOf: null, roster, subordinates: board(d), legend: "", maxChars: COMPLETENESS_LEGEND.length + 2_996 });
 
 		const now = fit(detail);
 		expect(now.level, "the rung this asserts against").toBe("terse");

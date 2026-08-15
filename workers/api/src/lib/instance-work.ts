@@ -33,7 +33,23 @@ export interface WorkItem {
 	updatedAt: string;
 }
 
-/** One durable run. Unlike `WorkItem.status`, `status` here IS a closed platform enum (0062). */
+/**
+ * One durable run. Unlike `WorkItem.status`, `status` here IS a closed platform enum (0062).
+ *
+ * ── Why the park and heartbeat columns are here (#589)
+ *
+ * They were not, and that absence WAS the bug rather than a symptom of it. `status` alone cannot
+ * distinguish a run that is ticking from one parked on an engine limit from one whose Workflow
+ * died — migration 0127 split those into three columns precisely so it could — and this SELECT
+ * carried none of them. So the supervision path could not form the platform's verdict even in
+ * principle, and did the only thing left: it read the raw column. Measured on one run at one
+ * instant: `check_instance_loop` said `health:"waiting"` while `subordinate_status` said
+ * `activity:"working"` about the same row, 4.35 hours into a park.
+ *
+ * These four fields are exactly {@link RunHealthInput}'s. The judgement is NOT made here — this
+ * file reads, `subordinate-observation.ts` judges — but a reader that cannot see the signal forces
+ * whoever consumes it to invent one.
+ */
 export interface RunItem {
 	instanceId: string;
 	runId: string;
@@ -45,7 +61,14 @@ export interface RunItem {
 	maxIterations: number;
 	startedAt: number;
 	finishedAt: number | null;
+	/** Last ADVANCE (0067/0127). A FACT about progress — never a liveness signal. */
 	lastProgressAt: number | null;
+	/** The orchestrator's heartbeat (0127). The signal a stall verdict is actually read from. */
+	lastAliveAt: number | null;
+	/** Why the run is deliberately parked, or null (0127). Outranks the heartbeat test. */
+	waitingReason: string | null;
+	/** When a deliberate park is expected to end, or null (0127). */
+	waitingUntil: number | null;
 }
 
 /**
@@ -217,6 +240,9 @@ interface RunRow {
 	started_at: number;
 	finished_at: number | null;
 	last_progress_at: number | null;
+	last_alive_at: number | null;
+	waiting_reason: string | null;
+	waiting_until: number | null;
 }
 
 /** The most recent durable runs for several instances, newest first per instance. */
@@ -230,8 +256,12 @@ export async function recentRunsForInstances(
 	const limit = clampPer(perInstance, 5);
 	const chunks = unionAllChunks(
 		(p) =>
+			// The three 0127 columns are NOT optional here (#589): without them this reader cannot
+			// tell a parked run from a ticking one, and the supervision surface it feeds answered
+			// `activity:"working"` about a run parked 4.35 hours.
 			`SELECT instance_id, run_id, objective, status, stop_reason, detail, iteration,
-			        max_iterations, started_at, finished_at, last_progress_at
+			        max_iterations, started_at, finished_at, last_progress_at,
+			        last_alive_at, waiting_reason, waiting_until
 			   FROM agent_loop_runs
 			  WHERE instance_id = ?${p} AND user_id = ?1
 			  ORDER BY started_at DESC LIMIT ?2`,
@@ -251,6 +281,9 @@ export async function recentRunsForInstances(
 		startedAt: r.started_at,
 		finishedAt: r.finished_at,
 		lastProgressAt: r.last_progress_at ?? null,
+		lastAliveAt: r.last_alive_at ?? null,
+		waitingReason: r.waiting_reason ?? null,
+		waitingUntil: r.waiting_until ?? null,
 	}));
 }
 

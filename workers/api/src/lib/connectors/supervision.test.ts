@@ -1041,6 +1041,13 @@ describe("subordinate_status — the whole roster, not the part that fit (#503)"
 					started_at: 1,
 					finished_at: null,
 					last_progress_at: 2,
+					// BUSY means busy (#589): a fresh heartbeat is what makes the open run here
+					// genuinely `working`. Without it, `last_progress_at: 2` is a 1970 timestamp
+					// and the platform's verdict on these agents is `stalled` — correctly, which
+					// is the whole point, and not what this fixture is named for.
+					last_alive_at: Date.now(),
+					waiting_reason: null,
+					waiting_until: null,
 				})),
 			),
 			acts: SIX.flatMap((_, i) =>
@@ -1072,7 +1079,7 @@ describe("subordinate_status — the whole roster, not the part that fit (#503)"
 		expect(parsed.roster.map((r) => r.name).sort()).toEqual([...SIX].sort());
 		expect(parsed.subordinates.map((s) => s.name).sort()).toEqual([...SIX].sort());
 		// "Which agents are idling, doing nothing?" — one field, on every agent, always present.
-		expect(parsed.roster.every((r) => r.activity === "working" || r.activity === "idle")).toBe(true);
+		expect(parsed.roster.every((r) => r.activity === "working")).toBe(true);
 		// And it fits because it was REDUCED, not because this fixture is small: six agents this
 		// busy do not fit at full detail, and the payload says so rather than ending mid-object.
 		expect(parsed.coverage.detailLevel).not.toBe("full");

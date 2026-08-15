@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
+import { activityLabel, isOpen, runActivity, type RunHealth } from "../lib/workInFlight";
 import Button from "../components/Button";
 import Card from "../components/Card";
 
@@ -26,6 +27,15 @@ type LoopRun = {
 	maxIterations: number;
 	/** A stop the server accepted but the run has not reached yet (#376) — see lib/loopStopState.ts. */
 	cancelRequested?: boolean;
+	/**
+	 * The platform's own verdict, sent by `GET /loop` (#589).
+	 *
+	 * This list rendered "step 1/40 · started 4h ago" beside a Stop button for a run parked on an
+	 * engine limit, at the same instant the supervision tools reported it `waiting`. The field was
+	 * already on the wire; the page derived a third answer from `status` instead of reading it.
+	 */
+	health?: RunHealth;
+	waitNote?: string | null;
 	startedAt: number;
 	finishedAt?: number | null;
 };
@@ -61,6 +71,18 @@ const TONE: Record<string, string> = {
  * `needs_human` above was exactly that until #367 swept it. Never spell such a class out in a
  * comment: Tailwind v4's source scan reads comments, so explaining one can regenerate it.
  */
+/**
+ * The verdict's colour. `waiting` is NOT a warning — a park is correct and self-resolving, and
+ * painting it amber is the same over-claim as calling it working, facing the other way. Only
+ * `stalled` asks for a human, so only `stalled` gets the danger token.
+ */
+const HEALTH_TONE: Record<RunHealth, string> = {
+	working: "text-muted",
+	waiting: "text-muted",
+	stalled: "text-danger",
+	ended: "text-muted",
+};
+
 const PHASE_TONE: Record<LoopPhase, string> = {
 	running: "text-accent",
 	stopping: "text-warning",
@@ -92,8 +114,9 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 
 	useEffect(() => { void load(); }, [load]);
 
-	// Poll only while something is actually running, so an idle settings page is quiet.
-	const anyRunning = runs.some((r) => r.status === "running");
+	// Poll only while something is still OPEN, so an idle settings page is quiet. Openness, not
+	// liveness: a parked or stalled run is the one whose state most needs to keep refreshing.
+	const anyRunning = runs.some((r) => isOpen(r));
 	useEffect(() => {
 		if (!anyRunning) return;
 		const t = setInterval(() => { void load(); }, 5000);
@@ -152,6 +175,14 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 							step {r.iteration}/{r.maxIterations} · started {when(r.startedAt)}
 							{ctl.statusLabel && <span className={PHASE_TONE[ctl.phase]}> · {ctl.statusLabel}</span>}
 						</div>
+						{/*
+						  * What the run is actually DOING, quoted from the server (#589). A parked run
+						  * looked identical to a working one here — same counter, same Stop button —
+						  * for as long as the park lasted, which was measured at 4.35 hours.
+						  */}
+						{activityLabel(r) && (
+							<div className={`text-xs mt-1 ${HEALTH_TONE[runActivity(r) ?? "ended"]}`}>{activityLabel(r)}</div>
+						)}
 						{/* What the wait is FOR. Without it a multi-minute settling window reads as a hang. */}
 						{ctl.hint && <div className="text-xs text-muted mt-1">{ctl.hint}</div>}
 						{r.detail && ctl.phase === "ended" && (

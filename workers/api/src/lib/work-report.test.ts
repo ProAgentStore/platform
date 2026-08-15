@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
+import { RUN_HEALTH_LEGEND, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
+import { statusFor, type LoopRunStatus, type LoopStopReason } from "./agent-loop.js";
 import type { LoopRunView } from "./agent-loop-store.js";
 import type { TerminalView } from "./terminal-label.js";
 
@@ -167,6 +168,77 @@ describe("describeLoopRun", () => {
 
 	it("only a running run can be stalled", () => {
 		expect(isStalled(run({ status: "completed", lastProgressAt: 0, lastAliveAt: 0 }), NOW)).toBe(false);
+	});
+
+	/**
+	 * #588 — measured live 2026-08-15: `health` was `"working"` on ALL 89 runs across 7 instances,
+	 * including runs that failed days earlier. The intent (a closed run carries no liveness claim)
+	 * was right; the enum simply had no member for it, so "no claim" was folded onto the member
+	 * that reads as the strongest possible positive claim.
+	 *
+	 * The denominator is the whole status domain and it is COMPILE-TIME EXHAUSTIVE, per ADR 0002:
+	 * a run row holds `"running"` or one of `LoopRunStatus`, and adding a member to either type
+	 * fails to typecheck here rather than quietly shrinking what this test measures. That matters
+	 * specifically for this bug, which is a missing enum member — a hand-listed set of statuses
+	 * would have been written from the same three-member assumption that produced it.
+	 */
+	describe("#588 — a finished run carries no liveness claim", () => {
+		/** Every terminal status a run row can hold, plus the in-flight one. */
+		const DOMAIN: Record<LoopRunStatus | "running", true> = {
+			running: true,
+			completed: true,
+			failed: true,
+			needs_human: true,
+			cancelled: true,
+		};
+		/** Every stop reason, so the closed set below is derived from `statusFor`, not asserted. */
+		const REASONS: Record<LoopStopReason, true> = {
+			done: true,
+			escalated: true,
+			failed: true,
+			max_iterations: true,
+			budget: true,
+			cancelled: true,
+			no_progress: true,
+			engine_limit: true,
+			interrupted: true,
+		};
+		const statuses = Object.keys(DOMAIN) as Array<LoopRunStatus | "running">;
+		const closed = statuses.filter((s) => s !== "running");
+
+		it("measures the whole status domain, and every terminal status is reachable", () => {
+			// G1/G2: state the size of the set, and prove the closed half is not an invention —
+			// each of these is what `statusFor` returns for at least one real stop reason.
+			expect(statuses.length).toBe(5);
+			expect(closed.length).toBe(4);
+			const reached = new Set((Object.keys(REASONS) as LoopStopReason[]).map((r) => statusFor(r)));
+			expect([...reached].sort()).toEqual([...closed].sort());
+		});
+
+		it("reports `ended`, never `working`, for every closed status", () => {
+			for (const status of closed) {
+				// Silent for hours and parked at the moment it closed — `finishLoopRun` does not
+				// clear the park columns, so this is the state a real failed run is left in.
+				const finished = run({ status, finishedAt: NOW - 3 * 60 * 60_000, lastProgressAt: NOW - 4 * 60 * 60_000, lastAliveAt: NOW - 4 * 60 * 60_000, waitingReason: "engine_limit" });
+				expect(runHealth(finished, NOW), `status=${status}`).toBe("ended");
+				expect(runHealth(finished, NOW), `status=${status}`).not.toBe("working");
+			}
+		});
+
+		it("still classifies the three LIVE states, which the 89-run sample never exercised", () => {
+			// Stated because the measurement could not: 0 of 89 runs were `running`, so two thirds
+			// of the rule was unobserved in production and is confirmed only here.
+			expect(runHealth(run({ status: "running", lastProgressAt: NOW - 1000, lastAliveAt: NOW - 1000 }), NOW)).toBe("working");
+			expect(runHealth(run({ status: "running", waitingReason: "engine_limit", lastAliveAt: NOW - 1000 }), NOW)).toBe("waiting");
+			expect(runHealth(run({ status: "running", lastProgressAt: NOW - STALLED_AFTER_MS - 1, lastAliveAt: NOW - STALLED_AFTER_MS - 1 }), NOW)).toBe("stalled");
+		});
+
+		it("says what it does and does not claim, in the payload the model reads", () => {
+			// #588 AC2. The legend ships beside the verdict, so a client is not left inferring the
+			// inference — every member is named and the engine caveat travels with it.
+			for (const member of ["working", "waiting", "stalled", "ended"]) expect(RUN_HEALTH_LEGEND).toContain(`\`${member}\``);
+			expect(RUN_HEALTH_LEGEND).toMatch(/engine/i);
+		});
 	});
 
 	describe("#580 — a parked run is neither working nor stalled, and says which", () => {

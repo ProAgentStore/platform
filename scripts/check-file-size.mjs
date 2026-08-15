@@ -1046,7 +1046,20 @@ const PINS = {
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
 	// again and the split has a natural seam.
-	"workers/api/src/lib/connectors/supervision.ts": 867,
+	// +20 at #589, and every line of it is the file paying a debt it created. This module holds
+	// TWO of the five readers of `agent_loop_runs` (`subordinate_status`, `check_delegation`) and
+	// neither applied the platform's own health verdict: for one run parked 4.35 hours they
+	// reported `activity:"working"` while `check_instance_loop` reported `waiting` about the same
+	// row at the same instant, so a Coder Lead kept waiting on a subordinate that had stopped.
+	// The lines are `health`/`waitNote`/`healthLegend` on the drill-down payload plus the two tool
+	// descriptions, which had to change because the vocabulary they sell did: `activity` used to
+	// mean "a run row says running" and now means "the platform's verdict", and only `idle` still
+	// means an agent is free. A description left describing the old field is #585 exactly.
+	//
+	// NOT split: the seam named above is connector-supervision vs. the agent-direction store, and
+	// #589 lands in the FIRST half — splitting there moves the other half out to make room, which
+	// is a pin raise wearing a diff.
+	"workers/api/src/lib/connectors/supervision.ts": 887,
 	// First entry at #580/#583, crossing LIMIT from 799 — a file that had been sitting one line
 	// under it, which is not a coincidence: work kept being pushed out (`coding-pause.ts`,
 	// `coding-wait.ts`, `coding-run-report.ts` are all extractions from here) precisely because
@@ -1166,7 +1179,11 @@ const PINS = {
 	// say the same thing — a status column was published without the derivation that makes it
 	// true — which is the case the split named above (PINS into its own data file) would make
 	// cheaper to read. Still not worth doing for two entries.
-	"scripts/check-file-size.mjs": 1250,
+	// +17 at #589: the supervision.ts raise above and this self-ref. It is the THIRD raise in a row
+	// (#580, #587, #589) whose reason is the same sentence in a different file — a status column
+	// published without the derivation that makes it true — which is now evidence rather than
+	// coincidence, and the strongest argument yet for the PINS-into-a-data-file split named above.
+	"scripts/check-file-size.mjs": 1267,
 };
 
 /**

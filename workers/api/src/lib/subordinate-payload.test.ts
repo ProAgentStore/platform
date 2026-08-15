@@ -30,6 +30,8 @@ const fatSubordinate = (i: number) => ({
 		runId: `r-${i}-${r}`,
 		objective: "objective ".repeat(20),
 		status: r === 0 ? "running" : "completed",
+		health: r === 0 ? "working" : "ended",
+		waitNote: null,
 		stopReason: null,
 		detail: "detail ".repeat(17),
 		iteration: 4,
@@ -294,8 +296,8 @@ describe("rosterLines — which ones are idle", () => {
 		const out = rosterLines({
 			roster,
 			observed: [
-				{ instanceId: "a", runs: [{ status: "completed" }, { status: "running" }] },
-				{ instanceId: "b", runs: [{ status: "completed" }] },
+				{ instanceId: "a", runs: [{ status: "completed", health: "ended" as const }, { status: "running", health: "working" as const }] },
+				{ instanceId: "b", runs: [{ status: "completed", health: "ended" as const }] },
 				{ instanceId: "c", runs: [] },
 			],
 			canWork: new Map([
@@ -311,7 +313,7 @@ describe("rosterLines — which ones are idle", () => {
 		// A status call narrowed to one agent reads runs for that agent alone. Reporting the other
 		// two as idle on the strength of a query that never asked about them is the confident wrong
 		// answer this whole file exists to stop — but the roster is still complete, which is the point.
-		const out = rosterLines({ roster, observed: [{ instanceId: "b", runs: [{ status: "running" }] }], canWork: new Map() });
+		const out = rosterLines({ roster, observed: [{ instanceId: "b", runs: [{ status: "running", health: "working" as const }] }], canWork: new Map() });
 		expect(out.map((r) => r.activity)).toEqual([undefined, "working", undefined]);
 		expect(out).toHaveLength(3);
 	});

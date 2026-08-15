@@ -45,6 +45,7 @@ import { CONFIG_LEGEND, objectiveConflict, resolveSubordinateConfig, type Subord
 import { isBudgetEnforced, resolveAccountCeilings, DAILY_CEILING_MICROS, DAILY_TOKEN_CEILING } from "../delegation-budget-store.js";
 import { accountUsageSince } from "../usage.js";
 import { formatTokens } from "../delegation-budget.js";
+import { RUN_HEALTH_LEGEND, runHealth, waitClause } from "../work-report.js";
 import type { SettingsField } from "../agent-capabilities.js";
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 
@@ -558,6 +559,14 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"never shortened. \"How many agents do you have\" is `total`; \"which ones are idle\" is " +
 			"`roster[].activity`. Never answer either by counting the `subordinates` detail below it — " +
 			"that detail is shortened when it does not fit, and `coverage` says when it was. " +
+			// #589: this sentence sold `activity` hardest while it was computed from the raw
+			// `status` column, so a run parked four hours read as `working` here and `waiting` on
+			// `check_instance_loop` at the same instant. Only `idle` now means "ready for work".
+			"`activity` is the platform's verdict, not the raw status: only `idle` means an agent is " +
+			"free to take work. `waiting` and `stalled` are runs still IN FLIGHT — `waiting` resumes " +
+			"on its own and wants nothing from you, `stalled` means nothing has ticked and somebody " +
+			"has to look. Never report a `waiting` or `stalled` agent as working, and never wait on " +
+			"one as though it were. " +
 			"Each item's `status` is that agent's own word for " +
 			"it; `columnTitle` is what THAT agent says the word means. " +
 			"`connectivity` is a SEPARATE question from busyness: `connectivity.canWork` says whether " +
@@ -698,6 +707,10 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		mutates: false,
 		description:
 			"Check ONE delegated run by id: its status, how many steps it has taken, why it stopped, and `acts` — the consequential things it DID along the way (a pull request opened or MERGED, a push, a force-push, a delete, a deploy). Report anything marked `irreversible` to the human: \"completed\" describes the objective, never what the run changed. " +
+			// #589: this returned `status` plus two timestamps and left the reader to work out what
+			// they meant. `health` is the platform's own reading of them and `healthLegend` ships
+			// beside it, so the model quotes a verdict instead of deriving a second one.
+			"Read `health` before anything else — it is the platform's own verdict on whether the run is working, parked, stalled or over, and `healthLegend` in the answer says what each value does and does not claim. " +
 			"`objective` is what this ONE run was asked to do; `config` is the agent's standing configuration — its merge authority, standing rules, behaviour and settings. Asked what an agent's instructions are, or whether it may merge to main, answer from `config` and say so by name; the objective cannot grant permission the configuration withholds, and `objectiveConflict` appears when it tries to. " +
 			"With no run id this falls through to the same picture subordinate_status gives — so for \"what is happening across my agents\", prefer subordinate_status directly.",
 		jsonSchema: {
@@ -730,10 +743,19 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 				const config = await standingConfigFor(ctx, run.instanceId).catch(() => null);
 				const conflict = config ? objectiveConflict(config.mergeAuthority.policy, run.objective) : null;
 				const zone = await accountTimeZone(ctx.env, userId);
+				const now = Date.now();
 				return {
 					content: JSON.stringify(
 						{
 							...run,
+							// The platform's OWN verdict, from the module that defines it (#589).
+							// This tool was one of the three readers that shipped `status` and two
+							// timestamps and left the model to decide what they meant — and the
+							// model reading them is exactly what told an owner a mid-edit run was
+							// stuck. `health` is the answer; the raw columns stay as its evidence.
+							health: runHealth(run, now),
+							waitNote: waitClause(run, now),
+							healthLegend: RUN_HEALTH_LEGEND,
 							// `...run` spreads EPOCH MILLISECONDS, which is the same defect as an ISO
 							// string wearing different clothes: asked when a run finished, the model
 							// either reads `1786...` out loud or does the conversion itself (#345).

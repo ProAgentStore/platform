@@ -9,6 +9,7 @@
 // out. This is that assembly, over subordinate INSTANCES instead of repos, and built only from
 // records every agent family writes.
 import { columnForStatus, type BoardColumn } from "./agent-capabilities.js";
+import { runHealth, waitClause, type RunHealth } from "./work-report.js";
 import type { RunItem, WorkItem } from "./instance-work.js";
 
 /** A board card, plus what the OWNING agent says its status means. */
@@ -33,7 +34,25 @@ export interface ObservedRun {
 	detail: string | null;
 	iteration: number;
 	maxIterations: number;
-	/** Minutes since the last recorded progress, for a run still `running`. Null otherwise. */
+	/**
+	 * The PLATFORM'S verdict on this run, from `runHealth` — the one implementation (#589).
+	 *
+	 * Not derived here and deliberately not derivable here: three surfaces answering "is this
+	 * alright" independently is the #580 defect, and this file was one of the two that still did.
+	 * A supervisor reads THIS, never `status`, to decide whether an agent is working.
+	 */
+	health: RunHealth;
+	/** What a parked run is waiting for and until when. Null unless `health === "waiting"`. */
+	waitNote: string | null;
+	/**
+	 * Minutes since the last recorded ADVANCE, for a run still `running`. Null otherwise.
+	 *
+	 * A FACT, never a verdict — and the distinction is load-bearing (`work-report.ts:136-141`).
+	 * A long healthy engine turn and a deliberate park both produce a large number here, so
+	 * reading it as staleness told an owner a run was stuck while the engine was mid-edit. It is
+	 * reported so a supervisor can say "no new instruction for 4 hours"; `health` says what that
+	 * MEANS, and the two are computed from different columns on purpose.
+	 */
 	quietForMinutes: number | null;
 }
 
@@ -138,19 +157,27 @@ export function summarizeSubordinates(input: {
 			counts.set(col.id, cur);
 		}
 
-		const rs = (runsBy.get(s.instanceId) ?? []).map((r): ObservedRun => ({
-			runId: r.runId,
-			objective: r.objective,
-			status: r.status,
-			stopReason: r.stopReason,
-			detail: r.detail,
-			iteration: r.iteration,
-			maxIterations: r.maxIterations,
-			// Only meaningful while running. `lastProgressAt` falls back to `startedAt` so a run
-			// that has never reported progress reads as quiet since it began — which is the
-			// signal, not a gap. A finished run is not "quiet", it is done.
-			quietForMinutes: r.status === "running" ? minutesSince(r.lastProgressAt ?? r.startedAt, now) : null,
-		}));
+		const rs = (runsBy.get(s.instanceId) ?? []).map((r): ObservedRun => {
+			// The verdict, from the module that owns it. `RunItem` now carries exactly the four
+			// signals `runHealth` reads, so this is a call rather than a second rule (#589) — and
+			// everything below that used to test the raw column now reads the verdict instead.
+			const health = runHealth(r, now);
+			return {
+				runId: r.runId,
+				objective: r.objective,
+				status: r.status,
+				stopReason: r.stopReason,
+				detail: r.detail,
+				iteration: r.iteration,
+				maxIterations: r.maxIterations,
+				health,
+				waitNote: waitClause(r, now),
+				// Only meaningful while the run is open. `lastProgressAt` falls back to `startedAt`
+				// so a run that has never reported progress reads as quiet since it began — which is
+				// the signal, not a gap. A finished run is not "quiet", it is done.
+				quietForMinutes: health === "ended" ? null : minutesSince(r.lastProgressAt ?? r.startedAt, now),
+			};
+		});
 
 		return { instanceId: s.instanceId, name: s.name, subscription: s.subscription, buckets: [...counts.values()], work: items, runs: rs };
 	});
