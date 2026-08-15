@@ -19,7 +19,7 @@ import { parseAccountPreferences } from "./lib/preferences.js";
 import { clockPrompt } from "./lib/agent-clock.js";
 import { stableStringify } from "./lib/stable-json.js";
 import { buildResumableRound, type ResumableRound, withResumableRound } from "./lib/resumable-round.js";
-import { fenceUntrusted } from "./lib/untrusted-fence.js";
+import { ragContextOrNotice } from "./lib/retrieval.js";
 import { transferFromToolResults, type ConversationTransfer } from "./lib/conversation-transfer.js";
 import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
@@ -293,17 +293,17 @@ export async function runAgentThink(opts: {
 		systemPrompt += block;
 	}
 
-	// Retrieved RAG content is UNTRUSTED — it comes from documents, ingested URLs,
-	// repo files, and public webhook payloads, any of which an attacker can author.
-	// Fence it so the model treats it as data, not instructions: this is the front
-	// line against prompt-injection that would otherwise chain read-tools + fetch_url
-	// into an exfiltration of the owner's private data.
+	// Retrieved RAG content is UNTRUSTED — documents, ingested URLs, repo files and public
+	// webhook payloads, any of which an attacker can author. Fence it so the model treats it as
+	// data, not instructions: the front line against prompt-injection that would otherwise chain
+	// read-tools + fetch_url into an exfiltration of the owner's private data. The wording lives
+	// in lib/untrusted-fence.ts because the outbound MCP connector needs the SAME fence for
+	// `resources/read` (#263) — remote text on the instruction path is one problem either way.
 	//
-	// The wording lives in lib/untrusted-fence.ts because the outbound MCP connector needs the
-	// SAME fence for `resources/read` (#263) — remote text on the instruction path is the same
-	// problem whether it arrived via RAG or via a server the agent named itself.
-	const ragContext = await engine.buildRAGContext(lastUserMessage);
-	if (ragContext) systemPrompt += `\n\n${fenceUntrusted(ragContext, "documents/URLs/repos/webhooks")}`;
+	// ragContextOrNotice applies that fence AND turns a retrieval OUTAGE into an explicit notice
+	// rather than omitting the block (#628), an omission the model reads as "there are no docs".
+	const ragContext = await ragContextOrNotice(engine, lastUserMessage, { env, agentId: state.agentId, userId });
+	if (ragContext) systemPrompt += `\n\n${ragContext}`;
 
 	if (memory.length > 0) {
 		// Provenance and AGE for every summary-derived entry (#495): one instance carried a false

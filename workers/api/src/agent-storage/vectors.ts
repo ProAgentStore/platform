@@ -13,6 +13,7 @@ import type {
 import { chunkText, deleteKeysBatched, shortId } from "../agent-storage-utils.js";
 import type { KnowledgeDoc, MemoryEntry } from "../agent-types.js";
 import { approxTokens } from "../lib/ai-pricing.js";
+import { RetrievalUnavailableError } from "../lib/retrieval.js";
 import { recordPlatformUsage } from "../lib/usage.js";
 import { type AgentStorageBaseCtor, CHUNK_SIZE } from "./base.js";
 
@@ -52,10 +53,17 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 				const chunk = chunks[i];
 				// Vectorize IDs max 64 bytes — use a short hash
 				const id = await shortId(this.agentId, sourceType, sourceId, i);
-				const embedding = await this.embed(chunk);
-				// AI is configured (guarded above), so a null embedding is a real failure —
+				// AI is configured (guarded above), so a failed embedding is a real failure —
 				// count it and fail loudly at the end. Silently skipping a chunk here is how
 				// content ends up persisted but unsearchable with the caller told "success".
+				// Caught per chunk so the final message can say HOW MUCH was lost (`3/40`), which
+				// a bare propagated embed error could not; the chunks that did embed are kept.
+				let embedding: number[] | null;
+				try {
+					embedding = await this.embed(chunk);
+				} catch {
+					embedding = null; // counted below — the throw is re-stated as the N/M summary
+				}
 				if (!embedding) {
 					failed++;
 					continue;
@@ -97,6 +105,14 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 
 		/**
 		 * Semantic search across all agent vectors.
+		 *
+		 * An empty array means the search RAN and matched nothing — a legitimate, common result.
+		 * A search that could not run throws {@link RetrievalUnavailableError} (#628), because the
+		 * two demand different things of the user and callers were reporting them as one.
+		 *
+		 * Indexing being off entirely (`indexingEnabled === false`) still returns `[]`: nothing was
+		 * ever embedded on such a deployment, so there is genuinely nothing to find, and #22
+		 * already makes the write side say `vectorized: false` rather than claim a false green.
 		 */
 		async vectorSearch(
 			query: string,
@@ -105,8 +121,9 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 		): Promise<VectorSearchResult[]> {
 			if (!this.vectorize || !this.ai) return [];
 
-			const embedding = await this.embed(query);
-			if (!embedding) return [];
+			// embed() returns null only when `this.ai` is absent, which the line above excluded;
+			// anything else it can do now throws. The `?? []` is unreachable, not a fallback.
+			const embedding = (await this.embed(query)) ?? [];
 
 			const vectorFilter: VectorizeVectorMetadataFilter = {
 				agentId: this.agentId,
@@ -115,11 +132,14 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 				vectorFilter.sourceType = filter.sourceType;
 			}
 
-			const results = await this.vectorize.query(embedding, {
-				topK,
-				filter: vectorFilter,
-				returnMetadata: "all",
-			});
+			// A Vectorize outage is the same answer as an embedder outage — "I could not look" —
+			// and must not reach the caller as a raw error that either 500s the chat turn or gets
+			// mistaken for an empty corpus.
+			const results = await this.vectorize
+				.query(embedding, { topK, filter: vectorFilter, returnMetadata: "all" })
+				.catch((err) => {
+					throw new RetrievalUnavailableError(err);
+				});
 
 			return results.matches.map((match) => ({
 				id: match.id,
@@ -223,10 +243,19 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 			const sourceId = `${repoKey}::${path}`;
 			const vectors: VectorizeVector[] = [];
 			const metas: Array<{ key: string; meta: VectorMeta }> = [];
+			let failed = 0;
 			for (let i = 0; i < chunks.length; i++) {
 				const labeled = `File: ${repoKey}/${path}\n${chunks[i]}`;
-				const embedding = await this.embed(labeled);
-				if (!embedding) continue;
+				let embedding: number[] | null;
+				try {
+					embedding = await this.embed(labeled);
+				} catch {
+					embedding = null; // counted as `failed` below, which makes the file retryable
+				}
+				if (!embedding) {
+					failed++;
+					continue;
+				}
 				const id = await shortId(this.agentId, "repo", sourceId, i);
 				vectors.push({
 					id,
@@ -235,14 +264,26 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 				});
 				metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId, chunkIndex: i, text: labeled, createdAt: new Date().toISOString() } });
 			}
-			// We had chunks to embed but produced zero vectors → every embed() returned null
-			// (a swallowed Workers-AI provider error). Signal failure (-1) so the ingest alarm
-			// retries this file on a later tick (REPO_FILE_MAX_RETRY) before giving up — rather
-			// than marking the file done-but-empty and advertising "Ready (N files)" while RAG
-			// returns nothing for it and no error is ever surfaced.
-			if (vectors.length === 0) return -1;
+			// Persist whatever DID embed before reporting, so a retry starts from more of the file
+			// rather than none of it (the ids are deterministic, so re-embedding a survivor upserts
+			// over itself).
 			for (let i = 0; i < vectors.length; i += 100) await this.vectorize.upsert(vectors.slice(i, i + 100));
 			for (const { key, meta } of metas) await this.doStorage.put(key, meta);
+			// ANY un-embedded chunk fails the file (-1), not just a total wipeout (#635).
+			//
+			// This used to return the success count for a partial file: 9 of 10 chunks embedded
+			// returned 9, the runner took the success branch, deleted the staged source at
+			// `rifile:{key}:{idx}` — and the tenth chunk was then unindexed, unrecoverable and
+			// UNCOUNTED, because `job.failed` never moved. The repo went `summarizing` → `done` and
+			// the Repo tab showed it ready, with a hole no reading of the console could detect.
+			// Partial failure is the NATURAL shape of the errors that get here (rate-limit,
+			// subrequest cap, a 5xx mid-file), so this was the common case, not the corner.
+			//
+			// -1 is precisely the signal the runner already handles well: keep the staged content,
+			// retry on a later tick (REPO_FILE_MAX_RETRY), and on exhaustion count the file in
+			// `job.failed`. Matches `vectorizeStore`, which has always refused to call a partly
+			// embedded document searchable.
+			if (failed > 0) return -1;
 			return vectors.length;
 		}
 
@@ -301,25 +342,44 @@ export function withVectors<TBase extends AgentStorageBaseCtor>(Base: TBase) {
 			}
 		}
 
+		/**
+		 * Embed one chunk. Returns null ONLY when there is no AI binding at all — i.e. exactly
+		 * what `indexingEnabled` already reports. Every other outcome is a failure and THROWS
+		 * (#628).
+		 *
+		 * It used to `catch { return null }`, swallowing a Workers-AI outage, a rate-limit and a
+		 * subrequest-cap trip alike, and logging nothing anywhere. `vectorSearch` then flattened
+		 * that null to `[]` and `search_knowledge` reported it to the model as "the knowledge base
+		 * may be empty" — an infrastructure failure stated as a fact about the user's data, on an
+		 * instance holding 3,979 chunks. A thrown error is the smallest change that lets every
+		 * caller tell "found nothing" apart from "could not look".
+		 */
 		protected async embed(text: string): Promise<number[] | null> {
 			if (!this.ai) return null;
+			let result: unknown;
 			try {
-				const result = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
-					text: [text],
-				});
-				// Platform-paid: ledger the embedding (issue #44). Embeddings have no output
-				// tokens; input is estimated from text length (Workers AI returns no usage).
-				if (this.meter?.userId) {
-					await recordPlatformUsage(
-						{ DB: this.meter.db },
-						{ userId: this.meter.userId, agentId: this.meter.agentId, instanceId: this.meter.instanceId, model: "@cf/baai/bge-base-en-v1.5", kind: "embedding" },
-						{ input: approxTokens(text.length), output: 0 },
-					);
-				}
-				return (result as { data: number[][] }).data?.[0] || null;
-			} catch {
-				return null;
+				result = await this.ai.run("@cf/baai/bge-base-en-v1.5", { text: [text] });
+			} catch (err) {
+				throw new RetrievalUnavailableError(err);
 			}
+			// Platform-paid: ledger the embedding (issue #44). Embeddings have no output
+			// tokens; input is estimated from text length (Workers AI returns no usage).
+			//
+			// Its own catch, OUTSIDE the embed call's: the ledger is bookkeeping about work that
+			// has already succeeded, so a D1 hiccup here must not discard a good vector and report
+			// the search as unavailable. Folding the two together is what the old single catch did.
+			if (this.meter?.userId) {
+				await recordPlatformUsage(
+					{ DB: this.meter.db },
+					{ userId: this.meter.userId, agentId: this.meter.agentId, instanceId: this.meter.instanceId, model: "@cf/baai/bge-base-en-v1.5", kind: "embedding" },
+					{ input: approxTokens(text.length), output: 0 },
+				).catch(() => undefined);
+			}
+			// AI is configured (guarded above), so a response carrying no vector is a provider
+			// failure wearing a success's clothes — not an empty result.
+			const vector = (result as { data?: number[][] }).data?.[0];
+			if (!vector) throw new RetrievalUnavailableError(new Error("embedder returned no vector"));
+			return vector;
 		}
 	};
 }

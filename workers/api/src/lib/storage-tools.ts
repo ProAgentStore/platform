@@ -11,6 +11,7 @@ import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client
 import { lastTerminal } from "./coding-timeline.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { localStamp } from "./agent-clock.js";
+import { RETRIEVAL_EMPTY_MESSAGE, searchKnowledgeFor } from "./retrieval.js";
 import type { Env } from "../types.js";
 
 export interface StorageToolCallRequest {
@@ -259,15 +260,13 @@ export async function executeStorageTool(
 				if (!query) return fail(call.name, "query required");
 				const topK = Math.min(Number(call.input.top_k) || 5, 20);
 				const sourceType = call.input.source_type as string | undefined;
-				const results = await engine.vectorSearch(query, topK, {
-					sourceType: sourceType as "knowledge" | "repo" | "message" | "file" | "collection" | undefined,
-				});
-				if (results.length === 0) {
-					return ok(call.name, "No relevant results found. The knowledge base may be empty or the query didn't match any stored content.");
-				}
+				// `fail` when the search could not RUN, `ok` when it ran and matched nothing (#628).
+				const found = await searchKnowledgeFor(engine, { query, topK, sourceType }, ctx);
+				if (!found.ok) return fail(call.name, found.message);
+				if (found.results.length === 0) return ok(call.name, RETRIEVAL_EMPTY_MESSAGE);
 				return ok(
 					call.name,
-					`${JSON.stringify(results, null, 2)}\n\nTo read around a file match and quote it exactly: read_file with id=sourceId and offset ≈ (the number after "_" in the match id) × 512.`,
+					`${JSON.stringify(found.results, null, 2)}\n\nTo read around a file match and quote it exactly: read_file with id=sourceId and offset ≈ (the number after "_" in the match id) × 512.`,
 				);
 			}
 
