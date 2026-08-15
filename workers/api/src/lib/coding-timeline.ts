@@ -162,13 +162,25 @@ export const FEED_BYTE_BUDGET = 40_000;
  *   · a row dropped by {@link FEED_BYTE_BUDGET} costs one more poll. `hasMore` says so and the
  *     cursor resumes exactly where it stopped, which is the property #581 AC2 already proved.
  *
- * A first pass set this to 1,600 and measured the consequence: 40 rows at 21,354 B, and **9 of
- * every 12 calls permanently omitted** — the feed would have been reporting a quarter of the record
- * while claiming to carry it. 6,000 holds a full production row (12.05 calls at ~420 B serialised),
- * so `toolCallsOmitted` is reserved for a genuinely abnormal row, and a page of nothing but
- * call-bearing snapshots simply returns fewer rows with `hasMore: true`.
+ * Two passes got this wrong before production data settled it, and both errors are worth keeping:
+ *
+ *   · **1,600** — sized from the page's point of view. 40 rows at 21,354 B, and **9 of every 12
+ *     calls permanently omitted**: a feed reporting a quarter of the record while claiming to carry
+ *     it.
+ *   · **6,000** — sized from the MEAN production row (12.05 calls at ~420 B serialised), with a
+ *     docblock claiming omission was "reserved for a genuinely abnormal row". Replaying 86 real
+ *     `terminal` rows through this function said otherwise: **124 of 610 calls omitted across 17
+ *     rows, 20%**. The mean was the wrong statistic. A row that lost continuity re-emits its whole
+ *     window (`toolCallGap`), and 35 of those 86 rows did — so the row that has to fit is the
+ *     largest, not the average.
+ *
+ * 12,000 is the measured knee on that data, not a round number: omission reaches **0** and the
+ * largest real row serialises to **11,331 B**. 16,000 and 24,000 deliver exactly the same 610 calls,
+ * so nothing above this buys anything. A page of nothing but call-bearing snapshots simply returns
+ * fewer rows with `hasMore: true` — which is the trade this is sized around, because a row dropped
+ * by {@link FEED_BYTE_BUDGET} costs one more poll and a call dropped here is gone for good.
  */
-export const FEED_TOOLCALL_BYTES = 6_000;
+export const FEED_TOOLCALL_BYTES = 12_000;
 
 /** One timeline row, cut to fit. */
 export interface FeedEvent {
