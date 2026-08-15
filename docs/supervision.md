@@ -1,5 +1,22 @@
 # Supervision as a platform primitive
 
+> ## ⚠ SUPERSEDED (2026-08-15) — this proposal was built (#605)
+>
+> **Read the rest of this document as history, not as a description of the platform.** It is written
+> in the tense of a plan that had not yet been carried out, and seven of its eight tracked items have
+> since shipped. A reader trusting the present tense below will conclude PAGS has no supervision
+> graph, no cross-agent delegation, no budgets and no durable loop. It has all four — the Tracking
+> table at the end of this file now names where each one lives.
+>
+> It is kept unrewritten on purpose: the value of a proposal is the reasoning that led to it, and
+> rewriting it into a description would destroy exactly that. For how supervision behaves **today**,
+> read the code the Tracking table points at — not this file.
+>
+> **One tracked item was not built:** #160, retiring the `workflow` closed enum. It is **deferred and
+> still open, not decided against** — `lib/agent-workflows.ts:33-47` still declares exactly three
+> values (`JOB_APPLY`, `CODING_SESSION`, `BROWSER_TASK`). The document's own closing argument, that
+> retiring the enum "is what finally makes a Coder configurable", therefore still stands unanswered.
+
 > Status: proposal. Extends `coordination-primitives.md` (#154). That doc deferred cross-agent
 > delegation until "a real second consumer beyond Coder" existed. **It now does** — configurable
 > multi-layer supervision — so this picks up where the gate left off.
@@ -205,13 +222,16 @@ the primitive, and when it is, the hardcoded route comes out.
 
 ## Tracking
 
-| Work | Ticket |
-|---|---|
-| Generalize `delegate(target, goal)` | #156 (un-deferred) |
-| Platform-provided durable agent loop | #158 (re-scoped, un-deferred) |
-| Supervision graph as configured data | #183 |
-| Autonomous work budget — cost, count, depth | #184 |
-| Authority containment (no privilege inheritance) | #185 |
-| Typed task/handoff + escalation ladder | #157 |
-| Cross-agent delegation | #159 (un-deferred) |
-| Retire the `workflow` enum | #160 |
+Where each item ended up, added 2026-08-15 (#605). This column is the pointer this document owes a
+reader; it is not a description of how any of it behaves — read the code for that.
+
+| Work | Ticket | Shipped as |
+|---|---|---|
+| Generalize `delegate(target, goal)` | #156 (un-deferred) | `lib/delegate-target.ts`; tool `delegate_goal` at `lib/connectors/supervision.ts:606` |
+| Platform-provided durable agent loop | #158 (re-scoped, un-deferred) | `workflows/agent-loop.ts`, migration `0062_agent_loop_runs.sql` |
+| Supervision graph as configured data | #183 | migration `0060_agent_supervision.sql` — table `agent_supervision` |
+| Autonomous work budget — cost, count, depth | #184 | migrations `0061_delegation_budgets.sql`, `0113_account_budget_limits.sql`, `0115_account_budget_loop_max_iterations.sql`; `lib/delegation-budget-store.ts` |
+| Authority containment (no privilege inheritance) | #185 | `lib/supervision-capability.ts` |
+| Typed task/handoff + escalation ladder | #157 | `lib/escalation.ts` |
+| Cross-agent delegation | #159 (un-deferred) | `lib/delegate-instance.ts` |
+| Retire the `workflow` enum | #160 | **Not built — deferred, still open.** `lib/agent-workflows.ts:33-47` declares three values. |

@@ -1,5 +1,35 @@
 # Coordination primitives — delegate goals, not one-shots
 
+> ## ⚠ SUPERSEDED (2026-08-15) — four of its five deferred items were built (#605)
+>
+> **Read the rest of this document as history, not as a description of the platform.** Both its
+> "problem" section and its "Deferred — filed, not built" list are written in a present tense that
+> has been overtaken. It is kept unrewritten because the reasoning — *why* delegate-a-goal beats
+> fire-a-one-shot, and why this was built as a primitive rather than a Coder refactor — is the part
+> worth keeping, and rewriting it into a description would destroy it.
+>
+> **Of the five deferred items, four shipped:** the first-class `delegate(target, goal)` primitive
+> (`lib/delegate-target.ts`; tool `delegate_goal` at `lib/connectors/supervision.ts:606`); the typed
+> task/handoff model (`lib/escalation.ts`); converging the Loop into a durable runner
+> (`workflows/agent-loop.ts`, migration `0062_agent_loop_runs.sql`); and cross-agent delegation
+> (`lib/delegate-instance.ts`). The supervision graph that grew out of this is migration
+> `0060_agent_supervision.sql`. See [`supervision.md`](./supervision.md), the follow-on proposal,
+> which is likewise superseded and carries the full table.
+>
+> **The fifth was not built:** retiring the `workflow` closed enum (#160). It is **deferred and still
+> open, not decided against** — `lib/agent-workflows.ts:33-47` declares exactly three values.
+>
+> **Two statements in "The problem (verified in code)" below are no longer true**, and are the reason
+> this banner exists rather than a status-line edit:
+>
+> - the Overseer is no longer at `routes/coding.ts` — it is `routes/coding-brains.ts:397`;
+> - *"autonomy that isn't durable — the Loop … dies when the browser closes"* has been fixed. The
+>   loop runs on the server (`routes/tools.ts:953`, `workflows/agent-loop.ts`); `routes/tools.ts`
+>   records the old browser-driven design in its own past tense.
+>
+> What the section got right and still is: `send_to_cli` remains a one-shot
+> (`lib/storage-tools.ts:231`).
+
 > **Status:** design proposal, 2026-08. Companion to [`agent-platform-strategy.md`](./agent-platform-strategy.md)
 > and [`connector-manifest.md`](./connector-manifest.md). Where the connector work made *what an
 > agent can touch* declarative, this makes *how work is delegated* correct — as a **platform
