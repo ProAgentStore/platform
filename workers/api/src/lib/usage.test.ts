@@ -98,28 +98,6 @@ describe("aggregateUsage", () => {
 	});
 });
 
-/**
- * Read the two cache columns off `totals`.
- *
- * `aggregateUsage` computes and returns `totals.cacheReadTokens` / `totals.cacheWriteTokens`
- * (usage.ts:417 and 434-435) and the console reads them (store/console/src/pages/Usage.tsx:281,
- * where they are declared optional), but `UsageSummary["totals"]` (usage.ts:319) never declared
- * them — the same drop-on-the-way-out shape #547 fixed for `daily`, one level up. Until that
- * declaration is widened, the assertions below cannot name the fields directly.
- *
- * This narrows instead of casting: if the totals loop ever stops emitting either column, the
- * throw fires and the test fails, which is exactly what naming the field would have done. Once
- * the production type carries them this helper can be deleted and the reads inlined.
- */
-function cacheTotals(totals: UsageSummary["totals"]): { cacheReadTokens: number; cacheWriteTokens: number } {
-	const t = totals as Record<string, unknown>;
-	const cacheReadTokens = t.cacheReadTokens;
-	const cacheWriteTokens = t.cacheWriteTokens;
-	if (typeof cacheReadTokens !== "number" || typeof cacheWriteTokens !== "number")
-		throw new Error("aggregateUsage stopped reporting cache tokens in totals");
-	return { cacheReadTokens, cacheWriteTokens };
-}
-
 describe("prompt-cache tokens are reported separately (#212)", () => {
 	it("keeps cache reads OUT of inputTokens, so the hit rate is computable", () => {
 		// They used to be summed into input. That made the hit rate — cacheRead ÷ (input +
@@ -127,7 +105,7 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		// working, while the cost line silently priced every read at the full input rate.
 		const s = aggregateUsage([row({ input_tokens: 200, cache_read_tokens: 1800, cache_write_tokens: 0 })]);
 		expect(s.totals.inputTokens).toBe(200);
-		const { cacheReadTokens } = cacheTotals(s.totals);
+		const { cacheReadTokens } = s.totals;
 		expect(cacheReadTokens).toBe(1800);
 		const hitRate = cacheReadTokens / (s.totals.inputTokens + cacheReadTokens);
 		expect(hitRate).toBeCloseTo(0.9);
@@ -162,11 +140,10 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		// totals over the same range. A zero-filled gap day contributes nothing to either side.
 		const sum = (k: "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens") =>
 			s.daily.reduce((n, d) => n + d[k], 0);
-		const totalCache = cacheTotals(s.totals);
 		expect(sum("inputTokens")).toBe(s.totals.inputTokens);
 		expect(sum("outputTokens")).toBe(s.totals.outputTokens);
-		expect(sum("cacheReadTokens")).toBe(totalCache.cacheReadTokens);
-		expect(sum("cacheWriteTokens")).toBe(totalCache.cacheWriteTokens);
+		expect(sum("cacheReadTokens")).toBe(s.totals.cacheReadTokens);
+		expect(sum("cacheWriteTokens")).toBe(s.totals.cacheWriteTokens);
 	});
 
 	it("treats a pre-migration NULL as zero for the sum without crashing", () => {
@@ -174,7 +151,8 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		// somehow, and zero is the only sane arithmetic; the unknown-vs-zero distinction lives in
 		// D1, not in a total.
 		const s = aggregateUsage([row({ cache_read_tokens: null, cache_write_tokens: null })]);
-		expect(cacheTotals(s.totals)).toEqual({ cacheReadTokens: 0, cacheWriteTokens: 0 });
+		expect(s.totals.cacheReadTokens).toBe(0);
+		expect(s.totals.cacheWriteTokens).toBe(0);
 	});
 });
 
@@ -346,5 +324,55 @@ describe("instanceSpendMicros — a ledger read failure is not a spend of zero (
 	it("still reads a real total, and floors a nonsense one at zero", async () => {
 		expect(await instanceSpendMicros(envWith(async () => ({ total: 4200 })), "u1", "i1")).toBe(4200);
 		expect(await instanceSpendMicros(envWith(async () => null), "u1", "i1")).toBe(0);
+	});
+});
+
+// ── #608: the declared shape and the shape actually returned ─────────────────
+//
+// `UsageSummary["totals"]` omitted `cacheReadTokens`/`cacheWriteTokens` for the whole life of
+// #547: the loop summed them, `c.json` sent them, the console read them through a parallel type
+// of its own, and the declaration said they did not exist. Nothing caught it because nothing
+// compiled worker sources until #599 — and once one existed, a page working around a wrong type
+// was easier to keep than to fix.
+//
+// Two halves, and neither is sufficient alone. The runtime half asserts what the aggregator
+// really returns; the compile-time half asserts what the type says. Only together do they fail
+// when the two drift, in EITHER direction — a column summed and not declared (the #608 defect) or
+// declared and not summed (a field the page renders as `undefined`).
+describe("aggregateUsage's totals ARE the declared totals (#608)", () => {
+	const TOTAL_KEYS = [
+		"calls",
+		"cacheReadTokens",
+		"cacheWriteTokens",
+		"chargedCostMicros",
+		"costMicros",
+		"inputTokens",
+		"outputTokens",
+	] as const;
+
+	// Compile-time. Mutual assignability, so it fails if the interface gains a key this list does
+	// not have OR loses one it does. Under the pre-#608 declaration `keyof UsageSummary["totals"]`
+	// is missing both cache keys, `Exact` resolves to `false`, and this file stops compiling —
+	// which the #599 gate now runs.
+	type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+	const _declaredKeysAreExactly: Exact<keyof UsageSummary["totals"], (typeof TOTAL_KEYS)[number]> = true;
+	void _declaredKeysAreExactly;
+
+	it("returns exactly those keys, and no others", () => {
+		const summary = aggregateUsage([row({ cache_read_tokens: 40, cache_write_tokens: 7 })]);
+		expect(Object.keys(summary.totals).sort()).toEqual([...TOTAL_KEYS].sort());
+	});
+
+	it("actually carries the cache columns it now declares", () => {
+		const summary = aggregateUsage([
+			row({ cache_read_tokens: 40, cache_write_tokens: 7 }),
+			row({ cache_read_tokens: 2, cache_write_tokens: 0 }),
+		]);
+		// The quantity a token ceiling counts is all four columns, not input+output (#547). A
+		// totals block that cannot report cache cannot be reconciled against the daily series
+		// beside it, which has reported all four since #547.
+		expect(summary.totals.cacheReadTokens).toBe(42);
+		expect(summary.totals.cacheWriteTokens).toBe(7);
+		expect(summary.daily.reduce((n, d) => n + d.cacheReadTokens, 0)).toBe(summary.totals.cacheReadTokens);
 	});
 });

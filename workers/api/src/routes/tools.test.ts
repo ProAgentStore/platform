@@ -274,6 +274,48 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		const body = await jsonBody(res);
 		expect(body.error).toMatch(/"number" must be a number/i);
 	});
+	/**
+	 * Draft-07's LIST form of `type`, which every `set_behaviour` field uses (#608).
+	 *
+	 * `matchesType` switched on `type` as a string, so an array fell through to `default: return
+	 * true` and the property was accepted whatever was passed. `JsonSchema` declared `type` as a
+	 * bare `string`, so no compiler could say so — the validator was inert for exactly the tool a
+	 * model is most likely to call with free text it invented, and it looked like it was working.
+	 */
+	it("400s a wrongly-typed field whose schema declares the draft-07 type LIST", async () => {
+		const { app, env } = testApp({
+			owned: true,
+			agentConfig: JSON.stringify({ capabilities: { tools: ["set_behaviour"] } }),
+		});
+		// behaviourToolSchema emits `type: ["number","null"]` for technicality, so null can reset it.
+		const res = await req(
+			app,
+			env,
+			"/v1/instances/i1/tools/set_behaviour",
+			{ method: "POST", body: JSON.stringify({ technicality: "banana" }) },
+			await tok("u1"),
+		);
+		expect(res.status).toBe(400);
+		const body = await jsonBody(res);
+		expect(body.error).toMatch(/"technicality" must be a number or null/i);
+	});
+
+	it("still accepts the null member of that list, so a setting can be reset", async () => {
+		const { app, env } = testApp({
+			owned: true,
+			agentConfig: JSON.stringify({ capabilities: { tools: ["set_behaviour"] } }),
+		});
+		const res = await req(
+			app,
+			env,
+			"/v1/instances/i1/tools/set_behaviour",
+			{ method: "POST", body: JSON.stringify({ technicality: null }) },
+			await tok("u1"),
+		);
+		// Whatever the handler then does, the VALIDATOR must not be what refused it.
+		expect(res.status).not.toBe(400);
+	});
+
 	it("passes validation when required fields are present + well-typed (reaches the handler)", async () => {
 		const { app, env } = testApp();
 		const res = await req(

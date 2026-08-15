@@ -66,13 +66,16 @@ export const CHARGED_LEGEND =
 export const CHARGED_COVERAGE_NOTE =
 	"Charged is only recorded for calls made since payer tracking began, so a longer range understates it.";
 
-/** What `/v1/usage` reports about the gap between the range and the payer's coverage (#544). */
-export interface PayerCoverage {
-	firstAttributedAt: string | null;
-	attributed: { calls: number; costMicros: number };
-	unattributedBefore: { calls: number; costMicros: number };
-	unattributedSince: { calls: number; costMicros: number };
-}
+/**
+ * What `/v1/usage` reports about the gap between the range and the payer's coverage (#544).
+ *
+ * Re-exported from the producer's own declaration rather than restated (#608): this file used to
+ * carry a hand-copied structural twin, which is the third instance of the habit that let
+ * `totals.cacheReadTokens` cross the wire for the whole life of #547 with neither side's type
+ * saying so. See `workers/api/src/lib/usage-shape.ts` for why the import points that way.
+ */
+import type { PayerCoverage } from "../../../../workers/api/src/lib/usage-shape";
+export type { PayerCoverage };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

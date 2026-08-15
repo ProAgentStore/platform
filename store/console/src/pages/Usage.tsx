@@ -6,56 +6,23 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
-import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, chargedCoverageNote, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy, type PayerCoverage } from "../lib/usageFigures";
-
-interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number }
-/** Cache fields optional: an API older than #547 does not report them, which is not the same as zero. */
-interface Day { date: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
+import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, chargedCoverageNote, dayTokens, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
 /**
- * What the dollars above LEAVE OUT, counted (#348).
+ * The response shape, imported from the module that PRODUCES it (#608).
  *
- * A coding CLI driven through the terminal connector — tmux, kitty, iTerm2 — writes no ledger row,
- * because a pane carries rendered text and not the CLI's own usage record. Before this the page
- * simply showed a smaller total, and a smaller total reads as cheaper. It is not cheaper, it is
- * invisible: the same binary on the same repo sends the same thing to the API either way.
+ * This page used to declare its own — a "Bucket", a "Day", an "Unmetered" and a "UsageData" whose
+ * `totals` marked `cacheReadTokens`/`cacheWriteTokens` optional. The API had returned them on
+ * every response since #547 and `UsageSummary["totals"]` did not declare them at all, so the page
+ * was reading real fields through a guess, and the compiler could not tell either side. The
+ * parallel declaration was the tell, not the workaround.
  *
- * `windowDays` matters because the trace this is counted from prunes at 14 days, so the count can
- * cover a shorter period than the dollars beside it. The page says which rather than implying they
- * line up.
+ * A deep relative path rather than a package import because `@proagentstore/sdk` is published and
+ * the API Worker deliberately does not depend on it (`lib/normalize-speech.ts` records why). This
+ * is `import type` — esbuild erases it, so it adds no bundle byte and no runtime edge; the only
+ * thing that crosses is the contract, in the one direction that cannot make the Worker's deploy
+ * depend on the console's.
  */
-interface Unmetered {
-	drives: number;
-	aiCliDrives: number;
-	instances: number;
-	lastAt: number | null;
-	windowDays: number;
-}
-interface UsageData {
-	range: string;
-	totals: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; chargedCostMicros?: number; calls: number };
-	daily: Day[];
-	byModel: Bucket[];
-	byKind: Bucket[];
-	byAgent: Bucket[];
-	/**
-	 * Per-INSTANCE spend (#526). Absent from an older API — the page simply omits the card.
-	 *
-	 * `byAgent` groups by the template a creator published, so seven Repo Coders working on seven
-	 * repositories are one row. This axis is the owner's own unit, carrying the names he gave them.
-	 */
-	byInstance?: Bucket[];
-	/** Sessions whose cost could not be read at all (#348) — absent, never zero. */
-	unmetered?: Unmetered;
-	/** Value split by who pays it (#346). Absent from an older API — the page degrades to totals. */
-	byPayer?: Bucket[];
-	/**
-	 * How far the charged figure's window actually reaches (#544).
-	 *
-	 * `Est. billed` was identical at 7d, 30d and all-time because `payer` shipped without a
-	 * backfill. Absent from an older API, in which case the page keeps the prose hedge.
-	 */
-	payerCoverage?: PayerCoverage;
-}
+import type { UnmeteredUsageSummary, UsageBucket, UsageDay, UsageResponse } from "../../../../workers/api/src/lib/usage-shape";
 
 /**
  * What each payer means for the reader's money. The `unknown` note is the honest one and the one
@@ -115,7 +82,7 @@ const KIND_LABEL: Record<string, string> = {
  * that on an account with a coding engine: the day a 250M-token ceiling tripped at 268M drew as a
  * 4.2M bar. A chart that cannot show the quantity being enforced cannot be used to calibrate it.
  */
-function DailyChart({ daily, metric }: { daily: Day[]; metric: "cost" | "tokens" }) {
+function DailyChart({ daily, metric }: { daily: UsageDay[]; metric: "cost" | "tokens" }) {
 	const vals = daily.map((d) => (metric === "cost" ? d.costMicros : dayTokens(d)));
 	const max = Math.max(1, ...vals);
 	const W = 640, H = 140, pad = 4;
@@ -159,7 +126,7 @@ function DailyChart({ daily, metric }: { daily: Day[]; metric: "cost" | "tokens"
  * rate (the "40x list price" symptom in #479). A small "+cache" badge makes the column
  * header honest: the reader can see the number includes more than plain I/O.
  */
-function TokenCell({ r }: { r: Bucket }) {
+function TokenCell({ r }: { r: UsageBucket }) {
 	const cache = (r.cacheReadTokens ?? 0) + (r.cacheWriteTokens ?? 0);
 	const total = r.inputTokens + r.outputTokens + cache;
 	if (cache === 0) {
@@ -185,7 +152,7 @@ function TokenCell({ r }: { r: Bucket }) {
  * difference between "none of this was charged" and "we do not know" — the states that read
  * identically before, and the reason a $9,566.69 row sat beside a $36.35 headline unexplained.
  */
-function CostCell({ r }: { r: Bucket }) {
+function CostCell({ r }: { r: UsageBucket }) {
 	const charged = chargedCell(r);
 	return (
 		<span className="w-14 sm:w-20 text-right shrink-0 text-xs flex flex-col items-end leading-tight">
@@ -209,12 +176,12 @@ function CostCell({ r }: { r: Bucket }) {
  * figure. It had never been measured: `/v1/usage` was not mocked, so the route was not in the
  * mobile sweep. Both are, now (#543).
  */
-function Breakdown({ rows, labelOf }: { rows: Bucket[]; labelOf: (b: Bucket) => string }) {
+function Breakdown({ rows, labelOf }: { rows: UsageBucket[]; labelOf: (b: UsageBucket) => string }) {
 	// Sized by NOTIONAL, on purpose. Sizing by charged would render the agent that did 99% of the
 	// account's work as a 2%-wide stub, which is a worse lie than the one being fixed. Two
 	// numbers, one bar.
 	const useCost = rows.some((r) => r.costMicros > 0);
-	const val = (r: Bucket) => (useCost ? r.costMicros : r.inputTokens + r.outputTokens);
+	const val = (r: UsageBucket) => (useCost ? r.costMicros : r.inputTokens + r.outputTokens);
 	const max = Math.max(1, ...rows.map(val));
 	const twoFigures = hasChargedFigures(rows);
 	if (rows.length === 0) return <p className="text-sm text-muted-soft py-2">No usage yet.</p>;
@@ -248,13 +215,13 @@ function Breakdown({ rows, labelOf }: { rows: Bucket[]; labelOf: (b: Bucket) => 
 
 export default function Usage() {
 	const [range, setRange] = useState<string>("30d");
-	const [data, setData] = useState<UsageData | null>(null);
+	const [data, setData] = useState<UsageResponse | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [metric, setMetric] = useState<"cost" | "tokens">("cost");
 
 	const load = useCallback(async () => {
 		try {
-			const d = await api<UsageData>(`/v1/usage?range=${encodeURIComponent(range)}`);
+			const d = await api<UsageResponse>(`/v1/usage?range=${encodeURIComponent(range)}`);
 			setData(d);
 		} catch { /* keep last good */ }
 		setLoading(false);
@@ -516,7 +483,7 @@ export default function Usage() {
  *
  * The correct caveat that was already here — Codex and Grok report nothing — is kept verbatim.
  */
-function Scope({ unmetered }: { unmetered?: Unmetered }) {
+function Scope({ unmetered }: { unmetered?: UnmeteredUsageSummary }) {
 	const drives = unmetered?.drives ?? 0;
 	return (
 		<details className="mb-3 group">
@@ -586,7 +553,7 @@ function Scope({ unmetered }: { unmetered?: Unmetered }) {
  * inventing one from a token estimate, or scraping it out of pane output, would replace a known
  * gap with a confident wrong number, which is the failure this whole thing exists to undo.
  */
-function UnmeteredNotice({ unmetered }: { unmetered?: Unmetered }) {
+function UnmeteredNotice({ unmetered }: { unmetered?: UnmeteredUsageSummary }) {
 	if (!unmetered || unmetered.drives <= 0) return null;
 	const { drives, aiCliDrives, windowDays } = unmetered;
 	return (

@@ -38,38 +38,12 @@
 // separate `WHERE` is how the coverage figure and the total it qualifies start to disagree.
 
 import { isCharged } from "./usage-payer.js";
+import type { CoverageSlice, PayerCoverage } from "./usage-shape.js";
 
-/** One slice of the range, in the two units the page reports. */
-export interface CoverageSlice {
-	calls: number;
-	costMicros: number;
-}
-
-export interface PayerCoverage {
-	/**
-	 * The earliest row IN THIS RANGE carrying a payer we could establish. `null` when none does.
-	 *
-	 * Deliberately not called a start date. Over a 7-day window it is a timestamp inside that
-	 * window and says nothing about when tracking began; the page must label it for what it is.
-	 */
-	firstAttributedAt: string | null;
-	/** Rows whose payer is established — charged or not (a subscription row is attributed and free). */
-	attributed: CoverageSlice;
-	/**
-	 * No payer, and older than {@link firstAttributedAt}. This is the bucket that makes a long range
-	 * understate: it cannot enter the charged figure and nothing on the page used to say it existed.
-	 */
-	unattributedBefore: CoverageSlice;
-	/**
-	 * No payer, and NOT older than {@link firstAttributedAt} — so, alongside calls we could attribute.
-	 *
-	 * A different problem with a different remedy: a coding engine on a machine login (#551), which
-	 * one stored token fixes. When nothing in the range is attributed at all, every unattributed row
-	 * lands here, which is vacuously true (none of them is older than a row that does not exist) and
-	 * is the honest reading — with no boundary, there is no "before" to be on the far side of.
-	 */
-	unattributedSince: CoverageSlice;
-}
+// The shapes moved to `usage-shape.ts` (#608), which the console imports directly: the console
+// declared its own copy of `PayerCoverage` (`store/console/src/lib/usageFigures.ts`) and nothing
+// made the two agree. Re-exported from here because this is the module that COMPUTES them.
+export type { CoverageSlice, PayerCoverage } from "./usage-shape.js";
 
 interface CoverageRow {
 	payer?: string | null;

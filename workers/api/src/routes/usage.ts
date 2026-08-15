@@ -74,5 +74,10 @@ usageRoutes.get("/", async (c) => {
 	// says which rather than implying they match.
 	const unmetered = await unmeteredUsageSummary(c.env, session.uid, { rangeDays: days ?? undefined });
 
+	// This literal IS the declared wire shape (#608): `UsageResponse` in lib/usage-shape.ts, which
+	// `store/console/src/pages/Usage.tsx` imports instead of declaring its own guess. Two tests read
+	// this line rather than a copy of it — `usage-shape.test.ts` asserts the keys equal the type's,
+	// and the MCP contract test asserts the `usage_summary` description documents every one — so it
+	// is deliberately left as a plain object literal that both can parse.
 	return c.json({ range, ...summary, unmetered });
 });

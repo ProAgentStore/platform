@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
-import { getRegistryTool, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
+import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
@@ -44,44 +44,8 @@ import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
 import type { TriggerAction } from "../lib/triggers.js";
+import { validateAgainstSchema } from "../lib/json-schema-validate.js";
 import type { Env } from "../types.js";
-
-/**
- * Minimal draft-07 object-schema validator — required-fields + basic JSON types only,
- * deliberately dependency-free (the repo has no ajv). Returns an error string on the
- * first violation, or null when the input satisfies the schema. Unknown/extra keys are
- * allowed (schemas here don't set additionalProperties); properties without a matching
- * schema entry are skipped, matching the tools' permissive handlers.
- */
-function validateAgainstSchema(schema: JsonSchema, input: Record<string, unknown>): string | null {
-	for (const req of schema.required ?? []) {
-		if (input[req] === undefined || input[req] === null) return `Missing required field: ${req}`;
-	}
-	for (const [key, spec] of Object.entries(schema.properties)) {
-		const val = input[key];
-		if (val === undefined || val === null) continue; // absent optional (or absent required already caught)
-		if (!matchesType(val, spec.type)) return `Field "${key}" must be a ${spec.type}`;
-	}
-	return null;
-}
-
-function matchesType(val: unknown, type: string): boolean {
-	switch (type) {
-		case "string":
-			return typeof val === "string";
-		case "number":
-		case "integer":
-			return typeof val === "number" && Number.isFinite(val) && (type === "number" || Number.isInteger(val));
-		case "boolean":
-			return typeof val === "boolean";
-		case "array":
-			return Array.isArray(val);
-		case "object":
-			return typeof val === "object" && !Array.isArray(val);
-		default:
-			return true; // unknown type spec → don't block
-	}
-}
 
 /**
  * Generic connector/registry tool surface (issue #87). The SAME tools the agent

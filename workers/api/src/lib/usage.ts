@@ -10,7 +10,8 @@ import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js"
 import { engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
 import { bucketLabel, UNASSIGNED_KEY } from "./usage-ids.js";
-import { payerCoverage, type PayerCoverage } from "./usage-coverage.js";
+import { payerCoverage } from "./usage-coverage.js";
+import type { UsageBucket, UsageDay, UsageSummary, UsageTotals } from "./usage-shape.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
 import type { Env } from "../types.js";
 
@@ -280,103 +281,14 @@ export interface UsageRow {
 	created_at: string; // "YYYY-MM-DD HH:MM:SS" (UTC, D1 datetime('now'))
 }
 
-export interface UsageBucket {
-	key: string;
-	label?: string;
-	inputTokens: number;
-	outputTokens: number;
-	/**
-	 * Prompt-cache tokens, reported separately so the hit rate is visible.
-	 *
-	 * cacheReadTokens ÷ (inputTokens + cacheReadTokens) IS the cache hit rate. Before this they
-	 * were summed into inputTokens, so the ratio could not be computed and nobody could tell
-	 * whether caching worked — while the cost line silently assumed it never did.
-	 */
-	cacheReadTokens: number;
-	cacheWriteTokens: number;
-	costMicros: number;
-	/**
-	 * The subset of `costMicros` in this bucket that someone is actually charged (#543).
-	 *
-	 * `costMicros` is notional value on every row, so a breakdown carrying only it answers "how
-	 * much AI did this use", never "what did it cost me" — and the page printed the notional
-	 * figure beside a charged headline, in the same `$` format, with nothing saying which was
-	 * which. The totals loop had computed exactly this since #346; the buckets simply never did,
-	 * so `byAgent`/`byKind`/`byModel`/`byPayer` (and both admin breakdowns, which share `bump`)
-	 * were all notional-only.
-	 *
-	 * Accumulated here rather than as a parallel `chargedByAgent` array: every bucket already
-	 * passes through one `bump()`, and two arrays joined by key are two things that can disagree.
-	 *
-	 * A bucket at 0 is NOT a claim that the work was free — `isCharged` excludes `subscription`
-	 * (no marginal charge) and NULL (payer not established). The console says so beside it.
-	 */
-	chargedCostMicros: number;
-	calls: number;
-}
-
-export interface UsageSummary {
-	totals: {
-		inputTokens: number;
-		outputTokens: number;
-		/** Notional list-price value of EVERYTHING here. Not a bill, and not what anyone owes. */
-		costMicros: number;
-		/**
-		 * The subset of `costMicros` that someone is actually charged (`payer` in byok-api /
-		 * platform). Reported separately rather than replacing the total, because the two answer
-		 * different questions and adding them together is the error #346 is about — a subscription
-		 * row's tokens are real consumption worth seeing, at a dollar figure worth nothing.
-		 */
-		chargedCostMicros: number;
-		calls: number;
-	};
-	/**
-	 * The per-day series, carrying ALL FOUR token columns (#547).
-	 *
-	 * It carried only input and output, so the chart plotted 4.2M tokens for 2026-08-11 — the day
-	 * a 250M-token circuit breaker tripped at 268M. Cache reads are 98.2% of what that ceiling
-	 * counts (`accountUsageSince` sums all four), so the one view that could answer "which day did
-	 * I blow the ceiling, and on what?" was off by 137x. The numbers were already accumulated by
-	 * `bump()` into `dayMap` and then dropped on the way out; nothing new is computed here.
-	 */
-	daily: Array<{
-		date: string;
-		inputTokens: number;
-		outputTokens: number;
-		cacheReadTokens: number;
-		cacheWriteTokens: number;
-		costMicros: number;
-		calls: number;
-	}>;
-	byModel: UsageBucket[];
-	byKind: UsageBucket[];
-	byAgent: UsageBucket[];
-	/**
-	 * The same value split by INSTANCE — the subscriber's own copy of an agent (#526).
-	 *
-	 * `byAgent` groups by template, which is the creator's unit and not the owner's: seven Repo
-	 * Coders working on seven repositories collapse into one row called "Repo Coder". So the page
-	 * could show a five-figure total and not answer "what did Chess coder 2 cost me this week?",
-	 * which is the question it exists for. Nothing new is measured — `ai_usage.instance_id` has
-	 * carried this on every chat, Pilot and engine row since the ledger shipped; it was aggregated
-	 * away.
-	 *
-	 * Rows with no instance (a creator's direct run against a template, account-scoped voice) keep
-	 * their own bucket rather than being dropped, so this axis sums to the same totals as the others.
-	 */
-	byInstance: UsageBucket[];
-	/** Value split by who pays it — the axis the page needs to stop implying everything is a bill. */
-	byPayer: UsageBucket[];
-	/**
-	 * What the charged figure does not cover, counted (#544).
-	 *
-	 * `Est. billed` read $36.35 at 7d, 30d AND all-time, because `payer` shipped without a backfill
-	 * and every older row resolves to NULL. The sum was right; the range it implied was not. This
-	 * says which rows are outside the payer's coverage and by how much, without asserting a start
-	 * date the page cannot derive — see `usage-coverage.ts` for what is derivable and what is not.
-	 */
-	payerCoverage: PayerCoverage;
-}
+/**
+ * The response shapes live in `usage-shape.ts` — one declaration, shared with the console (#608).
+ *
+ * They are re-exported here because this module is where every caller already imports them from,
+ * and because the producer and its contract belonging to the same import path is what stopped
+ * anyone noticing that `totals` was missing two of the columns this file sums.
+ */
+export type { UsageBucket, UsageDay, UsageResponse, UsageSummary, UsageTotals } from "./usage-shape.js";
 
 const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 });
 
@@ -414,7 +326,12 @@ export function aggregateUsage(
 	rows: UsageRow[],
 	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string>; instanceNames?: Record<string, string> } = {},
 ): UsageSummary {
-	const totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 };
+	// ANNOTATED, not inferred (#608). An inferred literal is what let this loop sum two cache
+	// columns that `UsageSummary["totals"]` did not declare: the fields crossed the wire, the
+	// console read them through a parallel type of its own, and nothing could report the
+	// disagreement. With the annotation, a column summed here and missing from the contract — or
+	// declared there and not summed here — is a compile error in this file.
+	const totals: UsageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, chargedCostMicros: 0, calls: 0 };
 	const dayMap = new Map<string, UsageBucket>();
 	const modelMap = new Map<string, UsageBucket>();
 	const kindMap = new Map<string, UsageBucket>();
@@ -448,7 +365,7 @@ export function aggregateUsage(
 	}
 
 	// Dense daily series so the chart shows empty days as zero rather than skipping.
-	const daily: UsageSummary["daily"] = [];
+	const daily: UsageDay[] = [];
 	const days = opts.fromDay && opts.toDay ? denseDays(opts.fromDay, opts.toDay) : [...dayMap.keys()].sort();
 	for (const date of days) {
 		const b = dayMap.get(date);
@@ -512,7 +429,7 @@ export interface BucketTotals {
 
 export interface AdminUsageSummary {
 	totals: BucketTotals;
-	daily: UsageSummary["daily"];
+	daily: UsageDay[];
 	byProvider: UsageBucket[];
 	byModel: UsageBucket[];
 	byKind: UsageBucket[];
@@ -571,7 +488,7 @@ export function aggregateAdminUsage(
 		addInto(r.provider === PLATFORM_PROVIDER ? split.platformPaid : split.byok, r);
 	}
 
-	const daily: UsageSummary["daily"] = [];
+	const daily: UsageDay[] = [];
 	const days = opts.fromDay && opts.toDay ? denseDays(opts.fromDay, opts.toDay) : [...maps.day.keys()].sort();
 	for (const date of days) {
 		const b = maps.day.get(date);

@@ -34,6 +34,7 @@
  * makes the change safe: an agent that has configured nothing gets today's prompt byte-for-byte.
  */
 import { withSubscriberRulePrecedence } from "./subscriber-rule-precedence.js";
+import type { JsonSchema } from "./connectors/types.js";
 
 export type BehaviourValue = number | string | boolean | string[];
 
@@ -562,15 +563,14 @@ export function behaviourPrompt(behaviour: Behaviour): string {
 
 /**
  * JSON Schema for `set_behaviour` (#224), derived from the field table.
- *
- * Generated rather than hand-written so adding a field never means editing the tool — the same
- * reason the console fetches the table instead of restating it. Every property also accepts `null`,
- * because "go back to how you were" has to be expressible or a setting can only ever be changed,
- * never undone.
+ * Generated rather than hand-written so adding a field never means editing the tool — the same reason the
+ * console fetches the table instead of restating it. Every property also accepts `null`, so that "go back to
+ * how you were" is expressible: draft-07's ARRAY form of `type`, and why the return is typed as the schema it
+ * IS rather than `Record<string, unknown>` (#608) — the loose type is what hid the mismatch.
  */
-export function behaviourToolSchema(allowedIds: readonly string[]): Record<string, unknown> {
+export function behaviourToolSchema(allowedIds: readonly string[]): JsonSchema {
 	const allowed = new Set(allowedIds);
-	const properties: Record<string, unknown> = {};
+	const properties: JsonSchema["properties"] = {};
 	for (const f of BEHAVIOUR_FIELDS) {
 		if (!allowed.has(f.id)) continue;
 		const desc = [f.label, f.help].filter(Boolean).join(" — ");

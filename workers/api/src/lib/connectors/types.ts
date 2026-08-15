@@ -106,10 +106,18 @@ export interface RegistryToolResult {
 /** A draft-07 JSON Schema for a tool's input — an object schema with typed properties.
  *  A property carries `type`/`description` plus whatever else draft-07 allows (`enum`,
  *  `items`, `default`, …); the schema is passed to the model verbatim, so constraining
- *  properties to two keys only meant a tool couldn't express a closed value set. */
+ *  properties to two keys only meant a tool couldn't express a closed value set.
+ *
+ *  `type` is a string OR an array of them, because draft-07 says so and because this codebase
+ *  ALREADY emits the array form: `behaviourToolSchema` writes `["number","null"]` on every
+ *  field, so that "go back to how you were" is expressible and a setting can be undone rather
+ *  than only changed (#224). Declaring it as a bare `string` made a legal schema this repo
+ *  produces fail to satisfy the type meant to describe it — invisible until #599 put worker
+ *  sources under `tsc`, and papered over at the two use sites with an `as` cast and a
+ *  double-`unknown` in a test. Widening the declaration is what removes both (#608). */
 export interface JsonSchema {
 	type: "object";
-	properties: Record<string, { type: string; description?: string; [k: string]: unknown }>;
+	properties: Record<string, { type: string | string[]; description?: string; [k: string]: unknown }>;
 	required?: string[];
 	[k: string]: unknown;
 }

@@ -27,6 +27,7 @@
  * under the Pilot and unmeasured through a pane — same binary, same repo, same spend.
  */
 import { logEvent } from "./events.js";
+import type { UnmeteredUsageSummary } from "./usage-shape.js";
 import type { Env } from "../types.js";
 
 /**
@@ -322,22 +323,10 @@ export async function noteUnmeteredHeadlessDrive(
 /**
  * What the Usage total leaves out, as a measured quantity.
  *
- * `windowDays` is part of the answer, not metadata. The trace prunes at 14 days, so a 90-day
- * usage range cannot be matched here — and a count silently covering a shorter window than the
- * dollars beside it would be its own small version of this bug.
+ * Declared in `usage-shape.ts` (#608) because it is part of the `/v1/usage` body the console
+ * reads, and that file is the one declaration of it. Re-exported here, where it is computed.
  */
-export interface UnmeteredUsageSummary {
-	/** Distinct (instance, target, day) drives on an unmetered path. */
-	drives: number;
-	/** Of those, the ones where a known AI coding CLI was observed running in the pane. */
-	aiCliDrives: number;
-	/** How many of the user's agents did it. */
-	instances: number;
-	/** ms epoch of the most recent observation, or null. */
-	lastAt: number | null;
-	/** The window this count actually covers — never longer than the trace's retention. */
-	windowDays: number;
-}
+export type { UnmeteredUsageSummary } from "./usage-shape.js";
 
 /** The trace's opportunistic retention (lib/events.ts). A count cannot outrun it. */
 export const UNMETERED_WINDOW_MAX_DAYS = 14;

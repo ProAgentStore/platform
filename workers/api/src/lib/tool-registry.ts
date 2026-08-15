@@ -347,7 +347,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		description:
 			"Change how you communicate, when the subscriber asks you to (\"be less technical\", \"stop using emoji\", \"keep answers short\"). Pass only the fields that change; pass null to reset one to the platform default. This is the ONLY correct place for preferences about your manner — do not store them in memory, which is for knowledge about the subject you work on.",
 		tier: "base",
-		jsonSchema: behaviourToolSchema(SELF_WRITABLE_FIELDS) as ToolDef["jsonSchema"],
+		jsonSchema: behaviourToolSchema(SELF_WRITABLE_FIELDS),
 		handler: async (ctx, input) => {
 			if (!ctx.instanceId || !ctx.userId) return { content: "set_behaviour needs an owned instance context.", success: false };
 			// SELF_WRITABLE_FIELDS excludes every guardrail. A Repo Coder reads untrusted repo files
