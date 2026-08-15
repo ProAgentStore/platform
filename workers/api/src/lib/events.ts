@@ -9,6 +9,7 @@
  * path it observes — and every field is length-bounded.
  */
 import type { Env } from "../types.js";
+import { toolLogLine } from "./tool-result-cap.js";
 
 export type EventLevel = "debug" | "info" | "warn" | "error";
 
@@ -85,6 +86,67 @@ export async function logEvent(env: Env, e: EventInput): Promise<void> {
 	} catch (err) {
 		console.error("[events] failed to persist:", err instanceof Error ? err.message : String(err));
 	}
+}
+
+/**
+ * One trace row for one tool call that FAILED (#564).
+ *
+ * ── What was broken
+ *
+ * A chat turn's tool activity reached the trace as a single row: `routes/instances-chat.ts` logs
+ * `tool.call` with the DO's already-flattened `toolMessage.content`, which is every line of the
+ * round joined with "\n" and each line pre-formatted by `toolLogLine` into `✅ **name** …` /
+ * `❌ **name** …`. The per-tool `success` boolean is gone by then, so the route cannot classify what
+ * it was handed and `logEvent` defaults the row to `info`. A round that ran one succeeding and one
+ * failing tool produced literally `✅ **check_work** … ❌ **start_work** …` in ONE `info` message cut
+ * at 200 characters — there is no shape in which that row carries a level honestly. Measured on
+ * instance bd43f4de-…: `agent_trace(level:"error")` returned four rows, all three days older than
+ * the tool failures that actually broke the session.
+ *
+ * ── Why a row per FAILURE, and not a row per tool
+ *
+ * `agent_events` has no cron; its only retention is an opportunistic 1%-of-writes 14-day prune. A
+ * row per tool multiplies inserts by the tool-call rate on exactly the agents that call the most
+ * tools. This writes only where there is information the summary row cannot carry, so the extra
+ * volume is bounded by the FAILURE rate instead, and an all-success turn writes precisely what it
+ * wrote before. The route's `info` summary is untouched, so nothing that reads it today changes.
+ *
+ * ── Why `warn` and not `error`
+ *
+ * `error` means the turn could not complete — the timeouts and workflow crashes bridged from
+ * `logError`. A refused `repo_find` is a real failure the agent could not work around, and also
+ * routine; filing it as `error` would bury the turn-level failures under tool noise. That would be
+ * a genuine dilemma if `level` were still an equality filter, because "warn" would then be a band
+ * nobody could see the errors from. It is a floor now (same issue, see `listEvents`), so
+ * `level:"warn"` returns the tool failures AND the errors above them and nothing is hidden by the
+ * choice. `warn` is also already the trace's "a human should look at this" band — see
+ * `lib/engine-acts.ts` — which is what this is.
+ *
+ * ── Why the message is 600 characters
+ *
+ * The route truncates its summary to 200. `TOOL_LOG_FAILURE_MAX_CHARS` is 600 because a failure's
+ * text is prose the platform wrote for a reader and the remedy is its LAST clause (#517); cutting
+ * it at 200 lands mid-remedy, which is the defect #517 fixed for the console pill and left standing
+ * in the trace. Same budget here, and the same `toolLogLine` rendering, so the trace row and the
+ * owner's pill say the same sentence.
+ */
+export async function logToolFailure(
+	env: Env,
+	e: { tool: string; content: string; round?: number; userId?: string | null; instanceId?: string | null; traceId?: string | null },
+): Promise<void> {
+	await logEvent(env, {
+		source: "chat",
+		// The SAME event name the summary row uses, deliberately: a caller filtering `event=tool.call`
+		// must not have to learn a second name to see the failures. The level and `context.success`
+		// are what distinguish them.
+		event: "tool.call",
+		level: "warn",
+		message: toolLogLine(e.tool, e.content, false).replace(/\s+/g, " "),
+		userId: e.userId ?? null,
+		instanceId: e.instanceId ?? null,
+		traceId: e.traceId ?? null,
+		context: { tool: e.tool, success: false, ...(typeof e.round === "number" ? { round: e.round } : {}) },
+	});
 }
 
 export interface EventRow {

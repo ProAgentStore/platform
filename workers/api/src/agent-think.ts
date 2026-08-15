@@ -29,7 +29,7 @@ import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/to
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import { redactFabricatedHistory } from "./lib/fabricated-history.js";
 import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
-import { logEvent } from "./lib/events.js";
+import { logEvent, logToolFailure } from "./lib/events.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
 import { templatePreviewNote, withholdConstrainedConnectorTools, type TemplatePreviewCapabilities } from "./lib/template-preview-tools.js";
@@ -1116,6 +1116,11 @@ export async function runAgentThink(opts: {
 			record(tc, toolResult.content, !toolResult.success);
 			broadcast({ type: "tool_call", tool: tc.name, result: toolResult });
 			await engine.logEvent("tool.called", userId, { tool: tc.name, success: toolResult.success });
+			// The same fact, in the TRACE (#564). It has to be written here because here is the only
+			// place `success` still exists as a boolean: one line below, the outcome is a `✅`/`❌`
+			// inside a string, and the route that logs that string cannot classify what it was
+			// handed. Failures only — see logToolFailure for why not one row per tool.
+			if (!toolResult.success) await logToolFailure(env, { tool: tc.name, content: toolResult.content, round, userId, instanceId: state.agentId, traceId: delegation?.traceId ?? null });
 		}
 
 		// The round, in the protocol the provider actually offers (#398).

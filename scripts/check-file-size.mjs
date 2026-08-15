@@ -818,7 +818,15 @@ const PINS = {
 	// path, why a basename collision is the signal (a model creating a new file picks a name; one
 	// mis-remembering keeps the name and loses the directory), and why the notice is appended to a
 	// SUCCESSFUL result instead of failing the call.
-	"workers/api/src/agent-think.ts": 1190,
+	// +5 at #564, of which ONE is code: a failed tool call writes its own trace row, at `warn`, from
+	// the one place `success` still exists as a boolean. One line below it the outcome is a `✅`/`❌`
+	// inside a joined string, and the route that logs that string cannot classify what it was handed
+	// — which is why `agent_trace(level:"error")` on a live agent showed the last failure as three
+	// days older than the ones that broke the session. Every decision the row embodies is in
+	// lib/events.ts's `logToolFailure` and NOT here: why one row per FAILURE rather than per tool
+	// (this table has no retention cron), why `warn` rather than `error`, and why its message keeps
+	// the 600 characters #517 preserved instead of the 200 the summary row cuts to.
+	"workers/api/src/agent-think.ts": 1195,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -1080,7 +1088,11 @@ const PINS = {
 	// threshold and would have crossed it.
 	// +8 at #570: the self-ref for LOWERING the instances-runtime pin above. A pin coming down costs
 	// this file the same lines a pin going up does, which is the price of recording why.
-	"scripts/check-file-size.mjs": 1164,
+	// +12 at #564: the agent-think raise above, whose reason has to say what did NOT move here — the
+	// row's level, its 600-character budget and the write-amplification argument all live in
+	// lib/events.ts beside the function, because the pin note is read when the FILE grows and those
+	// are read when the ROW is questioned. Plus this self-ref.
+	"scripts/check-file-size.mjs": 1176,
 };
 
 /**
