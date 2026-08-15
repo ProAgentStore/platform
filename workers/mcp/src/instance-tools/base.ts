@@ -30,6 +30,80 @@ function tierGloss(): string {
 	return TOOL_TIERS.map(([id, gloss]) => `${id} = ${gloss}`).join("; ");
 }
 
+// ── The listing's remaining overflow (#578) ──────────────────────────────────────────────────
+//
+// #569 budgeted the DEFAULT listing down to ~54,000 B and made this worker send it compact. The
+// `schemas:true` path was left over the limit, and re-measured on the deployed API across ALL 34
+// instances on the account it is worse than the ticket said: 61,796–66,189 B, with **20 of 34 over
+// 64 KiB** and the worst case 653 B over — not the 433 B of the coder-repo shape #569's guard
+// happens to measure. A fix tuned to 433 B of headroom still ships over.
+//
+// WHERE THE BYTES ARE, which inverts the ticket's three options. In that 66,189 B worst case:
+//
+//   · every jsonSchema in the response        11,753 B — 18%
+//   · `description` on the 68 NOT-DECLARED rows  25,074 B — 38%
+//
+// So the argument the tool blames is not what fills the response. Prose about tools the agent
+// cannot run is more than twice the weight of every schema, and it is present on the default path
+// too. Truncating it to 120 characters takes the worst case to 49,604 B (76%); dropping it takes
+// it to 40,442 B (62%).
+//
+// WHY TRUNCATE RATHER THAN NARROW THE ARGUMENT. The ticket's options 1 and 3 both rest on a
+// premise it flagged as unverified — "nobody wants all 104 schemas" — and that premise is
+// UNMEASURABLE from anything this platform records: `list_instance_tools` is a read tool, its
+// handler makes no `audit()` call, `requirePermission` writes only on denial, `audit()` no-ops
+// without a subject, and there is no Analytics Engine binding in `workers/`. This option needs no
+// premise about callers: it takes nothing away from anyone, no argument changes meaning, and
+// #525's contract — that the listing says what the agent CANNOT reach and why — is intact, because
+// `allowed`, `reason`, `connector`, `scope`, `mutates`, `tier` and `invocableBy` all stay.
+//
+// WHY HERE AND NOT IN `projectToolListing`. The 64 KiB ceiling is a property of the MCP host, not
+// of the data. The API route's other consumer is the console's Tool Permissions panel, which
+// renders `t.description` under every row INCLUDING the not-declared ones — that is how an owner
+// reads what a tool they could switch on actually does (`store/console/src/components/
+// ToolPermissions.tsx:139`). Truncating in the API to fix a limit the console does not have would
+// degrade that panel to save bytes nobody there is short of.
+//
+// THE COST, stated rather than hidden: an auditor reading a `not_declared` row over MCP now gets
+// the first clause of the description instead of all of it. The row still says what the tool is
+// for at a glance and every verdict field is untouched, but the full prose is not there.
+//
+// AND WHAT THIS IS NOT: a bound. It scales with the number of rows, so a large enough catalogue
+// overflows again — pagination (the ticket's option 2) is the only option that bounds it, and it
+// remains the eventual answer. What this buys is ~25% of headroom on the measured worst case
+// (66,189 -> ~49,300 B) and a guard that goes RED when the catalogue grows past the limit, which
+// is the right moment to spend that larger fix. `tool-listing-wire-size.test.ts` asserts it on a
+// deliberately heavier fixture, where the same cut lands at 83% of the limit rather than 75%.
+
+/** Characters of a NOT-RUNNABLE row's description that survive the trip over MCP. */
+export const UNRUNNABLE_DESCRIPTION_CHARS = 120;
+
+/** A tool-listing row, as far as the size projection needs to understand one. */
+interface ListingRow {
+	allowed?: boolean;
+	description?: string;
+}
+
+/**
+ * Truncate the description of every row this instance cannot run, at a word boundary.
+ *
+ * Applied on BOTH paths, not just `schemas:true`: the prose is the same weight either way, one row
+ * shape is easier to reason about than two, and the default path gains the same headroom. A row
+ * that is runnable, or already short, is returned untouched — including its object identity, so
+ * nothing is copied that does not need to be.
+ */
+export function budgetToolListing<T extends ListingRow>(rows: readonly T[]): T[] {
+	return rows.map((row) => {
+		const prose = row.description;
+		if (row.allowed !== false || typeof prose !== "string" || prose.length <= UNRUNNABLE_DESCRIPTION_CHARS) return row;
+		const cut = prose.slice(0, UNRUNNABLE_DESCRIPTION_CHARS);
+		const space = cut.lastIndexOf(" ");
+		// Only fall back to a hard cut when the word boundary would throw most of the clause away.
+		const kept = space > UNRUNNABLE_DESCRIPTION_CHARS / 2 ? cut.slice(0, space) : cut;
+		return { ...row, description: `${kept.trimEnd()}…` };
+	});
+}
+
 /**
  * The instance surface's LIFECYCLE core: what an instance may do (the connector-tool gate),
  * how one comes into and goes out of existence, and how you talk to it.
@@ -56,24 +130,34 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			// Rendered from TOOL_TIERS, never typed out: the two-of-four description that shipped is
 			// what #569 is about.
 			tierGloss() +
-			") and `invocableBy`, the surfaces that can actually reach it. Input schemas are NOT included by default: pass schemas:true to get them for the tools this instance may run (they are the bulk of the response, and a schema for a tool it may not run describes inputs you could never send). Pass allowed_only:true for just the runnable set. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit reach into EXTERNAL systems specifically, filter on `connector`.",
+			") and `invocableBy`, the surfaces that can actually reach it. Input schemas are NOT included by default: pass schemas:true to get them for the tools this instance may run (a schema for a tool it may not run describes inputs you could never send). Pass allowed_only:true for just the runnable set. To keep the response inside a calling host's limit, the `description` of a row this instance CANNOT run is truncated to its first clause and ends in `…` — every verdict field on it is complete, only the prose is cut; ask for allowed_only:true if you want full descriptions of the tools it can run. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit reach into EXTERNAL systems specifically, filter on `connector`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
 			allowed_only: z.boolean().optional().describe("Return only the tools this instance may actually run."),
-			schemas: z.boolean().optional().describe("Include each allowed tool's input schema. Off by default — schemas are the bulk of the response; ask for them when you are about to call one."),
+			// "Schemas are the bulk of the response" was measured wrong and is corrected here (#578):
+			// across all 34 instances every schema together is 18% of the worst-case payload, while
+			// the descriptions of the rows the agent cannot run are 38%.
+			schemas: z.boolean().optional().describe("Include each allowed tool's input schema. Off by default — ask for them when you are about to call one."),
 		},
 		async ({ token, instance_id, allowed_only, schemas }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = [allowed_only ? "allowed=true" : "", schemas ? "schemas=true" : ""].filter(Boolean).join("&");
-			const data = await authedCall(`/v1/instances/${instance_id}/tools${qs ? `?${qs}` : ""}`, sessionToken, {}, env);
+			const data = (await authedCall(`/v1/instances/${instance_id}/tools${qs ? `?${qs}` : ""}`, sessionToken, {}, env)) as {
+				tools?: Array<{ allowed?: boolean; description?: string }>;
+				error?: string;
+			};
+			// The remaining overflow (#578) — see `budgetToolListing` for where the bytes actually
+			// are and why this is done here rather than in the route. An `{error}` body carries no
+			// `tools`, so it passes through untouched rather than being reshaped into a success.
+			const budgeted = Array.isArray(data.tools) ? { ...data, tools: budgetToolListing(data.tools) } : data;
 			// Compact (#569). The API body for a 104-row instance is ~54 KB; pretty-printing it here
 			// added ~22% and took the WIRE response to 66,042 bytes — still over the calling host's
 			// limit that this issue was filed about, after the payload had already been budgeted
 			// down. Measured in production, which is the only reason it was noticed at all: every
 			// test asserted the API's compact body, not what MCP actually sends.
-			return jsonText(data, { compact: true });
+			return jsonText(budgeted, { compact: true });
 		},
 	);
 

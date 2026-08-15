@@ -23,13 +23,16 @@
  * for the same reason: a number two files restate by hand is a number that rots.
  *
  * **What the reconciliation picked, and what has moved since.** The paragraph below records why
- * `0.1.1` was the reconciled value in #573 — it is history, not the current number. `0.1.2` bumped
- * it for #574's `inputSchema` change; `0.1.3` for #581's new `coding_timeline` registration. Both
- * are recorded in `surface-lock.ts`, which is where the pairing of a version to the surface it
- * published actually lives.
+ * `0.1.1` was the reconciled value in #573 — it is history, not the current number. Since then:
+ * `0.1.2` for #574's `inputSchema` change, `0.1.3` for #581's new `coding_timeline` registration,
+ * `0.1.4` for #578's reworded `schemas` ARGUMENT. That last one is the boundary worth naming: a
+ * tool's own `description` is excluded from the fingerprint, but a `.describe()` on a PARAMETER is
+ * part of `inputSchema` and therefore is not — the lock caught exactly that distinction. Every
+ * version is recorded in `surface-lock.ts`, which is where the pairing of a version to the surface
+ * it published actually lives.
  *
- * `0.1.1` is the manifest's, and BOTH numbers
- * are live in the public registry. Measured 2026-08-15 —
+ * The reconciliation, for the record: `0.1.1` was the manifest's, and BOTH numbers
+ * were live in the public registry. Measured 2026-08-15 —
  * `GET https://registry.modelcontextprotocol.io/v0/servers?search=ProAgentStore` returns two
  * entries for `io.github.ProAgentStore/platform`: `0.1.0`, published 2026-06-20T12:34:01Z with
  * `isLatest: false`, and `0.1.1`, published nine hours later with `isLatest: true`. So
@@ -85,4 +88,4 @@
  */
 
 /** Advertised in `serverInfo.version`, and restated in `server.json` and `platform-docs/mcp.md`. */
-export const MCP_SERVER_VERSION = "0.1.3";
+export const MCP_SERVER_VERSION = "0.1.4";

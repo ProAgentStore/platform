@@ -84,4 +84,10 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// evidence of an idle run) are NOT what moved this hash — descriptions are excluded from the
 	// fingerprint on purpose. Appended, never edited in place: 0.1.2 is published.
 	"0.1.3": "sha256:f3cc58b5e73ffe3c9a6457a21ea247b971cba7af9fa7ba6c122f89f6ef86e682",
+	// 0.1.4 (#578): `list_instance_tools`'s `schemas` argument reworded — it claimed schemas were
+	// "the bulk of the response", measured at 18% against 38% for the descriptions of rows the
+	// agent cannot run. A `.describe()` on a PARAMETER lands inside `inputSchema`, which IS in the
+	// fingerprint, unlike the tool's own description; this entry exists because the lock caught
+	// exactly that distinction. 0.1.3 is live in the registry as `isLatest` — appended, not edited.
+	"0.1.4": "sha256:7963715848df074622b41a352f96714b1c90e573466d9e56f725f7df94b36dcf",
 };
