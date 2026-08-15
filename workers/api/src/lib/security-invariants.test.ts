@@ -528,6 +528,92 @@ describe("a model-authored reply leaves the agent loop only through the audit", 
 	});
 });
 
+describe("every route that hands back a decrypted secret is throttled and audited", () => {
+	/**
+	 * #639: the API-key reveal was singled out for `rateLimitStrict` with a comment saying why
+	 * — "hands out a raw decrypted key". The credentials vault reveal, which returns a SUPERSET
+	 * (password + PIN + recovery codes for a real employer account), sat in the 240/min default
+	 * bucket, and left no audit row at all. Two routes of the same kind, one protected, because
+	 * the protection was applied to a route rather than to a category.
+	 *
+	 * So this guard DERIVES the category — every `…/reveal` route, resolved through index.ts's
+	 * own mounts — instead of listing it. A third one added later is covered before it ships.
+	 */
+	const index = () => {
+		const f = ALL.find((s) => s.rel === "index.ts");
+		expect(f, "index.ts moved — repoint this guard").toBeTruthy();
+		return f as Source;
+	};
+
+	/** Router identifier → the source file it is defined in, read from index.ts's imports. */
+	const routerFiles = (() => {
+		const map = new Map<string, string>();
+		for (const m of index().raw.matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\/(routes\/[a-z0-9-]+)\.js"/gi)) {
+			for (const name of m[1].split(",").map((s) => s.trim().replace(/^type\s+/, ""))) if (name) map.set(name, `${m[2]}.ts`);
+		}
+		return map;
+	})();
+
+	/** Mounted prefix per router file, e.g. routes/credentials.ts → "/v1/instances". */
+	const mounts = (() => {
+		const map = new Map<string, string>();
+		for (const m of index().raw.matchAll(/app\.route\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)/g)) {
+			const file = routerFiles.get(m[2]);
+			if (file) map.set(file, m[1]);
+		}
+		return map;
+	})();
+
+	/** Every reveal endpoint in the API as a CONCRETE path, with params filled in. */
+	const revealPaths = (() => {
+		const out: Array<{ rel: string; path: string }> = [];
+		for (const f of ALL) {
+			const prefix = mounts.get(f.rel);
+			if (!prefix) continue;
+			for (const m of f.raw.matchAll(/\.\s*(?:get|post|put|delete)\(\s*"([^"]*\/reveal)"/g)) {
+				out.push({ rel: f.rel, path: `${prefix}${m[1]}`.replace(/:[A-Za-z0-9_]+/g, "x") });
+			}
+		}
+		return out;
+	})();
+
+	/** The paths index.ts puts in the strict bucket, as matchers (Hono `*` = one segment). */
+	const strictMatchers = [...index().raw.matchAll(/app\.use\(\s*"([^"]+)"\s*,\s*rateLimitStrict\(\)/g)].map(
+		(m) => new RegExp(`^${m[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]+")}$`),
+	);
+
+	it("finds the reveal routes and the strict bucket at all", () => {
+		expect(revealPaths.map((r) => r.path).sort()).toEqual(["/v1/instances/x/credentials/x/reveal", "/v1/keys/x/reveal"]);
+		expect(strictMatchers.length).toBeGreaterThan(5);
+	});
+
+	it("every reveal route is in the strict bucket, not the 240/min default", () => {
+		const offenders = revealPaths.filter((r) => !strictMatchers.some((re) => re.test(r.path))).map((r) => `${r.rel} → ${r.path}`);
+		expect(
+			offenders,
+			`Add \`app.use("<path>", rateLimitStrict())\` in index.ts.\n` +
+				`The default bucket is 240/min per user. The threat is not the owner — it is a leaked\n` +
+				`session token or an XSS on the console origin, and at 240/min that walks every\n` +
+				`credential on every instance in seconds (#639).\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+
+	it("every reveal route writes an audit row", () => {
+		const offenders = [...new Set(revealPaths.map((r) => r.rel))]
+			.filter((rel) => findCalls(ALL.find((f) => f.rel === rel)?.code ?? "", "logEvent").length === 0)
+			.map((rel) => `${rel} reveals a secret and never calls logEvent`);
+		expect(
+			offenders,
+			`Call \`logEvent\` on a successful reveal — WHICH credential and which kinds of secret,\n` +
+				`never a value. A correct ownership check leaves no evidence, and the reveal that hands a\n` +
+				`plaintext account password to a browser is the one an owner most needs to be able to\n` +
+				`see after the fact (#639).\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+});
+
 describe("a browser agent's action trail leaves the loop only through the redactor", () => {
 	/**
 	 * #631, measured in production: 18 of 500 `instance_task_events` on the apply instance held

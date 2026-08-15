@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { createCredential, deleteCredential, listCredentials, revealCredential, updateCredential, type CredentialInput } from "../lib/credentials.js";
+import { logEvent } from "../lib/events.js";
 import type { Env } from "../types.js";
 
 export const credentialRoutes = new Hono<{ Bindings: Env }>();
@@ -34,11 +35,31 @@ credentialRoutes.get("/:instanceId/credentials", async (c) => {
 	return c.json({ credentials: await listCredentials(c.env, instanceId, uid) });
 });
 
-/** Reveal one credential's secrets (owner-only, explicit). */
+/**
+ * Reveal one credential's secrets (owner-only, explicit).
+ *
+ * Audited (#639). Ownership was always enforced — `requireOwned` plus `revealCredential`'s own
+ * `id/instance_id/user_id` scoping — but a correct check leaves no evidence, and the thing this
+ * needs to be legible against is not the owner: it is a leaked session token or an XSS on the
+ * console origin using the owner's own credentials correctly. The MCP surface keeps an audit
+ * trail for far less consequential calls, and the vault is deliberately not on that surface at
+ * all; the least this route can do is say, in the owner's own trace, that it happened.
+ *
+ * The row records WHICH credential and which kinds of secret came back — never a value.
+ */
 credentialRoutes.get("/:instanceId/credentials/:id/reveal", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const cred = await revealCredential(c.env, instanceId, uid, c.req.param("id"));
 	if (!cred) throw new HttpError(404, "Credential not found");
+	await logEvent(c.env, {
+		source: "credentials",
+		event: "credential.reveal",
+		level: "warn",
+		message: `Revealed stored secrets for ${cred.domain}`,
+		userId: uid,
+		instanceId,
+		context: { credentialId: cred.id, domain: cred.domain, password: cred.hasPassword, pin: cred.hasPin, recoveryCodes: cred.hasRecoveryCodes },
+	});
 	return c.json(cred);
 });
 

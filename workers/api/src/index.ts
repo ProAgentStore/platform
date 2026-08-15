@@ -119,6 +119,13 @@ app.use("/v1/instances/*/apply", rateLimitStrict()); // workflow + LLM + browser
 app.use("/v1/push/test", rateLimitStrict());
 app.use("/v1/errors/client", rateLimitStrict()); // browser-driven writes to the durable log — throttle hard
 app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted key — throttle hard
+// The vault reveal holds a SUPERSET of that: password + PIN + recovery codes for a real
+// employer/ATS account, and it sat in the 240/min default bucket for want of this line (#639).
+// The threat is not the owner — it is a leaked session token or an XSS on the console origin,
+// for which 240/min is "walk every credential on every instance in seconds". Deliberately NOT
+// exposed over MCP at all, which is the same judgement written down; this makes the console
+// route agree with it.
+app.use("/v1/instances/*/credentials/*/reveal", rateLimitStrict());
 // Fetches a URL the CALLER supplied. safeFetch already refuses internal targets, but an
 // authenticated "make the Worker request this" button is still the shape of an SSRF/scanning
 // primitive, so it is throttled like the expensive routes rather than the read routes.

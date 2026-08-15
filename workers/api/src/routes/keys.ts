@@ -9,6 +9,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { wrongProviderError } from "../lib/key-shape.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
+import { logEvent } from "../lib/events.js";
 import { recordVoiceUsage } from "../lib/usage.js";
 import { estimateTtsMicros, estimateSttMicros, secondsFromAudioBytes } from "../lib/ai-pricing.js";
 import {
@@ -382,6 +383,18 @@ keysRoutes.get("/:provider/reveal", async (c) => {
 	await c.env.DB.prepare("UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2")
 		.bind(session.uid, providerId)
 		.run();
+	// Audited for the same reason the vault reveal is (#639): `last_used_at` records THAT a key
+	// was touched and overwrites itself, so it can say a key was read once and never that it was
+	// read four hundred times. The guard in security-invariants.test.ts derives the category —
+	// every reveal route — rather than naming routes, and found this one the moment it existed.
+	await logEvent(c.env, {
+		source: "keys",
+		event: "key.reveal",
+		level: "warn",
+		message: `Revealed the stored ${providerId} key to the browser`,
+		userId: session.uid,
+		context: { provider: providerId },
+	});
 	return c.json({ key });
 });
 
