@@ -61,6 +61,15 @@ for tool execution.
 > **declarative behavior** — retire the `workflow` enum in favor of composed steps/triggers so a
 > creator can define a *new* autonomous loop, not just pick one of three. Then converge onto the
 > shared multi-tenant runtime.
+>
+> **Correction (2026-08-15, #606): unlock (1) has since landed for built-ins.** "Connectors are
+> hand-written modules" was true when written and is no longer the whole picture — four of the 14
+> registered connectors are compiled from declarative manifests (`web-search`, `meta`, `github`,
+> `google_sheets`, via `compileConnector` in `lib/connectors/manifest.ts`). **The conclusion above
+> still holds for a third party**, which is the part that matters here: `sanitizeConnectorManifest`,
+> the entry point for an untrusted manifest, has no production caller, so a *creator* still cannot
+> supply one. Unlock (2), retiring the `workflow` enum, is untouched — `lib/agent-workflows.ts:33-47`
+> still declares exactly the three values named above (#160, open).
 
 ### Tier 2 — Code agents via Dynamic Workers (the "write on the fly" path)
 When an agent needs custom logic, the creator (or **Coder itself**) writes code that

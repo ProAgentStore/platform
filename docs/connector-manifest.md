@@ -1,5 +1,25 @@
 # Declarative connectors — the connector manifest
 
+> ### Correction (2026-08-15, #606) — the format below is the proposal, not what shipped
+>
+> The runtime substrate described in the status block IS live, and the status block's own last
+> sentence is the accurate one: *the substrate is done, creator-supplied manifests are not.* Two
+> corrections to the **format** this document specifies:
+>
+> - **`secretRef` was never implemented.** It appears below at three points as the field naming a
+>   secret. The shipped `ManifestAuth` (`lib/connectors/manifest.ts:73-83`) has no such field: an
+>   OAuth2 manifest carries `clientIdEnv` / `secretEnv`, and a platform token carries `tokenEnv`.
+>   **This is a superseded proposal, not a gap to build, and the narrowing was the point** — see
+>   "Why `secretRef` did not survive" below.
+> - **The `auth.type` list is the *creator-facing* set, and correctly so.** `sanitizeConnectorManifest`
+>   accepts exactly `none | app | api-key | oauth2` (`manifest.ts:216`). The full union has a fifth
+>   member, `platform-token`, which is built-in-only and which the sanitizer deliberately never emits.
+>
+> "COMPLETE" is scoped to epic #143 — the substrate. It is not a claim that a creator can supply a
+> manifest: `sanitizeConnectorManifest` still has **no production caller** (grepped 2026-08-15 —
+> `manifest.test.ts` only), while `compileConnector` has four (`web-search`, `meta`, `github`,
+> `google-sheets`). The gate that would give it one is #53/#54.
+
 > **Status:** **COMPLETE (2026-08)** — epic #143 fully landed. The executor
 > (`executeHttpRequest`, #144), `compileConnector` + `sanitizeConnectorManifest` (#145), the
 > per-tool `handler` escape hatch + the conversions of **web-search, github, meta, and
@@ -15,6 +35,10 @@
 > in the third-party plan — the runtime substrate is done.
 
 ## The problem
+
+> This section is the motivation as it stood when the proposal was written, and is kept as such.
+> It has since been acted on for built-ins: four connectors are now compiled from manifests. It
+> still describes the position of a **third-party** creator (#606).
 
 Every connector today is a hand-written module under `workers/api/src/lib/connectors/`
 (`github.ts`, `meta.ts`, `web-search.ts`, …). Adding Slack, Notion, Google Sheets, Linear, or
@@ -57,6 +81,8 @@ A connector manifest is JSON (built-in ones committed as data; later, creator-su
     "authUrl": "https://slack.com/oauth/v2/authorize",
     "tokenUrl": "https://slack.com/api/oauth.v2.access",
     "scopes": ["chat:write", "channels:read"],
+    // PROPOSED, NEVER BUILT (#606). Shipped instead: "clientIdEnv" + "secretEnv", and the
+    // sanitizer strips both from an untrusted manifest. See "Why `secretRef` did not survive".
     "secretRef": "SLACK_CLIENT_SECRET"    // resolved server-side, never in the manifest
   },
   "baseUrl": "https://slack.com/api",
@@ -140,6 +166,24 @@ manifest.json ──► compileConnector(manifest) ──► { Connector, ToolDe
   never contains a credential; OAuth refresh tokens stay envelope-encrypted (AES-256-GCM under
   `KEY_ENCRYPTION_KEY`). A creator-supplied manifest can *name* a secret only via the connect flow,
   never inline one.
+  > **Superseded (#606).** The invariant held — a manifest still never contains a credential — but
+  > `secretRef` is not how. See below.
+
+### Why `secretRef` did not survive
+
+`secretRef` was one free-form string naming "a Worker secret / vault slot". What shipped is typed
+and per-flow: `clientIdEnv` / `secretEnv` on an OAuth2 manifest, `tokenEnv` on a platform token
+(`lib/connectors/manifest.ts:73-83`).
+
+The difference is not cosmetic, which is why this is recorded rather than renamed. A generic "name
+any secret" field is exactly the escalation the sanitizer exists to prevent: on a creator-supplied
+manifest it would let an untrusted author point at *any* Worker secret and have the platform resolve
+it. So `sanitizeConnectorManifest` strips `clientIdEnv`/`secretEnv` and never emits `platform-token`
+at all — those are built-in-only (`manifest.ts:78-83`, `:216`).
+
+So the proposal's **security invariant** was kept — a manifest names a secret, never contains one —
+and its **mechanism** was deliberately narrowed to reach it. Recorded as superseded because the
+narrowing is a decision worth being able to find, not a typo.
 - **Validation**: `sanitizeConnectorManifest` mirrors `sanitizeDeclaredCapabilities` — closed enum
   for `auth.type`, required-field + charset checks, `maxLength` caps on tool params, and a host
   allowlist for creator manifests.

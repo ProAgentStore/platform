@@ -32,6 +32,13 @@ runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
    shape (new autonomous loop, new integration) still needs a monorepo PR. Opening the vocabulary
    = **declarative connectors** (see [`connector-manifest.md`](./connector-manifest.md)) +
    retiring the `workflow` enum for composed steps/triggers.
+   > **Correction (2026-08-15, #606).** "Connectors are hand-written modules" was true on
+   > 2026-08-01 and is now only half true: four of the 14 registered connectors are compiled from
+   > declarative manifests (`compileConnector`, `lib/connectors/manifest.ts`). **This item's
+   > conclusion is unchanged** — the manifest path is built-in-only, because
+   > `sanitizeConnectorManifest` (the untrusted-input entry point) has no production caller, so a
+   > third party still cannot ship an integration without a monorepo PR. The `workflow` half is
+   > entirely unchanged (#160, open).
 2. **No isolated code execution** — no Dynamic Workers; creator custom logic can't run safely.
 3. **No creator authoring UI** — creation is API/MCP only.
 4. **Metering/payouts incomplete** — in flight on `feat/admin-platform-metering` (#28–#46).
