@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	COMMIT_VERB_RE,
@@ -186,9 +187,13 @@ describe("the runner's fallback vocabulary", () => {
 	 * this cannot parse is a failure rather than a smaller measurement.
 	 */
 	const RUNNER_GUARD = "packages/browser-runner/src/commit-guard.ts";
+	// `.pathname` off the URL, as `security-invariants.test.ts` does: the Worker tsconfig's
+	// `@cloudflare/workers-types` URL is not node's, so passing the URL itself to `readFileSync`
+	// compiles nowhere — which the test-typecheck gate catches and `pnpm typecheck` does not.
+	const REPO = new URL("../../../../", import.meta.url).pathname;
 
 	it("parses, and refuses the committing words in every script the cloud list covers", () => {
-		const src = readFileSync(new URL(`../../../../${RUNNER_GUARD}`, import.meta.url), "utf8");
+		const src = readFileSync(join(REPO, RUNNER_GUARD), "utf8");
 		const m = src.match(/export const FALLBACK_COMMIT_RE\s*=\s*(\/[\s\S]*?\/[a-z]*);/);
 		expect(m, `no FALLBACK_COMMIT_RE in ${RUNNER_GUARD} — the runner would fail open`).toBeTruthy();
 		const body = (m as RegExpMatchArray)[1];
