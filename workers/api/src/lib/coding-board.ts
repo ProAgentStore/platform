@@ -13,6 +13,7 @@
 //
 // The SQL lives in `work-card.ts`, shared with the other domains that put work on the board; this
 // module owns only the card's SHAPE.
+import { cardDetail } from "./card-detail.js";
 import { closeWorkCards, upsertWorkCard } from "./work-card.js";
 import type { LoopRunStatus } from "./agent-loop.js";
 import type { Env } from "../types.js";
@@ -64,7 +65,12 @@ export function codingSessionTaskRecord(opts: {
 		status: opts.status,
 		title: `Coding: ${opts.repoName}`.slice(0, 200),
 		subtitle: opts.engine,
-		...(opts.note ? { description: opts.note.slice(0, 300) } : {}),
+		// Marked when it is cut (#568). This was the same blind `note.slice(0, 300)` the delegation
+		// card carried, and the reason to fix both at once is that neither reader can tell which
+		// writer produced the card it is looking at: a detail that ends mid-word has to mean the
+		// same thing everywhere, or "it just ends there" stays a plausible reading of a full one.
+		// No act headline here — a session card is written by the session, which has no run's acts.
+		...(opts.note ? { description: cardDetail(opts.note) } : {}),
 		createdAt: opts.now,
 		updatedAt: opts.now,
 		...(isCodingCardOpen(opts.status) ? {} : { completedAt: opts.now }),

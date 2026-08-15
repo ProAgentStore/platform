@@ -245,6 +245,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						status: statusFor(crashReason ?? stopReasonFor(outcome.outcome)),
 						now: new Date().toISOString(),
 						note,
+						// The SAME acts `actLine` was built from, as RECORDS (#568): the card's 300-char
+						// detail must state the COUNT, never a prefix of the sentence about it.
+						acts,
 					});
 					await upsertWorkCard(env, { instanceId, userId, id: event.payload.boardTaskId as string, task });
 					return null;

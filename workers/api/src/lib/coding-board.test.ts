@@ -77,6 +77,21 @@ describe("codingSessionTaskRecord — the generic card a coding session becomes"
 		expect((rec.title as string).length).toBeLessThanOrEqual(200);
 		expect((rec.description as string).length).toBeLessThanOrEqual(300);
 	});
+
+	it("MARKS a cut description instead of ending mid-word (#568)", () => {
+		// This card carried the identical blind `note.slice(0, 300)` the delegation card did, and
+		// the reason both were fixed at once is that no reader can tell which writer produced the
+		// card it is holding: a detail that just stops has to mean "there is more" everywhere, or
+		// "it ends there" stays a plausible reading of a complete one.
+		const cut = codingSessionTaskRecord({ sessionId: "s", repoName: "r", engine: "claude", status: "failed", now: NOW, note: "n".repeat(900) });
+		expect(cut.description).not.toBe("n".repeat(300));
+		expect((cut.description as string).endsWith("…")).toBe(true);
+		expect((cut.description as string).length).toBe(300);
+		// A note that fits is passed through untouched — the marker means something only because
+		// it is absent when nothing was dropped.
+		const whole = codingSessionTaskRecord({ sessionId: "s", repoName: "r", engine: "claude", status: "completed", now: NOW, note: "ended cleanly" });
+		expect(whole.description).toBe("ended cleanly");
+	});
 });
 
 describe("upsertCodingSessionCard / closeCodingSessionCards — writes", () => {

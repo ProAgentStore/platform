@@ -349,4 +349,39 @@ describe("buildInstanceBoard", () => {
 		expect(ghost!.status).toBe("offer");
 		expect(ghost!.attempts).toHaveLength(0);
 	});
+
+	// ── The cut detail must stay recoverable (#568) ───────────────────────────
+	//
+	// A card's `description` is capped at 300 characters by whichever domain wrote it, and #568 is
+	// what happens when a reader cannot tell it was cut: the board named 2 of 15 irreversible acts
+	// and the complete sentence was on the same row the whole time. `reasoning` is that row, and
+	// it only closes the gap if the board actually RETURNS it — so this asserts the field rather
+	// than the comment in delegation.ts that claims it.
+
+	it("returns a card's full `reasoning` alongside the capped `description`", async () => {
+		const long = `Overseer delegated on your behalf → apps/chess-academy: ${"g".repeat(900)}`;
+		const task = { id: "d1", type: "delegation", status: "failed", description: "15 acts, all irreversible: 14× pushed…", reasoning: long, updatedAt: nowIso };
+		const withDelegation = mockEnv({
+			first: (sql) => sql.includes("JOIN agents") ? { slug: "coder", category: "productivity", agent_config: "{}", instance_config: "{}" } : null,
+			all: (sql) => (sql.includes("instance_runtime_tasks") ? { results: [{ payload: JSON.stringify(task) }] } : { results: [] }),
+		});
+		const board = await buildInstanceBoard(withDelegation.env, "inst-1", "u1");
+		const card = board.items.find((i) => i.latestTaskId === "d1")!;
+		expect(card.description).toBe("15 acts, all irreversible: 14× pushed…");
+		expect(card.reasoning).toBe(long);
+		expect(card.reasoning!.length).toBeGreaterThan(card.description.length);
+	});
+
+	it("omits `reasoning` entirely when the writer set none, rather than echoing the detail", async () => {
+		// An empty-string `reasoning` would read as "there is more, and it is blank". Cards from
+		// domains that write no reasoning must simply not carry the field.
+		const bare = mockEnv({
+			first: (sql) => sql.includes("JOIN agents") ? { slug: "coder", category: "productivity", agent_config: "{}", instance_config: "{}" } : null,
+			all: (sql) => (sql.includes("instance_runtime_tasks")
+				? { results: [{ payload: JSON.stringify({ id: "c1", type: "coding.session", status: "failed", description: "engine exited", reasoning: "   ", updatedAt: nowIso }) }] }
+				: { results: [] }),
+		});
+		const board = await buildInstanceBoard(bare.env, "inst-1", "u1");
+		expect(board.items[0].reasoning).toBeUndefined();
+	});
 });
