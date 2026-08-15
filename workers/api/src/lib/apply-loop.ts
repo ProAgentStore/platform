@@ -528,7 +528,13 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- When you see a submission confirmation, call finish(status:\"submitted\") with the confirmation text.",
 		"- If you genuinely cannot proceed truthfully, call finish(status:\"blocked\") explaining why.",
 		"- Be decisive and brief. Do not narrate.",
-		job.cacheHint ? `\nNOTES FROM A PRIOR RUN ON THIS ATS (what worked AND what failed — reuse the good steps, avoid the failed ones):\n${job.cacheHint}` : "",
+		// The route from a prior run, NOT its answers. The typed values are withheld on purpose: an
+		// ATS host like jobs.ashbyhq.com or job-boards.greenhouse.io serves MANY employers from one
+		// cache row, so replaying what was typed there would put another company's cover letter on
+		// this application (#633). Say so, or the model treats the markers as data it has lost.
+		job.cacheHint
+			? `\nROUTE FROM A PRIOR RUN ON THIS ATS — the STEPS that worked and failed, not their answers. The typed values are deliberately withheld (this ATS hosts many employers, and their answers are not yours to reuse): take every value from the candidate data above and write any free-text answer fresh for THIS employer. Reuse the good steps, avoid the failed ones:\n${job.cacheHint}`
+			: "",
 	];
 	return lines.filter((l) => l !== "").join("\n");
 }
