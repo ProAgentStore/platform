@@ -145,9 +145,13 @@ describe("GET /v1/admin/audit", () => {
 	});
 });
 
+// #647: `payer` and the cache columns are part of the row because `loadAdminUsage` selects them
+// and every charged figure is decided from `payer`. A fixture without them is not a simpler
+// fixture — it is the one shape that hides the bug, which is how the real omission survived: the
+// production select list and this stub agreed with each other and both were wrong.
 const USAGE_ROWS = [
-	{ user_id: "u1", agent_id: null, instance_id: null, provider: "anthropic", model: "claude-sonnet-4-6", kind: "chat", input_tokens: 1000, output_tokens: 500, cost_micros: 10500, created_at: "2026-08-01 10:00:00", agent_name: null, user_login: "alice" },
-	{ user_id: "u2", agent_id: null, instance_id: null, provider: "platform", model: "@cf/baai/bge-base-en-v1.5", kind: "embedding", input_tokens: 200, output_tokens: 0, cost_micros: 40, created_at: "2026-08-01 11:00:00", agent_name: null, user_login: "bob" },
+	{ user_id: "u1", agent_id: null, instance_id: null, provider: "anthropic", model: "claude-sonnet-4-6", kind: "chat", input_tokens: 1000, output_tokens: 500, cache_read_tokens: 0, cache_write_tokens: 0, cost_micros: 10500, payer: "byok-api", created_at: "2026-08-01 10:00:00", agent_name: null, user_login: "alice" },
+	{ user_id: "u2", agent_id: null, instance_id: null, provider: "platform", model: "@cf/baai/bge-base-en-v1.5", kind: "embedding", input_tokens: 200, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, cost_micros: 40, payer: "platform", created_at: "2026-08-01 11:00:00", agent_name: null, user_login: "bob" },
 ];
 
 describe("GET /v1/admin/users", () => {

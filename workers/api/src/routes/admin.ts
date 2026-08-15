@@ -7,6 +7,7 @@ import { ERROR_COLUMNS, ERROR_RECENCY } from "../lib/error-log.js";
 import { listAllConsents } from "../lib/connector-consent.js";
 import { registryTools } from "../lib/tool-registry.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
+import { assertChargeColumnsSelected } from "../lib/usage-columns.js";
 import { readPlatformAiSetting } from "../lib/platform-settings.js";
 import { groupTerminalNodes } from "./terminals.js";
 import { relayConnected } from "../lib/runner-client.js";
@@ -29,14 +30,21 @@ interface AdminJoinedRow extends AdminUsageRow {
  * Pull cross-user ledger rows for the window and roll them up. Shared by
  * /usage and /spending. `days` undefined = all-time.
  */
-async function loadAdminUsage(env: Env, days: number | undefined) {
+export async function loadAdminUsage(env: Env, days: number | undefined) {
 	const where = days ? "WHERE u.created_at >= ?1" : "";
 	// Safety backstop: the ledger rows are pulled into the Worker and rolled up in JS, so
 	// an unbounded all-time query could OOM at scale. 500k rows is far beyond realistic
 	// near-term volume (totals stay correct below it) and bounds the worst case.
 	const stmt = env.DB.prepare(
+		// #647: `u.payer` and the two cache columns are not decoration. Every charged figure this
+		// feeds is computed from `payer` in JS (`isCharged(r.payer)`, lib/usage.ts:475 and :314), so
+		// omitting it did not degrade the number — it fixed it at 0 for all inputs, and the operator
+		// portal's "BYOK spend" headline read $0.00 beside per-user charged totals that
+		// `lib/admin.ts:112` computes correctly in SQL. The cache columns are the same omission:
+		// the daily series published `cacheReadTokens: 0` unconditionally.
 		`SELECT u.user_id, COALESCE(u.agent_id, i.agent_id) AS agent_id, u.instance_id,
 		        u.provider, u.model, u.kind, u.input_tokens, u.output_tokens, u.cost_micros, u.created_at,
+		        u.payer, u.cache_read_tokens, u.cache_write_tokens,
 		        a.name AS agent_name, us.github_login AS user_login
 		 FROM ai_usage u
 		 LEFT JOIN agent_instances i ON i.id = u.instance_id
@@ -48,6 +56,10 @@ async function loadAdminUsage(env: Env, days: number | undefined) {
 	);
 	const bound = days ? stmt.bind(`${dayUtc(days - 1)} 00:00:00`) : stmt;
 	const rows = (await bound.all<AdminJoinedRow>()).results ?? [];
+	// The generic above is unchecked — it describes what this code WANTS, not what the statement
+	// returned — which is why the missing column type-checked perfectly for as long as it shipped.
+	// Ask the rows instead.
+	assertChargeColumnsSelected(rows, "loadAdminUsage");
 	const agentNames: Record<string, string> = {};
 	const userNames: Record<string, string> = {};
 	for (const r of rows) {
