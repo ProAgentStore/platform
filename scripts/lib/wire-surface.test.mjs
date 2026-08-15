@@ -179,6 +179,11 @@ const FILES = {
 	"workers/mcp/src/index.ts":
 		'server = new McpServer({ name: "ProAgentStore", version: MCP_SERVER_VERSION }, { instructions: S });',
 	"server.json": '{"name":"io.github.ProAgentStore/platform","version":"0.1.1"}',
+	// The SERVED copy of the manifest, published at /.well-known/mcp-server.json. A fourth
+	// hand-typed statement of the version, added after the first pass of this check missed
+	// it — see the WELL_KNOWN comment in wire-surface.mjs for why a served claim is the one
+	// that matters most.
+	"store/.well-known/mcp-server.json": '{"name":"io.github.ProAgentStore/platform","version":"0.1.1"}',
 	"platform-docs/mcp.md": MD,
 };
 
@@ -197,7 +202,7 @@ describe("checkWireSurface", () => {
 		const res = run();
 		expect(res.failures).toEqual([]);
 		expect(res.notes).toEqual([
-			"wire surface — advertised version: 1 version(s) from 1 code file(s) == server.json (1), platform-docs/mcp.md (1), advertised from workers/mcp/src/index.ts",
+			"wire surface — advertised version: 1 version(s) from 1 code file(s) == server.json (1), store/.well-known/mcp-server.json (1), platform-docs/mcp.md (1), advertised from workers/mcp/src/index.ts",
 			"wire surface — tool annotations: 4 hint(s) from 2 code file(s) == platform-docs/mcp.md (4)",
 			"wire surface — structured results: 2 output schema(s) from 1 code file(s) == platform-docs/mcp.md (2)",
 		]);
@@ -263,6 +268,18 @@ describe("checkWireSurface", () => {
 	it("goes red when the docs state a version nobody serves", () => {
 		const res = run({ "platform-docs/mcp.md": MD.replace("`0.1.1`", "`0.2.0`") });
 		expect(messages(res)).toContain('serverInfo.version: says "0.2.0", the code defines "0.1.1"');
+	});
+
+	it("goes red when the SERVED manifest drifts from the constant, not just the repo-root one", () => {
+		// The miss this arm was added for. `store/.well-known/mcp-server.json` is a separate
+		// committed file with its own hand-typed `version`, served publicly by workers/host —
+		// and the first pass of this check read `server.json` and the docs and not this. The two
+		// happened to agree, which is precisely the state ADR 0002 calls certifying ground you
+		// never walked. It is also the same file class as check 6's miss: the claim the public
+		// web reads was in none of the input sets.
+		const res = run({ "store/.well-known/mcp-server.json": '{"version":"0.1.0"}' });
+		expect(messages(res)).toContain("store/.well-known/mcp-server.json gives the wrong value");
+		expect(messages(res)).toContain('serverInfo.version: says "0.1.0", the code defines "0.1.1"');
 	});
 
 	it("goes red when the constructor is gone entirely, rather than passing on an absence", () => {

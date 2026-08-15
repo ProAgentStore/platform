@@ -276,6 +276,21 @@ const SPEC_SCHEMA = "workers/mcp/src/mcp-schema-2025-11-25.json";
 const VERSION_SOURCE = "workers/mcp/src/server-version.ts";
 const MCP_INDEX = "workers/mcp/src/index.ts";
 const MANIFEST = "server.json";
+/**
+ * The SERVED copy of the manifest — a separate committed file, with its own hand-typed
+ * `version`, that `workers/host` publishes at `https://proagentstore.online/.well-known/
+ * mcp-server.json` (`build.js` reads it, `index.ts` routes it, and `llms.txt` points at it
+ * as "MCP discovery").
+ *
+ * It is here because #573's first pass covered `server.json` and the docs and missed this
+ * one, and the two happened to agree — which is the failure this whole file exists to
+ * refuse. It is also the SAME miss as check 6's: the served site was in none of the input
+ * sets, so proagentstore.online told every visitor the server had "~67 tools" while
+ * `/health` served 135, past the one guard whose job was that comparison. A version claim
+ * that reaches the public web is not a lesser statement of the version than the one in the
+ * repo root; it is the one strangers read.
+ */
+const WELL_KNOWN = "store/.well-known/mcp-server.json";
 
 /** The one key the version fact is stated under, in all three files. */
 const VERSION_KEY = "serverInfo.version";
@@ -327,6 +342,14 @@ export function wireFacts() {
 				{
 					file: MANIFEST,
 					how: "its `version` field",
+					parse: (src) => {
+						const v = parseJsonStringField(src, "version");
+						return v ? new Map([[VERSION_KEY, v]]) : new Map();
+					},
+				},
+				{
+					file: WELL_KNOWN,
+					how: "its `version` field — the copy served at /.well-known/mcp-server.json",
 					parse: (src) => {
 						const v = parseJsonStringField(src, "version");
 						return v ? new Map([[VERSION_KEY, v]]) : new Map();
