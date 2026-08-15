@@ -43,6 +43,7 @@ import type { Env } from "../types.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
+import { registerFeedRoutes } from "./coding-feed.js";
 import { registerPullRoutes } from "./coding-pulls.js";
 import { registerRepoRoutes } from "./coding-repos.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
@@ -82,6 +83,12 @@ registerRepoRoutes(codingRoutes);
 // Registered here, directly after the repo block, because that is where the surface it belongs to
 // ends — Hono matches in registration ORDER and `coding.contract.test.ts` pins it.
 registerPullRoutes(codingRoutes);
+
+// ── The cursored timeline feed (#581, #527) ──────────────────────────────
+// Before the session block on purpose: `/:instanceId/coding/timeline` is instance-level and must
+// not be reachable only after a caller has resolved a session id. Why it exists at all, and how a
+// session is chosen when the caller names none, is in `coding-feed.ts`.
+registerFeedRoutes(codingRoutes);
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 

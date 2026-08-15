@@ -221,9 +221,30 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	// WHAT THIS TOOL DOES NOT SPEAK FOR (#580 AC3).
+	//
+	// `status` and `lastProgressAt` are the ORCHESTRATOR's record, and neither is a statement about
+	// the engine. `lastProgressAt` in particular is refreshed by a deliberate heartbeat
+	// (`workflows/coding-session.ts`'s `tick` → `recordIteration`) whose stated job is to stay
+	// recent so `sweepStaleRuns` does not close a run that is legitimately parked waiting on a
+	// human. Correct for that case; fatal for reading it as liveness. Measured 2026-08-15: run
+	// `70ea298e` reported `running` with a `lastProgressAt` 3.5 minutes old for 4.35 HOURS, on
+	// iteration 1 of 30, while the engine had been dead since one second after it started.
+	//
+	// `lib/work-report.ts:84-88` already states this exactly — "What it deliberately does NOT
+	// claim: that the ENGINE is working … Asserting 'engine: working' from this column would
+	// replace a false stall with a false all-clear" — and the defect is that the caveat never left
+	// that one surface. It does now, in the description, which is where a model reads it.
+	//
+	// The DESCRIPTION rather than the payload, deliberately. This tool is generic: it serves apply
+	// agents, pipeline agents and chat agents, none of which have an engine to report a `runState`
+	// for, and joining a run to a coding session to fetch one would make every caller pay a runner
+	// round trip for a field that is null for most of them. Naming the tool that does answer it is
+	// the honest version and is what the acceptance criterion allows. Whether the RUN RECORD itself
+	// grows a truthful stall signal is #580's AC1/AC2, on the API side.
 	server.tool(
 		"check_instance_loop",
-		"Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance.",
+		"Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance. This reports the ORCHESTRATOR, not the engine: `status:\"running\"` means the run record is open, and `lastProgressAt` is a heartbeat that keeps a parked run from being swept — neither is evidence that anything is still working, and a run whose engine died has been observed reporting both for hours. For what the engine is actually doing, use coding_timeline (its `run_state`, plus the events since your last poll) or coding_session_capture.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

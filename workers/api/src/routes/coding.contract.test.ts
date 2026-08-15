@@ -54,6 +54,7 @@ import type { Env } from "../types.js";
 import { codingRoutes } from "./coding.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
+import { registerFeedRoutes } from "./coding-feed.js";
 import { registerPullRoutes } from "./coding-pulls.js";
 import { registerRepoRoutes } from "./coding-repos.js";
 
@@ -206,6 +207,7 @@ const ROUTES = [
 	"PUT /:instanceId/coding/repos/:repoId",
 	"GET /:instanceId/coding/repos/:repoId/pulls",
 	"GET /:instanceId/coding/repos/:repoId/pulls/:number",
+	"GET /:instanceId/coding/timeline",
 	"GET /:instanceId/coding/sessions",
 	"GET /:instanceId/coding/engines",
 	"PUT /:instanceId/coding/engines",
@@ -268,6 +270,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"coding-pulls.ts": registerPullRoutes,
 	"coding-brains.ts": registerCopilotRoutes,
 	"coding-diagnostics.ts": registerDiagnosticsRoutes,
+	"coding-feed.ts": registerFeedRoutes,
 };
 
 /** module → the routes it owns. `coding.ts` is the remainder, computed not listed. */
@@ -309,6 +312,10 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/coding/browse",
 		"GET /:instanceId/coding/diagnostics",
 	],
+	// The cursored feed (#581, #527). Its own module because it is the only route on this surface
+	// that resolves the session ITSELF — every other one is handed a session id — and that rule is
+	// what makes one read answer both "what is it doing right now" and "what did that run do".
+	"coding-feed.ts": ["GET /:instanceId/coding/timeline"],
 };
 
 /**

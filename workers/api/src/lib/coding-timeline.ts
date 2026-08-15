@@ -69,6 +69,146 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 	return (results ?? []).map(toEntry).reverse();
 }
 
+// ── The cursored feed: what a run is doing right now (#581), and what it did (#527) ──────────
+//
+// WHAT THIS RECORD ACTUALLY CONTAINS, measured before it was built rather than assumed.
+//
+// #581 recorded one open question — whether a `brain` row carries the instruction sent to the
+// engine, "the difference between a live feed worth having and a list of timestamps". It does
+// NOT, and the answer matters to anyone reading a page of this:
+//
+//   · `brain` is written THREE times per run, all at the start (`coding-session.ts:611-616`):
+//     the objective, the repo's working state, and the merge authority. Never per iteration.
+//   · the per-iteration instruction is a `command` row (`coding-session.ts:524`) — `driven`, the
+//     verbatim text the Pilot sent the engine, ungated by `loopRunId` so a hand-driven session
+//     records it too. THIS is the per-step narrative.
+//   · `terminal` is the engine's pane, `outcome` the run's verdict, `system` its loop events.
+//
+// Sampled from production D1 on 2026-08-15 across 2,757 rows: `command` n=483, mean 427 chars
+// (a real instruction, e.g. "Please read issue #26 … using the github_read_issue tool"); `brain`
+// n=118, mean 608; `outcome` n=105, mean 361 ("done — Issue #120 is fully resolved. Commit
+// `1fbb124` landed on `main` …"). So the narrative is worth reading. What it is NOT is a
+// structured tool call: `content` is free text, and the argument/result pairs #581 also asked
+// for exist only for CONSEQUENTIAL acts, in `agent_events`. That gap is stated on the issue.
+//
+// ── The payload bound, and why `limit` is not it
+//
+// `terminal` is 914 of those 2,757 rows at a mean of 8,068 chars and a max of 12,000 — five
+// untouched snapshots overflow a 64 KiB MCP response on their own. #569 is the standing lesson
+// here: a guard passed at ~54 KB while production served 66,042 B, because the size was asserted
+// one layer above the one that serialises. A row cap alone repeats that mistake, since it bounds
+// the COUNT of rows and nothing bounds a row.
+//
+// So the page is bounded twice, and the second bound is the real one:
+//
+//   1. per row — a `terminal` snapshot keeps its TAIL ({@link FEED_TERMINAL_CHARS}), because the
+//      end of a pane is the live part; every other type keeps its HEAD
+//      ({@link FEED_NARRATIVE_CHARS}), because an instruction says what it wants first. A cut row
+//      carries `chars`, its true length, so a reader is never told a truncation was the whole
+//      thing.
+//   2. per page — events are appended until {@link FEED_BYTE_BUDGET} of SERIALISED bytes, counted
+//      on `JSON.stringify` of the row itself so escaping and multi-byte characters are inside the
+//      measurement rather than outside it. Hitting the budget sets `hasMore` and stops; it never
+//      drops a row silently. The first row is always emitted even if it alone exceeds the budget —
+//      otherwise a single large row would stall the cursor forever, which is a liveness bug
+//      wearing a size fix's clothes.
+//
+// ── Cursor semantics: `since`, matching the `before` convention #566 settled
+//
+// `since` is an EXCLUSIVE `seq`, rows come back oldest→newest, and `nextSeq` is the last seq
+// returned — so the next call resumes strictly after it and consecutive pages can neither overlap
+// nor skip, whichever of the two bounds ended the page. On an empty page `nextSeq` echoes the
+// cursor back rather than answering null, so a poll that finds nothing does not restart from the
+// beginning of the session next time (the same rule `loadTerminalSnapshots`' `after` arm follows).
+// `seq` is the table's AUTOINCREMENT primary key and `idx_coding_timeline_session (session_id,
+// seq)` covers the scan, so a row appended mid-poll cannot shift a page.
+
+/** Rows per page when the caller does not say. */
+export const FEED_DEFAULT_LIMIT = 40;
+/** Ceiling on `limit`. NOT the payload bound — {@link FEED_BYTE_BUDGET} is. */
+export const FEED_MAX_LIMIT = 200;
+/** Chars kept from the START of a narrative row (`brain`/`command`/`outcome`/chat/`system`). */
+export const FEED_NARRATIVE_CHARS = 1200;
+/** Chars kept from the END of a `terminal` snapshot — a pane's tail is its live part. */
+export const FEED_TERMINAL_CHARS = 400;
+/**
+ * Serialised-event budget for one page, in bytes. 40,000 against the 64 KiB (65,536 B) limit the
+ * host in #569 applied: the remaining ~25 KB is headroom for the envelope and for JSON escaping
+ * that a character count cannot see.
+ */
+export const FEED_BYTE_BUDGET = 40_000;
+
+/** One timeline row, cut to fit. */
+export interface FeedEvent {
+	seq: number;
+	type: TimelineType;
+	content: string;
+	createdAt: string;
+	/** The FULL length of `content` in characters — present only when it was cut. */
+	chars?: number;
+}
+
+export interface TimelineFeed {
+	events: FeedEvent[];
+	/** Pass as the next call's `since`. Echoes the cursor back when the page is empty. */
+	nextSeq: number;
+	hasMore: boolean;
+	/** How much was withheld by the per-row caps, when anything was. */
+	truncated?: { events: number; chars: number };
+}
+
+/** Cut one row to its type's cap, recording its true length when that cuts anything. */
+export function budgetFeedEvent(e: TimelineEntry): FeedEvent {
+	const cap = e.type === "terminal" ? FEED_TERMINAL_CHARS : FEED_NARRATIVE_CHARS;
+	const base = { seq: e.seq, type: e.type, createdAt: e.createdAt };
+	if (e.content.length <= cap) return { ...base, content: e.content };
+	// Terminal from the tail, everything else from the head — see the header.
+	return { ...base, content: e.type === "terminal" ? e.content.slice(-cap) : e.content.slice(0, cap), chars: e.content.length };
+}
+
+/** A page of a session's timeline strictly newer than `sinceSeq`, bounded by rows AND by bytes. */
+export async function loadTimelineFeed(
+	env: Env,
+	args: { sessionId: string; sinceSeq?: number; limit?: number },
+): Promise<TimelineFeed> {
+	const limit = Math.max(1, Math.min(FEED_MAX_LIMIT, args.limit ?? FEED_DEFAULT_LIMIT));
+	const since = Number.isFinite(args.sinceSeq) && (args.sinceSeq as number) > 0 ? (args.sinceSeq as number) : 0;
+	// One row over the limit, purely to answer `hasMore` without a second COUNT query.
+	const { results } = await env.DB.prepare(
+		"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
+	)
+		.bind(args.sessionId, since, limit + 1)
+		.all<Row>();
+	const rows = (results ?? []).map(toEntry);
+	let hasMore = rows.length > limit;
+	const encoder = new TextEncoder();
+	const events: FeedEvent[] = [];
+	let bytes = 0;
+	let cutEvents = 0;
+	let cutChars = 0;
+	for (const entry of hasMore ? rows.slice(0, limit) : rows) {
+		const ev = budgetFeedEvent(entry);
+		const cost = encoder.encode(JSON.stringify(ev)).length + 1; // +1 for the array separator
+		// Always emit the first row, whatever it costs — see the header on cursor liveness.
+		if (events.length > 0 && bytes + cost > FEED_BYTE_BUDGET) {
+			hasMore = true;
+			break;
+		}
+		bytes += cost;
+		events.push(ev);
+		if (ev.chars !== undefined) {
+			cutEvents++;
+			cutChars += ev.chars - ev.content.length;
+		}
+	}
+	return {
+		events,
+		nextSeq: events.length ? events[events.length - 1].seq : since,
+		hasMore,
+		...(cutEvents ? { truncated: { events: cutEvents, chars: cutChars } } : {}),
+	};
+}
+
 /** The conversation turns the console renders as the chat thread. Includes `command`
  * (things you sent the CLI manually) so they show as your turns, not vanish. */
 export async function loadChat(env: Env, sessionId: string, limit = 200): Promise<TimelineEntry[]> {

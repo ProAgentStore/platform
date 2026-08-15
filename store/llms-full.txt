@@ -156,7 +156,7 @@ That response means the private instance path is working and correctly refusing 
 
 ## Main MCP Tool Groups
 
-The server registers 135 tools; 117 are always present and 18 are gated to the `apply`, `repo`, and `coding` surfaces. The lists below are the commonly used subset, not the full surface — call `tools/list` for the authoritative set, and see the tool table in `workers/mcp/README.md` for scopes, `dry_run` support, and confirmation values.
+The server registers 136 tools; 117 are always present and 19 are gated to the `apply`, `repo`, and `coding` surfaces. The lists below are the commonly used subset, not the full surface — call `tools/list` for the authoritative set, and see the tool table in `workers/mcp/README.md` for scopes, `dry_run` support, and confirmation values.
 
 Creator tools:
 

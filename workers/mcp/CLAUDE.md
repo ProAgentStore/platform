@@ -77,12 +77,12 @@ src/
     │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
-    └── coding.ts         system_status (gated to surfaces:["coding"]) + 3 loop tools
+    └── coding.ts         system_status + coding_timeline (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**135 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+**136 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
 inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 88 across
-`instance-tools/`. 117 are always registered; 18 are surface-gated (apply=4, repo=3, coding=11).
+`instance-tools/`. 117 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
 
 `base.ts` was 1871 lines and 67 of those 86 tools until #305 — the file a tool landed in
 when nobody decided where it went, and the largest in the repo. The nine ungated groups
@@ -186,7 +186,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 18 tools are surface-gated.
+  given connection, because 19 tools are surface-gated.
 
 ## Bindings and secrets
 

@@ -844,7 +844,12 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		if (groups.has("coding")) {
 		this.server.tool(
 			"coding_session_capture",
-			"Capture the live terminal output from a coding session (what the CLI is showing right now). Also returns run state (idle/working/offline).",
+			// #527 measured this answering a real, finished, 6-minute run — 5 Pilot instructions and
+			// a push to `main` — with `runState:"idle"` and `pane:""`, which is indistinguishable
+			// from a session that never did anything. The pane is a live buffer on the runner and
+			// there is nothing to capture once the session ends; the record that survives is
+			// `coding_timeline`, so the description names the tool that reads it.
+			"Capture the live terminal output from a coding session (what the CLI is showing right now). Also returns run state (idle/working/offline). LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane and `idle`, which does not mean nothing happened. To read what a run did, or to follow one while it works, use coding_timeline.",
 			{
 				instance_id: z.string().describe("Instance ID"),
 				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),

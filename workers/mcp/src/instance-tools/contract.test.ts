@@ -226,6 +226,7 @@ const TABLE: Record<string, Row> = {
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],
+	coding_timeline: ["coding", "read", null, null, "instance_id,limit,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],

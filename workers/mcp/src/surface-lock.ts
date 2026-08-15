@@ -76,4 +76,12 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// landed — and this entry is the first thing the ratchet ever demanded, since rebasing
 	// onto it failed with "surface-lock.ts has no entry for MCP_SERVER_VERSION 0.1.2".
 	"0.1.2": "sha256:fa4b1a42a18b7b0bc9f52f81d4443b6a934a898bf0e1fcd1dcaf9d0d610405bb",
+	// 0.1.3 (#581/#527): `coding_timeline` registered, the first MCP reader of the
+	// `coding_timeline` table — a NAME added to the surface-gated coding group, which is the
+	// first bullet of `MCP_SERVER_VERSION`'s own list. The three description changes that came
+	// with it (`check_instance_loop` and `coding_loop_status` no longer implying they speak for
+	// the engine, #580 AC3; `coding_session_capture` saying an ended session's empty pane is not
+	// evidence of an idle run) are NOT what moved this hash — descriptions are excluded from the
+	// fingerprint on purpose. Appended, never edited in place: 0.1.2 is published.
+	"0.1.3": "sha256:f3cc58b5e73ffe3c9a6457a21ea247b971cba7af9fa7ba6c122f89f6ef86e682",
 };

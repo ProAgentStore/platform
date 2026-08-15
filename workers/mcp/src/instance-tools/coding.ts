@@ -32,6 +32,54 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				return jsonText(data);
 			},
 		);
+
+		// ── The live feed (#581), which is also the finished-run audit (#527) ──
+		//
+		// Thirteen coding tools were registered and none of them read `coding_timeline`, the
+		// append-only per-session record that the Pilot writes DURING a run. So the two questions
+		// an owner most often has about an autonomous run — "what is it doing right now" and "what
+		// did that run actually do" — were answerable only from the pane, and only by someone who
+		// already knew a session id. #580 measured what that costs: a run whose engine died at step
+		// 1 reported `running` for 4.35 hours and the truth existed nowhere else.
+		//
+		// ONE tool for both, because they differ only in whether you keep asking. `since_seq` makes
+		// it a poll; omitting `session_id` resolves the newest active session, or — the half that
+		// answers #527 — the most recently updated one when the run has already ended.
+		//
+		// WHAT IT DOES NOT CARRY, stated here because the description is where a model reads it:
+		// `content` is free text. `coding_timeline` is a NARRATIVE (the objective, each instruction
+		// driven into the engine, pane snapshots, the outcome), not a structured tool-call log with
+		// arguments and results. Those exist only for consequential acts, in `agent_events`, which
+		// is `agent_trace(source:"coding")`. Promising otherwise here is how a partial answer gets
+		// handed over as the whole one.
+		server.tool(
+			"coding_timeline",
+			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome, oldest→newest. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots are returned as a 400-character TAIL with `chars` giving the true length; use coding_session_capture for a live session's full pane. This is the run's narrative, not a structured tool-call log — for a consequential act with its arguments and result, use agent_trace(source:\"coding\").",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				instance_id: z.string().describe("Instance ID or slug"),
+				session_id: z.string().optional().describe("A specific coding session. Omit for the newest active one, else the most recently updated."),
+				since_seq: z.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it. Pass the previous reply's `nextSeq`."),
+				limit: z.number().int().min(1).max(200).optional().describe("Events per page (default 40). Not the payload bound: a page also stops at a byte budget, and `hasMore` says so — raising this cannot make one call return more bytes."),
+			},
+			async ({ token, instance_id, session_id, since_seq, limit }) => {
+				const sessionToken = tokenFor(token);
+				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(safetyFor(token), "read", "coding_timeline", { instance_id, session_id });
+				if (denied) return denied;
+				const id = await resolveId(sessionToken, instance_id);
+				const qs = new URLSearchParams();
+				if (session_id) qs.set("session_id", session_id);
+				if (since_seq !== undefined) qs.set("since", String(since_seq));
+				if (limit !== undefined) qs.set("limit", String(limit));
+				const path = `/v1/instances/${encodeURIComponent(id)}/coding/timeline${qs.toString() ? `?${qs.toString()}` : ""}`;
+				// COMPACT, like `list_instance_tools` since #569. `jsonText` pretty-prints by default,
+				// which added ~22% to that tool's payload AFTER its budget test had passed — 54 KB
+				// asserted, 66,042 B served. A page of terminal tails is machine-read data with no
+				// human-formatting value, so the indentation buys nothing and costs 8 KB here.
+				return jsonText(await authedCall(path, sessionToken, {}, env), { compact: true });
+			},
+		);
 	}
 
 	// ── Agent Loop tools ──
@@ -115,7 +163,10 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 
 	server.tool(
 		"coding_loop_status",
-		"Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs. Reads the server's run record, so it is correct across reconnects and across clients.",
+		// Same caveat as `check_instance_loop`, and for the same measured reason (#580) — the two
+		// tools call the SAME endpoint, so a warning on only one of them is a warning a caller can
+		// miss by picking the other name.
+		"Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs. Reads the server's run record, so it is correct across reconnects and across clients — but the run record is the ORCHESTRATOR's, not the engine's: `status:\"running\"` means the run is open and `lastProgressAt` is a heartbeat that keeps a parked run from being swept, so neither says the engine is still working. For that, read coding_timeline (`run_state` plus the events since your last poll) or coding_session_capture.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),

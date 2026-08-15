@@ -108,6 +108,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_status: "read",
 	coding_repos_list: "read",
 	coding_session_capture: "read",
+	coding_timeline: "read",
 	coding_sessions_list: "read",
 	connector_status: "read",
 	email_status: "read",
@@ -269,7 +270,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 /** How the surface splits. A ratchet in BOTH directions: silently losing a read-only
  *  annotation is as much a regression as silently gaining one. */
 export const MCP_RISK_COUNTS: Record<McpScope, number> = {
-	read: 66,
+	read: 67,
 	write: 40,
 	runtime: 15,
 	destructive: 14,
