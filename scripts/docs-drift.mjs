@@ -21,6 +21,8 @@
  *   4. removed identity     the runtime docs no longer claim the FAGS runtime plane
  *   5. MCP tool surface     README's tool table == the tools actually registered
  *   6. MCP tool count       every "N tools" claim == workers/mcp/src/tool-count.ts
+ *  6b. MCP always-on split every "N are always …" / "N are gated" claim == the OTHER two
+ *                          constants in that same file, which nothing compared (#575)
  *   7. confirm gates        every documented `confirm` value == a requireConfirmation site
  *   8. wire surface         every fact a client RECEIVES — tool annotations, output schemas,
  *                           the advertised version — == the code defining it, and is named
@@ -63,6 +65,7 @@ import {
 	parseConfirmProse,
 	parseConfirmTable,
 } from "./lib/doc-claims.mjs";
+import { checkMcpSplit } from "./lib/mcp-split.mjs";
 import { checkWireSurface } from "./lib/wire-surface.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -551,6 +554,31 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 				`${SUBSET_CLAIMS.length} exempt) + ${registeredPerFile.size} per-file counts`,
 		);
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6b. the always-on / surface-gated SPLIT — the two constants beside the one
+//     that was already checked
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `tool-count.ts` exports three numbers and check 6 compared ONE of them to anything, so
+ * `workers/mcp/CLAUDE.md` could say — and did — "114 are always registered; 18 are
+ * surface-gated (apply=4, repo=3, coding=11+3)": wrong against the constant, wrong against
+ * its own paragraph, and wrong inside its own parentheses (#575).
+ *
+ * The comparison, its floors and its reasoning are in scripts/lib/mcp-split.mjs, unit-tested
+ * against strings. The sweep is the SAME one check 6 uses, passed in rather than recomputed,
+ * so the two checks cannot come to disagree about what the trusted surface is.
+ */
+{
+	const files = [...docFiles(), ...servedHtmlFiles()].map((f) => ({ name: rel(f), src: read(f) }));
+	const { failures: splitFailures, notes: splitNotes } = checkMcpSplit({
+		toolCountSrc: read(p("workers/mcp/src/tool-count.ts")),
+		files,
+	});
+	for (const f of splitFailures) fail(f.check, f.message);
+	for (const n of splitNotes) ok(n);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

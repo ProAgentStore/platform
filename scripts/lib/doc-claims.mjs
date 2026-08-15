@@ -53,6 +53,77 @@ export function findToolCountClaims(src) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The always-on / surface-gated SPLIT
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The split claims — "117 are always present", "18 are surface-gated" (#575).
+ *
+ * `MCP_TOOL_COUNT` was the only number check 6 compared to anything. `MCP_TOOL_ALWAYS_ON`
+ * and `MCP_TOOL_GATED` are exported on the next two lines of the same file and were
+ * compared to nothing, so the split could say anything — and did. `workers/mcp/CLAUDE.md`
+ * carried "114 are always registered; 18 are surface-gated (apply=4, repo=3, coding=11+3)",
+ * which is wrong three separate ways at once: 114 contradicts the constant's 117, 114+18
+ * misses the 135 stated two lines above it, and the parenthetical sums to 21 rather than
+ * 18. That is the doc a session working INSIDE the worker reads, while the public page got
+ * it right.
+ *
+ * Three phrasings are in use across the three files that state this, so the regexes cover
+ * all of them rather than the one that happened to be written first:
+ *
+ *     platform-docs/mcp.md   "117 are always present. The remaining 18 are gated to …"
+ *     workers/mcp/README.md  "117 are always registered; 18 are gated to the console"
+ *     workers/mcp/CLAUDE.md  "117 are always registered; 18 are surface-gated (…)"
+ *
+ * A NUMBER is required in front. `README.md`'s "All six are always registered" is prose
+ * about a subset and is correctly not a claim about the total — matching spelled numerals
+ * would turn every such sentence into a false failure, which is how a check gets deleted.
+ *
+ * The caller must still assert that each file it expects a claim from produced one: the
+ * silent failure mode here is a rephrasing that slips past both regexes, which reads
+ * exactly like agreement. See `findToolCountClaims` above for the same trap.
+ */
+const ALWAYS_ON_CLAIM = /\b(\d+)\s+(?:tools?\s+)?are\s+always\s+(?:present|registered|on)\b/g;
+const GATED_CLAIM = /\b(\d+)\s+(?:tools?\s+)?are\s+(?:surface-)?gated\b/g;
+
+/**
+ * A per-surface breakdown in parentheses — `(apply=4, repo=3, coding=11)`.
+ *
+ * Parsed because it is the third of #575's three errors and the one no other check could
+ * see: `platform-docs/mcp.md`'s gated TABLE is already compared to the constants, but a
+ * prose parenthetical restating the same split was compared to nothing.
+ *
+ * `coding=11+3` is accepted as a shape and summed to 14, deliberately — it is what the
+ * broken line actually said, and a parser that threw on it would report "no breakdown
+ * found" for the one line the check exists to catch.
+ */
+const BREAKDOWN_CLAIM = /\(\s*([a-z][\w-]*\s*=\s*\d+(?:\s*\+\s*\d+)*(?:\s*,\s*[a-z][\w-]*\s*=\s*\d+(?:\s*\+\s*\d+)*)*)\s*\)/g;
+
+/**
+ * Every always-on / gated / per-surface-breakdown claim in a document.
+ *
+ * @param {string} src
+ * @returns {{alwaysOn: {n: number, claimed: number, line: string}[],
+ *            gated: {n: number, claimed: number, line: string}[],
+ *            breakdowns: {n: number, sum: number, parts: string, line: string}[]}}
+ */
+export function findSplitClaims(src) {
+	const alwaysOn = [];
+	const gated = [];
+	const breakdowns = [];
+	src.split("\n").forEach((line, i) => {
+		const at = { n: i + 1, line: line.trim() };
+		for (const m of line.matchAll(ALWAYS_ON_CLAIM)) alwaysOn.push({ ...at, claimed: Number(m[1]) });
+		for (const m of line.matchAll(GATED_CLAIM)) gated.push({ ...at, claimed: Number(m[1]) });
+		for (const m of line.matchAll(BREAKDOWN_CLAIM)) {
+			const sum = [...m[1].matchAll(/\d+/g)].reduce((a, d) => a + Number(d[0]), 0);
+			breakdowns.push({ ...at, sum, parts: m[1] });
+		}
+	});
+	return { alwaysOn, gated, breakdowns };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The confirm-gated tool table
 // ─────────────────────────────────────────────────────────────────────────────
 

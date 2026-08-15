@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	diffConfirm,
+	findSplitClaims,
 	findToolCountClaims,
 	parseConfirmBullets,
 	parseConfirmCallSites,
@@ -57,6 +58,67 @@ describe("findToolCountClaims", () => {
 
 	it("ignores prose with no number attached to the word", () => {
 		expect(findToolCountClaims("Call `tools/list` for the authoritative set.")).toEqual([]);
+	});
+});
+
+describe("findSplitClaims", () => {
+	it("reads all three phrasings the three files actually use", () => {
+		// Not invented: these are the live sentences from platform-docs/mcp.md:321,
+		// workers/mcp/README.md:129 and workers/mcp/CLAUDE.md:189 respectively. A parser
+		// tested only against the phrasing someone wrote first is a parser that stops
+		// measuring the moment a second file says it differently.
+		const src = [
+			"The server registers **135 tools**. 117 are always present. The remaining 18 are gated to",
+			"**135 tool registrations.** 117 are always registered; 18 are gated to the console",
+			"given connection, because 18 tools are surface-gated.",
+		].join("\n");
+		const { alwaysOn, gated } = findSplitClaims(src);
+		expect(alwaysOn.map((c) => [c.n, c.claimed])).toEqual([
+			[1, 117],
+			[2, 117],
+		]);
+		expect(gated.map((c) => [c.n, c.claimed])).toEqual([
+			[1, 18],
+			[2, 18],
+			[3, 18],
+		]);
+	});
+
+	it("reads the exact broken line that shipped, in all three of the ways it was wrong (#575)", () => {
+		const line =
+			"`instance-tools/`. 114 are always registered; 18 are surface-gated (apply=4, repo=3, coding=11+3).";
+		const { alwaysOn, gated, breakdowns } = findSplitClaims(line);
+		expect(alwaysOn[0].claimed).toBe(114); // against a constant of 117
+		expect(gated[0].claimed).toBe(18);
+		// 4 + 3 + 11 + 3 — the parenthetical did not sum to the 18 beside it.
+		expect(breakdowns).toEqual([
+			{ n: 1, sum: 21, parts: "apply=4, repo=3, coding=11+3", line },
+		]);
+		// And the sum error is only catchable because the breakdown shares a line with the
+		// gated claim — which is how docs-drift decides a parenthetical restates that claim
+		// rather than being unrelated prose.
+		expect(breakdowns[0].n).toBe(gated[0].n);
+	});
+
+	/**
+	 * The failure mode the narrow regexes CANNOT see, recorded rather than argued — the
+	 * same trap as `findToolCountClaims` above, and the reason docs-drift keeps a
+	 * MUST_CLAIM list rather than trusting a sweep to have found everything.
+	 */
+	it("does NOT see 'N always-on' or a spelled numeral — which is why the caller asserts a non-empty result", () => {
+		expect(findSplitClaims("117 always-on, 18 gated.").alwaysOn).toEqual([]);
+		// Real line from workers/mcp/README.md:282. Correctly not a claim about the total:
+		// matching spelled numerals would turn every subset sentence into a false failure.
+		expect(findSplitClaims("All six are always registered — the `coding_loop_*` tools").alwaysOn).toEqual([]);
+	});
+
+	it("ignores a parenthetical that is not beside a gated claim, so unrelated prose cannot fail the build", () => {
+		// The breakdown parser is deliberately shape-based and will match this; docs-drift
+		// discards it because no gated claim shares the line. Asserted here so the division
+		// of labour between parser and caller is pinned, not assumed.
+		const { gated, breakdowns } = findSplitClaims("a config sample (retries=3, backoff=2)");
+		expect(gated).toEqual([]);
+		expect(breakdowns).toHaveLength(1);
 	});
 });
 

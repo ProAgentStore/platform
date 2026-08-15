@@ -82,7 +82,7 @@ src/
 
 **135 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
 inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 88 across
-`instance-tools/`. 114 are always registered; 18 are surface-gated (apply=4, repo=3, coding=11+3).
+`instance-tools/`. 117 are always registered; 18 are surface-gated (apply=4, repo=3, coding=11).
 
 `base.ts` was 1871 lines and 67 of those 86 tools until #305 — the file a tool landed in
 when nobody decided where it went, and the largest in the repo. The nine ungated groups
