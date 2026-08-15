@@ -8,6 +8,9 @@ import type { AgentStorageBaseCtor } from "./base.js";
 
 /** Sibling methods this group relies on (provided by earlier layers). */
 interface FileDeps {
+	/** #22: vectorizeStore no-ops (does not throw) when indexing is off, so a green try/catch
+	 *  is not evidence the file is searchable — this is. */
+	readonly indexingEnabled: boolean;
 	logEvent(type: ActivityEvent["type"], userId?: string, data?: Record<string, unknown>, channel?: string): Promise<ActivityEvent>;
 	vectorizeStore(sourceType: VectorMeta["sourceType"], sourceId: string, text: string): Promise<string[]>;
 	vectorDelete(sourceType: VectorMeta["sourceType"], sourceId: string): Promise<void>;
@@ -15,6 +18,26 @@ interface FileDeps {
 
 // biome-ignore lint/suspicious/noExplicitAny: mixin constructor helper
 type GConstructorWith<T> = new (...args: any[]) => T;
+
+/**
+ * How much of a document's extracted text is kept. Everything past this is dropped — it is not
+ * written to `filetext:` (so `read_file` cannot reach it) and not vectorized (so RAG cannot).
+ */
+const MAX_INDEXED_TEXT = 100_000;
+
+/**
+ * The bounded text to store, together with the metadata that admits it IS bounded (#637).
+ *
+ * The cap itself is fine — it is the silence that was not. A capped file used to be recorded with
+ * `extractionStatus: "extracted"` and `extractedTextLength` set to the FULL length, so nothing
+ * anywhere distinguished a 90k document that is entirely searchable from a 400k document that is
+ * a quarter searchable. Same shape as #503/#581: a bound that keeps the first N owes the caller a
+ * statement that it did.
+ */
+function boundedText(text: string): Pick<FileMeta, "extractedTextLength" | "indexedTextLength" | "textTruncated"> & { text: string } {
+	const kept = text.slice(0, MAX_INDEXED_TEXT);
+	return { text: kept, extractedTextLength: text.length, indexedTextLength: kept.length, textTruncated: kept.length < text.length };
+}
 
 export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<FileDeps>>(Base: TBase) {
 	return class extends Base {
@@ -58,6 +81,7 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 			});
 
 			const obj = await this.r2.head(r2Key);
+			const bounded = boundedText(extracted.text);
 			const meta: FileMeta = {
 				id,
 				agentId: this.agentId,
@@ -69,24 +93,36 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				tags: opts.tags || [],
 				r2Key,
 				extractionStatus: extracted.status,
-				extractedTextLength: extracted.text.length,
+				extractedTextLength: bounded.extractedTextLength,
+				indexedTextLength: bounded.indexedTextLength,
+				textTruncated: bounded.textTruncated,
 				extractionError: extracted.error,
 				createdAt: new Date().toISOString(),
 				updatedAt: new Date().toISOString(),
 			};
 
+			// Written BEFORE vectorization, then re-written with `vectorized` once it is known: the
+			// bytes are already in R2, so a throw between the two must never leave a file with no
+			// metadata at all.
 			await this.doStorage.put(`file:${id}`, meta);
 
-			if (extracted.text) {
-				await this.doStorage.put(`filetext:${id}`, extracted.text.slice(0, 100_000));
+			if (bounded.text) {
+				await this.doStorage.put(`filetext:${id}`, bounded.text);
 				// Best-effort: the file + its metadata are already committed to R2/DO, so a
 				// vectorization failure must not 500 the upload (that would leave torn state).
-				// Log it so it isn't fully invisible; the file text is retained and can be re-indexed.
+				// The file text is retained and can be re-indexed.
+				//
+				// `vectorized: false` is what makes that survivable. A console.error in a Worker is
+				// not persisted, so "uploaded fine, invisible to search" used to be a state with no
+				// record anywhere — the flag is the same admission #22 gave a knowledge doc.
 				try {
-					await this.vectorizeStore("file", id, extracted.text.slice(0, 100_000));
+					await this.vectorizeStore("file", id, bounded.text);
+					meta.vectorized = this.indexingEnabled;
 				} catch (err) {
+					meta.vectorized = false;
 					console.error(`[storage] file ${id} stored but not vectorized:`, err);
 				}
+				await this.doStorage.put(`file:${id}`, meta);
 			}
 
 			await this.logEvent("file.uploaded", undefined, {
@@ -96,6 +132,9 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				mimeType: opts.mimeType,
 				extractionStatus: meta.extractionStatus,
 				extractedTextLength: meta.extractedTextLength,
+				indexedTextLength: meta.indexedTextLength,
+				textTruncated: meta.textTruncated,
+				vectorized: meta.vectorized,
 			});
 
 			return meta;
@@ -133,8 +172,16 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 
 			// Bounded extraction read: PDFs/text under the cap get read fully (Workers
 			// memory comfortably handles this); bigger objects skip extraction.
+			//
+			// The skip carries its REASON (#637). "unsupported" on its own is a statement about the
+			// file's FORMAT, and a 40 MB PDF — well inside the documented 2 GB upload cap — was
+			// getting it with `extractionError` left undefined, so the one field that exists to
+			// explain the skip explained nothing and the user was told their PDF was not a PDF.
 			const MAX_EXTRACT_BYTES = 32 * 1024 * 1024;
-			let extracted: { text: string; status: FileMeta["extractionStatus"]; error?: string } = { text: "", status: "unsupported" };
+			let extracted: { text: string; status: FileMeta["extractionStatus"]; error?: string } =
+				head.size > MAX_EXTRACT_BYTES
+					? { text: "", status: "unsupported", error: `File is ${Math.round(head.size / (1024 * 1024))} MB; text extraction is capped at ${MAX_EXTRACT_BYTES / (1024 * 1024)} MB. The file is stored and downloadable, but its text is not searchable.` }
+					: { text: "", status: "unsupported" };
 			if (head.size <= MAX_EXTRACT_BYTES) {
 				const obj = await this.r2.get(opts.r2Key);
 				if (obj) {
@@ -146,6 +193,7 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				}
 			}
 
+			const bounded = boundedText(extracted.text);
 			const meta: FileMeta = {
 				id: opts.id,
 				agentId: this.agentId,
@@ -157,20 +205,25 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				tags: opts.tags || [],
 				r2Key: opts.r2Key,
 				extractionStatus: extracted.status,
-				extractedTextLength: extracted.text.length,
+				extractedTextLength: bounded.extractedTextLength,
+				indexedTextLength: bounded.indexedTextLength,
+				textTruncated: bounded.textTruncated,
 				extractionError: extracted.error,
 				createdAt: new Date().toISOString(),
 				updatedAt: new Date().toISOString(),
 			};
 			await this.doStorage.put(`file:${opts.id}`, meta);
 
-			if (extracted.text) {
-				await this.doStorage.put(`filetext:${opts.id}`, extracted.text.slice(0, 100_000));
+			if (bounded.text) {
+				await this.doStorage.put(`filetext:${opts.id}`, bounded.text);
 				try {
-					await this.vectorizeStore("file", opts.id, extracted.text.slice(0, 100_000));
+					await this.vectorizeStore("file", opts.id, bounded.text);
+					meta.vectorized = this.indexingEnabled;
 				} catch (err) {
+					meta.vectorized = false;
 					console.error(`[storage] file ${opts.id} stored but not vectorized:`, err);
 				}
+				await this.doStorage.put(`file:${opts.id}`, meta);
 			}
 
 			await this.logEvent("file.uploaded", undefined, {
@@ -180,6 +233,9 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				mimeType: opts.mimeType,
 				extractionStatus: meta.extractionStatus,
 				extractedTextLength: meta.extractedTextLength,
+				indexedTextLength: meta.indexedTextLength,
+				textTruncated: meta.textTruncated,
+				vectorized: meta.vectorized,
 				multipart: true,
 			});
 

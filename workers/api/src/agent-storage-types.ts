@@ -76,7 +76,23 @@ export interface FileMeta {
 	tags: string[];
 	r2Key: string;
 	extractionStatus?: "none" | "extracted" | "unsupported" | "failed";
+	/** Characters the extractor produced — i.e. how long the document actually is. */
 	extractedTextLength?: number;
+	/**
+	 * Characters actually stored and vectorized (#637). Below `extractedTextLength` when the
+	 * document exceeded the indexing cap: the remainder is in no store the agent can reach —
+	 * not `filetext:` (so `read_file` cannot see it) and not the vector index (so RAG cannot).
+	 * Recording only the pre-truncation length made the one field that could have said so say
+	 * the opposite: a 400k-character PDF read as fully extracted with 300k characters missing.
+	 */
+	indexedTextLength?: number;
+	/** True when `indexedTextLength < extractedTextLength` — the cap bit on this file. */
+	textTruncated?: boolean;
+	/**
+	 * Whether the extracted text made it into the vector index. False means the file uploaded
+	 * fine and is invisible to search — the same honesty `vectorized` gives a knowledge doc (#22).
+	 */
+	vectorized?: boolean;
 	extractionError?: string;
 	createdAt: string;
 	updatedAt: string;
