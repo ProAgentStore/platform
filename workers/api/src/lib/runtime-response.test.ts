@@ -9,11 +9,15 @@
  *
  * The fixtures below are the two instances measured live on 2026-08-15, not invented shapes.
  */
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runtimeNodeResponse, runtimeResponse } from "./runtime-response.js";
+import { d1Timestamp, runtimeNodeResponse, runtimeResponse } from "./runtime-response.js";
 import { HEARTBEAT_FRESH_MS } from "./runtime-attachment.js";
 import type { RuntimeRow } from "./runtime-nodes.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const NOW = Date.UTC(2026, 7, 15, 10, 12, 0);
 
 /** D1 writes `datetime('now')` as `YYYY-MM-DD HH:MM:SS`, no zone. Reproduce that exactly. */
@@ -87,6 +91,52 @@ describe("runtimeResponse derives status from the heartbeat (#587)", () => {
 	it("does not leak the token, before or after the derivation", () => {
 		expect(runtimeResponse(row({ token_plaintext: "secret" })).hasToken).toBe(true);
 		expect(JSON.stringify(runtimeResponse(row({ token_plaintext: "secret" })))).not.toContain("secret");
+	});
+});
+
+describe("a synthesised timestamp is written in the shape the derivation parses (#587)", () => {
+	// FOUND IN PRODUCTION, not here — the regression this file's own fix introduced, caught by
+	// checking the deployed API rather than by a green suite.
+	//
+	// `/runtime/status` echoes the row it just wrote, and built it with `new Date().toISOString()`.
+	// `heartbeatFresh` parses a stored stamp as `` `${s.replace(" ", "T")}Z` ``, so an ISO string —
+	// which already ends in `Z` — becomes `…ZZ`, `Date.parse` returns NaN, and the row reads as
+	// never-heard-from. Harmless while the status was published raw; the moment the status was
+	// DERIVED from that stamp, the probe began reporting `offline` for a machine it had just
+	// successfully reached. Every fixture in this file was already written in the D1 shape, which
+	// is exactly why the suite could not see it.
+	it("d1Timestamp is fresh; toISOString is not", () => {
+		expect(runtimeResponse(row({ status: "online", last_seen_at: d1Timestamp() })).status).toBe("online");
+		expect(runtimeResponse(row({ status: "online", last_seen_at: new Date().toISOString() })).status).toBe("offline");
+	});
+
+	it("d1Timestamp emits exactly the shape D1's datetime('now') does", () => {
+		expect(d1Timestamp(new Date(NOW))).toBe("2026-08-15 10:12:00");
+		expect(d1Timestamp()).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+	});
+
+	it("no route hands runtimeResponse an ISO timestamp", () => {
+		// The invariant, not just the instance: a `last_seen_at` built at a call site must go
+		// through `d1Timestamp`. Checked over the source because the next such call site will be
+		// written by someone who has not read the paragraph above.
+		const dir = join(__dirname, "..");
+		const offenders: string[] = [];
+		const walk = (d: string) => {
+			for (const entry of readdirSync(d)) {
+				const p = join(d, entry);
+				if (statSync(p).isDirectory()) {
+					walk(p);
+					continue;
+				}
+				if (!p.endsWith(".ts") || p.endsWith(".test.ts")) continue;
+				const src = readFileSync(p, "utf8");
+				for (const m of src.matchAll(/last_seen_at:\s*([^,\n}]+)/g)) {
+					if (m[1].includes("toISOString")) offenders.push(`${p.slice(dir.length + 1)}: ${m[1].trim()}`);
+				}
+			}
+		};
+		walk(dir);
+		expect(offenders, `use d1Timestamp() — an ISO string parses to NaN in heartbeatFresh:\n${offenders.join("\n")}`).toEqual([]);
 	});
 });
 

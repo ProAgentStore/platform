@@ -130,7 +130,7 @@ export function safeCapabilities(value: unknown): unknown[] {
 		: [];
 }
 
-export { runtimeNodeResponse, runtimeResponse, safeParseArray } from "../lib/runtime-response.js";
+export { d1Timestamp, runtimeNodeResponse, runtimeResponse, safeParseArray } from "../lib/runtime-response.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

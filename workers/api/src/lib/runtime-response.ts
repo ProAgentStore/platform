@@ -6,6 +6,23 @@
 import { heartbeatFresh } from "./runtime-attachment.js";
 import { relayNameForInstance, type RuntimeRow } from "./runtime-nodes.js";
 
+/**
+ * `now` in the shape D1 stores it: `YYYY-MM-DD HH:MM:SS`, no zone.
+ *
+ * Not cosmetic. `heartbeatFresh` parses a stored stamp as `` `${s.replace(" ", "T")}Z` `` — so an
+ * ISO-8601 string, which already ends in `Z`, becomes `…ZZ`, `Date.parse` returns NaN, and the row
+ * reads as NEVER HEARD FROM. The `/runtime/status` probe built its echoed row with
+ * `new Date().toISOString()`; that was harmless while the status was published raw and became a
+ * live defect the moment the status was derived from it (#587): the probe reported `offline` for a
+ * machine it had just successfully reached. Found in production, not in the suite, because every
+ * test fixture was already written in the D1 shape.
+ *
+ * Any code putting a synthesised timestamp into a `RuntimeRow` uses this.
+ */
+export function d1Timestamp(at: Date = new Date()): string {
+	return at.toISOString().replace("T", " ").slice(0, 19);
+}
+
 export function safeParseArray(value: string): unknown[] {
 	try {
 		const parsed = JSON.parse(value);

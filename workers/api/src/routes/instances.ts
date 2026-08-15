@@ -33,6 +33,7 @@ import {
 	requireOwnedInstance,
 	requireRuntime,
 	getLiveRuntime,
+	d1Timestamp,
 	runtimeNodeResponse,
 	runtimeResponse,
 	safeCapabilities,
@@ -847,6 +848,12 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		// same two-machine blend from the other direction, and it is also why the per-node table had
 		// no `offline` writer at all (#570): the one call site that passed a node passed "online".
 		await updateRuntimeStatus(c.env, instanceId, session.uid, effective, runtime.runner_node);
+		// Echo what that write left, never `now` unconditionally — an always-fresh stamp makes
+		// `heartbeatFresh` true by construction, which is how this route bypassed the derivation and
+		// became the one call that could not report a machine offline. `d1Timestamp` and NOT
+		// `toISOString`: an ISO stamp parses to NaN in `heartbeatFresh` (see its doc), so it would
+		// publish `offline` for the machine this probe just reached (#587).
+		const seenAt = effective === "online" ? d1Timestamp() : runtime.last_seen_at;
 		// #380: liveness is the PIN-AWARE answer or nothing. This used to ask `relayConnected`
 		// about `runtime.runner_node` — which, once `getLiveRuntime` returned null, is the FALLBACK
 		// row's node, a machine the pin excludes. So the pin-blind question overrode the pin-aware
@@ -878,17 +885,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 			liveNodeExcludedByPin,
 		});
 		return c.json({
-			// `last_seen_at` is echoed as the write above left it, NOT as `now` (#587). Stamping it
-			// `now` unconditionally was how this route bypassed the freshness derivation: an
-			// always-fresh timestamp makes `heartbeatFresh` true by construction, so the probe —
-			// the MORE thorough call — was the one that could not report a machine offline. When
-			// the probe succeeded the row genuinely is fresh, because `updateRuntimeStatus` just
-			// stamped it; when it failed, the honest answer is the last contact we actually had.
-			runtime: runtimeResponse({
-				...runtime,
-				status: effective,
-				last_seen_at: effective === "online" ? new Date().toISOString() : runtime.last_seen_at,
-			}),
+			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: seenAt }),
 			health,
 			capabilities,
 			relay: {
