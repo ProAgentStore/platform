@@ -31,6 +31,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runHealth, waitClause, type RunHealth } from "./work-report.js";
+import type { RunWaitReason } from "./agent-loop-store.js";
 import { summarizeSubordinates } from "./subordinate-observation.js";
 import { activityFromRuns, rosterLines } from "./subordinate-payload.js";
 import type { RunItem } from "./instance-work.js";
@@ -207,6 +208,39 @@ describe("no legend names fewer states than the code can produce (#594 AC5, scop
 		const members = Object.keys(HEALTH);
 		for (const m of members) expect(RUN_HEALTH_LEGEND, `RUN_HEALTH_LEGEND omits \`${m}\``).toContain(`\`${m}\``);
 		expect(members.length, `${members.length} RunHealth members checked`).toBe(4);
+	});
+
+	/**
+	 * No legend promises a resume time for a park that has none (#591/#596).
+	 *
+	 * `coding-pause.ts:146` deliberately writes no `waiting_until` for a HUMAN handoff: that
+	 * park's 15-minute deadline is the moment the run GIVES UP, not the moment it resumes, and
+	 * `waitClause` renders the column under "expected to resume in". So a legend that says a
+	 * parked run's note tells you "until when" is false for the one park that is waiting for the
+	 * reader — and "it resumes on its own" tells them to walk away from it.
+	 *
+	 * The denominator is every park reason the record can hold, compile-time exhaustive.
+	 */
+	it("no legend promises a resume time, or self-resolution, for every park", async () => {
+		const { RUN_HEALTH_LEGEND, waitClause } = await import("./work-report.js");
+		const { COMPLETENESS_LEGEND } = await import("./subordinate-payload.js");
+		const REASONS: Record<RunWaitReason, true> = { engine_limit: true, human: true, platform_interrupt: true };
+		const reasons = Object.keys(REASONS) as RunWaitReason[];
+
+		// The FACT the wording has to survive: a human handoff carries no `waitingUntil`, so its
+		// note names what it waits for and states no end.
+		const noteFor = (reason: RunWaitReason, until: number | null) =>
+			waitClause({ status: "running", waitingReason: reason, waitingUntil: until, lastAliveAt: 1_000, startedAt: 0 }, 1_000) ?? "";
+		expect(noteFor("human", null)).toContain("waiting for YOU");
+		expect(noteFor("human", null)).not.toContain("expected to resume");
+		expect(noteFor("engine_limit", 60_000)).toContain("expected to resume");
+		expect(reasons.length, `${reasons.length} park reasons, all producing a note`).toBe(3);
+		for (const r of reasons) expect(noteFor(r, null), r).not.toBe("");
+
+		for (const [name, legend] of [["RUN_HEALTH_LEGEND", RUN_HEALTH_LEGEND], ["COMPLETENESS_LEGEND", COMPLETENESS_LEGEND]] as const) {
+			expect(legend, `${name} promises a resume time for every park; one of the three has none`).not.toMatch(/what for and until when/i);
+			expect(legend, `${name} says a park resolves itself; a human handoff does not`).not.toMatch(/resumes on its own/i);
+		}
 	});
 
 	it("the supervision legend names every activity word AND every health word", async () => {

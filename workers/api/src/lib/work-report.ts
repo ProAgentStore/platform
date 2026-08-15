@@ -100,8 +100,14 @@ export type RunHealth = "working" | "waiting" | "stalled" | "ended";
  * code has since changed, believed because it is right next to the data.
  */
 export const RUN_HEALTH_LEGEND =
+	// #596: `waitNote` says what a park is FOR in every case; it says when it ends only sometimes,
+	// and the exception is the one that matters most. `coding-pause.ts:146` deliberately writes no
+	// `waiting_until` for a HUMAN handoff, because that park's 15-minute deadline is the moment the
+	// run GIVES UP, not the moment it resumes — and `waitClause` renders the field under "expected
+	// to resume in". Promising "until when" unconditionally would tell an owner to sit and wait for
+	// something that is about to stop waiting for them. State what is true for every park reason.
 	"`health` is the PLATFORM'S OWN verdict on a run and there are four values: `working` (the orchestrator is ticking — it may legitimately be many minutes into ONE instruction), " +
-	"`waiting` (deliberately parked, and `waitNote` says what for and until when), `stalled` (nothing has ticked; the row will say `running` forever and the workflow is probably gone), " +
+	"`waiting` (deliberately parked — `waitNote` says what for, and gives a resume time only when one is knowable; read it, because one park is waiting for a PERSON and will not clear itself), `stalled` (nothing has ticked; the row will say `running` forever and the workflow is probably gone), " +
 	"and `ended` (the run is CLOSED — read `status` and `stopReason` for what happened; `ended` makes NO claim that anything is running). " +
 	"Quote `health` rather than deriving your own from `status` or the timestamps: a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like, and that inference has told an owner a run was stuck while the engine was mid-edit. " +
 	"None of these speaks for the ENGINE — `health` is the orchestrator's state, never the CLI's output.";

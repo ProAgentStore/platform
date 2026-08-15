@@ -300,7 +300,7 @@ export const COMPLETENESS_LEGEND =
 	// #589: this said `working` = a run is going now, and it was computed from the raw `status`
 	// column — which reads `running` for a park, for a dead Workflow and for a row nothing will
 	// ever close. Five words, because a supervisor's next action differs for each.
-	"`roster[].activity` is the platform's verdict across that agent's runs: `working` (a run is genuinely advancing), `waiting` (a run is open but deliberately parked — leave it be, it resumes on its own), `stalled` (a run says it is running and nothing has ticked; somebody has to look), `idle` (nothing in flight — the normal ready state, NOT a fault), and `unknown` (there are open runs and this reply could not read the verdict on them — do NOT treat it as idle). Only `idle` means \"ready for more work\"; `waiting` and `stalled` are runs still in flight. " +
+	"`roster[].activity` is the platform's verdict across that agent's runs: `working` (a run is genuinely advancing), `waiting` (a run is open but deliberately parked and not advancing — read that run's `waitNote` before deciding it needs nothing, because one park is waiting for a PERSON and will not clear itself), `stalled` (a run says it is running and nothing has ticked; somebody has to look), `idle` (nothing in flight — the normal ready state, NOT a fault), and `unknown` (there are open runs and this reply could not read the verdict on them — do NOT treat it as idle). Only `idle` means \"ready for more work\"; `waiting` and `stalled` are runs still in flight. " +
 	// The per-run field, in one clause rather than a second copy of RUN_HEALTH_LEGEND. That block
 	// is 856 characters and the legend is already the largest fixed item in a payload that has run
 	// out of room once (#503); the roster sentence above teaches three of its four words, so the
@@ -335,7 +335,12 @@ export const STATUS_LEGEND =
 	// "No github access", and asked the HUMAN for a path the platform stores.
 	"`repo.githubRepo` is that repository's `owner/name` on GitHub and is the ONLY value to pass to a GitHub tool. `repo.name` is a display label chosen by the owner — it may look like a path and still not be one. When `githubRepo` is absent the repo is not linked to GitHub; say that rather than guessing an owner or asking the human to supply one. " +
 	"`acts` is what an agent actually DID — a pull request opened or merged, a push, a force-push, a delete, a deploy — with the literal command as evidence. Anything with `irreversible: true` changed something that cannot simply be undone, so REPORT IT to the human unprompted: an outcome of 'done' says only that the agent believes it finished, never what it changed on the way. " +
-	"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
+	// The SCOPE clause is the load-bearing half (#594/#597). `acts` is `agent_events` on
+	// `act.consequential` only — never the ordinary tool calls #581 AC7 records — and those rows
+	// have no outcome at all, because the runner computes `block.is_error` and drops it before it
+	// leaves the machine (`headless.ts:750` vs `:676`, tracked as #597). Saying which acts this
+	// sentence governs is what stops the promise being inherited by a list that cannot keep it.
+	"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. `ok` is present on every entry in `acts`; these are CONSEQUENTIAL acts only (merges, pushes, deletes, deploys), not the agent's ordinary tool calls, which carry no outcome and are not listed here. " +
 	"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing. " +
 	TIMES_LEGEND +
 	CONFIG_LEGEND +

@@ -30,6 +30,7 @@
  * extracted from these legends, checked against a fully-populated payload. The general form is
  * left open on the issue rather than approximated.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { STATUS_LEGEND } from "./subordinate-payload.js";
 import { recentActsForInstances } from "./instance-work.js";
@@ -92,6 +93,28 @@ describe("the supervision legends describe the payload that ships with them (#59
 			["not observed", null],
 		]);
 		expect(states.size, `${states.size} outcome states the legend distinguishes, all reachable`).toBe(3);
+	});
+
+	/**
+	 * The promise has to name the list it governs (#597).
+	 *
+	 * `ok` is obtainable for CONSEQUENTIAL acts and not for an ordinary tool call: #581 AC7's
+	 * per-tool-call record has no outcome field because the runner computes `block.is_error`
+	 * (`headless.ts:750`) and `toolResult()` writes the row without it (`:676`). Closing that needs
+	 * a runner change, a CLI publish and users upgrading — #597.
+	 *
+	 * So the sentence is TRUE of `acts` and would be FALSE the moment `acts` grew to include tool
+	 * calls. An unscoped promise is how a legend outlives the data it describes, which is the whole
+	 * class this file guards; naming the scope is what makes the promise checkable.
+	 */
+	it("says WHICH acts it governs, so the promise cannot be inherited by a list that cannot keep it", async () => {
+		expect(STATUS_LEGEND, "the `ok` sentence must name the acts it covers").toMatch(/CONSEQUENTIAL acts only/);
+		expect(STATUS_LEGEND).toMatch(/not the agent's ordinary tool calls/);
+		// …and the scope claim is TRUE of the reader: it keys on the generic consequential event
+		// and nothing else, so no tool-call row can reach this list without changing that constant.
+		const src = readFileSync(new URL("./instance-work.ts", import.meta.url).pathname, "utf-8");
+		expect(src).toContain('const ACT_EVENT = "act.consequential"');
+		expect(src.match(/ACT_EVENT/g)?.length, "one event name, used by both act reads").toBeGreaterThanOrEqual(3);
 	});
 
 	it("every act field the legend names is on the item the reader returns", async () => {

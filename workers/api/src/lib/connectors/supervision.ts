@@ -775,7 +775,12 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 							...(acts.length
 								? {
 										actsLegend:
-											"What this run actually did. `irreversible: true` cannot simply be undone — say so when you report the run. `ok:false` failed and `ok:null` was not observed to succeed; neither is a completed action.",
+											// Scope named, per #594/#597: these are CONSEQUENTIAL acts, and `ok` is on
+											// every one of them. The ordinary tool calls #581 AC7 records carry no
+											// outcome — the runner drops `block.is_error` before it leaves the
+											// machine — so a legend that did not say which list it governs would
+											// promise a field the other one cannot have.
+											"What this run actually did — its CONSEQUENTIAL acts (merges, pushes, deletes, deploys), not its ordinary tool calls. `irreversible: true` cannot simply be undone — say so when you report the run. Every entry carries `ok`: `false` failed and `null` was not observed to succeed; neither is a completed action.",
 									}
 								: {}),
 						},

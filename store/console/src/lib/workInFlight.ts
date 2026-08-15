@@ -73,10 +73,13 @@ export function runActivity(run: Pick<LoopRunLike, "status" | "health"> | null |
 export function activityLabel(run: Pick<LoopRunLike, "status" | "health" | "waitNote"> | null | undefined): string | null {
 	switch (runActivity(run)) {
 		case "waiting":
-			// The server's own sentence when it sent one: it names WHAT the run is waiting for and
-			// when it should resume, which is the part that turns a four-hour pause from alarming
-			// into expected. The bare word is the fallback, never a fabricated reason.
-			return run?.waitNote ? `Waiting — ${run.waitNote}` : "Waiting — parked, and expected to resume on its own";
+			// The server's own sentence when it sent one: it names WHAT the run is waiting for,
+			// which is the part that turns a four-hour pause from alarming into expected. A resume
+			// time rides along only when one is knowable — `coding-pause.ts:146` writes none for a
+			// HUMAN handoff, because that park's deadline is when the run gives up rather than when
+			// it resumes (#591/#596). So the FALLBACK must not promise one either: "expected to
+			// resume on its own" would be a fabricated all-clear over a run waiting for this owner.
+			return run?.waitNote ? `Waiting — ${run.waitNote}` : "Waiting — deliberately parked, not stalled";
 		case "stalled":
 			return "Stalled — nothing has ticked for a while; this run may have died";
 		default:

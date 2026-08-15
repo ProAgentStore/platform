@@ -1068,7 +1068,11 @@ const PINS = {
 	// NOT split: the seam named above is connector-supervision vs. the agent-direction store, and
 	// #589 lands in the FIRST half — splitting there moves the other half out to make room, which
 	// is a pin raise wearing a diff.
-	"workers/api/src/lib/connectors/supervision.ts": 887,
+	// +5 more at #594/#597: `check_delegation`'s `actsLegend` now names WHICH acts carry `ok`.
+	// `ok` is obtainable for consequential acts and not for an ordinary tool call — the runner
+	// computes `block.is_error` and drops it before it leaves the machine (#597) — and an unscoped
+	// promise is how a legend outlives its data, which is the defect #594 was filed about.
+	"workers/api/src/lib/connectors/supervision.ts": 892,
 	// First entry at #580/#583, crossing LIMIT from 799 — a file that had been sitting one line
 	// under it, which is not a coincidence: work kept being pushed out (`coding-pause.ts`,
 	// `coding-wait.ts`, `coding-run-report.ts` are all extractions from here) precisely because
@@ -1188,7 +1192,7 @@ const PINS = {
 	// say the same thing — a status column was published without the derivation that makes it
 	// true — which is the case the split named above (PINS into its own data file) would make
 	// cheaper to read. Still not worth doing for two entries.
-	// +17 at #589: the supervision.ts raise above and this self-ref. It is the THIRD raise in a row
+	// +22 at #589 and #594: the two supervision.ts raises above and this self-ref. It is the THIRD raise in a row
 	// (#580, #587, #589) whose reason is the same sentence in a different file — a status column
 	// published without the derivation that makes it true — which is now evidence rather than
 	// coincidence, and the strongest argument yet for the PINS-into-a-data-file split named above.
@@ -1196,7 +1200,8 @@ const PINS = {
 	// PINS comments grow, which is the ratchet applied to itself — those comments ARE the record of
 	// why each number moved, so trimming them to stay under a number would delete the only thing
 	// that makes a pin auditable rather than arbitrary.
-	"scripts/check-file-size.mjs": 1280,
+	// +5 at #594/#597: the second supervision.ts raise above and this self-ref.
+	"scripts/check-file-size.mjs": 1285,
 };
 
 /**
