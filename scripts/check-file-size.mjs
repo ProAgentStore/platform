@@ -241,7 +241,11 @@ const PINS = {
 	// The seventh was not right and now reports: a failed audio monitor silently disables the VAD,
 	// which is survivable only because `maxDictationMs` ends the turn — a mechanism nobody could
 	// see from the empty braces.
-	"packages/sdk/src/voice/use-voice.ts": 2017,
+	// +3 at #571: an import, and three lines saying why hands-free BAILING is a failure rather than a
+	// decision. The classification itself cost nothing — the twelve `client:voice` reports in this
+	// file swapped a string literal for one of two named constants (voice/report-source.ts), which is
+	// what lets `report-sources.test.ts` assert the whole set instead of one example.
+	"packages/sdk/src/voice/use-voice.ts": 2021,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -1068,7 +1072,7 @@ const PINS = {
 	// self-ref. Same shape as #526 an hour earlier — the coverage computation went to its own module
 	// (lib/usage-coverage.ts, 127 lines) rather than into usage.ts, which is 52 lines under the
 	// threshold and would have crossed it.
-	"scripts/check-file-size.mjs": 1152,
+	"scripts/check-file-size.mjs": 1156,
 };
 
 /**

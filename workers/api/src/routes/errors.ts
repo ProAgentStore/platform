@@ -1,7 +1,7 @@
 /** GET /v1/errors — read back the durable error log (see lib/error-log.ts). */
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
+import { deriveClientLevel, listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
 import type { Env } from "../types.js";
 
 export const errorRoutes = new Hono<{ Bindings: Env }>();
@@ -32,16 +32,24 @@ errorRoutes.post("/client", async (c) => {
 	const message = typeof body.message === "string" ? body.message : "";
 	if (!message.trim()) return c.json({ ok: false, error: "message required" }, 400);
 	const rawSource = typeof body.source === "string" ? body.source : "app";
+	const source = `client:${rawSource}`.slice(0, 64);
 	const status = typeof body.status === "number" ? body.status : undefined;
 	await logError(c.env, {
-		source: `client:${rawSource}`.slice(0, 64),
+		source,
 		userId: session?.uid ?? null,
 		status,
 		// Severity is derived here rather than trusted from the browser: a reported 4xx is a wall
 		// the user hit (diagnostic, not a bug), while a network failure or a thrown component
 		// carries no status and is a real error. Letting the client name its own level would make
 		// the field meaningless the first time a caller passed the wrong one.
-		level: status !== undefined && status >= 400 && status < 500 ? "warn" : "error",
+		//
+		// That reasoning is intact and is now stated once, in `deriveClientLevel`, together with the
+		// third case it was silent about (#571): telemetry that carries no status and is not a
+		// failure at all. A statusless report from a source the SERVER has declared observational —
+		// a voice gate discarding a turn it was built to discard — is a `warn`, so `?level=error`
+		// answers "bugs only" again. The client still cannot name its own level; it names only where
+		// it is reporting from, and the server owns what that name means.
+		level: deriveClientLevel(source, status),
 		// The bundle that reported it (#539). Trusted the way a User-Agent is: it identifies the
 		// build for a diagnosis, it authorizes nothing, and it is narrowed to a build id's shape
 		// before it reaches the collapse key. Absent = a bundle that predates this field.

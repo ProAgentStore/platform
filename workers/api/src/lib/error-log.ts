@@ -17,6 +17,69 @@ import { logEvent } from "./events.js";
 export type ErrorLevel = "error" | "warn";
 
 /**
+ * Sources whose STATUSLESS reports are OBSERVATIONS of a designed outcome, not failures (#571).
+ *
+ * The client telemetry route had exactly one input to derive severity from — the HTTP status — and
+ * one premise: no status means nothing answered, which means something broke. That premise held for
+ * every caller it was written for and is false for a whole family. The voice stack reports through
+ * this path with no status at all, so its noise gate catching Whisper's "Thank you for watching."
+ * hallucination off a silent microphone landed at the same severity as `Anthropic (400): Your credit
+ * balance is too low`. Measured 2026-08-15: **19 of the 40 newest rows were `client:voice`, every one
+ * at `error`, and eight of them (25 occurrences after collapse) were the feature working.**
+ * `?level=error` — documented in `routes/errors.ts` as "how you ask for bugs only" — returned mostly
+ * discarded microphone frames.
+ *
+ * ## This is not "trusting the client"
+ *
+ * The reasoning in `routes/errors.ts` stands: a caller must not be able to name its own level,
+ * because the first one to pass the wrong one makes the field meaningless. Nothing here changes that.
+ * The client still supplies only a SOURCE — where the report came from, the same untrusted-but-useful
+ * fact a `User-Agent` carries — and the SERVER decides what that name means, exactly as it already
+ * decides what a status means. A caller that reports under a name it has no business using gets the
+ * level this table assigns to that name; it cannot invent one.
+ *
+ * ## Why the list is names, not a rule
+ *
+ * A blanket allowlist on `voice` was the cheaper-looking fix and is unsound: `client:voice` is NOT a
+ * homogeneous source. It carries designed discards (the noise gate, the end-of-turn gate, the clip
+ * gate, the echo-tail ignore) AND genuine failures on the same string (the audio monitor failing to
+ * start, a Whisper 400, the transcription watchdog, hands-free bailing out because the recognizer
+ * kept dying). Downgrading all of it would silently hide real failures — the mirror of the bug being
+ * fixed. So the SDK splits the source instead: the designed-decision call sites report under
+ * `voice-decision` and every failure keeps `voice`. See `packages/sdk/src/voice/report-sources.test.ts`,
+ * which asserts that split over the whole voice tree so a new call site cannot land unclassified.
+ *
+ * ## Why `warn` and not a fourth level
+ *
+ * `warn` already means precisely this — "a failure can be RECORDED without being counted as a bug"
+ * ({@link ErrorLevel}) — and a designed discard is the purest case of it. An `info` level would have
+ * to be threaded through the read filter (`routes/errors.ts`), `listErrors`, and the MCP
+ * `list_errors` level enum, so a row nobody can name is a row nobody can filter for. Nothing is
+ * reduced either way: the rows are still written, still readable, still carry their full context —
+ * #511, #535 and #538 all reason from this telemetry and none of it goes away. Only the severity it
+ * claims changes.
+ */
+export const OBSERVATION_SOURCES: ReadonlySet<string> = new Set(["client:voice-decision"]);
+
+/**
+ * The level a CLIENT-reported row is filed at, from the two things the server is willing to judge on:
+ * the status it carries and the source it came from. Pure, so the policy is testable without a route.
+ *
+ * Order is the content. **The status wins**, because it is a measurement and a name is a claim: a 4xx
+ * is a wall the user hit (diagnostic, not a bug), and anything else the transport reported — a 5xx, a
+ * 0 — is a real failure however the caller labelled itself. Only a report with NO status at all falls
+ * through to the source, which is exactly the case the status rule was silent about and the one that
+ * produced #571.
+ *
+ * @param source the FULL stored source, `client:`-prefixed — the same string `list_errors(source:…)`
+ *               filters on, so what is declared above is what an investigator can query.
+ */
+export function deriveClientLevel(source: string, status?: number): ErrorLevel {
+	if (typeof status === "number") return status >= 400 && status < 500 ? "warn" : "error";
+	return OBSERVATION_SOURCES.has(source) ? "warn" : "error";
+}
+
+/**
  * How long an identical failure folds into the row already recording it (#424).
  *
  * One hour, anchored on that row's `created_at` rather than on its last hit, so a permanently

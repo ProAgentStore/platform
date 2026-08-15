@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1 } from "./d1-sqlite.js";
-import { listErrors, logError, sanitizeBuildId, type ErrorRow } from "./error-log.js";
+import { deriveClientLevel, listErrors, logError, OBSERVATION_SOURCES, sanitizeBuildId, type ErrorRow } from "./error-log.js";
 import type { Env } from "../types.js";
 
 /**
@@ -239,6 +239,73 @@ describe("logError — level", () => {
 		await logError(env, { source: "s", message: "m" });
 		await logError(env, { source: "s", message: "m", level: "warn" });
 		expect(inserts.filter((i) => i.sql.includes("error_log")).map((i) => i.args[6])).toEqual(["error", "warn"]);
+	});
+});
+
+/**
+ * #571 — the client channel carries no level, and deriving one from the status alone put "the noise
+ * gate worked" at the same severity as "your credit balance is too low".
+ *
+ * ## These go RED on the old code
+ *
+ * The route used to compute the level inline:
+ *
+ *     level: status !== undefined && status >= 400 && status < 500 ? "warn" : "error",
+ *
+ * `deriveClientLevel` did not exist, so this block does not compile against it — and restoring that
+ * expression in place of the call makes the two observation-source cases below fail with
+ * `expected 'error' to be 'warn'`, which is exactly the production row this ticket was filed about.
+ */
+describe("deriveClientLevel — a statusless OBSERVATION is not a bug (#571)", () => {
+	it("files a statusless report from an observation source at warn, and from a failure source at error", () => {
+		// The acceptance criterion, in one line: same absence of a status, two different levels,
+		// decided by what the server has declared the source to mean.
+		expect(deriveClientLevel("client:voice-decision")).toBe("warn");
+		expect(deriveClientLevel("client:voice")).toBe("error");
+	});
+
+	it("keeps every other statusless client report an error", () => {
+		// The distrust argument is unchanged: a name the server has not declared buys nothing.
+		for (const source of ["client:app", "client:voice-tts", "client:voice-gate", "client:voice-control", "client:auth", "keys-proxy"]) {
+			expect(deriveClientLevel(source), source).toBe("error");
+		}
+	});
+
+	it("still reads a 4xx as a diagnostic wall and anything else as a failure", () => {
+		expect(deriveClientLevel("client:app", 402)).toBe("warn");
+		expect(deriveClientLevel("client:app", 429)).toBe("warn");
+		expect(deriveClientLevel("client:app", 500)).toBe("error");
+		expect(deriveClientLevel("client:app", 0)).toBe("error");
+	});
+
+	it("lets a MEASURED status outrank the source name, in both directions", () => {
+		// A status is a measurement, a source is a claim. An observation source that somehow carries a
+		// 5xx is reporting a real failure and must not be downgraded by its own label — which is the
+		// property that keeps a source allowlist from becoming the mirror of the bug it fixes.
+		expect(deriveClientLevel("client:voice-decision", 500)).toBe("error");
+		expect(deriveClientLevel("client:voice-decision", 403)).toBe("warn");
+	});
+
+	it("declares the observation sources explicitly, and only those", () => {
+		// ADR 0002 G1 — assert the set, not an example. A source added here changes what `?level=error`
+		// returns for every account, so it is a decision someone signs rather than a quiet append.
+		expect([...OBSERVATION_SOURCES]).toEqual(["client:voice-decision"]);
+	});
+
+	it("routes the report through the same derivation the route uses", async () => {
+		// The policy is only worth testing if the write path actually consults it.
+		const { env, inserts } = mockDb();
+		await logError(env, { source: "client:voice-decision", message: "gate discard", level: deriveClientLevel("client:voice-decision") });
+		expect(inserts.find((i) => i.sql.includes("error_log"))?.args[6]).toBe("warn");
+	});
+
+	it("reduces nothing — the row still carries its full context", async () => {
+		// #511/#535/#538 all reason from this telemetry. The severity changes; the evidence does not.
+		const { env, inserts } = mockDb();
+		const context = { transcript: "Thank you for watching.", peakLevel: 0.02, frames: 900, gateSawWords: false };
+		await logError(env, { source: "client:voice-decision", message: "voice turn rejected as noise", level: "warn", context });
+		const row = inserts.find((i) => i.sql.includes("error_log"))!;
+		expect(JSON.parse(row.args[5] as string)).toEqual(context);
 	});
 });
 

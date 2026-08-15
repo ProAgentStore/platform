@@ -47,6 +47,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, type VoiceConfig } from "./config.js";
 import { isConnectivityError, reportClientError } from "../client.js";
+import { VOICE_DECISION, VOICE_FAILURE } from "./report-source.js";
 import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, VOICE_FLOOR } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
@@ -467,7 +468,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 							dictate({ type: "endOfTurn", at: now });
 							sttRef.current?.stop();
 						} else {
-							if (close.report) reportClientError("voice", close.report, { path: decision, ...captureContext() });
+							if (close.report) reportClientError(VOICE_DECISION, close.report, { path: decision, ...captureContext() });
 							idleRecycleRef.current = true;
 							clearVoiceText();
 							sttRef.current?.stopDiscard();
@@ -487,7 +488,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// contexts at ~6 — a resource condition worth SEEING even though the turn completes.
 			// One fixed string: `reportClientError` de-dups on source+message and hands-free
 			// reopens the mic every turn.
-			reportClientError("voice", "audio monitor failed to start — end-of-turn falls back to the max-dictation cap", {
+			reportClientError(VOICE_FAILURE, "audio monitor failed to start — end-of-turn falls back to the max-dictation cap", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
@@ -583,7 +584,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// Until #455 `finalize` had ALREADY cleared the bubble before we got here, so a drop was
 			// invisible from every side — precisely why #377 could not be confirmed from the data. The
 			// verdict now goes back with the return. Fixed message (de-duped per 30s), evidence in context.
-			reportClientError("voice", `voice turn dropped before sending — ${plan.reason}`, { transcript: text.slice(0, 200), path: "send", ...captureContext() });
+			reportClientError(VOICE_DECISION, `voice turn dropped before sending — ${plan.reason}`, { transcript: text.slice(0, 200), path: "send", ...captureContext() });
 			// The language nudge asks them to repeat — never an automatic language switch. Noise
 			// gets no notice at all: there is nothing for the user to do about a turn they didn't
 			// take, and telling them there was one is the confusing part.
@@ -938,7 +939,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// Same treatment `leaveForSwitch` gives a destroyed utterance: the noise filter keeps a
 			// pure-echo "turn" out of the composer, and a rejection is LOGGED rather than vanishing.
 			const noise = planNoiseRejection(plan.recoverText, { gate: gateSnapshot() });
-			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: plan.recoverText.slice(0, 200), path: "mute", ...captureContext() });
+			if (noise.action === "discard") reportClientError(VOICE_DECISION, noise.report, { transcript: plan.recoverText.slice(0, 200), path: "mute", ...captureContext() });
 			else onRecoveredTextRef.current?.(plan.recoverText);
 		}
 		clearVoiceText();
@@ -1121,7 +1122,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// than a notice; the transcript rides along because it is the only evidence of what came
 			// back. `reportClientError` de-dups per message per 30s, so an echo-heavy room cannot
 			// flood the log (#423).
-			if (isFinal && text?.trim()) reportClientError("voice", "result ignored (echo tail or a turn already abandoned)", { transcript: text.trim().slice(0, 200), path: "ignore" });
+			if (isFinal && text?.trim()) reportClientError(VOICE_DECISION, "result ignored (echo tail or a turn already abandoned)", { transcript: text.trim().slice(0, 200), path: "ignore" });
 			return;
 		}
 		if (verdict === "recover") {
@@ -1148,7 +1149,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// whole recover contract (#175) and costs a line the user can clear if we were wrong.
 			if (recovered) {
 				const noise = planNoiseRejection(recovered, { gate: gateSnapshot() });
-				if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: recovered.slice(0, 200), path: "recover", ...captureContext() });
+				if (noise.action === "discard") reportClientError(VOICE_DECISION, noise.report, { transcript: recovered.slice(0, 200), path: "recover", ...captureContext() });
 				else onRecoveredTextRef.current?.(recovered);
 			}
 			return;
@@ -1298,7 +1299,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// Logged either way. A discard is the case that could not be confirmed from the
 						// data at all — no message, no trace event, no error row — and the transcript
 						// rides in the context because it is the only evidence of what came back.
-						reportClientError("voice", noise.report, { transcript: t.slice(0, 200), path: "handsFree", ...captureContext() });
+						reportClientError(VOICE_DECISION, noise.report, { transcript: t.slice(0, 200), path: "handsFree", ...captureContext() });
 						// `failed` keeps the live capture on the bubble with a reason and the existing
 						// Dismiss, instead of erasing the words the user just watched appear.
 						flushSync(() => { if (noise.action === "keep") dictate({ type: "failed", note: noise.note, at: Date.now() }); else clearVoiceText(); });
@@ -1404,7 +1405,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// The recorder's own speech gate gets the same witness the VAD paths use, so all three
 			// answer "did real words happen this turn?" identically — and reports what it decided.
 			gate: gateSnapshot,
-			onClipGate: (v) => { const r = clipGateReport(v); if (r) reportClientError("voice", r, { path: "clip-gate", ...captureContext() }); },
+			onClipGate: (v) => { const r = clipGateReport(v); if (r) reportClientError(VOICE_DECISION, r, { path: "clip-gate", ...captureContext() }); },
 			onError: (err) => {
 				console.warn("[voice] STT error:", err);
 				// Soft "no-speech" = empty transcription (silence, echo, or the agent's own
@@ -1448,7 +1449,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// and a stall is not a blip: it is the thing we need rows for before the 20s
 					// first-byte deadline can safely be tightened.
 					if (!isConnectivityError(String(err)) || String(err) === TRANSCRIBE_TIMEOUT_MESSAGE) {
-						reportClientError("voice", String(err), { sttWhisper: sttIsWhisperRef.current });
+						reportClientError(VOICE_FAILURE, String(err), { sttWhisper: sttIsWhisperRef.current });
 					}
 					// Surface real errors (Whisper 401/400, mic denied) as a notice —
 					// otherwise a swallowed failure is indistinguishable from "nothing
@@ -1484,7 +1485,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// out on my phone" countable. planRestartBail holds both, and the reason the
 						// notice is NOT auto-cleared like the error notices above it.
 						const plan = planRestartBail({ rapidEnds, sttWhisper: sttIsWhisperRef.current });
-						reportClientError("voice", plan.report, plan.context);
+						// A FAILURE, not a decision (#571), even though bailing is the correct response:
+						// what it records is that the microphone stopped responding — every cause on the
+						// notice's list is a real fault (permission revoked, device taken, OS suspend).
+						reportClientError(VOICE_FAILURE, plan.report, plan.context);
 						flushSync(() => setNotice(plan.notice));
 						setConvoOn(false);
 						setMicOn(false);
@@ -1604,7 +1608,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// breadcrumb rather than the turn evaporating on the way to another agent (#377).
 		if (prep.recoverText) {
 			const noise = planNoiseRejection(prep.recoverText, { gate: gateSnapshot() });
-			if (noise.action === "discard") reportClientError("voice", noise.report, { transcript: prep.recoverText.slice(0, 200), path: "switch", ...captureContext() });
+			if (noise.action === "discard") reportClientError(VOICE_DECISION, noise.report, { transcript: prep.recoverText.slice(0, 200), path: "switch", ...captureContext() });
 			else onRecoveredTextRef.current?.(prep.recoverText);
 		}
 		if (prep.cancelSpeech) ttsRef.current?.cancel();
@@ -1800,7 +1804,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (dictation?.status !== "transcribing" || !dictation.transcribingAt) return;
 		const timer = setTimeout(() => {
 			if (dictationRef.current?.status !== "transcribing") return;
-			reportClientError("voice", `${TRANSCRIBE_TIMEOUT_MESSAGE} (watchdog)`, { sttWhisper: sttIsWhisperRef.current });
+			reportClientError(VOICE_FAILURE, `${TRANSCRIBE_TIMEOUT_MESSAGE} (watchdog)`, { sttWhisper: sttIsWhisperRef.current });
 			flushSync(() => dictate({ type: "failed", note: TRANSCRIBE_TIMEOUT_MESSAGE, at: Date.now() }));
 			setPaused(false);
 			if (!convoOnRef.current) setMicOn(false);
