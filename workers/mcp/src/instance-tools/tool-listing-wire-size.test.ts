@@ -63,12 +63,42 @@ function listing(): { tools: unknown[] } {
 	return { tools };
 }
 
+/**
+ * The route returns `jsonSchema` only on ALLOWED rows when `schemas=true` — a schema for a tool
+ * the caller may not run describes inputs it could never send (#569). The stub honours the query
+ * so the opt-in path measures the shape the route actually produces.
+ */
+function listingWithSchemas(): { tools: unknown[] } {
+	const { tools } = listing();
+	return {
+		tools: tools.map((t) => {
+			const row = t as { allowed: boolean };
+			if (!row.allowed) return t;
+			return {
+				...row,
+				jsonSchema: {
+					type: "object",
+					properties: Object.fromEntries(
+						Array.from({ length: 6 }, (_, k) => [
+							`parameter_${k}`,
+							{ type: "string", description: "What this parameter selects, and the constraint that matters." },
+						]),
+					),
+					required: ["parameter_0"],
+				},
+			};
+		}),
+	};
+}
+
 let tools: Map<string, { schema: Shape; handler: Handler }>;
 
 beforeEach(() => {
-	vi.stubGlobal("fetch", async () =>
-		new Response(JSON.stringify(listing()), { status: 200, headers: { "Content-Type": "application/json" } }),
-	);
+	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+		const url = typeof input === "string" ? input : input.toString();
+		const body = url.includes("schemas=true") ? listingWithSchemas() : listing();
+		return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+	});
 	tools = new Map();
 	const ctx: InstanceToolsCtx = {
 		env,
@@ -106,6 +136,40 @@ describe("list_instance_tools wire size (#569)", () => {
 		console.log(
 			`✓ list_instance_tools wire size: 104 rows, ${bytes} B compact vs ${pretty} B pretty ` +
 				`(+${Math.round(((pretty - bytes) / bytes) * 100)}%), limit ${HOST_LIMIT} B`,
+		);
+	});
+
+	it("carries schemas for the runnable set only, and states what the opt-in path costs", async () => {
+		// The default path above is what #569 was filed about and it now fits. `schemas:true` is
+		// the deliberately heavy path, and it was measured in production at 65,969 B — 433 B OVER
+		// the same 64 KiB limit. That is recorded here rather than asserted, because making it fit
+		// is a DESIGN decision this file must not pre-empt: the candidates are dropping the
+		// not-allowed rows' descriptions when schemas are asked for, or narrowing `schemas` from a
+		// boolean to the tools the caller names. Both change what the argument means.
+		//
+		// What IS asserted, stated precisely so this arm is not read as more than it is: the
+		// allowed-only rule belongs to the ROUTE (`workers/api`, where `tool-listing-budget.test.ts`
+		// owns it), and the stub below mirrors it. So this does NOT re-prove that rule. It proves
+		// the MCP layer passes those rows through UNCHANGED — that serialising compact neither
+		// drops a schema nor attaches one to a row the caller cannot invoke — and it puts the wire
+		// cost of the opt-in path on the record next to the default one.
+		const t = tools.get("list_instance_tools");
+		if (!t) throw new Error("list_instance_tools not registered");
+		const out = await t.handler({ instance_id: "inst-1", schemas: true });
+		const parsed = JSON.parse(out.content[0].text) as { tools: { allowed: boolean; jsonSchema?: unknown }[] };
+		const bytes = new TextEncoder().encode(out.content[0].text).length;
+
+		// G1 — the denominator, before any claim about it.
+		expect(parsed.tools).toHaveLength(104);
+		const allowed = parsed.tools.filter((r) => r.allowed);
+		expect(allowed).toHaveLength(35);
+
+		expect(parsed.tools.filter((r) => r.jsonSchema !== undefined)).toHaveLength(allowed.length);
+		expect(parsed.tools.filter((r) => !r.allowed && r.jsonSchema !== undefined)).toEqual([]);
+
+		console.log(
+			`✓ list_instance_tools schemas:true — ${bytes} B, schemas on ${allowed.length}/104 rows (allowed only). ` +
+				`Production measured 65,969 B for this path, ${65969 - HOST_LIMIT} B over the ${HOST_LIMIT} B host limit — unresolved, needs its own issue.`,
 		);
 	});
 });
