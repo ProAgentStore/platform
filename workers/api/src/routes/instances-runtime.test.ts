@@ -1,6 +1,9 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { HEARTBEAT_FRESH_MS } from "../lib/runtime-attachment.js";
 import { ORPHANABLE_TASK_TYPES } from "../lib/runtime-task-ownership.js";
-import { callRuntime, expireOrphanedRuntimeTasks, type RuntimeRow } from "./instances-runtime.js";
+import { callRuntime, expireOrphanedRuntimeTasks, runtimeNodeResponse, type RuntimeRow } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
 interface Write {
@@ -219,5 +222,98 @@ describe("callRuntime (relay-only)", () => {
 		const env = {} as unknown as Env;
 		const row = mockRow();
 		await expect(callRuntime(env, row, "/health")).rejects.toThrow("RELAY binding not configured");
+	});
+});
+
+/**
+ * #570, from production. `instance_runtime_status` on one instance returned four node rows, three
+ * of them last seen 2–4 days earlier, and all four said `online`. An operator asking "which of my
+ * machines is up?" got four yeses and one right answer.
+ */
+describe("a node's reported status comes from its heartbeat, not from a write-once column (#570)", () => {
+	const NOW = Date.parse("2026-08-15T00:00:00Z");
+	const stamp = (msAgo: number) => new Date(NOW - msAgo).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+
+	/** The observed table: one machine heartbeating, three registered days ago. All stored `online`. */
+	const rows: RuntimeRow[] = [
+		mockRow({ runner_node: "RLs-MacBook-Air", status: "online", last_seen_at: stamp(20_000) }),
+		mockRow({ runner_node: "Sergeys-Mac-mini.local", status: "online", last_seen_at: stamp(3 * 86_400_000) }),
+		mockRow({ runner_node: "RLs-MacBook-Air.local", status: "online", last_seen_at: stamp(4 * 86_400_000) }),
+		mockRow({ runner_node: "Mac", status: "online", last_seen_at: stamp(5 * 86_400_000) }),
+	];
+
+	it("distinguishes the machine that is talking to us from the three that are not", () => {
+		const serialised = rows.map((row) => runtimeNodeResponse(row, NOW));
+		// The denominator: four rows in, four rows out, and the assertion names the status of every
+		// one of them — not just that "at least one" is offline.
+		expect(serialised.map((n) => [n.runnerNode, n.status])).toEqual([
+			["RLs-MacBook-Air", "online"],
+			["Sergeys-Mac-mini.local", "offline"],
+			["RLs-MacBook-Air.local", "offline"],
+			["Mac", "offline"],
+		]);
+		expect(serialised.filter((n) => n.status === "online")).toHaveLength(1);
+	});
+
+	it("keeps every node listed, so a pin onto a machine that is switched off still resolves", () => {
+		const serialised = rows.map((row) => runtimeNodeResponse(row, NOW));
+		expect(serialised).toHaveLength(rows.length);
+		// The pin target and its relay name survive — #570's stated regression risk is that fixing
+		// the status field must not delete a machine from the "Runs on" tiles.
+		expect(serialised.map((n) => n.relayName)).toEqual(
+			rows.map((r) => `${r.instance_id}:node:${r.runner_node}`),
+		);
+		expect(serialised.every((n) => Boolean(n.lastSeenAt))).toBe(true);
+	});
+
+	it("uses the same window the status probe uses, on both sides of it", () => {
+		const justInside = mockRow({ status: "online", last_seen_at: stamp(HEARTBEAT_FRESH_MS - 1_000) });
+		const justOutside = mockRow({ status: "online", last_seen_at: stamp(HEARTBEAT_FRESH_MS + 1_000) });
+		expect(runtimeNodeResponse(justInside, NOW).status).toBe("online");
+		expect(runtimeNodeResponse(justOutside, NOW).status).toBe("offline");
+	});
+
+	it("never reports online for a row that has never been heard from", () => {
+		expect(runtimeNodeResponse(mockRow({ status: "online", last_seen_at: null }), NOW).status).toBe("offline");
+		expect(runtimeNodeResponse(mockRow({ status: "online", last_seen_at: "not a date" }), NOW).status).toBe("offline");
+	});
+
+	it("does not overrule a stored offline with a fresh-looking stamp", () => {
+		// The derivation may only ever move the answer toward `offline`, so a future writer that
+		// marks a node down is not undone by this function.
+		expect(runtimeNodeResponse(mockRow({ status: "offline", last_seen_at: stamp(1_000) }), NOW).status).toBe("offline");
+	});
+
+	// The premise the fix rests on, measured rather than asserted from memory: the per-node UPDATE
+	// in `updateRuntimeStatus` only runs when a caller passes a node, and only one caller does.
+	// If that ever stops being true, this fails and whoever changed it gets to revisit whether the
+	// column should out-rank the heartbeat.
+	it("still has exactly one call site that writes a node status, and it writes 'online'", () => {
+		const dir = join(__dirname, "..");
+		const files: string[] = [];
+		const walk = (d: string) => {
+			for (const entry of readdirSync(d)) {
+				const p = join(d, entry);
+				if (statSync(p).isDirectory()) walk(p);
+				else if (p.endsWith(".ts") && !p.endsWith(".test.ts")) files.push(p);
+			}
+		};
+		walk(dir);
+		const calls: string[] = [];
+		for (const file of files) {
+			const src = readFileSync(file, "utf8");
+			for (const m of src.matchAll(/updateRuntimeStatus\(\s*([^;]*?)\);/g)) {
+				const args = m[1].replace(/\s+/g, " ").trim();
+				// The declaration itself matches too; its parameters carry type annotations, calls don't.
+				if (/\w+\??:\s*(Env|string)\b/.test(args)) continue;
+				calls.push(args);
+			}
+		}
+		// Eight call sites; the denominator is asserted so a shrinking scan cannot pass by finding
+		// nothing.
+		expect(calls.length).toBeGreaterThanOrEqual(8);
+		const withNode = calls.filter((c) => c.split(",").length > 4);
+		expect(withNode).toHaveLength(1);
+		expect(withNode[0]).toContain('"online"');
 	});
 });

@@ -60,7 +60,7 @@ export {
 } from "./instances-runtime.js";
 import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
-import { diagnoseAttachment } from "../lib/runtime-attachment.js";
+import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
 
@@ -828,8 +828,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	// just rotated on a `pags up` restart, a momentary blip) must NOT flip it offline:
 	// getRunnerConn gates work on status != 'offline', so a destructive probe would
 	// knock out coding/apply and flash "not connected" while the runner is actually fine.
-	const lastSeenMs = runtime.last_seen_at ? Date.parse(`${runtime.last_seen_at.replace(" ", "T")}Z`) : 0;
-	const recentlySeen = lastSeenMs > 0 && Date.now() - lastSeenMs < 90_000;
+	const recentlySeen = heartbeatFresh(runtime.last_seen_at);
 
 	try {
 		const [healthRes, capabilitiesRes] = await Promise.all([

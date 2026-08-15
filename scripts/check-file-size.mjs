@@ -828,7 +828,13 @@ const PINS = {
 	// that write them); the DECISIONS — what a machine id is, which names are one machine, and
 	// what may therefore be claimed — are pure and live in lib/machine-identity.ts with their
 	// tests, which is where a split would have put them anyway.
-	"workers/api/src/routes/instances-runtime.ts": 893,
+	// -50 at #570. The two response serialisers moved to lib/runtime-response.ts (pure functions of
+	// a D1 row: no Hono, no env, no I/O) and `RuntimeRow` to lib/runtime-nodes.ts. The type had to
+	// move too: with it here, the new lib module imported a routes module back and
+	// `import-graph.test.ts` failed on the cycle — which is the guard doing its job on a split that
+	// looked finished. Both are re-exported from here, so no importer moved. Lowered rather than
+	// banked, per this guard's own rule: headroom left behind is how a removal gets silently spent.
+	"workers/api/src/routes/instances-runtime.ts": 843,
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
@@ -1072,7 +1078,9 @@ const PINS = {
 	// self-ref. Same shape as #526 an hour earlier — the coverage computation went to its own module
 	// (lib/usage-coverage.ts, 127 lines) rather than into usage.ts, which is 52 lines under the
 	// threshold and would have crossed it.
-	"scripts/check-file-size.mjs": 1156,
+	// +8 at #570: the self-ref for LOWERING the instances-runtime pin above. A pin coming down costs
+	// this file the same lines a pin going up does, which is the price of recording why.
+	"scripts/check-file-size.mjs": 1164,
 };
 
 /**

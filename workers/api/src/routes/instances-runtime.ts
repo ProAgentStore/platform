@@ -1,7 +1,7 @@
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
-import { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
+import { normalizeRunnerNode, relayNameForInstance, type RuntimeRow } from "../lib/runtime-nodes.js";
 import { getBoundRunnerConn } from "../lib/runner-client.js";
 import { isOrphanedByRunnerReconnect, ORPHANABLE_TASK_TYPES, orphanedTaskReason } from "../lib/runtime-task-ownership.js";
 export { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
@@ -17,26 +17,7 @@ export interface InstanceRow {
 	updated_at: string;
 }
 
-export interface RuntimeRow {
-	instance_id: string;
-	user_id: string;
-	placement: string;
-	endpoint_url: string;
-	token_ciphertext: ArrayBuffer | Uint8Array | null;
-	token_dek_wrapped: ArrayBuffer | Uint8Array | null;
-	token_iv: ArrayBuffer | Uint8Array | null;
-	token_plaintext: string | null;
-	capabilities: string;
-	runner_version: string;
-	runner_node: string;
-	/** Stable machine identity (#379). Only on `instance_runtime_nodes`, and null until the
-	 *  machine has registered with a CLI that mints one. */
-	machine_id?: string | null;
-	status: string;
-	last_seen_at: string | null;
-	created_at: string;
-	updated_at: string;
-}
+export type { RuntimeRow } from "../lib/runtime-nodes.js";
 
 export interface RuntimeRegistrationBody {
 	endpointUrl: string;
@@ -149,37 +130,7 @@ export function safeCapabilities(value: unknown): unknown[] {
 		: [];
 }
 
-export function runtimeResponse(row: RuntimeRow) {
-	return {
-		instanceId: row.instance_id,
-		placement: row.placement,
-		endpointUrl: row.endpoint_url,
-		capabilities: safeParseArray(row.capabilities),
-		runnerVersion: row.runner_version,
-		runnerNode: row.runner_node || "",
-		status: row.status,
-		lastSeenAt: row.last_seen_at,
-		createdAt: row.created_at,
-		updatedAt: row.updated_at,
-		hasToken: Boolean(row.token_plaintext || row.token_ciphertext),
-	};
-}
-
-export function runtimeNodeResponse(row: RuntimeRow) {
-	return {
-		...runtimeResponse(row),
-		relayName: relayNameForInstance(row.instance_id, row.runner_node),
-	};
-}
-
-export function safeParseArray(value: string): unknown[] {
-	try {
-		const parsed = JSON.parse(value);
-		return Array.isArray(parsed) ? parsed : [];
-	} catch {
-		return [];
-	}
-}
+export { runtimeNodeResponse, runtimeResponse, safeParseArray } from "../lib/runtime-response.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

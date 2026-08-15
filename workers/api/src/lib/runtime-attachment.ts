@@ -42,6 +42,21 @@ export interface AttachmentDiagnosis {
  *  heartbeats every 30s, so ~90s is three misses — the same window the status probe uses. */
 export const HEARTBEAT_FRESH_MS = 90_000;
 
+/**
+ * Has this registration been heard from inside the window? The ONE definition of "seen recently".
+ *
+ * The constant above already claimed to be "the same window the status probe uses", but four call
+ * sites re-inlined both the number and the D1-timestamp parse — and one reader of the same fact,
+ * `runtimeNodeResponse`, did neither and published a `status` column instead (#570). D1 writes
+ * `datetime('now')` as `YYYY-MM-DD HH:MM:SS` with no zone, so the parse has to supply one; an
+ * unparseable or absent stamp is NOT fresh, because "we have never heard from it" and "we heard
+ * from it a moment ago" must not collapse into the same answer.
+ */
+export function heartbeatFresh(lastSeenAt: string | null | undefined, now = Date.now()): boolean {
+	const seen = lastSeenAt ? Date.parse(`${lastSeenAt.replace(" ", "T")}Z`) : 0;
+	return seen > 0 && now - seen < HEARTBEAT_FRESH_MS;
+}
+
 export function diagnoseAttachment(input: {
 	hasRuntimeRow: boolean;
 	relayConnected: boolean;
@@ -79,9 +94,7 @@ export function diagnoseAttachment(input: {
 			remedy: null,
 		};
 	}
-	const seen = input.lastSeenAt ? Date.parse(`${input.lastSeenAt.replace(" ", "T")}Z`) : 0;
-	const fresh = seen > 0 && (input.now ?? Date.now()) - seen < HEARTBEAT_FRESH_MS;
-	if (!fresh) {
+	if (!heartbeatFresh(input.lastSeenAt, input.now ?? Date.now())) {
 		return {
 			state: "runner-offline",
 			message: "The runner for this agent isn't running.",

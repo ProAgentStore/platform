@@ -12,6 +12,7 @@ import {
 import type { BoardColumn } from "../lib/agent-capabilities.js";
 import { buildTicketAction, isRunnableStatus, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
 import { logEvent } from "../lib/events.js";
+import { heartbeatFresh } from "../lib/runtime-attachment.js";
 import {
 	MAX_TICKET_ANSWER_CHARS,
 	TICKET_ANSWER_EVENT,
@@ -100,8 +101,7 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		// 90s means the runner is alive, so a transient /tasks failure must NOT flip
 		// it offline — that would knock out getRunnerConn for coding/apply and flash
 		// "not connected" while the runner is actually fine.
-		const lastSeenMs = runtime.last_seen_at ? Date.parse(`${runtime.last_seen_at.replace(" ", "T")}Z`) : 0;
-		const recentlySeen = lastSeenMs > 0 && Date.now() - lastSeenMs < 90_000;
+		const recentlySeen = heartbeatFresh(runtime.last_seen_at);
 		const revalidate = (async () => {
 			try {
 				const res = await callRuntime(c.env, runtime, "/tasks");
@@ -596,8 +596,7 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		// Stale-while-revalidate (same as /tasks): serve the D1 mirror immediately so the
 		// activity feed never blanks/lags on a flaky tunnel; refresh from the runner in the
 		// background. Falls back to events synthesised from tasks when there's no history.
-		const lastSeenMs2 = runtime.last_seen_at ? Date.parse(`${runtime.last_seen_at.replace(" ", "T")}Z`) : 0;
-		const recentlySeen2 = lastSeenMs2 > 0 && Date.now() - lastSeenMs2 < 90_000;
+		const recentlySeen2 = heartbeatFresh(runtime.last_seen_at);
 		const revalidate = (async () => {
 			try {
 				const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
