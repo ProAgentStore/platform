@@ -1208,7 +1208,12 @@ const PINS = {
 	// why each number moved, so trimming them to stay under a number would delete the only thing
 	// that makes a pin auditable rather than arbitrary.
 	// +5 at #594/#597: the second supervision.ts raise above and this self-ref.
-	"scripts/check-file-size.mjs": 1285,
+	// +9 at #609: the instances-runtime raise above plus this line. Recorded in a SECOND commit,
+	// which is the honest note: 9bd2ed6 raised that pin and did not notice this file crossing its
+	// own, because the run that would have said so was drowned out by other agents' uncommitted
+	// work in a shared checkout. It was caught before pushing, by running the gate against the
+	// COMMITTED tree in a throwaway worktree — the only place the check measures what CI will.
+	"scripts/check-file-size.mjs": 1297,
 };
 
 /**
