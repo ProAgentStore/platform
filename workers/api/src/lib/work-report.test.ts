@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RUN_HEALTH_LEGEND, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
+import { RUN_HEALTH_LEGEND, RUN_HEALTH_STATES, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
 import { statusFor, type LoopRunStatus, type LoopStopReason } from "./agent-loop.js";
 import type { LoopRunView } from "./agent-loop-store.js";
 import type { TerminalView } from "./terminal-label.js";
@@ -236,7 +236,23 @@ describe("describeLoopRun", () => {
 		it("says what it does and does not claim, in the payload the model reads", () => {
 			// #588 AC2. The legend ships beside the verdict, so a client is not left inferring the
 			// inference — every member is named and the engine caveat travels with it.
-			for (const member of ["working", "waiting", "stalled", "ended"]) expect(RUN_HEALTH_LEGEND).toContain(`\`${member}\``);
+			//
+			// The domain is the ENUM ITSELF, not the hand-written list this assertion shipped with.
+			// That list was `["working","waiting","stalled","ended"]` — correct, and unable to notice
+			// a fifth member, which is the identical shape as the bug: #588 IS a missing enum member,
+			// and a guard whose denominator is retyped from the enum it guards can only ever confirm
+			// the members someone remembered.
+			//
+			// A RUNTIME list, deliberately, and not `Record<RunHealth, true>`. Measured while fixing
+			// this: `workers/api/tsconfig.json` and `workers/mcp/tsconfig.json` both carry
+			// `exclude: ["src/**\/*.test.ts"]`, and vitest transpiles without typechecking — so NO CI
+			// gate typechecks a Worker test, and a compile-time exhaustiveness trick in one of these
+			// files is inert. `RUN_HEALTH_STATES` is a value, so this loop actually grows when the
+			// enum does. (The `Record<LoopRunStatus | "running", true>` arms above are the inert
+			// shape and are left as-is: making them real means turning those unions into const arrays
+			// in `agent-loop.ts`, which is a separate change to a much hotter file.)
+			expect(RUN_HEALTH_STATES.length, "the domain is empty — the guard has stopped measuring").toBeGreaterThanOrEqual(4);
+			for (const member of RUN_HEALTH_STATES) expect(RUN_HEALTH_LEGEND).toContain(`\`${member}\``);
 			expect(RUN_HEALTH_LEGEND).toMatch(/engine/i);
 		});
 	});

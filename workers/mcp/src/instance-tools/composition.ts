@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
+import { runHealthSentence } from "../state-vocabulary.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -250,9 +251,17 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// The DESCRIPTION rather than a joined `runState` field, deliberately: this tool is generic and
 	// serves apply, pipeline and chat agents, none of which have an engine, so fetching one would
 	// make every caller pay a runner round trip for a field null for most of them.
+	//
+	// THE VERDICT VOCABULARY IS RENDERED, NOT TYPED (#588). This sentence used to be written out
+	// here and said "three values" — and stayed saying it when `RunHealth` gained `ended`, so a
+	// listing with no status filter answered `health:"ended"` about most of its rows in a word its
+	// own description did not define. `runHealthSentence()` builds it from the vocabulary, which
+	// `state-vocabulary.test.ts` derives from `work-report.ts`'s `RunHealth` union: a member added
+	// there fails this build. Do not retype the members back into this string — the test asserts
+	// the rendered sentence is present verbatim, in both tools that publish it.
 	server.tool(
 		"check_instance_loop",
-		"Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance. Read `health` first — it is the platform's own verdict and it has three values: `working` (the orchestrator is ticking; it may legitimately be many minutes into ONE instruction), `waiting` (deliberately parked — `waitNote` says what for and until when), `stalled` (nothing has ticked and the row will say `running` forever). Quote it rather than deriving your own from the timestamps: `lastAliveAt` is the orchestrator's heartbeat and `lastProgressAt` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its `run_state`, plus the events since your last poll) or coding_session_capture.",
+		`Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

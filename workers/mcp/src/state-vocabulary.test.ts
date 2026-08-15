@@ -31,8 +31,10 @@ const { MCP_TOOL_COUNT } = await import("./tool-count.js");
 const {
 	BACKED_VOCABULARIES,
 	CODING_RUN_STATES,
+	RUN_HEALTH_STATES,
 	UNBACKED_CLAIMS,
 	claimKey,
+	runHealthSentence,
 	runStateSentence,
 	stateEnumClaims,
 } = await import("./state-vocabulary.js");
@@ -112,6 +114,76 @@ describe("the coding run-state vocabulary is the API's, not a restatement of it"
 	});
 });
 
+describe("the run-health vocabulary is the API's RunHealth union, not a restatement of it (#588)", () => {
+	/**
+	 * `RunHealth`'s members, read out of the API worker's source — the only copy that is authority.
+	 *
+	 * Parses the `as const` ARRAY rather than the type union, and the array exists over there partly
+	 * so this can: a `type` is erased, so nothing on the API side could iterate it either (no CI gate
+	 * typechecks a Worker test — both tsconfigs exclude `*.test.ts`). One value, two guards.
+	 */
+	function runHealthFromSource(): string[] {
+		const src = readFileSync(join(import.meta.dirname, "../../api/src/lib/work-report.ts"), "utf8");
+		const m = src.match(/export const RUN_HEALTH_STATES = \[([^\]]+)\]/);
+		return m ? [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]) : [];
+	}
+
+	it("matches workers/api/src/lib/work-report.ts, derived from its source", () => {
+		const members = runHealthFromSource();
+		// G1/G3 — a parse that found nothing must fail as a broken guard, not pass as a clean tree.
+		// If `RUN_HEALTH_STATES` is ever reshaped (back to a bare union, a TS enum, a list built from
+		// another constant) this fires, which is correct: the derivation stopped measuring and must
+		// be rewritten, not silently believed.
+		expect(members.length, "parsed no RunHealth members — the guard has stopped measuring").toBeGreaterThanOrEqual(
+			4,
+		);
+		// THE ASSERTION THIS TICKET EXISTS FOR. Adding a member over there without touching this
+		// file turns the build red — which is exactly what did NOT happen when `ended` was added,
+		// because the vocabulary lived in two hand-written English sentences instead of a constant.
+		expect([...RUN_HEALTH_STATES].sort()).toEqual([...members].sort());
+	});
+
+	it("carries `ended` — the member whose absence produced the ticket", () => {
+		// #588 measured `health:"working"` on 89 of 89 CLOSED runs. `ended` is the member that made
+		// "no liveness claim" expressible; a vocabulary that lost it would take the defect back.
+		expect([...RUN_HEALTH_STATES]).toContain("ended");
+	});
+
+	it("gives every state a gloss, so a new one cannot arrive unlabelled", () => {
+		const sentence = runHealthSentence();
+		for (const s of RUN_HEALTH_STATES) expect(sentence, `no gloss for \`${s}\``).toContain(`\`${s}\` (`);
+		// The two clauses that are the CORRECTION, not decoration: `ended` says it makes no claim
+		// (the whole point of the member), and `waiting` promises a resume time only conditionally,
+		// because `coding-pause.ts:146` writes none for a human handoff (#596).
+		expect(sentence).toContain("makes NO claim that anything is running");
+		expect(sentence).toContain("only when one is knowable");
+	});
+
+	it("leads with a chain the sweep can actually see", () => {
+		// Not cosmetic. Both drifted descriptions were INVISIBLE to `stateEnumClaims` — they wrote
+		// the members with parenthesised glosses, a shape it does not read — so the claim was never
+		// one of the twelve #593 swept and no inventory entry could have recorded it. Leading with
+		// the bare chain puts it inside the denominator, where the backed-vocabulary check applies.
+		const claims = stateEnumClaims(runHealthSentence());
+		expect(claims, "the rendered sentence publishes no detectable claim").toContainEqual(
+			[...RUN_HEALTH_STATES].sort(),
+		);
+	});
+
+	it("is what BOTH tools publish, verbatim, because they call the same endpoint", async () => {
+		const tools = await registeredTools();
+		for (const name of ["check_instance_loop", "coding_loop_status"]) {
+			const tool = tools.find((t) => t.name === name);
+			expect(tool, `${name} is not registered`).toBeDefined();
+			expect(tool?.description, `${name} does not carry the rendered vocabulary`).toContain(runHealthSentence());
+			// G4 on the shipped strings: the exact wording that was live on 2026-08-15, both of which
+			// defined a three-member enum the payload had already outgrown.
+			expect(tool?.description).not.toContain("three values");
+			expect(tool?.description).not.toContain("says what for and until when");
+		}
+	});
+});
+
 describe("stateEnumClaims — the scanner, proven on the strings it exists for", () => {
 	it("finds the defect that produced this ticket", () => {
 		// G4: the assertion flips on the real defective sentence, without needing the fix reverted.
@@ -157,13 +229,17 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 		const violations: string[] = [];
 		const seenUnbacked = new Set<string>();
 		let claimCount = 0;
+		let backedCount = 0;
 
 		for (const tool of described) {
 			for (const members of stateEnumClaims(tool.description)) {
 				claimCount++;
 				const key = claimKey(members);
 				// Backed: every member must be emittable by that vocabulary.
-				if (backedSets.some((set) => members.every((m) => set.has(m)))) continue;
+				if (backedSets.some((set) => members.every((m) => set.has(m)))) {
+					backedCount++;
+					continue;
+				}
 				// A claim that OVERLAPS a backed vocabulary without being a subset is the defect —
 				// some of its values are emittable and at least one is not.
 				const overlapping = backedSets.find((set) => members.some((m) => set.has(m)));
@@ -188,15 +264,25 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 		const stale = Object.keys(UNBACKED_CLAIMS).filter((k) => !seenUnbacked.has(k));
 		expect(stale, `UNBACKED_CLAIMS entries no longer found on any description: ${stale.join(", ")}`).toEqual([]);
 
-		// G2 — the denominator, in the passing output. 12 is what the registered surface publishes
+		// G2 — the denominator, in the passing output. 14 is what the registered surface publishes
 		// today, measured; a floor rather than an equality so adding a documented enum is not a
 		// failure, but a scanner that stops finding them — or a description that quietly drops its
-		// vocabulary — falls under it and says so.
-		expect(claimCount, "value-set claims swept across the registered surface").toBeGreaterThanOrEqual(12);
-		expect(
-			`${described.length} tools swept, ${claimCount} value-set claims, ` +
-				`${Object.keys(BACKED_VOCABULARIES).length} backed vocabular(ies), ${seenUnbacked.size} inventoried`,
-		).toBeTruthy();
+		// vocabulary — falls under it and says so. It was 12 until #588 rendered `run health` into
+		// the two loop tools, which is the point: backing a claim is what moves this number, and a
+		// claim nobody can see moves nothing.
+		expect(claimCount, "value-set claims swept across the registered surface").toBeGreaterThanOrEqual(14);
+		// The split is PRINTED rather than asserted into a string nobody reads, the way
+		// `conformance.test.ts` prints its tallies: the number that matters is how much of the
+		// surface is checked against emitting code, and it belongs in every green build so a
+		// regression in coverage is visible without re-deriving it. Backed/inventoried are
+		// OCCURRENCES (a vocabulary published by two tools is two claims, and both are checked).
+		console.log(
+			`✓ ${described.length} tools swept for value-set claims:\n` +
+				`  ${claimCount} claims found · ${backedCount} backed by a derived vocabulary · ${claimCount - backedCount} inventoried as unbacked\n` +
+				`  ${Object.keys(BACKED_VOCABULARIES).length} backed vocabularies (${Object.keys(BACKED_VOCABULARIES).join(", ")}) · ` +
+				`${seenUnbacked.size} distinct UNBACKED_CLAIMS entries still present\n` +
+				"  NOT counted: a claim written with parenthesised glosses is invisible to the scanner — see state-vocabulary.ts for why detection is not the mechanism",
+		);
 	});
 
 	it("coding_session_capture publishes the RENDERED vocabulary, not a retyped one", async () => {

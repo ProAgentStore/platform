@@ -27,9 +27,43 @@
 //
 // {@link UNBACKED_CLAIMS} is a RATCHET, not an allowlist. Entries may leave it — by being backed —
 // and a new claim cannot be added without a decision, because an unrecorded one fails the build.
-// It is deliberately honest about what it has NOT verified: twelve of these claims are emitted by
-// code this worker cannot import and several are owned by other modules, so pretending they were
-// checked would be the "certifies ground it never walked" failure ADR 0002 exists for.
+// It is deliberately honest about what it has NOT verified: these claims are emitted by code this
+// worker cannot import and several are owned by other modules, so pretending they were checked
+// would be the "certifies ground it never walked" failure ADR 0002 exists for.
+//
+// ── The limit of the inventory, stated because #588 walked straight through it
+//
+// An inventory ratchet catches a claim that CHANGES. It cannot catch one that was already stale,
+// nor one whose source enum gains a member somewhere this worker cannot see — and it cannot catch
+// one the SCANNER NEVER FOUND. All three applied at once to `RunHealth` (see RUN_HEALTH_STATES
+// below), on the same day this file landed: `ended` was added in `workers/api`, two descriptions
+// went on saying "three values", and neither of them was among the twelve claims the sweep
+// measured, because both wrote their members with parenthesised glosses — the shape the scanner
+// does not read.
+//
+// The answer in each case is the mechanism above, not a better inventory: back the vocabulary
+// against the emitting source, and RENDER it rather than restate it.
+//
+// How far that generalises to the nine entries below was MEASURED, entry by entry, rather than
+// assumed — and it does not generalise evenly:
+//
+//   · FOUR are one derivation away, because the cited file really does declare a closed set:
+//     `board.ts:17 BoardView`, `feedback.ts:35 FeedbackStatus`, `agent-capabilities.ts:31
+//     AgentRuntimeKind` (needs the parser to accept the unquoted `null` member) and
+//     `agent-loop.ts:15 LoopStopReason` (a multi-line union of nine, of which the claim names
+//     three — the sweep's subset rule already covers that shape).
+//   · ONE cannot be backed at all and should not be: `events.ts:23` documents `source` as
+//     `'chat' | 'apply' | 'coding' | 'voice' | 'tool' | …` — an OPEN field with an explicit
+//     ellipsis. A closed set derived from an open one would be a new false claim.
+//   · THREE have a citation that does not hold, found while checking this: there is no
+//     `lib/tool-listing.ts` in the tree; `lib/connector-consent.ts` contains none of
+//     `granted/n\a/per_call/required` (grep count 0); and `lib/coding-engines.ts` declares
+//     `EngineAuth = auto|machine|subscription|api-key`, which is a DIFFERENT four-member set from
+//     the `account|default|env|platform` recorded here. The reasons are prose, so nothing enforces
+//     them — an inventory entry pointing at a file that does not exist still passes. Left as
+//     recorded rather than guessed at: sending an implementer to the wrong file is the cost this
+//     whole mechanism exists to avoid, and correcting three citations is a separate measurement.
+//   · ONE is correctly labelled not a value set at all ("added|errors|seen|skipped" — field names).
 
 /**
  * The coding `runState` vocabulary.
@@ -62,6 +96,79 @@ export function runStateSentence(): string {
 	return `\`run_state\` is one of: ${parts.join(", ")}.`;
 }
 
+/**
+ * The `health` verdict vocabulary — a run's liveness, as the platform itself judges it.
+ *
+ * A COPY of `RunHealth` in `workers/api/src/lib/work-report.ts`, for the same reason
+ * {@link CODING_RUN_STATES} is a copy: separate deployable, no import. `state-vocabulary.test.ts`
+ * parses the `export type RunHealth = …` union out of that file and fails when the two drift, so
+ * adding a member over there turns this build red rather than leaving two descriptions describing
+ * an enum that has moved.
+ *
+ * ── Why this one is here at all (#588)
+ *
+ * #593 shipped the guard above and measured its own reach honestly: 136 tools swept, 12 value-set
+ * claims, 1 backed by generation, 9 inventoried as unbacked because the emitting code lives in a
+ * worker this one cannot import. `RunHealth` gained a fourth member (`ended`) the SAME DAY, and
+ * two descriptions kept saying "three values" — a word the payload now returns and the prose does
+ * not define. So the first real vocabulary drift after the guard landed went straight through it.
+ *
+ * It went through TWO holes, and only one of them was the one that was labelled:
+ *
+ *   1. The import boundary, which was known. Closed here the way it was closed for the coding run
+ *      states — a copy the test derives from the original's source.
+ *   2. **The detector could not see the claim at all.** Measured: `stateEnumClaims` returns `[]`
+ *      for both of the drifted descriptions. It reads `(a/b/c)` and `` `a`/`b` `` chains; these
+ *      wrote `` `working` (gloss), `waiting` (gloss), `stalled` (gloss) ``, which is the shape a
+ *      GOOD description uses. So the claim was never one of the twelve — it was invisible, and
+ *      the inventory could not have recorded what the sweep never found.
+ *
+ * Widening the detector to match a glossed chain was measured and REJECTED: over the registered
+ * surface it found 8 candidates of which 6 were false positives (field names in a result envelope,
+ * the scope names `write`/`destructive`, a pair of tool names), and on the very description this
+ * ticket is about it recovered only `waiting|working` — the long gloss between the members hid the
+ * rest. A guard that cries wolf six times out of eight gets deleted, and one that finds two of
+ * four members certifies the half it saw. This is the file's own doctrine holding: **generation,
+ * not detection.** {@link runHealthSentence} renders the set, and the sentence LEADS with the bare
+ * chain so what it publishes is also a claim the sweep can see and check against the source.
+ */
+export const RUN_HEALTH_STATES = ["working", "waiting", "stalled", "ended"] as const;
+
+/**
+ * What each verdict means, and — for two of them — what it deliberately does NOT claim.
+ *
+ * `ended`'s gloss is the fix: it is the member that did not exist, and a reader who meets it
+ * unlabelled has no way to know it is a statement about a CLOSED run rather than a fifth kind of
+ * trouble. `waiting`'s says "only when one is knowable" because `coding-pause.ts:146` writes no
+ * resume time for a human handoff (#596) — the API legend stopped promising one, and a promise
+ * this surface kept making would be the same defect relocated.
+ */
+const RUN_HEALTH_GLOSS: Record<string, string> = {
+	working: "the orchestrator is ticking; it may legitimately be many minutes into ONE instruction",
+	waiting:
+		"deliberately parked — `waitNote` says what for, and gives a resume time only when one is knowable; read it, because one park is waiting for a PERSON and will not clear itself",
+	stalled: "nothing has ticked; the row will say `running` forever and the workflow is probably gone",
+	ended:
+		"the run is CLOSED — read `status` and `stopReason` for what happened; `ended` makes NO claim that anything is running",
+};
+
+/**
+ * The verdict vocabulary, rendered — never typed out.
+ *
+ * Two jobs in one sentence, both deliberate. The leading `` `a`/`b`/`c` `` chain is the closed set
+ * a model needs first AND the shape {@link stateEnumClaims} can detect, so this claim is swept and
+ * checked against `RunHealth` like any other rather than trusted because it was generated. The
+ * glossed clauses follow, because an unlabelled member is what let `ended` arrive as a word no
+ * reader could interpret.
+ */
+export function runHealthSentence(): string {
+	const chain = RUN_HEALTH_STATES.map((s) => `\`${s}\``).join("/");
+	const glossed = RUN_HEALTH_STATES.map((s) => `\`${s}\` (${RUN_HEALTH_GLOSS[s]})`).join("; ");
+	return (
+		`\`health\` is one of ${chain} — the platform's OWN verdict on the run, to be quoted rather than re-derived: ${glossed}.`
+	);
+}
+
 /** A value set a description publishes, and where the code that emits it lives. */
 export interface StateVocabulary {
 	/** Repo-relative path of the emitting source, read by the guard rather than trusted. */
@@ -74,6 +181,13 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"coding run state": {
 		source: "workers/api/src/lib/coding-run-state.ts",
 		values: CODING_RUN_STATES,
+	},
+	// #588. Two tools publish this one — `check_instance_loop` and `coding_loop_status`, which call
+	// the SAME endpoint — and both restated it by hand, which is exactly how they came to disagree
+	// with the payload on the day `ended` was added.
+	"run health": {
+		source: "workers/api/src/lib/work-report.ts",
+		values: RUN_HEALTH_STATES,
 	},
 };
 

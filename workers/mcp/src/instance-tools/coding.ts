@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, jsonText, text } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
+import { runHealthSentence } from "../state-vocabulary.js";
 import { type InstanceToolsCtx, findInstanceForAgent } from "./shared.js";
 
 /** Coding tools — the surface-gated system_status plus the always-on Agent Loop tools. */
@@ -175,7 +176,12 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// tools call the SAME endpoint, so a warning on only one of them is a warning a caller can
 		// miss by picking the other name. Read that registration's comment for why `health` is
 		// quoted rather than re-derived, and for the inference this wording must not re-introduce.
-		"Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs. Reads the server's run record, so it is correct across reconnects and across clients. Read `health` first — `working` | `waiting` (with `waitNote` saying what for) | `stalled` — it is the platform's own verdict; do not derive one from `lastAliveAt` (the orchestrator's heartbeat) and `lastProgressAt` (the last actual advance), because a fresh heartbeat beside a stale advance is equally a long engine turn, a park and a stall. And none of it speaks for the ENGINE: for that read coding_timeline (`run_state` plus the events since your last poll) or coding_session_capture.",
+		//
+		// That "same caveat" was a comment, and a comment cannot keep two strings equal: both were
+		// hand-written, and when `RunHealth` gained `ended` (#588) BOTH went stale, independently.
+		// The vocabulary is now rendered from one constant into both, so there is one thing to
+		// change and the test fails if either stops carrying it.
+		`Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs — most of them will be CLOSED, because this listing has no status filter. Reads the server's run record, so it is correct across reconnects and across clients. Read \`health\` first. ${runHealthSentence()} Do not derive one from \`lastAliveAt\` (the orchestrator's heartbeat) and \`lastProgressAt\` (the last actual advance), because a fresh heartbeat beside a stale advance is equally a long engine turn, a park and a stall. And none of it speaks for the ENGINE: for that read coding_timeline (\`run_state\` plus the events since your last poll) or coding_session_capture.`,
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),

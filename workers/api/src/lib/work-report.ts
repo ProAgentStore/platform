@@ -90,7 +90,23 @@ export const STALLED_AFTER_MS = 15 * 60 * 1000;
  * payload never carried, and the failure mode it names is that **a model reads an absent key as
  * "fine"**. An absence cannot carry a meaning; a word can.
  */
-export type RunHealth = "working" | "waiting" | "stalled" | "ended";
+export const RUN_HEALTH_STATES = ["working", "waiting", "stalled", "ended"] as const;
+
+/**
+ * The verdict, as a type — DERIVED from the runtime list above rather than declared beside it.
+ *
+ * A `type` union is erased, and this repo does not typecheck its Worker tests: `workers/api` and
+ * `workers/mcp` both `exclude: ["src/**\/*.test.ts"]`, and vitest transpiles without checking. So a
+ * guard written as `Record<RunHealth, true>` — the shape #588's own first pass used, and the shape
+ * this file's legend guard used until now — compiles nowhere and fails never. It reads like an
+ * exhaustiveness check and is decorative.
+ *
+ * One `as const` array makes the domain a VALUE, so the guards can iterate it at run time and go
+ * red for real. It is also what lets `workers/mcp` back its copy: that worker cannot import from
+ * here, so `state-vocabulary.test.ts` parses this declaration out of the source — the same shape,
+ * and the same reason, as `coding-run-state.ts`'s `ENGINE_RUN_STATES`.
+ */
+export type RunHealth = (typeof RUN_HEALTH_STATES)[number];
 
 /**
  * What `health` claims, said in the payload — because the payload is what the model reads (#259).
@@ -106,7 +122,10 @@ export const RUN_HEALTH_LEGEND =
 	// run GIVES UP, not the moment it resumes — and `waitClause` renders the field under "expected
 	// to resume in". Promising "until when" unconditionally would tell an owner to sit and wait for
 	// something that is about to stop waiting for them. State what is true for every park reason.
-	"`health` is the PLATFORM'S OWN verdict on a run and there are four values: `working` (the orchestrator is ticking — it may legitimately be many minutes into ONE instruction), " +
+	// The COUNT is computed, not typed. "three values" is the exact sentence that went stale in two
+	// MCP descriptions when `ended` arrived (#588); a hand-written number restating the size of an
+	// enum is the same claim as a hand-written list of it, and drifts the same way.
+	`\`health\` is the PLATFORM'S OWN verdict on a run and there are ${RUN_HEALTH_STATES.length} values: \`working\` (the orchestrator is ticking — it may legitimately be many minutes into ONE instruction), ` +
 	"`waiting` (deliberately parked — `waitNote` says what for, and gives a resume time only when one is knowable; read it, because one park is waiting for a PERSON and will not clear itself), `stalled` (nothing has ticked; the row will say `running` forever and the workflow is probably gone), " +
 	"and `ended` (the run is CLOSED — read `status` and `stopReason` for what happened; `ended` makes NO claim that anything is running). " +
 	"Quote `health` rather than deriving your own from `status` or the timestamps: a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like, and that inference has told an owner a run was stuck while the engine was mid-edit. " +
