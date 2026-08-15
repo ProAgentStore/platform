@@ -50,10 +50,19 @@ export function runtimeResponse(row: RuntimeRow) {
  * Durable Object fetch per node behind a list endpoint. `?probe=1` (`/runtime/status`) is where the
  * live check belongs and already is. A stored `offline` still wins, so the derivation can only ever
  * move the answer toward offline — a future writer that marks a node down is not undone here.
+ *
+ * ## Exactly one parameter, deliberately
+ *
+ * The first cut of this took `(row, now = Date.now())` so a test could pin the clock. Both callers
+ * are `nodes.map(runtimeNodeResponse)`, and `Array.prototype.map` passes `(element, index, array)`
+ * — so `now` received 0, 1, 2, 3. `0 - <a real timestamp>` is hugely negative, which is less than
+ * the window, so EVERY node read fresh and the fix did nothing in production while its unit tests
+ * (which passed `now` explicitly) stayed green. Tests move the clock with `vi.setSystemTime`
+ * instead; a one-argument function cannot be corrupted by the extra arguments `map` supplies.
  */
-export function runtimeNodeResponse(row: RuntimeRow, now = Date.now()) {
+export function runtimeNodeResponse(row: RuntimeRow) {
 	const base = runtimeResponse(row);
-	const fresh = heartbeatFresh(row.last_seen_at, now);
+	const fresh = heartbeatFresh(row.last_seen_at);
 	return {
 		...base,
 		status: base.status === "offline" || !fresh ? "offline" : base.status,

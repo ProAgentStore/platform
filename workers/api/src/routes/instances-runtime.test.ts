@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_FRESH_MS } from "../lib/runtime-attachment.js";
 import { ORPHANABLE_TASK_TYPES } from "../lib/runtime-task-ownership.js";
 import { callRuntime, expireOrphanedRuntimeTasks, runtimeNodeResponse, type RuntimeRow } from "./instances-runtime.js";
@@ -233,6 +233,11 @@ describe("callRuntime (relay-only)", () => {
 describe("a node's reported status comes from its heartbeat, not from a write-once column (#570)", () => {
 	const NOW = Date.parse("2026-08-15T00:00:00Z");
 	const stamp = (msAgo: number) => new Date(NOW - msAgo).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+	// The clock is moved, not injected. An optional `now` PARAMETER is what shipped the bug this
+	// suite now guards: both routes call `nodes.map(runtimeNodeResponse)`, so a second parameter
+	// gets the array INDEX, and every test that passed one stayed green over a dead fix.
+	beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); });
+	afterEach(() => { vi.useRealTimers(); });
 
 	/** The observed table: one machine heartbeating, three registered days ago. All stored `online`. */
 	const rows: RuntimeRow[] = [
@@ -243,7 +248,7 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 	];
 
 	it("distinguishes the machine that is talking to us from the three that are not", () => {
-		const serialised = rows.map((row) => runtimeNodeResponse(row, NOW));
+		const serialised = rows.map((row) => runtimeNodeResponse(row));
 		// The denominator: four rows in, four rows out, and the assertion names the status of every
 		// one of them — not just that "at least one" is offline.
 		expect(serialised.map((n) => [n.runnerNode, n.status])).toEqual([
@@ -255,8 +260,21 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 		expect(serialised.filter((n) => n.status === "online")).toHaveLength(1);
 	});
 
+	// The shape BOTH routes actually use — `nodes.map(runtimeNodeResponse)`. This is not a stylistic
+	// preference: `map` passes `(element, index, array)`, so the first version of this fix took the
+	// index as its `now` and read `0 - <timestamp> < 90_000` — true for every row. It shipped, every
+	// unit test here passed (each one supplied `now` itself), and production went on reporting four
+	// machines online. A guard that calls the function more conveniently than its callers do is
+	// measuring something nobody runs.
+	it("is correct when called the way its callers call it, with map's index in the second slot", () => {
+		const viaMap = rows.map(runtimeNodeResponse);
+		expect(viaMap.map((n) => n.status)).toEqual(["online", "offline", "offline", "offline"]);
+		// And directly, so the two paths are pinned to the same answer.
+		expect(rows.map((row) => runtimeNodeResponse(row).status)).toEqual(viaMap.map((n) => n.status));
+	});
+
 	it("keeps every node listed, so a pin onto a machine that is switched off still resolves", () => {
-		const serialised = rows.map((row) => runtimeNodeResponse(row, NOW));
+		const serialised = rows.map((row) => runtimeNodeResponse(row));
 		expect(serialised).toHaveLength(rows.length);
 		// The pin target and its relay name survive — #570's stated regression risk is that fixing
 		// the status field must not delete a machine from the "Runs on" tiles.
@@ -269,19 +287,19 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 	it("uses the same window the status probe uses, on both sides of it", () => {
 		const justInside = mockRow({ status: "online", last_seen_at: stamp(HEARTBEAT_FRESH_MS - 1_000) });
 		const justOutside = mockRow({ status: "online", last_seen_at: stamp(HEARTBEAT_FRESH_MS + 1_000) });
-		expect(runtimeNodeResponse(justInside, NOW).status).toBe("online");
-		expect(runtimeNodeResponse(justOutside, NOW).status).toBe("offline");
+		expect(runtimeNodeResponse(justInside).status).toBe("online");
+		expect(runtimeNodeResponse(justOutside).status).toBe("offline");
 	});
 
 	it("never reports online for a row that has never been heard from", () => {
-		expect(runtimeNodeResponse(mockRow({ status: "online", last_seen_at: null }), NOW).status).toBe("offline");
-		expect(runtimeNodeResponse(mockRow({ status: "online", last_seen_at: "not a date" }), NOW).status).toBe("offline");
+		expect(runtimeNodeResponse(mockRow({ status: "online", last_seen_at: null })).status).toBe("offline");
+		expect(runtimeNodeResponse(mockRow({ status: "online", last_seen_at: "not a date" })).status).toBe("offline");
 	});
 
 	it("does not overrule a stored offline with a fresh-looking stamp", () => {
 		// The derivation may only ever move the answer toward `offline`, so a future writer that
 		// marks a node down is not undone by this function.
-		expect(runtimeNodeResponse(mockRow({ status: "offline", last_seen_at: stamp(1_000) }), NOW).status).toBe("offline");
+		expect(runtimeNodeResponse(mockRow({ status: "offline", last_seen_at: stamp(1_000) })).status).toBe("offline");
 	});
 
 	// The premise the fix rests on, measured rather than asserted from memory: the per-node UPDATE
