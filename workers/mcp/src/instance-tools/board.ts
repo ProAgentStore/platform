@@ -34,8 +34,12 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 			// IS over the limit is `reasoning:true`, at 108,190 B. Paged for that, and because the
 			// card count is bounded by nothing. `reasoning:true` gets no separate budget — it makes
 			// each card bigger and `fitPage` answers with fewer cards, not a larger reply.
-			offset: z.number().int().min(0).optional().describe("Skip this many cards. Pass `page.nextOffset` from the previous reply; omit for the first page."),
-			limit: z.number().int().min(1).optional().describe("Cap the cards returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
+			// `z.coerce` for the reason recorded on `agent_trace.offset`: a host with a cached tool
+			// list that predates these arguments sends them as STRINGS, and a bare `z.number()`
+			// refuses with -32602 — leaving 66 of this board's 118 cards unreachable while page 1
+			// looks perfectly healthy. Measured in production, not anticipated.
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many cards. Pass `page.nextOffset` from the previous reply; omit for the first page."),
+			limit: z.coerce.number().int().min(1).optional().describe("Cap the cards returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
 		},
 		async ({ token, instance_id, reasoning, offset, limit }) => {
 			const sessionToken = tokenFor(token);

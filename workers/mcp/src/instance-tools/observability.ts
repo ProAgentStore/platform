@@ -138,7 +138,15 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			// back do I want to look" is not "how much fits in one reply", and collapsing them would
 			// silently change what `limit` has always meant (most-recent N events).
 			limit: z.number().int().min(1).max(1000).optional().describe("How many of the most-recent events to READ BACK (default 200), shown oldest→newest. This selects the window of history, not the size of the reply: the window is then delivered in budgeted pages via `offset`, so raising it does not make one reply bigger."),
-			offset: z.number().int().min(0).optional().describe("Skip this many events within the window. Pass `page.nextOffset` from the previous reply; omit for the first page."),
+			// `z.coerce`, and it is load-bearing rather than defensive. Verified in production the
+			// hour this shipped: a host whose cached tool list predates the argument has no type to
+			// cast to, so it sends `offset: "63"` as a STRING, and a bare `z.number()` answers
+			// `-32602 invalid_type`. That is the worst shape of the failure — page 1 arrives and
+			// looks fixed while every page after it hard-errors, so paging LOOKS delivered and the
+			// rest of the collection is unreachable. The tool-list cache is exactly what a version
+			// bump does not flush on its own. Same remedy `workers/mcp/CLAUDE.md` already records
+			// for object-shaped arguments ("models send JSON strings"), applied to the numeric case.
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many events within the window. Pass `page.nextOffset` from the previous reply; omit for the first page."),
 		},
 		async ({ token, instance_id, trace_id, source, level, limit, offset }) => {
 			const sessionToken = tokenFor(token);

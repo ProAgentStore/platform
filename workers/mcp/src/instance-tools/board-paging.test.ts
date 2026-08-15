@@ -269,6 +269,25 @@ describe("instance_board paging (#614)", () => {
 		expect(Object.values(board).flat().every((c) => typeof c.reasoning === "string")).toBe(true);
 	});
 
+	it("accepts a STRING offset, because a host with a stale tool list cannot send a number", async () => {
+		// Measured in production the hour #614 shipped, not anticipated. A client caches the tool
+		// list; one whose cache predates `offset` has no type to cast to and sends `"52"`. A bare
+		// `z.number()` answers `-32602 invalid_type`, so page 1 arrives looking fixed and every
+		// page after it hard-errors — 66 of this board's 118 cards unreachable, with no error a
+		// caller would attribute to caching. That is worse than the payload bug it replaced,
+		// because it fails silently in the direction of "the fix works".
+		//
+		// The schema must therefore COERCE. Asserted through the real zod parse rather than by
+		// reading the source, since it is the parse that refuses.
+		const h = setup();
+		const schema = h.schema as { offset: { parse: (v: unknown) => unknown }; limit: { parse: (v: unknown) => unknown } };
+		expect(schema.offset.parse("52")).toBe(52);
+		expect(schema.limit.parse("10")).toBe(10);
+		// And a bad string is still a refusal — coercion must not become "accept anything".
+		expect(() => schema.offset.parse("not-a-number")).toThrow();
+		expect(() => schema.offset.parse("-1")).toThrow();
+	});
+
 	it("passes an error body through instead of reshaping it into an empty board", async () => {
 		// An unreadable board and an empty one are different answers — the reason `instance_board`
 		// has caught its own API failure since it was written.

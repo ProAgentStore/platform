@@ -338,6 +338,20 @@ describe("agent_trace paging (#614)", () => {
 		);
 	});
 
+	it("accepts a STRING offset, because a host with a stale tool list cannot send a number", async () => {
+		// Verified in production the hour #614 shipped: the calling host's cached tool list predated
+		// `offset`, so it sent `"63"` and `z.number()` refused with -32602. Page 1 was clean and
+		// every subsequent page was a hard error — paging that looks delivered and is not. The
+		// tool-list cache is precisely what a version bump does not flush.
+		const { schema } = setupTrace();
+		const offset = (schema as { offset: { parse: (v: unknown) => unknown } }).offset;
+		expect(offset.parse("63")).toBe(63);
+		expect(offset.parse(63)).toBe(63);
+		// Still a schema, not a shrug: a non-numeric string and a negative one are refused.
+		expect(() => offset.parse("not-a-number")).toThrow();
+		expect(() => offset.parse("-1")).toThrow();
+	});
+
 	it("passes an error body through instead of reshaping it into an empty timeline", async () => {
 		// An unreadable trace and an empty one are different answers. Reshaping the first into the
 		// second is how "the agent did nothing" gets reported for an instance nobody could read.
