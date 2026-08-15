@@ -143,9 +143,38 @@ export function isNoiseTranscript(text: string, biasPrompt?: string): boolean {
  *  this is meant to prevent. "no, no, no" (3, short) and "very very good" stay ordinary speech. */
 export const REPETITION_MIN_RUN = 4;
 export const REPETITION_MIN_COVERAGE = 0.5;
-/** Longest phrase considered as the repeating unit. Loops observed in the log are 1–2 words
- *  ("chess academy"); 5 is headroom, and a longer "repeat" is usually a person being emphatic. */
+/** Longest phrase considered as the repeating unit under the bars above. Loops observed in the log
+ *  are 1–2 words ("chess academy"); 5 is headroom, and a longer "repeat" at only 4 occurrences is
+ *  usually a person being emphatic. Above this length the LONG-UNIT rule below takes over. */
 const REPETITION_MAX_PHRASE = 5;
+
+/**
+ * The second shape, and the bars are the other way round on purpose (#511).
+ *
+ * A unit of at least {@link REPETITION_LONG_UNIT_MIN_WORDS} words repeated only
+ * {@link REPETITION_LONG_UNIT_MIN_RUN} times, covering {@link REPETITION_LONG_UNIT_MIN_COVERAGE} of
+ * the transcript, is also a decoder — because verbatim repetition becomes less human the longer the
+ * unit is. "no, no, no" is a person insisting; an eleven-word clause reproduced word for word, as
+ * essentially the whole turn, is not something people do and is exactly what a stuck decoder emits.
+ *
+ * This exists because of a phantom that reached an agent as a real user message on 2026-08-10:
+ * `"Pottery Barn Please visit www.potterybarn.com for more ideas and inspiration."` — twice. That is
+ * Whisper's advertising-boilerplate hallucination, and it is the case #511 was left open for: the
+ * `no_speech_prob` gate is a `whisper-1` capability, the default model is `gpt-4o-transcribe`, and
+ * `isNoiseTranscript`'s whole-utterance list of known sign-offs can never contain a retailer's ad
+ * copy. Widening that list is whack-a-mole against a training corpus; the shape is not.
+ *
+ * Deliberately NOT a confidence threshold. `include[]=logprobs` is the model-side signal the
+ * streaming API does expose, and it stays rejected for the reason it was rejected before: it is a
+ * blind discard layer on the only transcription path anyone uses, there is no measured distribution
+ * to tune it against, and the live complaint is speech going MISSING. This rule fires on a property
+ * of the text that can be read off the recorded transcript and argued about.
+ */
+export const REPETITION_LONG_UNIT_MIN_WORDS = 6;
+export const REPETITION_LONG_UNIT_MIN_RUN = 2;
+/** Near-total, because two repeats is a low bar and coverage is what stops it eating a person who
+ *  restated themselves and then carried on. */
+export const REPETITION_LONG_UNIT_MIN_COVERAGE = 0.85;
 
 /**
  * Is this transcript a decoder repetition loop rather than something a person said? (#512)
@@ -168,12 +197,19 @@ const REPETITION_MAX_PHRASE = 5;
 export function isRepetitionLoop(text: string): boolean {
 	const w = normalizeSpeech(text).split(" ").filter(Boolean);
 	if (w.length < REPETITION_MIN_RUN * 1) return false;
-	for (let size = 1; size <= Math.min(REPETITION_MAX_PHRASE, Math.floor(w.length / REPETITION_MIN_RUN)); size++) {
-		for (let start = 0; start + size * REPETITION_MIN_RUN <= w.length; start++) {
+	// The two shapes are one scan with two sets of bars, so a unit can only be judged by the rule
+	// whose length band it falls in and neither rule can be widened without the other being read.
+	const maxSize = Math.max(REPETITION_MAX_PHRASE, Math.floor(w.length / REPETITION_LONG_UNIT_MIN_RUN));
+	for (let size = 1; size <= Math.min(maxSize, Math.floor(w.length / REPETITION_LONG_UNIT_MIN_RUN)); size++) {
+		const long = size >= REPETITION_LONG_UNIT_MIN_WORDS;
+		if (!long && size > REPETITION_MAX_PHRASE) continue;
+		const minRun = long ? REPETITION_LONG_UNIT_MIN_RUN : REPETITION_MIN_RUN;
+		const minCoverage = long ? REPETITION_LONG_UNIT_MIN_COVERAGE : REPETITION_MIN_COVERAGE;
+		for (let start = 0; start + size * minRun <= w.length; start++) {
 			const phrase = w.slice(start, start + size).join(" ");
 			let run = 1;
 			while (w.slice(start + run * size, start + (run + 1) * size).join(" ") === phrase) run++;
-			if (run >= REPETITION_MIN_RUN && (run * size) / w.length >= REPETITION_MIN_COVERAGE) return true;
+			if (run >= minRun && (run * size) / w.length >= minCoverage) return true;
 		}
 	}
 	return false;

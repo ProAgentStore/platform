@@ -255,6 +255,57 @@ describe("isRepetitionLoop — #512: a decoder that stuck is not a user turn", (
 		expect(isRepetitionLoop("add a test for the test runner in the test directory")).toBe(false);
 	});
 
+	/**
+	 * #511 criterion 1 — the phantom protection re-implemented for the DEFAULT streaming model,
+	 * against the transcript that got through.
+	 *
+	 * `no_speech_prob` is a `whisper-1` capability and the default is `gpt-4o-transcribe`, so on the
+	 * path everybody actually uses the only phantom defences are ours. The measurement #511 was left
+	 * open for has now been taken, and it says the phrase list is not enough: on **2026-08-10
+	 * 09:16:24Z** this landed on the owner's "Heartfull (tmux)" instance as a real user turn, with an
+	 * `audioKey` and no `dictation` —
+	 *
+	 *     "Pottery Barn Please visit www.potterybarn.com for more ideas and inspiration.
+	 *      Please visit www.potterybarn.com for more ideas and inspiration."
+	 *
+	 * — Whisper's advertising/credits boilerplate, doubled. `isNoiseTranscript` could never catch it:
+	 * that set is a WHOLE-utterance lookup of known sign-offs, and no list of sign-offs contains an
+	 * arbitrary retailer's ad copy. Widening the list is whack-a-mole against a corpus.
+	 *
+	 * The SHAPE is catchable, and it is the shape #512 already established as the right signal: a
+	 * unit repeated verbatim, covering the transcript. The existing rule missed it only because the
+	 * unit is long (11 words) and the run is short (2), and its bars were tuned for the opposite —
+	 * "chess academy" ×14. A LONG unit needs fewer repeats to be conclusive, because verbatim
+	 * repetition gets rapidly less human as the unit grows: "no, no, no" is a person, and an
+	 * eleven-word clause said twice, word for word, as the whole turn, is a decoder.
+	 */
+	it("catches the advertising phantom that reached an agent on the default streaming model (#511)", () => {
+		expect(
+			isRepetitionLoop(
+				"Pottery Barn Please visit www.potterybarn.com for more ideas and inspiration. Please visit www.potterybarn.com for more ideas and inspiration.",
+			),
+		).toBe(true);
+	});
+
+	it("does NOT fire on a long clause a person actually repeated, when it is not the whole turn", () => {
+		// The safety margin that makes the long-unit rule survivable: a repeat is only conclusive
+		// when it IS the transcript. A person who restates themselves and then carries on is
+		// ordinary speech, and dropping that costs a real turn.
+		expect(
+			isRepetitionLoop(
+				"I need you to check the deployment logs first. I need you to check the deployment logs first. Then open an issue for whatever you find and assign it to me before you touch anything else in that repository.",
+			),
+		).toBe(false);
+		// Two DIFFERENT long clauses are not a repeat at all, however similar they look.
+		expect(isRepetitionLoop("please visit the deployment page for more ideas please visit the deployment page for more details")).toBe(false);
+	});
+
+	it("still needs the unit to be long before two repeats are enough — a short one is a person being emphatic", () => {
+		// Five words twice is exactly what someone insisting sounds like, and it stays speech.
+		expect(isRepetitionLoop("I need you to stop I need you to stop")).toBe(false);
+		expect(isRepetitionLoop("stop the build stop the build")).toBe(false);
+	});
+
 	it("needs COVERAGE as well as a run — a loop tacked onto a real sentence stays a real sentence", () => {
 		// Deliberate: refusing to send a long instruction because it ended in a stutter would lose
 		// more than it saves. Only a transcript that is MOSTLY the loop is refused.
