@@ -157,9 +157,24 @@ const WORKFLOW_INTERNAL_MARKERS = [
  * lossless" — is true of every message that does not do this, so the fix belongs at the caller
  * that broke the premise and not in the collapse. Both ends survive: `context` keeps the first
  * occurrence's reference, `last_context` the latest (#538).
+ *
+ * ── The reference is NOT hex, and this shipped believing it was (#546)
+ *
+ * The first version of this matched `[0-9a-f-]{6,}`, written against a fabricated example, and was
+ * tested against the same fabrication. Cloudflare's handles are lowercase base36:
+ *
+ *     ta78s8dpekde3apmplf351m0   hknsjlipbemc1fi7lsn13vak   v5t1f9uth3ba0so067pi9qq5
+ *
+ * — read off the three production rows that carry one (2026-08-12 15:05:34, 15:13:35 and 2026-08-15
+ * 08:37:34). Every one of them contains a letter past `f`, so the regex matched NONE of them: all
+ * three rows still carry the reference in the collapse key and read `repeat_count: 1`, and a sweep of
+ * all 124 rows in the error log finds `cfReference` in the context of exactly zero. The remedy
+ * shipped, the docblock above described it in the present tense, and in production it had never once
+ * fired. The test below is now fed those three literal strings, which is what the first one should
+ * have been fed — a fixture invented to match the pattern can only ever confirm it.
  */
 export function splitCfReference(message: string): { message: string; reference: string | null } {
-	const m = /\breference\s*=\s*([0-9a-f-]{6,})/i.exec(message);
+	const m = /\breference\s*=\s*([0-9a-z][0-9a-z-]{5,})/i.exec(message);
 	if (!m) return { message, reference: null };
 	return { message: message.replace(m[0], "reference = (see context)"), reference: m[1] };
 }
@@ -357,6 +372,15 @@ export interface ResumeDecision extends ResumeRule {
  *
  * Called from the workflow's catch, where the alternative is the terminal teardown, so it MUST NOT
  * throw — a failure to decide degrades to "do not resume", which is the pre-#583 behaviour.
+ *
+ * ── Take a {@link CodingFailure}, and let the CALLER classify (#546)
+ *
+ * Both callers pass `classifyCodingFailure(e)` directly. `coding-session.ts` used to pass
+ * {@link recordCodingFailure}'s return value instead, which made "is this run resumed?" depend on
+ * whether an `error_log` INSERT succeeded — `recordCodingFailure` swallows its own failures by
+ * design, and the caller's `.catch(() => null)` then landed on the `!failure` branch and ended a run
+ * the platform could have replayed. The classifier is pure and total; the log write is neither, and
+ * a durable control-flow decision must not be downstream of best-effort observability.
  */
 export async function driverResumePlan(
 	env: Env,
@@ -426,11 +450,44 @@ export class CodingRunProbe {
 	}
 }
 
+/**
+ * What the platform DID about this death — the field that stops one run reading as several (#546).
+ *
+ * ── The defect
+ *
+ * Since #583 an `infra_transient` death is RESUMED: the driver rethrows, Cloudflare replays the
+ * instance from its journal, and the run carries on. The record did not know that. Every death wrote
+ * one row saying `coding run failed (<class>)`, so a run interrupted once and then killed filed two
+ * of them and read as a run that died twice — measured on run `b9d9c051`, `infra_transient` at
+ * 00:25:20 and `provider_stall` at 00:28:27 under one `runId`. Worse, the row CONTRADICTED the
+ * driver's own next act: `coding-session.ts` posts "⏸ Interrupted by a platform update … nothing is
+ * needed from you" to the chat immediately after writing "coding run failed" to the durable log.
+ *
+ * ── Why the row is kept rather than suppressed
+ *
+ * `agent-loop.ts`, the other {@link driverResumePlan} consumer, records its interruption as a
+ * `loop.interrupted` EVENT and no error row at all. Matching that exactly would be the smaller
+ * change and would lose the diagnostics that make an interruption countable — the class, the phase,
+ * the elapsed time, the payload sizes and Cloudflare's own reference id, none of which the event
+ * carries. #529 exists because a run that died with no durable record was the worse failure, and
+ * "the platform interrupted this run" is precisely the thing worth counting. So the row stays and
+ * stops lying: one run still files one DEATH, and its interruptions file as interruptions.
+ */
+export type CodingRunDisposition = "resumed" | "ended";
+
 export interface CodingFailureRecord {
 	err: unknown;
 	userId: string;
 	instanceId: string;
 	sessionId: string;
+	/**
+	 * Did this death END the run, or was the run resumed past it? See {@link CodingRunDisposition}.
+	 *
+	 * Required, with no default. A default would be a guess about the caller's control flow, and the
+	 * one caller that gets it wrong is exactly the one this field exists to fix — the workflow whose
+	 * catch block wrote a death row and then resumed anyway.
+	 */
+	disposition: CodingRunDisposition;
 	repo?: string | null;
 	/** The machine the run was talking to. */
 	node?: string | null;
@@ -464,13 +521,23 @@ export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Pro
 	// Classify on the RAW text, collapse on the stable text (#546). The order matters: the
 	// reference is stripped only after the class has been read off the message it is embedded in.
 	const { message, reference } = splitCfReference(raw);
+	const resumed = r.disposition === "resumed";
 	await logError(env, {
 		source: "coding:session",
 		userId: r.userId,
-		level: codingFailureLevel(f.class),
-		status: f.upstreamStatus ?? undefined,
-		message: `coding run failed (${f.class}) at ${r.probe.phase} after ${r.steps} steps: ${message}`,
+		// A row the platform is ACTIVELY RECOVERING FROM is never a bug, whatever its class says.
+		// `infra_transient` is already `warn`, so this changes nothing today — and that is why it is
+		// written as a rule rather than left to the class table. `DRIVER_RESUME_POLICY` is a table
+		// somebody will add a resumable class to, and the next one need not be in {@link EXPLAINED}.
+		level: resumed ? "warn" : codingFailureLevel(f.class),
+		// The VERB is the fix. Before it, the row said the run failed while the same catch block's
+		// next act posted "⏸ Interrupted by a platform update … nothing is needed from you" into the
+		// owner's chat — two durable accounts of one event, disagreeing, with the log the wrong one.
+		message: `coding run ${resumed ? "interrupted" : "failed"} (${f.class}) at ${r.probe.phase} after ${r.steps} steps${resumed ? ", resumed" : ""}: ${message}`,
 		context: {
+			// What the platform did about it, so a reader counting DEATHS gets one per run even when
+			// the run filed several rows on its way there (#546).
+			disposition: r.disposition,
 			instanceId: r.instanceId,
 			traceId: r.runId ?? r.sessionId,
 			sessionId: r.sessionId,

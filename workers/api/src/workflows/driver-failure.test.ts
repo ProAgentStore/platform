@@ -184,3 +184,69 @@ describe("agent-loop's resume is wired, not decorative", () => {
 		expect(src.match(/\bresuming = true\b/g) ?? []).toHaveLength(1);
 	});
 });
+
+/**
+ * A driver that RESUMES must not have already filed the run as dead (#546).
+ *
+ * ── The defect, over the denominator ADR 0002 asks for
+ *
+ * Both drivers that reach {@link DRIVER_RESUME_POLICY} do the same two things on a death: they write
+ * a durable record of it, and they decide whether to replay. The ORDER of those two is the whole
+ * property, and the two drivers disagreed about it.
+ *
+ * `agent-loop.ts` decides first and then records what it decided — `loop.interrupted`, `warn`, "resuming".
+ * `coding-session.ts` recorded first: an `error_log` row reading `coding run failed (<class>)`, and
+ * only afterwards asked whether to resume. So a run the platform was about to replay had already
+ * been filed as a death, and the driver's very next act posted "⏸ Interrupted by a platform update
+ * … nothing is needed from you" into the owner's chat. Two durable accounts of one event,
+ * disagreeing, with the log the wrong one.
+ *
+ * Measured: run `b9d9c051` filed `infra_transient` at 00:25:19 and `provider_stall` at 00:28:27 under
+ * one `runId`. Only the second ended it. Both rows said "coding run failed", so the owner's
+ * `list_errors` view showed a run that died twice — which is the shape #546 named and the shape
+ * `03762fd` made ROUTINE by resuming `infra_transient` on purpose.
+ *
+ * ── Why this is structural
+ *
+ * Both call sites live inside a Cloudflare Workflow's catch, which vitest cannot construct
+ * (`cloudflare:workers` does not resolve). It is the same reason `coding-failure.test.ts`'s #529 arm
+ * reads the catch region off disk. What is asserted is ORDER and DISPOSITION, the two things an
+ * inspection reliably gets wrong — #442 shipped correct and unreachable by being read rather than run.
+ */
+describe("no driver files a run as dead before deciding to resume it (#546)", () => {
+	/** Derived, never hand-listed: the drivers the registry credits with the SHARED decision. */
+	const resuming = Object.keys(CONSUMERS).filter((f) => CONSUMERS[f].reads === "driverResumePlan");
+
+	it("measures both of them — a driver dropping out of this set is the guard going quiet", () => {
+		expect(resuming.sort(), "drivers reaching driverResumePlan").toEqual(["agent-loop.ts", "coding-session.ts"]);
+	});
+
+	it.each(resuming)("%s asks driverResumePlan BEFORE it writes its terminal account of the run", (file) => {
+		const src = readFileSync(join(DIR, file), "utf8");
+		// The terminal write differs per driver — one files an error row, the other sets the stop
+		// reason the run is closed with — so the marker is named per driver rather than assumed.
+		const terminal = file === "coding-session.ts" ? "recordCodingFailure(env, {" : 'stop = { reason: "failed"';
+		const decide = src.indexOf("driverResumePlan(");
+		expect(decide, `${file} never calls driverResumePlan`).toBeGreaterThan(-1);
+		expect(decide, `${file} writes "${terminal}" before it knows whether the run is resumed`).toBeLessThan(src.indexOf(terminal));
+	});
+
+	it("the Pilot's record is TOLD which of the two it is, rather than inferring it", () => {
+		// Order alone is not enough: deciding first and then writing the same row regardless would
+		// satisfy the arm above and change nothing in production. The disposition has to reach the
+		// record, and it has to come from the plan — a literal would pass a naive `toContain`.
+		const src = readFileSync(join(DIR, "coding-session.ts"), "utf8");
+		expect(src).toContain('disposition: plan.resume ? "resumed" : "ended"');
+	});
+
+	it("agent-loop's interruption is recorded as an interruption, at warn", () => {
+		// The peer that already had this right, pinned so it stays the reference the arm above is
+		// measured against. If this driver regresses to filing a death, the property is gone even
+		// though the ordering arm would still pass.
+		const branch = readFileSync(join(DIR, "agent-loop.ts"), "utf8");
+		const resume = branch.slice(branch.indexOf("if (plan?.resume) {"), branch.indexOf('stop = { reason: "failed"'));
+		expect(resume).toContain('event: "loop.interrupted"');
+		expect(resume).toContain('level: "warn"');
+		expect(resume, "an interruption must not be filed as a failure").not.toContain('reason: "failed"');
+	});
+});

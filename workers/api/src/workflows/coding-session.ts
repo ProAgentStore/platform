@@ -48,7 +48,7 @@ import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type
 import { traceCodingRun } from "../lib/coding-run-trace.js";
 import { codingCrashReport, runOutcomeNote } from "../lib/coding-run-report.js";
 import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
-import { driverResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
+import { classifyCodingFailure, driverResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
 
@@ -685,23 +685,23 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const crash = codingCrashReport(e);
 			crashReason = crash.stopReason;
 			result = { outcome: "failed", detail: crash.detail, steps: result.steps, transcript: result.transcript };
-			// …and it is RECORDED (#529). Every peer workflow logs its own crash; this one logged
-			// nothing, so three runs that died on one instruction existed only as chat bubbles, and
-			// nobody could say whether that was a provider stall or an exhausted balance. The class,
-			// the step it died at and the payload sizes are what the next occurrence is read from.
-			const failure = await recordCodingFailure(env, {
-				err: e, userId, instanceId, sessionId, probe, steps: pilotSteps, startedAt: runStartedAt, repo: goal.repo,
-				node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null,
-			}).catch(() => null);
-			// …and if the PLATFORM is what killed it, the run is RESUMED rather than ended (#583).
+			// …and if the PLATFORM is what killed it, the run is RESUMED rather than ended (#583) —
+			// asked BEFORE the record, because the record has to say which of the two this row is (#546).
 			//
 			// The verdict this consumes was already computed and recorded on every death, with nobody to
 			// read it — `coding-failure.ts` said so in a comment. Rethrowing IS the resume: an error
 			// escaping `run()` makes Cloudflare replay the instance from its journal, which is how run
-			// `82739cb6` was observed to file itself twice with an identical `runStartedAt` and get
-			// further the second time. The mechanism is not new; what is new is that the driver stops
-			// tearing the run down before it can be used.
-			const plan = await driverResumePlan(env, failure, event.payload.loopRunId ?? null);
+			// `82739cb6` was observed to file itself twice with an identical `runStartedAt`. Classified at
+			// the call site, never off the record's return value — see `driverResumePlan` for why.
+			const plan = await driverResumePlan(env, classifyCodingFailure(e), event.payload.loopRunId ?? null);
+			// …and it is RECORDED (#529). Every peer workflow logs its own crash; this one logged nothing,
+			// so three runs that died on one instruction existed only as chat bubbles. `disposition` is
+			// what stops ONE run reading as several deaths: run `b9d9c051` filed an interruption at
+			// 00:25:19 and its real death at 00:28:27, and both rows said "coding run failed" (#546).
+			await recordCodingFailure(env, {
+				err: e, userId, instanceId, sessionId, probe, steps: pilotSteps, startedAt: runStartedAt, repo: goal.repo,
+				node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: plan.resume ? "resumed" : "ended",
+			}).catch(() => undefined);
 			if (plan.resume) {
 				resuming = true;
 				// Said OUT LOUD, on both surfaces. "The owner experienced this as agents dying for no

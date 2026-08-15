@@ -148,6 +148,7 @@ describe("recordCodingFailure — the durable record itself", () => {
 			userId: "u1",
 			instanceId: "f8ddc272",
 			sessionId: "csess_1",
+			disposition: "ended",
 			repo: "heartfull",
 			node: "RLs-MacBook-Air.local",
 			runId: "run_9",
@@ -196,6 +197,7 @@ describe("recordCodingFailure — the durable record itself", () => {
 			userId: "u1",
 			instanceId: "i1",
 			sessionId: "csess_2",
+			disposition: "ended",
 			steps: 0,
 			probe: new CodingRunProbe(),
 			startedAt: Date.now(),
@@ -215,6 +217,7 @@ describe("recordCodingFailure — the durable record itself", () => {
 			userId: "u1",
 			instanceId: "i1",
 			sessionId: "csess_3",
+			disposition: "ended",
 			runId: "run_3",
 			steps: 1,
 			probe: new CodingRunProbe(),
@@ -242,6 +245,7 @@ describe("recordCodingFailure — the durable record itself", () => {
 				userId: "u1",
 				instanceId: "i1",
 				sessionId: "s1",
+				disposition: "ended",
 				steps: 0,
 				probe: new CodingRunProbe(),
 				startedAt: Date.now(),
@@ -313,15 +317,39 @@ describe("WorkflowInternalError — the largest live class, and it was `unknown`
 		expect(classifyCodingFailure(new Error("Cannot read properties of undefined")).class).toBe("unknown");
 	});
 
+	/**
+	 * The three references Cloudflare has ACTUALLY emitted, read off the production rows that carry
+	 * one: 2026-08-12 15:05:34 and 15:13:35 (run `82739cb6`) and 2026-08-15 08:37:34 (`32d09ed1`).
+	 *
+	 * The first version of this test invented `aaaa1111bbbb2222` to match a `[0-9a-f-]` regex it was
+	 * testing, so it confirmed the pattern instead of measuring it. Every real handle below has a
+	 * letter past `f`, none of the three ever matched, and a sweep of all 124 rows in the error log
+	 * found `cfReference` in the context of exactly zero of them. A fixture drawn from the code it
+	 * tests can only agree with it.
+	 */
+	const PRODUCTION_REFERENCES = ["ta78s8dpekde3apmplf351m0", "hknsjlipbemc1fi7lsn13vak", "v5t1f9uth3ba0so067pi9qq5"];
+
+	it("reads the reference Cloudflare emits, which is base36 and not hex", () => {
+		// The arm the shipped version failed. Stated as a property of the DATA — a handle with a
+		// letter past `f` — so a regex narrowed back to hex fails here rather than in production.
+		expect(PRODUCTION_REFERENCES.every((r) => /[g-z]/.test(r)), "no fixture exercises the non-hex case").toBe(true);
+		for (const ref of PRODUCTION_REFERENCES) {
+			const split = splitCfReference(`internal error; reference = ${ref}`);
+			expect(split.reference, ref).toBe(ref);
+			expect(split.message, ref).not.toContain(ref);
+		}
+	});
+
 	it("collapses two occurrences whose only difference is Cloudflare's reference id", () => {
 		// AC 3. `collapseRepeat` keys on the exact message, so a per-occurrence `reference = <id>`
 		// made every row unique and all three production rows read `repeat_count: 1` — the repeat
 		// machinery #522/#538 built was inert for the one class that most needed a count.
-		const a = splitCfReference("internal error; reference = aaaa1111bbbb2222");
-		const b = splitCfReference("internal error; reference = cccc3333dddd4444");
+		const [refA, refB] = PRODUCTION_REFERENCES;
+		const a = splitCfReference(`internal error; reference = ${refA}`);
+		const b = splitCfReference(`internal error; reference = ${refB}`);
 		expect(a.message).toBe(b.message);
-		expect(a.reference).toBe("aaaa1111bbbb2222");
-		expect(b.reference).toBe("cccc3333dddd4444");
+		expect(a.reference).toBe(refA);
+		expect(b.reference).toBe(refB);
 		// Every OTHER message is untouched, which is what keeps the collapse lossless for them.
 		for (const other of ["run error: boom", "Anthropic (400): Your credit balance is too low", ""]) {
 			expect(splitCfReference(other)).toEqual({ message: other, reference: null });
@@ -331,19 +359,21 @@ describe("WorkflowInternalError — the largest live class, and it was `unknown`
 	it("carries the reference into the row's context, so moving it out of the headline loses nothing", async () => {
 		const { env, inserts } = mockDb();
 		await recordCodingFailure(env, {
-			err: new Error("internal error; reference = 4f2c8a1b9de04c6fa1e2b3c4d5e6f708"),
+			// The literal message from run `82739cb6`'s first row, reference and all.
+			err: new Error("internal error; reference = ta78s8dpekde3apmplf351m0"),
 			userId: "u1",
 			instanceId: "a1d3522f",
 			sessionId: "csess_2dd3124c",
+			disposition: "ended",
 			runId: "82739cb6",
 			steps: 6,
 			probe: new CodingRunProbe(),
 			startedAt: Date.now(),
 		});
 		const row = inserts.find((i) => i.sql.includes("error_log"))!;
-		expect(row.args[4], "the reference must not stay in the collapse key").not.toContain("4f2c8a1b");
+		expect(row.args[4], "the reference must not stay in the collapse key").not.toContain("ta78s8dp");
 		const ctx = JSON.parse(row.args[5] as string);
-		expect(ctx.cfReference).toBe("4f2c8a1b9de04c6fa1e2b3c4d5e6f708");
+		expect(ctx.cfReference).toBe("ta78s8dpekde3apmplf351m0");
 		expect(ctx.failureClass).toBe("workflow_internal");
 		// `warn`, because it is explained — and countable, because of the two lines above.
 		expect(row.args[6]).toBe("warn");
@@ -356,12 +386,87 @@ describe("WorkflowInternalError — the largest live class, and it was `unknown`
 			userId: "u1",
 			instanceId: "i1",
 			sessionId: "csess_1",
+			disposition: "ended",
 			steps: 0,
 			probe: new CodingRunProbe(),
 			startedAt: Date.now(),
 		});
 		const ctx = JSON.parse(inserts.find((i) => i.sql.includes("error_log"))!.args[5] as string);
 		expect("cfReference" in ctx).toBe(false);
+	});
+});
+
+/**
+ * One run, one DEATH — the half of #546 that survived `c64d9f5` (#546).
+ *
+ * `c64d9f5` classified `workflow_internal` and stopped calling an interruption a failed objective in
+ * the OWNER's sentence. It left the durable record alone, and then `03762fd` (#583) made the problem
+ * routine rather than occasional: an `infra_transient` death is now resumed on purpose, so a run that
+ * is interrupted and later dies writes two rows that read identically. Production run `b9d9c051` is
+ * that shape — `infra_transient` 00:25:20, `provider_stall` 00:28:27, one `runId`.
+ *
+ * The rows are told apart by what the platform DID, which only the caller knows. So the test is over
+ * the two dispositions, and the property is that the death row is unchanged while the interruption
+ * row stops claiming the run failed.
+ */
+describe("a resumed interruption is not filed as a death (#546)", () => {
+	/** The message CF hands the catch when our own deploy resets the isolate. `resume: true`. */
+	const DO_RESET = "Durable Object reset because its code was updated.";
+
+	const record = async (disposition: "resumed" | "ended", err = new Error(DO_RESET)) => {
+		const { env, inserts } = mockDb();
+		await recordCodingFailure(env, {
+			err,
+			userId: "u1",
+			instanceId: "a1d3522f",
+			sessionId: "csess_2dd3124c",
+			disposition,
+			runId: "b9d9c051",
+			steps: 6,
+			probe: new CodingRunProbe(),
+			startedAt: Date.now() - 61_000,
+		});
+		const row = inserts.find((i) => i.sql.includes("error_log"))!;
+		return { message: row.args[4] as string, level: row.args[6], ctx: JSON.parse(row.args[5] as string) };
+	};
+
+	it("says INTERRUPTED, not failed, when the run was resumed past it", async () => {
+		const { message, ctx } = await record("resumed");
+		// The word is the whole point. `coding-session.ts` posts "⏸ Interrupted by a platform
+		// update … nothing is needed from you" into the chat three lines after writing this row;
+		// before this the row said the run failed, so the two durable surfaces of one event
+		// contradicted each other and the owner's `list_errors` view was the one that was wrong.
+		expect(message).toContain("coding run interrupted (infra_transient)");
+		expect(message, "an interruption must not read as a death").not.toContain("coding run failed");
+		// …and it says what happened NEXT, which is the fact that makes the row countable.
+		expect(message).toContain("resumed");
+		expect(ctx.disposition).toBe("resumed");
+	});
+
+	it("keeps the death row exactly as it was, so the class that ends a run is unchanged", async () => {
+		const { message, ctx } = await record("ended", new Error(deadlineMessage("stall", 20_000)));
+		expect(message).toContain("coding run failed (provider_stall) at start after 6 steps");
+		expect(ctx.disposition).toBe("ended");
+	});
+
+	it("counts one death across the pair of rows one interrupted run writes", async () => {
+		// The property stated over the production sequence rather than over one row: `b9d9c051` files
+		// an interruption and then a death, and a reader counting deaths must get 1. This is what
+		// "one run, one death" means operationally — the rows are both kept (#529), and exactly one
+		// of them claims the run ended.
+		const rows = [await record("resumed"), await record("ended", new Error(deadlineMessage("stall", 20_000)))];
+		expect(rows.filter((r) => r.ctx.disposition === "ended")).toHaveLength(1);
+		expect(rows.filter((r) => r.message.includes("coding run failed"))).toHaveLength(1);
+	});
+
+	it("never files a row the platform is actively recovering from as an `error`", async () => {
+		// `infra_transient` is already `warn` by class, so today this is belt-and-braces — and that is
+		// precisely why it is asserted. `DRIVER_RESUME_POLICY` is a table someone will add a resumable
+		// class to, and the next one need not be in EXPLAINED. A run being resumed is explained BY the
+		// resume, whatever its class says.
+		const { level } = await record("resumed", new Error("something nobody has classified"));
+		expect(classifyCodingFailure(new Error("something nobody has classified")).class).toBe("unknown");
+		expect(level, "a resumed interruption is explained by the resume itself").toBe("warn");
 	});
 });
 
