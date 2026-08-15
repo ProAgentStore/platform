@@ -1,3 +1,4 @@
+import { capToolCalls, type EngineToolCall, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import type { Env } from "../types.js";
 
 /**
@@ -87,9 +88,23 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 // Sampled from production D1 on 2026-08-15 across 2,757 rows: `command` n=483, mean 427 chars
 // (a real instruction, e.g. "Please read issue #26 … using the github_read_issue tool"); `brain`
 // n=118, mean 608; `outcome` n=105, mean 361 ("done — Issue #120 is fully resolved. Commit
-// `1fbb124` landed on `main` …"). So the narrative is worth reading. What it is NOT is a
-// structured tool call: `content` is free text, and the argument/result pairs #581 also asked
-// for exist only for CONSEQUENTIAL acts, in `agent_events`. That gap is stated on the issue.
+// `1fbb124` landed on `main` …"). So the narrative is worth reading.
+//
+// ── The structured half, closed at read time (#581 AC7)
+//
+// The paragraph that used to end here said the argument/result pairs #581 also asked for existed
+// only for CONSEQUENTIAL acts, in `agent_events`, and that closing the gap was write-side work.
+// The first claim was right about `agent_events` and wrong about this record. Sampled from the same
+// production D1: **883 of 914 `terminal` rows carry the engine's own `⚙ <tool> <input>` /
+// `↳ <result>` framing**, a mean of **12.05 calls per row** — the argument/result pairs were in
+// every page this feed already served, and {@link FEED_TERMINAL_CHARS}'s 400-char tail of an
+// 8,000-char pane was cutting ~95% of them away. So a `terminal` row now carries `toolCalls`,
+// parsed by `engine-tool-calls.ts`, which states why deriving beats writing and what it will not
+// claim (whether a call SUCCEEDED is not in the pane, so it is not invented).
+//
+// The tail STAYS beside them, and that is deliberate: #580's case is an engine error printed to the
+// pane, not a tool call, and a reader that only ever saw tool calls would have missed the one thing
+// AC6 was written to prove is visible.
 //
 // ── The payload bound, and why `limit` is not it
 //
@@ -137,6 +152,23 @@ export const FEED_TERMINAL_CHARS = 400;
  * that a character count cannot see.
  */
 export const FEED_BYTE_BUDGET = 40_000;
+/**
+ * Serialised bytes of `toolCalls` one `terminal` row may carry (#581 AC7).
+ *
+ * Sized so that the PAGE bound does the bounding, and this one almost never fires — because the two
+ * are not equivalent losses:
+ *
+ *   · a call dropped by THIS cap is gone. No cursor reaches it, no second call returns it.
+ *   · a row dropped by {@link FEED_BYTE_BUDGET} costs one more poll. `hasMore` says so and the
+ *     cursor resumes exactly where it stopped, which is the property #581 AC2 already proved.
+ *
+ * A first pass set this to 1,600 and measured the consequence: 40 rows at 21,354 B, and **9 of
+ * every 12 calls permanently omitted** — the feed would have been reporting a quarter of the record
+ * while claiming to carry it. 6,000 holds a full production row (12.05 calls at ~420 B serialised),
+ * so `toolCallsOmitted` is reserved for a genuinely abnormal row, and a page of nothing but
+ * call-bearing snapshots simply returns fewer rows with `hasMore: true`.
+ */
+export const FEED_TOOLCALL_BYTES = 6_000;
 
 /** One timeline row, cut to fit. */
 export interface FeedEvent {
@@ -146,6 +178,18 @@ export interface FeedEvent {
 	createdAt: string;
 	/** The FULL length of `content` in characters — present only when it was cut. */
 	chars?: number;
+	/**
+	 * The engine's tool calls in this snapshot, with their arguments and results (#581 AC7).
+	 *
+	 * `terminal` rows only, and only the calls this snapshot ADDS — consecutive snapshots overlap
+	 * by ~41%, so the raw parse would re-deliver the same calls on every poll. Absent (rather than
+	 * empty) when the engine writes no such framing at all, which is every raw-spawn engine.
+	 */
+	toolCalls?: EngineToolCall[];
+	/** Calls dropped by {@link FEED_TOOLCALL_BYTES}. Present only when it cut something. */
+	toolCallsOmitted?: number;
+	/** Continuity with the previous snapshot was lost — see `SnapshotToolCalls.gap`. */
+	toolCallGap?: true;
 }
 
 export interface TimelineFeed {
@@ -166,6 +210,25 @@ export function budgetFeedEvent(e: TimelineEntry): FeedEvent {
 	return { ...base, content: e.type === "terminal" ? e.content.slice(-cap) : e.content.slice(0, cap), chars: e.content.length };
 }
 
+/**
+ * The tool-call anchor a page RESUMES from — the last settled call at or before the cursor.
+ *
+ * Without it the first `terminal` row of every page would be parsed with no predecessor and emit
+ * its whole overlapping window, so a 3-second poll would re-deliver the same twelve calls forever.
+ * That is the same defect `since` fixes for events, one level down, and it is fixed the same way:
+ * by reading the row the cursor sits on. One indexed lookup per page, on the index
+ * `(session_id, type, seq)` that `loadTerminalSnapshots` already relies on.
+ */
+async function anchorAt(env: Env, sessionId: string, since: number): Promise<EngineToolCall | null> {
+	if (since <= 0) return null;
+	const row = await env.DB.prepare(
+		"SELECT content FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' AND seq <= ?2 ORDER BY seq DESC LIMIT 1",
+	)
+		.bind(sessionId, since)
+		.first<{ content: string }>();
+	return row ? toolCallsForSnapshot(row.content, null).anchor : null;
+}
+
 /** A page of a session's timeline strictly newer than `sinceSeq`, bounded by rows AND by bytes. */
 export async function loadTimelineFeed(
 	env: Env,
@@ -183,11 +246,24 @@ export async function loadTimelineFeed(
 	let hasMore = rows.length > limit;
 	const encoder = new TextEncoder();
 	const events: FeedEvent[] = [];
+	let anchor = await anchorAt(env, args.sessionId, since);
 	let bytes = 0;
 	let cutEvents = 0;
 	let cutChars = 0;
 	for (const entry of hasMore ? rows.slice(0, limit) : rows) {
 		const ev = budgetFeedEvent(entry);
+		if (entry.type === "terminal") {
+			const found = toolCallsForSnapshot(entry.content, anchor);
+			anchor = found.anchor;
+			// Absent rather than empty when there is nothing: a raw-spawn engine writes no such
+			// framing at all, and `"toolCalls": []` would read as "it called nothing".
+			if (found.calls.length) {
+				const capped = capToolCalls(found.calls, FEED_TOOLCALL_BYTES);
+				ev.toolCalls = capped.calls;
+				if (capped.omitted) ev.toolCallsOmitted = capped.omitted;
+				if (found.gap) ev.toolCallGap = true;
+			}
+		}
 		const cost = encoder.encode(JSON.stringify(ev)).length + 1; // +1 for the array separator
 		// Always emit the first row, whatever it costs — see the header on cursor liveness.
 		if (events.length > 0 && bytes + cost > FEED_BYTE_BUDGET) {

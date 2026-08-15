@@ -46,15 +46,23 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// it a poll; omitting `session_id` resolves the newest active session, or — the half that
 		// answers #527 — the most recently updated one when the run has already ended.
 		//
-		// WHAT IT DOES NOT CARRY, stated here because the description is where a model reads it:
-		// `content` is free text. `coding_timeline` is a NARRATIVE (the objective, each instruction
-		// driven into the engine, pane snapshots, the outcome), not a structured tool-call log with
-		// arguments and results. Those exist only for consequential acts, in `agent_events`, which
-		// is `agent_trace(source:"coding")`. Promising otherwise here is how a partial answer gets
-		// handed over as the whole one.
+		// WHAT IT CARRIES, and what it still does not — stated here because the description is where
+		// a model reads it. The first version of this comment said the tool was a NARRATIVE and "not
+		// a structured tool-call log with arguments and results"; #581 AC7 closed that half, and the
+		// reason it could be closed without a single new write is that the record was already there:
+		// 883 of 914 production `terminal` rows carry the engine's own `⚙ <tool> <input>` /
+		// `↳ <result>` framing, a mean of 12.05 calls per row, and this feed's 400-char tail was
+		// cutting ~95% of them away. `engine-tool-calls.ts` parses them; a `terminal` event now
+		// carries `toolCalls`.
+		//
+		// It still does NOT carry whether a call SUCCEEDED — the runner writes the result text into
+		// the transcript but not `is_error`, so an `ok` here would be derived rather than observed,
+		// which is the guess `describeEngineAct` refuses on the same data. A consequential act's
+		// verdict is in `agent_trace(source:"coding")`, which is also where an act is checked
+		// against the run that made it.
 		server.tool(
 			"coding_timeline",
-			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome, oldest→newest. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots are returned as a 400-character TAIL with `chars` giving the true length; use coding_session_capture for a live session's full pane. This is the run's narrative, not a structured tool-call log — for a consequential act with its arguments and result, use agent_trace(source:\"coding\").",
+			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome, oldest→newest. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); use coding_session_capture for a live session's full pane. `toolCalls` does not say whether a call SUCCEEDED — the pane does not record that — and `output` is null for a call whose result had not come back yet; for a consequential act's verdict use agent_trace(source:\"coding\").",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
