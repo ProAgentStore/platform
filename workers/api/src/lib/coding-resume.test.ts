@@ -9,9 +9,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-	CODING_RESUME_POLICY,
+	DRIVER_RESUME_POLICY,
 	classifyCodingFailure,
-	codingResumePlan,
+	driverResumePlan,
 	MAX_PLATFORM_RESUMES,
 	type CodingFailure,
 	type CodingFailureClass,
@@ -55,17 +55,17 @@ describe("every failure class has a stated resume decision — the denominator (
 	];
 
 	it("covers all 11 classes, and each decision carries its reason", () => {
-		const keys = Object.keys(CODING_RESUME_POLICY).sort();
+		const keys = Object.keys(DRIVER_RESUME_POLICY).sort();
 		expect(keys.length, `policy covers ${keys.length} classes`).toBe(ALL.length);
 		expect(keys).toEqual([...ALL].sort());
 		for (const cls of ALL) {
 			// A boolean with no sentence is how "retryable" became unreadable in the first place.
-			expect(CODING_RESUME_POLICY[cls].why.length, `${cls} has no stated reason`).toBeGreaterThan(20);
+			expect(DRIVER_RESUME_POLICY[cls].why.length, `${cls} has no stated reason`).toBeGreaterThan(20);
 		}
 	});
 
 	it("exactly one class resumes, and it is the one we cause ourselves", () => {
-		const resuming = ALL.filter((c) => CODING_RESUME_POLICY[c].resume);
+		const resuming = ALL.filter((c) => DRIVER_RESUME_POLICY[c].resume);
 		expect(resuming).toEqual(["infra_transient"]);
 	});
 
@@ -75,21 +75,21 @@ describe("every failure class has a stated resume decision — the denominator (
 		// were already committed — two of the five recorded occurrences had pushed to `origin main` —
 		// would repeat.
 		expect(classifyCodingFailure(new Error("Attempt failed due to internal workflows error")).retryable).toBe(true);
-		expect(CODING_RESUME_POLICY.workflow_internal.resume).toBe(false);
+		expect(DRIVER_RESUME_POLICY.workflow_internal.resume).toBe(false);
 		// Same shape for a stall: retryable, and every attempt spends the owner's credit (#518).
 		expect(classifyCodingFailure(new Error("Anthropic stopped sending mid-reply after 20s")).retryable).toBe(true);
-		expect(CODING_RESUME_POLICY.provider_stall.resume).toBe(false);
+		expect(DRIVER_RESUME_POLICY.provider_stall.resume).toBe(false);
 	});
 });
 
-describe("codingResumePlan — a coding run killed by our own deploy is resumed", () => {
+describe("driverResumePlan — a coding run killed by our own deploy is resumed", () => {
 	it("resumes the measured production failure", async () => {
 		const { env, close } = envWithRun();
 		try {
 			const f = classifyCodingFailure(new Error(DO_RESET));
 			expect(f.class).toBe("infra_transient");
 			expect(f.retryable).toBe(true);
-			const plan = await codingResumePlan(env, f, "run-1");
+			const plan = await driverResumePlan(env, f, "run-1");
 			expect(plan.resume, "a DO reset from a deploy must not end an hours-long run").toBe(true);
 			expect(plan.attempts).toBe(1);
 		} finally {
@@ -106,11 +106,11 @@ describe("codingResumePlan — a coding run killed by our own deploy is resumed"
 		try {
 			const f = classifyCodingFailure(new Error(DO_RESET));
 			for (let i = 1; i <= MAX_PLATFORM_RESUMES; i++) {
-				const p = await codingResumePlan(env, f, "run-1");
+				const p = await driverResumePlan(env, f, "run-1");
 				expect(p.resume, `interruption ${i} of ${MAX_PLATFORM_RESUMES}`).toBe(true);
 				expect(p.attempts).toBe(i);
 			}
-			const past = await codingResumePlan(env, f, "run-1");
+			const past = await driverResumePlan(env, f, "run-1");
 			expect(past.resume).toBe(false);
 			expect(past.why).toContain("defect");
 		} finally {
@@ -123,7 +123,7 @@ describe("codingResumePlan — a coding run killed by our own deploy is resumed"
 		// unbounded replay is the worse one.
 		const { env, close } = envWithRun();
 		try {
-			const plan = await codingResumePlan(env, classifyCodingFailure(new Error(DO_RESET)), null);
+			const plan = await driverResumePlan(env, classifyCodingFailure(new Error(DO_RESET)), null);
 			expect(plan.resume).toBe(false);
 			expect(plan.why).toContain("bounded");
 		} finally {
@@ -134,7 +134,7 @@ describe("codingResumePlan — a coding run killed by our own deploy is resumed"
 	it("does not resume a provider stall — the cost falls on the owner (#518)", async () => {
 		const { env, close } = envWithRun();
 		try {
-			const plan = await codingResumePlan(env, classifyCodingFailure(new Error("Anthropic stopped sending mid-reply after 20s")), "run-1");
+			const plan = await driverResumePlan(env, classifyCodingFailure(new Error("Anthropic stopped sending mid-reply after 20s")), "run-1");
 			expect(plan.resume).toBe(false);
 			expect(plan.why).toContain("credit");
 		} finally {
@@ -145,7 +145,7 @@ describe("codingResumePlan — a coding run killed by our own deploy is resumed"
 	it("does not resume an unclassifiable death", async () => {
 		const { env, close } = envWithRun();
 		try {
-			expect((await codingResumePlan(env, null, "run-1")).resume).toBe(false);
+			expect((await driverResumePlan(env, null, "run-1")).resume).toBe(false);
 		} finally {
 			close();
 		}
@@ -157,7 +157,7 @@ describe("codingResumePlan — a coding run killed by our own deploy is resumed"
 		const { env, close } = envWithRun();
 		try {
 			const f: CodingFailure = { class: "infra_transient", retryable: false, upstreamStatus: null };
-			const plan = await codingResumePlan(env, f, "run-1");
+			const plan = await driverResumePlan(env, f, "run-1");
 			expect(plan.resume).toBe(false);
 			expect(plan.why).toContain("not marked retryable");
 		} finally {
@@ -177,7 +177,7 @@ describe("the Pilot CONSUMES the verdict — the property #518 was written to pr
 	 * is not a wrapper around a call, it is the ABSENCE of a teardown and the presence of a rethrow
 	 * inside a Cloudflare Workflow's own try/finally. There is no seam to inject.
 	 *
-	 * So the decision was extracted instead — `codingResumePlan` is unit-tested above against real
+	 * So the decision was extracted instead — `driverResumePlan` is unit-tested above against real
 	 * rows — and what remains in the workflow is three structural facts. These assertions are what
 	 * stops #442's failure mode: a correct decision that nothing reaches. `probe-outside-steps` in
 	 * `coding-failure.test.ts` guards its invariant the same way and for the same reason.

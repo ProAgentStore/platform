@@ -286,8 +286,24 @@ export interface ResumeRule {
  * `retryable: true` says an identical attempt could plausibly succeed. Resuming additionally
  * requires that repeating the attempt is SAFE and CHEAP — which is a property of who caused the
  * failure and what the run has already done, not of the transport that dropped.
+ *
+ * ── Why `DRIVER_`, not `CODING_` (#583 AC5)
+ *
+ * Nothing in this table is about coding. It reads a provider transport failure, a runner that went
+ * away, a Cloudflare per-invocation ceiling and an isolate reset — every one of which is a fact
+ * about the PLATFORM, and every one of which can kill an apply, a browser task, a pipeline or a
+ * chat loop identically. Only its first consumer was the Pilot, and the name recorded the consumer
+ * rather than the subject. #583 AC5 asks for a guard that this verdict has a reader on every
+ * driver, and a decision function named after one of them is how the next driver ends up with a
+ * second copy of the rule instead of a call to this one. `agent-loop.ts` is now the second caller.
+ *
+ * {@link classifyCodingFailure} and {@link CodingFailureClass} keep their names, deliberately: they
+ * are a shared vocabulary whose name is a wart rather than a coupling, and renaming them would
+ * churn ~60 references across two test files for no property. `workflows/driver-failure.test.ts`
+ * measures the property that actually matters — that every driver REACHES a consumer — which no
+ * amount of naming can establish.
  */
-export const CODING_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
+export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
 	// THE ONE. Our own deploy evicted a Durable Object out from under a run that was working, and
 	// the owner experienced it as the agent dying for no reason. Terminating is not a viable policy
 	// at the measured deploy cadence: a platform that ships seven API deploys in 48 minutes cannot
@@ -333,7 +349,7 @@ export interface ResumeDecision extends ResumeRule {
  *
  *  1. **The site that knows said a retry could work** — {@link isRetryableFailure}, the SAME
  *     predicate `autoResumableRoundOf` gates the chat path on. One rule, two drivers.
- *  2. **The class is safe and cheap to replay** — {@link CODING_RESUME_POLICY}. Retryable alone is
+ *  2. **The class is safe and cheap to replay** — {@link DRIVER_RESUME_POLICY}. Retryable alone is
  *     not enough; `workflow_internal` is retryable and would repeat a merge.
  *  3. **The run can be BOUNDED** — the count is durable, because the resume works by replaying the
  *     journal and every in-memory counter replays with it. A run with no loop-run row cannot be
@@ -342,14 +358,14 @@ export interface ResumeDecision extends ResumeRule {
  * Called from the workflow's catch, where the alternative is the terminal teardown, so it MUST NOT
  * throw — a failure to decide degrades to "do not resume", which is the pre-#583 behaviour.
  */
-export async function codingResumePlan(
+export async function driverResumePlan(
 	env: Env,
 	failure: CodingFailure | null,
 	runId: string | null,
 ): Promise<ResumeDecision> {
 	const no = (why: string): ResumeDecision => ({ resume: false, why, attempts: 0 });
 	if (!failure) return no("the failure could not be classified, so nothing established that a replay is safe");
-	const rule = CODING_RESUME_POLICY[failure.class];
+	const rule = DRIVER_RESUME_POLICY[failure.class];
 	if (!rule.resume) return { ...rule, attempts: 0 };
 	if (!isRetryableFailure(failure)) return no(`${failure.class} is resumable in principle, but this one was not marked retryable`);
 	if (!runId) return no("no loop-run row, so the resume could not be bounded — an unbounded replay is worse than stopping");

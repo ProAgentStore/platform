@@ -294,7 +294,7 @@ export async function recordLiveness(
  * in-memory one would reset on the event it exists to bound.
  *
  * Returns 0 when the row is missing rather than throwing: a run with no loop-run row (a chat-side
- * `start_work` that never created one) simply cannot be bounded, and `codingResumePlan` refuses to
+ * `start_work` that never created one) simply cannot be bounded, and `driverResumePlan` refuses to
  * resume in that case rather than resuming without a bound.
  */
 export async function countInterruption(env: Env, runId: string): Promise<number> {

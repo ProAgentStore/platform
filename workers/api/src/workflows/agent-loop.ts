@@ -14,7 +14,8 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { nextStep, instructionKey, needsHuman, readAgentReply, replyErrorClass, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
-import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
+import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness } from "../lib/agent-loop-store.js";
+import { classifyCodingFailure, driverResumePlan, MAX_PLATFORM_RESUMES } from "../lib/coding-failure.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
@@ -68,6 +69,21 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 		// it, so every sibling permanently has $0.20 less headroom. There is no reconciling cron:
 		// `scheduled()` runs only runDueTriggers and runDueDeliveries.
 		let outstanding: { reserved: number; spendBefore: number } | null = null;
+		/**
+		 * Is this death an interruption we are about to be REPLAYED through? (#583 AC5)
+		 *
+		 * Gates the teardown, exactly as `coding-session.ts` gates its own. A resumed run still owns
+		 * its reservation and its run row, and Cloudflare is about to replay it — so settling and
+		 * closing on the way out would tear down the run that then carries on working.
+		 *
+		 * Skipping the settle is the LOAD-BEARING half here, and for a reason specific to money. The
+		 * `finally`'s settle and the loop's own `settle-${iteration}` are different step ids, so if
+		 * the finally settled and the replay then reached the loop's settle un-journalled, one
+		 * iteration would be charged to the shared tree pool TWICE — the exact double-count the
+		 * comment on `outstanding = null` above already warns is worse than a leak. Left alone, the
+		 * replay settles it once, through the step that was always meant to.
+		 */
+		let resuming = false;
 
 		try {
 		while (!stop) {
@@ -192,14 +208,51 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 			instruction = verdict.nextInstruction as string;
 		}
 		} catch (e) {
+			/**
+			 * Is this a PLATFORM interruption we are about to be replayed through? (#583 AC5)
+			 *
+			 * This catch used to turn every death into `failed`, which made this the one durable
+			 * driver with NO consumer of the retryable verdict at all — the defect #583 reports for
+			 * the Pilot, on a driver nobody had checked. Our own deploy resets the isolate (seven API
+			 * deploys in 48 minutes, measured), and an agent-loop run caught by one was closed
+			 * permanently while its four peers all re-threw and resumed.
+			 *
+			 * It reaches the SAME decision function the Pilot does rather than a fourth copy of the
+			 * rule — that is why `driverResumePlan` is no longer named after one driver. And it is
+			 * BOUNDED where job-apply, browser-task and pipeline-run are not, because this driver has
+			 * an `agent_loop_runs` row and `countInterruption` can therefore hold a durable count: an
+			 * in-memory bound would replay with the journal and reset on the very event it bounds.
+			 *
+			 * The replay is cheap for the reason it is cheap for the Pilot: `act`, `decide`, `reserve`
+			 * and `settle` are all `step.do`, so a replay returns each journalled result without
+			 * re-executing it and without re-charging the pool. Only the step that died runs again.
+			 */
+			const plan = await driverResumePlan(this.env, classifyCodingFailure(e), runId).catch(() => null);
+			if (plan?.resume) {
+				resuming = true;
+				await logEvent(this.env, {
+					source: "loop",
+					event: "loop.interrupted",
+					message: `Loop interrupted by a platform update, resuming (${plan.attempts} of ${MAX_PLATFORM_RESUMES}): ${plan.why}`.slice(0, 500),
+					userId,
+					instanceId,
+					traceId: runId,
+					level: "warn",
+				}).catch(() => undefined);
+				// A replay in flight must read as WAITING, never as a stall: a resume has nothing
+				// ticking by design, and `runHealth` would otherwise call it dead. No `until` — see
+				// `coding-pause.ts` on why a platform interrupt has no instant to state (#591).
+				await recordLiveness(this.env, runId, Date.now(), { reason: "platform_interrupt" }).catch(() => undefined);
+				throw e;
+			}
 			// A step that exhausted its retries. The run still has to END — a `running` row nobody
 			// will ever close is worse than a failed one, because the supervisor keeps waiting.
 			stop = { reason: "failed", message: `The run stopped unexpectedly: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500) };
 		} finally {
 			// Release a reservation the loop was holding when it died, or the tree pool leaks that
 			// headroom permanently. Settled with the ACTUAL spend, same as the happy path — the
-			// tokens were spent either way.
-			if (budgetId && outstanding) {
+			// tokens were spent either way. Skipped for a run being resumed — see `resuming`.
+			if (budgetId && outstanding && !resuming) {
 				const held = outstanding;
 				await step.do(`settle-outstanding-${iteration}`, async () => {
 					const after = await instanceSpendMicros(this.env, userId, instanceId).catch(() => held.spendBefore);

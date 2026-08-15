@@ -48,7 +48,7 @@ import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type
 import { traceCodingRun } from "../lib/coding-run-trace.js";
 import { codingCrashReport, runOutcomeNote } from "../lib/coding-run-report.js";
 import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
-import { codingResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
+import { driverResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
 
@@ -701,7 +701,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// `82739cb6` was observed to file itself twice with an identical `runStartedAt` and get
 			// further the second time. The mechanism is not new; what is new is that the driver stops
 			// tearing the run down before it can be used.
-			const plan = await codingResumePlan(env, failure, event.payload.loopRunId ?? null);
+			const plan = await driverResumePlan(env, failure, event.payload.loopRunId ?? null);
 			if (plan.resume) {
 				resuming = true;
 				// Said OUT LOUD, on both surfaces. "The owner experienced this as agents dying for no
