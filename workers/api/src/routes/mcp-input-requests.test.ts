@@ -18,6 +18,7 @@ import { encryptKey } from "../lib/crypto.js";
 import { INPUT_TTL_MS, MAX_ROUNDS } from "../lib/mcp-elicitation.js";
 import type { Env } from "../types.js";
 import { toolRoutes } from "./tools.js";
+import { sqlTimeMs } from "../lib/sql-time.js";
 
 const TEST_SECRET = "test-secret";
 const TEST_KEK = "0".repeat(64);
@@ -83,7 +84,10 @@ function testEnv(opts: { grants?: string[]; writeConsent?: boolean; credential?:
 							if (sql.startsWith("UPDATE mcp_input_requests")) {
 								// The claim: `status='pending'` and an unexpired deadline are part of the
 								// WHERE, so a second attempt matches nothing and returns null.
-								const row = rows.find((r) => r.id === a[0] && r.instance_id === a[1] && r.user_id === a[2] && r.status === "pending" && Date.parse(r.expires_at) > Date.now());
+																// `sqlTimeMs`, not `Date.parse`: `expires_at` is stored in `datetime('now')`'s shape
+								// (#657), and V8 reads `YYYY-MM-DD HH:MM:SS` as LOCAL time — so this double would
+								// disagree with SQLite by the machine's UTC offset.
+								const row = rows.find((r) => r.id === a[0] && r.instance_id === a[1] && r.user_id === a[2] && r.status === "pending" && sqlTimeMs(r.expires_at) > Date.now());
 								if (!row) return null;
 								row.status = a[3];
 								row.resolved_at = new Date().toISOString();
@@ -147,7 +151,7 @@ function testEnv(opts: { grants?: string[]; writeConsent?: boolean; credential?:
 				async run() {
 					if (sql.startsWith("UPDATE mcp_input_requests")) {
 						for (const r of rows) {
-							if (r.status === "pending" && Date.parse(r.expires_at) <= Date.now()) r.status = "expired";
+							if (r.status === "pending" && sqlTimeMs(r.expires_at) <= Date.now()) r.status = "expired";
 						}
 					}
 					return { success: true };
@@ -360,7 +364,7 @@ describe("#264 — a paused MCP call", () => {
 
 		// Walk the clock past the window rather than editing the row, so the DERIVED status is what
 		// refuses — the deadline must hold whether or not a sweeper has run.
-		vi.spyOn(Date, "now").mockReturnValue(Date.parse(rows[0].expires_at) + 1000);
+		vi.spyOn(Date, "now").mockReturnValue(sqlTimeMs(rows[0].expires_at) + 1000);
 		const res = await app().request(
 			`/v1/instances/inst-1/mcp/input-requests/${rows[0].id}`,
 			{ method: "POST", headers: await headers(), body: JSON.stringify({ action: "submit", values: { suburb: "Newtown" } }) },
@@ -375,7 +379,7 @@ describe("#264 — a paused MCP call", () => {
 		const { env, rows } = testEnv();
 		mockNetwork([elicits({ suburb: { type: "string" } }, ["suburb"])]);
 		await pause(env);
-		vi.spyOn(Date, "now").mockReturnValue(Date.parse(rows[0].expires_at) + 1000);
+		vi.spyOn(Date, "now").mockReturnValue(sqlTimeMs(rows[0].expires_at) + 1000);
 
 		const res = await app().request("/v1/instances/inst-1/mcp/input-requests", { headers: await headers() }, env);
 		const body = (await res.json()) as { requests: Array<{ status: string }> };

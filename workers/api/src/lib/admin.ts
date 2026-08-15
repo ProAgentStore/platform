@@ -2,6 +2,7 @@ import type { Env, SessionPayload } from "../types.js";
 import { agentCapabilities } from "./agent-capabilities.js";
 import { relayConnected } from "./runner-client.js";
 import { registryTools } from "./tool-registry.js";
+import { sqlTime } from "./sql-time.js";
 import { CHARGED_SQL } from "./usage-payer.js";
 
 // toolName → { connector, scope } for connector-provided registry tools (built once).
@@ -112,9 +113,9 @@ const USER_SELECT = `SELECT u.id, u.github_login, u.github_name, u.avatar_url, u
 	        (SELECT COALESCE(SUM(x.cost_micros), 0) FROM ai_usage x WHERE x.user_id = u.id AND x.created_at >= ? AND ${CHARGED_SQL}) AS charged_30d_micros
 	 FROM users u`;
 
-/** "YYYY-MM-DD HH:MM:SS" for `days` ago (UTC), matching D1 datetime('now'). */
+/** "YYYY-MM-DD HH:MM:SS" for `days` ago (UTC), matching D1 datetime('now') — see `sql-time.ts`. */
 function sinceTs(days: number): string {
-	return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+	return sqlTime(Date.now() - days * 86_400_000);
 }
 
 /** Paginated, searchable list of all users with rollup counts + 30-day spend. */

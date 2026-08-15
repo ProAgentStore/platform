@@ -43,6 +43,8 @@
 // say "these three fields were supplied, 41 bytes" without becoming a second copy of the user's
 // data — the same rule `connectors/mcp.ts` already applies to ordinary arguments.
 
+import { sqlTimeMs } from "./sql-time.js";
+
 /** A single value the server is asking for. Primitive by construction — MCP's elicitation schema
  *  is restricted to flat primitives, and a nested object is a schema we could not render. */
 export interface McpInputField {
@@ -285,7 +287,10 @@ export type McpInputStatus = "pending" | "answered" | "cancelled" | "expired";
  */
 export function resolveInputStatus(row: { status: string; expiresAt: string | null }, now = Date.now()): McpInputStatus {
 	if (row.status === "answered" || row.status === "cancelled" || row.status === "expired") return row.status;
-	const at = row.expiresAt ? Date.parse(row.expiresAt) : Number.NaN;
+	// `sqlTimeMs`, not `Date.parse`: the column is stored in `datetime('now')`'s shape (#657) and
+	// V8 reads a `YYYY-MM-DD HH:MM:SS` string as LOCAL time — correct in the Workers runtime,
+	// hour-shifted in any test process outside UTC, which is the wrong way round for a bug to hide.
+	const at = row.expiresAt ? sqlTimeMs(row.expiresAt) : Number.NaN;
 	if (Number.isFinite(at) && at <= now) return "expired";
 	return "pending";
 }

@@ -17,6 +17,7 @@ import { deriveFromUrl } from "../lib/board.js";
 import { logError } from "../lib/error-log.js";
 import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
+import { sqlTime } from "../lib/sql-time.js";
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
 export class ApplyError extends Error {
@@ -99,8 +100,13 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	// 4h is safely past it; a genuinely dead task clears sooner via Cancel.
 	const STALE_APPLY_MS = 4 * 60 * 60 * 1000;
 	const claimId = `apply-claim_${crypto.randomUUID()}`;
-	const nowIso = new Date().toISOString();
-	const staleCutoff = new Date(Date.now() - STALE_APPLY_MS).toISOString();
+	// Both the value written and the bound cutoff are in the COLUMN's format (#634). They have to
+	// move together: the guard below compares `updated_at > ?5`, so the moment the mirror writer
+	// started storing `datetime('now')`'s shape, an ISO cutoff would have read every live card as
+	// stale — and single-flight is the one thing standing between a double-click and two
+	// concurrent applications.
+	const nowSql = sqlTime();
+	const staleCutoff = sqlTime(Date.now() - STALE_APPLY_MS);
 	const claim = await env.DB.prepare(
 		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
 		 SELECT ?1, ?2, ?3, 'job.apply_agent', 'queued', '{"claim":true}', ?4, ?4
@@ -110,7 +116,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 		     AND status IN ('queued','running','needs_human') AND hidden = 0
 		     AND updated_at > ?5
 		 )`,
-	).bind(claimId, instanceId, userId, nowIso, staleCutoff).run();
+	).bind(claimId, instanceId, userId, nowSql, staleCutoff).run();
 	if ((claim.meta.changes ?? 0) === 0) {
 		throw new ApplyError("An application is already in progress on this agent — finish or cancel it before starting another.", 409);
 	}

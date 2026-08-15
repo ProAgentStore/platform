@@ -14,6 +14,7 @@ import { mcpRoutes } from "./mcp.js";
 import { HttpError } from "../lib/auth.js";
 import { signMcpOauthState } from "../lib/mcp-oauth.js";
 import type { Env } from "../types.js";
+import { sqlTimeMs } from "../lib/sql-time.js";
 
 const app = new Hono<{ Bindings: Env }>();
 app.route("/v1/mcp", mcpRoutes);
@@ -48,7 +49,10 @@ function fakeDb() {
 				if (sql.includes("FROM mcp_oauth_clients")) return (tables.clients.get(k(a[0], a[1])) ?? null) as T | null;
 				if (sql.includes("DELETE FROM mcp_oauth_flows") && sql.includes("RETURNING")) {
 					const f = tables.flows.get(String(a[0]));
-					if (!f || f.user_id !== a[1] || Date.parse(String(f.expires_at)) <= Date.now()) return null;
+										// `sqlTimeMs`, not `Date.parse`: `expires_at` is stored in `datetime('now')`'s shape
+					// (#657), and V8 reads `YYYY-MM-DD HH:MM:SS` as LOCAL time — so this double would
+					// disagree with SQLite by the machine's UTC offset.
+					if (!f || f.user_id !== a[1] || sqlTimeMs(String(f.expires_at)) <= Date.now()) return null;
 					tables.flows.delete(String(a[0]));
 					return f as T;
 				}

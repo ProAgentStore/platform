@@ -20,6 +20,7 @@ import {
 	FLOW_TTL_SECONDS,
 } from "./mcp-oauth.js";
 import { readMcpRefreshMaterial, resolveMcpCredential, saveMcpCredential, updateMcpAccessToken, type McpCredentialResolution } from "./mcp-credentials.js";
+import { sqlTime } from "./sql-time.js";
 
 // ─── Client registrations, cached per (user, authorization server) ───────────────────────────
 
@@ -134,7 +135,11 @@ export async function saveFlow(env: Env, flow: McpOauthFlow, ttlSeconds: number 
 			ciphertext,
 			dekWrapped,
 			iv,
-			new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+			// The column's format: `claimFlow` and `purgeExpiredFlows` both compare this against
+			// `datetime('now')`, and an ISO string loses that comparison bytewise for the rest of
+			// the UTC day — leaving an abandoned flow's encrypted PKCE verifier in D1 far past the
+			// ten minutes this TTL promises (#657).
+			sqlTime(Date.now() + ttlSeconds * 1000),
 		)
 		.run();
 }

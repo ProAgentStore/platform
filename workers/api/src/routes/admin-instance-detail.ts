@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, requireAdmin } from "../lib/auth.js";
 import { relayConnected } from "../lib/runner-client.js";
+import { sqlTime } from "../lib/sql-time.js";
 import { CHARGED_SQL } from "../lib/usage-payer.js";
 import type { Env } from "../types.js";
 
@@ -162,7 +163,7 @@ adminInstanceDetailRoutes.get("/instances/:id/detail", async (c) => {
 	});
 });
 
-/** SQLite "YYYY-MM-DD HH:MM:SS" timestamp 30 days ago (matches datetime('now') format). */
+/** SQLite "YYYY-MM-DD HH:MM:SS" timestamp 30 days ago (matches datetime('now') — see `sql-time.ts`). */
 function thirtyDaysAgo(): string {
-	return new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+	return sqlTime(Date.now() - 30 * 86_400_000);
 }

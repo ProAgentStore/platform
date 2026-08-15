@@ -10,6 +10,7 @@ import type { Env } from "../types.js";
 import { decryptKey, encryptKey } from "./crypto.js";
 import { redactText } from "./redact.js";
 import { INPUT_TTL_MS, MAX_ROUNDS, resolveInputStatus, type McpInputAsk, type McpInputField, type McpInputStatus } from "./mcp-elicitation.js";
+import { sqlTime, sqlTimeToIso } from "./sql-time.js";
 
 /** The paused call, as it is held between the ask and the answer. */
 export interface PausedMcpCall {
@@ -88,7 +89,9 @@ function toView(row: RequestRow, now: number): McpInputRequestView {
 		message: row.message,
 		fields,
 		traceId: row.trace_id,
-		expiresAt: row.expires_at,
+		// Stored in the column's format so the purge predicate works; published as the ISO-8601 this
+		// field has always been (#657).
+		expiresAt: sqlTimeToIso(row.expires_at),
 		createdAt: row.created_at,
 	};
 }
@@ -104,7 +107,11 @@ export async function openMcpInputRequest(env: Env, input: OpenMcpInputRequestIn
 	if (!env.KEY_ENCRYPTION_KEY) throw new Error("Key encryption not configured");
 	const id = crypto.randomUUID();
 	const { ciphertext, dekWrapped, iv } = await encryptKey(JSON.stringify(input.call), env.KEY_ENCRYPTION_KEY);
-	const expiresAt = new Date(Date.now() + INPUT_TTL_MS).toISOString();
+	// The COLUMN's format, because the purge compares it with `datetime('now')` (#657). Written
+	// ISO, that predicate was false for the whole UTC day the row expired on: SQLite compares
+	// TEXT bytewise and `'T'` (0x54) beats `' '` (0x20), so the encrypted arguments this row
+	// holds outlived their 30-minute retention by up to ~24 h. Served back as ISO in `toView`.
+	const expiresAt = sqlTime(Date.now() + INPUT_TTL_MS);
 	await env.DB.prepare(
 		`INSERT INTO mcp_input_requests (id, instance_id, user_id, endpoint, tool, trace_id, status, round, message, schema_json, use_auth, call_ciphertext, dek_wrapped, iv, expires_at, created_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))`,

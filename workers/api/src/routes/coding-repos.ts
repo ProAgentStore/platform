@@ -29,6 +29,7 @@ import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { parseRepoRef } from "../lib/git-providers.js";
+import { sqlTime } from "../lib/sql-time.js";
 import { getSessionRunnerConn, pickNextIssue, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
@@ -130,13 +131,8 @@ async function verifyLocalWorkdir(
 	// so one extra SELECT per repo would buy at most a sub-second difference. The caller renders
 	// the response, so without this a re-check would answer "never checked" about the check it
 	// just performed.
-	const checkedAt = checked ? { cloneCheckedAt: sqlNow() } : {};
+	const checkedAt = checked ? { cloneCheckedAt: sqlTime() } : {};
 	return { repo: { ...repo, ...next, ...checkedAt }, verdict, checked };
-}
-
-/** `datetime('now')`'s own format — see `verifyLocalWorkdir`. */
-function sqlNow(): string {
-	return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
 /**

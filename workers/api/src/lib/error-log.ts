@@ -4,6 +4,7 @@
  */
 import type { Env } from "../types.js";
 import { logEvent } from "./events.js";
+import { sqlTime } from "./sql-time.js";
 
 /**
  * How severe a logged failure is.
@@ -89,8 +90,6 @@ export function deriveClientLevel(source: string, status?: number): ErrorLevel {
  */
 const COLLAPSE_WINDOW_MS = 60 * 60_000;
 
-/** `datetime('now')`'s own format, so a JS-computed bound compares correctly against the column. */
-const sqlTime = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
 export interface ErrorLogInput {
 	/** Where it failed: 'keys-proxy' | 'auth' | 'job-apply' | 'coding' | 'chat' | … */

@@ -12,6 +12,7 @@ import type { BrowserTaskJob } from "../lib/browser-task-loop.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { requireLiveRuntime, requireOwnedInstance } from "./instances-runtime.js";
+import { sqlTime } from "../lib/sql-time.js";
 
 /** A browse-trigger failure with an HTTP-ish status. */
 export class BrowseError extends Error {
@@ -103,8 +104,10 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 	// mechanism + 4h stale cutoff as apply); D1 serializes writes so exactly one wins.
 	const STALE_MS = 4 * 60 * 60 * 1000;
 	const claimId = `browse-claim_${crypto.randomUUID()}`;
-	const nowIso = new Date().toISOString();
-	const staleCutoff = new Date(Date.now() - STALE_MS).toISOString();
+	// Written and compared in the COLUMN's format, and necessarily together — see the same claim
+	// in `instances-apply.ts` for why an ISO cutoff would retire live cards (#634).
+	const nowSql = sqlTime();
+	const staleCutoff = sqlTime(Date.now() - STALE_MS);
 	const claim = await env.DB.prepare(
 		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
 		 SELECT ?1, ?2, ?3, 'browser.task', 'queued', '{"claim":true}', ?4, ?4
@@ -114,7 +117,7 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 		     AND status IN ('queued','running','needs_human') AND hidden = 0
 		     AND updated_at > ?5
 		 )`,
-	).bind(claimId, instanceId, userId, nowIso, staleCutoff).run();
+	).bind(claimId, instanceId, userId, nowSql, staleCutoff).run();
 	if ((claim.meta.changes ?? 0) === 0) {
 		throw new BrowseError("A run is already in progress on this agent — finish or cancel it before starting another.", 409);
 	}

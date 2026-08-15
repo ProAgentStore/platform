@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../types.js";
 import { saveMcpCredential } from "./mcp-credentials.js";
 import { claimFlow, completeFlow, ensureMcpAccessToken, getOrRegisterClient, readClientRegistration, saveFlow } from "./mcp-oauth-store.js";
+import { sqlTimeMs } from "./sql-time.js";
 
 vi.mock("./connectors/dcr.js", async (orig) => {
 	const actual = (await orig()) as Record<string, unknown>;
@@ -52,7 +53,10 @@ function fakeDb() {
 						expires_at: a[11],
 					});
 				} else if (sql.includes("DELETE FROM mcp_oauth_flows")) {
-					for (const [id, f] of flows) if (Date.parse(String(f.expires_at)) <= Date.now()) flows.delete(id);
+										// `sqlTimeMs`, not `Date.parse`: `expires_at` is stored in `datetime('now')`'s shape
+					// (#657), and V8 reads `YYYY-MM-DD HH:MM:SS` as LOCAL time — so this double would
+					// disagree with SQLite by the machine's UTC offset.
+					for (const [id, f] of flows) if (sqlTimeMs(String(f.expires_at)) <= Date.now()) flows.delete(id);
 				} else if (sql.includes("INSERT INTO mcp_credentials")) {
 					creds.set(k(a[0], a[1]), {
 						user_id: a[0],
@@ -94,7 +98,7 @@ function fakeDb() {
 				if (sql.includes("FROM mcp_oauth_clients")) return (clients.get(k(a[0], a[1])) ?? null) as T | null;
 				if (sql.includes("DELETE FROM mcp_oauth_flows") && sql.includes("RETURNING")) {
 					const f = flows.get(String(a[0]));
-					if (!f || f.user_id !== a[1] || Date.parse(String(f.expires_at)) <= Date.now()) return null;
+					if (!f || f.user_id !== a[1] || sqlTimeMs(String(f.expires_at)) <= Date.now()) return null;
 					flows.delete(String(a[0]));
 					return f as T;
 				}

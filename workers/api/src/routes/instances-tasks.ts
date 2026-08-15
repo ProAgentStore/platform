@@ -25,6 +25,7 @@ import { executeTriggerAction } from "../lib/triggers.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { touchInstanceActivity } from "../lib/instance-config.js";
+import { sqlTime } from "../lib/sql-time.js";
 import {
 	callRuntime,
 	clearFinishedRuntimeTasks,
@@ -242,7 +243,9 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			`UPDATE instance_runtime_tasks SET status = 'running', updated_at = ?1
 	     WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4 AND status = ?5`,
 		)
-			.bind(new Date().toISOString(), taskId, instanceId, userId, String(stored.status))
+			// The column, so `datetime('now')`'s shape — an ISO stamp here sorted this ticket above
+			// every card the other eleven writers had touched more recently (#634).
+			.bind(sqlTime(), taskId, instanceId, userId, String(stored.status))
 			.run();
 		if ((claimed.meta?.changes ?? 0) === 0) {
 			return { body: { error: "Ticket was already picked up.", task: stored }, status: 409 };

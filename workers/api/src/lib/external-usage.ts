@@ -1,4 +1,5 @@
 import type { Env } from "../types.js";
+import { sqlTime } from "./sql-time.js";
 import { CHARGED_SQL } from "./usage-payer.js";
 
 /**
@@ -163,10 +164,7 @@ export function splitUsage(
 /** The report over a time window, in days. */
 export async function externalUsage(env: Env, days = 30, callerUid?: string): Promise<ExternalUsageReport> {
 	const operators = await operatorUserIds(env, callerUid);
-	const since = new Date(Date.now() - Math.max(1, Math.min(365, days)) * 86_400_000)
-		.toISOString()
-		.replace("T", " ")
-		.slice(0, 19);
+	const since = sqlTime(Date.now() - Math.max(1, Math.min(365, days)) * 86_400_000);
 	const { results } = await env.DB.prepare(
 		`SELECT user_id, agent_id, COUNT(*) AS calls,
 		        COALESCE(SUM(cost_micros), 0) AS value_micros,

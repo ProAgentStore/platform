@@ -4,6 +4,8 @@ import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { normalizeRunnerNode, relayNameForInstance, type RuntimeRow } from "../lib/runtime-nodes.js";
 import { getBoundRunnerConn } from "../lib/runner-client.js";
 import { isOrphanedByRunnerReconnect, ORPHANABLE_TASK_TYPES, orphanedTaskReason } from "../lib/runtime-task-ownership.js";
+import { taskColumnTimestamp, taskTimestamp } from "../lib/runtime-task-time.js";
+export { taskColumnTimestamp, taskTimestamp } from "../lib/runtime-task-time.js";
 export { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -152,12 +154,6 @@ export function parsePayload(value: string): unknown {
 	}
 }
 
-export function taskTimestamp(value: unknown): string {
-	return typeof value === "string" && value.trim()
-		? value
-		: new Date().toISOString();
-}
-
 export function taskId(value: Record<string, unknown>): string | null {
 	return typeof value.id === "string" && value.id.trim() ? value.id : null;
 }
@@ -247,8 +243,8 @@ export async function mirrorRuntimeTask(
 	if (!id) return;
 	const type = typeof task.type === "string" ? task.type.slice(0, 120) : "task";
 	const status = typeof task.status === "string" ? task.status.slice(0, 80) : "queued";
-	const createdAt = taskTimestamp(task.createdAt ?? task.created_at);
-	const updatedAt = taskTimestamp(task.updatedAt ?? task.updated_at ?? createdAt);
+	const createdAt = taskColumnTimestamp(task.createdAt ?? task.created_at);
+	const updatedAt = taskColumnTimestamp(task.updatedAt ?? task.updated_at ?? createdAt);
 	await env.DB.prepare(
 		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -425,7 +421,7 @@ export async function mirrorRuntimeEvent(
 			? event.task_id
 			: null;
 	const type = typeof event.type === "string" ? event.type.slice(0, 120) : "task.event";
-	const createdAt = taskTimestamp(event.createdAt ?? event.created_at);
+	const createdAt = taskColumnTimestamp(event.createdAt ?? event.created_at);
 	await env.DB.prepare(
 		`INSERT INTO instance_runtime_task_events (id, instance_id, user_id, task_id, type, payload, created_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)

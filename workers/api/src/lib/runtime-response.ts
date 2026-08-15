@@ -5,6 +5,7 @@
 // ratchet. Re-exported from there, so every existing importer is unchanged.
 import { heartbeatFresh } from "./runtime-attachment.js";
 import { relayNameForInstance, type RuntimeRow } from "./runtime-nodes.js";
+import { sqlTime } from "./sql-time.js";
 
 /**
  * `now` in the shape D1 stores it: `YYYY-MM-DD HH:MM:SS`, no zone.
@@ -20,7 +21,7 @@ import { relayNameForInstance, type RuntimeRow } from "./runtime-nodes.js";
  * Any code putting a synthesised timestamp into a `RuntimeRow` uses this.
  */
 export function d1Timestamp(at: Date = new Date()): string {
-	return at.toISOString().replace("T", " ").slice(0, 19);
+	return sqlTime(at);
 }
 
 export function safeParseArray(value: string): unknown[] {
