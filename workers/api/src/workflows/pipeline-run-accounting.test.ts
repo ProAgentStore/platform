@@ -56,6 +56,21 @@ describe("the runner folds a step's partial failures into the run (#642)", () =>
 	});
 });
 
+describe("the run's detail line describes the path that RAN (#632)", () => {
+	it("builds it with persistenceNote instead of reading the declaration", () => {
+		expect(RUNNER).toContain("persistenceNote(");
+	});
+
+	it("neither the detail nor the end event reads `pipeline.sink.collection` any more", () => {
+		// That was the whole defect: `pipeline.sink ? … ${pipeline.sink.collection}` credited the
+		// declared sink on every run of all three shipped pipelines, whose sink stands down.
+		const close = RUNNER.slice(RUNNER.indexOf('closeRun(env, runId, "completed"'));
+		expect(close.slice(0, close.indexOf("\n"))).toContain("persistNote");
+		const end = RUNNER.slice(RUNNER.indexOf('event: "pipeline.end", message: `Completed'));
+		expect(end.slice(0, end.indexOf("\n"))).not.toContain("pipeline.sink.collection");
+	});
+});
+
 describe("every step that reports a `failed` count is wired to the run", () => {
 	/** Each `TOOL_CATALOG` entry in steps.ts, as `name → its source segment`. */
 	function catalogSegments(): Map<string, string> {

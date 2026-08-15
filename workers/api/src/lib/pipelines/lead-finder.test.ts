@@ -250,7 +250,11 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		// step that bounds the sweep stops bounding it whenever the caller omits the param.
 		expect(def.params?.max_places.default).toBe(300);
 		expect(def.sink?.collection).toBe("leads");
-		expect(def.sink?.keyField).toBe("place_id");
+		// The sink is NOT what persists here and never has been: the last step is `dedupe_upsert`,
+		// which stands the sink down entirely. The `keyField` beside it in the JSON was read by
+		// nothing — one grep hit, its own declaration — and the type no longer offers it (#632).
+		expect((def.sink as unknown as Record<string, unknown>).keyField).toBe("place_id"); // still in the seeded JSON
+		expect(def.steps.at(-1)?.tool).toBe("dedupe_upsert"); // …and this is what actually writes
 	});
 
 	it("uses the full-sweep step chain (geocode→fan_out→http_request/forEach→flatten→slice→map→enrich→filter→dedupe)", () => {

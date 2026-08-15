@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, executePipelineStep, partialFailure, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
+import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, executePipelineStep, partialFailure, persistenceNote, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { closeRun } from "../lib/pipeline-runs.js";
@@ -193,7 +193,8 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			// reach the instance. Each record is its own durable step so a large sink resumes
 			// mid-write. Dedupe/upsert-by-key is #96's job; here we insert.
 			let sunk = 0;
-			const persisted = persistSummary(pipeline.steps[pipeline.steps.length - 1]?.tool, lastOutput);
+			const finalStep = pipeline.steps[pipeline.steps.length - 1];
+			const persisted = persistSummary(finalStep?.tool, lastOutput);
 			if (persisted) {
 				// The last step ALREADY wrote the records (dedupe_upsert), and its output is a
 				// counts summary, not rows. Sinking it wrapped that summary in an array and POSTed
@@ -239,15 +240,27 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				seen = Array.isArray(lastOutput) ? lastOutput.length : lastOutput != null ? 1 : 0;
 			}
 
+			// WHERE the records went, from the path that RAN rather than from the declaration
+			// (#632). `updated` rides in it too, so an update-only pipeline reads as work done
+			// without inflating `added` (which means net-new) for the sweeps that re-see everything.
+			const persistNote = persistenceNote({
+				declaredSink: pipeline.sink?.collection ?? null,
+				persistedBy: persisted ? (finalStep?.tool ?? null) : null,
+				// Only when the definition names it literally — a `$ref`/`$param` collection is not
+				// resolvable here, and printing the reference would be worse than printing nothing.
+				persistedInto: persisted && typeof finalStep?.inputs?.collection === "string" ? finalStep.inputs.collection : null,
+				added,
+				updated,
+			});
+
 			await step.do("trace-end", async () => {
-				await logEvent(env, { source: "pipeline", event: "pipeline.end", message: `Completed "${pipeline.name}": ${pipeline.steps.length} step(s)${pipeline.sink ? `, ${sunk} → ${pipeline.sink.collection}` : ""}`, userId, instanceId, traceId: runId, context: { steps: pipeline.steps.length, sunk, seen, added, skipped, errors } }).catch(() => undefined);
+				// `sunk` is what the SINK wrote, so it is only meaningful when the sink ran — and it
+				// reads `0 → leads` on every run of all three shipped pipelines, whose sink stands
+				// down. Say who actually persisted instead (#632).
+				await logEvent(env, { source: "pipeline", event: "pipeline.end", message: `Completed "${pipeline.name}": ${pipeline.steps.length} step(s)${persistNote}`, userId, instanceId, traceId: runId, context: { steps: pipeline.steps.length, sunk, seen, added, updated, skipped, errors, persistedBy: persisted ? finalStep?.tool : pipeline.sink ? "sink" : null } }).catch(() => undefined);
 				return null;
 			});
 			await step.do("run-close-ok", async () => {
-				// `updated` rides in the DETAIL, so an update-only pipeline reads as work done without
-				// inflating `added` (which means net-new) for the sweeps that re-see everything.
-				const persisted = updated ? `, ${updated} updated` : "";
-				const sinkNote = pipeline.sink ? `, ${added} → ${pipeline.sink.collection}${persisted}` : persisted;
 				// The cap rides in the detail for the same reason `updated` does: it is the part of
 				// "how did this run go" the counts cannot express. `seen` counts what was EXAMINED,
 				// so without this line a capped sweep of Sydney and a complete sweep of Hobart read
@@ -256,7 +269,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				const partialNote = partials.length ? `; ${partials.join("; ")}` : "";
 				// NOT best-effort — see `run-close-fail`. Reporting `{outcome:"completed"}` from a step
 				// that failed to record the completion is the exact "success without the work" shape.
-				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}${capNote}${partialNote}`);
+				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${persistNote}${capNote}${partialNote}`);
 				return null;
 			});
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };

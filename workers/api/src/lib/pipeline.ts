@@ -59,11 +59,31 @@ export interface PipelineParam {
 	default?: string | number | boolean;
 }
 
+/**
+ * Where a pipeline's final records are written, when its last step does not write them itself.
+ *
+ * Read this before declaring one. The sink is a plain INSERT per record — `POST …/records` in
+ * `workflows/pipeline-run.ts` — and that is all it is:
+ *
+ *   • it cannot dedupe. It declared a `keyField` "for upsert/dedupe (pass-through to the sink
+ *     tool)" for as long as it has existed, there has never BEEN a sink tool for it to pass
+ *     through to, and a grep for the name found exactly one hit: the declaration itself (#632). So
+ *     a definition that wrote the obvious thing — steps that produce records, plus a sink with a
+ *     key — got a duplicate row per record per run while looking correct. The field is gone rather
+ *     than implemented, because `dedupe_upsert` already is the upsert-by-key primitive and two
+ *     paths that persist, one of them silently worse, is how the next drift starts. The three
+ *     shipped definitions still carry `keyField` in their seeded JSON; it has never been read, and
+ *     re-seeding them is a migration, not a type change.
+ *   • it cannot emit. `deliverEvent` has exactly one caller — `dedupe_upsert`'s handler — so a
+ *     pipeline that persists through its declared sink starts no chain: its records exist, the run
+ *     closes `completed`, and every connection wired off it stays at zero with no error anywhere.
+ *
+ * A pipeline that needs either should end in a `dedupe_upsert` step instead, which is what all
+ * three shipped ones do — and which stands the sink down entirely (see `persistenceNote`).
+ */
 export interface PipelineSink {
-	/** Target instance collection (#91) the final records are upserted into. */
+	/** Target instance collection (#91) each final record is INSERTED into. No dedupe, no emit. */
 	collection: string;
-	/** Unique key field for upsert/dedupe (optional; pass-through to the sink tool). */
-	keyField?: string;
 }
 
 /** A pipeline definition — pure data, storable per instance (see loadPipeline). */
@@ -242,6 +262,41 @@ export function partialFailure(tool: string, output: unknown, label = tool): Par
 	// the detail line is read by someone deciding whether data was LOST.
 	const what = tool === "dedupe_upsert" ? `could not write ${failed} of ${total} record(s)` : `failed on ${failed} of ${total} record(s)`;
 	return { failed, total, firstError, note: `${label} ${what}${firstError ? ` — ${firstError}` : ""}` };
+}
+
+/**
+ * The part of a run's detail line that says WHERE the records went (#632).
+ *
+ * It used to be built from `pipeline.sink` — the DECLARATION — rather than from what actually ran:
+ *
+ *     const sinkNote = pipeline.sink ? `, ${added} → ${pipeline.sink.collection}${persisted}` : …
+ *
+ * All three shipped pipelines declare a sink AND end in `dedupe_upsert`, which stands the sink down
+ * completely. So the live lead-finder run `119a3933` reported `"8 step(s), 45 → leads, 38 updated"`
+ * for a sink that wrote none of those 45 — a credit given to the path that did nothing, which is
+ * the same class as the rest of this batch: the run reporting something other than what happened.
+ *
+ * And a sink that stood down now SAYS so. A declaration that silently does nothing is the failure
+ * this whole issue is about; leaving it unmentioned is how it survived unnoticed.
+ */
+export function persistenceNote(input: {
+	/** The declared sink's collection, when the definition declares one. */
+	declaredSink?: string | null;
+	/** The tool that persisted instead, when a final persisting step stood the sink down. */
+	persistedBy?: string | null;
+	/** The collection that step wrote to, when its definition names one literally. */
+	persistedInto?: string | null;
+	added: number;
+	updated: number;
+}): string {
+	const updated = input.updated ? `, ${input.updated} updated` : "";
+	if (input.persistedBy) {
+		const into = input.persistedInto ? ` → ${input.persistedInto}` : "";
+		const stoodDown = input.declaredSink ? `; declared sink "${input.declaredSink}" not used — the final step persists` : "";
+		return `, ${input.added}${into} via ${input.persistedBy}${updated}${stoodDown}`;
+	}
+	if (input.declaredSink) return `, ${input.added} → ${input.declaredSink}${updated}`;
+	return updated;
 }
 
 /**

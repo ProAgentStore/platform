@@ -25,7 +25,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { attachAudit, auditStepEntry, collectReferences, coverageShortfall, declaredParamDefaults, executePipelineStep, partialFailure, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
+import { attachAudit, auditStepEntry, collectReferences, coverageShortfall, declaredParamDefaults, executePipelineStep, partialFailure, persistenceNote, pipelineDefForKey, pipelineInventory, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -642,5 +642,36 @@ describe("coverageShortfall — fan_out stopped at its page cap (#640)", () => {
 		// `slice` knows what it dropped; a paginated source cannot. Inventing "N left" here would be
 		// the same defect pointed the other way.
 		expect(coverageShortfall("fan_out", { count: 120, pages: 5, hasMore: true })).not.toMatch(/of \d+ record/);
+	});
+});
+
+/**
+ * #632 — the run's detail line credited the DECLARED sink for work the other path did.
+ *
+ * `sinkNote` read `pipeline.sink`, not whether the sink ran, and all three shipped pipelines
+ * declare a sink AND end in `dedupe_upsert` (which stands it down). The live lead-finder run
+ * `119a3933` therefore reported "8 step(s), 45 → leads, 38 updated" for a sink that wrote none of
+ * those 45.
+ */
+describe("persistenceNote (#632)", () => {
+	it("credits the step that actually persisted, and says the declared sink stood down", () => {
+		expect(persistenceNote({ declaredSink: "leads", persistedBy: "dedupe_upsert", persistedInto: "leads", added: 45, updated: 38 })).toBe(
+			', 45 → leads via dedupe_upsert, 38 updated; declared sink "leads" not used — the final step persists',
+		);
+	});
+
+	it("credits the sink when the sink is what ran", () => {
+		expect(persistenceNote({ declaredSink: "leads", persistedBy: null, added: 45, updated: 0 })).toBe(", 45 → leads");
+	});
+
+	it("names no collection when the definition does not name one literally", () => {
+		// A `$ref`/`$param` collection cannot be resolved at this point, and printing the reference
+		// would be worse than printing nothing.
+		expect(persistenceNote({ declaredSink: null, persistedBy: "dedupe_upsert", persistedInto: null, added: 3, updated: 0 })).toBe(", 3 via dedupe_upsert");
+	});
+
+	it("still reports updates for a pipeline with neither sink nor persisting step", () => {
+		expect(persistenceNote({ added: 0, updated: 7 })).toBe(", 7 updated");
+		expect(persistenceNote({ added: 0, updated: 0 })).toBe("");
 	});
 });

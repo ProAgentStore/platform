@@ -200,8 +200,13 @@ describe("site-builder — shape", () => {
 		}
 	});
 
-	it("sinks into `sites`, keyed by place_id, so the lead and its site line up", () => {
-		expect((siteBuilder as unknown as PipelineDef).sink).toEqual({ collection: "sites", keyField: "place_id" });
+	it("writes into `sites` keyed by place_id — through dedupe_upsert, not through the sink", () => {
+		// The declared sink is dead here, as it is in all three shipped definitions: the final step
+		// persists, so `pipeline-run.ts` stands the sink down. Its `keyField` was never read by
+		// anything (#632) — the key that matters is the one on the `dedupe_upsert` step.
+		const builder = siteBuilder as unknown as PipelineDef;
+		expect(builder.sink?.collection).toBe("sites");
+		expect(builder.steps.at(-1)?.tool).toBe("dedupe_upsert");
 		expect((siteDeploy as unknown as PipelineDef).sink?.collection).toBe("sites");
 	});
 });
