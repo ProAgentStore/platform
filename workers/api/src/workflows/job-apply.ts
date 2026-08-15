@@ -11,6 +11,7 @@ import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
 import { runShotKey } from "../lib/run-shots.js";
+import { collectJobSecrets, makeSecretRedactor } from "../lib/redact-secrets.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
@@ -181,6 +182,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// transient error to hammer — so act catches it and returns it as data.
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
+		// #631: `agent.shot` is written from inside `act`, so it does NOT pass through the
+		// loop's redacting `emit` — and it was the sink where 9 of the 18 leaked production
+		// rows landed, each with an empty control name that no field-name rule could catch.
+		// Redact the shot message here with the same job-derived value redactor.
+		const redact = makeSecretRedactor(collectJobSecrets(job));
 		const deps: ApplyDeps = {
 			// The durable cancel is read HERE, beside the runner's own flag, so both answers meet at
 			// the one place `runApplyLoop` already halts on (#560) — no second way for an
@@ -239,7 +245,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					if (r.screenshot && env.STORAGE) {
 						const key = runShotKey(userId, instanceId, taskId, sn);
 						await env.STORAGE.put(key, b64ToBytes(r.screenshot), { httpMetadata: { contentType: "image/jpeg" } }).catch(() => undefined);
-						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: describeAction(a), data: { seq: sn, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
+						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
 					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {
@@ -248,7 +254,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				}
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
-				await callRunner(conn, "/browser/event", { taskId, type, message, data }).catch(() => undefined);
+				await callRunner(conn, "/browser/event", { taskId, type, message: redact(message), data }).catch(() => undefined);
 				// Bridge the same step into the unified trace so agent_trace shows the
 				// apply play-by-play (nav → snapshot → act → stuck …), not just failures.
 				await logEvent(env, { source: "apply", event: type, message, userId, instanceId, traceId: taskId, context: data as Record<string, unknown> | undefined }).catch(() => undefined);
@@ -276,7 +282,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					if (!match) return `No matching email yet (searched: ${query}). It may not have arrived — wait a few seconds and call read_email_link again.`;
 					// Record the email in the activity log with a click-through to open it in
 					// Gmail, so the user can see (and verify) exactly which message the agent read.
-					await callRunner(conn, "/browser/event", { taskId, type: "job.email", message: `Read email: ${match.subject}`, data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date, purpose: "sign-in / verification" } }).catch(() => undefined);
+					await callRunner(conn, "/browser/event", { taskId, type: "job.email", message: redact(`Read email: ${match.subject}`), data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date, purpose: "sign-in / verification" } }).catch(() => undefined);
 					const ranked = rankConfirmationLinks(match.links, q.from);
 					const code = extractCode(match.text);
 					const parts = [`Email "${match.subject}" from ${match.from}.`];
@@ -440,7 +446,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 							(await findMatchingMessage(token, buildQuery({ from: fromDomain, withinDays: 1 }))) ??
 							(await findMatchingMessage(token, buildQuery({ subject: confirmSubjects, withinDays: 1 })));
 						if (!match) return false;
-						await callRunner(conn, "/browser/event", { taskId, type: "job.confirmation_email", message: match.subject, data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date } }).catch(() => undefined);
+						await callRunner(conn, "/browser/event", { taskId, type: "job.confirmation_email", message: redact(match.subject), data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date } }).catch(() => undefined);
 						return true;
 					} catch { return true; /* best-effort — don't spin on errors */ }
 				});

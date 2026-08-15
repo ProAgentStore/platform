@@ -1,3 +1,4 @@
+import { collectJobSecrets, makeSecretRedactor, redactAction, redactEventData } from "./redact-secrets.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
@@ -139,6 +140,26 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 	const pageOf = (u: string) => (u || "").split("#")[0];
 	const solvedPage = opts.solvedChallengeUrl ? pageOf(opts.solvedChallengeUrl) : "";
 	const actionLog: string[] = [];
+	// #631: the job's secrets (the ATS account password, and anything secret-named added to
+	// a job later) must not reach ANY sink. There are four — `agent_events.context`, the
+	// runner's task-event mirror, `ats_apply_cache.notes`, and the action log fed back into
+	// the next prompt — and only two doors out of this loop. So redact at the doors:
+	//
+	//   `emit`      — the ONLY way an event leaves the loop. Every future event type is
+	//                 covered by construction; a guard in security-invariants.test.ts fails
+	//                 the build if `deps.onEvent` is called directly again.
+	//   `logAction` — the ONLY way a line enters the action log, which becomes
+	//                 `result.transcript` and from there the per-ATS cache the console
+	//                 renders back to the owner.
+	//
+	// Value-based, not field-name-based: 9 of the 18 leaked production rows were `agent.shot`
+	// events whose control name was the empty string, so a name rule alone would have masked
+	// half of it. Both rules run (see redact-secrets.ts).
+	const redact = makeSecretRedactor(collectJobSecrets(job));
+	const emit = async (type: string, message: string, data?: unknown) => {
+		await deps.onEvent?.(type, redact(message), redactEventData(data, redact));
+	};
+	const logAction = (line: string) => actionLog.push(redact(line));
 	let lastUrl = "";
 	let lastActionKey = "";
 	let repeatFails = 0;
@@ -156,7 +177,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 	for (let step = 0; step < maxSteps; step++) {
 		const snap = await deps.snapshot();
 		if (snap.cancelled) {
-			await deps.onEvent?.("agent.cancelled", "Stopped by the user", {});
+			await emit("agent.cancelled", "Stopped by the user", {});
 			return { outcome: "cancelled", detail: "stopped by the user", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		lastUrl = snap.url;
@@ -172,7 +193,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		// dynamic content — any real change simply means no nudge.
 		if (actedLast) {
 			if (snap.snapshot === lastSnapshot) {
-				actionLog.push("⚠ that action caused NO visible change to the page — the control may be wrong, disabled, or covered by a cookie/consent banner; try a DIFFERENT element or approach, do NOT repeat it");
+				logAction("⚠ that action caused NO visible change to the page — the control may be wrong, disabled, or covered by a cookie/consent banner; try a DIFFERENT element or approach, do NOT repeat it");
 			}
 			actedLast = false;
 		}
@@ -182,7 +203,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		// But don't re-hand-off for the page a human already solved one on (lingering
 		// widget/text); only a captcha on a DIFFERENT page is a fresh one.
 		if (snap.challenge && pageOf(snap.url) !== solvedPage) {
-			await deps.onEvent?.("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
+			await emit("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
 			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
 
@@ -191,7 +212,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		const liveHint = deps.pollHint ? await deps.pollHint().catch(() => null) : null;
 		if (liveHint) {
 			job.userHint = liveHint;
-			await deps.onEvent?.("agent.guidance", `Message from you: "${liveHint}"`, { hint: liveHint });
+			await emit("agent.guidance", `Message from you: "${liveHint}"`, { hint: liveHint });
 		}
 
 		let decision: ApplyDecision;
@@ -202,12 +223,12 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			// crash the whole durable run with no output — hand off for this step so the
 			// human can take over or it fails cleanly (and gets logged) on timeout.
 			const msg = e instanceof Error ? e.message : String(e);
-			await deps.onEvent?.("agent.decide_failed", `Deciding the next step failed: ${msg} — handing off`, { error: msg });
+			await emit("agent.decide_failed", `Deciding the next step failed: ${msg} — handing off`, { error: msg });
 			return { outcome: "stuck", detail: `assistant error: ${msg}`, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
 		if (liveHint) job.userHint = undefined; // applied to this step only
 		if (decision.usage) { tokens.input += decision.usage.input; tokens.output += decision.usage.output; }
-		await deps.onEvent?.(
+		await emit(
 			"agent.decision",
 			decision.finish ? `finish: ${decision.finish.status}` : decision.action ? describeAction(decision.action) : "thinking",
 			{ thought: decision.thought, action: decision.action, finish: decision.finish, tokensInput: tokens.input, tokensOutput: tokens.output },
@@ -217,14 +238,14 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			// If the model gives up because of a CAPTCHA the detector missed, route it
 			// to a human takeover (captcha handoff) instead of failing the whole run.
 			if (decision.finish.status === "blocked" && /captcha|not a robot|are you (a )?human|verify you('?re| are) human|anti-?bot/i.test(decision.finish.detail || "")) {
-				await deps.onEvent?.("agent.captcha", `CAPTCHA the model can't solve — handing off (${decision.finish.detail})`, { challenge: "captcha", url: snap.url });
+				await emit("agent.captcha", `CAPTCHA the model can't solve — handing off (${decision.finish.detail})`, { challenge: "captcha", url: snap.url });
 				return { outcome: "captcha", challenge: "captcha", detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		if (decision.needsInput) {
 			// Ask-and-hold: pause for the user to supply a value (same machinery as captcha).
-			await deps.onEvent?.("agent.needs_input", `Needs your input — ${decision.needsInput.field}${decision.needsInput.why ? ` (${decision.needsInput.why})` : ""}`, decision.needsInput);
+			await emit("agent.needs_input", `Needs your input — ${decision.needsInput.field}${decision.needsInput.why ? ` (${decision.needsInput.why})` : ""}`, decision.needsInput);
 			return { outcome: "needs_input", fieldNeeded: decision.needsInput.field, detail: decision.needsInput.why, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
 		if (decision.readEmail) {
@@ -234,8 +255,8 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			const found = deps.readEmail
 				? await deps.readEmail(decision.readEmail).catch((e) => `email read failed: ${e instanceof Error ? e.message : String(e)}`)
 				: "email reading is not available for this agent";
-			actionLog.push(`read_email_link → ${found}`);
-			await deps.onEvent?.("agent.read_email", found, decision.readEmail);
+			logAction(`read_email_link → ${found}`);
+			await emit("agent.read_email", found, decision.readEmail);
 			actedLast = false;
 			continue;
 		}
@@ -266,7 +287,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			const submitClick = filledSomething && act.action === "click" && /\b(apply|submit|send|finish|done|complete|confirm|accept|agree)\b/i.test(act.name ?? "");
 			if (enterSubmit || submitClick) {
 				const label = act.name ?? act.key ?? "submit";
-				await deps.onEvent?.("agent.dryrun", `Reached final "${label}" — stopping without submitting (test mode)`, {});
+				await emit("agent.dryrun", `Reached final "${label}" — stopping without submitting (test mode)`, {});
 				return { outcome: "ready", detail: `reached final submit "${label}" — test mode, not submitted`, url: snap.url, steps: step, transcript: [...actionLog] };
 			}
 		}
@@ -283,7 +304,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 				// DIAGNOSTIC: capture the full page (ARIA tree) at the stuck point — it shows
 				// every field, disabled-button state, checkbox checked/unchecked, and any
 				// validation text, so a "button won't advance" cause is knowable, not guessed.
-				await deps.onEvent?.("agent.stuck", `Repeated "${describeAction(decision.action)}" with no progress — handing off`, { action: decision.action, url: snap.url, stuckSnapshot: snap.snapshot, recentActions: [...actionLog].slice(-8) });
+				await emit("agent.stuck", `Repeated "${describeAction(decision.action)}" with no progress — handing off`, { action: decision.action, url: snap.url, stuckSnapshot: snap.snapshot, recentActions: [...actionLog].slice(-8) });
 				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 		}
@@ -294,8 +315,8 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			repeatFails = key === lastActionKey ? repeatFails + 1 : 1;
 			lastActionKey = key;
 			failsOnPage += 1;
-			actionLog.push(`${describeAction(decision.action)} — FAILED: ${actResult.error}`);
-			await deps.onEvent?.("agent.action_failed", `${describeAction(decision.action)} failed: ${actResult.error}`, { action: decision.action, error: actResult.error });
+			logAction(`${describeAction(decision.action)} — FAILED: ${actResult.error}`);
+			await emit("agent.action_failed", `${describeAction(decision.action)} failed: ${actResult.error}`, { action: decision.action, error: actResult.error });
 			// Can't proceed after trying → hand off to the human for THIS step (the
 			// workflow turns "stuck" into a takeover), then resume. Trips on a pure
 			// repeat (3×) OR on several different-but-failing attempts on one page (the
@@ -303,7 +324,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			if (repeatFails >= 3 || failsOnPage >= 4) {
 				// DIAGNOSTIC: same as the fixation guard — record the page so a repeated-failure
 				// stuck (a widget the agent can't operate) is diagnosable from the transcript.
-				await deps.onEvent?.("agent.stuck", `Stuck after repeated failures on "${describeAction(decision.action)}" — handing off`, { action: decision.action, url: snap.url, lastError: actResult.error, stuckSnapshot: snap.snapshot, recentActions: [...actionLog].slice(-8) });
+				await emit("agent.stuck", `Stuck after repeated failures on "${describeAction(decision.action)}" — handing off`, { action: decision.action, url: snap.url, lastError: actResult.error, stuckSnapshot: snap.snapshot, recentActions: [...actionLog].slice(-8) });
 				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 		} else {
@@ -319,7 +340,7 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			lastActionWasArrow = decision.action.action === "key" && /^arrow/i.test(decision.action.key ?? "");
 			// Surface the runner's write-back feedback (real value + validation error) so
 			// the brain self-corrects a rejected/mangled input instead of resending it.
-			actionLog.push(actResult.feedback ? `${describeAction(decision.action)} — ${actResult.feedback}` : describeAction(decision.action));
+			logAction(actResult.feedback ? `${describeAction(decision.action)} — ${actResult.feedback}` : describeAction(decision.action));
 			// A click/select/check/type is expected to change the page; if the NEXT
 			// snapshot shows no change, the loop top tells the brain so it adapts.
 			actedLast = decision.action.action !== "scroll" && decision.action.action !== "wait";
@@ -328,8 +349,17 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 	return { outcome: "max_steps", detail: `stopped after ${maxSteps} actions`, url: lastUrl, steps: maxSteps, transcript: [...actionLog] };
 }
 
-/** Human-readable one-liner for an action (for the action log + activity trace). */
-export function describeAction(a: BrowserAction): string {
+/**
+ * Human-readable one-liner for an action (for the action log + activity trace).
+ *
+ * The typed value is elided when the target control is a secret one (#631) — this is the
+ * half of the redaction that needs no knowledge of the value, so it protects a mid-run
+ * `request_user_info` answer or a security question we were never handed. The half that
+ * catches an UNNAMED password field is value-based and lives at the loop's two doors
+ * (`emit`/`logAction`) and at the `agent.shot` call sites, which do not come through here.
+ */
+export function describeAction(action: BrowserAction): string {
+	const a = redactAction(action);
 	switch (a.action) {
 		case "type": return `type "${a.text ?? ""}" into ${a.role ?? "field"} "${a.name ?? ""}"`;
 		case "select": return `select "${a.text ?? ""}" in "${a.name ?? ""}"`;

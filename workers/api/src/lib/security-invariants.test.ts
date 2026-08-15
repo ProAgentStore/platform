@@ -528,6 +528,82 @@ describe("a model-authored reply leaves the agent loop only through the audit", 
 	});
 });
 
+describe("a browser agent's action trail leaves the loop only through the redactor", () => {
+	/**
+	 * #631, measured in production: 18 of 500 `instance_task_events` on the apply instance held
+	 * the ATS account password VERBATIM, across 6 tasks and 3 ATS hosts, in `agent.decision` and
+	 * `agent.shot` alike. `deriveJobPassword` is one stable HMAC-derived credential reused for
+	 * EVERY ATS account that user holds, so it was not one account's password in a log — it was
+	 * the password, for all of them, in a store MCP tools read.
+	 *
+	 * The fix is redaction at the WRITE, and a write-side fix is only as good as the number of
+	 * writers that go through it. There are exactly two doors out of `runApplyLoop` — `emit`
+	 * (every event) and `logAction` (every transcript line, which becomes `ats_apply_cache.notes`
+	 * and is rendered back to the owner) — plus the `agent.shot` writes that happen inside `act`
+	 * and therefore bypass both. This guard pins all three, so the ninth event type added next
+	 * quarter cannot quietly reopen it.
+	 */
+	const loop = () => {
+		const f = ALL.find((s) => s.rel === "lib/apply-loop.ts");
+		expect(f, "lib/apply-loop.ts moved — repoint this guard").toBeTruthy();
+		return f as Source;
+	};
+
+	it("the loop's two doors exist and are what the rest of the guard is about", () => {
+		// Guards over source die by finding nothing and passing vacuously. Assert the subject.
+		expect(matchLines(loop().code, /const emit = async \(/g).length).toBe(1);
+		expect(matchLines(loop().code, /const logAction = \(/g).length).toBe(1);
+		expect(findCalls(loop().code, "makeSecretRedactor").length).toBe(1);
+	});
+
+	it("no event is emitted around `emit`", () => {
+		// One permitted read: the wrapper's own call. Anything else is a writer that skipped it.
+		const offenders = matchLines(loop().code, /deps\.onEvent\?\.\(/g)
+			.filter((h) => !/await deps\.onEvent\?\.\(type, redact\(message\)/.test(h.excerpt))
+			.map((h) => `lib/apply-loop.ts:${h.line} ${h.excerpt}`);
+		expect(
+			offenders,
+			`Call \`emit(type, message, data)\`, not \`deps.onEvent\` directly.\n` +
+				`\`emit\` is where the job's secrets are substituted out of BOTH the message and the\n` +
+				`context — and the context is what becomes \`agent_events.context\` and the runner's\n` +
+				`task-event mirror, the two stores that held the password in production (#631).\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+
+	it("no line enters the transcript around `logAction`", () => {
+		const offenders = matchLines(loop().code, /actionLog\.push\(/g)
+			.filter((h) => !/const logAction = /.test(h.excerpt))
+			.map((h) => `lib/apply-loop.ts:${h.line} ${h.excerpt}`);
+		expect(
+			offenders,
+			`Call \`logAction(line)\`, not \`actionLog.push\`. The action log becomes \`result.transcript\`,\n` +
+				`which \`saveAtsCache\` writes to \`ats_apply_cache.notes\` and the console renders straight\n` +
+				`back to the owner under Knowledge -> Rules & Tips (#631).\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+
+	it("every /browser/event write passes its message through the redactor", () => {
+		// Scanned over RAW source: the path is a string literal, which the lexer blanks. The same
+		// trap the credential-writer guard above documents — a guard that cannot see its own
+		// subject reports "no offenders" forever.
+		const writers = ALL.flatMap((f) =>
+			matchLines(f.raw, /"\/browser\/event"/g).map((h) => ({ rel: f.rel, line: h.line, excerpt: h.excerpt })),
+		);
+		expect(writers.length, "no /browser/event writers found — repoint this guard").toBeGreaterThanOrEqual(6);
+		const offenders = writers.filter((w) => !/message: redact\(/.test(w.excerpt)).map((w) => `${w.rel}:${w.line} ${w.excerpt}`);
+		expect(
+			offenders,
+			`Wrap the message in the job-derived \`redact(...)\` (lib/redact-secrets.ts).\n` +
+				`A write from inside \`act\` does not pass through the loop's \`emit\`, and \`agent.shot\` is\n` +
+				`where 9 of the 18 leaked rows landed — each with an EMPTY control name, which is why a\n` +
+				`field-name rule alone is not the fix (#631).\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+});
+
 /** The text between the paren at `open` and its match — a CREATE TABLE body, however it ends. */
 function balancedBody(sql: string, open: number): string {
 	let depth = 0;

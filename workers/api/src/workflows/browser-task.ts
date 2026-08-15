@@ -8,6 +8,7 @@ import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
 import { runShotKey } from "../lib/run-shots.js";
+import { collectJobSecrets, makeSecretRedactor } from "../lib/redact-secrets.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -86,6 +87,10 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
+		// #631: `agent.shot` is written inside `act`, so it bypasses the loop's redacting
+		// `emit`. A browse job carries no password today, which is exactly why this is here —
+		// the redactor reads the job's own keys, so the day one is added it is already covered.
+		const redact = makeSecretRedactor(collectJobSecrets(job));
 		const deps: ApplyDeps<BrowserTaskJob> = {
 			// The durable cancel is read HERE, beside the runner's own flag, so the two answers meet
 			// at the one place `runApplyLoop` already halts on (#560). `browserRunTick` also
@@ -112,7 +117,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					if (r.screenshot && env.STORAGE) {
 						const key = runShotKey(userId, instanceId, taskId, sn);
 						await env.STORAGE.put(key, b64ToBytes(r.screenshot), { httpMetadata: { contentType: "image/jpeg" } }).catch(() => undefined);
-						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: describeAction(a), data: { seq: sn, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
+						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
 					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {
@@ -120,7 +125,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				}
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
-				await callRunner(conn, "/browser/event", { taskId, type, message, data }).catch(() => undefined);
+				await callRunner(conn, "/browser/event", { taskId, type, message: redact(message), data }).catch(() => undefined);
 				await logEvent(env, { source: "apply", event: type, message, userId, instanceId, traceId: taskId, context: data as Record<string, unknown> | undefined }).catch(() => undefined);
 				return null;
 			}).then(() => undefined),
