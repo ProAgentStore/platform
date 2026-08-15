@@ -14,7 +14,7 @@
  * deliberately keeps a capturing double instead — it is testing dispatch, auth and gating, and
  * a double is the right tool there. This is a second, separate harness.
  *
- * **It owns two layers, and they are not the same claim:**
+ * **It owns three layers, and they are not the same claim:**
  *
  *  1. **Spec conformance** — is this structurally a legal MCP tool surface? Validated against
  *     the published `schema/2025-11-25/schema.json`, vendored beside this file.
@@ -34,6 +34,22 @@
  *     annotations for their tools, in particular `readOnlyHint`, `destructiveHint`, and
  *     `title`." §5.C caps tool names at 64 characters. PAGS has to assert this itself, and is
  *     unusually well placed to, because `safety.ts` already classifies every tool.
+ *
+ *  3. **Change detection** — did the surface move without the advertised version moving?
+ *     (#573 AC2.) Layers 1 and 2 both passed through all four of #561's commits, correctly:
+ *     the surface stayed legal and stayed within the directory bar while what a client
+ *     RECEIVES changed under a frozen `serverInfo.version`. This layer hashes the published
+ *     objects (minus `description`) against `surface-lock.ts`, whose header carries the two
+ *     decisions — what counts as the surface, and why a mismatch fails rather than
+ *     auto-bumps.
+ *
+ *     It lives HERE rather than in a file of its own for the reason stated two paragraphs
+ *     up: it must hash the objects a host actually receives, and this file is where those
+ *     objects are. A separate file would need either a second harness — a reconstruction,
+ *     which is what this file exists to avoid — or an extracted helper that `tsconfig.json`'s
+ *     `src/**\/*.test.ts` exclude would not cover, dragging build config into a test's
+ *     plumbing. Three claims measured off one honest reading of the wire beats three files
+ *     measuring three different things.
  *
  * **It does NOT decide whether a declared annotation is TRUE.** Nothing in a schema can tell
  * you that `cancel_instance` really is destructive. What CAN be checked — and is the one check
@@ -67,7 +83,10 @@ vi.mock("agents/mcp", () => ({
 
 const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_COUNT } = await import("./tool-count.js");
-const { annotationsFor, TOOL_RISK } = await import("./tool-metadata.js");
+const { annotationsFor, TOOL_RISK, SERVER_INSTRUCTIONS } = await import("./tool-metadata.js");
+const { MCP_SERVER_VERSION } = await import("./server-version.js");
+const { SURFACE_LOCK } = await import("./surface-lock.js");
+const { createHash } = await import("node:crypto");
 const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
 const { LATEST_PROTOCOL_VERSION } = await import("@modelcontextprotocol/sdk/types.js");
@@ -407,6 +426,141 @@ describe("output schemas (#561)", () => {
 				expect(res.structuredContent).toBeDefined();
 				expect((res.structuredContent as { error?: string }).error).toContain("authentication required");
 			},
+		);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 3 — CHANGE DETECTION: did the surface move without the version? (#573 AC2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A canonical string for a published surface: tools sorted by name, `description` removed,
+ * every object's keys sorted recursively, plus the server `instructions`.
+ *
+ * Key-sorting matters because `JSON.stringify` preserves insertion order, so a refactor that
+ * built a tool's schema in a different order would change the hash without changing anything
+ * a client receives — a ratchet that cries wolf is a ratchet someone regenerates without
+ * reading, which is the same failure as no ratchet at all.
+ *
+ * `description` is dropped HERE rather than at the call site so there is exactly one place
+ * that decides what the surface is. See `surface-lock.ts` for why it is dropped at all.
+ */
+function canonicalSurface(tools: WireTool[], instructions: string): string {
+	const sortKeys = (v: unknown): unknown => {
+		if (Array.isArray(v)) return v.map(sortKeys);
+		if (v && typeof v === "object") {
+			return Object.fromEntries(
+				Object.entries(v as Record<string, unknown>)
+					.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+					.map(([k, val]) => [k, sortKeys(val)]),
+			);
+		}
+		return v;
+	};
+	const published = [...tools]
+		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+		.map((t) => {
+			const { description: _dropped, ...rest } = t;
+			return sortKeys(rest);
+		});
+	return JSON.stringify({ instructions, tools: published });
+}
+
+const surfaceFingerprint = (tools: WireTool[], instructions: string) =>
+	`sha256:${createHash("sha256").update(canonicalSurface(tools, instructions)).digest("hex")}`;
+
+describe("published surface vs the advertised version (#573 AC2)", () => {
+	it("has a lock entry for the version it advertises", () => {
+		// G1 — the input set, asserted. A lock with no entry for the current version would
+		// otherwise make the comparison below vacuous: `undefined === undefined` is not a
+		// green build, it is a check that stopped running.
+		expect(
+			Object.keys(SURFACE_LOCK).length,
+			"surface-lock.ts records no versions at all; it cannot certify anything",
+		).toBeGreaterThanOrEqual(1);
+		expect(
+			SURFACE_LOCK[MCP_SERVER_VERSION],
+			`surface-lock.ts has no entry for MCP_SERVER_VERSION ${MCP_SERVER_VERSION} ` +
+				`(it records: ${Object.keys(SURFACE_LOCK).join(", ")}). A bumped version needs a NEW ` +
+				"entry recording the surface it publishes — that pairing is the whole mechanism.",
+		).toBeDefined();
+	});
+
+	it("publishes exactly the surface its version locked — or says the version must move", () => {
+		// Measured over the REAL wire objects this file already holds, which is the reason
+		// this layer lives here rather than in a file of its own: a second harness would be
+		// a reconstruction of the wire, and the header above explains why that is worthless.
+		const computed = surfaceFingerprint(published, SERVER_INSTRUCTIONS);
+		expect(
+			computed,
+			`The published MCP surface no longer matches what ${MCP_SERVER_VERSION} locked.\n\n` +
+				`  computed: ${computed}\n` +
+				`  locked:   ${SURFACE_LOCK[MCP_SERVER_VERSION]}\n\n` +
+				"  Something a client RECEIVES changed: a tool name, an inputSchema, an annotation,\n" +
+				"  an outputSchema, or SERVER_INSTRUCTIONS. Descriptions are excluded, so this is not\n" +
+				"  a reworded tool.\n\n" +
+				"  Fix it by BUMPING `MCP_SERVER_VERSION` in server-version.ts and adding a new entry\n" +
+				"  to SURFACE_LOCK with the computed hash above — and let `server.json`, the served\n" +
+				"  /.well-known manifest and platform-docs/mcp.md follow it (`pnpm docs:drift` will\n" +
+				"  name any that do not). Editing the existing entry in place records a new surface\n" +
+				"  against a version that has already been published to the MCP registry.",
+		).toBe(SURFACE_LOCK[MCP_SERVER_VERSION]);
+	});
+
+	it("hashes the surface and not the prose — a reworded description is not a bump", () => {
+		// The decision in surface-lock.ts, executed rather than asserted in a comment. #565
+		// rewrote usage_summary's description hours before this landed and correctly did not
+		// bump the version; this is what makes that correct rather than merely tolerated.
+		const reworded = published.map((t) =>
+			t.name === "usage_summary" ? { ...t, description: "something else entirely" } : t,
+		);
+		expect(reworded).not.toEqual(published); // the fixture really did change
+		expect(surfaceFingerprint(reworded, SERVER_INSTRUCTIONS)).toBe(
+			surfaceFingerprint(published, SERVER_INSTRUCTIONS),
+		);
+	});
+
+	it("moves when any of the things a caching host keys on moves", () => {
+		// G4, as a property rather than one example: each mutation below is a distinct class
+		// of surface change, and every one must change the hash. A ratchet that only noticed
+		// tool names would have passed through three of #561's four commits.
+		const base = surfaceFingerprint(published, SERVER_INSTRUCTIONS);
+		const first = published[0];
+		const mutations: [string, WireTool[], string][] = [
+			["a tool is added", [...published, { ...first, name: "brand_new_tool" }], SERVER_INSTRUCTIONS],
+			["a tool is removed", published.slice(1), SERVER_INSTRUCTIONS],
+			["a tool is renamed", [{ ...first, name: "renamed" }, ...published.slice(1)], SERVER_INSTRUCTIONS],
+			[
+				"an annotation flips",
+				[{ ...first, annotations: { ...first.annotations, readOnlyHint: !first.annotations?.readOnlyHint } }, ...published.slice(1)],
+				SERVER_INSTRUCTIONS,
+			],
+			[
+				"an outputSchema appears",
+				[{ ...first, outputSchema: { type: "object" } }, ...published.slice(1)],
+				SERVER_INSTRUCTIONS,
+			],
+			[
+				"an inputSchema changes",
+				[{ ...first, inputSchema: { ...first.inputSchema, extra: true } }, ...published.slice(1)],
+				SERVER_INSTRUCTIONS,
+			],
+			["the server instructions change", published, `${SERVER_INSTRUCTIONS} and one more thing`],
+		];
+		for (const [what, tools, instructions] of mutations) {
+			expect(surfaceFingerprint(tools, instructions), `${what} must move the fingerprint`).not.toBe(base);
+		}
+		expect(mutations.length, "every class of surface change is exercised").toBe(7);
+	});
+
+	it("does not move when only key ORDER changes, so the ratchet cannot cry wolf", () => {
+		const reordered = published.map((t) => {
+			const entries = Object.entries(t).reverse();
+			return Object.fromEntries(entries) as WireTool;
+		});
+		expect(surfaceFingerprint(reordered, SERVER_INSTRUCTIONS)).toBe(
+			surfaceFingerprint(published, SERVER_INSTRUCTIONS),
 		);
 	});
 });

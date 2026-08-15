@@ -63,10 +63,19 @@
  * the standard mechanism rather than a measured cause: that a bump would specifically have
  * made OpenAI's client re-fetch was NOT tested against it.
  *
- * Nothing enforces the bump today; `docs-drift.mjs` enforces only that the three statements
- * of the version agree. A fingerprint over the published surface, ratcheted against this
- * constant, is the check that would — `conformance.test.ts` already holds the wire objects
- * a fingerprint would be taken from — and it is its own piece of work, not a rider here.
+ * ── WHAT ENFORCES IT
+ *
+ * Two checks, and they answer different questions. `docs-drift.mjs`'s wire-surface arm
+ * enforces that all four STATEMENTS of the version agree — this constant, `server.json`, the
+ * served `/.well-known/mcp-server.json`, and `platform-docs/mcp.md`. It cannot tell you the
+ * number is right, only that everyone says the same one.
+ *
+ * `surface-lock.ts` + `conformance.test.ts`'s layer 3 is the half that makes it MOVE: the
+ * published surface is hashed against the entry locked for this version, so a change to what
+ * a client receives goes red and the failure names the bump as the fix. That closes the gap
+ * this file was written inside — four statements agreeing at `0.1.1` through four commits
+ * that changed the surface. Read `surface-lock.ts` for what is in the hash and why a
+ * mismatch fails rather than auto-bumping.
  */
 
 /** Advertised in `serverInfo.version`, and restated in `server.json` and `platform-docs/mcp.md`. */

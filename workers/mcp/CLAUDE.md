@@ -227,3 +227,9 @@ someone re-types the literal back into the `McpServer` constructor. So bump the 
 and let `server.json` follow it — never the other way round. That constant's own comment
 carries the rule for when a bump is due (the served surface changed: tool names, input
 schemas, annotations, output schemas or `instructions` — not a reworded description).
+
+You will not have to remember. `src/surface-lock.ts` records a hash of the published
+surface per version, and `conformance.test.ts` recomputes it from a real `tools/list`; a
+surface change fails the build with the computed hash to paste and the bump named as the
+fix. Regenerate by running that test, never by hand-editing a hash — and add a NEW entry
+rather than editing the one for a version already published to the MCP registry.
