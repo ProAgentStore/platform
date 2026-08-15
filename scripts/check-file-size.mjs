@@ -729,7 +729,15 @@ const PINS = {
 	// changes nothing). Raised rather than split for the reason #396 raised it: a step's own facts
 	// belong beside the handler, and a separate mutation table would be the same defect one file
 	// over. The set is pinned with its denominator in lib/tool-mutation-report.test.ts.
-	"workers/api/src/lib/steps.ts": 1039,
+	// +66 at #630/#640: `dedupe_upsert` now tells a failed write apart from a deliberate skip —
+	// its own counter, the DO's error message read off the response body it used to discard, a
+	// refusal when EVERY attempted write failed, and the pump's other counters kept instead of
+	// only `delivered` — and `fan_out pages` reports `hasMore` so a cap is not read as a complete
+	// sweep. Raised rather than split for the same reason as the raise above: a step's facts
+	// belong beside its handler, and the parts that COULD move already did — the shortfall
+	// sentence and the partial-failure lift both live in lib/pipeline.ts, which is where the run
+	// reads them.
+	"workers/api/src/lib/steps.ts": 1105,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1268,7 +1276,11 @@ const PINS = {
 	// +9 at #505: the coding-session.ts raise above is +1 of code and eight lines of why, because a
 	// file sitting EXACTLY on its pin makes every one-line wiring a pin decision — which is the
 	// ratchet working, and is worth the ledger entry it costs. Plus this note.
-	"scripts/check-file-size.mjs": 1352,
+	// +12 at #630/#640: the steps.ts raise above and this line. Recorded in a SECOND commit, the
+	// same honest note #609 and #469 carry: the growth landed across two issue commits and the
+	// ratchet was not run until the full bar before pushing. Caught before the push, which is
+	// the point of running the bar there, but the pin and the growth did not travel together.
+	"scripts/check-file-size.mjs": 1364,
 };
 
 /**
