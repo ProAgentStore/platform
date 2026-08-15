@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	diffConfirm,
+	findClaimSpans,
+	findQuantityMentions,
 	findSplitClaims,
 	findToolCountClaims,
 	parseConfirmBullets,
@@ -282,5 +284,81 @@ describe("diffConfirm", () => {
 			phantom: ["delete_everything"],
 			wrong: [{ tool: "remove_repo", documented: "remove_repo", actual: "remove_all_repos" }],
 		});
+	});
+});
+
+describe("findQuantityMentions — the population the parsers above are graded against", () => {
+	/**
+	 * The sentence this function exists for. `findSplitClaims` and `findToolCountClaims` both
+	 * return `[]` for it (asserted below, so the premise cannot rot); it was in the swept set
+	 * and `pnpm docs:drift` was green with it present. A mention detector that misses it is
+	 * worth nothing, which is why this is the first assertion in the block.
+	 */
+	const DEFECT = "   *per-connection*: 18 of the 124 registrations are gated to the console surfaces of the";
+
+	it("sees the claim that thirteen green checks did not", () => {
+		expect(findToolCountClaims(DEFECT), "premise: the total parser is blind to this").toEqual([]);
+		const { alwaysOn, gated } = findSplitClaims(DEFECT);
+		expect([...alwaysOn, ...gated], "premise: the split parser is blind to this").toEqual([]);
+
+		const mentions = findQuantityMentions(DEFECT);
+		expect(mentions.map((m) => [m.text, m.shape])).toEqual([
+			["124 registrations", "noun"],
+			["124 registrations are gated", "verb"],
+		]);
+	});
+
+	it("reads the phrasings the extractors deliberately do not", () => {
+		// Every one of these is a real claim about the surface that no check compares to
+		// anything. That is the point: a mention is not an extraction.
+		expect(findQuantityMentions("The server registers 135 MCP tools.")[0].text).toBe("135 MCP tools");
+		expect(findQuantityMentions("18 of the 124 registrations")[0].text).toBe("124 registrations");
+		expect(findQuantityMentions("117 tools are always registered")[0].shape).toBe("noun");
+		expect(findQuantityMentions("19 are surface-gated")[0].shape).toBe("verb");
+	});
+
+	it("requires the number to QUANTIFY the subject, not merely share a line with it", () => {
+		// The line-level rule was measured and rejected: 75 lines matched, 50 with no claim on
+		// them. These four are the shapes that produced those false positives.
+		expect(findQuantityMentions("Registry connectors (issues #84–#90): a tool framework")).toEqual([]);
+		expect(findQuantityMentions('<h3 style="color:#22c55e">Tools</h3>')).toEqual([]);
+		expect(findQuantityMentions("OAuth 2.1 + PKCE (S256). Tools carry scopes.")).toEqual([]);
+		expect(findQuantityMentions("`GHSA-g7r4-m6w7-qqqr` — the tool is unaffected")).toEqual([]);
+	});
+
+	/**
+	 * ADR 0002's obligation on a hand-rolled scanner: its own test names what it does NOT
+	 * handle. Each of these IS a claim about the surface and this detector is blind to it, so
+	 * a document written this way is still unguarded. Recorded as a known gap rather than
+	 * left to be discovered the way `AGENTS.md:15` was.
+	 */
+	it("does NOT read a count that follows its subject, or one spelled out", () => {
+		expect(findQuantityMentions("`/health` reports tools: 136"), "trailing count — unread").toEqual([]);
+		expect(findQuantityMentions("A tool surface of 136."), "count after the noun — unread").toEqual([]);
+		expect(findQuantityMentions("all one hundred and thirty-six tools"), "spelled numeral — unread").toEqual([]);
+		expect(
+			findQuantityMentions("136 of the newly added and separately counted registrations"),
+			"more than three words between number and noun — unread",
+		).toEqual([]);
+	});
+});
+
+describe("findClaimSpans — what the extractors already cover, for overlap", () => {
+	it("covers the mention inside a claim that is wider than it", () => {
+		const line = "117 tools are always registered; 19 are gated to the console";
+		const spans = findClaimSpans(line);
+		// Every mention on this line must fall inside some claim span, or the shape check would
+		// report a false unparsed on a sentence that IS read. This is the assertion that keeps
+		// the two halves in step when either regex is edited.
+		for (const m of findQuantityMentions(line)) {
+			expect(
+				spans.some((s) => s.start < m.end && m.start < s.end),
+				`"${m.text}" is not covered by any claim span`,
+			).toBe(true);
+		}
+	});
+
+	it("reports nothing for a line carrying no claim", () => {
+		expect(findClaimSpans("18 of the 124 registrations are gated")).toEqual([]);
 	});
 });

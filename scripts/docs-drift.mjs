@@ -65,6 +65,7 @@ import {
 	parseConfirmProse,
 	parseConfirmTable,
 } from "./lib/doc-claims.mjs";
+import { SUBSET_CLAIMS, checkClaimShape } from "./lib/claim-shape.mjs";
 import { checkMcpSplit } from "./lib/mcp-split.mjs";
 import { checkWireSurface } from "./lib/wire-surface.mjs";
 
@@ -438,11 +439,9 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 	// The list was three paths and the sweep is now ~90 files; #555's defect was on the one
 	// page a prospective user reads, which was in neither the list nor docFiles().
 	//
-	// One file is exempt, and only because it is checked HARDER elsewhere:
-	// workers/mcp/CLAUDE.md quotes per-file counts in its module layout (checked below,
-	// against the real registrations) plus deliberate historical statements ("67 of those
-	// 86 tools until #305"). Sweeping it would fire on the prose that explains the rule.
-	const SUBSET_CLAIMS = ["workers/mcp/CLAUDE.md"];
+	// One file is exempt, and only because it is checked HARDER elsewhere — the reason lives
+	// with the list in claim-shape.mjs, because check 6c honours the same exemption and one
+	// decision restated in two places is how the two come to mean different things.
 
 	// Files that MUST state the total. The other half of the denominator: a claim that is
 	// deleted, or rephrased past the regex ("135 MCP tools" does not match), otherwise
@@ -579,6 +578,13 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 	});
 	for (const f of splitFailures) fail(f.check, f.message);
 	for (const n of splitNotes) ok(n);
+
+	// 6c. …and the SHAPE arm over the same sweep: a document that quantifies the tool
+	// surface in a phrasing neither check above can read is a claim nothing compares to
+	// anything, which is how AGENTS.md:15 carried a stale 124 through a green build (#603).
+	const { failures: shapeFailures, notes: shapeNotes } = checkClaimShape({ files });
+	for (const f of shapeFailures) fail(f.check, f.message);
+	for (const n of shapeNotes) ok(n);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

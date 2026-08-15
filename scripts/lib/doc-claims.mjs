@@ -124,6 +124,108 @@ export function findSplitClaims(src) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MENTIONS — the denominator the two parsers above cannot supply (#603)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A number bound to the MCP tool surface, in ANY phrasing — the population the parsers
+ * above are supposed to cover.
+ *
+ * ── Why this exists
+ *
+ * Every parser in this file reports what it FOUND, and the callers assert that the files
+ * expected to speak did speak. That defends a claim being DELETED. It does not defend a
+ * claim being REPHRASED, because a rephrased claim and an absent one produce the same
+ * empty result — which is failure mode (2) in this file's own header, still open on the
+ * day it was written.
+ *
+ * `workers/mcp/AGENTS.md:15` is what that costs. It said "18 of the **124** registrations
+ * are gated" against an actual 19 of 136, in a file that IS swept, and `pnpm docs:drift`
+ * reported thirteen green checks with the sentence present. Neither regex matched it:
+ * `TOOL_COUNT_CLAIM` wants the word "tool" ("the 124 registrations" has none), and
+ * `GATED_CLAIM` allows only "tools" between the number and "are gated", not "of the 124
+ * registrations". The file was in the denominator; the claim never was.
+ *
+ * So this function answers a different question from the parsers: not "what does this
+ * document claim" but "**does this document raise the subject at all**". A mention no
+ * parser can read is then a FAILURE rather than a silence — see `claim-shape.mjs`.
+ *
+ * ── The two shapes, and what they deliberately do NOT read
+ *
+ * Both were measured over the real sweep (40 files) rather than imagined:
+ *
+ *   NOUN  `\d+ [≤3 words] (tool|tools|registration|registrations)` — 27 mentions, 24 of
+ *         them already parsed. The ≤3-word filler is the whole point: it is what makes
+ *         "135 MCP tools" and "124 registrations" mentions even though neither is a
+ *         claim any parser reads.
+ *   VERB  `\d+ [≤3 words] are [≤2 words] (gated|always …)` — 8 mentions, 7 already
+ *         parsed. Zero false positives measured.
+ *
+ * A LINE-level rule — "a line containing a digit and the word tool" — was measured and
+ * rejected: 75 lines, 50 of them with no claim on them at all (`#84–#90` issue ranges,
+ * `#22c55e` colours, `S256`, CVE identifiers). The number must quantify the noun.
+ *
+ * NOT read, stated because a mention detector with an unstated blind spot is the very
+ * defect this is for: a count that follows its subject (`tools: 135`, "a tool surface of
+ * 135"), a spelled-out numeral ("all one hundred and thirty-six"), and a number separated
+ * from its noun by more than the filler allows. Each would be a mention this returns
+ * nothing for. `claim-shape.test.mjs` names them as unread rather than leaving them to be
+ * discovered.
+ *
+ * @param {string} src
+ * @returns {{n: number, claimed: number, line: string, start: number, end: number,
+ *            shape: "noun"|"verb", text: string}[]}
+ */
+// Case-INSENSITIVE, and the filler admits a capital. Written lowercase-only first, which
+// silently failed to see "135 MCP tools" — the one phrasing this file's own header names as
+// the trap. Caught by the test below rather than in production, which is the point of it.
+const MENTION_NOUN = /\b(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,3}(?:tools?|registrations?)\b/gi;
+const MENTION_VERB = /\b(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,3}are\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:surface-)?(?:gated|always)\b/gi;
+
+export function findQuantityMentions(src) {
+	const out = [];
+	src.split("\n").forEach((line, i) => {
+		for (const [shape, re] of [
+			["noun", MENTION_NOUN],
+			["verb", MENTION_VERB],
+		]) {
+			for (const m of line.matchAll(re)) {
+				out.push({
+					n: i + 1,
+					claimed: Number(m[1]),
+					line: line.trim(),
+					start: m.index,
+					end: m.index + m[0].length,
+					shape,
+					text: m[0],
+				});
+			}
+		}
+	});
+	return out;
+}
+
+/**
+ * The spans on ONE line that a known claim parser recognises.
+ *
+ * Exported so `claim-shape.mjs` can ask "is this mention inside something we can read?"
+ * without restating the three patterns — a fourth copy of them is the drift this whole
+ * module exists to prevent. Overlap rather than equality, because a claim's match is
+ * usually WIDER than the mention inside it ("117 tools are always registered" is one
+ * always-on claim containing one noun mention).
+ *
+ * @param {string} line
+ * @returns {{start: number, end: number}[]}
+ */
+export function findClaimSpans(line) {
+	const spans = [];
+	for (const re of [TOOL_COUNT_CLAIM, ALWAYS_ON_CLAIM, GATED_CLAIM]) {
+		for (const m of line.matchAll(re)) spans.push({ start: m.index, end: m.index + m[0].length });
+	}
+	return spans;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The confirm-gated tool table
 // ─────────────────────────────────────────────────────────────────────────────
 
