@@ -129,7 +129,8 @@ Current runtime-backed surfaces:
 
 - Job Application Assistant: Cloudflare Workflow brain drives Playwright browser
   actions.
-- Coder: Cloudflare Workflow brain drives local CLI sessions through the generic Terminal connector. Multiple
+- Coder: Cloudflare Workflow brain drives local CLI sessions directly over the relay
+  (`callRunner` → `/coding/capture`, `/coding/act`, `/coding/event`), not through a connector. Multiple
   machines can connect to the same Coder instance through node-scoped relay
   connections; see [Coder Multi-Machine Runtime](../platform-docs/coder-multi-machine.md).
 
@@ -159,7 +160,7 @@ The API worker is a Hono app. It mounts route modules for:
 - Instance storage: documents, files, collections, search, activity, summaries
 - Runtime: `/v1/relay`, runtime registration/status/task mirrors
 - Coding: `/v1/instances/:id/coding/...`
-- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads), `/v1/connectors/:id/oauth/*` (generic OAuth2); registry connectors (github, http, meta, web-search, terminal, tmux, browser, repo-local, supervision, mcp, google_sheets) are dispatched through the tool loop, not per-connector routes
+- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads), `/v1/connectors/:id/oauth/*` (generic OAuth2); registry connectors (github, http, meta, web-search, terminal, tmux, browser, repo-local, supervision, mcp, google_sheets, google_drive, zoho_workdrive, gmail) are dispatched through the tool loop, not per-connector routes
 - Keys: BYOK key vault and key proxy
 - Billing, notifications, push, dashboard, errors
 
@@ -168,7 +169,10 @@ The worker also exports:
 - `AgentDO`: per-agent/per-instance state and chat runtime.
 - `RelayDO`: WebSocket relay between cloud and local runtime.
 - `JobApplyWorkflow`: durable job application browser brain.
-- `CodingSessionWorkflow`: durable coding-session brain.
+- `CodingSessionWorkflow`: durable coding-session brain (the Pilot).
+- `PipelineRunWorkflow`: durable declarative-pipeline runner.
+- `BrowserTaskWorkflow`: durable general browser-objective brain.
+- `AgentLoopWorkflow`: the platform's durable, generic agent loop.
 
 ### Assessment
 
@@ -245,7 +249,7 @@ Primary files:
 - `workers/mcp/src/index.ts`
 - `workers/mcp/src/oauth-provider.ts`
 - `workers/mcp/src/safety.ts`
-- `workers/mcp/src/instance-tools.ts`
+- `workers/mcp/src/instance-tools/` (a directory: `index.ts` plus per-family modules)
 - `workers/mcp/src/storage-tools.ts`
 - `workers/mcp/src/repo-tools.ts`
 
@@ -445,6 +449,9 @@ Registered connectors (`CONNECTORS`):
 | `supervision` | none (internal) | read+write | delegate goals through configured supervision links |
 | `mcp` | token (vault key) | read+write | call user-configured outbound MCP servers |
 | `google_sheets` | oauth | read+write | read and append rows through generic OAuth2 connector flow |
+| `google_drive` | oauth | — | connected account (#352 Stage 1): declared with `tools: []`, so no agent gains a tool from it |
+| `zoho_workdrive` | oauth | — | connected account, as above |
+| `gmail` | oauth | — | connected account, as above |
 
 Auth is minted through the single `connectorClient(env, provider, {userId, instanceId})`
 path (`connectors/client.ts`): app-installation token, OAuth refresh→access, a vault key,
@@ -701,7 +708,7 @@ Use these rules when adding new platform features:
 ## Related Docs
 
 - [MCP Instance Runtime](mcp-instance-runtime.md)
-- [MCP](mcp.md)
+- [MCP](../platform-docs/mcp.md)
 - [Browser-Capable Agent Runtime](../platform-docs/browser-runtime.md)
 - [Cloudflare Agent Stack 2026](cloudflare-agent-stack-2026.md)
 - [Agent Platform Strategy](agent-platform-strategy.md)

@@ -57,7 +57,7 @@ plugins/claude/proagentstore/
 .claude-plugin/marketplace.json
 ```
 
-See [Skill Publishing](skill-publishing.md) for the install commands and release checklist.
+See [Skill Publishing](../platform-docs/skill-publishing.md) for the install commands and release checklist.
 
 ## Correct User Runtime Flow
 
