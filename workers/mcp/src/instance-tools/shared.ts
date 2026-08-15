@@ -93,7 +93,7 @@ export function normalizeTriggerConfig(
 }
 
 export interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll?: boolean }
-export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; reasoning?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string }
+export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; reasoning?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string; updatedAt?: string; sessionEnded?: boolean }
 
 /**
  * CANONICAL SOURCE: `workers/api/src/lib/agent-capabilities.ts` `columnForStatus`.
@@ -145,6 +145,14 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean }): unkno
 			reasoning: opts?.reasoning ? it.reasoning : undefined,
 			url: it.url,
 			latestTaskId: it.latestTaskId,
+			// WHEN, which no card on any of the five measured boards carried (#592). A board is read
+			// to decide whether to intervene, and "queued" without a date is not a decidable fact:
+			// the measured card had been waiting 1h13m and, given its engine's limit, could not run
+			// for another two days. Both facts existed; neither was where the owner looks.
+			updatedAt: it.updatedAt || undefined,
+			// The card is keyed on a coding session that is OVER, so its takeover is not available.
+			// Emitted only when true — absence must never have to be read as "the session is fine".
+			sessionEnded: it.sessionEnded ? true : undefined,
 		};
 		const colId = columnFor(cols, String(it.status ?? ""));
 		if (!colId) { other.push(card); continue; }
@@ -166,7 +174,11 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean }): unkno
 		jobCount: items.length,
 		...(truncated ? { truncated: true, truncatedNote: "Only the most recent runtime tasks were read — some older jobs may be missing." } : {}),
 		...(withheld ? { reasoningAvailable: withheld, reasoningNote: `${withheld} card(s) carry a longer \`reasoning\` (the decision/audit the agent recorded). Omitted here to keep the board small — call instance_board again with reasoning:true to read it.` } : {}),
-		note: "One card per job (retries of the same job collapse into one; `attempts` = run count). `moved:true` means a human set the status. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
+		// `attempts` = run count was a claim this could not make until #592: a coding card is one
+		// upserted row per session however many runs drove it, and the count was pinned at 1 on all
+		// 83 measured cards while one of them had nine runs and a failure behind it. The API now
+		// joins the runs at read time, so the sentence is true for both card families.
+		note: "One card per job (retries of the same job collapse into one; `attempts` = the runs behind it). `updatedAt` is when the card last moved. `moved:true` means a human set the status. `sessionEnded:true` means the coding session is over, so there is nothing left to take over. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
 	};
 }
 

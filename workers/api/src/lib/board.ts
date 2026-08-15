@@ -1,6 +1,13 @@
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
+import {
+	CODING_SESSION_TASK_TYPE,
+	codingRunsForSessions,
+	codingSessionIdFromCardId,
+	codingSessionStates,
+	reconcileCodingCard,
+} from "./board-runs.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
 import { sqlLiteralList } from "./sql.js";
 import { TICKET_ANSWER_EVENT, TICKET_QUESTION_EVENT } from "./ticket-chat.js";
@@ -96,6 +103,15 @@ export interface BoardItemView {
 	status: string;
 	attempts: BoardAttempt[];
 	updatedAt: string;
+	/**
+	 * True when this card is keyed on a coding session that is OVER (#592).
+	 *
+	 * Set only where it is a fact worth acting on, so its absence never has to be read as "the
+	 * session is fine". Four of five measured `needs_human` cards offered "take over" on sessions
+	 * that had ended minutes earlier; a reader needs to be able to tell that the affordance is gone
+	 * without inferring it from a status.
+	 */
+	sessionEnded?: boolean;
 }
 
 export interface InstanceBoard {
@@ -313,6 +329,10 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 	}
 
 	const items: BoardItemView[] = [];
+	// Coding cards are keyed on a session, so what they report has to agree with that session and
+	// with the runs behind it (#592). Collected here and joined in ONE pair of reads below rather
+	// than a read per card — the board polls every 2.5s.
+	const codingCards = new Map<string, BoardItemView>();
 	for (const [jobKey, arr] of byKey) {
 		arr.sort((a, b) => stamp(b) - stamp(a));
 		const rep = arr[0];
@@ -320,7 +340,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		const runStatus = String(rep.status ?? "");
 		const userStatus = overlay.get(jobKey)?.user_status ?? null;
 		const latestTaskId = String(rep.id ?? "");
-		items.push({
+		const item: BoardItemView = {
 			jobKey,
 			latestTaskId,
 			threadTurns: threadTurnsByTask.get(latestTaskId) ?? 0,
@@ -334,7 +354,38 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			status: userStatus || runStatus,
 			attempts: arr.map((t) => ({ id: String(t.id ?? ""), status: String(t.status ?? ""), updatedAt: t.updatedAt || t.createdAt || "" })),
 			updatedAt: rep.updatedAt || rep.createdAt || "",
-		});
+		};
+		items.push(item);
+		if (rep.type === CODING_SESSION_TASK_TYPE) {
+			const sessionId = codingSessionIdFromCardId(jobKey);
+			if (sessionId) codingCards.set(sessionId, item);
+		}
+	}
+
+	// The read-time join `board.ts:334` never had. Every coding card's `attempts`, status and detail
+	// are settled against the run that owns the work and the session it is keyed on — see
+	// `board-runs.ts` for why this cannot be a write-through.
+	if (codingCards.size) {
+		const sessionIds = [...codingCards.keys()];
+		const [runsBySession, sessionStates] = await Promise.all([
+			codingRunsForSessions(env, instanceId, userId, sessionIds),
+			codingSessionStates(env, instanceId, userId, sessionIds),
+		]);
+		for (const [sessionId, item] of codingCards) {
+			const patch = reconcileCodingCard({
+				runStatus: item.runStatus,
+				description: item.description,
+				attempts: item.attempts,
+				runs: runsBySession.get(sessionId) ?? [],
+				session: sessionStates.get(sessionId),
+			});
+			item.runStatus = patch.runStatus;
+			item.description = patch.description;
+			item.attempts = patch.attempts;
+			// A human's own move still outranks the reconciliation, exactly as it outranks the writer.
+			item.status = item.userStatus || patch.runStatus;
+			if (patch.sessionEnded) item.sessionEnded = true;
+		}
 	}
 
 	// Standalone durable cards: a job the user MOVED whose runtime tasks are gone
