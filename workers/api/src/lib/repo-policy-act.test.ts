@@ -81,6 +81,17 @@ describe("classifyRunnerError — an old CLI is not a failure", () => {
 		expect(r.detail).toContain(SWITCH_BRANCH_MIN_CLI);
 	});
 
+	it("names the MACHINE when the caller knows which one answered (#524)", () => {
+		// It said "this machine's runner", which an owner with two connected runners resolves to
+		// the machine in front of him. `runRepoPolicyRemediation` holds `conn.runnerNode` already,
+		// so the name costs nothing and is the difference between an actionable remedy and a
+		// version number attached to no address.
+		const r = classifyRunnerError(new Error("Runner /coding/git-write → 404: not found"), "Sergeys-Mac-mini.local");
+		expect(r.status).toBe("unsupported");
+		expect(r.detail).toContain("Sergeys-Mac-mini.local");
+		expect(r.detail).toContain(SWITCH_BRANCH_MIN_CLI);
+	});
+
 	it("a disconnect is UNCONFIRMED, never failed — nobody knows whether it ran", () => {
 		// Judged by `isRunnerUnreachable`, which owns the rule — including the marker that survives
 		// a Workflow step boundary, where the receiving side gets a message and not a prototype.

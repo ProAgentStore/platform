@@ -37,6 +37,7 @@
  * a transport failure must never be able to move a branch.
  */
 import { callRunner, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
+import { runnerUpgradeClause } from "./runner-upgrade.js";
 import { isRunnerUnreachable } from "./runner-unreachable.js";
 import { getRepo } from "./coding-store.js";
 import { readRepoWorkingState } from "./repo-state.js";
@@ -99,13 +100,15 @@ export const SWITCH_BRANCH_MIN_CLI = "0.4.48";
  * owns the judgement, including the marker that survives a Workflow step boundary (which hands the
  * receiving side a message, not a prototype).
  */
-export function classifyRunnerError(e: unknown): { status: RepoPolicyActStatus; detail: string } {
+export function classifyRunnerError(e: unknown, node?: string | null): { status: RepoPolicyActStatus; detail: string } {
 	const message = e instanceof Error ? e.message : String(e);
 	if (/→ 404|not found/i.test(message)) {
-		return {
-			status: "unsupported",
-			detail: `this machine's runner has no switch-branch endpoint — CLI ${SWITCH_BRANCH_MIN_CLI} or newer, then restart \`pags up\``,
-		};
+		// NAMES THE MACHINE (#524). It said "this machine", which an owner with two runners reads
+		// as the one in front of him — and the remedy has to be run on the other one. The clause is
+		// built by `lib/runner-upgrade.ts` so this and the repo-search refusal cannot drift into
+		// two different accounts of the same fact; the caller passes `conn.runnerNode`, which it
+		// already holds, so naming it costs no query.
+		return { status: "unsupported", detail: runnerUpgradeClause({ what: "switch branch", minCli: SWITCH_BRANCH_MIN_CLI, node }) };
 	}
 	if (isRunnerUnreachable(e)) return { status: "unconfirmed", detail: "the machine went away before it answered" };
 	return { status: "failed", detail: message.slice(0, 160) };
@@ -133,7 +136,7 @@ export async function runRepoPolicyRemediation(
 			{ timeoutMs: READ_TIMEOUT_MS },
 		);
 	} catch (e) {
-		return { ...base, ...classifyRunnerError(e) };
+		return { ...base, ...classifyRunnerError(e, conn.runnerNode) };
 	}
 	const from = typeof wire.from === "string" ? wire.from : null;
 	if (wire.refused) {
@@ -232,7 +235,7 @@ export async function enforceRepoPolicies(
 		if (f.status === "violated" && f.remediation) {
 			const remediation = f.remediation;
 			const outcome = await runRepoPolicyRemediation(conn, { repo, sessionId, remediation }).catch(
-				(e): RepoPolicyActOutcome => ({ requested: remediation, from: null, observed: null, ...classifyRunnerError(e) }),
+				(e): RepoPolicyActOutcome => ({ requested: remediation, from: null, observed: null, ...classifyRunnerError(e, conn.runnerNode) }),
 			);
 			const card = describeRepoPolicyAct(f.policy, repoLabel, outcome);
 			await upsertWorkCard(env, {

@@ -22,6 +22,7 @@
 // where resolveInside() and gitArgv() carry the safety.
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
+import { runnerUpgradeMessage, runnerUpgradeRefusal } from "../runner-upgrade.js";
 import { checkWorkdirVia, isWorkdirBroken } from "../coding-workdir.js";
 import { listRepoWorkdirs, type RepoWorkdirRow } from "../coding-store.js";
 import { agentCapabilities } from "../agent-capabilities.js";
@@ -69,11 +70,20 @@ const TREE_DEPTH_CAP = 4;
  */
 export const REPO_SEARCH_MIN_CLI = "0.4.49";
 
-/** An older runner 404s an endpoint it does not serve; say which release adds it. */
-function runnerTooOld(e: unknown, what: string): string | null {
+/**
+ * An older runner 404s an endpoint it does not serve; say which release adds it — and WHICH
+ * MACHINE (#524).
+ *
+ * The message is built by `lib/runner-upgrade.ts`, which names the node, its version, the pin
+ * that holds the agent there, and a capable machine if one exists. It used to say "that machine",
+ * which an owner with two runners resolves to the one in front of him — here, the one he had
+ * already upgraded.
+ */
+async function runnerTooOld(ctx: RegistryToolCtx, e: unknown, what: string): Promise<string | null> {
 	const message = e instanceof Error ? e.message : String(e);
 	if (!/→ 404|not found/i.test(message)) return null;
-	return `This machine's runner is too old to ${what} — it needs CLI ${REPO_SEARCH_MIN_CLI} or newer. Run \`npm i -g @proagentstore/cli\` on that machine and restart \`pags up\`.`;
+	if (!ctx.instanceId || !ctx.userId) return runnerUpgradeMessage({ what, minCli: REPO_SEARCH_MIN_CLI });
+	return runnerUpgradeRefusal(ctx.env, ctx.instanceId, ctx.userId, { what, minCli: REPO_SEARCH_MIN_CLI });
 }
 
 /**
@@ -542,7 +552,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					res = await callRunner(t.conn, "/coding/search", { workDir: t.workDir, pattern, path: input.path, mode: isFind ? "path" : "content" }, { timeoutMs: READ_TIMEOUT_MS });
 				} catch (e) {
 					// The whole reason this is a separate endpoint: a 404 is unambiguous.
-					const old = runnerTooOld(e, "search this repository");
+					const old = await runnerTooOld(ctx, e, "search this repository");
 					if (old) return { content: old, success: false };
 					throw e;
 				}
