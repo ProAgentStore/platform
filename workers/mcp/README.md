@@ -135,6 +135,13 @@ performs no scope check and is gated only by having a valid session (all such to
 reads, with the noted exceptions). **Dry** = accepts `dry_run: true`. **Confirm** = the
 exact string the `confirm` argument must carry.
 
+Published alongside the table, and cheaper for a client to read than any of it: every tool
+carries `readOnlyHint` / `destructiveHint` annotations, and the server sends an
+`instructions` block on `initialize`. `list_agents` and `my_instances` additionally declare
+an `outputSchema` and answer with `structuredContent` — their payloads are `{"agents": […]}`
+and `{"instances": […]}`, **objects rather than bare arrays**. All results are serialised
+compactly.
+
 ### Catalog and reference (no auth)
 
 | Tool | Purpose | Scope | Dry | Confirm |
@@ -312,7 +319,7 @@ immediately instead of a whole transcript.
 
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
-| `list_instance_tools` | Every registry tool with this instance's verdict (`allowed`, `scope`, `disabled`, `reason`) + input schemas | — | | |
+| `list_instance_tools` | Every tool the instance could run — built-ins as well as connector tools — with this instance's verdict (`allowed`, `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`) + input schemas. Read `mutates` for "does this change anything" (not `scope`) and `reach` for "does this leave the platform" (never the connector name) | — | | |
 | `set_instance_tool` | Switch one tool on or off for this instance | write | yes | |
 | `call_instance_tool` | Invoke a connector tool directly (`tool` + `input`) | write | no ([why](#tools-with-no-dry-run)) | |
 | `connector_status` | Is a file connector connected, and is this deployment configured for it? | — | | |
@@ -375,7 +382,7 @@ is that a preview here would be *less* informative than something that already e
 
 | Tool | Why not | Read this instead |
 |---|---|---|
-| `call_instance_tool` | A generic invoker. What the call does is decided by the connector registry in `workers/api`, which this Worker cannot see. Its preview could only echo your own `tool` and `input` back — a safety check that knows nothing about the side effect it is previewing. | `list_instance_tools` — the registry's own verdict (`allowed`, `scope`, `disabled`, `reason`) plus the input schema, as a read. |
+| `call_instance_tool` | A generic invoker. What the call does is decided by the connector registry in `workers/api`, which this Worker cannot see. Its preview could only echo your own `tool` and `input` back — a safety check that knows nothing about the side effect it is previewing. | `list_instance_tools` — the registry's own verdict (`allowed`, `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`) plus the input schema, as a read. |
 | `stop_instance_loop` | Fully described by `run_id`; there is nothing else to get wrong. Stopping is also the safe direction — cooperative, the in-flight step settles its own spend. | `check_instance_loop` — the objective, steps taken and stop reason for the run you are about to stop. |
 | `coding_loop_stop` | The same cancel through the same route, under the coding name (#502) — so it inherits the same argument. | `coding_loop_status` — the run's step count, stop reason and budget pool. |
 

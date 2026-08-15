@@ -410,18 +410,23 @@ Measured at the repo root on 2026-08-06, on a machine with live agent worktrees:
   `.gitleaks.toml`: 11 findings, 17.5 MB, 1.7s. Those 11 are real paths in real source
   and are deliberately left visible.
 
-**Lint is a gate now, but only where the count is zero (#326).** Getting `pnpm lint` to
-*run* still left every rule advisory — it was in no workflow, which is how 300 findings
-accumulated without ever being a regression anyone was told about. `ci.yml` now runs
-`pnpm exec biome check --error-on-warnings packages workers/mcp`: the two trees measured
-at 0 errors **and** 0 warnings. `--error-on-warnings` because every finding those trees
-ever had was a warning, so a gate that ignored warnings would protect nothing; `pnpm
-exec` rather than `npx` so it is the pinned Biome and a new upstream rule cannot redden a
-green `main` without a commit here. The rest is blocked on its own count — `workers/api`
-~234 (184 of them `any`), `store/**` ~54 `!important` plus the console's hook and a11y
-warnings, `agents/coder` 1. **Add a path to that step when a tree reaches zero; do not
-widen it early and reach for `continue-on-error`, which is the step with the teeth
-removed.**
+**Lint is a gate, and every tree is now in it (#326).** Getting `pnpm lint` to *run* still
+left every rule advisory — it was in no workflow, which is how 300 findings accumulated
+without ever being a regression anyone was told about. `ci.yml` runs `pnpm exec biome
+check --error-on-warnings packages workers store agents/coder`, all measured at 0 errors
+**and** 0 warnings. `--error-on-warnings` because every finding those trees ever had was a
+warning, so a gate that ignored warnings would protect nothing; `pnpm exec` rather than
+`npx` so it is the pinned Biome and a new upstream rule cannot redden a green `main`
+without a commit here.
+
+The step began on `packages` + `workers/mcp` only, because a gate can be turned on only
+where the count is already zero. The rest arrived on 2026-08-07: `workers/api`'s last
+finding was one `useOptionalChain`, and the `any` debt that looked much larger was all 184
+in `*.test.ts`, which this repo's tsconfig excludes — so it had never been typechecked
+either. `workers` now covers api, host and mcp, so a NEW worker is in the gate from its
+first commit rather than accruing a backlog nobody is told about. **A new tree must arrive
+at zero or arrive with its own step; do not widen early and reach for `continue-on-error`,
+which is this step with the teeth removed.**
 
 **What is deliberately still in scope.** `agents/coder` and `agents/job-application-assistant`
 are Tier-0 — pnpm workspace members that CI typechecks and builds — so they are scanned.

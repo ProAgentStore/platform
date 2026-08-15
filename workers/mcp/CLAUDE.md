@@ -81,20 +81,27 @@ src/
 ```
 
 **136 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
-inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 88 across
+inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 92 across
 `instance-tools/`. 117 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
 
-`base.ts` was 1871 lines and 67 of those 86 tools until #305 — the file a tool landed in
-when nobody decided where it went, and the largest in the repo. The nine ungated groups
-above are that file split along the registration boundaries it already had; the blocks
-moved verbatim.
+Those three numbers ADD UP to the headline, and that is the point of stating them: 31 + 13
++ 92 = 136. They said 88 until #602, which made the paragraph sum to 132 — a total the
+same sentence contradicted two clauses earlier. The per-file rows in the tree above are
+machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
+
+`base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
+file a tool landed in when nobody decided where it went, and the largest in the repo. That
+86 is history and is not the current count (92); it is kept because it is what makes the
+1871 lines legible. The nine ungated groups above are that file split along the
+registration boundaries it already had; the blocks moved verbatim.
 
 Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 `instance-tools.test.ts`, `instance-tools/contract.test.ts`, `oauth-provider.test.ts`,
 `repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`.
 
-`instance-tools/contract.test.ts` is the one to know about. It holds all 86 instance tools
-to a table of **group, scope, confirmation string, dry-run behaviour and input fields** —
+`instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
+under `instance-tools/` — 92 of them — to a table of **group, scope, confirmation string,
+dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the
 refusal), not declared. So it catches the failure mode this surface is actually prone to: a
@@ -225,10 +232,24 @@ typecheck` → `wrangler deploy` → a `/health` smoke test (5 retries).
 registry when that file changes, via `mcp-publisher` with GitHub OIDC.
 
 The version is **one constant** — `MCP_SERVER_VERSION` in `src/server-version.ts` (#573).
-`index.ts` imports it for `serverInfo.version`; `server.json` and `platform-docs/mcp.md`
-restate it and `pnpm docs:drift` fails when any of the three disagree, including when
-someone re-types the literal back into the `McpServer` constructor. So bump the CONSTANT
-and let `server.json` follow it — never the other way round. That constant's own comment
+`index.ts` imports it for `serverInfo.version`, so that half cannot diverge. **Three other
+files restate it by hand — four statements in total** — and `pnpm docs:drift`'s
+wire-surface arm fails when any of the four disagree, including when someone re-types the
+literal back into the `McpServer` constructor:
+
+| Statement | Why it cannot import the constant |
+|---|---|
+| `src/server-version.ts` | the constant itself |
+| `server.json` | JSON, consumed by an external publisher |
+| `store/.well-known/mcp-server.json` | JSON, served from `workers/host` |
+| `platform-docs/mcp.md` | prose |
+
+The third is the one to remember, and this doc said "the three" until #602 — omitting the
+served `/.well-known/` copy, which is **the exact statement #573's own first pass missed**.
+`scripts/lib/wire-surface.mjs:285` exists solely because of that miss. A doc that drops it
+again re-teaches the original bug, so if you add a fifth statement, add a row here.
+
+So bump the CONSTANT and let the other three follow it — never the other way round. That constant's own comment
 carries the rule for when a bump is due (the served surface changed: tool names, input
 schemas, annotations, output schemas or `instructions` — not a reworded description).
 

@@ -12,10 +12,15 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    unless the user explicitly overrides this.
 
 2. **Discover the surface before using it.** The tool list is versioned and
-   *per-connection*: 18 of the 124 registrations are gated to the console surfaces of the
-   agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A tool
-   you used last week may be absent today, and a tool present for one user is absent for
-   another. Call `tools/list` first; never assume a name exists.
+   *per-connection*: of the 136 tool registrations, 19 are gated to the console surfaces
+   of the agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A
+   tool you used last week may be absent today, and a tool present for one user is absent
+   for another. Call `tools/list` first; never assume a name exists.
+
+   Both numbers above are phrased to be machine-checked — `docs-drift` reads "N tool
+   registrations" and "N are gated" against `src/tool-count.ts`. This sentence said "18 of
+   the 124" for months *while the gate swept this file*, because the old wording put words
+   between the number and "are gated" and matched nothing (#602, #603). Keep the shape.
 
 3. **Detect failure structurally, not by reading prose — but know the shape.** This
    server does **not** set `isError` on results. Every tool returns a single text content
@@ -26,6 +31,15 @@ Connection methods and the full tool table: [`README.md`](./README.md).
      `{"error": "API <status>", ...}` and most tools pass that straight through.
 
    Check for both. Treat anything else as success.
+
+   Two tools are the exception to "a single text block", and their shape is a contract a
+   client may build against: `list_agents` returns `{"agents": [...]}` and `my_instances`
+   returns `{"instances": [...]}` — **objects, not bare arrays**. Both declare an
+   `outputSchema` and answer with `structuredContent` on every path, including refusals
+   (where the payload is `{"error": …}`). Every field is optional, so a field added
+   server-side cannot break your call.
+
+   Results are serialised **compactly**. Do not parse by eye or by line offset.
 
 4. **A permission denial is a stop, not a retry.** `requirePermission` returns
    `Error: <tool> requires <scope> permission, but MCP is in read-only mode.` or
@@ -59,7 +73,15 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    reads. The instance's own write-consent gate applies on top. Call
    `list_instance_tools` first: it returns every tool the instance could run — built-in
    facilities as well as connector tools — with this instance's verdict (`allowed`,
-   `scope`, `disabled`, `reason`, `tier`, `invocableBy`). A tool absent from the allowed
+   `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`).
+
+   Read `mutates`, not `scope`, to answer "does this change anything": `scope` is what
+   triggers the write-consent gate, and the two are different questions. Read `reach`
+   (`platform` / `machine` / `internet`) to answer "does this touch anything outside the
+   platform" — do NOT infer it from whether a tool names a connector, which is wrong in
+   both directions (`fetch_url` reaches the internet with no connector; every `supervision`
+   tool names one and never leaves the platform). `tier` has four values — `base`,
+   `standard`, `runtime`, `connector`. A tool absent from the allowed
    set cannot be invoked — by chat or by MCP. `invocableBy` says which of the two: a
    built-in tool reports `["chat"]` and is not reachable through `call_instance_tool` at
    all. Before #525 the listing covered only the registry while claiming to answer for
@@ -78,6 +100,24 @@ Connection methods and the full tool table: [`README.md`](./README.md).
     written to KV under the OAuth subject for 90 days. `mcp_audit_log` reads them back.
     Note that audit only records when connected via OAuth — a per-call `token` argument
     carries no subject, so it writes no audit rows and no scope set.
+
+13. **Read the annotations and the server `instructions` before reading descriptions.**
+    Every tool publishes `readOnlyHint` / `destructiveHint`, and they are accurate:
+    `readOnlyHint: true` means it only reads. `destructiveHint: true` reads "MAY perform
+    destructive updates", and every such tool additionally demands an exact `confirm`
+    string and a connection holding `destructive`. The server sends an `instructions`
+    block on `initialize`; it is maintained alongside the tool surface, so prefer it to
+    assumptions carried in from another MCP server.
+
+14. **Report a run's state in the platform's words, not your own.** `health` has four
+    values — `working`, `waiting`, `stalled`, `ended` — and `ended` is returned for any run
+    that is not `running`, so it is the usual answer from `check_instance_loop`. `ended`
+    makes no claim that anything is running. Do not derive a verdict from `status` or from
+    timestamps: `lastAliveAt` is a heartbeat and `lastProgressAt` is the last instruction
+    advance, and a healthy long step looks stale on the second while fresh on the first —
+    inferring "stuck" from that has told an owner their work was dead mid-edit. A parked
+    run carries `waitingReason`; it carries `waitingUntil` only when a resume time is
+    knowable, and a run waiting on a *person* has none.
 
 ## Scopes
 
