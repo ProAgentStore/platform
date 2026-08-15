@@ -189,9 +189,13 @@ describe("enginePayerSessionsNote", () => {
 		expect(note).toBe("All 9 coding sessions in this range ran on a credential we could not attribute.");
 	});
 
-	it("splits the count when only some are unattributed", () => {
+	it("reports two counts and never their sum when both exist", () => {
+		// Measured in production: `byPayer` sessions sum to the distinct total, but `byModel` sums to
+		// 39 against 37 — a session can cross buckets. A session whose engine sign-in changed
+		// mid-run resolves to two payers and lands in both, so "7 coding sessions" would be a total
+		// the data does not support. Two counts side by side are both true.
 		expect(enginePayerSessionsNote([{ key: "unknown", sessions: 2 }, { key: "subscription", sessions: 5 }])).toBe(
-			"7 coding sessions ran in this range; 2 of them on a credential we could not attribute.",
+			"2 coding sessions ran on a credential we could not attribute, alongside 5 we could.",
 		);
 	});
 

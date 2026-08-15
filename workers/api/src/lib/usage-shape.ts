@@ -111,6 +111,13 @@ export interface UsageBucket {
 	 * `undefined` means NOT MEASURED, and is not zero: the admin aggregates share this shape and
 	 * do not select `ai_usage.id`, so they cannot count sessions and must not appear to have
 	 * counted none. `0` on a `/v1/usage` bucket IS a measurement — no coding engine ran in it.
+	 *
+	 * PER-BUCKET DISTINCT, so the column does NOT sum to a distinct account total on every axis.
+	 * Measured in production 2026-08-16: `byPayer`, `byKind`, `byAgent` and `byInstance` each sum
+	 * to 37, and `byModel` sums to 39 — because a session belongs to exactly one instance but can
+	 * SWITCH MODEL, and is then counted in both model buckets. That is the right per-row answer
+	 * ("how many sessions touched Opus 5") and the wrong total, so a caller adding this column up
+	 * is making a claim the data does not support. The console reports the buckets, not a sum.
 	 */
 	sessions?: number;
 }

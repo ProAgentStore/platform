@@ -170,14 +170,17 @@ export function unknownPayerRemedy(
 export function enginePayerSessionsNote(rows: readonly { key: string; sessions?: number }[] | undefined): string | null {
 	const measured = (rows ?? []).filter((r) => typeof r.sessions === "number");
 	if (!measured.length) return null;
-	const total = measured.reduce((n, r) => n + (r.sessions ?? 0), 0);
-	if (total <= 0) return null;
 	const unknown = measured.filter((r) => r.key === "unknown").reduce((n, r) => n + (r.sessions ?? 0), 0);
+	const known = measured.filter((r) => r.key !== "unknown").reduce((n, r) => n + (r.sessions ?? 0), 0);
+	if (unknown + known <= 0) return null;
 	const s = (n: number) => `${n} coding session${n === 1 ? "" : "s"}`;
-	if (unknown === 0) return `${s(total)} ran in this range, every one on a credential we could identify.`;
-	// "All N" rather than "N of N": the whole point of the sentence is that it is not a stray row.
-	if (unknown === total) return `All ${s(total)} in this range ran on a credential we could not attribute.`;
-	return `${s(total)} ran in this range; ${unknown} of them on a credential we could not attribute.`;
+	if (unknown === 0) return `${s(known)} ran in this range, every one on a credential we could identify.`;
+	// "All N" only when nothing lands in another bucket, and then the sum IS the distinct count.
+	if (known === 0) return `All ${s(unknown)} in this range ran on a credential we could not attribute.`;
+	// Two counts, never their sum. A session whose engine sign-in changed mid-run resolves to two
+	// payers and is counted in both buckets, so adding them would state a total that is not the
+	// number of sessions — the confident wrong number this page exists to stop printing.
+	return `${s(unknown)} ran on a credential we could not attribute, alongside ${known} we could.`;
 }
 
 /**
