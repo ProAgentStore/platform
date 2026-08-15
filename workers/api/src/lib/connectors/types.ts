@@ -157,8 +157,40 @@ export interface ToolDef {
 	 * `runRegistryTool` and this one is an early warning.
 	 */
 	dispatchesFromInput?: string;
-	/** read = safe; write = mutates the external system (gated by consent, #90). */
+	/**
+	 * Does this tool need the owner's WRITE CONSENT for its connector (#90)?
+	 *
+	 * `read` = no consent gate applies. `write` = `runRegistryTool` refuses the call until the
+	 * owner has granted write on `connector`.
+	 *
+	 * It is NOT the answer to "does this change anything" — that is {@link ToolDef.mutates}, and
+	 * conflating the two is #563. `scope` is an INSTRUCTION TO A GATE: a write-scoped tool with no
+	 * connector has nothing to consent to and is refused outright (`tool-registry.ts`, "unreachable
+	 * rather than silently ungated"), so `start_work` — which spends the owner's tokens on an
+	 * autonomous run — cannot be marked `write` without breaking it. Nine tools sat in exactly that
+	 * position and the listing reported all nine as `read`.
+	 */
 	scope?: "read" | "write";
+	/**
+	 * Can a call to this tool CHANGE something — the external system, the owner's machine, or this
+	 * instance's own stored data?
+	 *
+	 * REQUIRED, because this is the question an auditor asks ("is this agent read-only before I
+	 * trust it with sensitive data") and a default is not a decision. `scope` has a default and has
+	 * to keep one: it drives a gate, and the gate's answer for an undeclared tool is "no gate". This
+	 * field drives nothing — it is reported — so the compiler can insist on it, and does.
+	 *
+	 * Answer it "can", not "will", and answer it fail-closed. `http_request` is `scope:"read"`
+	 * because the CALLER picks the verb, and `mutates:true` because one of the verbs it can pick is
+	 * POST. Over-reporting a read as a mutation costs an auditor a question; under-reporting a
+	 * mutation as a read is the bug this field exists to close — the same fail direction, and for
+	 * the same reason, as `scopeOfBuiltin` in `lib/builtin-tool-policy.ts`.
+	 *
+	 * Reach is a SEPARATE question and has its own field: `connector` names the external system a
+	 * tool touches, so "does it mutate" and "does it leave the platform" stay independently
+	 * filterable. A tool that reads someone's private repo mutates nothing.
+	 */
+	mutates: boolean;
 	handler: (ctx: RegistryToolCtx, input: Record<string, unknown>) => Promise<RegistryToolResult>;
 }
 

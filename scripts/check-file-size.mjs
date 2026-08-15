@@ -558,7 +558,11 @@ const PINS = {
 	// finds the code without those will eventually "simplify" the fallback away. The decisions
 	// themselves are pure and live in lib/mcp-elicitation.ts, and the storage in
 	// lib/mcp-input-requests.ts — which is where a split would have put them.
-	"workers/api/src/lib/connectors/mcp.ts": 1343,
+	// +6 at #563: one `mutates:` line per tool. `scope` answers "does the write-consent gate
+	// apply", which is not "does this change anything" — six lines is the whole cost of the six
+	// MCP tools answering the second question too, and it belongs beside each declaration for the
+	// same reason `scope` does.
+	"workers/api/src/lib/connectors/mcp.ts": 1349,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -671,7 +675,15 @@ const PINS = {
 	// `http_request`. A separate table would be the same defect one file over. The rule that reads
 	// them is pure in lib/pipeline-tool-policy.ts, and step-dispatch.test.ts derives the same table
 	// from this source so a declaration cannot be forgotten.
-	"workers/api/src/lib/steps.ts": 1006,
+	// +33 for #563: twelve `mutates:` declarations and the paragraphs for the five that are not
+	// obvious from the scope beside them — `dedupe_upsert` (scope:"read" because there is no
+	// connector to consent to, and it writes the instance's collection anyway), `fan_out` and
+	// `enrich` (they run a request or a tool supplied as INPUT, so they mutate whenever what they
+	// were handed does), `geocode` (a POST that is a search) and `ai_generate` (spends tokens,
+	// changes nothing). Raised rather than split for the reason #396 raised it: a step's own facts
+	// belong beside the handler, and a separate mutation table would be the same defect one file
+	// over. The set is pinned with its denominator in lib/tool-mutation-report.test.ts.
+	"workers/api/src/lib/steps.ts": 1039,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1092,7 +1104,9 @@ const PINS = {
 	// row's level, its 600-character budget and the write-amplification argument all live in
 	// lib/events.ts beside the function, because the pin note is read when the FILE grows and those
 	// are read when the ROW is questioned. Plus this self-ref.
-	"scripts/check-file-size.mjs": 1176,
+	// +12 at #563: the two raises above (mcp.ts, steps.ts) and their reasons. The reasons are the
+	// artefact — a pin moved without one is the ratchet reading as a formality.
+	"scripts/check-file-size.mjs": 1190,
 };
 
 /**

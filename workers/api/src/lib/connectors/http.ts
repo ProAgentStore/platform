@@ -185,8 +185,10 @@ type HttpAuth = { mode: "none" } | { mode: "bearer" } | ApiKeyAuth;
 // declares `scope:"write"` is simply checked twice against the same key, which costs one indexed
 // read and closes the case where a manifest declares `read` over a mutating request.
 
-/** RFC 9110 safe methods: no side effect is expected of the origin server. */
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+/** RFC 9110 safe methods: no side effect is expected of the origin server.
+ *  Exported for `sanitizeConnectorManifest`, which has to answer "does this mutate" about a
+ *  request it was handed as untrusted data (#563) and can only read the verb. */
+export const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 
 /**
  * Endpoints whose POST is a QUERY, not a mutation.
@@ -242,6 +244,13 @@ export const HTTP_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "http",
 		scope: "read",
+		// scope:"read" + mutates:true is not a contradiction — it is the pair of answers this
+		// separation exists to give (#563). `scope` is read because the tool does not choose the
+		// verb and a blanket write gate would put every GET behind a consent nobody granted (the
+		// block above). `mutates` is true because DELETE is one of the verbs a caller can pick, and
+		// an auditor asking "can this agent change anything" must not be told no. The per-call gate
+		// in `executeHttpRequest` is what makes the two consistent at runtime.
+		mutates: true,
 		description:
 			"Call any REST/HTTP(S) API by configuration — no bespoke code. Supply `method`, and either `url` or `base`(+`path`), plus optional `query`, `headers`, and JSON `body`; every string supports `{{param}}` interpolation from `inputs`. Optional `auth` injects a vault-stored API key into a header or query param (e.g. Google Places X-Goog-Api-Key). Optional `responseMap` extracts fields (dotted paths + `array[].{a,b:path}` projection). Optional `pagination` returns the next cursor/offset for the caller to fan out. Returns { status, data, raw? }. HTTPS-only, SSRF-guarded.",
 		jsonSchema: {

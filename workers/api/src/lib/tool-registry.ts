@@ -140,10 +140,19 @@ async function stopOneRun(
  * First-party registry tools that are NOT provided by a connector (base/standard/runtime
  * tiers). `run_pipeline` (issue #97) lets an agent start a declarative pipeline the owner
  * has declared on the instance ("sweep Sydney" → run the `leads` pipeline with city=Sydney).
+ *
+ * EVERY tool here declares `scope` nowhere and `mutates` explicitly, and that asymmetry is the
+ * point (#563). Eight of these eleven change something real — they start autonomous runs, cancel
+ * them, kill an engine on the owner's machine, rewrite the agent's persona — and none of them can
+ * carry `scope:"write"`, because a write-scoped tool with no connector is refused outright by
+ * `runRegistryTool` below. So they were all reported to auditors as `scope:"read"`, which is a true
+ * statement about the consent gate and a false one about the tool. `mutates` is the field that
+ * answers the auditor; `scope` keeps meaning what the gate reads.
  */
 const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "start_work",
+		mutates: true,
 		description:
 			"Hand a GOAL to this agent's own executor and let it work autonomously — the same thing the Loop button does. Use this whenever the user asks you to DO something rather than explain it. Give an outcome in plain language ('fix issue #83 and merge it'), not a single command. It runs durably in the background and reports each step back into this conversation; say it has started, do not claim it has finished.",
 		tier: "base",
@@ -189,6 +198,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "check_work",
+		mutates: false,
 		description:
 			"Look up work YOU started — with start_work, or by handing a goal to an agent you supervise: its status, how far it got, and how it ended. Call this whenever the user asks whether something actually happened, or challenges a report you gave — answer from this record, never from memory and never by apologising. With no runId it returns your most recent runs, including the ones you delegated.",
 		tier: "base",
@@ -239,6 +249,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "stop_work",
+		mutates: true,
 		description:
 			"Stop work YOU started — call this the moment the user says stop, halt, cancel, abort, that's enough, or finish. With no runId it stops everything of yours that is currently running. Stopping is COOPERATIVE: the step in flight finishes first, so say you have ASKED it to stop, never that it has stopped. It is the user's decision to relay, not your own tidying up — never stop a run because you think it is stuck or taking too long.",
 		tier: "base",
@@ -290,6 +301,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "end_coding_session",
+		mutates: true,
 		description:
 			"End a coding session — the engine (Claude Code / Codex / …) running on the user's machine for one repository. Use it when the user says to finish, close or end the session. This is NOT how you stop a run in progress: stop_work does that, and it leaves the session open. If a run is driving the session, this asks that run to stop too and says so. Only ever do this because the user asked — a session left open costs nothing and keeps its conversation.",
 		tier: "runtime",
@@ -308,6 +320,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "get_behaviour",
+		mutates: false,
 		description:
 			"Read how your subscriber has asked you to communicate — technicality, length, tone, formatting, and so on. Use this when they ask what your settings are, or before changing one, so you report what is actually stored rather than what you remember.",
 		tier: "base",
@@ -330,6 +343,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "set_behaviour",
+		mutates: true,
 		description:
 			"Change how you communicate, when the subscriber asks you to (\"be less technical\", \"stop using emoji\", \"keep answers short\"). Pass only the fields that change; pass null to reset one to the platform default. This is the ONLY correct place for preferences about your manner — do not store them in memory, which is for knowledge about the subject you work on.",
 		tier: "base",
@@ -359,6 +373,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "get_stats",
+		mutates: false,
 		description:
 			"Read the stats cards configured for this agent AND their current numbers — the same numbers the Stats tab shows. Call this before answering any question about how much/how many ('how many leads did I find this week?'); never estimate and never recompute from a record dump. IMPORTANT: in a daily trend, a day marked \"no run\" means NOTHING RAN that day. It is not zero — never report it as a day with no results.",
 		tier: "base",
@@ -383,6 +398,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "set_stats_card",
+		mutates: true,
 		description:
 			"Add, edit or remove ONE stats card, when the subscriber asks you to track something ('chart my leads per suburb'). Pass `card: null` to remove it. `kind` decides how it reads: 'line' is a daily trend built from a nightly snapshot, so a NEW line card starts empty and shows its first point tomorrow — say so. 'number'/'bar'/'table' are current values and work immediately. You may only pick a `source` from the fixed list; you can never write a query or change whose data is shown.",
 		tier: "base",
@@ -436,6 +452,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "run_pipeline",
+		mutates: true,
 		description:
 			"Run a declarative data pipeline that the owner has configured on this agent. Pass the pipeline `name` and any `params` (e.g. {city:\"Sydney\"}). The pipeline runs durably in the background (source → transform → sink); it does not return results inline — tell the user it's started.",
 		tier: "base",
@@ -461,6 +478,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "create_ticket",
+		mutates: true,
 		description:
 			"Put a ticket on the board asking the owner to approve a piece of work. Give it a `title`, the `reasoning` (the WHY, shown on the card), and optionally the work itself — `action` (run_pipeline / insert_record / add_knowledge / create_task / run_browse) with its `config` and `params`. A ticket carrying an action sits in Needs-approval until the owner approves it, and approving RUNS exactly that action. Use this to pause for a human decision before doing something consequential; without an action it's an informational card.",
 		tier: "base",
@@ -507,6 +525,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "record_feedback",
+		mutates: true,
 		description:
 			"Record that the USER said YOU got something wrong — a wrong answer, an action you claimed but did not take, a step that failed silently. Pass `body`: their complaint in THEIR words, not your interpretation of it. This is a report kept for the people who improve the platform. It is NOT a fact to remember (write_memory), NOT a change to how you communicate (set_behaviour), and NOT work for the board (create_ticket). Record it, say you have, and carry on with the task — do not promise to remember it.",
 		tier: "base",

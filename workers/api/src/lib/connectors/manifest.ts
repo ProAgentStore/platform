@@ -8,7 +8,7 @@
 // Design + rationale: docs/connector-manifest.md.
 import type { Connector, EnvTokenKey } from "./types.js";
 import type { ToolDef, JsonSchema } from "./types.js";
-import { executeHttpRequest } from "./http.js";
+import { executeHttpRequest, SAFE_METHODS } from "./http.js";
 
 // ── Manifest shape ───────────────────────────────────────────────────────────
 
@@ -41,6 +41,21 @@ export interface ManifestTool {
 	description: string;
 	/** read = safe; write = mutates (consent-gated, #90). Default read. */
 	scope?: "read" | "write";
+	/**
+	 * Does a call CHANGE anything (`ToolDef.mutates`, #563)? Optional HERE and required on
+	 * `ToolDef`, which is the one place the compiler cannot enforce it — a manifest tool is DATA,
+	 * and `sanitizeConnectorManifest` builds one from untrusted JSON that has no such field.
+	 *
+	 * Derived when omitted, and the derivation is honest for a manifest specifically: a manifest
+	 * tool's request is fixed configuration, so there is no caller-chosen verb to be wrong about
+	 * (the case that forces `http_request` to declare `scope:"read", mutates:true` by hand). The
+	 * author declares `scope:"write"` exactly when the fixed request mutates the target system, so
+	 * `mutates = scope === "write"` says the same thing twice rather than guessing.
+	 *
+	 * Declare it only to say something the scope does not — a POST that is really a query, or a
+	 * handler-escape tool whose code does more than its request template shows.
+	 */
+	mutates?: boolean;
 	/** Configuration-as-data request (the default). Omitted for a `handler` tool. */
 	request?: ManifestToolRequest;
 	/**
@@ -136,11 +151,15 @@ export function compileConnector(
 	const reqAuth = requestAuth(m.auth);
 	const tools: ToolDef[] = m.tools.map((t): ToolDef => {
 		const scope = t.scope ?? "read";
+		// See ManifestTool.mutates: a manifest tool's request is fixed data, so the scope the author
+		// declared already answers "does this change the target system" — there is no caller-chosen
+		// verb here to be wrong about. An explicit `mutates` overrides it.
+		const mutates = t.mutates ?? scope === "write";
 		// Escape-hatch tool: bind the named code handler (built-in manifests only).
 		if (t.handler) {
 			const fn = handlers[t.handler];
 			if (!fn) throw new Error(`Manifest ${m.id}: tool "${t.name}" references unknown handler "${t.handler}".`);
-			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, handler: fn };
+			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, mutates, handler: fn };
 		}
 		const req = t.request ?? {};
 		return {
@@ -150,6 +169,7 @@ export function compileConnector(
 			tier: "connector",
 			connector: m.id,
 			scope,
+			mutates,
 			handler: (ctx, input) =>
 				executeHttpRequest(
 					ctx,
@@ -247,10 +267,18 @@ export function sanitizeConnectorManifest(raw: unknown): ConnectorManifest | nul
 		if (typeof request !== "object") continue;
 		// A tool must have either a url or a path (joined onto baseUrl).
 		if (!request.url && !request.path && !baseUrl) continue;
+		// `mutates` is DERIVED here rather than copied, and derived from the verb rather than from
+		// the declared scope (#563). An untrusted manifest's `scope` defaults to "read", so trusting
+		// it would let a POST-shaped tool report "changes nothing" — the exact under-report this
+		// field exists to close. The runtime is unaffected either way (the per-call gate in
+		// `executeHttpRequest` refuses an unconsented mutating verb whatever the manifest claims);
+		// this is about the answer an auditor gets.
+		const method = String(request.method ?? "GET").toUpperCase();
 		tools.push({
 			name,
 			description,
 			scope: t.scope === "write" ? "write" : "read",
+			mutates: t.scope === "write" || !SAFE_METHODS.has(method),
 			request,
 			params: sanitizeParams(t.params),
 		});

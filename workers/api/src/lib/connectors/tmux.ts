@@ -37,6 +37,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "read",
+		mutates: false,
 		description:
 			"List every live tmux session on the connected machine (name, window count, whether it's attached, and the command running in its active pane). Use this first to discover which session to read or drive.",
 		jsonSchema: { type: "object", properties: {} },
@@ -52,6 +53,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "read",
+		mutates: false,
 		description:
 			"Read the current output of a tmux session's active pane (ANSI-stripped, with scrollback). Use this to see what a shell, build, server, or CLI is showing right now.",
 		jsonSchema: {
@@ -80,6 +82,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "write",
+		mutates: true,
 		description:
 			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready).",
 		jsonSchema: {
@@ -107,6 +110,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "write",
+		mutates: true,
 		description:
 			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be at its input prompt yet). Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\". To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `tmux_send_message` instead.",
 		jsonSchema: {
@@ -136,6 +140,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "write",
+		mutates: true,
 		description:
 			"Send a message to an interactive CLI running in a tmux session and submit it (types the text, presses Enter, waits for the pane to quiesce, and confirms the input landed). WRITE: runs on the user's machine. Use this — not `tmux_send_keys` — whenever you want to submit a message or command to a running CLI like Claude Code, Codex, or a REPL. Returns `changed: false` with an explicit warning when the pane did not react (CLI not yet at its input prompt — retry after a short wait).",
 		jsonSchema: {
@@ -174,6 +179,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "write",
+		mutates: true,
 		description:
 			"Create a new detached tmux session (optionally running a command in a working directory). WRITE: runs on the user's machine. No-op if a session with that name already exists.",
 		jsonSchema: {
@@ -206,6 +212,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "tmux",
 		scope: "write",
+		mutates: true,
 		description:
 			"Kill a tmux session by name. WRITE: runs on the user's machine. Destroys whatever is running in it — use with care.",
 		jsonSchema: {

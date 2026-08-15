@@ -28,7 +28,7 @@
 // separately what the consent machinery will do to the same tool.
 import { agentCapabilities, type AgentCapabilities } from "./agent-capabilities.js";
 import { toolNamesFor } from "../agent-do-tools.js";
-import { builtinToolPolicyInputs, type ToolInvocation, type ToolTier } from "./builtin-tool-policy.js";
+import { builtinToolPolicyInputs, callerChoosesMethod, type ToolInvocation, type ToolTier } from "./builtin-tool-policy.js";
 import { registryTools } from "./tool-registry.js";
 import { listConsents } from "./connector-consent.js";
 import type { Env } from "../types.js";
@@ -57,7 +57,27 @@ export type ToolWriteConsent = "n/a" | "granted" | "required" | "per_call";
 export interface ToolPolicyEntry {
 	name: string;
 	connector?: string;
+	/**
+	 * Whether the #90 write-consent gate applies — NOT whether the tool changes anything. Read
+	 * {@link ToolPolicyEntry.mutates} for that; the two are separate fields because they were one
+	 * for a while and it made this listing wrong (#563).
+	 */
 	scope: "read" | "write";
+	/**
+	 * Does a call to this tool CHANGE anything — the external system, the owner's machine, or this
+	 * instance's own stored data? The auditor's field.
+	 *
+	 * It is not `scope`, and it is not derivable from it. Nine tools — `start_work`, `stop_work`,
+	 * `end_coding_session`, `set_behaviour`, `set_stats_card`, `run_pipeline`, `create_ticket`,
+	 * `record_feedback`, `dedupe_upsert` — are `scope:"read"` because they have no connector to
+	 * consent to, and every one of them changes something. Measured on a production instance
+	 * (bd43f4de-…, 104 rows) and reported as read.
+	 *
+	 * Declared per tool on the registry side (`ToolDef.mutates`, a REQUIRED field, so the compiler
+	 * asks) and derived from `BUILTIN_TOOL_SCOPES` on the built-in side, where the table already IS
+	 * that judgement. `mutation-report.test.ts` pins the whole set with its denominator.
+	 */
+	mutates: boolean;
 	description: string;
 	jsonSchema: unknown;
 	/** The final answer: may this instance run this tool right now? */
@@ -86,6 +106,18 @@ export type PolicyInput = {
 	name: string;
 	connector?: string;
 	scope?: "read" | "write";
+	/**
+	 * Optional HERE and required on `ToolDef`, with the OPPOSITE default to `scope`: an omitted
+	 * `mutates` resolves to `true`.
+	 *
+	 * Both directions are deliberate. `scope` defaults to `"read"` because it drives a gate, and
+	 * the gate's honest answer for a tool that declared nothing is "no consent applies"; guessing
+	 * `"write"` there would refuse a working tool. `mutates` drives nothing — it is reported — so
+	 * the cost of a wrong guess is asymmetric in the other direction, and it takes the same fail
+	 * direction `scopeOfBuiltin` takes for the same reason. Unreachable in production: every
+	 * registry tool is compelled to declare it and every built-in row derives one.
+	 */
+	mutates?: boolean;
 	description: string;
 	jsonSchema: unknown;
 	tier?: ToolTier;
@@ -105,8 +137,10 @@ export type PolicyInput = {
  */
 function perCallGateOf(t: PolicyInput): "method" | "endpoint" | null {
 	const scope = t.scope ?? "read";
-	const props = (t.jsonSchema as { properties?: Record<string, unknown> } | null | undefined)?.properties;
-	if (scope === "read" && props && props.method !== undefined) return "method";
+	// The predicate moved to builtin-tool-policy.ts so the built-in `mutates` derivation can use the
+	// SAME one (#563) — `fetch_url` and `http_request` have to give one answer, and two copies of
+	// "does the schema take a method" is how they would eventually stop.
+	if (callerChoosesMethod(scope, t.jsonSchema)) return "method";
 	if (scope === "write" && t.connector === "mcp") return "endpoint";
 	return null;
 }
@@ -172,6 +206,9 @@ export function resolveToolPolicy(
 			name: t.name,
 			connector: t.connector,
 			scope: t.scope ?? "read",
+			// Fails CLOSED, unlike `scope` directly above it — see PolicyInput.mutates for why the
+			// two defaults point opposite ways.
+			mutates: t.mutates ?? true,
 			description: t.description,
 			jsonSchema: t.jsonSchema,
 			allowed: isDeclared && !disabled,

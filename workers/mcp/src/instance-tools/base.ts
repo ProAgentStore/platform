@@ -26,7 +26,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"list_instance_tools",
-		"Audit exactly what one of your instances may do. Returns EVERY tool it could run — its built-in agent facilities (memory, tasks, board, fetch_url, knowledge, files, collections) as well as its connector tools — each with this instance's verdict: `allowed` (may it run), `scope` (read/write), `disabled` (you switched it off), `reason` (ok | not_declared | disabled_by_owner), `writeConsent` (n/a | granted | required | per_call) — the SEPARATE consent gate, so `allowed:true, writeConsent:\"required\"` means the tool is this agent's but every call is refused until write access for its `connector` is granted; `per_call` means some calls run and mutating ones don't (a caller-chosen HTTP method, or an MCP server/tool that has not been granted) — plus `tier` (base = a universal facility every agent has; connector = reaches an external system) and `invocableBy`, the surfaces that can actually reach it. Plus input schemas. Pass allowed_only:true for just the runnable set. Use this to verify an agent is read-only before trusting it with sensitive data: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit reach into EXTERNAL systems specifically, filter on `connector`.",
+		"Audit exactly what one of your instances may do. Returns EVERY tool it could run — its built-in agent facilities (memory, tasks, board, fetch_url, knowledge, files, collections) as well as its connector tools — each with this instance's verdict: `allowed` (may it run), `mutates` (does a call CHANGE anything — the external system, your machine, or the agent's own stored data), `scope` (read/write — whether the write-CONSENT gate applies to it, NOT whether it changes anything), `disabled` (you switched it off), `reason` (ok | not_declared | disabled_by_owner), `writeConsent` (n/a | granted | required | per_call) — the SEPARATE consent gate, so `allowed:true, writeConsent:\"required\"` means the tool is this agent's but every call is refused until write access for its `connector` is granted; `per_call` means some calls run and mutating ones don't (a caller-chosen HTTP method, or an MCP server/tool that has not been granted) — plus `tier` (base = a universal facility every agent has; connector = reaches an external system) and `invocableBy`, the surfaces that can actually reach it. Plus input schemas. Pass allowed_only:true for just the runnable set. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit reach into EXTERNAL systems specifically, filter on `connector`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
@@ -78,10 +78,11 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	// worse than not offering one.
 	//
 	// The real preview already exists as a separate READ tool: `list_instance_tools` returns
-	// every registry tool with this instance's verdict (`allowed`, `scope`, `disabled`,
-	// `reason`) and its input schema. That answers both questions a caller has — may this
-	// run, and does it mutate — without touching anything, and it answers them from the
-	// registry rather than from a guess made here.
+	// every registry tool with this instance's verdict (`allowed`, `mutates`, `scope`,
+	// `disabled`, `reason`) and its input schema. That answers both questions a caller has —
+	// may this run (`allowed`), and does it mutate (`mutates`, which is NOT `scope`; see #563)
+	// — without touching anything, and it answers them from the registry rather than from a
+	// guess made here.
 	server.tool(
 		"call_instance_tool",
 		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object. No dry run: call list_instance_tools first for the schema and for whether this instance may run it at all.",

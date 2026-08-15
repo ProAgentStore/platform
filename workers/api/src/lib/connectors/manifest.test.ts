@@ -1,8 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock the shared executor so we can assert exactly what request each compiled tool builds.
+// `SAFE_METHODS` is passed through REAL (it is a constant, and the sanitizer's `mutates`
+// derivation reads it — a mocked-out empty set would silently call every method mutating).
 const { executeHttpRequest } = vi.hoisted(() => ({ executeHttpRequest: vi.fn() }));
-vi.mock("./http.js", () => ({ executeHttpRequest }));
+vi.mock("./http.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./http.js")>()),
+	executeHttpRequest,
+}));
 
 import { compileConnector, sanitizeConnectorManifest, type ConnectorManifest } from "./manifest.js";
 

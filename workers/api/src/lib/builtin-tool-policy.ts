@@ -145,10 +145,47 @@ export function scopeOfBuiltin(name: string): "read" | "write" {
 	return BUILTIN_TOOL_SCOPES[name] ?? "write";
 }
 
+/**
+ * Does the caller pick the HTTP verb for this tool?
+ *
+ * The one shape where `scope:"read"` and "changes nothing" come apart: `fetch_url` and
+ * `http_request` both take `method` as an input, so both are honestly read-SCOPED (the tool does
+ * not choose to write) and both can POST. Lives here rather than in `instance-tool-policy.ts`
+ * because both the built-in `mutates` derivation below and that module's `perCallGateOf` need the
+ * SAME predicate, and this module is the one they can both import without a cycle.
+ */
+export function callerChoosesMethod(scope: "read" | "write" | undefined, jsonSchema: unknown): boolean {
+	if ((scope ?? "read") !== "read") return false;
+	const props = (jsonSchema as { properties?: Record<string, unknown> } | null | undefined)?.properties;
+	return !!props && props.method !== undefined;
+}
+
+/**
+ * Does a call to this built-in tool CHANGE anything (#563)?
+ *
+ * DERIVED from `BUILTIN_TOOL_SCOPES` rather than declared a second time, because on this side of
+ * the listing the two questions really do have one answer: a built-in tool has no connector, so
+ * nothing here is consent-gated and the table above is already a hand-made "does the handler
+ * mutate" judgement — that is exactly what its header says it is. On the REGISTRY side the same
+ * word means "does this need external write consent", which is why `ToolDef.mutates` is declared
+ * there instead of derived. One field, two provenances, and this comment is the reason.
+ *
+ * The exception is `fetch_url`, and it is the reason this is a function and not `=== "write"`:
+ * it is read-scoped because the CALLER picks the verb, and the header of this file forbids giving
+ * it a different answer from `http_request`, the registry tool with the identical shape (which
+ * declares `mutates:true` by hand). Deriving it from the schema keeps them equal by construction
+ * rather than by memory.
+ */
+export function mutatesBuiltin(name: string, jsonSchema: unknown): boolean {
+	return scopeOfBuiltin(name) === "write" || callerChoosesMethod(scopeOfBuiltin(name), jsonSchema);
+}
+
 /** A built-in tool as the policy resolver reads it. Structurally the resolver's `PolicyInput`. */
 export interface BuiltinToolPolicyInput {
 	name: string;
 	scope: "read" | "write";
+	/** Does a call change anything? See {@link mutatesBuiltin} for why this one is derived. */
+	mutates: boolean;
 	description: string;
 	jsonSchema: unknown;
 	tier: ToolTier;
@@ -176,6 +213,7 @@ export function builtinToolPolicyInputs(): BuiltinToolPolicyInput[] {
 	return [...byName.values()].map((def) => ({
 		name: def.name,
 		scope: scopeOfBuiltin(def.name),
+		mutates: mutatesBuiltin(def.name, legacyToolSchema(def)),
 		description: def.description,
 		jsonSchema: legacyToolSchema(def),
 		// A name outside every catalog group is `standard`: not universal (so not `base`), backed by

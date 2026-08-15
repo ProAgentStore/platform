@@ -46,6 +46,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "browser",
 		scope: "write",
+		mutates: true,
 		description:
 			"Open a URL in the agent's real browser on the connected machine. WRITE: acts as the signed-in user. Follow with browser_snapshot to see the page.",
 		jsonSchema: {
@@ -72,6 +73,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "browser",
 		scope: "read",
+		mutates: false,
 		description:
 			"Read the current page as an accessibility (ARIA) tree with stable element refs (e.g. [ref=e42]) — what the agent 'sees'. Use those refs with browser_act. Returns the url, title, and the snapshot; flags a captcha/login challenge when one is detected (which this bounded tool cannot solve).",
 		jsonSchema: { type: "object", properties: {} },
@@ -101,6 +103,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "browser",
 		scope: "write",
+		mutates: true,
 		description:
 			"Perform ONE action on the current page, targeting an element by its snapshot ref (preferred) or ARIA role + accessible name. WRITE: acts as the signed-in user. Take a browser_snapshot first to get refs, act, then snapshot again to see the result.",
 		jsonSchema: {

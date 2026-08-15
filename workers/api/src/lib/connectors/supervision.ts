@@ -521,6 +521,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "supervision",
 		scope: "read",
+		mutates: false,
 		description:
 			"The roster of agents this one supervises — instance id, name, SUBSCRIPTION state (active/paused, which is NOT what they are doing) and each one's standing DIRECTION: what your owner has said that agent is for. Use subordinate_status to see what each is working on. You may only delegate to agents that appear here.",
 		jsonSchema: { type: "object", properties: {} },
@@ -544,6 +545,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "supervision",
 		scope: "read",
+		mutates: false,
 		description:
 			"What every agent you supervise is doing RIGHT NOW, in one call: what each is working on, " +
 			"what finished, what is waiting on a human, and how long anything has been quiet. Call this " +
@@ -598,6 +600,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		// WRITE: it starts real work on another agent and spends real money, so it sits behind
 		// the per-instance write-consent gate (#90) like every other write tool.
 		scope: "write",
+		mutates: true,
 		description:
 			"Hand a GOAL to an agent you supervise. It runs autonomously with its own tools and knowledge and reports back — you do not micro-manage it. Give an outcome ('get the test suite green'), not a single command. Returns a run id you can check with check_delegation. " +
 			"It does NOT need an open coding session or a session you prepared — a coding subordinate starts its own. The only thing that blocks delegation is a subordinate whose `connectivity.canWork` is false; a cloud-only agent needs no runner at all. Do not ask the user to set anything up before trying.",
@@ -692,6 +695,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "supervision",
 		scope: "read",
+		mutates: false,
 		description:
 			"Check ONE delegated run by id: its status, how many steps it has taken, why it stopped, and `acts` — the consequential things it DID along the way (a pull request opened or MERGED, a push, a force-push, a delete, a deploy). Report anything marked `irreversible` to the human: \"completed\" describes the objective, never what the run changed. " +
 			"`objective` is what this ONE run was asked to do; `config` is the agent's standing configuration — its merge authority, standing rules, behaviour and settings. Asked what an agent's instructions are, or whether it may merge to main, answer from `config` and say so by name; the objective cannot grant permission the configuration withholds, and `objectiveConflict` appears when it tries to. " +
@@ -780,6 +784,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		// (#90) like every other write tool and deliberately not special-cased — "this agent may
 		// move me" is something the owner turns on once, in the place they turn everything else on.
 		scope: "write",
+		mutates: true,
 		description:
 			"Move the person you are speaking with over to an agent you supervise, when THEY ask to be transferred (\"put me through to the FWS coder\", \"transfer me to the auditor\"). " +
 			"They are moved as soon as you answer, and they hear which agent they have arrived at, so do NOT say you will transfer them and then stop — call this. " +
@@ -821,6 +826,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		// behind the per-instance write-consent gate (#90) like every other write tool — and behind
 		// the stronger rule below, which consent does not substitute for.
 		scope: "write",
+		mutates: true,
 		description:
 			"PROPOSE the standing direction for an agent you supervise — one or two sentences saying what that agent is FOR (\"finish the voice port and keep the suite green\"), not a task for today. It is durable: it survives this conversation and is shown to you on every later turn. " +
 			"You cannot overwrite a direction your OWNER set — only they can change or clear that, and what you record here is a PROPOSAL until they confirm it in Settings. " +

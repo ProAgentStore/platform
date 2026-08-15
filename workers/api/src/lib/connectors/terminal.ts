@@ -50,6 +50,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "read",
+		mutates: false,
 		description:
 			"List controllable local terminal targets on the connected machine across tmux, kitty, and iTerm2. Returns targets like `tmux:main`, `kitty:3`, and `iterm2:1:1:1`; use those exact targets for capture/run/send/kill.",
 		jsonSchema: {
@@ -70,6 +71,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "read",
+		mutates: false,
 		description:
 			"Read the current output of a local terminal target. Use terminal_list_targets first, then pass a target like `tmux:main`, `kitty:3`, or `iterm2:1:1:1`.",
 		jsonSchema: {
@@ -93,6 +95,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "write",
+		mutates: true,
 		description:
 			"Type a command line into a local terminal target and press Enter. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react).",
 		jsonSchema: {
@@ -120,6 +123,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "write",
+		mutates: true,
 		description:
 			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 currently supports text only. To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `terminal_send_message` instead.",
 		jsonSchema: {
@@ -151,6 +155,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "write",
+		mutates: true,
 		description:
 			"Send a message to an interactive CLI running in a local terminal target and submit it (types the text, presses Enter, waits for the pane to quiesce, and confirms the input landed). WRITE: runs on the user's machine. Use this — not `terminal_send_keys` — whenever you want to submit a message or command to a running CLI like Claude Code, Codex, or a REPL. Returns `changed: false` with an explicit warning when the pane did not react (CLI not yet at its input prompt — retry after a short wait).",
 		jsonSchema: {
@@ -190,6 +195,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "write",
+		mutates: true,
 		description:
 			"Create a new local terminal target. tmux creates a detached session; kitty opens an OS window via remote control; iTerm2 opens a new window. WRITE: runs on the user's machine.",
 		jsonSchema: {
@@ -220,6 +226,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		tier: "connector",
 		connector: "terminal",
 		scope: "write",
+		mutates: true,
 		description:
 			"Close or kill a local terminal target. tmux kills the session; kitty closes the window; iTerm2 closes the addressed session. WRITE: runs on the user's machine.",
 		jsonSchema: {

@@ -30,6 +30,17 @@ export interface ToolPolicyEntry {
 	name: string;
 	connector?: string;
 	scope: "read" | "write";
+	/**
+	 * Does a call change anything (#563)? Mirrored because this row mirrors the wire, and because
+	 * an incomplete mirror is how the console ends up re-deriving a fact the server already sent.
+	 *
+	 * Deliberately NOT read by the summary sentences below, and the distinction is worth stating:
+	 * `mutates` is "can this change ANYTHING, anywhere", while {@link writesOwnData} asks the
+	 * narrower "does it change THIS AGENT'S data" — `start_work` mutates and changes nothing of
+	 * the agent's own, so wiring it in would make that sentence wrong in the other direction.
+	 * Optional so an older API's response still typechecks.
+	 */
+	mutates?: boolean;
 	description: string;
 	allowed: boolean;
 	disabled: boolean;
