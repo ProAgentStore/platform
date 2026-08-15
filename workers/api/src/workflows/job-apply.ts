@@ -185,7 +185,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		let n = 0;
 		// #631: `agent.shot` is written from inside `act`, so it does NOT pass through the
 		// loop's redacting `emit` — and it was the sink where 9 of the 18 leaked production
-		// rows landed, each with an empty control name that no field-name rule could catch.
+		// rows landed, all but one with an empty control name that no field-name rule could catch.
 		// Redact the shot message here with the same job-derived value redactor.
 		const redact = makeSecretRedactor(collectJobSecrets(job));
 		// The page the CURRENT decision was made from — see the snapshot dep below (#627).

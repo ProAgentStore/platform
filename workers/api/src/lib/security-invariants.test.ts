@@ -617,7 +617,7 @@ describe("every route that hands back a decrypted secret is throttled and audite
 describe("a browser agent's action trail leaves the loop only through the redactor", () => {
 	/**
 	 * #631, measured in production: 18 of 500 `instance_task_events` on the apply instance held
-	 * the ATS account password VERBATIM, across 6 tasks and 3 ATS hosts, in `agent.decision` and
+	 * the ATS account password VERBATIM, across 4 tasks and 3 ATS hosts, in `agent.decision` and
 	 * `agent.shot` alike. `deriveJobPassword` is one stable HMAC-derived credential reused for
 	 * EVERY ATS account that user holds, so it was not one account's password in a log — it was
 	 * the password, for all of them, in a store MCP tools read.
@@ -683,8 +683,8 @@ describe("a browser agent's action trail leaves the loop only through the redact
 			offenders,
 			`Wrap the message in the job-derived \`redact(...)\` (lib/redact-secrets.ts).\n` +
 				`A write from inside \`act\` does not pass through the loop's \`emit\`, and \`agent.shot\` is\n` +
-				`where 9 of the 18 leaked rows landed — each with an EMPTY control name, which is why a\n` +
-				`field-name rule alone is not the fix (#631).\n` +
+				`where 9 of the 18 leaked rows landed. Only 2 of those 18 had a control name a field-name\n` +
+				`rule could have matched, which is why such a rule alone is not the fix (#631).\n` +
 				`Offenders:\n${listing(offenders)}`,
 		).toEqual([]);
 	});

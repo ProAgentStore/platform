@@ -12,15 +12,18 @@
  * the next prompt.
  *
  * Measured in production before the fix: 18 of 500 `instance_task_events` on the one
- * apply-capable instance held the 14-char account password VERBATIM, across 6 tasks and 3
- * ATS hosts, in both `agent.decision` and `agent.shot`.
+ * apply-capable instance held the 14-char account password VERBATIM, across 4 tasks and 3
+ * ATS hosts, in both `agent.decision` and `agent.shot`. (Re-measured after the fix: 4 tasks,
+ * not the 6 first reported — the 6 is the BOARD, where one Workday card collapses several
+ * attempts — and `agent.stuck` never carried it, though it was named at first.)
  *
  * ── Why the field NAME is not enough
  *
  * The obvious guard is "mask what is typed into a control called Password". It is
- * necessary and it is not sufficient: 9 of those 18 rows were `agent.shot` events whose
- * recorded control name was the EMPTY STRING. A name-based rule would have masked half the
- * exposure and reported success.
+ * necessary and it is not sufficient. Re-measured against the 18 live rows: only TWO carried a
+ * control name a field-name rule could have matched. The other sixteen recorded the name as the
+ * empty string — nine of them `agent.shot` events, which record no name at all. A name-based
+ * rule would have masked 2 of 18 and reported success.
  *
  * So redaction is primarily VALUE-based. The loop knows the secret it was handed, and any
  * string on its way to a sink has that value substituted out — whatever field it went into,
