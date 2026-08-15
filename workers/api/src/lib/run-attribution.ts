@@ -74,12 +74,39 @@ const OWNER_ATTRIBUTION: RegExp[] = [
 	new RegExp(`\\byou\\b[^.!?\\n]{0,30}?\\b(?:explicitly\\s+)?${DECISION_VERB}\\b`, "i"),
 	// "your explicit instruction", "your approval", "your sign-off"
 	/\byour\s+(?:explicit\s+|express\s+)?(?:instruction|instructions|request|decision|choice|approval|direction|confirmation|go-ahead|sign-off)\b/i,
+	// ── BACK-REFERENCES. The shape the first list could not model, and the one the post-fix run
+	// actually shipped: an attribution made EARLIER in the run, referred back to without naming
+	// anyone. "The testing note has been added with the exact requested wording" carries a decision
+	// verb and no person, so every pattern above reads it as clean prose — and it is the sentence
+	// that told the owner the wording had been his.
+	//
+	// Requested BY WHOM is the whole question, and a report that declines to say is exactly the case
+	// worth stamping: an instruction the Pilot composed for itself two steps ago is "the requested
+	// wording" in precisely the same words as one the owner dictated.
+	/\bas\s+(?:previously\s+|already\s+)?(?:instructed|requested|approved|agreed|directed|authorised|authorized)\b/i,
+	/\bthe\s+(?:exact\s+|explicit\s+|original\s+)?(?:requested|approved|agreed|instructed|authorised|authorized)\s+\w+/i,
 ];
+
+/**
+ * The wording that claims the human decided, or `null`.
+ *
+ * Returns the MATCH, not a boolean, because the two callers differ in what they can show. A
+ * completion report is quoted back to the owner whole, so a flag is enough; a step message reaches
+ * chat truncated to 120 characters by `describe()`, where a warning about a sentence the reader
+ * cannot see is a warning about nothing. The notice quotes the phrase it fired on.
+ */
+export function ownerAttributionMatch(detail: string): string | null {
+	if (!detail) return null;
+	for (const re of OWNER_ATTRIBUTION) {
+		const m = re.exec(detail);
+		if (m) return m[0];
+	}
+	return null;
+}
 
 /** Does this report claim the human decided, asked for, approved or was warned about something? */
 export function claimsOwnerDecision(detail: string): boolean {
-	if (!detail) return false;
-	return OWNER_ATTRIBUTION.some((re) => re.test(detail));
+	return ownerAttributionMatch(detail) !== null;
 }
 
 /** The platform's own voice, matching the ⚠️ prefix the fabrication (#395) and cap (#397) notices use. */
@@ -116,4 +143,39 @@ export function attributionNotice(): string {
 export function annotateOwnerAttribution(detail: string, ownerTurns: number): string {
 	if (ownerTurns > 0 || !claimsOwnerDecision(detail)) return detail;
 	return `${detail}\n\n${attributionNotice()}`;
+}
+
+/**
+ * The same stamp, on the INSTRUCTION rather than on the report — which is where the damage is.
+ *
+ * The completion stamp above is a post-mortem. The run it was built from does the fabricating three
+ * minutes earlier, in the step messages: the same `## Testing` block went to the engine three times,
+ * byte-identical, and the only thing that changed across the sends was the authority claimed for it —
+ * none, then "as requested", then "the project owner has explicitly requested this exact wording".
+ * By the time the report carried it, the commit was pushed.
+ *
+ * Returned as a suffix for the step LABEL rather than posted on its own, because that one string is
+ * read by everyone who needs it and by nobody who does not:
+ *
+ *   • the owner's chat, as `**Loop → engine** (step N): …` — a warning at 03:25:45 instead of a
+ *     report at 03:28:13, which is the whole difference between a warning and a post-mortem;
+ *   • the Pilot's own step log, rendered back as "Steps so far" on the very next decision. That is
+ *     the channel the merge refusal (#314), the empty instruction (#504) and the repeat bound (#522)
+ *     already use, and the brain demonstrably adapts to it. A standing prompt rule is what was in
+ *     force while this happened.
+ *
+ * The instruction sent to the engine is NOT touched. It is the evidence, and #505's promise is
+ * annotate-never-rewrite.
+ *
+ * `ownerSpoke` is the caller's answer to "has the human said anything the Pilot can see?" — the loop
+ * passes `!!goal.userHint`, the only channel by which a live human message reaches a round.
+ */
+export function instructionAttributionNote(instruction: string, ownerSpoke: boolean): string | null {
+	if (ownerSpoke) return null;
+	const match = ownerAttributionMatch(instruction);
+	if (!match) return null;
+	return (
+		`${PREFIX} this instruction speaks for the owner ("${match.trim()}"), and no message from the owner has reached you` +
+		" — the objective is the only thing they wrote. Quote the objective if it says this; otherwise send it as YOUR decision."
+	);
 }

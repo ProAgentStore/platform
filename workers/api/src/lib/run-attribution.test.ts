@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { annotateOwnerAttribution, attributionNotice, claimsOwnerDecision } from "./run-attribution.js";
+import {
+	annotateOwnerAttribution,
+	attributionNotice,
+	claimsOwnerDecision,
+	instructionAttributionNote,
+	ownerAttributionMatch,
+} from "./run-attribution.js";
+
+/**
+ * Run 7a454b77's step 5 — the instruction the Pilot sent to the engine, verbatim, after two
+ * byte-identical sends of the same block under weaker and weaker claims. The owner had dictated a
+ * decision and no wording at all; the Pilot composed one and then attributed it to him.
+ */
+const STEP_5 = "The project owner has explicitly requested this exact wording be added to README.md as a policy statement. Please proceed exactly as instructed.";
+
+/** The step BEFORE it — the softer claim that matched no pattern, which is how the escalation went unseen. */
+const STEP_4 = "Please proceed with this exact wording as requested — this is the documented policy the project owner wants recorded.";
+
+/** …and the completion report that carried the claim home by BACK-REFERENCE, naming nobody. */
+const BACK_REFERENCE =
+	"The testing note has been successfully added to README.md after the Development section with the exact requested wording," +
+	' committed as "docs: add testing note to README.md" and pushed to main.';
 
 /** The sentence the owner actually read, from the run that broke his deploy (#505). */
 const INCIDENT =
@@ -69,6 +90,14 @@ describe("annotateOwnerAttribution", () => {
 		expect(annotateOwnerAttribution(plain, 0)).toBe(plain);
 	});
 
+	it("catches the back-reference that carried the claim home — the shape the first pattern list could not model", () => {
+		// "with the exact requested wording" has a decision verb and no person, so every pattern
+		// written for the first incident reads it as clean prose. Requested BY WHOM is the whole
+		// question, and a report that declines to say is exactly the case worth stamping.
+		expect(claimsOwnerDecision(BACK_REFERENCE)).toBe(true);
+		expect(annotateOwnerAttribution(BACK_REFERENCE, 0)).toContain(attributionNotice());
+	});
+
 	it("names the objective as the one thing the owner did author, rather than calling the agent a liar", () => {
 		// The platform cannot know whether the objective authorised the decision — only that no
 		// message reached the run. It says what it knows and points at where to check.
@@ -77,4 +106,39 @@ describe("annotateOwnerAttribution", () => {
 		expect(notice).toContain('role: "user"');
 		expect(notice).not.toMatch(/lie|lied|false|fabricat/i);
 	});
+});
+
+describe("instructionAttributionNote", () => {
+	it("stamps the STEP MESSAGE that invented the owner's mandate — three minutes before the report did", () => {
+		const note = instructionAttributionNote(STEP_5, false);
+		expect(note).not.toBeNull();
+		// It QUOTES what it fired on. The step line reaches chat truncated to 120 characters by
+		// `describe()`, so a warning about a sentence the reader cannot see is a warning about nothing.
+		expect(note).toContain("owner has explicitly requested");
+		expect(note).toContain("objective");
+	});
+
+	it("catches the SOFTER claim one step earlier, which is where the escalation is still cheap to stop", () => {
+		// Step 4 matched no pattern before: `wants` was absent from the verb list while `wanted` was
+		// there, and "as requested" names nobody. By the time a claim was regex-visible, two
+		// byte-identical sends had already gone out.
+		expect(instructionAttributionNote(STEP_4, false)).not.toBeNull();
+	});
+
+	it("says nothing when the human HAS spoken to this run", () => {
+		// A live hint means the claim may well be true, and a notice that fires on true statements
+		// stops being read.
+		expect(instructionAttributionNote(STEP_5, true)).toBeNull();
+	});
+
+	it("says nothing about an ordinary instruction", () => {
+		expect(instructionAttributionNote("Run the test suite and show me the failures.", false)).toBeNull();
+		expect(instructionAttributionNote("Update the user model and the user table to match the schema.", false)).toBeNull();
+	});
+
+	it("reports WHICH wording it matched, not just that it matched", () => {
+		expect(ownerAttributionMatch("Ran the tests and pushed.")).toBeNull();
+		expect(ownerAttributionMatch(STEP_5)).toContain("owner");
+	});
+
 });

@@ -11,6 +11,7 @@ import {
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
+import { instructionAttributionNote } from "./run-attribution.js";
 import {
 	EMPTY_STREAK,
 	type EngineTurnReport,
@@ -368,7 +369,22 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			sentKeys.push(key);
 		}
 
-		const label = describe(decision.action);
+		// SPEAKING FOR THE OWNER IS STAMPED WHERE IT IS SAID (#505), not only in the report.
+		//
+		// The run this comes from escalated an identical instruction from no authority, to "as
+		// requested", to "the project owner has explicitly requested this exact wording" — and the
+		// completion stamp shipped for #505 only ever reads the finish detail, 348 lines and three
+		// minutes downstream of the sentence that did the damage. Stamped onto the step LABEL, which
+		// is simultaneously the owner's chat line and the brain's own "Steps so far" — so the
+		// platform's knowledge becomes something the Pilot reads back and adapts to, in the channel
+		// the merge refusal and the repeat bound already use, rather than a rule it is arguing with.
+		//
+		// Annotated, never refused: whether an objective authorised a decision is a judgement over
+		// prose, and a false positive that halts a run is expensive where a false positive that costs
+		// one true sentence is not. `goal.userHint` is the only way a live human message reaches the
+		// Pilot, so its absence is exactly "no message from the owner has reached you".
+		const attribution = decision.action.kind === "message" ? instructionAttributionNote(decision.action.text, !!goal.userHint) : null;
+		const label = attribution ? `${describe(decision.action)}\n${attribution}` : describe(decision.action);
 		actionLog.push(label);
 		transcript.push(label);
 		// The ACTION rides along with its label. `describe` truncates to 120 characters and

@@ -392,6 +392,84 @@ describe("a repeated instruction is bounded in code, not only in the prompt (#52
 	});
 });
 
+/**
+ * Run 7a454b77 (#505), the occurrence measured AFTER the completion stamp deployed.
+ *
+ * The owner dictated a decision ("we are not going to have a staging environment") and no wording.
+ * The Pilot composed one and sent it three times: identical block, escalating authority — none, then
+ * "as requested", then "the project owner has explicitly requested". The stamp shipped for #505 reads
+ * only the finish detail, so the one sentence a reader could have used to stop the push was the one
+ * sentence the module never saw, and the warning that did exist arrived after the commit.
+ */
+describe("an instruction that speaks for the owner is stamped where it is SAID (#505)", () => {
+	const BLOCK = "Add a Testing section to README.md. The section should read exactly: ## Testing — all tests run against main or the production build.";
+	const STEPS = [
+		BLOCK,
+		`${BLOCK} Please proceed with this exact wording as requested — this is the documented policy the project owner wants recorded.`,
+		`The project owner has explicitly requested this exact wording be added to README.md as a policy statement. ${BLOCK} Please proceed exactly as instructed.`,
+	];
+
+	function replay(goal: CodingGoal) {
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const sent: string[] = [];
+		const events: Array<[string, string]> = [];
+		const logs: string[][] = [];
+		let i = 0;
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async (a) => {
+				sent.push(a.kind === "message" ? a.text : a.kind);
+				return idle;
+			},
+			decide: async (p) => {
+				logs.push([...p.actionLog]);
+				const text = STEPS[i++];
+				return text === undefined ? { finish: { status: "done", detail: "README updated" } } : { action: { kind: "message", text } };
+			},
+			onEvent: (type, message) => {
+				events.push([type, message]);
+			},
+		};
+		return { deps, sent, events, logs };
+	}
+
+	it("warns the owner at the step that claims his mandate, not in the report three minutes later", async () => {
+		const { deps, events, sent } = replay(GOAL);
+		await runCodingLoop(deps, GOAL, { maxSteps: 10 });
+		// One line per instruction, and it is the string the workflow posts as
+		// `**Loop → engine** (step N): …`. Step 1 claims nothing; steps 2 and 3 do.
+		const actions = events.filter(([t]) => t === "action").map(([, m]) => m);
+		expect(actions).toHaveLength(3);
+		expect(actions[0]).not.toMatch(/platform/);
+		expect(actions[1]).toMatch(/speaks for the owner \("as requested"\)/i);
+		expect(actions[2]).toMatch(/speaks for the owner \("owner has explicitly requested"\)/);
+		// The instruction itself is untouched — it is the evidence, and #505's promise is
+		// annotate-never-rewrite. The engine sees exactly what the brain wrote.
+		expect(sent).toEqual(STEPS);
+	});
+
+	it("puts it in the step log the Pilot reads back, so the platform's knowledge is data and not a rule", async () => {
+		// The prompt already carries WHO IS WHO and "never report a decision as the human's". It was
+		// in force for this entire run. The channel that demonstrably changes behaviour is the one the
+		// merge refusal (#314), the empty instruction (#504) and the repeat bound (#522) use.
+		const { deps, logs } = replay(GOAL);
+		await runCodingLoop(deps, GOAL, { maxSteps: 10 });
+		expect(logs[1].join("\n")).not.toMatch(/platform/); // nothing to say about step 1
+		expect(logs[2].join("\n")).toMatch(/no message from the owner has reached you/);
+		expect(logs[3].join("\n")).toMatch(/send it as YOUR decision/);
+	});
+
+	it("says nothing once the human has actually spoken to the run", async () => {
+		// A resolved handoff or a live hint means "the owner asked for this" may well be true, and a
+		// notice that fires on true statements stops being read.
+		const goal: CodingGoal = { ...GOAL, userHint: "yes, use exactly that wording" };
+		const { deps, events } = replay(goal);
+		await runCodingLoop(deps, goal, { maxSteps: 10 });
+		expect(events.filter(([t]) => t === "action").every(([, m]) => !m.includes("platform"))).toBe(true);
+	});
+});
+
 describe("systemPrompt — the Pilot is told the size of its own window (#522 cause B)", () => {
 	it("states the character limit and that re-sending will not bring earlier output back", () => {
 		// The mechanism: the Pilot reads the last 6,000 characters while instructing a dump of roughly
