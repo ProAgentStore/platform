@@ -8,6 +8,7 @@ import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
+import { runStateSentence } from "./state-vocabulary.js";
 import { annotationsFor, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
 	AGENT_ID,
@@ -837,7 +838,12 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			// from a session that never did anything. The pane is a live buffer on the runner and
 			// there is nothing to capture once the session ends; the record that survives is
 			// `coding_timeline`, so the description names the tool that reads it.
-			"Capture the live terminal output from a coding session (what the CLI is showing right now). Also returns run state (idle/working/offline). LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane and `idle`, which does not mean nothing happened. To read what a run did, or to follow one while it works, use coding_timeline.",
+			// The vocabulary is the API's `CODING_RUN_STATES`, not a restatement of it. What shipped
+			// here for six weeks was "(idle/working/offline)": `working` is not a value any engine can
+			// emit — the runner's union is `idle | thinking | responding` — and `offline` was, at the
+			// time, produced only by the timeline route. `state-vocabulary.test.ts` measures this
+			// sentence against the code that emits it, over every tool that publishes a state enum.
+			`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. To read what a run DID, use coding_timeline; to find out whether the work is stuck, use coding_diagnostics.`,
 			{
 				instance_id: z.string().describe("Instance ID"),
 				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -850,8 +856,34 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const sessions = r.sessions || [];
 				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
-				const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/capture`, sessionToken, {}, this.env)) as { runState?: string; pane?: string };
-				return jsonText({ sessionId: sid, runState: d.runState, pane: d.pane });
+				const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/capture`, sessionToken, {}, this.env)) as {
+					runState?: string;
+					pane?: string;
+					runnerConnected?: boolean;
+					alive?: boolean;
+					ready?: boolean;
+					authPrompt?: unknown;
+				};
+				// The siblings that make `runState` falsifiable (#593). The API answers `idle` on three
+				// paths and disambiguates with exactly these, so a projection without them turns "the
+				// engine is idle", "the machine is gone" and "the probe failed" into one answer.
+				//
+				// This was never a payload decision, though it read like one: `git log -L` puts the
+				// three-field projection in the tool's ORIGINAL commit (d63333d, 2026-06-28, "read live
+				// terminal output + run state"). `alive`/`ready`/`runnerConnected` were already on the
+				// route two days earlier and simply were not carried; `authPrompt` arrived five weeks
+				// later (2026-08-04) and nobody came back. The decisive evidence that size was not the
+				// reason is that the projection KEPT `pane` — up to 64 KB — while dropping four
+				// booleans.
+				return jsonText({
+					sessionId: sid,
+					runState: d.runState,
+					runnerConnected: d.runnerConnected,
+					alive: d.alive,
+					ready: d.ready,
+					pane: d.pane,
+					...(d.authPrompt ? { authPrompt: d.authPrompt } : {}),
+				});
 			},
 		);
 

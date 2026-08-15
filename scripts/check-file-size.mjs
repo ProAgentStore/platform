@@ -584,7 +584,16 @@ const PINS = {
 	// is that a policy in another Worker (a new session continues the repo's recent conversation)
 	// would otherwise have deleted this tool's entire contract without touching this file. A reader
 	// who finds the flag without finding that sentence will drop it as redundant.
-	"workers/mcp/src/index.ts": 1157,
+	// +4 at #593: `coding_session_capture` now projects the four fields that make `runState`
+	// FALSIFIABLE — `runnerConnected`, `alive`, `ready`, `authPrompt`. The API answers `idle` on
+	// three different paths and disambiguates with exactly those, so without them "the engine is
+	// idle", "the machine is gone" and "the probe failed" arrived over MCP as one answer. Raised
+	// rather than split because the lines ARE the fix: the projection is the defect, and the
+	// paragraph beside it records what `git log -L` established — the three-field shape came from
+	// the tool's original commit and was never a payload decision, which the ticket had inferred it
+	// was. The vocabulary those fields describe is rendered from a constant in `state-vocabulary.ts`,
+	// which is where the growth would otherwise have been.
+	"workers/mcp/src/index.ts": 1161,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1183,7 +1192,11 @@ const PINS = {
 	// (#580, #587, #589) whose reason is the same sentence in a different file — a status column
 	// published without the derivation that makes it true — which is now evidence rather than
 	// coincidence, and the strongest argument yet for the PINS-into-a-data-file split named above.
-	"scripts/check-file-size.mjs": 1267,
+	// +11 at #593: the `workers/mcp/src/index.ts` entry above. This file's own pin moves when its
+	// PINS comments grow, which is the ratchet applied to itself — those comments ARE the record of
+	// why each number moved, so trimming them to stay under a number would delete the only thing
+	// that makes a pin auditable rather than arbitrary.
+	"scripts/check-file-size.mjs": 1280,
 };
 
 /**

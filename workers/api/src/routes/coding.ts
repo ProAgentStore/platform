@@ -27,6 +27,7 @@ import {
 	listSessions,
 	touchSessionActivity,
 } from "../lib/coding-store.js";
+import { resolveRunState } from "../lib/coding-run-state.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
 import { logEvent } from "../lib/events.js";
 import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.js";
@@ -231,13 +232,32 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// anyone is actually looking at. Throttled to one write a minute inside the store.
 	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
-	if (!conn) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: false });
+	// `offline`, not `idle` (#593). There is no engine to ask on this path, so reporting the engine
+	// as idle states something nobody observed — and it is the reading that let a repo whose machine
+	// had gone away render "Ready", in green, under the tab's own "run `pags up`" banner.
+	if (!conn)
+		return c.json({
+			pane: "",
+			runState: resolveRunState({ sessionActive: session.status === "active", runnerConnected: false }),
+			alive: false,
+			ready: false,
+			runnerConnected: false,
+		});
 	// `drainUsage` — this poll is the primary carrier for Engine spend (#267). It runs every 3s
 	// per open session, so it is where the CLI's own per-turn cost report is collected. Only the
 	// paths that actually write the ledger ask to drain; the other capture callers must not
 	// consume records they would then discard.
 	const snap = await callRunner(conn, "/coding/capture", { sessionId, drainUsage: true }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
-	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
+	// `unknown`, not `idle` (#593). The runner IS connected and did not answer — the probe failed,
+	// which is a different fact from an engine sitting idle and must not be reported as one.
+	if (!snap)
+		return c.json({
+			pane: "",
+			runState: resolveRunState({ sessionActive: session.status === "active", runnerConnected: true }),
+			alive: false,
+			ready: false,
+			runnerConnected: true,
+		});
 	// The SAME snapshot carries what the engine authenticated with, and it is the only place in
 	// the system that knows: the credential is decided by a merge with the machine's own shell,
 	// which happens on the runner. It was already being displayed further down this handler and
@@ -303,6 +323,14 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	const { usage: _drained, acts: _drainedActs, ...paneSnap } = snap as Record<string, unknown>;
 	return c.json({
 		...paneSnap,
+		// AFTER the spread, deliberately: the runner's own word is normalised through the one
+		// vocabulary rather than passed through (#593), so a value no engine can emit cannot reach a
+		// client by riding the snapshot. An unrecognised word is `unknown`, never `idle`.
+		runState: resolveRunState({
+			sessionActive: session.status === "active",
+			runnerConnected: true,
+			engineRunState: (snap as { runState?: unknown }).runState,
+		}),
 		runnerConnected: true,
 		auth,
 		...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),

@@ -108,8 +108,10 @@ describe("the properties the table is FOR", () => {
 });
 
 describe("the fix: a repo row can no longer contradict the banner above it", () => {
-	// `GET …/capture` answers `{ runState: "idle", runnerConnected: false }` when no runner is
-	// connected — there is no engine to ask, so it reports the engine idle. The poll stored
+	// `GET …/capture` ANSWERED `{ runState: "idle", runnerConnected: false }` when no runner was
+	// connected — there was no engine to ask, and it reported the engine idle anyway. (#593 changed
+	// that path to `"offline"`; this case is kept because a STALE `idle` from an earlier poll is
+	// still reachable — `repoStatuses` outlives the tick that wrote it.) The poll stored
 	// "idle", and the row's phrase consulted `runnerOnline` only on the branch where the repo had
 	// NO active session. So a repo with a live session on a machine that had gone away read
 	// "Ready", with a green dot, directly under ReposList's "Your machine isn't connected. Start

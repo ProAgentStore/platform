@@ -18,6 +18,8 @@ import type { Context, Hono } from "hono";
 import { callRunner, getRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured } from "../lib/github-app.js";
 import { engineAuthFor, engineAuthReport, readEngines, type EngineAuthResolved } from "../lib/coding-engines.js";
+import { codingRunsForSessions, type CodingRunFact } from "../lib/board-runs.js";
+import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
@@ -136,6 +138,21 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			readEngines(env, instanceId, uid),
 		]);
 
+		// 3b. What the RUNS behind those sessions are doing (#593). The runner can only report that
+		// a process is alive; whether it is WORKING is the run's own record, and `engine_limit` is
+		// already a first-class park reason there (#541). Without this join the one failure mode
+		// where the machine is healthy and the work is stopped is invisible to the tool named for
+		// stuck sessions.
+		const runsBySession = await codingRunsForSessions(
+			env,
+			instanceId,
+			uid,
+			dbSessions.filter((s) => s.status === "active").map((s) => s.id),
+		).catch(() => new Map<string, CodingRunFact[]>());
+		/** The newest run on a session, which is the one whose park is current. */
+		const latestRunFor = (sessionId: string): CodingRunFact | undefined =>
+			[...(runsBySession.get(sessionId) ?? [])].sort((a, b) => b.at - a.at)[0];
+
 		// 4. Cross-reference D1 active sessions vs runner's tracked sessions
 		const trackedIds = new Set<string>();
 		// No tmux fields (#247): the coding engine spawns a child process, so the old
@@ -252,6 +269,16 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 
 		for (const s of sessions) {
 			if (s.issue) issues.push({ severity: "warn", message: `Session ${s.id.slice(-8)} (${s.repoName}): ${s.issue}`, fix: s.issue.startsWith("orphaned") ? "Kill the session and start a new one" : "Restart the session from ⚙" });
+			// An engine that is up and REFUSING (#593) — the case every rule above misses, because
+			// every rule above is about the machine rather than the work.
+			if (s.status === "active") {
+				const refusal = refusingEngineIssue({
+					sessionLabel: `${s.id.slice(-8)} (${s.repoName})`,
+					alive: s.live?.alive === true,
+					run: latestRunFor(s.id),
+				});
+				if (refusal) issues.push(refusal);
+			}
 		}
 		for (const r of repos) {
 			if (r.issue)
@@ -268,7 +295,13 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		}
 
 		const activeSessions = sessions.filter((s) => s.status === "active");
-		const healthySessions = activeSessions.filter((s) => s.live?.alive);
+		// "Healthy" has to mean able to work, not merely running (#593). A session whose run is
+		// parked on the engine's own usage limit was counted here, so the summary read
+		// `healthySessions: 1, issueCount: 0` for an engine that had refused every instruction for
+		// hours — the two numbers a reader checks first, both wrong in the same direction.
+		const healthySessions = activeSessions.filter(
+			(s) => s.live?.alive && !refusingEngineIssue({ sessionLabel: s.id, alive: true, run: latestRunFor(s.id) }),
+		);
 
 		return c.json({
 			summary: {

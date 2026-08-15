@@ -16,9 +16,13 @@
 //
 // ── The disagreement this fixed
 //
-// `GET …/sessions/:id/capture` answers `{ runState: "idle", runnerConnected: false }` when no
-// runner is connected (routes/coding.ts — there is no engine to ask, so it reports the engine as
-// idle). The poll stored `"idle"` for that repo, and the row's phrase consulted `runnerOnline`
+// `GET …/sessions/:id/capture` USED TO answer `{ runState: "idle", runnerConnected: false }` when
+// no runner was connected (routes/coding.ts — there is no engine to ask, and it reported the engine
+// as idle anyway). Since #593 that path answers `"offline"` and a probe that went unanswered
+// answers `"unknown"`, so the server no longer states something nobody observed. The reconciliation
+// below is unchanged and still load-bearing: `runnerOnline` is polled on its own 10s timer, so the
+// two signals can still disagree, and this is where that is settled.
+// The poll stored `"idle"` for that repo, and the row's phrase consulted `runnerOnline`
 // only on the branch where the repo had NO active session. So a repo with a live session on a
 // machine that had gone away read **"Ready"**, with a green dot, directly underneath ReposList's
 // "Your machine isn't connected. Start the runner: pags up" banner — which reads off the SAME

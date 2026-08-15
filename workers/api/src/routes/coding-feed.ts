@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
+import { resolveRunState } from "../lib/coding-run-state.js";
 import { listSessions } from "../lib/coding-store.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
 import { loadTimelineFeed } from "../lib/coding-timeline.js";
@@ -70,6 +71,10 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
  * `unknown` is a real answer and is not collapsed into `idle`: the runner is connected but did not
  * answer the capture, so the honest report is that nobody knows. Collapsing it would be the same
  * defect #580 is about — a dead thing reported as a benign state.
+ *
+ * The mapping itself moved to `lib/coding-run-state.ts` (#593). It was stated here first and
+ * correctly, while `/capture` — the same probe, the surface MCP publishes — answered `idle` on all
+ * three of these paths. Two vocabularies over one probe is what let the older one keep shipping.
  */
 async function readRunState(
 	env: Env,
@@ -77,9 +82,9 @@ async function readRunState(
 	uid: string,
 	session: CodingSessionRecord,
 ): Promise<{ runState: string; runnerConnected: boolean }> {
-	if (session.status !== "active") return { runState: "ended", runnerConnected: false };
+	if (session.status !== "active") return { runState: resolveRunState({ sessionActive: false, runnerConnected: false }), runnerConnected: false };
 	const conn = await getSessionRunnerConn(env, instanceId, uid, session).catch(() => null);
-	if (!conn) return { runState: "offline", runnerConnected: false };
+	if (!conn) return { runState: resolveRunState({ sessionActive: true, runnerConnected: false }), runnerConnected: false };
 	const snap = await callRunner<{ runState?: string }>(conn, "/coding/capture", { sessionId: session.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
-	return { runState: snap?.runState ?? "unknown", runnerConnected: true };
+	return { runState: resolveRunState({ sessionActive: true, runnerConnected: true, engineRunState: snap?.runState }), runnerConnected: true };
 }

@@ -42,13 +42,23 @@ export function codingSessionIdFromCardId(cardId: string): string {
 	return cardId.startsWith(CODING_CARD_PREFIX) ? cardId.slice(CODING_CARD_PREFIX.length) : "";
 }
 
-/** One `agent_loop_runs` row, reduced to what a card needs. */
+/**
+ * One `agent_loop_runs` row, reduced to what a reader needs.
+ *
+ * Read by the board (#592) and by `coding_diagnostics` (#593), which asks the same question about
+ * the same rows — "what is the run behind this session actually doing" — so they share one reader
+ * rather than growing a second copy of the join.
+ */
 export interface CodingRunFact {
 	runId: string;
 	status: string;
 	detail: string;
 	/** ms epoch — when it finished, else when it started. */
 	at: number;
+	/** Why the run is deliberately parked, or "" when it is not (#580). */
+	waitingReason: string;
+	/** ms epoch the park is due to end, or null. */
+	waitingUntil: number | null;
 }
 
 /** One `coding_sessions` row, reduced to what a card needs. */
@@ -154,6 +164,8 @@ interface LoopRunRow {
 	detail: string | null;
 	started_at: number;
 	finished_at: number | null;
+	waiting_reason: string | null;
+	waiting_until: number | null;
 }
 
 /**
@@ -174,7 +186,7 @@ export async function codingRunsForSessions(
 	if (!sessionIds.length) return out;
 	const placeholders = sessionIds.map((_, i) => `?${i + 3}`).join(",");
 	const rows = await env.DB.prepare(
-		`SELECT run_id, session_id, status, detail, started_at, finished_at
+		`SELECT run_id, session_id, status, detail, started_at, finished_at, waiting_reason, waiting_until
 		   FROM agent_loop_runs
 		  WHERE instance_id = ?1 AND user_id = ?2 AND session_id IN (${placeholders})`,
 	)
@@ -188,6 +200,8 @@ export async function codingRunsForSessions(
 			status: String(r.status ?? ""),
 			detail: r.detail ?? "",
 			at: Number(r.finished_at ?? r.started_at ?? 0) || 0,
+			waitingReason: r.waiting_reason ?? "",
+			waitingUntil: r.waiting_until ?? null,
 		};
 		const arr = out.get(r.session_id);
 		if (arr) arr.push(fact);
