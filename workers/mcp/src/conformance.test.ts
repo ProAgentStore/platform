@@ -726,6 +726,9 @@ type SweepResult = {
 	unreached: string[];
 	/** Bytes served across the discriminating set, and what indenting them would have cost. */
 	bytes: { served: number; ifIndented: number };
+	/** Per tool: the wire bytes of its result, and how many of the 39 collection keys it echoed.
+	 *  Both exist for the limitation arm (#615), NOT for any assertion about payload size. */
+	perTool: Map<string, { bytes: number; collectionKeys: number }>;
 };
 
 async function callEveryTool(): Promise<SweepResult> {
@@ -760,6 +763,7 @@ async function callEveryTool(): Promise<SweepResult> {
 		prose: [],
 		unreached: [],
 		bytes: { served: 0, ifIndented: 0 },
+		perTool: new Map(),
 	};
 	for (const tool of published) {
 		let res: { content?: { type: string; text?: string }[]; isError?: boolean };
@@ -787,8 +791,18 @@ async function callEveryTool(): Promise<SweepResult> {
 				parsed = JSON.parse(body);
 			} catch {
 				out.prose.push(tool.name);
+				// A prose result still has a size and still echoes whatever the stub returned.
+				out.perTool.set(tool.name, { bytes: new TextEncoder().encode(body).length, collectionKeys: 0 });
 				continue;
 			}
+			// How much of the one-body-fits-all fixture this tool handed straight back. See the
+			// limitation arm (#615): a real endpoint returns ONE collection, so anything above 1 is
+			// a body no production route could produce.
+			const echoed =
+				parsed && typeof parsed === "object" && !Array.isArray(parsed)
+					? SWEEP_COLLECTION_KEYS.filter((k) => k in (parsed as Record<string, unknown>)).length
+					: 0;
+			out.perTool.set(tool.name, { bytes: new TextEncoder().encode(body).length, collectionKeys: echoed });
 			const compact = JSON.stringify(parsed);
 			if (JSON.stringify(parsed, null, 2) === compact) {
 				out.vacuous.push(tool.name);
@@ -841,6 +855,87 @@ describe("result serialisation — every tool, on the wire (#586)", () => {
 		// fall below 80 means the fixture stopped producing nested bodies, not that the code
 		// got cleaner.
 		expect(sweep.discriminating.length).toBeGreaterThanOrEqual(80);
+	});
+
+	/**
+	 * The stated limitation (#615), and why it is a comment with a measurement rather than a fix.
+	 *
+	 * #615 was filed because the agent that evaluated this sweep as a home for #595's wire-size
+	 * guard reported it producing **10,657,229 B for `billing_status`** — a tool that returns no
+	 * collection. **This file has never produced that number**, and the arm below measures what it
+	 * does produce: a few KB.
+	 *
+	 * Where 10,657,229 came from is INFERRED, not verified. #595 describes it as this fixture "run
+	 * at 300 rows", but 300 rows of `SWEEP_ROWS`' own shape is 956,760 B — measured, an order of
+	 * magnitude short. Reaching 10.6 MB needs 300 rows of PRODUCTION size (~900 B each, which is
+	 * what `wire-size.test.ts`' fixtures carry) across all 39 keys: 39 x 300 x ~900. So the figure
+	 * is arithmetic on a doubly-hypothetical fixture — this file's breadth with another file's row
+	 * size — and neither half of it is what runs here.
+	 *
+	 * ── AC3: the argument is not the cause, and neither is the handler
+	 *
+	 * Both candidate explanations in the issue are wrong, and the second one — "the handler is
+	 * genuinely capable of that" — is wrong in a way worth stating, because it would have been the
+	 * far bigger finding:
+	 *
+	 *   · **It cannot be the invented argument.** `billing_status` declares exactly one parameter,
+	 *     the optional `token`, and `sweepArgs` sends only required arguments plus
+	 *     `agent_id`/`instance_id`. So the sweep invents NOTHING for this tool and calls it with
+	 *     `{}`. There is no argument to be absurd.
+	 *   · **It is not the handler.** `billing_status` is a pass-through —
+	 *     `authedCall("/v1/billing/status") → jsonText(data)` (`instance-tools/account.ts`) — and
+	 *     `/v1/billing/status` answers a fixed six-scalar object (`active`, `status`, `expiresAt`,
+	 *     `hasBillingAccount`, `pro`, `enforced`; `routes/billing.ts`), ~104 B. It has no
+	 *     collection and no unbounded field, so it cannot serve megabytes however it is called.
+	 *
+	 * The cause is the RESPONSE fixture: {@link sweepBody} answers every URL with one body
+	 * carrying all 39 collection keys, and a pass-through tool hands back whatever it was given.
+	 * That is a deliberate trade — a per-tool response table would be a second hand-maintained
+	 * restatement of the surface, which is what this file exists to avoid — and it is correct for
+	 * the question this file asks. **Compactness is a property of the serialiser and is
+	 * independent of payload realism**: `JSON.stringify(x) === body` discriminates just as well on
+	 * an unrealistic body as a realistic one.
+	 *
+	 * ── AC1: nothing here asserts a size, so nothing here needed fixing
+	 *
+	 * Checked rather than assumed: `sweep.bytes` is read in exactly three places, all inside the
+	 * `console.log` of "states what it measured". Every `expect()` in this file counts TOOLS or
+	 * schema `$defs`; the compactness detector compares a body to its own re-serialisation, which
+	 * is an equality, not a magnitude. So no conclusion here rests on how big a response is, and
+	 * the honest remedy is this note plus the denominator below — not new machinery.
+	 *
+	 * **The rule this leaves behind: do not read a byte count off this sweep.** A guard about
+	 * SIZE needs per-endpoint fixtures calibrated against live bodies — `wire-size.test.ts`, which
+	 * holds each of its six to within 5% of what production served.
+	 */
+	it("states how unrealistic its bodies are, so no future guard reads a size off them (#615)", () => {
+		// AC4's denominator: not "one bad case" but how many of the swept tools answer a body no
+		// production route could produce. A real endpoint returns at most ONE collection, so a
+		// result echoing two or more of the 39 keys is definitionally implausible.
+		const implausible = [...sweep.perTool].filter(([, m]) => m.collectionKeys >= 2);
+		const billing = sweep.perTool.get("billing_status");
+
+		// `billing_status` is the issue's example and the sharpest case: no collection at all in
+		// its real response, and the fixture hands it every one of them.
+		expect(billing, "billing_status went unmeasured").toBeDefined();
+		expect(billing?.collectionKeys).toBe(SWEEP_COLLECTION_KEYS.length);
+		// And nowhere near the 10.6 MB the issue reports — that figure was this fixture scaled to
+		// 300 production-shaped rows, not anything this file has ever emitted.
+		expect(billing?.bytes ?? 0).toBeLessThan(64 * 1024);
+
+		// The bound that keeps the note above true. If someone makes the fixture per-endpoint
+		// realistic, this fails and they are sent here to rewrite the limitation rather than
+		// leaving a comment that describes a fixture the file no longer has.
+		expect(implausible.length).toBeGreaterThanOrEqual(60);
+
+		const worst = [...sweep.perTool].sort((a, b) => b[1].bytes - a[1].bytes)[0];
+		console.log(
+			`✓ fixture realism (#615): ${implausible.length}/${sweep.perTool.size} measured results carry 2+ of the ` +
+				`${SWEEP_COLLECTION_KEYS.length} collection keys, which no real endpoint returns.\n` +
+				`  billing_status: ${billing?.bytes} B here, ${billing?.collectionKeys} collection keys — its real endpoint returns 6 scalars (~104 B) and no collection.\n` +
+				`  largest swept result: ${worst?.[0]} at ${worst?.[1].bytes} B.\n` +
+				"  Sizes here are NOT production-representative and no assertion in this file uses one; for bytes see wire-size.test.ts.",
+		);
 	});
 
 	it("states what it measured", () => {
