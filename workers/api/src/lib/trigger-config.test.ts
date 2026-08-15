@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyMapping, extractPath, isValidPath, stringifyMapped, validateTriggerConfig } from "./trigger-config.js";
+import { applyMapping, extractPath, isValidPath, stringifyMapped, TRIGGER_CONFIG_KEYS, type TriggerConfigKey, validateTriggerConfig } from "./trigger-config.js";
+import { parseConfig } from "./triggers.js";
 
 describe("extractPath", () => {
 	const payload = {
@@ -170,5 +171,68 @@ describe("validateTriggerConfig", () => {
 
 	it("rejects a non-object config", () => {
 		expect(validateTriggerConfig("create_task", "webhook", "nope")).toEqual(["config must be an object"]);
+	});
+});
+
+/**
+ * #645 — the third copy of the config vocabulary, the one no compiler can reach.
+ *
+ * `TRIGGER_CONFIG_KEYS` and the `TriggerConfig` interface are held together by `satisfies` and by
+ * `_NoUnlistedTriggerConfigKey`. `parseConfig`'s object literal is held to the interface by its
+ * `-?` mapped-type annotation. None of that proves the literal's line for a key actually KEEPS a
+ * value: `foo: undefined` compiles, validates, and drops the field at dispatch — which is the
+ * original bug (a field accepted, persisted, displayed as configuration and then ignored) with the
+ * validator now vouching for it.
+ *
+ * So this asserts the runtime half over the whole vocabulary, with the denominator stated: a
+ * plausible value for each of the 21 keys must survive a JSON round trip through `parseConfig`.
+ */
+describe("trigger config vocabulary (#645)", () => {
+	/** A valid value per key — valid in the sense `parseConfig` accepts it (a bad zone or an
+	 *  unknown provider is dropped by design, so a lazy sample would fail for the wrong reason). */
+	const SAMPLE: Record<TriggerConfigKey, unknown> = {
+		title: "Ticket title",
+		description: "Ticket body",
+		source: "webhook",
+		sourceUrl: "https://example.test/doc",
+		provider: "google_drive",
+		grantId: "grant-1",
+		folderId: "folder-1",
+		limit: 5,
+		query: "invoices",
+		recursive: true,
+		maxDepth: 2,
+		versioned: true,
+		pipeline: "lead_finder",
+		collection: "leads",
+		url: "https://example.test/start",
+		dryRun: true,
+		jitterMinutes: 7,
+		timezone: "Australia/Sydney",
+		mapping: { title: "lead.name" },
+		params: { suburb: "Bondi" },
+		traceId: "run-1",
+	};
+
+	it("covers every declared key, so a new one cannot be added without a sample", () => {
+		expect(Object.keys(SAMPLE).sort()).toEqual([...TRIGGER_CONFIG_KEYS].sort());
+		expect(TRIGGER_CONFIG_KEYS.length).toBe(21);
+	});
+
+	it("parseConfig keeps a value for all 21 keys — a whitelist that drops one is silent", () => {
+		const parsed = parseConfig(JSON.stringify(SAMPLE)) as Record<string, unknown>;
+		const dropped = TRIGGER_CONFIG_KEYS.filter((key) => parsed[key] === undefined);
+		expect(dropped).toEqual([]);
+	});
+
+	it("validateTriggerConfig cannot accept a key parseConfig would drop", () => {
+		// The two halves of the guard meeting: every key the validator recognises for an action
+		// must be one the parser keeps, or the validator is vouching for a field that never runs.
+		const parsed = parseConfig(JSON.stringify(SAMPLE)) as Record<string, unknown>;
+		for (const key of TRIGGER_CONFIG_KEYS) {
+			const errors = validateTriggerConfig("run_pipeline", "webhook", { pipeline: "p", [key]: SAMPLE[key] });
+			const unrecognised = errors.some((e) => e.includes("Unrecognised config field"));
+			if (!unrecognised) expect(parsed[key]).toBeDefined();
+		}
 	});
 });

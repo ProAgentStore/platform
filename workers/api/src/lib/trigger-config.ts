@@ -19,9 +19,26 @@
 
 import { SYNC_MAX_DEPTH } from "./connector-sync.js";
 import { isValidTimeZone } from "./cron-time.js";
-import type { TriggerAction, TriggerType } from "./trigger-types.js";
+import type { TriggerAction, TriggerConfig, TriggerType } from "./trigger-types.js";
 
-/** Every key `parseConfig` will keep. A key absent here is dropped before dispatch sees it. */
+/**
+ * Every key `parseConfig` will keep. A key absent here is dropped before dispatch sees it.
+ *
+ * This vocabulary is written down THREE times — the `TriggerConfig` interface, `parseConfig`'s
+ * object literal (lib/triggers.ts) and this array — and until #645 nothing checked that the three
+ * agreed. They did agree, so this is a guard against a drift that had not happened yet; the drift
+ * matters because its failure mode is the exact bug this module exists to catch. A key listed here
+ * but missed in `parseConfig` makes `validateTriggerConfig` VOUCH for a field that is then dropped
+ * on the way to dispatch: accepted, persisted, shown in the console as configuration, ignored
+ * forever at run time.
+ *
+ * Two of the three copies are now held by the compiler:
+ *   • `satisfies` below rejects a key here that `TriggerConfig` does not declare;
+ *   • `_NoUnlistedTriggerConfigKey` rejects a `TriggerConfig` key missing from here;
+ *   • `parseConfig` builds a `-?` mapped type, so omitting a key there is a compile error too.
+ * The runtime half — that `parseConfig` KEEPS a value for each of the 21 — is pinned by
+ * `trigger-config.test.ts`, because a line can be present and still parse to `undefined`.
+ */
 export const TRIGGER_CONFIG_KEYS = [
 	"title",
 	"description",
@@ -44,7 +61,15 @@ export const TRIGGER_CONFIG_KEYS = [
 	"mapping",
 	"params",
 	"traceId",
-] as const;
+] as const satisfies readonly (keyof TriggerConfig)[];
+
+/** One key of the trigger config vocabulary. */
+export type TriggerConfigKey = (typeof TRIGGER_CONFIG_KEYS)[number];
+
+/** Compile-time exhaustiveness: a `TriggerConfig` field missing from `TRIGGER_CONFIG_KEYS` makes
+ *  this alias fail its `never` constraint, naming the key in the error. */
+type AssertNever<T extends never> = T;
+export type _NoUnlistedTriggerConfigKey = AssertNever<Exclude<keyof TriggerConfig, TriggerConfigKey>>;
 
 /**
  * Which config keys the given action actually READS. A key that is spelled correctly but

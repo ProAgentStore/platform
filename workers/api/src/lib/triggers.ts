@@ -84,11 +84,22 @@ export function safeJson(value: unknown): string {
 	return JSON.stringify(value ?? {}).slice(0, MAX_PAYLOAD_CHARS);
 }
 
+/**
+ * Every field of `TriggerConfig`, made REQUIRED (`-?`) while still allowing `undefined` as a value.
+ *
+ * `parseConfig` is a whitelist and every `TriggerConfig` field is optional, so dropping a line from
+ * the literal below — or adding a field to the interface and forgetting this function — used to
+ * compile cleanly and silently stop honouring that field at dispatch (#645). Annotating the literal
+ * with this type makes the omission a compile error naming the key, which is the only one of the
+ * three copies of this vocabulary TypeScript can hold on its own.
+ */
+type ParsedTriggerConfig = { [K in keyof Required<TriggerConfig>]: TriggerConfig[K] | undefined };
+
 export function parseConfig(value: string | null | undefined): TriggerConfig {
 	if (!value) return {};
 	try {
 		const parsed = JSON.parse(value) as Record<string, unknown>;
-		return {
+		const config: ParsedTriggerConfig = {
 			title: typeof parsed.title === "string" ? parsed.title.slice(0, 200) : undefined,
 			description: typeof parsed.description === "string" ? parsed.description.slice(0, 2000) : undefined,
 			source: typeof parsed.source === "string" ? parsed.source.slice(0, 120) : undefined,
@@ -121,6 +132,7 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			params: parsed.params && typeof parsed.params === "object" && !Array.isArray(parsed.params) ? (parsed.params as Record<string, unknown>) : undefined,
 			traceId: typeof parsed.traceId === "string" ? parsed.traceId.slice(0, 200) : undefined,
 		};
+		return config;
 	} catch {
 		return {};
 	}
