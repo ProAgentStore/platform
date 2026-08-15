@@ -65,7 +65,10 @@ describe("the tool listing fits in a response (#569)", () => {
 	it("keeps the audit fields on every row when the schemas are dropped", () => {
 		// The reduction must cost nothing auditable. This is the list #569 promised stays.
 		const [row] = projectToolListing(resolveToolPolicy(caps({}), [], allToolPolicyInputs(), []));
-		for (const field of ["name", "scope", "mutates", "allowed", "disabled", "reason", "writeConsent", "tier", "invocableBy", "description"]) {
+		// `reach` joined the list at #584: it is what the console's "reaches outside the platform"
+		// sentence is derived from, so dropping it to save bytes would put that claim back on a
+		// field that does not answer it.
+		for (const field of ["name", "scope", "mutates", "reach", "allowed", "disabled", "reason", "writeConsent", "tier", "invocableBy", "description"]) {
 			expect(row, `the listing dropped ${field}, which is part of the audit`).toHaveProperty(field);
 		}
 	});

@@ -30,6 +30,7 @@ import { agentCapabilities, type AgentCapabilities } from "./agent-capabilities.
 import { toolNamesFor } from "../agent-do-tools.js";
 import { builtinToolPolicyInputs, callerChoosesMethod, type ToolInvocation, type ToolTier } from "./builtin-tool-policy.js";
 import { registryTools } from "./tool-registry.js";
+import { reachOf, type ToolReach } from "./tool-reach.js";
 import { listConsents } from "./connector-consent.js";
 import type { Env } from "../types.js";
 // The reason vocabulary + its wording moved to a LEAF (#381) so a pipeline step can refuse with
@@ -103,6 +104,17 @@ export interface ToolPolicyEntry {
 	 * held for the invoker.
 	 */
 	invocableBy: readonly ToolInvocation[];
+	/**
+	 * Where a call to this tool LANDS: `platform` | `machine` | `internet` (#584).
+	 *
+	 * The third axis of the same row, and the reason it is a field rather than something a reader
+	 * works out: the console worked it out, from "does the tool name a connector", and told ten of
+	 * this account's instances they had "no tool that reaches outside the platform" while
+	 * `fetch_url` was switched on. `connector` cannot answer it in either direction — `fetch_url`
+	 * has none and reaches the internet, every `supervision` tool has one and never leaves — and
+	 * neither can `tier`, `scope` or `mutates`. See `tool-reach.ts` for the boundary rules.
+	 */
+	reach: ToolReach;
 }
 
 /** A tool as this module reads it — the fields of `ToolDef` the two verdicts are computed from. */
@@ -224,6 +236,9 @@ export function resolveToolPolicy(
 			// fields explicitly (`builtinToolPolicyInputs`), so neither default can describe it.
 			tier: t.tier ?? "connector",
 			invocableBy: t.invocableBy ?? REGISTRY_INVOCATION,
+			// Derived from the tool's name and connector, not from either of the two fields above
+			// it — see tool-reach.ts for why every one of them was measured and rejected as a proxy.
+			reach: reachOf(t),
 		};
 	});
 }
