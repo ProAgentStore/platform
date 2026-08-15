@@ -8,6 +8,7 @@ import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
 import { repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-title";
 import { resolveRunnerOnline } from "./runner-online";
+import { noticeSentence, runnerOfflineNotice, type AttachmentAnswer } from "./runner-offline-notice";
 import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
@@ -90,6 +91,18 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 */
 	const [relayOnline, setRelayOnline] = useState<boolean | null>(null);
 	const [captureOnline, setCaptureOnline] = useState<boolean | null>(null);
+	/**
+	 * WHY the runner reads offline — the server's own sentence, rendered verbatim (#537).
+	 *
+	 * The boolean above cannot carry it. With one machine off and another running `pags up`, a
+	 * session stamped to the first is correctly unreachable while the second is correctly
+	 * connected, and the only remedy a boolean can express — "run `pags up`" — is being read by
+	 * someone who is already running it. Two diagnoses because they answer different questions:
+	 * `/capture` knows the SESSION's machine, `/runtime/status` knows the instance's. See
+	 * ./runner-offline-notice for which one wins.
+	 */
+	const [sessionAttachment, setSessionAttachment] = useState<AttachmentAnswer | null>(null);
+	const [relayAttachment, setRelayAttachment] = useState<AttachmentAnswer | null>(null);
 
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
@@ -297,16 +310,23 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// The one answer the whole tab reads. A capture's verdict is dropped as soon as the sessions
 	// that produced it are gone, so an offline state always clears itself once the runner is back.
 	const runnerOnline = resolveRunnerOnline({ relay: relayOnline, capture: captureOnline, hasActiveSessions });
+	// One sentence for every offline banner on this tab, so two of them cannot say different
+	// things about the same machine (#537).
+	const offlineNotice = runnerOfflineNotice({ runnerOnline, sessionAttachment, relayAttachment });
 
 	// Authoritative relay check, on a timer that does NOT require a session to exist — the missing
 	// piece that made the offline state unrecoverable (#241). Same route the header dot and the
 	// Settings tab use, so the header and this body cannot report different things.
 	const checkRelay = useCallback(async () => {
 		try {
-			const d = await api<{ relay?: { connected?: boolean } }>(`/v1/instances/${instanceId}/runtime/status`);
+			const d = await api<{ relay?: { connected?: boolean }; attachment?: AttachmentAnswer }>(`/v1/instances/${instanceId}/runtime/status`);
 			setRelayOnline(d.relay?.connected === true);
+			// Already in this response and previously discarded — it is what names a stale "Runs on"
+			// pin, and the banner had no way to say that (#461/#537).
+			setRelayAttachment(d.attachment ?? null);
 		} catch {
 			setRelayOnline(false);
+			setRelayAttachment(null);
 		}
 	}, [instanceId]);
 	useEffect(() => { void checkRelay(); }, [checkRelay]);
@@ -325,9 +345,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		if (!activeSessions.length) return;
 		const results = await Promise.allSettled(
 			activeSessions.map((s) =>
-				api<{ runState?: string; runnerConnected?: boolean }>(
+				api<{ runState?: string; runnerConnected?: boolean; attachment?: AttachmentAnswer }>(
 					`/v1/instances/${instanceId}/coding/sessions/${s.id}/capture`,
-				).then((d) => ({ repoId: s.repoId, state: d.runState || "idle", connected: d.runnerConnected }))
+				).then((d) => ({ repoId: s.repoId, state: d.runState || "idle", connected: d.runnerConnected, attachment: d.attachment ?? null }))
 			),
 		);
 		const statuses: Record<string, string> = {};
@@ -336,6 +356,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			if (r.status === "fulfilled") {
 				statuses[r.value.repoId] = r.value.state;
 				if (r.value.connected !== undefined) setCaptureOnline(r.value.connected);
+				// Held only while the capture that produced it still says offline. A diagnosis that
+				// outlived its verdict would explain a banner that is no longer on screen.
+				if (r.value.connected === false) setSessionAttachment(r.value.attachment);
+				else if (r.value.connected === true) setSessionAttachment(null);
 			} else {
 				statuses[activeSessions[i].repoId] = "offline";
 			}
@@ -383,6 +407,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				alive?: boolean;
 				authPrompt?: AuthPrompt;
 				runnerConnected?: boolean;
+				attachment?: AttachmentAnswer;
 				auth?: EngineAuthReport;
 				lastTurn?: EngineTurnReport;
 			}>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
@@ -403,6 +428,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// unchanged-text early return below, or a stable pane re-freezes the badge.
 			setRepoStatuses((s) => (s[openSession.repoId] === (d.runState || "idle") ? s : { ...s, [openSession.repoId]: d.runState || "idle" }));
 			if (typeof d.runnerConnected === "boolean") setCaptureOnline(d.runnerConnected);
+			// Same pairing as `pollStatuses`: the diagnosis lives exactly as long as the verdict it
+			// explains (#537).
+			if (d.runnerConnected === false) setSessionAttachment(d.attachment ?? null);
+			else if (d.runnerConnected === true) setSessionAttachment(null);
 			// Fold the live pane into the stored scrollback (#432). It is not a REPLACEMENT for
 			// the history — it is the same growing transcript — so it is stitched on, and when
 			// there is neither the empty state says WHICH of the four causes applies.
@@ -1142,7 +1171,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									    machine, a failed open), not the way in. */}
 									<div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line">
 										{(() => {
-											const a = repoOpenAction({ hasActiveSession: false, opening: openingRepoId === solo.id, runnerOnline });
+											const a = repoOpenAction({ hasActiveSession: false, opening: openingRepoId === solo.id, runnerOnline, offlineReason: noticeSentence(offlineNotice) });
 											return (
 												<Button variant="primary" size="lg" onClick={() => openRepoSession(solo.id)} disabled={a.disabled} title={a.title}>
 													{a.label}
@@ -1154,9 +1183,13 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										    only ever learned from a live session's capture, so with no session
 										    and no way to start one, "your machine isn't connected" could never
 										    be disproved — including while `pags up` was demonstrably running. */}
-										{runnerOnline === false && (
+										{/* The SERVER's sentence, not a boolean's (#537): with this session's machine
+										    off and another one running `pags up`, "run `pags up`" is the one thing
+										    the owner is already doing. See ./runner-offline-notice. */}
+										{offlineNotice && (
 											<span className="text-xs text-muted">
-												Your machine doesn't look connected — run <code className="bg-panel border border-line rounded px-1 py-0.5">pags up</code>.
+												{offlineNotice.text}
+												{offlineNotice.command && <> <code className="bg-panel border border-line rounded px-1 py-0.5">{offlineNotice.command}</code></>}
 											</span>
 										)}
 										{openError && <span className="text-xs text-danger">{openError}</span>}
@@ -1334,6 +1367,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					sessions={sessions}
 					repoStatuses={repoStatuses}
 					runnerOnline={runnerOnline}
+					offlineNotice={offlineNotice}
 					recheck={repoRecheck}
 					onRepoRechecked={(fresh) => setRepos((rs) => rs.map((r) => (r.id === fresh.id ? { ...r, ...fresh } : r)))}
 					showAddRepo={showAddRepo}

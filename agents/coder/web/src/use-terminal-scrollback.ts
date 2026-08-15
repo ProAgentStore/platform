@@ -16,6 +16,9 @@ export interface CaptureSnapshot {
 	runState?: string;
 	alive?: boolean;
 	runnerConnected?: boolean;
+	/** Why the session's machine could not be reached (#537) — the server's sentence, which is the
+	 *  only one that can name the session's machine AND the one that is up. Absent when reachable. */
+	attachment?: { message?: string } | null;
 	/** How the engine's last turn ended (#545). Absent on a runner older than CLI 0.4.51. */
 	lastTurn?: { verdict?: string };
 }
@@ -189,6 +192,7 @@ export function useTerminalScrollback(instanceId: string, termRef: RefObject<HTM
 				appendSnapshot(savedRef.current, pane) ||
 				terminalPlaceholder({
 					runnerConnected: snap.runnerConnected,
+					offlineNotice: snap.attachment?.message,
 					alive: snap.alive,
 					runState: snap.runState,
 					loadingHistory: loadingRef.current,

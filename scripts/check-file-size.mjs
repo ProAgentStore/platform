@@ -559,7 +559,16 @@ const PINS = {
 	// worth testing, the WORDING and the four cases where it must say nothing, is outside the file
 	// in ./engine-turn-view.ts. The seam this file wants is still #305's landing/session split —
 	// which is also what would stop a third notice repeating this.
-	"agents/coder/web/src/CodingTab.tsx": 1435,
+	// +34 at #537: the offline banner stopped being a boolean. Two state slots (the session
+	// diagnosis from `/capture`, the instance one from `/runtime/status` — which this file was
+	// already fetching and throwing away), their doc comments, the pairing that drops each
+	// diagnosis when the verdict it explains clears, and the render. The DECISION is outside the
+	// file in ./runner-offline-notice.ts, where it is enumerated in both directions; what stays
+	// here is wiring, and the comments are the larger half of it because the trap is invisible in
+	// the code — every reading behind that boolean was truthful, and the sentence it produced told
+	// an owner running `pags up` on the connected machine to run `pags up`. Still #305's
+	// landing/session split as the seam; a THIRD notice on this strip should take it.
+	"agents/coder/web/src/CodingTab.tsx": 1469,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1193,6 +1202,10 @@ const PINS = {
 	// +9 more at #528, landing beside it: the agent-think raise above, whose reason has to say what did NOT move here (the
 	// path rules, the wording, the sink table — all in lib/path-corroboration.ts) so the next reader
 	// can tell a two-line call site from a file nobody split. Plus this self-ref.
+	// +11 at #537: the CodingTab raise above. Its reason is longer than the diff because the diff is
+	// two `useState`s and a render — the thing a later reader cannot reconstruct is that the boolean
+	// being replaced was not WRONG, it was under-specified, which is why "simplify this back" reads
+	// as a tidy-up. Plus this self-ref.
 	// +15 at #526: the Usage.tsx raise above (a fourth breakdown card, per agent INSTANCE). Plus
 	// this self-ref. Worth noting WHY the raise is only ten lines for a change that also added a
 	// 128-line module and a 160-line test: usage.ts crossed the 800-line threshold during it and
@@ -1241,7 +1254,10 @@ const PINS = {
 	// `grep`, which hid two of its three findings behind a filter chosen before the output existed.
 	// The gate prints everything it found for a reason; reading a guard's output selectively is the
 	// same defect ADR 0002 is about, one layer up.
-	"scripts/check-file-size.mjs": 1325,
+	// +4 at #537: the CodingTab raise above and its two-part reason (the entry, plus the self-ref
+	// in the ledger below), which is what this map costs when a raise is recorded rather than
+	// squeezed. Plus this note.
+	"scripts/check-file-size.mjs": 1341,
 };
 
 /**

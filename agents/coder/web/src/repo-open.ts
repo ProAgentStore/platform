@@ -29,14 +29,32 @@ export interface RepoOpenAction {
  * start one, "your machine isn't connected" can never be disproved — including while `pags up` is
  * demonstrably running. The warning goes in the title, beside the action, not in place of it.
  */
-export function repoOpenAction(input: { hasActiveSession: boolean; opening: boolean; runnerOnline: boolean | null }): RepoOpenAction {
+export function repoOpenAction(input: {
+	hasActiveSession: boolean;
+	opening: boolean;
+	runnerOnline: boolean | null;
+	/**
+	 * The server's own reason for the offline reading (#537), when it has sent one.
+	 *
+	 * The hardcoded remedy below is wrong in the case where this action is MOST useful: a session
+	 * stamped to a machine that is off, with another machine running `pags up` — opening it again is
+	 * exactly what relocates it (`startSessionOnRunner`'s machine-switch reclaim), and "run `pags
+	 * up`" tells the owner to do the thing they are already doing.
+	 */
+	offlineReason?: string | null;
+}): RepoOpenAction {
 	if (input.opening) {
 		// A spawn plus a `--resume` takes seconds, not milliseconds (#378's lesson from the Terminal
 		// tab: silence reads as a hang). The label is the progress indicator.
 		return { label: "Opening…", disabled: true, title: "Starting the engine on your machine — this takes a few seconds." };
 	}
 	if (input.runnerOnline === false) {
-		return { label: "Open", disabled: false, title: "Your machine doesn't look connected — run `pags up`. Opening will still try." };
+		const why = (input.offlineReason || "").trim();
+		return {
+			label: "Open",
+			disabled: false,
+			title: why ? `${why} Opening will still try.` : "Your machine doesn't look connected — run `pags up`. Opening will still try.",
+		};
 	}
 	if (input.hasActiveSession) return { label: "Open", disabled: false, title: "Open this repo's terminal." };
 	return { label: "Open", disabled: false, title: "Open this repo — its engine starts if it isn't already running." };

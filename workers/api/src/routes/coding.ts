@@ -32,6 +32,7 @@ import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask }
 import { logEvent } from "../lib/events.js";
 import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
+import { sessionAttachment } from "../lib/session-attachment.js";
 import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
 import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
@@ -242,6 +243,10 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 			alive: false,
 			ready: false,
 			runnerConnected: false,
+			// WHY, not just whether (#537) — the sentence, and the reasoning behind it, live in
+			// lib/session-attachment.ts. Best-effort: a diagnosis must never turn a 1.5s poll into a
+			// 500, and the console keeps its previous wording when the field is absent.
+			attachment: await sessionAttachment(c.env, instanceId, uid, session.runnerNode).catch(() => null),
 		});
 	// `drainUsage` — this poll is the primary carrier for Engine spend (#267). It runs every 3s
 	// per open session, so it is where the CLI's own per-turn cost report is collected. Only the

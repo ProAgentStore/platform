@@ -37,6 +37,22 @@ describe("repoOpenAction — one verb, and the two rules most likely to be tidie
 		expect(a.title).toMatch(/pags up/);
 	});
 
+	// #537. This action is exactly the fix for a session stamped to a machine that is off —
+	// reopening relocates it onto the machine that is up — so the title telling the owner to run
+	// `pags up` was pointing away from the button it is attached to.
+	it("carries the server's reason instead of the hardcoded remedy, when there is one", () => {
+		const a = repoOpenAction({
+			hasActiveSession: true,
+			opening: false,
+			runnerOnline: false,
+			offlineReason: "This session is running on air.local, which isn't connected. mini.local is connected — open the session again to move it to mini.local.",
+		});
+		expect(a.disabled).toBe(false);
+		expect(a.title).toContain("mini.local");
+		expect(a.title).toContain("Opening will still try.");
+		expect(a.title).not.toMatch(/pags up/);
+	});
+
 	it("shows the opening state instead of nothing", () => {
 		// A spawn plus a `--resume` takes seconds. Silence reads as a hang (#378).
 		const a = repoOpenAction({ hasActiveSession: false, opening: true, runnerOnline: true });

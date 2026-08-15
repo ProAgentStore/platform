@@ -55,6 +55,23 @@ describe("terminalPlaceholder — four causes had one sentence between them (#43
 		expect(terminalPlaceholder({ runnerConnected: false, loadingHistory: true, runState: "thinking" })).toContain("pags up");
 	});
 
+	// #537: the command is right for a machine that is off and WRONG for a session stamped to one
+	// machine while another is running `pags up`. Only the server can tell those apart, so when it
+	// sends its sentence the placeholder must show that instead of the hardcoded remedy.
+	it("defers to the server's diagnosis, and stops prescribing `pags up` when it is the wrong advice", () => {
+		const text = terminalPlaceholder({
+			runnerConnected: false,
+			offlineNotice: "This session is running on air.local, which isn't connected. mini.local is connected — open the session again to move it to mini.local.",
+		});
+		expect(text).toContain("air.local");
+		expect(text).toContain("mini.local");
+		expect(text).not.toContain("pags up");
+	});
+
+	it("keeps the hardcoded sentence when the server sends none — an older API must not blank the pane", () => {
+		expect(terminalPlaceholder({ runnerConnected: false, offlineNotice: "   " })).toContain("pags up");
+	});
+
 	it("says it is still loading rather than that there is nothing", () => {
 		// The old code cleared the DB fallback and THEN awaited the timeline, so this state was
 		// reported as "(waiting for output...)" on every single session open.

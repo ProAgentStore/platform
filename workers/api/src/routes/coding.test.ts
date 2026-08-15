@@ -212,6 +212,18 @@ describe("terminal persistence (#coding-transcript)", () => {
 		return src.slice(i, next === -1 ? undefined : next);
 	};
 
+	// #537. `runnerConnected: false` is truthful about the SESSION and unactionable on its own: the
+	// console's only way to render it was "run `pags up`", which is the wrong instruction whenever
+	// the session's machine is off and ANOTHER machine is running the runner. The route is the only
+	// place that can name both, so the offline branch has to carry the diagnosis with it.
+	it("says WHY the session's machine could not be reached, not only that it wasn't", () => {
+		const offlineBranch = routeSrc().slice(0, routeSrc().indexOf("drainUsage"));
+		expect(offlineBranch).toContain("runnerConnected: false");
+		expect(offlineBranch).toContain("sessionAttachment(c.env, instanceId, uid, session.runnerNode)");
+		// Never a 500 from a diagnosis: this is a 1.5s poll, and the answer is an explanation.
+		expect(offlineBranch).toContain("catch(() => null)");
+	});
+
 	it("persists the transcript from /capture, not only from /explain", () => {
 		// Before this, the ONLY writer was the Co-pilot route — so anyone working in the
 		// Terminal view had nothing saved, and the pane died with the runner.

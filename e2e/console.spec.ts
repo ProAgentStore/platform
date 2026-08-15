@@ -5530,3 +5530,119 @@ test.describe("mobile — the engine's refusal is a sentence, not a line in the 
 		await expect(page.locator("#inst-coding-engine-turn")).toHaveCount(0);
 	});
 });
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * mobile — the Coding banner stops telling an owner already running `pags up` to run it (#537)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * With machine A off and machine B running the runner, three readings are each truthful and
+ * disagree: `/runtime/status` says connected (B's socket), `/capture` says offline (the SESSION is
+ * stamped to A), and `resolveRunnerOnline` resolves that to offline by its documented
+ * capture-priority rule. The banner then collapsed all of it into a boolean and rendered the one
+ * remedy a boolean can carry.
+ *
+ * The fixture is the server's fixed answer, so this spec pins the RENDERING: the sentence reaches
+ * the screen, it names both machines, and no surface on the tab prescribes `pags up`. Same family
+ * as #524 / #530 / #531, and the last surface in it.
+ */
+test.describe("mobile — the Coding banner names the machine, not a command (#537)", () => {
+	const STAMPED = "RLs-MacBook-Air.local";
+	const LIVE = "Sergeys-Mac-mini.local";
+	const SENTENCE =
+		`This session is running on ${STAMPED}, which isn't connected. ${LIVE} is connected — ` +
+		`open the session again to move it to ${LIVE}, or start the runner on ${STAMPED}.`;
+
+	const coder = [{
+		id: "inst-1",
+		name: "Coder",
+		slug: "coder",
+		category: "code",
+		capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+	}];
+
+	async function openCodingTab(page: Page, width: number, capture: unknown) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, { instances: coder });
+		// The relay is UP — that is the whole point. An instance-level probe that said "offline"
+		// would make the old hardcoded sentence correct and the spec vacuous.
+		await page.route("**/v1/instances/inst-1/runtime/status", (route) => route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				runtime: { instanceId: "inst-1", status: "online", runnerNode: LIVE },
+				relay: { connected: true, runnerNode: LIVE, live: true },
+				attachment: { state: "attached", message: "Connected.", remedy: null },
+			}),
+		}));
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [{ id: "repo-1", name: "pas/platform", workdir: "~/dev/stores/pas/platform", cloneStatus: "ready" }] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/capture")) return json(capture);
+			// An ACTIVE session is what gives the capture its say — see resolveRunnerOnline.
+			if (url.includes("/sessions")) return json({ sessions: [{ id: "csess-1", repoId: "repo-1", status: "active", clientType: "claude" }] });
+			if (url.includes("/timeline")) return json({ chat: [] });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+	}
+
+	for (const width of [320, 390]) {
+		test(`the banner names both machines and offers no command at ${width}px`, async ({ page }) => {
+			await openCodingTab(page, width, {
+				pane: "",
+				runState: "offline",
+				alive: false,
+				ready: false,
+				runnerConnected: false,
+				attachment: { state: "session-machine-offline", message: SENTENCE, remedy: null },
+			});
+
+			// 20s, not the 10s default: the capture poll that learns this is on the PASSIVE tier
+			// (12s) until an engine is busy, and `usePolling` waits a full interval before its
+			// first call. The banner is therefore up to ~12s behind the fact — worth knowing, and
+			// not something to hide behind a shorter fixture.
+			const banner = page.locator("#inst-coding-offline");
+			await expect(banner).toBeVisible({ timeout: 20_000 });
+			await expect(banner).toContainText(STAMPED);
+			await expect(banner).toContainText(LIVE);
+			// THE regression. A boolean could only ever say this, and it is the thing the owner is
+			// already doing on the machine they are sitting at.
+			expect(await page.evaluate(() => document.body.innerText)).not.toContain("pags up");
+
+			// Two hostnames in one sentence is where a phone gets a horizontal scrollbar.
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("mobile — a machine that really is off still gets the command", async ({ page }) => {
+		// Not a blanket suppression: when the server says a command fixes it, the command is shown.
+		// Deleting `pags up` everywhere would be the opposite failure to the one this ticket is about.
+		await openCodingTab(page, 390, {
+			pane: "",
+			runState: "offline",
+			alive: false,
+			ready: false,
+			runnerConnected: false,
+			attachment: { state: "runner-offline", message: "The runner for this agent isn't running.", remedy: "pags up" },
+		});
+		const banner = page.locator("#inst-coding-offline");
+		await expect(banner).toBeVisible({ timeout: 20_000 });
+		await expect(banner).toContainText("The runner for this agent isn't running.");
+		await expect(banner.locator("code")).toHaveText("pags up");
+	});
+
+	test("mobile — a reachable session shows no banner at all", async ({ page }) => {
+		await openCodingTab(page, 390, { pane: "", runState: "idle", alive: true, ready: true, runnerConnected: true });
+		// Waited past the same poll the two above depend on, so this is "it never appeared" rather
+		// than "it had not appeared yet".
+		await page.waitForTimeout(14_000);
+		await expect(page.locator("#inst-coding-offline")).toHaveCount(0);
+	});
+});

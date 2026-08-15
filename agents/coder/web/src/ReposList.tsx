@@ -10,6 +10,7 @@ import { repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
 import { repoOpenAction } from "./repo-open";
 import { repoFreshnessLabel, staleListNotice, type RecheckReport } from "./repo-freshness";
+import { noticeSentence, type RunnerNotice } from "./runner-offline-notice";
 import Button from "./Button";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
@@ -24,7 +25,7 @@ type TimelineEntry = { type?: string; content?: string; text?: string };
  */
 export default function ReposList({
 	instanceId,
-	repos, sessions, repoStatuses, runnerOnline, recheck, onRepoRechecked,
+	repos, sessions, repoStatuses, runnerOnline, offlineNotice, recheck, onRepoRechecked,
 	singleRepo = false, showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
 	openRepo, openingRepoId, setSettingsRepoId,
 	repoLabel, getActiveSession, onWorkOnIssue, onOpenEngines,
@@ -34,6 +35,15 @@ export default function ReposList({
 	sessions: CodingSession[];
 	repoStatuses: Record<string, string>;
 	runnerOnline: boolean | null;
+	/**
+	 * What to SAY about being offline, already resolved (#537) — see ./runner-offline-notice.
+	 *
+	 * A sentence rather than the boolean beside it, because the boolean cannot distinguish "no
+	 * machine is connected" from "this session's machine is not the one that is", and those have
+	 * different remedies. `runnerOnline` stays: the repo ROWS still need the boolean to pick a
+	 * status phrase, and that is a different question from what the banner should say.
+	 */
+	offlineNotice: RunnerNotice | null;
 	/** What the last `GET …/coding/repos` managed to re-check, and why not when it did not (#440). */
 	recheck?: RecheckReport;
 	/** A single repo's row after an on-demand re-check, so the card updates without a full reload. */
@@ -174,7 +184,7 @@ export default function ReposList({
 					</div>
 					<div className="flex gap-1.5 shrink-0 items-center">
 						{(() => {
-							const a = repoOpenAction({ hasActiveSession: !!active, opening: openingRepoId === r.id, runnerOnline });
+							const a = repoOpenAction({ hasActiveSession: !!active, opening: openingRepoId === r.id, runnerOnline, offlineReason: noticeSentence(offlineNotice) });
 							return (
 								// No aria-label: the visible word IS the accessible name, and overriding it with
 								// "Open <repo>" would make the control unaddressable by the name a user (or a
@@ -252,10 +262,16 @@ export default function ReposList({
 	// CTA below: that one is about the machine, this one is about what the rows below are worth.
 	const staleNotice = staleListNotice(recheck, repos.filter((r) => r.workdir).length);
 
-	const offlineCta = runnerOnline === false && (
-		<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 mt-3 text-sm">
-			<b>Your machine isn't connected.</b> Start the runner:
-			<code className="block mt-1.5 bg-paper border border-line text-ink rounded-md p-1.5 text-sm">pags up</code>
+	// The sentence comes from the server, and the command block only appears when the server says a
+	// command fixes it (#537). It used to be one hardcoded remedy for four different situations —
+	// including the one where the owner is already running `pags up` on the machine that IS up, and
+	// the session is simply stamped to the machine that is not.
+	const offlineCta = offlineNotice && (
+		<div id="inst-coding-offline" className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 mt-3 text-sm">
+			<span className="break-words">{offlineNotice.text}</span>
+			{offlineNotice.command && (
+				<code className="block mt-1.5 bg-paper border border-line text-ink rounded-md p-1.5 text-sm">{offlineNotice.command}</code>
+			)}
 		</div>
 	);
 

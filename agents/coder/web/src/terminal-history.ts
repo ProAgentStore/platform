@@ -84,6 +84,15 @@ export interface TerminalPage {
 export interface TerminalState {
 	/** Is a machine running `pags up` reachable for this instance? From `/capture`. */
 	runnerConnected?: boolean;
+	/**
+	 * WHY it is not reachable — the server's own sentence, from `/capture`'s `attachment` (#537).
+	 *
+	 * The line below used to be hardcoded, and it was wrong in the case that matters most: a
+	 * session stamped to a machine that is off while ANOTHER machine is running `pags up` reads
+	 * `runnerConnected: false` truthfully, and "run `pags up` on the machine with this repo" is
+	 * then advice to do the thing already being done. Only the server can name both machines.
+	 */
+	offlineNotice?: string | null;
 	/** Does the runner still hold this session? From `/capture`. */
 	alive?: boolean;
 	/** `idle` | `thinking` | `responding`. From `/capture`. */
@@ -110,7 +119,10 @@ export interface TerminalState {
  * with a command attached.
  */
 export function terminalPlaceholder(s: TerminalState): string {
-	if (s.runnerConnected === false) return "Runner offline — run `pags up` on the machine with this repo, and output will appear here.";
+	if (s.runnerConnected === false)
+		return (s.offlineNotice || "").trim()
+			? `${s.offlineNotice} Output will appear here once it is attached.`
+			: "Runner offline — run `pags up` on the machine with this repo, and output will appear here.";
 	if (s.loadingHistory) return "Loading saved output…";
 	if (s.alive === false) return "This session isn't running on the runner — reopen it, or start a new one.";
 	if (s.runState && s.runState !== "idle") return "The engine is working — nothing has been captured yet. The first snapshot lands shortly.";
