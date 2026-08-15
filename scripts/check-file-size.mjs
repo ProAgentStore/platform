@@ -962,7 +962,18 @@ const PINS = {
 	// default response was 89 KB and a calling host refused it. The decision and its measurements
 	// live in lib/instance-tool-policy.ts, which is where a split would have put them; what is
 	// here is the route's own contract, which is what a reader of the route needs.
-	"workers/api/src/routes/tools.ts": 1079,
+	// +28 at #580: the two loop-read routes now ship the platform's own verdict — `health` and
+	// `waitNote`, from `runHealth`/`waitClause` — beside the raw columns. Four of those lines are
+	// the helper and the import; the rest is why, and the why is the whole ticket. A run parked for
+	// 4.35 hours reported `running` with a 3.5-minute-old timestamp on every surface, and the fix
+	// that split liveness from progress left the READING of the new fields on the agent-facing work
+	// report only. So an MCP client still got counters and had to judge for itself, which is
+	// measured (`work-report.ts:136-141`) to produce a model calling a mid-edit run stalled. The
+	// verdict is NOT computed here — that is the point of the raise: it is imported from the module
+	// that defines it, because two surfaces deriving health independently is the defect #580
+	// documents rather than the cure. A split would move a four-line decorator away from the two
+	// routes that are its only callers.
+	"workers/api/src/routes/tools.ts": 1107,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1135,7 +1146,10 @@ const PINS = {
 	// +5 at #569: the routes/tools.ts raise above (schemas became opt-in, so the listing fits a
 	// response) and this self-ref. Recorded on the way through a three-way rebase, where the two
 	// pin lines conflicted and the reasons were the only thing distinguishing them.
-	"scripts/check-file-size.mjs": 1219,
+	// +14 at #580: the routes/tools.ts raise above (the loop reads now carry `health`/`waitNote`)
+	// and this self-ref. The reason is longer than the code it accounts for on purpose — a raise
+	// whose note is shorter than "because it grew" is the ratchet reading as a formality.
+	"scripts/check-file-size.mjs": 1233,
 };
 
 /**

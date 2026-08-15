@@ -5,6 +5,8 @@ import { signSession } from "../lib/session.js";
 import { resetEraCache } from "../lib/connectors/mcp.js";
 import { toolRoutes } from "./tools.js";
 import { unfenceUntrusted } from "../lib/untrusted-fence.js";
+// Imported so the health expectations are COMPUTED by the shared function, never hand-written.
+import { runHealth, STALLED_AFTER_MS, waitClause } from "../lib/work-report.js";
 
 /**
  * Knowingly-partial test doubles, and the only `any` left in this file.
@@ -47,6 +49,8 @@ function testApp(
 		create?: (arg: unknown) => Promise<{ id: string }>;
 		runs?: unknown[];
 		loopCreate?: (arg: unknown) => Promise<{ id: string }>;
+		/** Columns to overlay on the `agent_loop_runs` fixture row (#580's liveness/park fields). */
+		loopRun?: Record<string, unknown>;
 		/** Rows in instance_mcp_consent for this instance (#262). */
 		mcpGrants?: Array<{ instance_id: string; user_id: string; endpoint: string; tool: string; created_at: string }>;
 		/** Connectors with write consent granted (#90). */
@@ -77,7 +81,13 @@ function testApp(
 								}
 								// Supervision (#183): the read-back after INSERT.
 								if (sql.includes("FROM agent_loop_runs")) {
-									return { run_id: "r1", user_id: "u1", instance_id: "i1", objective: "ship it", status: "running", stop_reason: null, detail: null, iteration: 2, max_iterations: 10, cancel_requested: 0, budget_id: "b1", started_at: 1, finished_at: null };
+									return {
+										run_id: "r1", user_id: "u1", instance_id: "i1", objective: "ship it", status: "running", stop_reason: null,
+										detail: null, iteration: 2, max_iterations: 10, cancel_requested: 0, budget_id: "b1", started_at: 1, finished_at: null,
+										// The 0127 columns (#580). Overridable so a test can drive the three health
+										// states; absent from the default row, exactly as a pre-0127 run reads.
+										...(opts.loopRun ?? {}),
+									};
 								}
 								if (sql.includes("FROM delegation_budgets")) {
 									return { id: "b1", user_id: "u1", root_instance_id: "i1", cost_micros_limit: 5000000, cost_micros_reserved: 0, cost_micros_spent: 0, delegations_limit: 50, delegations_used: 0, max_depth: 4, status: "open", exhausted_reason: null, exhausted_at_depth: null, created_at: "", updated_at: "" };
@@ -103,6 +113,15 @@ function testApp(
 							// pipeline_runs query, empty otherwise.
 							all: async () => {
 								if (sql.includes("FROM pipeline_runs")) return { results: opts.runs ?? [] };
+								// The loop LIST route (#580) — same fixture row the `.first()` branch above
+								// returns, so the list and the detail read cannot describe different runs.
+								if (sql.includes("FROM agent_loop_runs")) {
+									return {
+										results: opts.loopRun
+											? [{ run_id: "r1", user_id: "u1", instance_id: "i1", objective: "ship it", status: "running", stop_reason: null, detail: null, iteration: 2, max_iterations: 10, cancel_requested: 0, budget_id: "b1", started_at: 1, finished_at: null, ...opts.loopRun }]
+											: [],
+									};
+								}
 								if (sql.includes("instance_mcp_consent")) return { results: opts.mcpGrants ?? [] };
 								return { results: [] };
 							},
@@ -967,5 +986,100 @@ describe("POST /v1/instances/:id/mcp/test (connection diagnostics)", () => {
 			expect(body.resources.readEnabled).toBe(true);
 			expect(body.resources.detail).toMatch(/no per-item approval/);
 		});
+	});
+});
+
+/**
+ * The run record ships the platform's OWN verdict, not just the counters (#580 AC3).
+ *
+ * `fd1c323` split liveness, progress and a park into three fields. This is the half that gets the
+ * READING of them off the agent-facing work report and onto the surface an MCP client calls: a
+ * client used to receive `status:"running"`, two timestamps and an iteration counter, and had to
+ * decide for itself whether that was alright.
+ *
+ * That derivation is the defect. `work-report.ts:136-141` records a model reading "step 3/50 after
+ * 9 minutes" as a stall and telling the owner there was "nothing I can do", while the engine was
+ * mid-edit — and the intervention that invites destroys work that was progressing normally.
+ *
+ * Every expectation below is computed by calling the SHARED `runHealth`/`waitClause`, never by
+ * writing the expected string out by hand. That is the assertion: the route quotes the platform's
+ * verdict rather than growing a second one that can drift from it.
+ */
+describe("a loop run carries its health verdict (#580)", () => {
+	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
+	const NOW = 1_800_000_000_000;
+
+	// The route calls `Date.now()` and so does the expectation, so the clock is frozen: otherwise
+	// `waitClause`'s "expected to resume in …" is computed against two different instants and the
+	// equality below would be testing the scheduler rather than the route.
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** The shape `runHealth`/`waitClause` read, matching what `getLoopRun` maps a row into. */
+	const view = (over: Record<string, unknown>) =>
+		fake({ status: "running", startedAt: NOW, lastProgressAt: null, lastAliveAt: null, waitingUntil: null, waitingReason: null, ...over });
+
+	async function readRun(loopRun: Record<string, unknown>) {
+		const { app, env } = testApp({ loopRun });
+		const res = await app.request("/v1/instances/i1/loop/r1", { headers: { Authorization: `Bearer ${await tok()}` } }, env);
+		expect(res.status).toBe(200);
+		return jsonBody(res);
+	}
+
+	it("reports `working` for a run whose orchestrator is ticking", async () => {
+		const body = await readRun({ started_at: NOW - 60_000, last_alive_at: NOW - 30_000, last_progress_at: NOW - 30_000 });
+		// G1 — the fixture reached the route intact, or the verdict below describes a row that is
+		// not the one under test.
+		expect(body.runId).toBe("r1");
+		expect(body.lastAliveAt).toBe(NOW - 30_000);
+		expect(body.health).toBe(runHealth(view({ startedAt: NOW - 60_000, lastAliveAt: NOW - 30_000, lastProgressAt: NOW - 30_000 }), NOW));
+		expect(body.health).toBe("working");
+		expect(body.waitNote).toBeNull();
+	});
+
+	it("reports `working`, NOT stalled, when the heartbeat is fresh and progress is old", async () => {
+		// The inference this surface must never make. A fresh heartbeat beside a stale advance is
+		// equally a long engine turn, a park, and a genuine stall — reading it as the third is what
+		// told an owner a mid-edit run was stuck. Progress is a fact here; it is not a diagnosis.
+		const row = { started_at: NOW - 3_600_000, last_alive_at: NOW - 20_000, last_progress_at: NOW - 3_000_000 };
+		const body = await readRun(row);
+		expect(body.lastProgressAt).toBe(NOW - 3_000_000); // reported, plainly
+		expect(body.health).toBe("working");
+	});
+
+	it("reports `waiting` with the reason for a deliberately parked run", async () => {
+		const row = { started_at: NOW - 3_600_000, last_alive_at: NOW - 3_600_000, waiting_reason: "engine_limit", waiting_until: NOW + 600_000 };
+		const body = await readRun(row);
+		const expected = view({ startedAt: NOW - 3_600_000, lastAliveAt: NOW - 3_600_000, waitingReason: "engine_limit", waitingUntil: NOW + 600_000 });
+		// A park OUTRANKS the heartbeat test: this run has not ticked for an hour and that is
+		// correct, so "stalled" would be as wrong as a bare "running".
+		expect(body.health).toBe(runHealth(expected, NOW));
+		expect(body.health).toBe("waiting");
+		expect(body.waitNote).toBe(waitClause(expected, NOW));
+		expect(String(body.waitNote)).toContain("WAITING, not stalled and not working");
+	});
+
+	it("reports `stalled` when nothing has ticked at all", async () => {
+		const row = { started_at: NOW - 3_600_000, last_alive_at: NOW - STALLED_AFTER_MS - 60_000 };
+		const body = await readRun(row);
+		expect(body.health).toBe(runHealth(view({ startedAt: NOW - 3_600_000, lastAliveAt: NOW - STALLED_AFTER_MS - 60_000 }), NOW));
+		expect(body.health).toBe("stalled");
+		expect(body.waitNote).toBeNull();
+	});
+
+	it("carries the verdict on the LIST route too, so the two cannot disagree", async () => {
+		// #580's original AC3 is that two surfaces must not disagree about one run. A verdict on
+		// the detail route alone would leave the list — which is what a caller with no run id
+		// reads — still shipping bare counters.
+		const { app, env } = testApp({ loopRun: { started_at: NOW - 3_600_000, last_alive_at: NOW - 3_600_000, waiting_reason: "human" } });
+		const res = await app.request("/v1/instances/i1/loop", { headers: { Authorization: `Bearer ${await tok()}` } }, env);
+		const listed = rows((await jsonBody(res)).runs);
+		expect(listed.length).toBeGreaterThan(0);
+		for (const run of listed) expect(run).toHaveProperty("health");
 	});
 });

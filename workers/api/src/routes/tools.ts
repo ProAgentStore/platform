@@ -35,6 +35,8 @@ import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js"
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
 import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+// The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
+import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
@@ -1020,11 +1022,37 @@ toolRoutes.put("/:id/loop-presets", async (c) => {
 	return c.json(saved);
 });
 
+/**
+ * The run record plus the platform's OWN verdict on it (#580 AC3).
+ *
+ * `fd1c323` split liveness, progress and a park into three fields that can no longer contradict
+ * each other. What it did not do is send the READING of them anywhere but the agent-facing work
+ * report — so an MCP client still received `status:"running"`, two timestamps and an iteration
+ * counter, and had to derive "is this alright" itself. That derivation is the defect, not the
+ * fields: `work-report.ts:136-141` records a model reading "step 3/50 after 9 minutes" as a stall
+ * and telling the owner there was "nothing I can do" while the engine was mid-edit, and the
+ * intervention that invites destroys work that was progressing normally.
+ *
+ * So the verdict is computed ONCE, by the module that defines it, and shipped. Two surfaces
+ * deriving health independently is precisely what #580 documents; `runHealth` and `waitClause` are
+ * exported for this, and re-implementing either here would recreate the disagreement.
+ *
+ * The raw columns stay alongside it. The verdict is the answer; the fields are the evidence, and a
+ * caller that wants to check the arithmetic must be able to.
+ */
+function withHealth<T extends Parameters<typeof runHealth>[0]>(run: T, now: number) {
+	// `waitClause` returns null unless the run is running AND parked, so `waitNote` is present
+	// exactly when there is something to say — never a "nothing is wrong" filler line.
+	return { ...run, health: runHealth(run, now), waitNote: waitClause(run, now) };
+}
+
 toolRoutes.get("/:id/loop", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	return c.json({ runs: await listLoopRuns(c.env, session.uid, instanceId) });
+	const now = Date.now();
+	const runs = await listLoopRuns(c.env, session.uid, instanceId);
+	return c.json({ runs: runs.map((run) => withHealth(run, now)) });
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {
@@ -1032,7 +1060,7 @@ toolRoutes.get("/:id/loop/:runId", async (c) => {
 	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
 	const run = await getLoopRun(c.env, session.uid, c.req.param("runId"));
 	if (!run) throw new HttpError(404, "loop run not found");
-	return c.json(run);
+	return c.json(withHealth(run, Date.now()));
 });
 
 toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {

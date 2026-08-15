@@ -223,28 +223,36 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	// WHAT THIS TOOL DOES NOT SPEAK FOR (#580 AC3).
 	//
-	// `status` and `lastProgressAt` are the ORCHESTRATOR's record, and neither is a statement about
-	// the engine. `lastProgressAt` in particular is refreshed by a deliberate heartbeat
-	// (`workflows/coding-session.ts`'s `tick` → `recordIteration`) whose stated job is to stay
-	// recent so `sweepStaleRuns` does not close a run that is legitimately parked waiting on a
-	// human. Correct for that case; fatal for reading it as liveness. Measured 2026-08-15: run
-	// `70ea298e` reported `running` with a `lastProgressAt` 3.5 minutes old for 4.35 HOURS, on
-	// iteration 1 of 30, while the engine had been dead since one second after it started.
+	// `status:"running"` hid three states, and until migration 0127 the record could not tell them
+	// apart. Measured 2026-08-15: run `70ea298e` reported `running` with a `lastProgressAt` 3.5
+	// minutes old for 4.35 HOURS, on iteration 1 of 30, while its engine had been dead since one
+	// second after it started — because the pause tick refreshed that column on a timer.
 	//
-	// `lib/work-report.ts:84-88` already states this exactly — "What it deliberately does NOT
-	// claim: that the ENGINE is working … Asserting 'engine: working' from this column would
-	// replace a false stall with a false all-clear" — and the defect is that the caveat never left
-	// that one surface. It does now, in the description, which is where a model reads it.
+	// `fd1c323` split the fact into three that cannot contradict each other: `lastAliveAt`
+	// (the orchestrator's heartbeat), `lastProgressAt` (an actual advance, now written only when
+	// the iteration moves), and `waitingReason`/`waitingUntil` (a deliberate park). The route now
+	// also sends `health` and `waitNote`, computed by `runHealth`/`waitClause` — the platform's own
+	// verdict, so this surface quotes it rather than deriving a second one. Two surfaces answering
+	// "is this alright" independently is the defect #580 documents, not the cure.
 	//
-	// The DESCRIPTION rather than the payload, deliberately. This tool is generic: it serves apply
-	// agents, pipeline agents and chat agents, none of which have an engine to report a `runState`
-	// for, and joining a run to a coding session to fetch one would make every caller pay a runner
-	// round trip for a field that is null for most of them. Naming the tool that does answer it is
-	// the honest version and is what the acceptance criterion allows. Whether the RUN RECORD itself
-	// grows a truthful stall signal is #580's AC1/AC2, on the API side.
+	// WHAT THE DESCRIPTION MUST STILL NOT SAY. `health` reads LIVENESS. A fresh heartbeat with a
+	// stale progress timestamp is ALSO what a healthy long engine turn and a legitimate park look
+	// like, so "liveness fresh + progress stale ⇒ stalled" is an inference this surface must not
+	// re-introduce — `work-report.ts:136-141` records a model making exactly it and telling the
+	// owner there was "nothing I can do" while the engine was mid-edit. Progress is reported as a
+	// fact; it is never a diagnosis.
+	//
+	// And none of the four speaks for the ENGINE. `work-report.ts:146` is the reference — "What it
+	// deliberately does NOT claim: that the ENGINE is working … Asserting 'engine: working' from
+	// this column would replace a false stall with a false all-clear." The engine's own state is
+	// `runState`, behind `/capture`, which is a different tool and is named below.
+	//
+	// The DESCRIPTION rather than a joined `runState` field, deliberately: this tool is generic and
+	// serves apply, pipeline and chat agents, none of which have an engine, so fetching one would
+	// make every caller pay a runner round trip for a field null for most of them.
 	server.tool(
 		"check_instance_loop",
-		"Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance. This reports the ORCHESTRATOR, not the engine: `status:\"running\"` means the run record is open, and `lastProgressAt` is a heartbeat that keeps a parked run from being swept — neither is evidence that anything is still working, and a run whose engine died has been observed reporting both for hours. For what the engine is actually doing, use coding_timeline (its `run_state`, plus the events since your last poll) or coding_session_capture.",
+		"Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance. Read `health` first — it is the platform's own verdict and it has three values: `working` (the orchestrator is ticking; it may legitimately be many minutes into ONE instruction), `waiting` (deliberately parked — `waitNote` says what for and until when), `stalled` (nothing has ticked and the row will say `running` forever). Quote it rather than deriving your own from the timestamps: `lastAliveAt` is the orchestrator's heartbeat and `lastProgressAt` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its `run_state`, plus the events since your last poll) or coding_session_capture.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

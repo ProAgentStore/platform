@@ -165,8 +165,9 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		"coding_loop_status",
 		// Same caveat as `check_instance_loop`, and for the same measured reason (#580) — the two
 		// tools call the SAME endpoint, so a warning on only one of them is a warning a caller can
-		// miss by picking the other name.
-		"Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs. Reads the server's run record, so it is correct across reconnects and across clients — but the run record is the ORCHESTRATOR's, not the engine's: `status:\"running\"` means the run is open and `lastProgressAt` is a heartbeat that keeps a parked run from being swept, so neither says the engine is still working. For that, read coding_timeline (`run_state` plus the events since your last poll) or coding_session_capture.",
+		// miss by picking the other name. Read that registration's comment for why `health` is
+		// quoted rather than re-derived, and for the inference this wording must not re-introduce.
+		"Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs. Reads the server's run record, so it is correct across reconnects and across clients. Read `health` first — `working` | `waiting` (with `waitNote` saying what for) | `stalled` — it is the platform's own verdict; do not derive one from `lastAliveAt` (the orchestrator's heartbeat) and `lastProgressAt` (the last actual advance), because a fresh heartbeat beside a stale advance is equally a long engine turn, a park and a stall. And none of it speaks for the ENGINE: for that read coding_timeline (`run_state` plus the events since your last poll) or coding_session_capture.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
