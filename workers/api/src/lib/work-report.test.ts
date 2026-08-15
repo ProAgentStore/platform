@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt } from "./work-report.js";
+import { STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
 import type { LoopRunView } from "./agent-loop-store.js";
 import type { TerminalView } from "./terminal-label.js";
 
@@ -20,6 +20,13 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		startedAt: NOW - 60_000,
 		finishedAt: NOW - 30_000,
 		lastProgressAt: NOW - 40_000,
+		// The default run is HEALTHY: liveness tracks progress and nothing is parked. Every case
+		// below that means otherwise says so, which keeps the three states (#580) explicit per case
+		// rather than implied by an omission.
+		lastAliveAt: NOW - 40_000,
+		waitingUntil: null,
+		waitingReason: null,
+		interruptions: 0,
 		delegatedBy: null,
 		sessionId: null,
 		...over,
@@ -97,9 +104,12 @@ describe("describeLoopRun", () => {
 		expect(s).not.toMatch(/engine/i);
 	});
 
+	/** A run that has neither ticked nor advanced since `ms` ago — the shape of a dead Workflow. */
+	const silentFor = (ms: number) => run({ status: "running", finishedAt: null, lastProgressAt: NOW - ms, lastAliveAt: NOW - ms });
+
 	it("#459 — a finished run makes no liveness claim in either direction", () => {
 		for (const status of ["completed", "failed", "cancelled"]) {
-			const s = describeLoopRun(run({ status, lastProgressAt: NOW - STALLED_AFTER_MS - 1 }), NOW);
+			const s = describeLoopRun(run({ ...silentFor(STALLED_AFTER_MS + 1), status, finishedAt: NOW - 30_000 }), NOW);
 			expect(s, status).not.toContain("stalled");
 			expect(s, status).not.toContain("STALLED");
 			expect(s, status).not.toContain("has been running");
@@ -110,21 +120,31 @@ describe("describeLoopRun", () => {
 		// A Workflow that dies mid-step leaves status='running' forever, so "running" alone is not
 		// evidence anything is happening — reporting it as live would be the same over-claim in a
 		// new place.
-		const s = describeLoopRun(run({ status: "running", finishedAt: null, lastProgressAt: NOW - STALLED_AFTER_MS - 1 }), NOW);
-		expect(s).toContain("STALLED");
+		expect(describeLoopRun(silentFor(STALLED_AFTER_MS + 1), NOW)).toContain("STALLED");
 	});
 
 	it("a run that just reported progress is plainly running", () => {
-		const s = describeLoopRun(run({ status: "running", finishedAt: null, lastProgressAt: NOW - 1000 }), NOW);
+		const s = describeLoopRun(run({ status: "running", finishedAt: null, lastProgressAt: NOW - 1000, lastAliveAt: NOW - 1000 }), NOW);
 		expect(s).toContain("running");
 		expect(s).not.toContain("STALLED");
+	});
+
+	it("#580 — a run mid-instruction is NOT stalled just because the instruction is long", () => {
+		// The behaviour change, stated as a case. `lastProgressAt` counts INSTRUCTIONS, and one
+		// instruction is a whole engine turn: reading files, editing, running a test suite. Before
+		// 0127 that was the only column, so a healthy 20-minute step crossed the 15-minute line and
+		// the report told the owner the run had probably died — #459's own incident, re-armed.
+		// Liveness is what separates a long step from a dead orchestrator, and only liveness.
+		const longStep = run({ status: "running", finishedAt: null, lastProgressAt: NOW - 4 * 60 * 60_000, lastAliveAt: NOW - 30_000 });
+		expect(isStalled(longStep, NOW)).toBe(false);
+		expect(describeLoopRun(longStep, NOW)).toContain("NOT stalled");
 	});
 
 	it("#459 — a run one second under the threshold is NOT stalled; one second over it is", () => {
 		// The boundary is the whole claim. `isStalled` is the platform's verdict and the prompt now
 		// tells the agent to quote it, so the report and the predicate must never disagree.
-		const under = run({ status: "running", finishedAt: null, lastProgressAt: NOW - STALLED_AFTER_MS + 1000 });
-		const over = run({ status: "running", finishedAt: null, lastProgressAt: NOW - STALLED_AFTER_MS - 1000 });
+		const under = silentFor(STALLED_AFTER_MS - 1000);
+		const over = silentFor(STALLED_AFTER_MS + 1000);
 		expect(isStalled(under, NOW)).toBe(false);
 		expect(describeLoopRun(under, NOW)).toContain("NOT stalled");
 		expect(isStalled(over, NOW)).toBe(true);
@@ -133,13 +153,91 @@ describe("describeLoopRun", () => {
 		expect(describeLoopRun(over, NOW)).not.toContain("NOT stalled");
 	});
 
-	it("falls back to startedAt when a run has never reported progress", () => {
-		expect(isStalled(run({ status: "running", lastProgressAt: null, startedAt: NOW - STALLED_AFTER_MS - 1 }), NOW)).toBe(true);
-		expect(isStalled(run({ status: "running", lastProgressAt: null, startedAt: NOW - 1000 }), NOW)).toBe(false);
+	it("falls back through progress to startedAt when a run has never ticked", () => {
+		// A pre-0127 row has a null `lastAliveAt`, and a run that died before its first tick has one
+		// too. Absence must never read as death — it reads as whatever the older columns say.
+		const never = (ms: number) => run({ status: "running", lastProgressAt: null, lastAliveAt: null, startedAt: NOW - ms });
+		expect(isStalled(never(STALLED_AFTER_MS + 1), NOW)).toBe(true);
+		expect(isStalled(never(1000), NOW)).toBe(false);
+		// …and through `lastProgressAt` when only THAT was written, which is every in-flight run at
+		// the moment 0127 deploys.
+		expect(isStalled(run({ status: "running", lastProgressAt: NOW - 1000, lastAliveAt: null }), NOW)).toBe(false);
+		expect(isStalled(run({ status: "running", lastProgressAt: NOW - STALLED_AFTER_MS - 1, lastAliveAt: null }), NOW)).toBe(true);
 	});
 
 	it("only a running run can be stalled", () => {
-		expect(isStalled(run({ status: "completed", lastProgressAt: 0 }), NOW)).toBe(false);
+		expect(isStalled(run({ status: "completed", lastProgressAt: 0, lastAliveAt: 0 }), NOW)).toBe(false);
+	});
+
+	describe("#580 — a parked run is neither working nor stalled, and says which", () => {
+		/**
+		 * Run 70ea298e, as the record held it: `status:"running"`, `iteration:1/30`, a fresh
+		 * timestamp, 4.35 hours after it started, while the engine sat idle on "You've hit your
+		 * weekly limit · resets Aug 17 at 4pm".
+		 *
+		 * Reconstructed with the columns 0127 adds: the heartbeat IS fresh (the five-minute
+		 * engine-wait tick was beating), progress is 4.35h stale (nothing advanced), and the park is
+		 * now named. Nothing about the run's behaviour was wrong — `coding-wait.ts` permits a
+		 * six-hour park — and no field could say so.
+		 */
+		const reported = run({
+			status: "running",
+			finishedAt: null,
+			stopReason: null,
+			detail: null,
+			iteration: 1,
+			maxIterations: 30,
+			startedAt: NOW - 4.35 * 60 * 60_000,
+			lastProgressAt: NOW - 4.35 * 60 * 60_000,
+			lastAliveAt: NOW - 3.5 * 60_000,
+			waitingReason: "engine_limit",
+			waitingUntil: NOW + 60 * 60_000,
+		});
+
+		it("classifies it as waiting", () => {
+			expect(runHealth(reported, NOW)).toBe("waiting");
+			expect(isStalled(reported, NOW)).toBe(false);
+		});
+
+		it("names what it is waiting for and when it should resume", () => {
+			const s = describeLoopRun(reported, NOW);
+			expect(s).toContain("PARKED");
+			expect(s).toContain("usage limit");
+			expect(s).toContain("1h");
+		});
+
+		it("does NOT also say 'NOT stalled', which is the all-clear that hid this", () => {
+			// Both sentences are true of a parked run, and printing them together is what the owner
+			// read as "it is fine and working". The park clause replaces the reassurance.
+			expect(describeLoopRun(reported, NOW)).not.toContain("NOT stalled");
+		});
+
+		it("a park OUTRANKS a dead heartbeat, so a mid-resume run is not reported as failed", () => {
+			// #583: a run interrupted by our own deploy is parked with nothing ticking BY DESIGN
+			// while Cloudflare replays its journal. Reading that silence as death would report a
+			// recovery in progress as a failure.
+			const resuming = run({
+				status: "running",
+				finishedAt: null,
+				lastAliveAt: NOW - 60 * 60_000,
+				lastProgressAt: NOW - 60 * 60_000,
+				waitingReason: "platform_interrupt",
+				waitingUntil: null,
+			});
+			expect(runHealth(resuming, NOW)).toBe("waiting");
+			expect(describeLoopRun(resuming, NOW)).toContain("platform update");
+		});
+
+		it("a human handoff is a park too, and says so in the second person", () => {
+			const handoff = run({ status: "running", finishedAt: null, waitingReason: "human", waitingUntil: null, lastAliveAt: NOW - 60_000 });
+			expect(describeLoopRun(handoff, NOW)).toContain("waiting for YOU");
+		});
+
+		it("says nothing about the engine — the caveat this file has always carried", () => {
+			// `waitClause` describes the ORCHESTRATOR's own state. The live `runState` is behind
+			// `/capture`; claiming it from a run row is the false all-clear facing the other way.
+			expect(describeLoopRun(reported, NOW)).not.toMatch(/engine:/i);
+		});
 	});
 
 	it("surfaces a pending cancel", () => {

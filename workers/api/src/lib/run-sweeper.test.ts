@@ -61,13 +61,18 @@ describe("sweepStaleRuns — a run nobody will ever close", () => {
 		expect(u?.sql).toContain("status = 'interrupted'");
 	});
 
-	it("measures loop-run quiet from last_progress_at, falling back to started_at", async () => {
+	it("measures loop-run quiet from LIVENESS, falling back to progress and then to started_at", async () => {
 		// The SAME rule `summarizeSubordinates` uses. If the sweeper and the supervisor disagreed
 		// about what "quiet" means, a run could read as fine to one and dead to the other.
+		//
+		// `last_alive_at` first since 0127 (#580): this predicate is the reason the pause tick wrote
+		// `last_progress_at` on a timer, which is what made a parked run's progress timestamp lie.
+		// The fallback chain is what keeps a pre-0127 row behaving exactly as it did.
+		// `run-liveness.test.ts` asserts the EFFECT of this on real rows; this asserts its shape.
 		const { env, selects } = stubEnv({ loop: [] });
 		await sweepStaleRuns(env, NOW);
 		const s = selects.find((x) => x.sql.includes("agent_loop_runs"));
-		expect(s?.sql).toContain("COALESCE(last_progress_at, started_at)");
+		expect(s?.sql).toContain("COALESCE(last_alive_at, last_progress_at, started_at)");
 		expect(s?.args[0]).toBe(NOW - STALE_RUN_MS);
 	});
 

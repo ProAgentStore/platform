@@ -54,12 +54,20 @@ export async function sweepStaleRuns(env: Env, now: number = Date.now()): Promis
 }
 
 async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<number> {
-	// `last_progress_at` is null for a run that never reported one (pre-0067 rows, and any run that
-	// died before its first iteration) — fall back to when it started, which is the same rule
-	// `summarizeSubordinates` uses so the sweeper and the supervisor agree on what "quiet" means.
+	// LIVENESS, not progress (#580). This predicate read `last_progress_at`, which is why
+	// `coding-session.ts`'s pause tick had to write that column on a timer — the heartbeat existed
+	// to defeat this WHERE clause, and defeating it also destroyed the platform's only stall signal.
+	// 0127 gives the heartbeat its own column, so the two requirements stop fighting: a parked run
+	// keeps `last_alive_at` fresh and survives here exactly as it did before, while
+	// `last_progress_at` is free to go stale and mean something.
+	//
+	// The COALESCE chain is the compatibility story and the null story at once: `last_alive_at` is
+	// null on every row written before 0127 and on a run that died before its first tick, so it
+	// falls back to the column this used to read and then to `started_at` — the same rule
+	// `summarizeSubordinates` uses, so the sweeper and the supervisor still agree on "quiet".
 	const { results } = await env.DB.prepare(
 		`SELECT run_id, instance_id, user_id, session_id FROM agent_loop_runs
-		  WHERE status = 'running' AND COALESCE(last_progress_at, started_at) < ?1
+		  WHERE status = 'running' AND COALESCE(last_alive_at, last_progress_at, started_at) < ?1
 		  LIMIT ?2`,
 	)
 		.bind(cutoff, SWEEP_LIMIT)

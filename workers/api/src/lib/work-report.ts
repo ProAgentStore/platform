@@ -61,11 +61,73 @@ function ago(ms: number): string {
  */
 export const STALLED_AFTER_MS = 15 * 60 * 1000;
 
+/**
+ * What a `running` row actually means right now (#580).
+ *
+ * `status` has three states hiding inside it, and until 0127 the record could only express two of
+ * them — badly. The distinction is not cosmetic: each licenses a different sentence to the owner and
+ * a different intervention, and the two wrong ones are both destructive.
+ *
+ *   working  — the orchestrator is ticking. It may be many minutes into ONE instruction; a large
+ *              refactor legitimately is. Nothing is wrong and nothing is wanted.
+ *   waiting  — it is deliberately parked, until a stated instant or a stated event. This is the
+ *              state run 70ea298e was in for 4.35 hours while every surface said "running".
+ *   stalled  — nothing has ticked. The Workflow is gone and the row will say `running` forever.
+ */
+export type RunHealth = "working" | "waiting" | "stalled";
+
+/**
+ * Classify a run, from the run record alone.
+ *
+ * ── Why the test is LIVENESS and not progress
+ *
+ * #580's own comment proposed classifying a run stalled when "liveness is fresh but progress is
+ * stale". That signature is real, and it is also produced by the two healthiest things a coding run
+ * does: one long engine turn (ten minutes of editing and a test suite, with no new instruction), and
+ * a deliberate park. Calling either of them stalled is #459 exactly — a Lead read "step 3/50 after 9
+ * minutes" as a stuck progress bar, told the owner there was "nothing I can do", and the
+ * intervention that invites destroys work that was progressing normally.
+ *
+ * So progress-staleness is reported as a FACT (how long the current instruction has been running,
+ * which `describeLoopRun` already prints) and never as a verdict, while the verdict is read off the
+ * two signals that can actually carry it: the heartbeat, and the park.
+ *
+ * The heartbeat is what makes this stronger than what it replaces rather than merely different.
+ * Before 0127 the only column was written per INSTRUCTION, so a healthy long turn crossed the 15
+ * minute line and read as stalled; `last_alive_at` is written by the pause tick and by the capture
+ * poll, at most a minute apart, so silence on it is evidence rather than a slow step.
+ */
+export function runHealth(run: LoopRunView, now: number): RunHealth {
+	if (run.status !== "running") return "working";
+	// A park OUTRANKS the heartbeat test, and deliberately so: a run parked on a platform
+	// interruption (#583) is mid-resume and has nothing ticking BY DESIGN, so reading its silence as
+	// death would report a recovery in progress as a failure.
+	if (run.waitingReason) return "waiting";
+	const last = run.lastAliveAt ?? run.lastProgressAt ?? run.startedAt;
+	return now - last > STALLED_AFTER_MS ? "stalled" : "working";
+}
+
 /** Is this run's `running` status believable right now? */
 export function isStalled(run: LoopRunView, now: number): boolean {
-	if (run.status !== "running") return false;
-	const last = run.lastProgressAt ?? run.startedAt;
-	return now - last > STALLED_AFTER_MS;
+	return runHealth(run, now) === "stalled";
+}
+
+/** The clause a parked run gets instead of a stall or a false all-clear. */
+export function waitClause(run: LoopRunView, now: number): string | null {
+	// A FINISHED run makes no liveness claim in either direction (#459) — and `finishLoopRun` does
+	// not clear the park columns, so a run that ended while parked still carries them. Reading them
+	// on a closed row would announce a wait that is over.
+	if (run.status !== "running" || !run.waitingReason) return null;
+	const why =
+		run.waitingReason === "engine_limit"
+			? "the coding CLI's own usage limit has to reset"
+			: run.waitingReason === "human"
+				? "it is waiting for YOU to answer a handoff"
+				: "a platform update interrupted it and it is being resumed";
+	const until = run.waitingUntil && run.waitingUntil > now ? `, expected to resume in ${ago(run.waitingUntil - now).replace(" ago", "")}` : "";
+	// Said out loud, because the whole defect is that this state was indistinguishable from working:
+	// nothing has advanced and that is CORRECT, so neither "stalled" nor a bare "running" is honest.
+	return `WAITING, not stalled and not working — ${why}${until}. No instruction has advanced since it parked, which is expected`;
 }
 
 /**
@@ -81,13 +143,20 @@ export function isStalled(run: LoopRunView, now: number): boolean {
  * `isStalled` is the platform's answer to "is this run stuck?". This makes it say the NEGATIVE
  * answer out loud, so the agent has a verdict to quote instead of a counter to interpret.
  *
- * What it deliberately does NOT claim: that the ENGINE is working. `lastProgressAt` is the
- * orchestrator's last recorded iteration, not the engine's last output — the live `runState` lives
- * behind `/capture`, on the coding surface, and `work-report.ts` describes loop runs that may have
- * no engine at all. Asserting "engine: working" from this column would replace a false stall with
- * a false all-clear, which is the same defect facing the other way.
+ * What it deliberately does NOT claim: that the ENGINE is working. `lastAliveAt` is the
+ * ORCHESTRATOR's heartbeat and `lastProgressAt` its last advance — neither is the engine's last
+ * output. The live `runState` lives behind `/capture`, on the coding surface, and `work-report.ts`
+ * describes loop runs that may have no engine at all. Asserting "engine: working" from these columns
+ * would replace a false stall with a false all-clear, which is the same defect facing the other way.
+ *
+ * #580 measured that gap from the other end: `check_instance_loop` reported `running` with a fresh
+ * timestamp at the same moment `coding_session_capture.runState` said `idle` and the pane showed the
+ * engine's own limit message. The caveat written here was correct and was confined to this file.
  */
-const NOT_STALLED = `NOT stalled — a run counts as stalled only after ${Math.round(STALLED_AFTER_MS / 60_000)}m with no progress, and this one is inside that window`;
+// The word "engine" is deliberately absent from this sentence: #465's guards assert that a run with
+// no live capture renders NO engine clause by matching /engine/i over the whole report, and a
+// caveat that names it here would satisfy that match and quietly disarm them.
+const NOT_STALLED = `NOT stalled — a run counts as stalled only after ${Math.round(STALLED_AFTER_MS / 60_000)}m with nothing ticking, and this one is inside that window`;
 
 /**
  * The engine clause from a live terminal capture (#465).
@@ -131,8 +200,14 @@ export function engineClause(view: TerminalView | null | undefined): string | nu
  */
 export function describeLoopRun(run: LoopRunView, now: number = Date.now(), timeZone?: string, engineView?: TerminalView | null): string {
 	const parts: string[] = [];
-	const stalled = isStalled(run, now);
-	const status = stalled ? "running but STALLED (no progress reported recently — it may have died)" : run.status;
+	const health = runHealth(run, now);
+	const stalled = health === "stalled";
+	const status =
+		health === "stalled"
+			? "running but STALLED (nothing has ticked recently — it may have died)"
+			: health === "waiting"
+				? "running but PARKED (deliberately waiting — see below)"
+				: run.status;
 	parts.push(`run ${run.runId}: ${status}`);
 	parts.push(`objective: ${run.objective}`);
 	// "step N/M" read as a progress bar and is not one: it counts the instructions the orchestrator
@@ -142,7 +217,13 @@ export function describeLoopRun(run: LoopRunView, now: number = Date.now(), time
 	// it with the elapsed time IN the current step leaves a long step legible as a long step.
 	const inStep = run.status === "running" ? ` (this one has been running ${ago(now - (run.lastProgressAt ?? run.startedAt)).replace(" ago", "")})` : "";
 	parts.push(`instruction ${run.iteration} of up to ${run.maxIterations}${inStep}`);
-	if (!stalled && run.status === "running") parts.push(NOT_STALLED);
+	// The park clause REPLACES the not-stalled clause rather than joining it (#580). Both are true
+	// of a parked run and printing them together is what produced the reported confusion: "NOT
+	// stalled" beside a four-hour-old instruction reads as an all-clear, which is the same over-claim
+	// facing the other way.
+	const waiting = waitClause(run, now);
+	if (waiting) parts.push(waiting);
+	else if (!stalled && run.status === "running") parts.push(NOT_STALLED);
 	// #465: the engine clause is only present for a running coding run with a resolved capture.
 	// Absent for non-coding runs and for completed/failed runs (the engine is no longer running).
 	if (run.status === "running") {
