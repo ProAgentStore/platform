@@ -68,7 +68,12 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			if (!sessionToken) return authRequired();
 			const qs = [allowed_only ? "allowed=true" : "", schemas ? "schemas=true" : ""].filter(Boolean).join("&");
 			const data = await authedCall(`/v1/instances/${instance_id}/tools${qs ? `?${qs}` : ""}`, sessionToken, {}, env);
-			return jsonText(data);
+			// Compact (#569). The API body for a 104-row instance is ~54 KB; pretty-printing it here
+			// added ~22% and took the WIRE response to 66,042 bytes — still over the calling host's
+			// limit that this issue was filed about, after the payload had already been budgeted
+			// down. Measured in production, which is the only reason it was noticed at all: every
+			// test asserted the API's compact body, not what MCP actually sends.
+			return jsonText(data, { compact: true });
 		},
 	);
 

@@ -20,8 +20,24 @@ export function authRequired(): TextResult {
 	return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
 }
 
-export function jsonText(value: unknown): TextResult {
-	return text(JSON.stringify(value, null, 2));
+/**
+ * JSON as a text result. Indented by default — the output is read by people as often as by
+ * models, and two spaces is what makes a nested board or trace legible.
+ *
+ * `compact` drops the indentation, and exists because indentation is not free at scale (#569).
+ * `list_instance_tools` on a 104-row instance measured **66,042 bytes** pretty-printed on the
+ * wire against **53,970** compact: the indentation alone is ~22%, and it was the difference
+ * between fitting a calling host's response limit and being refused by it. That was measured in
+ * production AFTER the payload itself had been budgeted down, which is the point — the tool had
+ * already dropped every schema it could and still did not fit.
+ *
+ * Opt-in per call site rather than a size threshold inside this function: a threshold would
+ * change the output format of any of the other 134 tools the moment their data grew, and none
+ * of them has been measured. If a second tool hits a limit, that is the moment to reconsider a
+ * general rule — not before.
+ */
+export function jsonText(value: unknown, opts?: { compact?: boolean }): TextResult {
+	return text(opts?.compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
 }
 
 /** A result that carries BOTH the JSON text every client has always read and the parsed
