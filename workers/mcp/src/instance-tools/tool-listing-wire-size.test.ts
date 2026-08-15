@@ -232,6 +232,8 @@ describe("list_instance_tools worst case (#578)", () => {
 				disabled: false,
 				reason: allowed ? "ok" : "not_declared",
 				writeConsent: "n/a",
+				// `reach` (#584) — on every row the route emits, so the fixture carries it too.
+				reach: i % 3 === 0 ? "internet" : i % 3 === 1 ? "machine" : "platform",
 				tier: ["base", "standard", "runtime", "connector"][i % 4],
 				invocableBy: ["chat", "call_instance_tool"],
 			};
@@ -321,6 +323,37 @@ describe("list_instance_tools worst case (#578)", () => {
 
 			console.log(`✓ #578 ${label}: ${bytes} B, ${Math.round((bytes / HOST_LIMIT) * 100)}% of the ${HOST_LIMIT} B limit`);
 		}
+	});
+
+	/**
+	 * `reach` arrives, which is what makes #585's advice followable (AC2).
+	 *
+	 * The description now tells an operator to audit external access by reading `reach`. That is
+	 * only better than the `connector` proxy it replaced if the field is actually on the row a
+	 * caller receives — and it crosses TWO projections to get here: `projectToolListing` in
+	 * `workers/api`, and `budgetToolListing` in this file, which #578 added hours before #585 was
+	 * filed. Recommending a field callers cannot see would be worse than the stale advice.
+	 *
+	 * Asserted on a TRUNCATED row specifically. Truncation is the projection that rewrites a row,
+	 * so it is the one that could drop a field, and a not-runnable row is exactly where an auditor
+	 * looks: "what could this agent reach if I switched it on".
+	 */
+	it("carries `reach` through both projections, including onto a truncated row (#585 AC2)", async () => {
+		const t = worstTools.get("list_instance_tools");
+		if (!t) throw new Error("list_instance_tools not registered");
+		const out = await t.handler({ instance_id: "inst-1" });
+		const parsed = JSON.parse(out.content[0].text) as { tools: Array<{ allowed: boolean; reach?: string; description: string }> };
+
+		// G1 — the denominator: both halves of the listing are present before either is checked.
+		const cut = parsed.tools.filter((r) => !r.allowed);
+		const kept = parsed.tools.filter((r) => r.allowed);
+		expect(cut).toHaveLength(68);
+		expect(kept).toHaveLength(36);
+
+		expect(cut.filter((r) => r.reach === undefined), "a truncated row lost `reach` — the field #585 tells operators to audit with").toEqual([]);
+		expect(kept.filter((r) => r.reach === undefined)).toEqual([]);
+		// And it is the truncated rows being checked, not untouched ones.
+		expect(cut.every((r) => r.description.endsWith("…"))).toBe(true);
 	});
 
 	it("keeps every verdict field on a truncated row — #525's contract is what must not be paid", async () => {

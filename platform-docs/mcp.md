@@ -391,7 +391,11 @@ looking and tells the user which console screen to use instead.
   (memory, tasks, board, `fetch_url`, knowledge, files, collections) as well as its
   connector tools, each carrying `tier` and `invocableBy` — a built-in reports
   `["chat"]`, meaning the agent runs it in conversation and `call_instance_tool` cannot
-  reach it. To audit reach into external systems specifically, filter on `connector`.
+  reach it. To audit what an agent can REACH, read `reach` — `platform` (never leaves
+  ProAgentStore), `machine` (the owner's computer) or `internet` (anywhere else). Do
+  **not** filter on `connector` for this: it is wrong in both directions and was measured
+  so (#584) — `fetch_url` names no connector and reaches the internet, while every
+  `supervision` tool names one and never leaves the platform.
 - Prefer read-only tools unless the user explicitly requests changes.
 
 The scope, read-only, confirmation, dry-run, audit, and redaction logic all live in one

@@ -79,4 +79,45 @@ describe("list_instance_tools describes the fields it returns", () => {
 		expect(TOOL_TIERS.map(([id]) => id), "the MCP copy of the tier vocabulary has drifted from workers/api").toEqual(apiTiers);
 		console.log(`✓ #569: MCP tier vocabulary matches the API's ${apiTiers.length}-value ToolTier`);
 	});
+
+	/**
+	 * The reach advice, and why it needs its own arm (#585).
+	 *
+	 * #584 measured that "names a connector" is not "reaches outside the platform", in BOTH
+	 * directions: `fetch_url` names no connector and reaches the internet — which is how 10 of 34
+	 * instances were told they had nothing reaching outside the platform while it was `allowed` on
+	 * all ten — and every `supervision` tool names one and never leaves. It shipped `reach` as the
+	 * field that answers it, and the description kept recommending the disproven proxy.
+	 *
+	 * That is the identical failure the first arm in this file exists for (`scope` offered as the
+	 * read-only answer), one clause later, in the same sentence, corrected in the same release for
+	 * the neighbouring claim and missed here. Neither guard that might have caught it is at fault:
+	 * `docs-drift` compares numbers and names, and #573's hash excludes `description` by design.
+	 * Prose going stale against a field is simply a class neither covers, so it is asserted here.
+	 */
+	it("names `reach` as the answer to 'what can it get to', and stops offering `connector` (#585)", () => {
+		const d = describeTool("list_instance_tools");
+		expect(d).toContain("`reach`");
+
+		// Every value it can return is defined, read from the API's own vocabulary as TEXT — the
+		// same channel and the same reason as the tier arm above: this Worker cannot import it.
+		const src = readFileSync(new URL("../../../api/src/lib/tool-reach.ts", import.meta.url), "utf8");
+		const m = src.match(/export const TOOL_REACHES = \[([^\]]*)\] as const;/);
+		// G3: a parse failure is reported, never skipped.
+		expect(m, "could not find `export const TOOL_REACHES = [...] as const;` in workers/api/src/lib/tool-reach.ts — the guard cannot see the source of truth any more").not.toBeNull();
+		const reaches = [...(m as RegExpMatchArray)[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]);
+		// G1: the vocabulary is asserted before it is iterated.
+		expect(reaches, "parsed no reach values out of the API's TOOL_REACHES").toEqual(["platform", "machine", "internet"]);
+		for (const value of reaches) {
+			expect(d, `reach value "${value}" is returned but not defined in the description`).toContain(`\`${value}\``);
+		}
+
+		// THE REGRESSION ITSELF. Not "does not mention connector" — `connector` is a real field and
+		// the description names it for other reasons. What must not recur is recommending it as the
+		// way to audit REACH, which is the sentence #584 disproved.
+		expect(d, "the description still offers `connector` as the way to audit external reach — #584 measured that proxy wrong in both directions").not.toMatch(
+			/(audit|verify|check)[^.]*(reach|external)[^.]*filter[^.]*`connector`/i,
+		);
+		console.log(`✓ #585: description names reach (${reaches.join(" | ")}) and no longer offers connector as the proxy`);
+	});
 });
