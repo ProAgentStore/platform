@@ -1,3 +1,4 @@
+import { commitBlockReason, POST_FILL_SUBMIT_RE, resolveSnapshotElement, SUBMIT_KEY_RE } from "./commit-guard.js";
 import { collectJobSecrets, makeSecretRedactor, redactAction, redactEventData } from "./redact-secrets.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { UsageContext } from "./usage.js";
@@ -278,15 +279,25 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 			// very FIRST Enter, before any of our field mutations set `filledSomething`. So block
 			// it unconditionally in dry-run (NOT gated on a prior fill) — the one case the
 			// post-fill guard below misses and the stateless workflow guard (click-only) can't see.
-			const enterSubmit = act.action === "key" && /^(enter|return)$/i.test(act.key ?? "") && !lastActionWasArrow;
+			const enterSubmit = act.action === "key" && SUBMIT_KEY_RE.test(act.key ?? "") && !lastActionWasArrow;
 			// Submit CLICKS only count post-fill: "Apply" is the ENTRY button on most multi-page
 			// ATS, so blocking it pre-fill would stop dry-run before it fills anything. Post-fill,
 			// eSignature/acknowledge terminals ("I Agree", "Accept", "Complete", "Confirm") are the
 			// common LAST step, safe to treat as submit. (accept/agree live only here, not in the
 			// stateless workflow guard, so a PRE-fill cookie "Accept" banner stays walkable.)
-			const submitClick = filledSomething && act.action === "click" && /\b(apply|submit|send|finish|done|complete|confirm|accept|agree)\b/i.test(act.name ?? "");
+			//
+			// Matched against the PAGE's name for the ref first, and the model's claimed `name`
+			// second (#627). `name` is a self-report — the runner locates purely by `ref` — so a
+			// paraphrase, an empty string or a page in French made this test pass on a label the
+			// click had nothing to do with. The snapshot line is the page's own account of the
+			// element, which is what the guard was always supposed to be measuring.
+			const pageName = resolveSnapshotElement(snap.snapshot, act.ref)?.name ?? "";
+			const submitClick = filledSomething && act.action === "click" && [pageName, act.name ?? ""].some((n) => n && POST_FILL_SUBMIT_RE.test(n));
 			if (enterSubmit || submitClick) {
-				const label = act.name ?? act.key ?? "submit";
+				// The PAGE's label for the element, when there is one: what the model called it is
+				// exactly the thing this guard stopped trusting (#627). Through `emit`, so the
+				// event goes out redacted like every other one (#631).
+				const label = pageName || act.name || act.key || "submit";
 				await emit("agent.dryrun", `Reached final "${label}" — stopping without submitting (test mode)`, {});
 				return { outcome: "ready", detail: `reached final submit "${label}" — test mode, not submitted`, url: snap.url, steps: step, transcript: [...actionLog] };
 			}
@@ -529,26 +540,22 @@ export function applySystemPrompt(job: ApplyJob): string {
  * post-fill guard because this one arms immediately — a 1-click "Easy Apply" from a saved profile
  * submits as the FIRST action, before anything has been filled.
  *
- * A NAMELESS click is refused. `name` is documented on the click tool but only `ref` is required,
- * and the runner targets purely by ref — so `click({ref:"e88"})` on the final Submit matched
- * nothing in either guard (both test `name ?? ""`, which is empty) and really submitted a job
- * application during a run the user asked to be a test. Dry run's whole promise is "this will not
- * submit", so an unverifiable click is refused rather than trusted; the brain re-issues it with
- * the label and continues.
+ * The rule itself now lives in `commit-guard.ts`, which the browse loop consults too: two guards
+ * with two vocabularies had already drifted into disagreeing about what "committing" means, and
+ * the weaker one was the hole (#629). This wrapper stays because it is the apply workflow's call
+ * site and its refusal wording is asserted by tests written against the incident it came from.
+ *
+ * A click that can be resolved to NEITHER a claimed name nor a line in the snapshot is refused.
+ * `name` is documented on the click tool but only `ref` is required, and the runner targets purely
+ * by ref — so `click({ref:"e88"})` on the final Submit matched nothing in either guard (both
+ * tested `name ?? ""`, which is empty) and really submitted a job application during a run the
+ * user asked to be a test.
  */
-const DRY_RUN_SUBMIT_RE =
-	/\bsubmit\b|\bfinish\b|\bdone\b|\bcomplete\b|\bconfirm\b|send application|submit application|easy apply|quick apply|one[- ]?click|1[- ]?click/i;
-
-export function dryRunBlockReason(action: { action?: string; name?: string } | null | undefined): string | null {
-	if (action?.action !== "click") return null;
-	const name = String(action.name ?? "").trim();
-	if (!name) {
-		return 'DRY-RUN (test mode): a click must include the control\'s visible `name` so the final submit can be recognised and blocked. Re-issue this click with `name`.';
-	}
-	if (DRY_RUN_SUBMIT_RE.test(name)) {
-		return 'DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:"ready") now.';
-	}
-	return null;
+export function dryRunBlockReason(
+	action: { action?: string; name?: string; ref?: string; key?: string } | null | undefined,
+	snapshot?: string | null,
+): string | null {
+	return commitBlockReason({ mode: "apply_dry_run", action, snapshot });
 }
 
 /** Map a Claude tool call to a loop decision (a BrowserAction or a finish). */

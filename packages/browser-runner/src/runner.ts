@@ -7,6 +7,7 @@ import type { BrowserContext, CDPSession, Page } from "playwright";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
 import { McpRuntime } from "./mcp-runtime.js";
+import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
@@ -855,6 +856,45 @@ export class LocalRunner {
 		return null;
 	}
 
+	/** Evaluate a function ON an element (by snapshot ref) and parse its JSON result. Never throws
+	 *  — a null return means "the page could not be asked", which callers must not read as a yes. */
+	private async evalJson<T>(mcp: McpRuntime, ref: string, label: string, fn: string): Promise<T | null> {
+		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }).catch(() => null);
+		if (!res || res.isError) return null;
+		const txt = mcp.textOf(res);
+		const i = txt.indexOf("### Result");
+		if (i < 0) return null;
+		const after = txt.slice(i + "### Result".length).trim();
+		const end = after.indexOf("\n###");
+		const block = (end >= 0 ? after.slice(0, end) : after).trim();
+		try {
+			return JSON.parse(block) as T;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * The commit guard, enforced HERE because this is the process that clicks (#627, #629).
+	 *
+	 * The cloud's pre-filter reads a label the model wrote; this one reads the element. For a
+	 * read-only agent that is a DOM fact — does this control submit a POST form — which no label,
+	 * in any language, can talk its way past. Returns the refusal to hand back to the brain.
+	 */
+	private async commitRefusal(mcp: McpRuntime, page: Page, action: BrowserAction, guard: CommitGuardSpec): Promise<string | null> {
+		const re = commitLabelRe(guard);
+		if (action.action === "click") {
+			const ref = (action.ref || "").trim();
+			const facts = ref ? await this.evalJson<ElementFacts>(mcp, ref, action.name || action.role || "control", ELEMENT_PROBE_FN) : null;
+			return refuseClick(guard, facts, action.name, re);
+		}
+		if (action.action === "key") {
+			const focus = (await page.evaluate(FOCUS_PROBE_FN).catch(() => null)) as FocusFacts | null;
+			return refuseKey(guard, action.key, focus);
+		}
+		return null;
+	}
+
 	/** The snapshot ref the brain must target the element by (standard-tool `target`). */
 	private refOf(action: BrowserAction): string {
 		const ref = (action.ref || "").trim();
@@ -959,7 +999,7 @@ export class LocalRunner {
 	 * element by its snapshot ref. A tool-level failure is thrown so the workflow
 	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
-	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string }> {
+	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; mode?: string } }> {
 		const page = await this.getActivePage();
 		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
 		// resumePath may be a signed URL (remote runner) or a local path — resolve to
@@ -984,9 +1024,18 @@ export class LocalRunner {
 				title: await active.title().catch(() => ""),
 				challenge: await detectHumanChallenge(active),
 				screenshot: await this.shot(active),
+				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
 		const mcp = await this.getMcp();
+		// BEFORE the tool call, never after: this is the last point at which the action is still
+		// only a proposal. `commitGuard.supported` on every reply is how the cloud learns that this
+		// enforcement exists here at all — measured from the runner's own answer, not guessed from
+		// a version number, because the published CLI upgrades on the field's schedule.
+		if (guard) {
+			const refusal = await this.commitRefusal(mcp, page, action, guard);
+			if (refusal) throw new RunnerInputError(refusal);
+		}
 		const res = await this.callBrowserTool(mcp, action);
 		const text = mcp.textOf(res).trim();
 		// A native page dialog (alert/confirm/beforeunload) puts the standard server
@@ -1008,6 +1057,7 @@ export class LocalRunner {
 				challenge: await detectHumanChallenge(settled),
 				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
 				screenshot: await this.shot(settled),
+				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
 		if (res.isError) throw new RunnerInputError(this.conciseFeedback(text) || `${action.action} failed`);
@@ -1039,6 +1089,7 @@ export class LocalRunner {
 			challenge: await detectHumanChallenge(active),
 			feedback: feedback || undefined,
 			screenshot: await this.shot(active),
+			commitGuard: { supported: true, mode: guard?.mode },
 		};
 	}
 

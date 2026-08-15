@@ -574,7 +574,14 @@ const PINS = {
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
 	// it removes — so the second flag is not belt-and-braces, it is the point. That sentence has to
 	// live next to the flags, because removing "the redundant-looking one" is the obvious tidy-up.
-	"packages/browser-runner/src/runner.ts": 1226,
+	// +51 for #627/#629: the commit guard's two probes and the act-boundary hook. The RULES are in
+	// `commit-guard.ts` (a new file, pure and unit-tested); what is here is what cannot leave — the
+	// `browser_evaluate` call that asks the live DOM about the element, and the refusal placed
+	// immediately before `callBrowserTool`. That placement is the whole fix: every guard before it
+	// ran in the cloud and read a label the model wrote, while this file clicks by `ref` and never
+	// reads that label. Splitting the hook out of the method it must precede would put the ordering
+	// back in the reader's head.
+	"packages/browser-runner/src/runner.ts": 1277,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in
@@ -1280,7 +1287,9 @@ const PINS = {
 	// same honest note #609 and #469 carry: the growth landed across two issue commits and the
 	// ratchet was not run until the full bar before pushing. Caught before the push, which is
 	// the point of running the bar there, but the pin and the growth did not travel together.
-	"scripts/check-file-size.mjs": 1364,
+	// +10 at #627/#629: the runner.ts raise above is one number and seven lines of why the guard has
+	// to sit inside the method rather than beside it. Plus this note.
+	"scripts/check-file-size.mjs": 1374,
 };
 
 /**

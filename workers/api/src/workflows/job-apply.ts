@@ -3,6 +3,7 @@ import { decideAction, describeAction, dryRunBlockReason, runApplyLoop, type App
 import { decideWithinBudget } from "../lib/apply-decide-budget.js";
 import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
+import { commitGuardSpec } from "../lib/commit-guard.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { instanceRunLink } from "../lib/console-links.js";
@@ -187,6 +188,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// rows landed, each with an empty control name that no field-name rule could catch.
 		// Redact the shot message here with the same job-derived value redactor.
 		const redact = makeSecretRedactor(collectJobSecrets(job));
+		// The page the CURRENT decision was made from — see the snapshot dep below (#627).
+		let lastSnapshot = "";
+		// The policy that travels with every action so the runner can enforce it where the click
+		// actually happens. Null on a real application: there is nothing to block.
+		const guard = job.dryRun ? commitGuardSpec("apply_dry_run") : undefined;
 		const deps: ApplyDeps = {
 			// The durable cancel is read HERE, beside the runner's own flag, so both answers meet at
 			// the one place `runApplyLoop` already halts on (#560) — no second way for an
@@ -196,7 +202,15 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId });
 				const stopped = await browserRunTick(env, loopRunId);
 				return stopped ? { ...snap, cancelled: true } : snap;
-			}) as Promise<PageSnapshot>,
+			}).then((snap) => {
+				// Kept for the guard below: the snapshot is the page's OWN account of every element
+				// (role, accessible name, [ref=eNN]), so resolving the brain's `ref` against it is
+				// how the dry-run block stops depending on a label the brain wrote and the runner
+				// never reads (#627). Set outside the journaled step, from its (replayed) value, so
+				// a resumed workflow rebuilds it deterministically.
+				lastSnapshot = (snap as PageSnapshot)?.snapshot ?? "";
+				return snap as PageSnapshot;
+			}),
 			// The spend gate lives in `apply-decide-budget.ts` — the LLM call is the only place this
 			// loop spends money, so it is the only place the budget has to sit (#516). Reserve and
 			// settle both happen INSIDE this step, so no reservation is ever held across a handoff:
@@ -230,14 +244,18 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				// One stateless guard, shared with the pure loop's module so it is testable without a
 				// Workflow — including the nameless-click case, which slipped past BOTH guards and
 				// really submitted an application during a test run.
-				const blocked = job.dryRun ? dryRunBlockReason(a as { action?: string; name?: string }) : null;
+				const blocked = job.dryRun ? dryRunBlockReason(a as { action?: string; name?: string }, lastSnapshot) : null;
 				if (blocked) {
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
 					// Pass resumePath so the runner arms file-chooser auto-attach (résumé
 					// uploads never pop a blocking native dialog, whatever the ATS DOM).
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath });
+					// `guard` goes with it: this pre-filter reads a label the brain wrote, and the
+					// runner is the only party that can read the ELEMENT (#627). A runner too old
+					// to know the field ignores it, which is exactly the state this leaves the
+					// field in until the CLI is upgraded.
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, ...(guard ? { guard } : {}) });
 					// Persist a screenshot of the resulting page so the run can be REPLAYED
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot

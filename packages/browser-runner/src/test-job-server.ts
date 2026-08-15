@@ -19,15 +19,29 @@ export interface TestJobSubmission {
 export interface TestJobServer {
 	url: string;
 	jobUrl: string;
+	/**
+	 * A one-click application: everything already filled from a "saved profile", nothing marked
+	 * `required`, and a submit button whose label is in FRENCH. So a single click really POSTs —
+	 * which is what makes it possible to prove that a guarded click did not, rather than proving
+	 * that HTML validation stopped it. Named the way the real ones are ("Easy Apply", "Postuler en
+	 * 1 clic"), and the shape the runtime guard exists for (#627).
+	 */
+	quickApplyUrl: string;
+	/** A GET search form — a read-only agent is explicitly allowed to use one, so the guard has to
+	 *  let Enter through here while refusing it on the POST form above (#629). */
+	searchUrl: string;
 	submissions: TestJobSubmission[];
+	/** Search queries the server received (GET) — the read side of the same proof. */
+	searches: string[];
 	close: () => Promise<void>;
 }
 
 export async function startTestJobServer(port = 0): Promise<TestJobServer> {
 	const submissions: TestJobSubmission[] = [];
+	const searches: string[] = [];
 	const server = createServer(async (req, res) => {
 		try {
-			await route(req, res, submissions);
+			await route(req, res, submissions, searches);
 		} catch (error) {
 			html(res, 500, `<h1>Server Error</h1><pre>${escapeHtml(String(error))}</pre>`);
 		}
@@ -40,7 +54,10 @@ export async function startTestJobServer(port = 0): Promise<TestJobServer> {
 	return {
 		url,
 		jobUrl: `${url}/jobs/software-engineer`,
+		quickApplyUrl: `${url}/jobs/quick-apply`,
+		searchUrl: `${url}/search`,
 		submissions,
+		searches,
 		async close() {
 			await new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()));
@@ -64,6 +81,7 @@ async function route(
 	req: IncomingMessage,
 	res: ServerResponse,
 	submissions: TestJobSubmission[],
+	searches: string[],
 ): Promise<void> {
 	const url = new URL(req.url || "/", "http://127.0.0.1");
 	if (req.method === "GET" && url.pathname === "/") {
@@ -77,6 +95,16 @@ async function route(
 			invisibleRecaptcha: url.searchParams.get("invisible_recaptcha") === "1",
 			recaptcha: url.searchParams.get("recaptcha") === "1",
 		}));
+		return;
+	}
+	if (req.method === "GET" && url.pathname === "/jobs/quick-apply") {
+		html(res, 200, quickApplyPage());
+		return;
+	}
+	if (req.method === "GET" && url.pathname === "/search") {
+		const q = url.searchParams.get("q");
+		if (q !== null) searches.push(q);
+		html(res, 200, searchPage(q));
 		return;
 	}
 	if (req.method === "POST" && url.pathname === "/apply") {
@@ -148,6 +176,35 @@ function jobPage(opts: { challenge?: boolean; hcaptcha?: boolean; invisibleRecap
         ${challenge}
         <button type="submit">Submit application</button>
       </form>
+    </main>
+  `);
+}
+
+/** One click = one real application. No `required` attribute anywhere, so nothing but the guard
+ *  can stop the POST — a fixture where HTML validation did the stopping would prove nothing. */
+function quickApplyPage(): string {
+	return page("Postuler en 1 clic", `
+    <main>
+      <section class="job"><h1>Ingénieur logiciel</h1><p class="company">Fixture Labs</p></section>
+      <form action="/apply" method="post" enctype="multipart/form-data" class="application-form">
+        <input type="hidden" name="fullName" value="Sergey Ivochkin" />
+        <input type="hidden" name="email" value="sergey@example.com" />
+        <label>Recherche <input name="coverNote" aria-label="Recherche" /></label>
+        <button type="submit">Envoyer ma candidature</button>
+      </form>
+    </main>
+  `);
+}
+
+/** A GET search form: submitting it only READS. */
+function searchPage(q: string | null): string {
+	return page("Recherche", `
+    <main>
+      <form action="/search" method="get">
+        <label>Search <input name="q" aria-label="Search" /></label>
+        <button type="submit">Search</button>
+      </form>
+      <p id="result">${q === null ? "no query" : `searched: ${escapeHtml(q)}`}</p>
     </main>
   `);
 }

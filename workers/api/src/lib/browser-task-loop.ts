@@ -5,6 +5,7 @@
 // "achieve this objective on this page". The agent supplies the objective as DATA, so
 // the platform stays domain-agnostic (no "facebook"/"friends" in core).
 import { runUserWorkersAi } from "./user-ai.js";
+import { COMMIT_VERB_RE as COMMIT_VERBS, commitBlockReason, commitModeFor } from "./commit-guard.js";
 import { type ApplyDecision, type BrowserAction, type BrowserJobBase, type PageSnapshot } from "./apply-loop.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
@@ -41,10 +42,11 @@ export interface BrowserTaskJob extends BrowserJobBase {
 	providedAnswers?: Record<string, string>;
 }
 
-/** Verbs that COMMIT an irreversible action — blocked in dry-run, and the model is told
- *  to treat them as the final step. Kept here (not the workflow) so both agree. */
-export const COMMIT_VERB_RE =
-	/\b(confirm|accept|add friend|add|submit|send|post|publish|delete|remove|pay|purchase|buy|apply|approve|agree|save)\b/i;
+/** Verbs that COMMIT an irreversible action — blocked in dry-run and read-only, and the model is
+ *  told to treat them as the final step. Re-exported from `commit-guard.ts`, which is now the one
+ *  place the vocabulary lives: a second copy is how apply and browse came to disagree about what
+ *  "committing" means, and the weaker of the two was the hole (#629). */
+export { COMMIT_VERB_RE } from "./commit-guard.js";
 
 function tool(name: string, description: string, props: Record<string, { type: string; description: string }>, required: string[]) {
 	return { type: "function" as const, function: { name, description, parameters: { type: "object", properties: props, required } } };
@@ -201,27 +203,33 @@ export async function decideBrowserTask(
 
 /** Is this action the committing step (blocked in dry-run / read-only)? */
 export function isCommitClick(action: BrowserAction): boolean {
-	return action.action === "click" && COMMIT_VERB_RE.test(action.name ?? "");
+	return action.action === "click" && COMMIT_VERBS.test(action.name ?? "");
 }
 
 /**
  * Why this action must not reach the page — the workflow's act layer returns this to the
  * brain INSTEAD of performing it. `null` means "go ahead".
  *
- * Read-only and dry-run share one commit-verb guard on purpose: two guards would eventually
- * disagree about what "committing" means, and the weaker one would be the hole. The guard is
- * deliberately fail-safe — a filter button literally labelled "Apply" is refused too. For an
+ * Read-only and dry-run share one commit guard on purpose: two guards would eventually disagree
+ * about what "committing" means, and the weaker one would be the hole. That is not a hypothetical
+ * — this one was CLICK-ONLY while apply's blocked Enter, so a read-only agent could commit by
+ * pressing Enter on a focused form field, which is the one thing its declaration promises it can
+ * never do (#629). The rule now lives in `commit-guard.ts` and is consulted by both loops:
+ *
+ *   • every action kind that can commit, not just `click` — Enter/NumpadEnter/Return submit a
+ *     focused form, Space activates a focused button;
+ *   • matched against the PAGE's own name for the targeted `ref` as well as the model's claimed
+ *     `name`, because the runner locates purely by `ref` and never reads `name` (#627);
+ *   • a vocabulary that is not English-only.
+ *
+ * Still deliberately fail-safe: a filter button literally labelled "Apply" is refused too. For an
  * agent whose promise is that it cannot act, refusing a harmless click is the cheap error and
  * performing a harmful one is the expensive one.
+ *
+ * `snapshot` is the page the decision was made from; `runnerEnforces` says whether the runner
+ * acknowledged that it applies the guard at the act boundary itself (see `commit-guard.ts`).
  */
-export function blockedActionReason(job: BrowserTaskJob, action: BrowserAction): string | null {
-	if (!isCommitClick(action)) return null;
-	const what = action.name ?? "";
-	if (job.readOnly) {
-		return `BLOCKED — this agent is READ-ONLY and can never perform "${what}". Do not attempt it again or look for another way round it. Report what you can already see: call finish with the values you read, or finish(status:"blocked") if the objective genuinely required changing something.`;
-	}
-	if (job.dryRun) {
-		return `DRY RUN (rehearsal): the committing action "${what}" is BLOCKED — do not perform it. Call finish(status:"done") now.`;
-	}
-	return null;
+export function blockedActionReason(job: BrowserTaskJob, action: BrowserAction, snapshot?: string | null, runnerEnforces?: boolean): string | null {
+	const mode = commitModeFor(job);
+	return mode ? commitBlockReason({ mode, action, snapshot, runnerEnforces }) : null;
 }

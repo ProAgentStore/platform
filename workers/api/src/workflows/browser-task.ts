@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { blockedActionReason, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
+import { commitGuardSpec, commitModeFor } from "../lib/commit-guard.js";
 import { callRunner, getBoundRunnerConn } from "../lib/runner-client.js";
 import { instanceRunLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
@@ -83,7 +84,14 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 
 		// Open the start URL FIRST — this initializes the runner's page for the task
 		// (the same "open" step the apply workflow uses; a fresh, scoped page — no stale tab).
-		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url }));
+		// The opening navigate doubles as the capability probe: a runner that enforces the commit
+		// guard at the act boundary says so in every reply (#627/#629). MEASURED from its own
+		// answer, never inferred from a version — the published CLI upgrades on the field's
+		// schedule, and 0.4.45 and 0.4.51 were both live when this landed.
+		const opened = (await step.do("open", () =>
+			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url }),
+		)) as { commitGuard?: { supported?: boolean } } | undefined;
+		const runnerEnforces = opened?.commitGuard?.supported === true;
 
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
@@ -91,6 +99,11 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// `emit`. A browse job carries no password today, which is exactly why this is here —
 		// the redactor reads the job's own keys, so the day one is added it is already covered.
 		const redact = makeSecretRedactor(collectJobSecrets(job));
+		// The page the CURRENT decision was made from, so the guard can resolve the brain's `ref`
+		// to the element the PAGE describes rather than trusting the name the brain wrote (#627).
+		let lastSnapshot = "";
+		const mode = commitModeFor(job);
+		const guard = mode ? commitGuardSpec(mode) : undefined;
 		const deps: ApplyDeps<BrowserTaskJob> = {
 			// The durable cancel is read HERE, beside the runner's own flag, so the two answers meet
 			// at the one place `runApplyLoop` already halts on (#560). `browserRunTick` also
@@ -99,7 +112,10 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId });
 				const stopped = await browserRunTick(env, loopRunId);
 				return stopped ? { ...snap, cancelled: true } : snap;
-			}) as Promise<PageSnapshot>,
+			}).then((snap) => {
+				lastSnapshot = (snap as PageSnapshot)?.snapshot ?? "";
+				return snap as PageSnapshot;
+			}),
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideBrowserTask(env, userId, p, { kind: "chat", instanceId })) as Promise<ApplyDecision>,
 			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, retry, async () => {
 				// The commit guard, enforced HERE and not in the prompt: a rehearsal (`dryRun`) or a
@@ -108,12 +124,12 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				// This is what makes dryRun safe for a task whose commit is a plain click
 				// (Confirm/Add/…), which apply's fill-gated guard wouldn't catch — and what lets a
 				// read-only agent be pointed at a REAL logged-in account.
-				const blocked = blockedActionReason(job, a);
+				const blocked = blockedActionReason(job, a, lastSnapshot, runnerEnforces);
 				if (blocked) {
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", a);
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", guard ? { ...a, guard } : a);
 					if (r.screenshot && env.STORAGE) {
 						const key = runShotKey(userId, instanceId, taskId, sn);
 						await env.STORAGE.put(key, b64ToBytes(r.screenshot), { httpMetadata: { contentType: "image/jpeg" } }).catch(() => undefined);

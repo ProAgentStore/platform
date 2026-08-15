@@ -449,9 +449,9 @@ describe("dryRunBlockReason — dry run must not be able to submit", () => {
 		// purely by ref. Both dry-run guards tested `name ?? ""`, so `click({ref:"e88"})` on the
 		// final Submit matched nothing and went straight through, submitting a real job
 		// application during a run the user asked to be a test.
-		expect(dryRunBlockReason({ action: "click", name: "" })).toMatch(/must include the control's visible `name`/);
-		expect(dryRunBlockReason({ action: "click" })).toMatch(/must include/);
-		expect(dryRunBlockReason({ action: "click", name: "   " })).toMatch(/must include/);
+		expect(dryRunBlockReason({ action: "click", name: "" })).toMatch(/include its visible `name`/);
+		expect(dryRunBlockReason({ action: "click" })).toMatch(/include its visible `name`/);
+		expect(dryRunBlockReason({ action: "click", name: "   " })).toMatch(/include its visible `name`/);
 	});
 
 	it("blocks the named terminal buttons, including 1-click apply", () => {

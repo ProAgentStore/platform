@@ -6,6 +6,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { URL } from "node:url";
 import { LocalRunner, RunnerInputError } from "./runner.js";
+import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 
@@ -113,8 +114,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, await runner.browserSnapshot(b.taskId));
 	}
 	if (req.method === "POST" && path === "/browser/act") {
-		const body = await readJson<BrowserAction & { resumePath?: string }>(req);
-		return json(res, 200, await runner.browserAct(body, body.resumePath));
+		// `guard` is the commit policy for THIS run (#627, #629) — a rehearsal or a read-only
+		// agent. It travels with every action rather than being registered once, because the
+		// runner serves many instances at once and a per-connection mode would be a second piece
+		// of state to get wrong.
+		const body = await readJson<BrowserAction & { resumePath?: string; guard?: CommitGuardSpec }>(req);
+		return json(res, 200, await runner.browserAct(body, body.resumePath, body.guard));
 	}
 	if (req.method === "POST" && path === "/browser/event") {
 		const b = await readJson<{ taskId: string; type: string; message: string; data?: unknown }>(req);
