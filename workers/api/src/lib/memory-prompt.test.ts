@@ -194,3 +194,81 @@ describe("#495 — the block is otherwise unchanged", () => {
 		expect(memoryPrompt([AGENT_SET], { now: NOW })).toMatch(/- \[knowledge] fact:commit-strategy: /);
 	});
 });
+
+/**
+ * #495 step 3 — what the block may NOT do is grow without bound.
+ *
+ * Steps 1 and 2 dated every inferred entry and subordinated it to live state, which roughly DOUBLED
+ * the block (+76% on the largest instance measured, +2,150 tokens per turn). The honesty was worth
+ * it and it made this half more urgent, not less: 75 of one instance's 77 entries are inferred, 61
+ * of them written on a single day, injected on every turn for the life of the instance — including
+ * `fact:GitHub App:not provisioned in production` (2 Aug) and `fact:GitHub App:already created and
+ * installed` (3 Aug), both at once.
+ */
+describe("#495 step 3 — the inferred half of the block is bounded", () => {
+	const summary = (n: number, daysAgo: number): MemoryEntry => ({
+		key: `fact:subject ${n}:predicate`,
+		type: "knowledge",
+		content: `subject ${n} predicate object`,
+		updatedAt: new Date(NOW - daysAgo * 86_400_000).toISOString(),
+		source: "summary",
+	});
+
+	it("stops repeating an inferred entry nothing has restated for a week", () => {
+		// Measured on the live dumps: a durable subject on an active instance is re-extracted within
+		// ~2 days (5.9 at the tail); the junk this bounds is write-once — "tmux sessions exist five",
+		// false within the hour, never restated.
+		const block = memoryPrompt([summary(1, 2), summary(2, 30)], { now: NOW });
+		expect(block).toContain("fact:subject 1:predicate");
+		expect(block).not.toContain("fact:subject 2:predicate");
+		// …and it SAYS so, because a list the model believes is complete is one it will answer from.
+		expect(block).toMatch(/1 older auto-noted entry is not repeated here/);
+		expect(block).toContain("read_memory returns them");
+	});
+
+	it("keeps a user-set and an agent-written entry forever, however old", () => {
+		// This bounds INFERENCE, not memory. Ageing out a standing instruction the user typed would
+		// invite the agent to treat it as expired — the reverse of the bug.
+		const old = { ...USER_SET, updatedAt: "2025-01-01T00:00:00Z" };
+		const agent = { ...AGENT_SET, updatedAt: "2025-01-01T00:00:00Z" };
+		const block = memoryPrompt([old, agent], { now: NOW });
+		expect(block).toContain("preference:tone");
+		expect(block).toContain("fact:commit-strategy");
+		expect(block).not.toMatch(/not repeated here/);
+	});
+
+	it("caps the inferred entries at 30, newest restatement first, and counts what it withheld", () => {
+		// The TTL alone does not bound the days that cost anything: growth is BURST-shaped, so a cap
+		// is the half that bites every day. 40 fresh entries in, 30 out.
+		const many = Array.from({ length: 40 }, (_, i) => summary(i, i / 24)); // all within the day
+		const block = memoryPrompt(many, { now: NOW });
+		const shown = many.filter((m) => block.includes(`${m.key} (auto-noted`));
+		expect(shown).toHaveLength(30);
+		expect(shown.map((m) => m.key)).toContain("fact:subject 0:predicate"); // the newest survives
+		expect(shown.map((m) => m.key)).not.toContain("fact:subject 39:predicate"); // the oldest does not
+		expect(block).toMatch(/10 older auto-noted entries are not repeated here/);
+	});
+
+	it("says how long a fact has been BELIEVED, not only when it was last restated", () => {
+		// `updatedAt` is rewritten on every re-extraction, and the transcript includes the agent's own
+		// turns — so a stale belief the agent keeps repeating has its age reset to zero. The incident
+		// entry existed on 7 Aug and read `updatedAt: 2026-08-10`. Two weeks of belief looked like one
+		// day, which is exactly the reading that made it competitive with a live fact.
+		const block = memoryPrompt([{ ...WRITE_ACCESS, firstSeenAt: "2026-08-07T06:29:08Z" }], { now: NOW, timeZone: "UTC" });
+		expect(block).toMatch(/first noted/);
+		// A first sighting on the same day as the restatement is not a second date worth printing.
+		expect(memoryPrompt([{ ...WRITE_ACCESS, firstSeenAt: "2026-08-10T07:00:00Z" }], { now: NOW })).not.toMatch(/first noted/);
+	});
+
+	it("un-injects, never deletes — the caller's array is not mutated", () => {
+		// The owner's stated preference and the right one: the same generator produced a real standing
+		// preference of his, deletion is the lossy answer to a provenance problem, and editing an
+		// entry in the console Memory tab re-tags it `source:"user"`, which is a one-click promotion
+		// back to permanent. Nothing here removes a row from storage.
+		const entries = [summary(1, 30), summary(2, 30)];
+		const before = JSON.stringify(entries);
+		memoryPrompt(entries, { now: NOW });
+		expect(JSON.stringify(entries)).toBe(before);
+		expect(entries).toHaveLength(2);
+	});
+});

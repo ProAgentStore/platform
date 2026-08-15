@@ -51,6 +51,19 @@ export interface MemoryEntry {
 	updatedAt: string;
 	/** Who wrote this entry. Absent on legacy entries (treated as agent-written). */
 	source?: "agent" | "user" | "summary";
+	/**
+	 * When this belief was FIRST recorded, as distinct from when it was last restated (#495).
+	 *
+	 * `updatedAt` is rewritten on every re-extraction, so a stale belief the agent keeps repeating in
+	 * chat gets summarised again and its age resets to zero: `fact:Write access to terminal
+	 * connector:is not enabled` existed on 7 Aug and read `updatedAt: 2026-08-10` three days later.
+	 * An entry that has been believed for two weeks and restated yesterday then looked one day old.
+	 *
+	 * Written only by the summariser (the only writer that can re-write an entry it did not author);
+	 * absent on every entry made before this existed, which reads as "not measured" and falls back to
+	 * `updatedAt`.
+	 */
+	firstSeenAt?: string;
 }
 
 export interface AgentTask {

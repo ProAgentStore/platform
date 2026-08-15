@@ -180,12 +180,22 @@ NEVER extract the platform's own state, as a class: whether a tool, permission, 
 						const key = `fact:${fact.subject}:${fact.predicate}`.slice(0, 100);
 						const existing = await this.doStorage.get<MemoryEntry>(`mem:${key}`);
 						if (existing?.source === "user") continue;
+						const now = new Date().toISOString();
 						const entry: MemoryEntry = {
 							key,
 							type: "knowledge",
 							content: `${fact.subject} ${fact.predicate} ${fact.object}`,
-							updatedAt: new Date().toISOString(),
+							updatedAt: now,
 							source: "summary",
+							// HOW LONG THIS HAS BEEN BELIEVED, which `updatedAt` stopped being able to say (#495).
+							//
+							// This line re-writes an existing key with a fresh `updatedAt` on every re-extraction,
+							// and the transcript it extracts from includes the ASSISTANT's own turns — so an agent
+							// repeating a stale belief in chat gets it summarised again and its age reset to zero.
+							// The entry that motivated #495 was measured doing exactly that: present on 7 Aug,
+							// reading `updatedAt: 2026-08-10` three days later. Preserved rather than recomputed, so
+							// the first sighting survives every restatement.
+							firstSeenAt: existing?.firstSeenAt ?? existing?.updatedAt ?? now,
 						};
 						await this.doStorage.put(`mem:${key}`, entry);
 					}

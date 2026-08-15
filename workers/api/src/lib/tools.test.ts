@@ -115,9 +115,56 @@ describe("memory tool execution", () => {
 			null,
 			"agent-1",
 		);
-		expect(result.content).toMatch(/All memory keys: language$/);
+		// Exactly one key, and no second one after it — the result no longer ENDS with the key list
+		// (#506 appends what memory is not), so the anchor is on the key rather than on the string.
+		expect(result.content).toMatch(/All memory keys: language(?![,\w])/);
 		const entry = (await storage.get("mem:language")) as MemoryEntry;
 		expect(entry.content).toBe("German");
+	});
+
+	it("says what memory is NOT, in the result — nothing will come back for a note left here (#506)", async () => {
+		// The Coder Lead, asked to file two GitHub bug reports it had no tool for, wrote
+		// `fact:pending issue:Heartfull:…` and answered "I'll file the issue as soon as the current
+		// run finishes". Nothing schedules that; the bug report was still a memory key the next day.
+		// The false belief is about the platform, so the platform states the fact where the model is
+		// looking — in the tool result, not in a standing rule it is free to conclude around.
+		const storage = mockDoStorage();
+		const r = await executeTool(write("pending issue", "event link shows ID"), storage, null, "agent-1");
+		expect(r.content).toMatch(/nothing acts on it/i);
+		expect(r.content).toMatch(/no event will wake you/i);
+		expect(r.content).toMatch(/create_task/);
+	});
+
+	it("hands back an INFERRED entry marked as inferred, and an entry the user set unchanged (#495)", async () => {
+		// read_memory is the door the #495 incident came through: it surfaced "Write access to
+		// terminal connector is not enabled" and the agent refused a call it was permitted to make
+		// eight minutes later. The `## Your Memory` block dates and outranks those; this tool
+		// returned the same rows raw, and may return one the prompt has stopped repeating entirely.
+		const storage = mockDoStorage();
+		await storage.put("mem:fact:write access:is not enabled", {
+			key: "fact:write access:is not enabled",
+			type: "knowledge",
+			content: "Write access to terminal connector is not enabled",
+			updatedAt: "2026-08-10T07:13:25Z",
+			source: "summary",
+		});
+		await storage.put("mem:commit-strategy", {
+			key: "commit-strategy",
+			type: "preference",
+			content: "Always push to main",
+			updatedAt: "2026-08-10T10:30:54Z",
+			source: "user",
+		});
+		const r = await executeTool({ name: "read_memory", input: {} }, storage, null, "agent-1");
+		const rows = JSON.parse(r.content) as Array<{ key: string; inferred?: true; note?: string }>;
+		const inferred = rows.find((e) => e.key === "fact:write access:is not enabled");
+		expect(inferred?.inferred).toBe(true);
+		expect(inferred?.note).toMatch(/outranks this/);
+		// A user-set entry is authoritative and gains nothing — marking it would invite the agent to
+		// treat a standing instruction as expired.
+		const userSet = rows.find((e) => e.key === "commit-strategy");
+		expect(userSet?.inferred).toBeUndefined();
+		expect(userSet?.note).toBeUndefined();
 	});
 
 	it("write_memory tags the entry as agent-written", async () => {

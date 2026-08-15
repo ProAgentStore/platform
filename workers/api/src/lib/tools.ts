@@ -172,6 +172,22 @@ export const AGENT_TOOLS: ToolDef[] = [
 
 /** One-line snapshot of all memory keys, appended to write/delete results so the
  *  model immediately sees duplicates it just created (e.g. `language` AND `user_language`). */
+/**
+ * A memory row as `read_memory` hands it back, with the platform's reading of its own provenance.
+ *
+ * Only `source: "summary"` rows gain anything: those were INFERRED by a summariser from a past
+ * conversation, with no way to know whether it was reading a durable fact or a momentary one. A
+ * user-set or agent-written entry is left byte-identical.
+ */
+export function markInferred(m: MemoryEntry): MemoryEntry & { inferred?: true; note?: string } {
+	if (m.source !== "summary") return m;
+	return {
+		...m,
+		inferred: true,
+		note: "Auto-noted by a summariser from an earlier conversation, not told to you. A live tool result or a status block in your prompt is current and outranks this — check it now rather than refusing or reporting on the strength of this entry.",
+	};
+}
+
 async function memoryKeyList(storage: DurableObjectStorage): Promise<string> {
 	const all = await storage.list<MemoryEntry>({ prefix: "mem:" });
 	const keys = [...all.keys()].map((k) => k.slice("mem:".length)).sort();
@@ -211,7 +227,18 @@ export async function executeTool(
 				if (typeFilter) entries = entries.filter((e) => e.type === typeFilter);
 				return {
 					name: call.name,
-					content: JSON.stringify(entries),
+					// THE SECOND DOOR (#495). The dated, ranked `## Your Memory` block bounds what the
+					// prompt repeats; this tool returns the same rows raw, and it is the door the
+					// incident actually came through — `read_memory` surfaced "Write access to terminal
+					// connector is not enabled" at 07:15:19 and the agent refused a call it was
+					// permitted to make eight minutes later. A rule in the prompt about entries "marked
+					// auto-noted" says nothing about a JSON row that carries no marking, and the entry
+					// this tool returns may be one the prompt deliberately stopped repeating.
+					//
+					// So the fact travels WITH the data rather than as a rule about it: `stale` is
+					// derived from `source`, which is provenance the platform recorded rather than a
+					// judgement about the content.
+					content: JSON.stringify(entries.map(markInferred)),
 					success: true,
 				};
 			}
@@ -252,7 +279,22 @@ export async function executeTool(
 				await storage.put(`mem:${key}`, entry);
 				return {
 					name: call.name,
-					content: `Stored memory: ${key}. ${await memoryKeyList(storage)}`,
+					// WHAT MEMORY IS NOT (#506). Asked to file two GitHub bug reports it had no tool
+					// for, the Coder Lead wrote `fact:pending issue:Heartfull:event link shows ID
+					// instead of event name` and said "I'll file the issue as soon as the current run
+					// finishes". Nothing schedules that. Nothing re-reads memory on an event. The bug
+					// report was still a memory key when the owner asked again the next day.
+					//
+					// The belief that produced it is about the PLATFORM, not about the request: that
+					// something will come back for this. It is stated in the tool result rather than in
+					// a prompt rule for the reason this repo has now recorded three times (#493, #494,
+					// #517) — a standing instruction loses to what the model concludes in the turn it
+					// is in, and the fix that holds puts the fact in the data it is looking at.
+					content:
+						`Stored memory: ${key}. ${await memoryKeyList(storage)}` +
+						" Memory is only read back into your prompt — nothing acts on it, and no event will wake you to finish" +
+						" something you left here. If this records work still to be done, do it now or create_task it;" +
+						" a note to yourself is not a record anyone will act on.",
 					success: true,
 				};
 			}

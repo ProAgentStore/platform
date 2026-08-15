@@ -61,7 +61,83 @@ function provenance(m: MemoryEntry, now: number, timeZone?: string): string {
 	const ms = Date.parse(m.updatedAt ?? "");
 	const age = Number.isFinite(ms) ? ago(now - ms) : "";
 	const when = [stamp, age].filter(Boolean).join(", ");
-	return ` (auto-noted from an earlier conversation${when ? ` on ${when}` : ""} — may be out of date)`;
+	// …and, when the two differ, how long it has been BELIEVED as well as when it was last
+	// restated. An entry carried for two weeks and re-extracted yesterday reads one day old on
+	// `updatedAt` alone, which is the shape the incident entry had.
+	const firstMs = Date.parse(m.firstSeenAt ?? "");
+	const first =
+		Number.isFinite(firstMs) && Math.abs(firstMs - ms) >= DAY ? `, first noted ${localStamp(m.firstSeenAt, timeZone)}` : "";
+	return ` (auto-noted from an earlier conversation${when ? ` on ${when}` : ""}${first} — may be out of date)`;
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * How long a summary-derived entry keeps being injected after its last restatement.
+ *
+ * Measured, not chosen by habit (#495's decision brief, over live memory dumps from four instances):
+ * a durable subject on an active instance is re-extracted within ~2 days, at the tail 5.9; the junk
+ * this bounds is write-once and never comes back — "tmux sessions exist five", false within the
+ * hour, never restated. Seven days is the smallest round number above that measured tail.
+ *
+ * Keyed on the LAST RESTATEMENT (`updatedAt`), not on `firstSeenAt`. The brief recommended
+ * `firstSeenAt` because `updatedAt` is defeated by an agent that keeps repeating its own stale
+ * belief — which is true, and is why `firstSeenAt` is recorded and rendered. But keying the cutoff
+ * on it retires a fact that is being re-confirmed every other day, permanently and silently: the
+ * same summariser produced `fact:commit-strategy … Always push to main`, a real standing preference
+ * of the owner's, and no amount of restating it would bring it back. The issue's own words are
+ * "drop them from injection after N days UNLESS RE-CONFIRMED", and that is what `updatedAt` means.
+ * The self-restatement loop is closed at the reader instead — STALE_MEMORY_RULE and the first-noted
+ * stamp are what stop the agent repeating it in the first place.
+ */
+export const SUMMARY_MEMORY_TTL_DAYS = 7;
+
+/**
+ * How many summary-derived entries may be injected at once, newest restatement first.
+ *
+ * The TTL alone does not bound the days that actually cost anything: the growth is BURST-shaped —
+ * 61 of one instance's 75 inferred facts were written on a single day, because `SUMMARY_THRESHOLD`
+ * is 20 messages and `maybeSummarize` runs after every assistant reply, each summary writing up to
+ * 20 facts. Measured on that instance, a TTL of 7 dropped everything today and would have dropped
+ * NOTHING on the day the block was at its worst; a cap of 30 takes it from ~4,981 tokens per turn
+ * to ~2,242 every day.
+ *
+ * User- and agent-written entries are never counted and never dropped — this bounds inference, not
+ * memory.
+ */
+export const SUMMARY_MEMORY_CAP = 30;
+
+/** Last restatement, as a number; `-Infinity` for an unparseable date so it sorts oldest. */
+function restatedAt(m: MemoryEntry): number {
+	const ms = Date.parse(m.updatedAt ?? "");
+	return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * Which entries reach the prompt, and how many were withheld.
+ *
+ * UN-INJECTED, NEVER DELETED — the owner's stated preference and the right one. The same generator
+ * that produced "tmux sessions exist five" produced a real standing preference; deletion is the
+ * lossy answer to a provenance problem, and the console Memory tab already offers a one-click
+ * promotion (editing an entry re-tags it `source:"user"`, which makes it undated, protected and
+ * permanently injected). `read_memory` still returns everything, so nothing here is unreachable —
+ * it is unrepeated.
+ */
+export function selectMemoryForPrompt(
+	memory: readonly MemoryEntry[],
+	now: number,
+): { shown: MemoryEntry[]; withheld: number } {
+	const cutoff = now - SUMMARY_MEMORY_TTL_DAYS * DAY;
+	// An UNDATED legacy entry is not expired — it is unmeasured, and dropping it would be a decision
+	// made by a parse failure rather than by evidence. It still sorts last under the cap, and it
+	// still carries the "auto-noted" label, which is the part that must never be lost.
+	const fresh = memory.filter((m) => m.source !== "summary" || restatedAt(m) === Number.NEGATIVE_INFINITY || restatedAt(m) >= cutoff);
+	const inferred = fresh.filter((m) => m.source === "summary").sort((a, b) => restatedAt(b) - restatedAt(a));
+	const keep = new Set(inferred.slice(0, SUMMARY_MEMORY_CAP));
+	// Original order preserved for everything kept: the block is read by a model, and re-sorting it
+	// by recency would imply a ranking the platform is not making.
+	const shown = memory.filter((m) => m.source !== "summary" || keep.has(m));
+	return { shown, withheld: memory.length - shown.length };
 }
 
 /** Round to a human interval. Exact ms in a prompt invites the model to quote it back as precision. */
@@ -104,13 +180,22 @@ export function memoryPrompt(
 	opts: { now: number; timeZone?: string } = { now: Date.now() },
 ): string {
 	if (memory.length === 0) return "";
-	const lines = memory.map((m) => `- [${m.type}] ${m.key}${provenance(m, opts.now, opts.timeZone)}: ${m.content}`);
-	const hasSummary = memory.some((m) => m.source === "summary");
+	const { shown, withheld } = selectMemoryForPrompt(memory, opts.now);
+	if (shown.length === 0 && withheld === 0) return "";
+	const lines = shown.map((m) => `- [${m.type}] ${m.key}${provenance(m, opts.now, opts.timeZone)}: ${m.content}`);
+	const hasSummary = shown.some((m) => m.source === "summary");
+	// Said out loud, because a list the model believes is complete is a list it will answer from.
+	// It also names the one tool that still reaches them, so "not repeated to you" cannot be read as
+	// "gone" — read_memory returns every entry, un-injected or not.
+	const cut = withheld
+		? `\n(${withheld} older auto-noted ${withheld === 1 ? "entry is" : "entries are"} not repeated here — they are still in your memory and read_memory returns them.)\n`
+		: "";
 	return (
 		"\n\n## Your Memory\n" +
 		"To change a fact below, write_memory to its EXACT key; never add a new key for a fact that already has one. " +
 		"Entries marked (user-set) were set directly by the user — never overwrite or delete them unless the user explicitly asks.\n" +
 		`${lines.join("\n")}\n` +
+		cut +
 		(hasSummary ? STALE_MEMORY_RULE : "")
 	);
 }
