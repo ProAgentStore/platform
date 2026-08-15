@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCredential, credDomain, deleteCredential, findCredentialForHost, listCredentials, revealCredential, updateCredential } from "./credentials.js";
+import { createCredential, credDomain, credentialMatchRank, deleteCredential, findCredentialForHost, listCredentials, revealCredential, updateCredential } from "./credentials.js";
 import type { Env } from "../types.js";
 
 // 32-byte (64 hex) master key for AES-KW envelope encryption in tests.
@@ -10,19 +10,34 @@ const KEK = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
  *  parameter treats an explicitly-passed undefined as absent and would hand back the key. */
 function mockEnv(kek: string | null = KEK): Env {
 	const rows: Record<string, unknown>[] = [];
+	const logged: string[] = [];
+	let seq = 0;
 	const cols = ["id", "instance_id", "user_id", "domain", "login_url", "username", "secrets_ciphertext", "secrets_dek", "secrets_iv", "comments", "recovery_history"];
 	const prepare = (sql: string) => ({
 		bind: (...a: unknown[]) => ({
 			all: async () => {
 				if (/WHERE instance_id = \?1 AND user_id = \?2/.test(sql)) {
-					return { results: rows.filter((r) => r.instance_id === a[0] && r.user_id === a[1]) };
+					const hits = rows.filter((r) => r.instance_id === a[0] && r.user_id === a[1]);
+					// Honour the ORDER BY the real query carries (#650) — without it the mock hands
+					// back insertion order and a test for the newest-first tie-break would pass by
+					// accident, measuring the fixture instead of the code.
+					if (/ORDER BY created_at DESC/.test(sql)) hits.sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)) || String(x.id).localeCompare(String(y.id)));
+					return { results: hits };
 				}
 				return { results: [] };
 			},
 			first: async () => rows.find((r) => r.id === a[0] && r.instance_id === a[1] && r.user_id === a[2]) ?? null,
 			run: async () => {
+				// Checked BEFORE the generic INSERT arm: `logEvent` writes agent_events through this
+				// same mock, and the arm below would file a trace row as a credential.
+				if (/INSERT INTO agent_events/.test(sql)) {
+					logged.push(JSON.stringify(a));
+					return { meta: { changes: 1 } };
+				}
 				if (sql.startsWith("INSERT")) {
-					const row: Record<string, unknown> = { created_at: "t0", updated_at: "t0", last_used_at: null };
+					// Distinct, increasing created_at per insert — insertion order IS storage order in
+					// the real table, and the newest-first tie-break is only testable if they differ.
+					const row: Record<string, unknown> = { created_at: `t${String(seq++).padStart(3, "0")}`, updated_at: "t0", last_used_at: null };
 					cols.forEach((c, i) => { row[c] = a[i] ?? null; });
 					rows.push(row);
 					return { meta: { changes: 1 } };
@@ -45,8 +60,11 @@ function mockEnv(kek: string | null = KEK): Env {
 			},
 		}),
 	});
-	return { DB: { prepare }, KEY_ENCRYPTION_KEY: kek ?? undefined } as unknown as Env;
+	return { DB: { prepare }, KEY_ENCRYPTION_KEY: kek ?? undefined, __events: logged } as unknown as Env;
 }
+
+/** The trace rows `logEvent` wrote through the mock DB — bind args, stringified. */
+const events = (env: Env): string[] => (env as unknown as { __events: string[] }).__events;
 
 describe("credDomain", () => {
 	it("normalizes URLs and hosts to a bare host", () => {
@@ -188,5 +206,80 @@ describe("credential vault fails closed on an UNREADABLE secret (#325)", () => {
 		await createCredential(good, "i1", "u1", { domain: "acme.com", password: "hunter2" });
 		expect(await findCredentialForHost(withKek(good, WRONG_KEK), "i1", "u1", "jobs.acme.com")).toBeNull();
 		expect((await listCredentials(good, "i1", "u1"))[0].lastUsedAt).toBeUndefined();
+	});
+});
+
+describe("credentialMatchRank — which stored credential fits a host (#650)", () => {
+	it("an exact host beats an ancestor, which beats a descendant", () => {
+		expect(credentialMatchRank("jobs.dayforcehcm.com", "jobs.dayforcehcm.com")).toBe(0);
+		const parent = credentialMatchRank("jobs.dayforcehcm.com", "dayforcehcm.com") as number;
+		const child = credentialMatchRank("bigco.com", "careers.bigco.com") as number;
+		expect(parent).toBeGreaterThan(0);
+		expect(child).toBeGreaterThan(parent);
+	});
+
+	it("the closer of two ancestors wins — specificity, not just tier", () => {
+		const near = credentialMatchRank("a.b.c.example.com", "c.example.com") as number;
+		const far = credentialMatchRank("a.b.c.example.com", "example.com") as number;
+		expect(near).toBeLessThan(far);
+	});
+
+	it("an unrelated host does not match, and a shared SUFFIX is not a relationship", () => {
+		expect(credentialMatchRank("jobs.dayforcehcm.com", "lever.co")).toBeNull();
+		// "notdayforcehcm.com" ends with "dayforcehcm.com" as a STRING but is a different domain.
+		expect(credentialMatchRank("notdayforcehcm.com", "dayforcehcm.com")).toBeNull();
+	});
+});
+
+describe("the apply agent signs in with the RIGHT credential, not the first-stored one (#650)", () => {
+	it("prefers the exact host over the broader domain stored before it", async () => {
+		// The issue's reproduction, in the order that produced it: the broad credential is stored
+		// FIRST, so the unordered query yielded it and `.find()` took it. Before the fix this
+		// returns the dayforcehcm.com account — the wrong username on a real application.
+		const env = mockEnv();
+		await createCredential(env, "i1", "u1", { domain: "dayforcehcm.com", username: "broad@example.com", password: "broad-pw" });
+		await createCredential(env, "i1", "u1", { domain: "jobs.dayforcehcm.com", username: "exact@example.com", password: "exact-pw" });
+		const found = await findCredentialForHost(env, "i1", "u1", "https://jobs.dayforcehcm.com/en-AU/careers/1");
+		expect(found?.username).toBe("exact@example.com");
+		expect(found?.password).toBe("exact-pw");
+	});
+
+	it("still falls back to the ancestor when nothing matches the host exactly", async () => {
+		// The behaviour the vault is FOR — one ATS account covering its subdomains — must survive.
+		const env = mockEnv();
+		await createCredential(env, "i1", "u1", { domain: "dayforcehcm.com", username: "broad@example.com", password: "broad-pw" });
+		expect((await findCredentialForHost(env, "i1", "u1", "https://jobs.dayforcehcm.com/x"))?.username).toBe("broad@example.com");
+	});
+
+	it("prefers an ancestor over a descendant of the requested host", async () => {
+		const env = mockEnv();
+		await createCredential(env, "i1", "u1", { domain: "careers.bigco.com", username: "sub@example.com", password: "sub-pw" });
+		await createCredential(env, "i1", "u1", { domain: "com", username: "tld@example.com", password: "tld-pw" });
+		// Requesting bigco.com: "com" is an ancestor, "careers.bigco.com" a descendant guess.
+		expect((await findCredentialForHost(env, "i1", "u1", "bigco.com"))?.username).toBe("tld@example.com");
+	});
+
+	it("breaks a same-domain tie with the NEWEST credential — the replacement, not the stale one", async () => {
+		// Two accounts on one host is the case the data model cannot express. The owner's most
+		// recent act is the best available signal: when a password expires and they store a
+		// replacement, the stale row is the one with the recent USE and the new one has none,
+		// which is why the tie-break is created_at and not last_used_at.
+		const env = mockEnv();
+		await createCredential(env, "i1", "u1", { domain: "acme.com", username: "old@example.com", password: "old-pw" });
+		await createCredential(env, "i1", "u1", { domain: "acme.com", username: "new@example.com", password: "new-pw" });
+		expect((await findCredentialForHost(env, "i1", "u1", "acme.com"))?.username).toBe("new@example.com");
+	});
+
+	it("records which credential was chosen ONLY when the choice was ambiguous", async () => {
+		// A determined-but-wrong answer is harder to notice than a random one, so the ambiguous
+		// case leaves a trace; the ordinary one-credential case stays silent.
+		const env = mockEnv();
+		await createCredential(env, "i1", "u1", { domain: "acme.com", username: "only@example.com", password: "pw" });
+		await findCredentialForHost(env, "i1", "u1", "acme.com");
+		expect(events(env).filter((e) => e.includes("credential.selected"))).toEqual([]);
+
+		await createCredential(env, "i1", "u1", { domain: "jobs.acme.com", username: "exact@example.com", password: "pw2" });
+		await findCredentialForHost(env, "i1", "u1", "jobs.acme.com");
+		expect(events(env).filter((e) => e.includes("credential.selected")).length).toBe(1);
 	});
 });

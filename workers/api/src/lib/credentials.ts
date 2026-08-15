@@ -1,6 +1,7 @@
 import { decryptKey, encryptKey } from "./crypto.js";
 import { HttpError } from "./auth.js";
 import { logError } from "./error-log.js";
+import { logEvent } from "./events.js";
 import type { Env } from "../types.js";
 
 export interface CredentialSecrets {
@@ -146,21 +147,81 @@ export async function revealCredential(env: Env, instanceId: string, userId: str
 }
 
 /**
- * Find the stored credential whose domain matches a job/login host (suffix match
- * either way, so "jobs.dayforcehcm.com" matches a stored "dayforcehcm.com").
- * Decrypts the secrets and bumps last_used_at. Used by the apply agent.
+ * How well a stored credential's domain fits the host being signed in to (#650).
+ * Lower is better; `null` means it does not match at all.
+ *
+ * There was no ranking here, and no `ORDER BY` on the query that fed it — the caller took the
+ * first row the index yielded, which is insertion order. So a user holding both
+ * `dayforcehcm.com` and `jobs.dayforcehcm.com` signed in with whichever they happened to store
+ * FIRST. That is the function's own motivating example, and it is what supplies the email
+ * address put on the application and the password the brain types into the form.
+ *
+ * A bare `ORDER BY created_at` would have made that deterministic without making it correct,
+ * and a deterministic wrong answer is harder to notice than a random one. So the order is
+ * derived from what actually makes a credential the right one:
+ *
+ *   0. EXACT — the stored domain IS the host. Nothing beats it.
+ *   1. PARENT — the stored domain contains the host (`dayforcehcm.com` for
+ *      `jobs.dayforcehcm.com`). The documented case: one ATS account covering its subdomains.
+ *   2. CHILD — the stored domain is BELOW the host (`careers.bigco.com` offered for
+ *      `bigco.com`). A speculative widening, so it loses to any parent match.
+ *
+ * Within a tier, fewer intervening labels wins — the closer of two ancestors is the more
+ * specific account.
+ */
+export function credentialMatchRank(host: string, domain: string): number | null {
+	const h = host.toLowerCase();
+	const d = domain.toLowerCase();
+	if (!h || !d) return null;
+	const labels = (s: string) => s.split(".").length;
+	if (h === d) return 0;
+	if (h.endsWith(`.${d}`)) return 100 + (labels(h) - labels(d));
+	if (d.endsWith(`.${h}`)) return 200 + (labels(d) - labels(h));
+	return null;
+}
+
+/**
+ * Find the stored credential that best matches a job/login host — most specific first, see
+ * {@link credentialMatchRank}. Decrypts the secrets and bumps last_used_at. Used by the apply agent.
+ *
+ * Ties (two credentials on the SAME domain — two accounts on one ATS) are broken by the
+ * `ORDER BY` below, newest first, and the rank sort is stable so that survives. Newest rather
+ * than most-recently-used on purpose: `last_used_at` is written by THIS function, so ordering
+ * by it would make the first arbitrary pick self-reinforcing, and it gets the common case
+ * backwards — when a password expires and the owner stores a replacement, the stale row is the
+ * one with the recent use and the new one has none.
+ *
+ * What this still cannot express is which of two accounts on one host belongs to which job.
+ * Nothing in the data model says so; the owner is told which was used (below) rather than
+ * guessed at silently.
  */
 export async function findCredentialForHost(env: Env, instanceId: string, userId: string, host: string): Promise<{ id: string; username?: string; loginUrl?: string; password?: string; pin?: string } | null> {
 	const h = credDomain(host);
 	if (!h) return null;
-	const res = await env.DB.prepare("SELECT * FROM agent_credentials WHERE instance_id = ?1 AND user_id = ?2")
+	const res = await env.DB.prepare("SELECT * FROM agent_credentials WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, id")
 		.bind(instanceId, userId)
 		.all<CredRow>();
-	const match = (res.results ?? []).find((r) => {
-		const d = String(r.domain).toLowerCase();
-		return h === d || h.endsWith(`.${d}`) || d.endsWith(`.${h}`);
-	});
+	const ranked = (res.results ?? [])
+		.map((r) => ({ row: r, rank: credentialMatchRank(h, String(r.domain)) }))
+		.filter((m): m is { row: CredRow; rank: number } => m.rank !== null)
+		.sort((a, b) => a.rank - b.rank);
+	const match = ranked[0]?.row;
 	if (!match) return null;
+	// More than one credential fit this host, so a choice was made that the owner did not make.
+	// Recorded only when it was genuinely ambiguous — the ordinary one-credential case stays
+	// silent — because the failure this replaces was invisible either way: a wrong account is a
+	// real application submitted under the wrong identity, or a sign-in that fails and burns the
+	// run into a stuck handoff, and neither said which credential had been used (#650).
+	if (ranked.length > 1) {
+		await logEvent(env, {
+			source: "credentials",
+			event: "credential.selected",
+			message: `Signing in to ${h} as ${match.username ?? "the stored account"} (${match.domain})`,
+			userId,
+			instanceId,
+			context: { host: h, chosen: { id: match.id, domain: match.domain, rank: ranked[0].rank }, passedOver: ranked.slice(1, 5).map((m) => ({ id: m.row.id, domain: m.row.domain, rank: m.rank })) },
+		});
+	}
 	const secrets = await decryptSecrets(env, match);
 	// A credential we cannot decrypt is not a credential the agent can sign in with. Handing back
 	// `{password: undefined}` is what produced "hasStoredLogin: true but the login doesn't work" —
