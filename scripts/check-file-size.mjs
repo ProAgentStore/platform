@@ -957,7 +957,12 @@ const PINS = {
 	// went to `lib/builtin-tool-policy.ts` (that is why this is +11 and not +26); what has to stay
 	// here is the record of which surface each gate actually covers, because the defect was
 	// precisely a route-level guarantee being described as an agent-level one.
-	"workers/api/src/routes/tools.ts": 1071,
+	// +8 at #569: the listing route reads a second query flag (`schemas`) and hands both to
+	// `projectToolListing`, plus the paragraph saying why the schemas are off by default — the
+	// default response was 89 KB and a calling host refused it. The decision and its measurements
+	// live in lib/instance-tool-policy.ts, which is where a split would have put them; what is
+	// here is the route's own contract, which is what a reader of the route needs.
+	"workers/api/src/routes/tools.ts": 1079,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1106,7 +1111,10 @@ const PINS = {
 	// are read when the ROW is questioned. Plus this self-ref.
 	// +12 at #563: the two raises above (mcp.ts, steps.ts) and their reasons. The reasons are the
 	// artefact — a pin moved without one is the ratchet reading as a formality.
-	"scripts/check-file-size.mjs": 1190,
+	// +5 at #569: the routes/tools.ts raise above (schemas became opt-in, so the listing fits a
+	// response) and this self-ref. Recorded on the way through a three-way rebase, where the two
+	// pin lines conflicted and the reasons were the only thing distinguishing them.
+	"scripts/check-file-size.mjs": 1198,
 };
 
 /**

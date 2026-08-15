@@ -139,9 +139,12 @@ describe("GET /v1/instances/:id/tools", () => {
 		const body = await jsonBody(res);
 		expect(rows(body.tools).map((t) => t.name)).toContain("github_workflow_runs");
 	});
-	it("emits each tool's jsonSchema verbatim (draft-07 object schema)", async () => {
+	it("emits each tool's jsonSchema verbatim under ?schemas=true (draft-07 object schema)", async () => {
+		// `?schemas=true` since #569: the schemas were 41% of an 89 KB default response that a
+		// calling host refused outright. Verbatim is still the contract when they ARE sent — see
+		// tool-listing-budget.test.ts for the budget and for the rows that never carry one.
 		const { app, env } = testApp();
-		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		const res = await req(app, env, "/v1/instances/i1/tools?schemas=true", {}, await tok("u1"));
 		const body = await jsonBody(res);
 		const tool = rows(body.tools).find((t) => t.name === "github_workflow_runs");
 		expect(tool.jsonSchema.type).toBe("object");
@@ -149,6 +152,18 @@ describe("GET /v1/instances/:id/tools", () => {
 		expect(tool.jsonSchema.required).toContain("repo");
 		// The old ad-hoc `parameters` map is gone from the wire shape.
 		expect(tool.parameters).toBeUndefined();
+	});
+
+	it("omits schemas by default (#569)", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		const body = await jsonBody(res);
+		const tool = rows(body.tools).find((t) => t.name === "github_workflow_runs");
+		expect(tool.jsonSchema).toBeUndefined();
+		// …and the row is still a full audit row.
+		expect(tool.name).toBe("github_workflow_runs");
+		expect(typeof tool.description).toBe("string");
+		expect(tool.mutates).toBe(false);
 	});
 });
 

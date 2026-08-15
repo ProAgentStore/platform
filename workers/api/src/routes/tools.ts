@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
-import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
+import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
@@ -100,13 +100,21 @@ export const toolRoutes = new Hono<{ Bindings: Env }>();
  * "EVERY tool" became true in #525: it listed the REGISTRY only while being described as the way to
  * verify an agent is read-only, so eleven universal BASE tools — six of them writes — were missing
  * from that audit. `tier` and `invocableBy` keep the narrower question answerable by filtering.
+ *
+ * `?schemas=true` adds each ALLOWED tool's input schema (#569). Off by default because it was 41%
+ * of a 89 KB response, which is a size a calling host can refuse outright — and a listing nobody
+ * can receive audits nothing. `projectToolListing` owns that decision and states the measurements.
  */
 toolRoutes.get("/:id/tools", async (c) => {
 	const session = await requireUser(c);
 	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
 	const policy = await instanceToolPolicy(c.env, instance.id, session.uid, instance.config);
-	const onlyAllowed = c.req.query("allowed") === "true";
-	return c.json({ tools: onlyAllowed ? policy.filter((t) => t.allowed) : policy });
+	return c.json({
+		tools: projectToolListing(policy, {
+			allowedOnly: c.req.query("allowed") === "true",
+			schemas: c.req.query("schemas") === "true",
+		}),
+	});
 });
 
 /**

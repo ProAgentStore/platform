@@ -79,7 +79,11 @@ export interface ToolPolicyEntry {
 	 */
 	mutates: boolean;
 	description: string;
-	jsonSchema: unknown;
+	/**
+	 * The tool's input schema — present only when the caller asked for schemas AND the row is
+	 * `allowed` (#569). See {@link projectToolListing} for the budget this pays for.
+	 */
+	jsonSchema?: unknown;
 	/** The final answer: may this instance run this tool right now? */
 	allowed: boolean;
 	/** True when the agent declares it but the owner switched it off. */
@@ -221,6 +225,47 @@ export function resolveToolPolicy(
 			tier: t.tier ?? "connector",
 			invocableBy: t.invocableBy ?? REGISTRY_INVOCATION,
 		};
+	});
+}
+
+/** How much of the listing to send. Both default OFF, and only one of them is a policy choice. */
+export interface ToolListingOptions {
+	/** Narrow to the runnable set. NOT a default — see {@link projectToolListing}. */
+	allowedOnly?: boolean;
+	/** Include each allowed tool's input schema. Off by default: it is 41% of the payload. */
+	schemas?: boolean;
+}
+
+/**
+ * The listing as it goes over the wire (#569) — the one place the response's SIZE is decided.
+ *
+ * Measured on production instance bd43f4de-… (104 rows, 2026-08-15): 89,281 bytes, which exceeded
+ * the calling host's response limit. So the tool's most useful mode — "return every tool, not just
+ * the allowed ones" — was the one that did not fit.
+ *
+ * Two reductions, and they are not the same kind of thing:
+ *
+ *   1. **A schema is never sent for a row the instance cannot run.** That is not a budget
+ *      decision, it is a correctness one: a schema describes inputs the caller can never send.
+ *      The verdict, reason, scope, mutation answer, tier, connector and writeConsent all stay, so
+ *      nothing auditable is lost.
+ *   2. **Schemas are opt-in even for allowed rows** (`schemas: true`). This IS a budget decision,
+ *      and it is here because (1) is not enough on its own. Re-measured against this tree: with
+ *      only (1), an agent that declares nothing (39 of 104 allowed) serialises to 65,600 bytes —
+ *      64 bytes over 64 KiB — and one that declares every tool to 82,535. Dropping schemas by
+ *      default puts EVERY shape at ~54,000, which is a bound rather than a coincidence. A caller
+ *      that wants to invoke something asks for the schema and gets it for the tools it may run.
+ *
+ * `allowedOnly` stays opt-in and must not become the default: `resolveToolPolicy`'s contract is
+ * that "what can this agent do" is only answerable if the answer includes what it can't, and
+ * defaulting it away would retire that quietly while looking like a size fix.
+ */
+export function projectToolListing(policy: readonly ToolPolicyEntry[], opts: ToolListingOptions = {}): ToolPolicyEntry[] {
+	const rows = opts.allowedOnly ? policy.filter((t) => t.allowed) : policy;
+	return rows.map((t) => {
+		if (opts.schemas && t.allowed) return t;
+		const { jsonSchema: _dropped, ...rest } = t;
+		return rest;
 	});
 }
 

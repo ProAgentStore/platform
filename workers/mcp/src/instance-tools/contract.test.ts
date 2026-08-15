@@ -273,7 +273,8 @@ const TABLE: Record<string, Row> = {
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],
 	list_instance_knowledge: ["knowledge", "none", null, null, "instance_id,token"],
-	list_instance_tools: ["base", "none", null, null, "allowed_only,instance_id,token"],
+	// +schemas at #569: the input schemas are opt-in now, because the default response was 89 KB.
+	list_instance_tools: ["base", "none", null, null, "allowed_only,instance_id,schemas,token"],
 	list_instance_trigger_events: ["triggers", "read", null, null, "limit,token,trigger_id"],
 	list_instance_triggers: ["triggers", "read", null, null, "instance_id,token"],
 	get_instance_pipeline: ["observability", "none", null, null, "instance_id,pipeline,token"],

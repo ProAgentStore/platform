@@ -44,8 +44,20 @@ import { STORAGE_TOOLS } from "./storage-tools.js";
 import { TOOL_CATALOG } from "../agent-do-tools.js";
 import { registryToolNameSet } from "./tool-registry.js";
 
-/** The catalog group a tool belongs to — the same vocabulary `ToolCatalogGroup.tier` uses. */
-export type ToolTier = "base" | "standard" | "runtime" | "connector";
+/**
+ * The catalog group a tool belongs to — the same vocabulary `ToolCatalogGroup.tier` uses.
+ *
+ * A LIST first and a type second (#569), because the vocabulary has to be readable at RUNTIME.
+ * `list_instance_tools` documented two of these four values while returning all four: 34 of 104
+ * rows on the audited instance carried a tier the description did not define, including every
+ * `runtime` tool — the set that reaches the owner's own machine. The guard that stops that
+ * recurring has to iterate the real vocabulary, and a TS union cannot be iterated; a hand-copied
+ * list in the test would be the same defect one layer over.
+ */
+export const TOOL_TIERS = ["base", "standard", "runtime", "connector"] as const;
+
+/** base = always granted · standard = creator-selectable · runtime = needs a local runner · connector = external system. */
+export type ToolTier = (typeof TOOL_TIERS)[number];
 
 /**
  * Which invocation surface can actually REACH a tool.

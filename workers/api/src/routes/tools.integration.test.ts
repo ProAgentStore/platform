@@ -106,15 +106,19 @@ describe("GET /v1/instances/:id/tools (integration)", () => {
 
 	it("returns the real connector-tool registry with schemas for the owner", async () => {
 		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
-		const res = await get(app, env, "/v1/instances/inst-1/tools", await tokenFor("u1"));
+		// `?schemas=true` since #569 — the default response omits them (89 KB was over a calling
+		// host's limit). An ALLOWED row still carries its schema verbatim when asked for, and this
+		// instance declares nothing, so every row here is allowed.
+		const res = await get(app, env, "/v1/instances/inst-1/tools?schemas=true", await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { tools: Array<{ name: string; connector: string; scope?: string; jsonSchema: unknown }> };
+		const body = (await res.json()) as { tools: Array<{ name: string; connector: string; scope?: string; allowed: boolean; jsonSchema: unknown }> };
 		expect(Array.isArray(body.tools)).toBe(true);
 		expect(body.tools.length).toBeGreaterThan(0);
 		// Every tool carries the fields the client relies on.
 		for (const t of body.tools) {
 			expect(typeof t.name).toBe("string");
-			expect(t.jsonSchema).toBeTruthy();
+			if (t.allowed) expect(t.jsonSchema, t.name).toBeTruthy();
+			else expect(t.jsonSchema, t.name).toBeUndefined();
 		}
 		// A known connector tool from the registry is present with its connector stamped.
 		const gh = body.tools.find((t) => t.name === "github_create_issue");

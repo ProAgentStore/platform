@@ -5,6 +5,32 @@ import { audit, dryRun, requireConfirmation, requirePermission } from "../safety
 import { findInstanceForAgent, type InstanceSummary, type InstanceToolsCtx } from "./shared.js";
 
 /**
+ * The `tier` vocabulary a `list_instance_tools` row can carry, with the gloss the API worker's own
+ * `ToolTier` carries (`workers/api/src/lib/builtin-tool-policy.ts`).
+ *
+ * COPIED, not imported: this worker is a separate deployable and cannot import from `workers/api`
+ * (see the `columnFor` note in ./shared.ts). `tool-listing-contract.test.ts` reads that file as
+ * text and fails when the two vocabularies diverge, which is the only honest way to keep a copy.
+ *
+ * A LIST, so the description below is BUILT from it (#569). The description defined `base` and
+ * `connector` and no others while the API returned all four — measured on the audited instance,
+ * 34 of 104 rows carried an undocumented tier, `standard` (30) and `runtime` (4), and a caller
+ * filtering on the documented pair silently dropped every tool that reaches the owner's machine.
+ * Prose and vocabulary drift apart; prose generated from the vocabulary cannot.
+ */
+export const TOOL_TIERS: ReadonlyArray<readonly [string, string]> = [
+	["base", "a universal facility every agent has"],
+	["standard", "creator-selectable, and this agent declared it"],
+	["runtime", "needs a local runner — the machine running `pags up`"],
+	["connector", "reaches an external system"],
+];
+
+/** The tier clause of the listing tool's description, rendered from the vocabulary itself. */
+function tierGloss(): string {
+	return TOOL_TIERS.map(([id, gloss]) => `${id} = ${gloss}`).join("; ");
+}
+
+/**
  * The instance surface's LIFECYCLE core: what an instance may do (the connector-tool gate),
  * how one comes into and goes out of existence, and how you talk to it.
  *
@@ -26,17 +52,22 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"list_instance_tools",
-		"Audit exactly what one of your instances may do. Returns EVERY tool it could run — its built-in agent facilities (memory, tasks, board, fetch_url, knowledge, files, collections) as well as its connector tools — each with this instance's verdict: `allowed` (may it run), `mutates` (does a call CHANGE anything — the external system, your machine, or the agent's own stored data), `scope` (read/write — whether the write-CONSENT gate applies to it, NOT whether it changes anything), `disabled` (you switched it off), `reason` (ok | not_declared | disabled_by_owner), `writeConsent` (n/a | granted | required | per_call) — the SEPARATE consent gate, so `allowed:true, writeConsent:\"required\"` means the tool is this agent's but every call is refused until write access for its `connector` is granted; `per_call` means some calls run and mutating ones don't (a caller-chosen HTTP method, or an MCP server/tool that has not been granted) — plus `tier` (base = a universal facility every agent has; connector = reaches an external system) and `invocableBy`, the surfaces that can actually reach it. Plus input schemas. Pass allowed_only:true for just the runnable set. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit reach into EXTERNAL systems specifically, filter on `connector`.",
+		"Audit exactly what one of your instances may do. Returns EVERY tool it could run — its built-in agent facilities (memory, tasks, board, fetch_url, knowledge, files, collections) as well as its connector tools — each with this instance's verdict: `allowed` (may it run), `mutates` (does a call CHANGE anything — the external system, your machine, or the agent's own stored data), `scope` (read/write — whether the write-CONSENT gate applies to it, NOT whether it changes anything), `disabled` (you switched it off), `reason` (ok | not_declared | disabled_by_owner), `writeConsent` (n/a | granted | required | per_call) — the SEPARATE consent gate, so `allowed:true, writeConsent:\"required\"` means the tool is this agent's but every call is refused until write access for its `connector` is granted; `per_call` means some calls run and mutating ones don't (a caller-chosen HTTP method, or an MCP server/tool that has not been granted) — plus `tier` (" +
+			// Rendered from TOOL_TIERS, never typed out: the two-of-four description that shipped is
+			// what #569 is about.
+			tierGloss() +
+			") and `invocableBy`, the surfaces that can actually reach it. Input schemas are NOT included by default: pass schemas:true to get them for the tools this instance may run (they are the bulk of the response, and a schema for a tool it may not run describes inputs you could never send). Pass allowed_only:true for just the runnable set. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit reach into EXTERNAL systems specifically, filter on `connector`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
 			allowed_only: z.boolean().optional().describe("Return only the tools this instance may actually run."),
+			schemas: z.boolean().optional().describe("Include each allowed tool's input schema. Off by default — schemas are the bulk of the response; ask for them when you are about to call one."),
 		},
-		async ({ token, instance_id, allowed_only }) => {
+		async ({ token, instance_id, allowed_only, schemas }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const qs = allowed_only ? "?allowed=true" : "";
-			const data = await authedCall(`/v1/instances/${instance_id}/tools${qs}`, sessionToken, {}, env);
+			const qs = [allowed_only ? "allowed=true" : "", schemas ? "schemas=true" : ""].filter(Boolean).join("&");
+			const data = await authedCall(`/v1/instances/${instance_id}/tools${qs ? `?${qs}` : ""}`, sessionToken, {}, env);
 			return jsonText(data);
 		},
 	);
@@ -85,7 +116,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	// guess made here.
 	server.tool(
 		"call_instance_tool",
-		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object. No dry run: call list_instance_tools first for the schema and for whether this instance may run it at all.",
+		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object. No dry run: call list_instance_tools with schemas:true first — that is where the input schema lives, and where you learn whether this instance may run the tool at all.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),

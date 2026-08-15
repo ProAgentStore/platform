@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
-import { registerBaseTools } from "./base.js";
+import { registerBaseTools, TOOL_TIERS } from "./base.js";
 
 /**
  * What `list_instance_tools` PROMISES, held to what it returns (#563, #569).
@@ -51,5 +52,31 @@ describe("list_instance_tools describes the fields it returns", () => {
 		// And `scope`'s own gloss has to say what `scope` is: the consent gate, not mutation.
 		expect(d, "`scope` must be glossed as the write-CONSENT gate").toMatch(/`scope`[^,]*\([^)]*[Cc]ONSENT|`scope`[^,]*\([^)]*consent/);
 		console.log(`✓ #563: list_instance_tools description is ${d.length} chars and names mutates`);
+	});
+
+	it("defines every `tier` value it can return (#569)", () => {
+		const d = describeTool("list_instance_tools");
+		// G1: the vocabulary itself is asserted before it is iterated. An empty TOOL_TIERS would
+		// otherwise pass this arm by examining nothing — the exact shape ADR 0002 exists for.
+		expect(TOOL_TIERS.length, "the tier vocabulary is empty — this arm is measuring nothing").toBe(4);
+		for (const [id, gloss] of TOOL_TIERS) {
+			expect(d, `tier "${id}" is returned but not defined in the description`).toContain(`${id} = ${gloss}`);
+		}
+		console.log(`✓ #569: all ${TOOL_TIERS.length} tier values are defined in the description`);
+	});
+
+	it("keeps its copy of the tier vocabulary equal to the API worker's (#569)", () => {
+		// This Worker cannot import from `workers/api` — separate deployables — so the vocabulary is
+		// a copy, and a copy nobody compares is a copy that drifts. Read the source of truth as TEXT,
+		// which is the only channel there is.
+		const src = readFileSync(new URL("../../../api/src/lib/builtin-tool-policy.ts", import.meta.url), "utf8");
+		const m = src.match(/export const TOOL_TIERS = \[([^\]]*)\] as const;/);
+		// G3: a parse failure is REPORTED, never skipped — a moved declaration would otherwise turn
+		// this guard off silently while it kept printing a tick.
+		expect(m, "could not find `export const TOOL_TIERS = [...] as const;` in workers/api/src/lib/builtin-tool-policy.ts — the guard cannot see the source of truth any more").not.toBeNull();
+		const apiTiers = [...(m as RegExpMatchArray)[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]);
+		expect(apiTiers.length, "parsed no tier names out of the API's TOOL_TIERS").toBeGreaterThan(0);
+		expect(TOOL_TIERS.map(([id]) => id), "the MCP copy of the tier vocabulary has drifted from workers/api").toEqual(apiTiers);
+		console.log(`✓ #569: MCP tier vocabulary matches the API's ${apiTiers.length}-value ToolTier`);
 	});
 });
