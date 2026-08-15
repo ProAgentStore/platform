@@ -319,7 +319,15 @@ const PINS = {
 	// returns `command: null` on purpose, because firing has already happened, and that asymmetry
 	// (fire cheaply, strip only on certainty) is the structural point #457 makes — a reader tidying
 	// it into "return the command like every other branch" would fire mute twice per turn.
-	"packages/sdk/src/voice/convo.ts": 1091,
+	// +14 at #469, and 13 of them are the comment above `matchVoiceCommand`'s last two checks. The
+	// change is that `mute` is now tested before `repeat`, which is one line moved and would read as
+	// a tidy-up; what it actually is, is ADR 0001 M1. A phrase the user bound to BOTH resolved to
+	// `repeat`, and the always-on control listener had no repeat branch, so the word did nothing in
+	// three of the five phases the ADR says may never be dead zones. The comment carries why the
+	// reorder is a no-op for everyone else — the built-in tables are pairwise disjoint, asserted with
+	// its denominator in convo.test.ts — because the next person to reach for an ordering change
+	// needs that fact, and re-deriving it means reading twenty language tables.
+	"packages/sdk/src/voice/convo.ts": 1105,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -1228,7 +1236,12 @@ const PINS = {
 	// work in a shared checkout. It was caught before pushing, by running the gate against the
 	// COMMITTED tree in a throwaway worktree — the only place the check measures what CI will.
 	// +6 at #595: the `workers/mcp/src/index.ts` raise above plus this line.
-	"scripts/check-file-size.mjs": 1303,
+	// +22 at #469: the use-voice and convo raises above plus this line. Same honest note as #609 —
+	// the two raises were made in a SECOND commit because the first ratchet run was read through a
+	// `grep`, which hid two of its three findings behind a filter chosen before the output existed.
+	// The gate prints everything it found for a reason; reading a guard's output selectively is the
+	// same defect ADR 0002 is about, one layer up.
+	"scripts/check-file-size.mjs": 1325,
 };
 
 /**
