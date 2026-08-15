@@ -309,7 +309,17 @@ describe("authentication", () => {
 		const some = await setup();
 		some.fetchStub.respond((u) => u.endsWith("/agents/my/agents"), { body: { agents: [{ id: "a1", slug: "x" }] } });
 		const res = await some.tools.get("my_agents")!.handler({});
-		expect(JSON.parse(res.content[0].text)).toEqual([{ id: "a1", slug: "x" }]);
+		// A bare array until #595. It answers `{total, roster, page, agents}` now: 41 owned agents
+		// were 66,013 bytes against a calling host's 64 KiB limit, so the records are paged — and
+		// the count and the names ride in front of the page, where a truncating reader still sees
+		// them (the #503 rule). The full record, `config` included, is still what `agents` carries;
+		// `agent-listing.test.ts` holds that, because no other tool can read that field.
+		expect(JSON.parse(res.content[0].text)).toEqual({
+			total: 1,
+			roster: [{ id: "a1", slug: "x", name: undefined, status: undefined, visibility: undefined }],
+			page: { offset: 0, count: 1, of: 1, nextOffset: null, hasMore: false },
+			agents: [{ id: "a1", slug: "x" }],
+		});
 	});
 });
 

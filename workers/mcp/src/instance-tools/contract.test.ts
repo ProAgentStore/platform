@@ -312,7 +312,10 @@ const TABLE: Record<string, Row> = {
 	update_profile: ["account", "write", null, "envelope", "dry_run,fields,token"],
 	upload_resume: ["apply", "write", null, "envelope", "content_base64,dry_run,filename,instance_id,token,url"],
 	usage_summary: ["account", "none", null, null, "range,token"],
-	vector_stats: ["knowledge", "none", null, null, "instance_id,token"],
+	// `offset`/`limit` at #595: 315 sources measured at 151,700 bytes, 2.3x a calling host's
+	// 64 KiB limit, so the inventory is paged. Still ungated — paging a read changes nothing
+	// about what it may see.
+	vector_stats: ["knowledge", "none", null, null, "instance_id,limit,offset,token"],
 	write_instance_memory: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,key,token,type"],
 };
 

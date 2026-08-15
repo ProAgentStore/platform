@@ -593,7 +593,12 @@ const PINS = {
 	// the tool's original commit and was never a payload decision, which the ticket had inferred it
 	// was. The vocabulary those fields describe is rendered from a constant in `state-vocabulary.ts`,
 	// which is where the growth would otherwise have been.
-	"workers/mcp/src/index.ts": 1161,
+	// +8 at #595: `my_agents` served 66,013 bytes against a calling host's 64 KiB limit — measured
+	// in production, already compact, so #586 did not help it — and now takes `offset`/`limit` and
+	// pages. The eight lines here are the two arguments, their descriptions and the call; the
+	// SHAPING is in `src/agent-listing.ts`, a new pure module, precisely so that this file did not
+	// absorb it. That is the split this ratchet asks for, taken in the same commit as the growth.
+	"workers/mcp/src/index.ts": 1169,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1213,7 +1218,8 @@ const PINS = {
 	// own, because the run that would have said so was drowned out by other agents' uncommitted
 	// work in a shared checkout. It was caught before pushing, by running the gate against the
 	// COMMITTED tree in a throwaway worktree — the only place the check measures what CI will.
-	"scripts/check-file-size.mjs": 1297,
+	// +6 at #595: the `workers/mcp/src/index.ts` raise above plus this line.
+	"scripts/check-file-size.mjs": 1303,
 };
 
 /**

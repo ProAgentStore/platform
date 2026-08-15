@@ -90,4 +90,14 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// fingerprint, unlike the tool's own description; this entry exists because the lock caught
 	// exactly that distinction. 0.1.3 is live in the registry as `isLatest` — appended, not edited.
 	"0.1.4": "sha256:7963715848df074622b41a352f96714b1c90e573466d9e56f725f7df94b36dcf",
+	// 0.1.5 (#595): `vector_stats` and `my_agents` each gained `offset` and `limit`. Both were
+	// measured over a calling host's 64 KiB limit in production AFTER #586's compaction —
+	// 151,700 B and 66,013 B — so the collections they return are now paged, and an argument
+	// added to a tool lands in `inputSchema`, which IS in the fingerprint. The result SHAPES also
+	// changed (both now lead with the totals and carry a `page`), which is a consumer-visible
+	// change the fingerprint cannot see: it hashes what a host is TOLD about a tool, not what the
+	// tool answers. That is the same gap #561 fell through when `my_instances` became
+	// `{"instances":[…]}` under a frozen version, and it is why the bump is justified twice over
+	// here. Appended, never edited: 0.1.4 is published.
+	"0.1.5": "sha256:cf3a8e35a95a152601e5cea1fed4bcae56b15bcffd87651d8b499a6048d72951",
 };

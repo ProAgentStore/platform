@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
+import { fitPage } from "../wire-budget.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -194,16 +195,34 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"vector_stats",
-		"What's in a subscribed instance's vector store, grouped by source (files, KB docs, repo files, conversation summaries) with chunk counts — the console's Knowledge → Index panel. Use search_instance_knowledge to test retrieval.",
+		"What's in a subscribed instance's vector store, grouped by source (files, KB docs, repo files, conversation summaries) with chunk counts — the console's Knowledge → Index panel. Use search_instance_knowledge to test retrieval. The three totals (`totalSources`, `totalChunks`, `totalChars`) always describe the WHOLE store and are never reduced, so \"how much is indexed\" is answerable from any page. `sources` is a PAGE of that store: read `page.hasMore` and call again with `offset: page.nextOffset` to continue. A repo-backed instance runs to thousands of sources — one measured at 315 sources and 151,700 bytes, 2.3x a calling host's 64 KiB limit — so a single reply cannot carry them all and never could.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
+			offset: z.number().int().min(0).optional().describe("Skip this many sources. Pass `page.nextOffset` from the previous reply; omit for the first page."),
+			limit: z.number().int().min(1).optional().describe("Cap the sources returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, offset, limit }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const data = await authedCall(`/v1/instances/${instance_id}/vectors`, sessionToken, {}, env);
-			return jsonText(data);
+			// An `{error}` body carries no `sources` and passes through untouched rather than being
+			// reshaped into a success with an empty inventory — the same rule `list_instance_tools`
+			// follows next door, and for the same reason: an empty store and an unreadable one are
+			// different answers.
+			const rec = data as { sources?: unknown[]; error?: string };
+			if (!Array.isArray(rec.sources)) return jsonText(data);
+			const { sources, ...totals } = rec;
+			// The totals ride in FRONT of the page and describe the whole store, so a caller that
+			// reads one page still knows the size of what it did not read (#503's rule: the count
+			// must never live in the part that gets cut).
+			const fitted = fitPage({
+				rows: sources,
+				offset,
+				limit,
+				build: (rows, page) => ({ ...totals, page, sources: rows }),
+			});
+			return text(fitted.text);
 		},
 	);
 
