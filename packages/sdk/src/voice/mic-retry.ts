@@ -16,9 +16,11 @@
  *
  * Production, 2026-08-08 → 08-11: 20 `client:voice-control` rows reading
  * `control listener refused the microphone: audio-capture`, ten of them inside one 94-minute
- * window. `reportClientError` de-dups an identical message to one row per 30s, so those rows are
- * a floor on the number of failures, not a count of them — which is why {@link MicErrorDetail}
- * exists: the counter is the measurement that says whether a row is a spin or a scatter.
+ * window. `reportClientError` drops an identical message sent within 30s (`client.ts:81`), and the
+ * durable log then collapses what does arrive onto one row per hour (`error-log.ts:90`), so those
+ * rows are a floor on the number of failures and not a count of them — which is why
+ * {@link MicErrorDetail} exists: the counter is the measurement that says whether a row is a spin
+ * or a scatter.
  *
  * ## Why backoff, and not a latch
  *
@@ -56,9 +58,9 @@ export const MIC_CONTENTION_NOTICE_AFTER = 4;
 /**
  * What the caller learns alongside the error code.
  *
- * `fails` is the consecutive-failure counter and is the number the durable log was missing: with
- * de-dup at one row per 30s, `fails: 2` and `fails: 240` are the same single row and mean
- * completely different things about the user's machine.
+ * `fails` is the consecutive-failure counter and is the number the durable log was missing: a row
+ * stands for every failure suppressed behind it, so `fails: 2` and `fails: 240` are the same single
+ * row and mean completely different things about the user's machine.
  */
 export interface MicErrorDetail {
 	/** Consecutive non-benign errors over the device, reset by proof of capture. */
@@ -73,8 +75,17 @@ export interface MicErrorDetail {
  *
  * Without a gap rule a run only ever grows, so the fourth failure of a session shows the
  * contention notice even if the three before it were hours ago and the device has worked since.
- * 30s is the durable log's own de-dup window, which makes `fails` and the row count answer the
- * same question over the same period.
+ *
+ * 30s is `reportClientError`'s send-side throttle (`client.ts:81`) — the interval at which an
+ * identical message can reach the log at all — so a REPORTED failure and the burst counter divide
+ * time the same way. It is deliberately NOT the durable log's collapse window, which is one hour
+ * (`COLLAPSE_WINDOW_MS`, `error-log.ts:90`); an earlier version of this comment said it was, and
+ * that mattered, because it makes `repeat_count: 11` and `fails: 1` on one row look contradictory
+ * when they are not. They are consistent, and together they say something precise: eleven failures
+ * reached the log inside one hour, and each one was the FIRST of its burst, i.e. more than 30s
+ * after the previous with a proven capture in between. That is scattered turn-boundary contention,
+ * not a spin — which is exactly the distinction this counter was added to make, and on 2026-08-12
+ * it made it.
  */
 export const MIC_BURST_GAP_MS = 30_000;
 

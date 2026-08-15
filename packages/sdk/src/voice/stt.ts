@@ -123,9 +123,10 @@ export interface SttOptions {
 	transcribePrompt?: string;
 	onResult?: (text: string, isFinal: boolean) => void;
 	/** `detail` accompanies a browser-recognizer failure only (#425): how many times in a row this
-	 *  recognizer has failed, and how long the burst has lasted. The durable log de-dups an
-	 *  identical message to one row per 30s, so without the counter a single row cannot tell a
-	 *  turn-boundary transient from a loop that has been re-activating the mic for an hour. */
+	 *  recognizer has failed, and how long the burst has lasted. An identical message is dropped
+	 *  client-side within 30s and collapsed onto one durable row per hour, so without the counter a
+	 *  single row cannot tell a turn-boundary transient from a loop that has been re-activating the
+	 *  mic for an hour. */
 	onError?: (error: string, detail?: MicErrorDetail) => void;
 	onEnd?: () => void;
 	/** Fired with the raw recorded audio for a transcribed turn (Whisper only) so the
