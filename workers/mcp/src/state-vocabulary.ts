@@ -44,8 +44,37 @@
 // The answer in each case is the mechanism above, not a better inventory: back the vocabulary
 // against the emitting source, and RENDER it rather than restate it.
 //
-// How far that generalises to the nine entries below was MEASURED, entry by entry, rather than
-// assumed — and it does not generalise evenly:
+// ── Both halves of that limit are now MEASURED rather than narrated (#600)
+//
+// The paragraph above was true and was doing no work: it described the blindness in prose while
+// the success line went on reporting "12 claims found", a number that reads the same whether the
+// surface holds twelve claims or twenty. Two arms in `state-vocabulary.test.ts` close it, and the
+// design is deliberately split in two so neither compromises the other:
+//
+//   · DETECTION OF PRESENCE is broad. {@link enumAnnouncements} asks only "does this description
+//     publish a value set", never what the members are, so it can match phrasings the extractor
+//     must not. A description that announces one and yields no parsed claim now FAILS.
+//   · EXTRACTION OF MEMBERS stays narrow. {@link stateEnumClaims} is unchanged, because a widened
+//     extractor has to be RIGHT about what it pulls out: measured at 6 false positives in 8
+//     candidates, recovering two of four members from the description it was written for.
+//
+// So the remedy for an unreadable announcement is to render the vocabulary readably, never to
+// teach the scanner one more shape. Its first catch was `coding_session_capture` — rendered from
+// a constant since #593 and INVISIBLE to the sweep the whole time, checked by generation and
+// uncounted by detection at once. Fixing it moved the surface from 14 claims to 15.
+//
+// The announcement vocabulary was measured over all 136 descriptions, not imagined: 3 announce a
+// value set, and `\bvalues are\b` was dropped as a marker because it produced 2 false positives
+// and no true ones.
+//
+// ── The nine entries below, re-derived against the tree
+//
+// Each was checked entry by entry rather than assumed, and their citations are now FIELDS the
+// test resolves (file exists, symbol declared, members present near it) instead of prose nothing
+// read. Three were false — `lib/tool-listing.ts` was not a file, `lib/connector-consent.ts` held
+// none of the four members cited to it, `lib/coding-engines.ts` declared a different four-member
+// set — and an entry naming a missing file passed exactly as an accurate one did. Corrected in
+// place; the old citation is kept in each `reason` so the record shows what moved.
 //
 //   · FOUR are one derivation away, because the cited file really does declare a closed set:
 //     `board.ts:17 BoardView`, `feedback.ts:35 FeedbackStatus`, `agent-capabilities.ts:31
@@ -55,15 +84,14 @@
 //   · ONE cannot be backed at all and should not be: `events.ts:23` documents `source` as
 //     `'chat' | 'apply' | 'coding' | 'voice' | 'tool' | …` — an OPEN field with an explicit
 //     ellipsis. A closed set derived from an open one would be a new false claim.
-//   · THREE have a citation that does not hold, found while checking this: there is no
-//     `lib/tool-listing.ts` in the tree; `lib/connector-consent.ts` contains none of
-//     `granted/n\a/per_call/required` (grep count 0); and `lib/coding-engines.ts` declares
-//     `EngineAuth = auto|machine|subscription|api-key`, which is a DIFFERENT four-member set from
-//     the `account|default|env|platform` recorded here. The reasons are prose, so nothing enforces
-//     them — an inventory entry pointing at a file that does not exist still passes. Left as
-//     recorded rather than guessed at: sending an implementer to the wrong file is the cost this
-//     whole mechanism exists to avoid, and correcting three citations is a separate measurement.
-//   · ONE is correctly labelled not a value set at all ("added|errors|seen|skipped" — field names).
+//   · ONE is correctly labelled not a value set at all ("added|errors|seen|skipped" — field
+//     names), though it is a PIPELINE run tally rather than the "ingest" one recorded until #600.
+//
+// What the citation check CANNOT do, stated because it is the next hole: it proves a citation
+// RESOLVES, not that it is the right enum. `cancelled|done|failed` cites `LoopStopReason`, which
+// contains all three — and the only description publishing that set is about runtime TASK status,
+// whose vocabulary has `completed` and no `done` at all. That defect is real, is in a file this
+// one does not own, and is recorded on the entry rather than silently fixed here.
 
 /**
  * The coding `runState` vocabulary.
@@ -90,10 +118,24 @@ const RUN_STATE_GLOSS: Record<string, string> = {
  *
  * Every member carries its gloss because the three states that are NOT an engine's answer are
  * exactly the ones a reader collapses into "idle" when they are unlabelled, which is the defect.
+ *
+ * ── Why it LEADS with a bare chain (#600)
+ *
+ * It did not, and that cost it its place in the denominator. Written as `is one of:` followed
+ * straight into glossed members, `stateEnumClaims` returned `[]` for it — the same blindness
+ * that hid the two `health` descriptions in #588 — so the one description on this surface that
+ * is genuinely rendered from a constant was NOT among the claims the sweep counted. It was
+ * checked by generation and invisible to detection at the same time, which reads in the success
+ * line as a surface with one fewer value set on it than it has.
+ *
+ * Found by the announcement sweep added in #600 rather than by reading: it was the only true
+ * positive of three, over 136 descriptions. Fixed the way {@link runHealthSentence} was fixed,
+ * because the two now have to answer the same guard.
  */
 export function runStateSentence(): string {
+	const chain = CODING_RUN_STATES.map((s) => `\`${s}\``).join("/");
 	const parts = CODING_RUN_STATES.map((s) => `\`${s}\` (${RUN_STATE_GLOSS[s]})`);
-	return `\`run_state\` is one of: ${parts.join(", ")}.`;
+	return `\`run_state\` is one of ${chain} — ${parts.join(", ")}.`;
 }
 
 /**
@@ -191,24 +233,165 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	},
 };
 
+/** An unbacked claim's citation — the code that emits it, in a shape a guard can resolve. */
+export interface UnbackedClaim {
+	/** Why the claim is not backed by a derived vocabulary. */
+	reason: string;
+	/**
+	 * Repo-relative path of the code that emits the vocabulary, or `null` when the members are
+	 * genuinely declared nowhere. `state-vocabulary.test.ts` READS this file and fails when it
+	 * does not exist or does not declare the members — prose could not be checked, and three of
+	 * these nine were false (#600).
+	 */
+	source: string | null;
+	/** The declaration in {@link source}. The guard looks for the members around it. */
+	symbol?: string;
+}
+
 /**
  * Enum-shaped claims found in tool descriptions that are NOT yet backed by a derived vocabulary.
  *
- * Keyed by the claim's normalised members, valued by why it is unbacked. Backing one means finding
- * the code that emits it and adding it to {@link BACKED_VOCABULARIES} — at which point its entry
- * here must be deleted, which the guard enforces in both directions.
+ * Keyed by the claim's normalised members. Backing one means finding the code that emits it and
+ * adding it to {@link BACKED_VOCABULARIES} — at which point its entry here must be deleted, which
+ * the guard enforces in both directions.
+ *
+ * ── Why the citation is a field and not a sentence (#600)
+ *
+ * It was a sentence, and nothing read it. Three of the nine named code that does not exist:
+ * `lib/tool-listing.ts` was not a file in the tree, `lib/connector-consent.ts` contained zero
+ * occurrences of any of `granted/n\a/per_call/required`, and `lib/coding-engines.ts` declares
+ * `EngineAuth = auto|machine|subscription|api-key` — a different four-member set from the one
+ * recorded against it. An entry pointing at a missing file passed exactly as an accurate one did.
+ *
+ * That is the defect this whole file was built to catch, occurring in its own metadata: a stated
+ * fact nothing checks. It matters more than three stale strings because the inventory exists so a
+ * future reader can decide whether a claim can NOW be backed; a false citation sends them to a
+ * file that is not there, and finding nothing they conclude the claim is unbackable — the exact
+ * opposite of what the record is for.
+ *
+ * All nine were re-derived against the tree, not just the three known bad: the base rate was
+ * three false in nine, which is too poor to spot-check. Two more corrections came out of it —
+ * `added|errors|seen|skipped` is a PIPELINE run tally rather than an "ingest" one, and
+ * `account|default|env|platform` was mislabelled "engine auth origin" when it is a budget
+ * ceiling tier, so both the file AND the noun were wrong on that entry.
  */
-export const UNBACKED_CLAIMS: Record<string, string> = {
-	"kanban|list": "board view — emitted by workers/api/src/lib/board.ts `BoardView`",
-	"browser|coding|null": "runtime kind — emitted by workers/api/src/lib/agent-capabilities.ts",
-	"added|errors|seen|skipped": "FIELD NAMES of an ingest tally, not a value set",
-	"dismissed|filed|open|triaged": "feedback status — emitted by workers/api/src/lib/feedback.ts",
-	"disabled_by_owner|not_declared|ok": "tool-listing reason — emitted by workers/api/src/lib/tool-listing.ts",
-	"granted|n/a|per_call|required": "write-consent state — emitted by workers/api/src/lib/connector-consent.ts",
-	"cancelled|done|failed": "loop stop reasons — emitted by workers/api/src/lib/agent-loop.ts",
-	"apply|chat|coding|voice": "trace source — emitted by workers/api/src/lib/events.ts",
-	"account|default|env|platform": "engine auth origin — emitted by workers/api/src/lib/coding-engines.ts",
+export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
+	"kanban|list": {
+		reason: "board view",
+		source: "workers/api/src/lib/board.ts",
+		symbol: "BoardView",
+	},
+	"browser|coding|null": {
+		reason: "agent runtime kind — `null` is an unquoted member of the union",
+		source: "workers/api/src/lib/agent-capabilities.ts",
+		symbol: "AgentRuntimeKind",
+	},
+	"added|errors|seen|skipped": {
+		reason:
+			"FIELD NAMES of a pipeline-run tally, not a value set — backing it would invent a closed " +
+			'set out of four struct members. Recorded as "an ingest tally" until #600; it is the ' +
+			"pipeline run counter, and the tool that publishes it is `list_pipeline_runs`.",
+		source: "workers/api/src/lib/pipeline-runs.ts",
+		symbol: "RunCounts",
+	},
+	"dismissed|filed|open|triaged": {
+		reason: "feedback status",
+		source: "workers/api/src/lib/feedback.ts",
+		symbol: "FeedbackStatus",
+	},
+	"disabled_by_owner|not_declared|ok": {
+		reason:
+			"tool-policy reason. Cited `lib/tool-listing.ts` until #600 — a file that has never " +
+			"existed in this tree. The producer is `instance-tool-policy.ts:220`; the type is " +
+			"re-exported from the leaf below.",
+		source: "workers/api/src/lib/tool-refusal.ts",
+		symbol: "ToolPolicyReason",
+	},
+	"granted|n/a|per_call|required": {
+		reason:
+			"write-consent state. Cited `lib/connector-consent.ts` until #600, which contains none " +
+			"of the four (that file declares only `ConnectorScope = \"write\"`).",
+		source: "workers/api/src/lib/instance-tool-policy.ts",
+		symbol: "ToolWriteConsent",
+	},
+	"cancelled|done|failed": {
+		reason:
+			"loop stop reasons — three of a nine-member union, which the sweep's subset rule covers. " +
+			"NOTE, and NOT fixed here because it is a defect in a description this file does not own: " +
+			"the only description publishing this set is `instance-tools/board.ts:273`, which is about " +
+			"runtime TASK status, not loop stop reasons. That vocabulary is `TaskStatus` in " +
+			"`packages/browser-runner/src/types.ts:10`, where the member is `completed` and `done` does " +
+			"not appear. So the citation below resolves and the description is still wrong — the limit " +
+			"of a mechanical citation check, stated rather than papered over.",
+		source: "workers/api/src/lib/agent-loop.ts",
+		symbol: "LoopStopReason",
+	},
+	"apply|chat|coding|voice": {
+		reason:
+			"trace source, and the field is genuinely OPEN — declared `source: string` with an " +
+			"explicit ellipsis in its doc comment. A closed set derived from an open one would be a " +
+			"new false claim, so this entry must stay here rather than move to BACKED_VOCABULARIES.",
+		source: "workers/api/src/lib/events.ts",
+		symbol: "source",
+	},
+	"account|default|env|platform": {
+		reason:
+			"budget CEILING TIER — which of four sources supplied a spend limit. Recorded as " +
+			'"engine auth origin — emitted by lib/coding-engines.ts" until #600, where both halves ' +
+			"were wrong: that file declares `EngineAuth = auto|machine|subscription|api-key`, and no " +
+			"concept of an engine auth origin exists in the tree at all. Unexported, and under " +
+			"`routes/` rather than `lib/`, which is why it was hard to find and is worth naming.",
+		source: "workers/api/src/routes/budget.ts",
+		symbol: "CeilingTier",
+	},
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANNOUNCEMENTS — the denominator {@link stateEnumClaims} cannot supply (#600)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Phrases that ANNOUNCE a value set, whether or not {@link stateEnumClaims} can read the members.
+ *
+ * Measured over the real registered surface (136 descriptions), not imagined. `\bvalues are\b`
+ * was a candidate and is deliberately absent: it produced two false positives and no true ones
+ * ("values are never exposed" in `keys_status`, "Values are clamped server-side" in
+ * `set_budget_limits`), which is the cry-wolf rate that gets a guard deleted.
+ *
+ * `it has three values:` is here because it is what the two drifted `health` descriptions
+ * actually said before #588 — recovered from `78bac76^` rather than guessed.
+ */
+const ENUM_ANNOUNCEMENTS: RegExp[] = [
+	/\bis one of\b/i,
+	/\bone of:/i,
+	/\bone of the following\b/i,
+	/\b(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+values\b/i,
+];
+
+/**
+ * Does this description publish a value set — in ANY shape?
+ *
+ * A different question from {@link stateEnumClaims}, and the whole point of the split. That
+ * function EXTRACTS members and must be right about them; this one only asserts that a value set
+ * is being published, so it can be broad where the extractor cannot.
+ *
+ * The failure this closes: `stateEnumClaims` returned `[]` for both drifted `health`
+ * descriptions, so the claim was never one of the twelve the sweep measured and no inventory
+ * entry could have recorded what the sweep never found. Counting announcements gives the sweep a
+ * denominator — announced = parsed + UNPARSED — where before it had only "12 claims found", a
+ * number that looked identical whether the surface held twelve claims or twenty.
+ *
+ * The remedy for an announcement the extractor cannot read is to RENDER the vocabulary in a
+ * readable shape ({@link runHealthSentence}, {@link runStateSentence}), never to widen the
+ * extractor: widening was measured at 6 false positives in 8 candidates and still recovered only
+ * two of four members from the description it was written for. Generation, not detection — the
+ * doctrine at the top of this file, now with a guard that says when it has been skipped.
+ *
+ * @returns the announcement phrases found, so a failure can quote what it matched on
+ */
+export function enumAnnouncements(text: string): string[] {
+	return ENUM_ANNOUNCEMENTS.map((re) => text.match(re)?.[0]).filter((m): m is string => Boolean(m));
+}
 
 /**
  * Every enum-shaped claim in a piece of prose, as sorted member lists.

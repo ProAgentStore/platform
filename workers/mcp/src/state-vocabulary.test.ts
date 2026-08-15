@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 vi.mock("@cloudflare/workers-oauth-provider", () => ({ OAuthProvider: class {} }));
@@ -34,6 +34,7 @@ const {
 	RUN_HEALTH_STATES,
 	UNBACKED_CLAIMS,
 	claimKey,
+	enumAnnouncements,
 	runHealthSentence,
 	runStateSentence,
 	stateEnumClaims,
@@ -230,8 +231,27 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 		const seenUnbacked = new Set<string>();
 		let claimCount = 0;
 		let backedCount = 0;
+		let announcedCount = 0;
+		const unreadable: string[] = [];
 
 		for (const tool of described) {
+			// THE DENOMINATOR ARM (#600). A description that announces a value set but yields no
+			// parsed claim is not a clean description — it is a claim outside the measurement, and
+			// it looks identical to a tool that publishes no vocabulary at all. That is how both
+			// drifted `health` descriptions sat outside the twelve #593 counted while the inventory
+			// reported itself complete.
+			const announcements = enumAnnouncements(tool.description);
+			if (announcements.length) {
+				announcedCount++;
+				if (stateEnumClaims(tool.description).length === 0) {
+					unreadable.push(
+						`${tool.name}: announces a value set ("${announcements[0]}") that stateEnumClaims cannot read. ` +
+							"RENDER the vocabulary so the members are detectable — lead with a `a`/`b`/`c` chain the " +
+							"way runHealthSentence and runStateSentence do — rather than widening the scanner, which " +
+							"was measured at 6 false positives in 8 candidates.",
+					);
+				}
+			}
 			for (const members of stateEnumClaims(tool.description)) {
 				claimCount++;
 				const key = claimKey(members);
@@ -258,6 +278,7 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 		}
 
 		expect(violations, violations.join("\n")).toEqual([]);
+		expect(unreadable, unreadable.join("\n")).toEqual([]);
 
 		// The ratchet's shrink arm: an entry that no longer appears has been fixed or reworded, and
 		// must leave — otherwise the inventory rots into an allowlist nobody reads.
@@ -270,7 +291,16 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 		// vocabulary — falls under it and says so. It was 12 until #588 rendered `run health` into
 		// the two loop tools, which is the point: backing a claim is what moves this number, and a
 		// claim nobody can see moves nothing.
-		expect(claimCount, "value-set claims swept across the registered surface").toBeGreaterThanOrEqual(14);
+		// 15 since #600, and the +1 over #588's 14 is the point rather than drift: making
+		// `runStateSentence` lead with a bare chain moved `coding_session_capture`'s vocabulary
+		// from checked-by-generation-but-invisible-to-detection into the counted population. A
+		// claim nobody can see moves nothing, so this number only rises when coverage does.
+		expect(claimCount, "value-set claims swept across the registered surface").toBeGreaterThanOrEqual(15);
+		// G2 for the arm above: announcements are the population, parsed claims are what was
+		// checked. Asserting the floor stops the sweep silently reporting "0 unreadable" because
+		// the ANNOUNCEMENT detector broke rather than because the surface is clean — the same
+		// empty-set-passes trap one level up.
+		expect(announcedCount, "descriptions announcing a value set — the detector has stopped detecting").toBeGreaterThanOrEqual(3);
 		// The split is PRINTED rather than asserted into a string nobody reads, the way
 		// `conformance.test.ts` prints its tallies: the number that matters is how much of the
 		// surface is checked against emitting code, and it belongs in every green build so a
@@ -281,7 +311,10 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 				`  ${claimCount} claims found · ${backedCount} backed by a derived vocabulary · ${claimCount - backedCount} inventoried as unbacked\n` +
 				`  ${Object.keys(BACKED_VOCABULARIES).length} backed vocabularies (${Object.keys(BACKED_VOCABULARIES).join(", ")}) · ` +
 				`${seenUnbacked.size} distinct UNBACKED_CLAIMS entries still present\n` +
-				"  NOT counted: a claim written with parenthesised glosses is invisible to the scanner — see state-vocabulary.ts for why detection is not the mechanism",
+				`  ${announcedCount} description(s) ANNOUNCE a value set == ${announcedCount - unreadable.length} readable by the scanner + ${unreadable.length} unreadable\n` +
+				"  That last line replaced a caveat (#600). It used to read \"NOT counted: a claim written with " +
+				"parenthesised glosses is invisible to the scanner\" — true, and the sort of thing a guard states " +
+				"instead of measuring. It is now the arm that fails.",
 		);
 	});
 
@@ -293,5 +326,103 @@ describe("every tool that publishes a value set is backed or recorded", () => {
 		// built from the constant, so it cannot name a state the code does not have.
 		expect(capture?.description).toContain(runStateSentence());
 		expect(capture?.description).not.toContain("(idle/working/offline)");
+	});
+});
+
+describe("the inventory's own citations resolve (#600)", () => {
+	/**
+	 * A verification artefact that is itself unverified erodes trust in the verification, and this
+	 * one was: three of nine `reason` strings named code that does not exist — `lib/tool-listing.ts`
+	 * (no such file), `lib/connector-consent.ts` (zero occurrences of any of the four members it was
+	 * cited for) and `lib/coding-engines.ts` (a DIFFERENT four-member set). An entry pointing at a
+	 * missing file passed exactly as an accurate one did, because the citation was prose.
+	 *
+	 * Three false in nine is too poor a base rate to spot-check the remaining six, so this checks
+	 * all of them mechanically and states the denominator.
+	 */
+	const REPO_ROOT = join(import.meta.dirname, "../../..");
+
+	/**
+	 * The lines around a declaration — a doc comment above it through the end of the statement.
+	 *
+	 * A whole-file substring search would pass on almost anything (`ok`, `null` and `required`
+	 * appear in most files), which would make this guard agree with everything and therefore
+	 * measure nothing. Windowing is what makes it able to say no: `coding-engines.ts` contains
+	 * neither `account` nor `platform` near `EngineAuth`, which is how the third false citation is
+	 * caught rather than waved through.
+	 */
+	function declarationWindow(src: string, symbol: string): string | null {
+		const lines = src.split("\n");
+		const at = lines.findIndex((l) => new RegExp(`\\b${symbol}\\b`).test(l) && !l.trim().startsWith("*"));
+		if (at === -1) return null;
+		return lines.slice(Math.max(0, at - 12), at + 16).join("\n");
+	}
+
+	it("every citation names a file that exists and declares the members it is cited for", () => {
+		const entries = Object.entries(UNBACKED_CLAIMS);
+		// G1 — an inventory that parsed to nothing must fail rather than report nine clean
+		// citations over an empty map.
+		expect(entries.length, "UNBACKED_CLAIMS is empty — this guard is measuring nothing").toBeGreaterThanOrEqual(5);
+
+		const problems: string[] = [];
+		let checked = 0;
+		for (const [key, entry] of entries) {
+			if (entry.source === null) continue;
+			checked++;
+			const path = join(REPO_ROOT, entry.source);
+			if (!existsSync(path)) {
+				problems.push(`${key}: cites ${entry.source}, which does not exist`);
+				continue;
+			}
+			const src = readFileSync(path, "utf8");
+			if (!entry.symbol) continue;
+			const window = declarationWindow(src, entry.symbol);
+			if (window === null) {
+				problems.push(`${key}: ${entry.source} does not declare \`${entry.symbol}\``);
+				continue;
+			}
+			// `n/a` is one member containing its own separator; `null` is unquoted in its union.
+			const missing = key.split("|").filter((m) => !window.includes(m));
+			if (missing.length) {
+				problems.push(
+					`${key}: ${entry.source} declares \`${entry.symbol}\`, but ${missing.map((m) => `\`${m}\``).join(", ")} ` +
+						"do not appear near it — the citation names the wrong symbol or the wrong file.",
+				);
+			}
+		}
+
+		expect(problems, problems.join("\n")).toEqual([]);
+		// G2 — the denominator. "All citations valid" over zero citations is the failure this
+		// whole file is about.
+		expect(checked, "citations actually resolved against the tree").toBeGreaterThanOrEqual(8);
+		console.log(`✓ ${checked} of ${entries.length} UNBACKED_CLAIMS citations resolved against the tree (source + symbol + members)`);
+	});
+
+	it("goes red on a citation that does not resolve — all three of the ways the real ones failed", () => {
+		// G4, on the three shapes actually found rather than one invented one. Each is run
+		// through the same code path the sweep uses, against the REAL tree.
+		const bad: Record<string, { source: string; symbol: string }> = {
+			// 1. the file does not exist — `lib/tool-listing.ts`, as recorded until #600.
+			"disabled_by_owner|not_declared|ok": { source: "workers/api/src/lib/tool-listing.ts", symbol: "ToolPolicyReason" },
+			// 2. the file exists and contains none of the members — `lib/connector-consent.ts`.
+			"granted|n/a|per_call|required": { source: "workers/api/src/lib/connector-consent.ts", symbol: "ConnectorScope" },
+			// 3. the file exists and declares a DIFFERENT set of the same size — `EngineAuth`.
+			"account|default|env|platform": { source: "workers/api/src/lib/coding-engines.ts", symbol: "EngineAuth" },
+		};
+		const failures: string[] = [];
+		for (const [key, entry] of Object.entries(bad)) {
+			const path = join(REPO_ROOT, entry.source);
+			if (!existsSync(path)) {
+				failures.push(`${key}: missing file`);
+				continue;
+			}
+			const window = declarationWindow(readFileSync(path, "utf8"), entry.symbol);
+			const missing = window === null ? key.split("|") : key.split("|").filter((m) => !window.includes(m));
+			if (missing.length) failures.push(`${key}: ${missing.join(",")} absent`);
+		}
+		// All three must be rejected. If any passes, the check is too loose to have caught the
+		// citations that were actually wrong, which is the only thing it exists for.
+		expect(failures).toHaveLength(3);
+		expect(failures[0]).toContain("missing file");
 	});
 });
