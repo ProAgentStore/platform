@@ -58,8 +58,9 @@ describe("session ID generation", () => {
 	});
 
 	it("generated session IDs are unique", () => {
+		const provided = undefined; // the caller sent no sessionId — same shape as the test above
 		const ids = new Set(
-			Array.from({ length: 50 }, () => undefined || crypto.randomUUID()),
+			Array.from({ length: 50 }, () => provided || crypto.randomUUID()),
 		);
 		expect(ids.size).toBe(50);
 	});

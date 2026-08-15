@@ -113,14 +113,14 @@ function buildApp(
 
 const tokenFor = (uid: string, roles: string[] = ["user"]) => signSession(uid, SECRET, { roles });
 
-function json(app: Hono, env: unknown, method: string, path: string, body: unknown, tok?: string) {
+function json(app: Hono<{ Bindings: Env }>, env: Env, method: string, path: string, body: unknown, tok?: string) {
 	return app.request(path, {
 		method,
 		headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" },
 		body: body === undefined ? undefined : JSON.stringify(body),
 	}, env);
 }
-function get(app: Hono, env: unknown, path: string, tok?: string) {
+function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
 	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
 

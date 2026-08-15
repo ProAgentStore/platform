@@ -84,10 +84,17 @@ function setup(): Harness {
 	});
 
 	const env: McpEnv = { API_BASE: "https://api.test" };
-	let captured: { schema: Record<string, unknown>; handler: (a: Record<string, unknown>) => Promise<{ content: { text: string }[] }> } | null = null;
+	type CapturedTool = { schema: Record<string, unknown>; handler: (a: Record<string, unknown>) => Promise<{ content: { text: string }[] }> };
+	// A holder OBJECT rather than a bare `let`. TS's control-flow analysis does not track assignments
+	// made inside the fake server's callback, so a `let` stays narrowed to `null` across the
+	// `registerObservabilityTools` call and `NonNullable<typeof captured>` collapses to `never` — which
+	// is exactly what this file did the moment #599 put it in front of tsc. A property read is
+	// invalidated by an intervening call, so `box.current` recovers its declared type honestly
+	// instead of being cast back into one.
+	const box: { current: CapturedTool | null } = { current: null };
 	const server = {
 		tool(name: string, _d: string, schema: Record<string, unknown>, handler: (a: Record<string, unknown>) => Promise<{ content: { text: string }[] }>) {
-			if (name === "instance_messages") captured = { schema, handler };
+			if (name === "instance_messages") box.current = { schema, handler };
 		},
 	};
 	const ctx: InstanceToolsCtx = {
@@ -98,8 +105,8 @@ function setup(): Harness {
 	};
 	// biome-ignore lint/suspicious/noExplicitAny: minimal fake MCP server, same shape as instance-tools.test.ts
 	registerObservabilityTools(server as any, ctx);
-	if (!captured) throw new Error("instance_messages was not registered — the guard has stopped measuring");
-	const tool = captured as NonNullable<typeof captured>;
+	const tool = box.current;
+	if (!tool) throw new Error("instance_messages was not registered — the guard has stopped measuring");
 	return {
 		schema: tool.schema,
 		urls,

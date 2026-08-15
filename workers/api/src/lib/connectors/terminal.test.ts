@@ -56,6 +56,9 @@ describe("terminal connector — registration", () => {
 		// enforces; the schema enums are what the model is offered. A backend added to one and not
 		// the other is either an unreachable declaration or an unconstrained argument.
 		const def = CONNECTOR_CONSTRAINTS.terminal.backends;
+		// A VALUE ceiling is what this test is about: `wildcard`/`values` only exist on that variant,
+		// so narrow rather than cast — if `backends` is ever re-declared as a binding, this fails loudly.
+		if (def.kind !== "values") throw new Error("CONNECTOR_CONSTRAINTS.terminal.backends must be a value ceiling");
 		expect(getRegistryTool("terminal_list_targets")?.jsonSchema.properties.backend.enum).toEqual([def.wildcard, ...def.values]);
 		expect(getRegistryTool("terminal_new_target")?.jsonSchema.properties.backend.enum).toEqual([...def.values]);
 		for (const name of ["terminal_capture", "terminal_run_command", "terminal_send_keys", "terminal_send_message", "terminal_kill_target"]) {

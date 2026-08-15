@@ -56,7 +56,7 @@ describe("DELETE /:instanceId/apply-resume reports what actually happened (#325)
 		const app = new Hono<{ Bindings: Env }>();
 		app.route("/v1/instances", router);
 		app.onError((err, c) => (err instanceof HttpError ? c.json({ error: err.message }, err.status as 400) : c.json({ error: String(err) }, 500)));
-		const token = await signSession({ uid: "u1", email: "a@b.c", roles: [] }, SECRET);
+		const token = await signSession("u1", SECRET, { roles: [] });
 		return app.request(`/v1/instances/${INSTANCE}/apply-resume`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }, env);
 	}
 

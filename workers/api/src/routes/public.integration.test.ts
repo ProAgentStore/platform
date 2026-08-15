@@ -303,13 +303,13 @@ describe("GET /v1/public/developers/:login", () => {
 		const res = await wrap("/v1/public/developers/alice");
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.developer.login).toBe("alice");
-		expect(body.developer.name).toBe("Alice"); // falls back to github_name when display_name empty
-		expect(body.developer.agentCount).toBe(1); // only the published one
+		expect(rec(body.developer).login).toBe("alice");
+		expect(rec(body.developer).name).toBe("Alice"); // falls back to github_name when display_name empty
+		expect(rec(body.developer).agentCount).toBe(1); // only the published one
 		expect(body.agents).toHaveLength(1);
 		// roles must NOT be exposed on this unauthenticated endpoint
 		expect(JSON.stringify(body)).not.toContain("roles");
-		expect(body.developer.roles).toBeUndefined();
+		expect(rec(body.developer).roles).toBeUndefined();
 	});
 });
 

@@ -1,0 +1,14 @@
+{
+	"//": "Typechecks the test files that `tsconfig.json` excludes (#599). Until this existed, no CI gate compiled a worker test and vitest transpiles without typechecking, so a type-level assertion in one — an exhaustiveness `Record<Union, true>`, a `satisfies`, a conditional-type check — compiled nowhere and failed never. #588's `Record<RunHealth, true>` was exactly that: a comment shaped like a guard.",
+	"//1": "A SEPARATE config, not a lifted `exclude`, because the production config's two exclusions are both load-bearing and neither may be weakened. `types: [\"@cloudflare/workers-types\"]` withholds node globals from Worker code on purpose; 86 test files import `node:fs`/`node:sqlite`/`node:os`, so adding `node` to the production array to admit them would hand every production module the very globals the Worker has no runtime for. And `src/lib/d1-sqlite.ts` is excluded as a BUNDLE barrier — a production module importing it drags `node:fs` in and fails that typecheck, which is the point. Both survive intact here because this config is additive and never read by the build.",
+	"//2": "`noEmit`, so this can never contribute output. The production config keeps `outDir`/`rootDir` and stays the only thing that emits.",
+	"extends": "./tsconfig.json",
+	"//3": "`rootDir` is unset because tests legitimately import across package boundaries (packages/browser-runner, store/console) to assert that two trees agree. Under `noEmit` a rootDir constrains nothing but the error list, so keeping it would report TS6059 on every such import and hide the real findings.",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": null,
+		"types": ["@cloudflare/workers-types", "node"]
+	},
+	"include": ["src"],
+	"exclude": []
+}

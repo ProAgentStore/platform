@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
@@ -69,7 +70,7 @@ describe("list_instance_tools describes the fields it returns", () => {
 		// This Worker cannot import from `workers/api` — separate deployables — so the vocabulary is
 		// a copy, and a copy nobody compares is a copy that drifts. Read the source of truth as TEXT,
 		// which is the only channel there is.
-		const src = readFileSync(new URL("../../../api/src/lib/builtin-tool-policy.ts", import.meta.url), "utf8");
+		const src = readFileSync(fileURLToPath(new URL("../../../api/src/lib/builtin-tool-policy.ts", import.meta.url).href), "utf8");
 		const m = src.match(/export const TOOL_TIERS = \[([^\]]*)\] as const;/);
 		// G3: a parse failure is REPORTED, never skipped — a moved declaration would otherwise turn
 		// this guard off silently while it kept printing a tick.
@@ -101,7 +102,7 @@ describe("list_instance_tools describes the fields it returns", () => {
 
 		// Every value it can return is defined, read from the API's own vocabulary as TEXT — the
 		// same channel and the same reason as the tier arm above: this Worker cannot import it.
-		const src = readFileSync(new URL("../../../api/src/lib/tool-reach.ts", import.meta.url), "utf8");
+		const src = readFileSync(fileURLToPath(new URL("../../../api/src/lib/tool-reach.ts", import.meta.url).href), "utf8");
 		const m = src.match(/export const TOOL_REACHES = \[([^\]]*)\] as const;/);
 		// G3: a parse failure is reported, never skipped.
 		expect(m, "could not find `export const TOOL_REACHES = [...] as const;` in workers/api/src/lib/tool-reach.ts — the guard cannot see the source of truth any more").not.toBeNull();

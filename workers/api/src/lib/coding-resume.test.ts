@@ -7,6 +7,7 @@
  * defect intact for the next class; the denominator assertion is what does not.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	DRIVER_RESUME_POLICY,
@@ -182,7 +183,7 @@ describe("the Pilot CONSUMES the verdict — the property #518 was written to pr
 	 * stops #442's failure mode: a correct decision that nothing reaches. `probe-outside-steps` in
 	 * `coding-failure.test.ts` guards its invariant the same way and for the same reason.
 	 */
-	const workflow = readFileSync(new URL("../workflows/coding-session.ts", import.meta.url), "utf8");
+	const workflow = readFileSync(fileURLToPath(new URL("../workflows/coding-session.ts", import.meta.url).href), "utf8");
 
 	it("rethrows on a resume, so Cloudflare replays the journal", () => {
 		const branch = workflow.slice(workflow.indexOf("if (plan.resume) {"));

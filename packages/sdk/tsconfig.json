@@ -1,8 +1,11 @@
 {
 	"extends": "../../tsconfig.json",
+	"//": "`types` is pinned, not left to auto-discovery (#599). This package ships to browsers; before the test typecheck existed it had no `@types/node` and so could not compile a reference to `process`, `Buffer` or `NodeJS.Timeout` — a barrier that held by accident, because nothing in the dependency tree provided them. Adding `@types/node` for tsconfig.test.json puts it in this package's node_modules, where auto-discovery would hand it to the SHIPPED build too. Naming the two type packages the browser build actually needs keeps the barrier, and now states it.",
+	"//1": "`exclude` stays: this config EMITS the dist that `files: [\"dist\"]` publishes to npm, so compiling tests here would ship test JS and .d.ts in the package. tsconfig.test.json compiles them with `noEmit` instead.",
 	"compilerOptions": {
 		"outDir": "dist",
-		"rootDir": "src"
+		"rootDir": "src",
+		"types": ["react", "react-dom"]
 	},
 	"include": ["src"],
 	"exclude": ["src/**/*.test.ts"]

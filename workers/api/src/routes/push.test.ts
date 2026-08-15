@@ -21,7 +21,7 @@ async function realSub(id: string) {
 async function vapidEnvKeys() {
 	const kp = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
 	const pub = new Uint8Array((await crypto.subtle.exportKey("raw", kp.publicKey)) as ArrayBuffer);
-	const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+	const jwk = (await crypto.subtle.exportKey("jwk", kp.privateKey)) as JsonWebKey;
 	return { VAPID_PUBLIC_KEY: b64url(pub), VAPID_PRIVATE_KEY: jwk.d as string, VAPID_SUBJECT: "mailto:x@example.com" };
 }
 

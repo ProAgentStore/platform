@@ -156,6 +156,35 @@ jobs:
       - run: pnpm test:e2e
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit
+      - name: Typecheck worker + SDK TESTS (#599)
+        # The four `tsc` steps around this one compile SOURCE only: workers/api, workers/mcp and
+        # packages/sdk each `exclude` their `*.test.ts`, and vitest transpiles without typechecking.
+        # So a type-level assertion in a worker test compiled NOWHERE and could not fail — it was a
+        # comment shaped like a guard. #588's `Record<RunHealth, true>` was exactly that, and ADR
+        # 0002's G4 practice (break a guard, watch it go red) silently passes anything of that shape:
+        # the mutation is made, nothing fails, and that is indistinguishable from "covered elsewhere".
+        #
+        # A SEPARATE `tsconfig.test.json` per project rather than a lifted `exclude`, because all
+        # three exclusions are load-bearing and answering them is the point:
+        #   • workers/*  — `types: ["@cloudflare/workers-types"]` withholds node globals from Worker
+        #     code, and 86 test files import `node:fs`/`node:sqlite`. Widening the production array
+        #     would hand every production module globals the Worker has no runtime for.
+        #   • workers/api — `src/lib/d1-sqlite.ts` is excluded as a BUNDLE barrier: a production
+        #     module importing it drags `node:fs` in and fails that typecheck, which is the point.
+        #   • packages/sdk — that config EMITS the dist `files: ["dist"]` publishes to npm, so
+        #     compiling tests there would ship test JS and .d.ts in the package.
+        # Each test config is `noEmit`, so none of the three reasons is weakened.
+        #
+        # Also the only `tsc` this repo runs over workers/mcp at all — its source was never
+        # typechecked by CI either, only by its own deploy workflow.
+        #
+        # Cost measured 2026-08-15 on a warm local checkout: 5.7s for all three (api 3.4s, mcp 1.5s,
+        # sdk 0.9s) — the api project is 347 test files. Expect a small multiple of that on a CI
+        # runner, against a job that already runs a full Playwright matrix.
+        run: |
+          cd workers/api && npx tsc -p tsconfig.test.json
+          cd ../mcp && npx tsc -p tsconfig.test.json
+          cd ../../packages/sdk && npx tsc -p tsconfig.test.json
       - name: Typecheck coder-web
         run: cd agents/coder/web && npx tsc --noEmit
       - name: Typecheck Console

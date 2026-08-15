@@ -15,8 +15,11 @@ describe("redactSecrets", () => {
 		const out = redactSecrets({ apiKey: "whatever", token: "x", nested: { password: "p", ok: "keep" } }) as Record<string, unknown>;
 		expect(out.apiKey).toBe("[redacted]");
 		expect(out.token).toBe("[redacted]");
-		expect(out.nested.password).toBe("[redacted]");
-		expect(out.nested.ok).toBe("keep");
+		// Recursion into the nested object is the point of this case — a redactor that only walked
+		// the top level would pass the two assertions above.
+		const nested = out.nested as Record<string, unknown>;
+		expect(nested.password).toBe("[redacted]");
+		expect(nested.ok).toBe("keep");
 	});
 	it("masks secret-shaped values under innocent keys", () => {
 		const out = redactSecrets({ note: "my key sk-abcdefghij1234567890" }) as Record<string, unknown>;

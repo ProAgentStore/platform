@@ -62,7 +62,12 @@ describe("isResumableFor — three ways to be invalid, all silent if missed", ()
 
 describe("buildResumableRound — stores only what is worth resuming", () => {
 	it("stamps the save time and keeps the round verbatim", () => {
-		const built = buildResumableRound({ ...round(), savedAt: undefined as never }, NOW);
+		// `savedAt` is destructured OFF rather than set to `undefined`: the parameter is
+		// `Omit<ResumableRound, "savedAt">`, so the old spread was passing a key the signature
+		// excludes — which is the whole claim of this test (the stamp comes from the caller's clock,
+		// never from the input). tsc could not say so until #599.
+		const { savedAt: _ignored, ...withoutSavedAt } = round();
+		const built = buildResumableRound(withoutSavedAt, NOW);
 		expect(built?.savedAt).toBe(NOW);
 		expect(built?.messages).toHaveLength(2);
 		expect(built?.executed).toEqual([["github_read_issue:{\"number\":402}", 0]]);

@@ -130,7 +130,10 @@ describe("setInstanceBoardConfig", () => {
 	});
 
 	it("caps the stored columns at MAX_BOARD_COLUMNS", async () => {
-		const many = Array.from({ length: MAX_BOARD_COLUMNS + 5 }, (_, i) => ({ id: `c${i}`, title: `C${i}` }));
+		// `color` is stated because the parameter is `BoardColumn[]`, where it is required. It is not
+		// what this case measures — `sanitizeBoardColumns` defaults a missing colour to `#a3a3a3`
+		// (agent-capabilities.ts) — the assertion below is purely the COUNT cap.
+		const many = Array.from({ length: MAX_BOARD_COLUMNS + 5 }, (_, i) => ({ id: `c${i}`, title: `C${i}`, color: "#a3a3a3" }));
 		const { env, writes } = mockEnv({
 			first: (sql) => sql.includes("JOIN agents")
 				? { slug: "a", category: "other", agent_config: "{}", instance_config: "{}" }

@@ -267,7 +267,7 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		const places = def.steps.find((s) => s.tool === "http_request")!;
 		expect(places.forEach).toEqual({ $ref: "grid.cells" });
 		// per-cell body plugs the cell's lat/lng via the #114 dotted-item convention.
-		const center = rec(rec(rec(rec(places.inputs).body).locationRestriction).circle).center;
+		const center = rec(rec(rec(rec(rec(places.inputs).body).locationRestriction).circle).center);
 		expect(center.latitude).toEqual({ $param: "item.lat" });
 		expect(center.longitude).toEqual({ $param: "item.lng" });
 	});

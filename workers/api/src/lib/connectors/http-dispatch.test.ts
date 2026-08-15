@@ -37,7 +37,9 @@ const baseCtx = { env: fake({}) } as RegistryToolCtx;
 
 async function run(input: Record<string, unknown>, ctx: RegistryToolCtx = baseCtx) {
 	const r = await httpRequest.handler(ctx, input);
-	let parsed: Record<string, unknown>;
+	// `undefined` is load-bearing here: the SSRF tests below assert on it to prove a refusal came
+	// back as prose rather than as an envelope, so the absence must stay distinguishable from `{}`.
+	let parsed: Record<string, unknown> | undefined;
 	try {
 		// #308: a successful envelope is fenced; unwrap the way the pipeline binder does.
 		parsed = JSON.parse(unfenceUntrusted(r.content));

@@ -102,7 +102,7 @@ function buildApp() {
 
 const tokenFor = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
 
-function json(app: Hono, env: unknown, method: string, path: string, body: unknown, tok: string) {
+function json(app: Hono<{ Bindings: Env }>, env: Env, method: string, path: string, body: unknown, tok: string) {
 	return app.request(path, { method, headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }, env);
 }
 

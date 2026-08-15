@@ -14,6 +14,7 @@ import {
 	sanitizeBehaviour,
 	strayBehaviourKey,
 } from "./agent-behaviour.js";
+import type { Behaviour } from "./agent-behaviour.js";
 
 describe("unset is a first-class state", () => {
 	it("an empty behaviour contributes NOTHING to the prompt", () => {
@@ -476,11 +477,16 @@ describe("a stored subscriber rule outranks the platform's style sentence (#521)
 	it("carries the rule on a declared-behaviour reminder and on the plain-speech one too", () => {
 		// Precedence is positional, not a special case for the technical branch — the same clause has
 		// to reach a rule about emoji or length on any agent, which is why no conflict is detected.
-		for (const opts of [
+		// Element type stated: without it TypeScript infers a UNION across the three literals, in which
+		// every `behaviour` key is optional-and-possibly-`undefined` — and `Behaviour` is
+		// `Record<string, BehaviourValue>`, which does not admit `undefined`. `Behaviour` is the type
+		// these three are meant to be instances of, so saying so is what the loop already claimed.
+		const cases: { repoChatStyle: boolean; hasCodingContext: boolean; behaviour: Behaviour }[] = [
 			{ ...plainAgent, behaviour: {} },
 			{ ...plainAgent, behaviour: { verbosity: "brief" } },
 			{ ...coder, behaviour: { technicality: 10 } },
-		]) {
+		];
+		for (const opts of cases) {
 			const r = resolveResponseStyle({ ...opts, subscriberRules: NO_FILENAMES });
 			expect(r.styleReminder.endsWith(NO_FILENAMES)).toBe(true);
 		}

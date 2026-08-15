@@ -156,7 +156,7 @@ describe("#494 — the route and the prompt share one definition of 'configured'
 		// The duplicate is the failure mode, not the style: an agent announcing a repo the status
 		// route refuses to poll (or the reverse) is #494 inverted, and it would look correct in
 		// both files.
-		const route = readFileSync(fileURLToPath(new URL("../routes/instances-deploy.ts", import.meta.url)), "utf8");
+		const route = readFileSync(fileURLToPath(new URL("../routes/instances-deploy.ts", import.meta.url).href), "utf8");
 		expect(route).toContain('from "../lib/deployment-prompt.js"');
 		expect(route).not.toMatch(/function isValidGithubRepo/);
 	});

@@ -103,14 +103,14 @@ function buildApp(opts: Opts = {}) {
 
 const tokenFor = (uid: string, roles: string[] = ["user"]) => signSession(uid, SECRET, { roles });
 
-function json(app: Hono, env: unknown, method: string, path: string, body: unknown, tok?: string) {
+function json(app: Hono<{ Bindings: Env }>, env: Env, method: string, path: string, body: unknown, tok?: string) {
 	return app.request(path, {
 		method,
 		headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" },
 		body: body === undefined ? undefined : JSON.stringify(body),
 	}, env);
 }
-function get(app: Hono, env: unknown, path: string, tok?: string) {
+function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
 	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
 
@@ -220,7 +220,7 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		expect(res.status).toBe(200);
 		const put = doCalls.find((c) => c.path === "/state" && c.method === "PUT");
 		expect(put).toBeTruthy();
-		expect(rec(put!.body).guardrails.maxLength).toBe(500);
+		expect(rec(rec(put!.body).guardrails).maxLength).toBe(500);
 	});
 
 	it("DELETE memory/:key forwards an (encoded) DELETE to the instance DO", async () => {

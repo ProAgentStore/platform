@@ -26,7 +26,7 @@ import { TERMINAL_CLI_PROTOCOL, connectorToolsPrompt, type PromptTool } from "./
 import { registryTools } from "./tool-registry.js";
 import { toolNamesFor } from "../agent-do-tools.js";
 
-const MIGRATIONS_DIR = fileURLToPath(new URL("../../migrations", import.meta.url));
+const MIGRATIONS_DIR = fileURLToPath(new URL("../../migrations", import.meta.url).href);
 const readMigration = (name: string) => readFileSync(`${MIGRATIONS_DIR}/${name}`, "utf8");
 
 /**
@@ -157,7 +157,9 @@ describe("0118 — the protocol reaches an instance that subscribed before it (#
 		// future agent that carries the seed rules WITHOUT those tools is a known gap rather than a
 		// surprise: for it, the personality copy would be the only route, and there isn't one.
 		const noTerminal = connectorToolsPrompt(
-			[{ name: "github_list_issues", description: "d", connector: "github", scope: "read" }],
+			// `jsonSchema` is required by `PromptTool` but plays no part in what this case measures —
+			// the point is a tool list with NO terminal connector in it.
+			[{ name: "github_list_issues", description: "d", connector: "github", scope: "read", jsonSchema: {} }],
 			[],
 		);
 		expect(noTerminal).not.toContain("INTERACTIVE CLI PROTOCOL");

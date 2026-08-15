@@ -80,6 +80,14 @@ describe("AgentDO types", () => {
 			model: "@cf/meta/llama-3.2-3b-instruct",
 			status: "idle",
 			systemPrompt: "You are Test Agent.",
+			// These three are REQUIRED by `AgentState` (agent-types.ts:92-94) and this literal did not
+			// carry them. The annotation above is the whole test — it is a compile-time claim that the
+			// shape is buildable — and it was wrong for as long as it existed, because nothing compiled
+			// this file until #599. `guardrails` in particular is not decorative: it is what
+			// `agent-think.ts` reads to bound a reply.
+			guardrails: { topicRestrictions: "", blockedTerms: [], responseStyle: "concise", maxResponseLength: 0, requireCitations: false },
+			welcomeMessage: "Hello — ask me anything.",
+			isPublished: false,
 		};
 		expect(state.status).toBe("idle");
 		const statuses: AgentState["status"][] = ["idle", "thinking", "error"];

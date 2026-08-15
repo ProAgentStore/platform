@@ -1,0 +1,13 @@
+{
+	"//": "Typechecks the test files that `tsconfig.json` excludes (#599). See workers/api/tsconfig.test.json for the full reasoning; the same blind spot applied here, and worse — `workers/mcp` had no `tsc` step in ci.yml at all, so neither its tests NOR its source were typechecked by CI.",
+	"//1": "`noEmit` and a separate file so the production config's `types: [\"@cloudflare/workers-types\"]` keeps withholding node globals from Worker code.",
+	"extends": "./tsconfig.json",
+	"//2": "`rootDir` unset: these tests import `workers/api` source to assert the two workers agree on a vocabulary, which is the point of them. Under `noEmit` a rootDir only adds TS6059 noise over the real findings.",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": null,
+		"types": ["@cloudflare/workers-types", "node"]
+	},
+	"include": ["src"],
+	"exclude": []
+}

@@ -1,0 +1,13 @@
+{
+	"//": "Typechecks the test files that `tsconfig.json` excludes (#599). See workers/api/tsconfig.test.json for the full reasoning.",
+	"//1": "The exclusion here answers a DIFFERENT reason than the workers': this package's tsconfig actually emits (`cd packages/sdk && npx tsc` builds the dist the console and the agent UIs consume), and `files: [\"dist\"]` publishes that directory to npm. Including tests in the emitting config would ship compiled test JS and its .d.ts in the package. `noEmit` here is what keeps that reason answered while still compiling the files.",
+	"extends": "./tsconfig.json",
+	"//2": "`rootDir` unset: `safe-html-guard.test.ts` scans sibling trees for unsafe HTML sinks, so it reads files outside `src`. Under `noEmit` a rootDir only adds TS6059 noise.",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": null,
+		"types": ["node", "react", "react-dom"]
+	},
+	"include": ["src"],
+	"exclude": []
+}

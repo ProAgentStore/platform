@@ -96,7 +96,7 @@ function buildApp(opts: {
 
 const tokenFor = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
 
-function req(app: Hono, env: unknown, method: string, path: string, body: unknown, tok?: string) {
+function req(app: Hono<{ Bindings: Env }>, env: Env, method: string, path: string, body: unknown, tok?: string) {
 	return app.request(path, {
 		method,
 		headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" },

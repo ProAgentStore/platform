@@ -156,16 +156,16 @@ function defaultDoResponse(path: string): Response {
 
 const tokenFor = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
 
-function get(app: Hono, env: unknown, path: string, tok?: string) {
+function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
 	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
-function post(app: Hono, env: unknown, path: string, body: unknown, tok?: string) {
+function post(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok?: string) {
 	return app.request(path, { method: "POST", headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
 }
-function put(app: Hono, env: unknown, path: string, body: unknown, tok?: string) {
+function put(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok?: string) {
 	return app.request(path, { method: "PUT", headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
 }
-function del(app: Hono, env: unknown, path: string, tok?: string) {
+function del(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
 	return app.request(path, { method: "DELETE", headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
 

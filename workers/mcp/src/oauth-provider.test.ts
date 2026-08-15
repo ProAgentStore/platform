@@ -64,7 +64,12 @@ function makeEnv(
 const ctx = {} as ExecutionContext;
 
 async function run(env: LoginEnv, url: string, init?: RequestInit): Promise<Response> {
-	const res = await loginHandler.fetch?.(new Request(url, init), env, ctx);
+	// `new Request` builds a `Request<unknown, CfProperties>`; a Worker's fetch handler receives the
+	// narrower `IncomingRequestCfProperties` the edge attaches. Nothing under test reads `cf`, so the
+	// cast is the honest way to say "this stands in for an inbound request" rather than faking the
+	// edge metadata. (Invisible until #599 put this file in front of tsc.)
+	const req = new Request(url, init) as Request<unknown, IncomingRequestCfProperties>;
+	const res = await loginHandler.fetch?.(req, env, ctx);
 	if (!res) throw new Error("Expected a Response from loginHandler");
 	return res;
 }

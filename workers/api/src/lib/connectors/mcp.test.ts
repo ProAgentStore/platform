@@ -126,13 +126,35 @@ interface ScriptEntry {
 }
 
 /**
+ * The JSON-RPC request the connector actually put on the wire, as the tests read it back.
+ * Typed rather than `unknown` so an assertion on `params._meta` or `params.protocolVersion`
+ * is checked against the field it names — the whole point of the era/`_meta` tests below.
+ * `params` is optional because a notification carries none; the tests that reach into it use
+ * `!`, so a request that unexpectedly lost its params fails loudly instead of asserting
+ * `undefined === undefined`.
+ */
+interface RpcRequestParams {
+	name?: string;
+	cursor?: string;
+	protocolVersion?: string;
+	arguments?: Record<string, unknown>;
+	_meta?: Record<string, unknown>;
+}
+interface RpcRequestBody {
+	jsonrpc?: string;
+	id?: number;
+	method?: string;
+	params?: RpcRequestParams;
+}
+
+/**
  * Mock the network with a per-JSON-RPC-method script. Records every request so the tests can
  * assert on the era, headers, `_meta`, and the params actually put on the wire. `once` lets a
  * script answer the FIRST attempt at a method differently from the retry, which is how the
  * era-detection and version-negotiation paths are exercised.
  */
 function mockRpc(script: Record<string, ScriptEntry | ScriptEntry[]>, opts: { sessionId?: string; wellKnown?: unknown } = {}) {
-	const calls: Array<{ url: string; headers: Headers; body: unknown }> = [];
+	const calls: Array<{ url: string; headers: Headers; body: RpcRequestBody }> = [];
 	const seen = new Map<string, number>();
 	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
 		// OAuth discovery (#180 on a 401, #552 on a missing credential) is GETs at the well-known
@@ -353,8 +375,8 @@ describe("mcp_call_tool — modern (2026-07-28) servers", () => {
 		expect(req.headers.get("Accept")).toContain("text/event-stream");
 		expect(req.headers.get("Accept")).toContain("application/json");
 		// The header value MUST equal the body value or a validating server answers -32020.
-		expect(req.body.params.name).toBe("get_weather");
-		expect(req.body.params._meta["io.modelcontextprotocol/protocolVersion"]).toBe(MODERN_VERSION);
+		expect(req.body.params!.name).toBe("get_weather");
+		expect(req.body.params!._meta!["io.modelcontextprotocol/protocolVersion"]).toBe(MODERN_VERSION);
 		// Sessions do not exist in this era.
 		expect(req.headers.get("Mcp-Session-Id")).toBeNull();
 	});
@@ -390,7 +412,7 @@ describe("mcp_call_tool — legacy (initialize/session) servers", () => {
 		// The session id from initialize rides on everything after it.
 		expect(calls[3].headers.get("Mcp-Session-Id")).toBe("sess-9");
 		// …and the legacy shape carries no per-request _meta.
-		expect(calls[3].body.params._meta).toBeUndefined();
+		expect(calls[3].body.params!._meta).toBeUndefined();
 	});
 
 	it("completes the handshake with notifications/initialized", async () => {
@@ -450,7 +472,7 @@ describe("mcp_call_tool — version mismatch", () => {
 		// 2025-11-25 is a handshake-era version, so agreeing on it means switching transports —
 		// not just changing a header.
 		expect(calls.map((c) => c.body.method)).toEqual(["tools/call", "initialize", "notifications/initialized", "tools/call"]);
-		expect(calls[1].body.params.protocolVersion).toBe("2025-11-25");
+		expect(calls[1].body.params!.protocolVersion).toBe("2025-11-25");
 	});
 
 	it("reports both version lists when there is no overlap, and gives up", async () => {
@@ -925,7 +947,7 @@ describe("mcp_list_resources / mcp_list_prompts", () => {
 		// Without nextCursor the "pagination/continuation where applicable" criterion is unmeetable:
 		// the caller has no way to ask for page two.
 		expect(parsed.nextCursor).toBe("page-2");
-		expect(calls[0].body.params.cursor).toBe("page-1");
+		expect(calls[0].body.params!.cursor).toBe("page-1");
 	});
 
 	it("lists prompts over SSE framing", async () => {
@@ -1106,7 +1128,7 @@ describe("mcp_get_prompt", () => {
 		await getPrompt.handler(ctx, { url: "https://example.com/mcp", name: "summarize" });
 		expect(calls[0].headers.get("Mcp-Method")).toBe("prompts/get");
 		expect(calls[0].headers.get("Mcp-Name")).toBe("summarize");
-		expect(calls[0].body.params.name).toBe("summarize");
+		expect(calls[0].body.params!.name).toBe("summarize");
 	});
 
 	it("logs the prompt name but not its argument values", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateUsage, denseDays, instanceSpendMicros, usageDay, type UsageRow } from "./usage.js";
+import { aggregateUsage, denseDays, instanceSpendMicros, usageDay, type UsageRow, type UsageSummary } from "./usage.js";
 import { bucketLabel, instanceLabels } from "./usage-ids.js";
 import type { Env } from "../types.js";
 
@@ -98,6 +98,28 @@ describe("aggregateUsage", () => {
 	});
 });
 
+/**
+ * Read the two cache columns off `totals`.
+ *
+ * `aggregateUsage` computes and returns `totals.cacheReadTokens` / `totals.cacheWriteTokens`
+ * (usage.ts:417 and 434-435) and the console reads them (store/console/src/pages/Usage.tsx:281,
+ * where they are declared optional), but `UsageSummary["totals"]` (usage.ts:319) never declared
+ * them — the same drop-on-the-way-out shape #547 fixed for `daily`, one level up. Until that
+ * declaration is widened, the assertions below cannot name the fields directly.
+ *
+ * This narrows instead of casting: if the totals loop ever stops emitting either column, the
+ * throw fires and the test fails, which is exactly what naming the field would have done. Once
+ * the production type carries them this helper can be deleted and the reads inlined.
+ */
+function cacheTotals(totals: UsageSummary["totals"]): { cacheReadTokens: number; cacheWriteTokens: number } {
+	const t = totals as Record<string, unknown>;
+	const cacheReadTokens = t.cacheReadTokens;
+	const cacheWriteTokens = t.cacheWriteTokens;
+	if (typeof cacheReadTokens !== "number" || typeof cacheWriteTokens !== "number")
+		throw new Error("aggregateUsage stopped reporting cache tokens in totals");
+	return { cacheReadTokens, cacheWriteTokens };
+}
+
 describe("prompt-cache tokens are reported separately (#212)", () => {
 	it("keeps cache reads OUT of inputTokens, so the hit rate is computable", () => {
 		// They used to be summed into input. That made the hit rate — cacheRead ÷ (input +
@@ -105,8 +127,9 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		// working, while the cost line silently priced every read at the full input rate.
 		const s = aggregateUsage([row({ input_tokens: 200, cache_read_tokens: 1800, cache_write_tokens: 0 })]);
 		expect(s.totals.inputTokens).toBe(200);
-		expect(s.totals.cacheReadTokens).toBe(1800);
-		const hitRate = s.totals.cacheReadTokens / (s.totals.inputTokens + s.totals.cacheReadTokens);
+		const { cacheReadTokens } = cacheTotals(s.totals);
+		expect(cacheReadTokens).toBe(1800);
+		const hitRate = cacheReadTokens / (s.totals.inputTokens + cacheReadTokens);
 		expect(hitRate).toBeCloseTo(0.9);
 	});
 
@@ -139,10 +162,11 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		// totals over the same range. A zero-filled gap day contributes nothing to either side.
 		const sum = (k: "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens") =>
 			s.daily.reduce((n, d) => n + d[k], 0);
+		const totalCache = cacheTotals(s.totals);
 		expect(sum("inputTokens")).toBe(s.totals.inputTokens);
 		expect(sum("outputTokens")).toBe(s.totals.outputTokens);
-		expect(sum("cacheReadTokens")).toBe(s.totals.cacheReadTokens);
-		expect(sum("cacheWriteTokens")).toBe(s.totals.cacheWriteTokens);
+		expect(sum("cacheReadTokens")).toBe(totalCache.cacheReadTokens);
+		expect(sum("cacheWriteTokens")).toBe(totalCache.cacheWriteTokens);
 	});
 
 	it("treats a pre-migration NULL as zero for the sum without crashing", () => {
@@ -150,8 +174,7 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 		// somehow, and zero is the only sane arithmetic; the unknown-vs-zero distinction lives in
 		// D1, not in a total.
 		const s = aggregateUsage([row({ cache_read_tokens: null, cache_write_tokens: null })]);
-		expect(s.totals.cacheReadTokens).toBe(0);
-		expect(s.totals.cacheWriteTokens).toBe(0);
+		expect(cacheTotals(s.totals)).toEqual({ cacheReadTokens: 0, cacheWriteTokens: 0 });
 	});
 });
 

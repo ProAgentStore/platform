@@ -206,7 +206,12 @@ describe("constraintsFor — the ceiling, NOT gated on surfaces", () => {
 
 	it("returns undefined for a connector with no vocabulary, and for capabilities that declare nothing", () => {
 		expect(constraintsFor({ surfaceOptions: { github: { backends: ["tmux"] } } }, "github")).toBeUndefined();
-		expect(constraintsFor({ surfaces: ["coding"] }, "terminal")).toBeUndefined();
+		// A real `AgentCapabilities` carries more than `surfaceOptions`, and `constraintsFor` only
+		// names the one field it reads — so this goes through a variable, or the extra `surfaces`
+		// key is an excess-property error instead of the case being measured (declares surfaces,
+		// declares no options).
+		const surfacesOnly: { surfaces: string[]; surfaceOptions?: unknown } = { surfaces: ["coding"] };
+		expect(constraintsFor(surfacesOnly, "terminal")).toBeUndefined();
 		expect(constraintsFor(null, "terminal")).toBeUndefined();
 	});
 });

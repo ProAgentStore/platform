@@ -23,11 +23,19 @@ class FakeSR {
 	onaudiostart: (() => void) | null = null;
 	started = 0;
 	stopped = 0;
+	/** Chrome's recognizer HAS `abort()`; the gate's interface types it optional (`abort?()`, gate.ts:52)
+	 *  because not every vendor prefix ships it, and `stop()`'s failure path calls `rec.abort?.()`.
+	 *  This fake omitted it, so `?.` short-circuited to a no-op in every test here and the one test
+	 *  that cares had to monkey-patch it on — which typechecked nowhere, since this file was excluded
+	 *  from tsc until #599. Modelled as a counter beside `started`/`stopped` so the fake matches the
+	 *  browser it stands in for, and every test now runs against a recognizer that CAN abort. */
+	aborted = 0;
 	/** A session that GETS the device. `start()` alone deliberately does not, so a test has to say
 	 *  which of the two happened — that is the distinction the gate is now made of. */
 	start() { this.started++; }
 	openMic() { this.onaudiostart?.(); }
 	stop() { this.stopped++; if (this.onend) this.onend(); }
+	abort() { this.aborted++; }
 	// Helper: emit a result with one alternative.
 	emit(transcript: string, isFinal: boolean) {
 		this.onresult?.({ resultIndex: 0, results: { length: 1, 0: { isFinal, length: 1, 0: { transcript } } } });
@@ -268,16 +276,15 @@ describe("speech gate", () => {
 		const { instances, restore } = withFakeSR();
 		const gate = createSpeechGate({ onInterim: () => {} })!;
 		gate.start();
-		const sr = instances[0] as FakeSR & { aborted?: boolean };
+		const sr = instances[0];
 		sr.stop = () => {
 			throw new Error("InvalidStateError");
 		};
-		sr.abort = () => {
-			sr.aborted = true;
-		};
 
 		expect(() => gate.stop()).not.toThrow();
-		expect(sr.aborted).toBe(true);
+		// EXACTLY once, not merely truthy: the point is that the failed stop is answered by one
+		// abort, so a retry loop that called it repeatedly would be a different (and noisy) bug.
+		expect(sr.aborted).toBe(1);
 		restore();
 	});
 });

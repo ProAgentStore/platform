@@ -16,7 +16,7 @@ import { resolveSettingsValues, settingsPromptBlock } from "./instance-settings.
 import { blockPublishReason } from "./test-agent-guard.js";
 import { blockedActionReason, browserTaskSystemPrompt, type BrowserTaskJob } from "./browser-task-loop.js";
 
-const MIGRATION = fileURLToPath(new URL("../../migrations/0087_seed_portal_watch_agent.sql", import.meta.url));
+const MIGRATION = fileURLToPath(new URL("../../migrations/0087_seed_portal_watch_agent.sql", import.meta.url).href);
 const SQL = readFileSync(MIGRATION, "utf8");
 
 /** Pull the agent's config JSON back out of the migration's `json('…')` literal. */

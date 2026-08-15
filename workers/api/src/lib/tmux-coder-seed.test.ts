@@ -30,7 +30,7 @@ import { registryConnectorGroups, registryTools } from "./tool-registry.js";
 import { TERMINAL_CLI_PROTOCOL, TOOL_LIST_CLOSED, connectorToolsPrompt, type PromptTool } from "./connector-tool-prompt.js";
 import { toolNamesFor } from "../agent-do-tools.js";
 
-const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0123_seed_tmux_coder_agent.sql", import.meta.url)), "utf8");
+const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0123_seed_tmux_coder_agent.sql", import.meta.url).href), "utf8");
 
 /** Pull the agent's config JSON back out of the INSERT's `json('…')` literal. */
 function seededConfig(): Record<string, unknown> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Env } from "./types.js";
+import type { Env } from "../types.js";
 import { ALL_TOOLS, hasMcpConsent, isDestructiveToolName, mcpConsentDenial, normalizeMcpEndpoint } from "./mcp-consent.js";
 
 /** A D1 stub that answers the consent SELECT from a fixed row set, recording the binds so a

@@ -8,6 +8,7 @@
  * issue rejected as unfilable.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildFeedbackRow, FEEDBACK_LIMITS } from "./feedback.js";
 
@@ -114,7 +115,7 @@ describe("buildFeedbackRow", () => {
 	 */
 	it("is unreachable from every prompt builder — feedback is never read back as instruction", () => {
 		for (const file of ["../agent-think.ts", "../agent-do-prompt.ts", "../lib/memory-prompt.ts"]) {
-			const src = readFileSync(new URL(file, import.meta.url), "utf8");
+			const src = readFileSync(fileURLToPath(new URL(file, import.meta.url).href), "utf8");
 			expect(src, `${file} must not read feedback`).not.toContain("feedback.js");
 			expect(src, `${file} must not read feedback`).not.toContain("agent_feedback");
 		}

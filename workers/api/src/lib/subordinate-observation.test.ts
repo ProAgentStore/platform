@@ -35,6 +35,12 @@ const run = (instanceId: string, over: Partial<RunItem> = {}): RunItem => ({
 	startedAt: NOW - 60 * 60_000,
 	finishedAt: null,
 	lastProgressAt: NOW - 7 * 60_000,
+	// Three `RunItem` fields (0127) the factory never carried; `summarizeSubordinates` reads none of
+	// them, so this is fixture truthfulness rather than a behaviour change — but it was only
+	// invisible because this file was excluded from tsc until #599.
+	lastAliveAt: null,
+	waitingReason: null,
+	waitingUntil: null,
 	...over,
 });
 

@@ -21,7 +21,7 @@ import { lintAgentClaims } from "./agent-claims-lint.js";
 import { CONNECTOR_CONSTRAINTS, constraintsFor, enforceConstraints, narrowConstraintSpec } from "./surface-options.js";
 import { getRegistryTool } from "./tool-registry.js";
 
-const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0104_operator_backend_ceilings.sql", import.meta.url)), "utf8");
+const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0104_operator_backend_ceilings.sql", import.meta.url).href), "utf8");
 
 /** The statements alone. Comments discuss the paths and fields this migration does NOT write, so
  *  an assertion about what it writes has to read what runs — the same split `check-migrations.mjs`
@@ -191,7 +191,7 @@ describe("migration 0104 — the descriptions go back, because the capability ch
  * gate. A SQL file cannot state that the field it writes survives the sanitiser, and a field that
  * does not survive is config the next agent update deletes.
  */
-const SEED_SQL = readFileSync(fileURLToPath(new URL("../../migrations/0112_seed_single_pane_operator_agent.sql", import.meta.url)), "utf8");
+const SEED_SQL = readFileSync(fileURLToPath(new URL("../../migrations/0112_seed_single_pane_operator_agent.sql", import.meta.url).href), "utf8");
 const SEED_DDL = SEED_SQL.split("\n")
 	.filter((l) => !l.trimStart().startsWith("--"))
 	.join("\n");

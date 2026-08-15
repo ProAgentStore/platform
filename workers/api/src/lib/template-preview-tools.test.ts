@@ -6,8 +6,16 @@ import { CONNECTOR_CONSTRAINTS } from "./surface-options.js";
 import { constrainedConnectorOf, templatePreviewNote, withholdConstrainedConnectorTools } from "./template-preview-tools.js";
 import { registryConnectorGroups, registryTools } from "./tool-registry.js";
 
-const caps = (tools?: string[]): AgentCapabilities =>
-	({ surfaces: [], runtime: null, workflow: null, ...(tools ? { tools } : {}) }) as AgentCapabilities;
+const caps = (tools?: string[]): AgentCapabilities => ({
+	surfaces: [],
+	runtime: null,
+	workflow: null,
+	// `boardColumns` is required on `AgentCapabilities`; the `as AgentCapabilities` cast that used to
+	// stand here hid its absence, and nothing compiled this file until #599. Empty is right for these
+	// cases — every assertion in this file is about the TOOL set, and no board is involved.
+	boardColumns: [],
+	...(tools ? { tools } : {}),
+});
 
 /** The tmux Operator's declaration as migration 0117 writes it — every tool it has is `tmux_*`. */
 const TMUX_OPERATOR = [

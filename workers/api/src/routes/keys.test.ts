@@ -330,9 +330,10 @@ describe("rate limit logic (100/hour)", () => {
 	});
 
 	it("first call in an hour is not blocked (count = 0, no row)", () => {
-		const usage: { count: number } | null = null;
-		const blocked = usage !== null && usage.count >= RATE_LIMIT;
-		expect(blocked).toBe(false);
+		// The guard as the handler writes it, taken as a function of the row so the `null` case
+		// is a real input rather than a constant the compiler narrows away before it is checked.
+		const isBlocked = (usage: { count: number } | null) => usage !== null && usage.count >= RATE_LIMIT;
+		expect(isBlocked(null)).toBe(false);
 	});
 
 	it("hour bucket key uses ISO slice to 13 chars (YYYY-MM-DDTHH)", () => {

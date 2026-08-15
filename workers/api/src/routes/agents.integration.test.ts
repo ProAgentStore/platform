@@ -131,14 +131,14 @@ function buildApp(opts: Opts = {}) {
 
 const tokenFor = (uid: string, roles: string[] = ["user"]) => signSession(uid, SECRET, { roles });
 
-function json(app: Hono, env: unknown, method: string, path: string, body: unknown, tok?: string) {
+function json(app: Hono<{ Bindings: Env }>, env: Env, method: string, path: string, body: unknown, tok?: string) {
 	return app.request(path, {
 		method,
 		headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" },
 		body: body === undefined ? undefined : JSON.stringify(body),
 	}, env);
 }
-function get(app: Hono, env: unknown, path: string, tok?: string) {
+function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
 	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
 
@@ -169,8 +169,8 @@ describe("GET /v1/agents/my/agents", () => {
 		const res = await get(app, env, "/v1/agents/my/agents", await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.agents).toHaveLength(1);
-		expect(body.agents[0].slug).toBe("mine");
+		expect(rows(body.agents)).toHaveLength(1);
+		expect(rows(body.agents)[0].slug).toBe("mine");
 	});
 });
 
@@ -387,8 +387,8 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
 		expect(Array.isArray(body.settingsSchema)).toBe(true);
-		expect(body.settingsSchema[0].id).toBe("target_language");
-		expect(body.settingsSchema[0].options).toHaveLength(2);
+		expect(rows(body.settingsSchema)[0].id).toBe("target_language");
+		expect(rows(body.settingsSchema)[0].options).toHaveLength(2);
 		// The write must preserve the pre-existing capabilities and add settingsSchema.
 		const upd = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
 		expect(upd).toBeTruthy();

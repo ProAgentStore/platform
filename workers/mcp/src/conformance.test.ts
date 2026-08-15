@@ -65,6 +65,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 // Only the Workers-runtime base class and the OAuth provider are mocked. The MCP SDK is
@@ -198,7 +199,7 @@ async function withClient(
 }
 
 const specSchema = JSON.parse(
-	readFileSync(new URL(`./mcp-schema-${SPEC_REVISION}.json`, import.meta.url), "utf-8"),
+	readFileSync(fileURLToPath(new URL(`./mcp-schema-${SPEC_REVISION}.json`, import.meta.url).href), "utf8"),
 ) as { $defs: Record<string, unknown>; $schema?: string };
 
 describe(`MCP tool surface — spec ${SPEC_REVISION} + directory bar (#562)`, () => {

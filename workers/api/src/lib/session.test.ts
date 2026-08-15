@@ -133,6 +133,7 @@ describe("session", () => {
 		const token = await signSession("user-123", SECRET, { ttl: 3600 });
 		const payload = await verifySession(token, SECRET);
 		expect(payload).not.toBeNull();
-		expect(payload?.exp - payload?.iat).toBe(3600);
+		if (!payload) throw new Error("verifySession returned null for a token it just signed");
+		expect(payload.exp - payload.iat).toBe(3600);
 	});
 });

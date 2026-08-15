@@ -69,7 +69,7 @@ describe("map", () => {
 			},
 			keep: ["place_id"],
 		});
-		const out = parse(r.content).items[0];
+		const out = rows(parse(r.content).items)[0];
 		expect(out).toEqual({ place_id: "p1", city: "Sydney", suburb: "Newtown", state: "NSW", country: "Australia" });
 	});
 
@@ -79,7 +79,7 @@ describe("map", () => {
 			rename: { "displayName.text": "name", websiteUri: "geo.site" },
 			derive: { source: "places" },
 		});
-		const out = parse(r.content).items[0];
+		const out = rows(parse(r.content).items)[0];
 		expect(out.name).toBe("Cafe");
 		expect(out.geo).toEqual({ site: "https://x.test" });
 		expect(out.source).toBe("places");
@@ -89,7 +89,7 @@ describe("map", () => {
 		const r = await mapT.handler(baseCtx, { items: { a: 1 }, extract: { b: "nope.deep" } });
 		const parsed = parse(r.content);
 		expect(parsed.count).toBe(1);
-		expect(parsed.items[0].b).toBeNull();
+		expect(rows(parsed.items)[0].b).toBeNull();
 	});
 });
 
@@ -334,8 +334,8 @@ describe("enrich", () => {
 		const parsed = parse(r.content);
 		expect(parsed.count).toBe(2);
 		// original fields preserved on a COPY; the tool result lands under `as`.
-		expect(parsed.items[0].id).toBe(1);
-		expect(parsed.items[0].tag).toMatchObject({ count: 1 });
+		expect(rows(parsed.items)[0].id).toBe(1);
+		expect(rows(parsed.items)[0].tag).toMatchObject({ count: 1 });
 	});
 
 	it("the reachability enrich-merge (the lead-finder 'is this site up' half)", async () => {
@@ -578,13 +578,13 @@ describe("slice", () => {
 
 	it("takes the first `limit` records and reports what it dropped", async () => {
 		const r = parse((await sliceT.handler(baseCtx, { items, limit: 2 })).content);
-		expect(r.items.map((i: { n: number }) => i.n)).toEqual([1, 2]);
+		expect(rows(r.items).map((i) => i.n)).toEqual([1, 2]);
 		expect(r).toMatchObject({ count: 2, dropped: 3 });
 	});
 
 	it("skips `offset` first", async () => {
 		const r = parse((await sliceT.handler(baseCtx, { items, offset: 3, limit: 10 })).content);
-		expect(r.items.map((i: { n: number }) => i.n)).toEqual([4, 5]);
+		expect(rows(r.items).map((i) => i.n)).toEqual([4, 5]);
 	});
 
 	it("passes everything through when no limit is given", async () => {
@@ -629,7 +629,7 @@ describe("slice", () => {
 	it("still accepts every legitimate way to say a number", async () => {
 		// A numeric string is the normal shape of a $param off a settings field.
 		expect(parse((await sliceT.handler(baseCtx, { items, limit: "2" })).content).count).toBe(2);
-		expect(parse((await sliceT.handler(baseCtx, { items, limit: 2, offset: "1" })).content).items[0].n).toBe(2);
+		expect(rows(parse((await sliceT.handler(baseCtx, { items, limit: 2, offset: "1" })).content).items)[0].n).toBe(2);
 		// An explicit 0 is a real request for zero records and must keep working.
 		expect((await sliceT.handler(baseCtx, { items, limit: 0 })).success).toBe(true);
 		// Absent means "all" — a blank param must NOT reach this branch, which is the bug.
@@ -640,33 +640,33 @@ describe("slice", () => {
 describe("parse_json", () => {
 	it("parses a clean JSON string into structured fields", async () => {
 		const r = parse((await parseJsonT.handler(baseCtx, { items: [{ text: '{"a":1}' }] })).content);
-		expect(r.items[0].text).toEqual({ a: 1 });
+		expect(rows(r.items)[0].text).toEqual({ a: 1 });
 		expect(r.failed).toBe(0);
 	});
 
 	it("strips the ```json fence models add", async () => {
 		const items = [{ out: '```json\n{"a":1}\n```' }];
 		const r = parse((await parseJsonT.handler(baseCtx, { items, field: "out", as: "parsed" })).content);
-		expect(r.items[0].parsed).toEqual({ a: 1 });
-		expect(r.items[0].out).toBe('```json\n{"a":1}\n```'); // the raw reply is kept
+		expect(rows(r.items)[0].parsed).toEqual({ a: 1 });
+		expect(rows(r.items)[0].out).toBe('```json\n{"a":1}\n```'); // the raw reply is kept
 	});
 
 	it("digs the JSON out of surrounding prose", async () => {
 		const items = [{ text: 'Sure! Here you go:\n{"a":[1,2]}\nHope that helps.' }];
-		expect(parse((await parseJsonT.handler(baseCtx, { items })).content).items[0].text).toEqual({ a: [1, 2] });
+		expect(rows(parse((await parseJsonT.handler(baseCtx, { items })).content).items)[0].text).toEqual({ a: [1, 2] });
 	});
 
 	it("writes null and counts a failure instead of failing the batch", async () => {
 		const items = [{ text: "not json at all" }, { text: '{"ok":true}' }];
 		const r = parse((await parseJsonT.handler(baseCtx, { items })).content);
-		expect(r.items[0].text).toBeNull();
-		expect(r.items[1].text).toEqual({ ok: true });
+		expect(rows(r.items)[0].text).toBeNull();
+		expect(rows(r.items)[1].text).toEqual({ ok: true });
 		expect(r).toMatchObject({ count: 2, failed: 1 });
 	});
 
 	it("passes an already-parsed value through", async () => {
 		const r = parse((await parseJsonT.handler(baseCtx, { items: [{ text: { a: 1 } }] })).content);
-		expect(r.items[0].text).toEqual({ a: 1 });
+		expect(rows(r.items)[0].text).toEqual({ a: 1 });
 	});
 });
 
@@ -674,7 +674,7 @@ describe("map derive — $format (compose a string from other fields)", () => {
 	it("renders {{field}} from the record", async () => {
 		const items = [{ name: "Palm Tree Kiosk", suburb: "Bondi" }];
 		const r = parse((await mapT.handler(baseCtx, { items, derive: { q: { $format: "{{name}} {{suburb}} instagram" } } })).content);
-		expect(r.items[0].q).toBe("Palm Tree Kiosk Bondi instagram");
+		expect(rows(r.items)[0].q).toBe("Palm Tree Kiosk Bondi instagram");
 	});
 
 	it("sees fields that `extract` just produced — derive runs last, over the reshaped record", async () => {
@@ -689,18 +689,18 @@ describe("map derive — $format (compose a string from other fields)", () => {
 				derive: { title: { $format: "Deploy the site for {{name}}" } },
 			})).content,
 		);
-		expect(r.items[0].title).toBe("Deploy the site for Palm Tree Kiosk");
+		expect(rows(r.items)[0].title).toBe("Deploy the site for Palm Tree Kiosk");
 	});
 
 	it("collapses the gap a missing field leaves behind", async () => {
 		const items = [{ name: "Joe's" }]; // no suburb
 		const r = parse((await mapT.handler(baseCtx, { items, derive: { q: { $format: "{{name}} {{suburb}} cafe" } } })).content);
-		expect(r.items[0].q).toBe("Joe's cafe");
+		expect(rows(r.items)[0].q).toBe("Joe's cafe");
 	});
 
 	it("still treats a plain object as a literal", async () => {
 		const r = parse((await mapT.handler(baseCtx, { items: [{ a: 1 }], derive: { meta: { kind: "x" } } })).content);
-		expect(r.items[0].meta).toEqual({ kind: "x" });
+		expect(rows(r.items)[0].meta).toEqual({ kind: "x" });
 	});
 });
 

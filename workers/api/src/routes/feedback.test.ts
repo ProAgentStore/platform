@@ -116,7 +116,7 @@ function buildApp(owns: string[] = ["i1::u1"], seed: Row[] = []) {
 	return { app, env, rows };
 }
 
-const send = (app: Hono, env: unknown, method: string, path: string, tok: string, body?: unknown) =>
+const send = (app: Hono<{ Bindings: Env }>, env: Env, method: string, path: string, tok: string, body?: unknown) =>
 	app.request(
 		path,
 		{

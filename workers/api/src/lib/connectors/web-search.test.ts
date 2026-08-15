@@ -46,7 +46,9 @@ function parse(content: string): Record<string, unknown> {
 		// see `parseOutput` in pipeline.ts — so this is the production read path, not a test hack.
 		return JSON.parse(unfenceUntrusted(content));
 	} catch {
-		return undefined;
+		// Not an envelope (a refusal is prose): an empty record leaves every field read below
+		// undefined, so a test that expects an envelope field fails rather than passing quietly.
+		return {};
 	}
 }
 
@@ -86,7 +88,7 @@ describe("web_search — Google Custom Search wiring", () => {
 		expect(r.success).toBe(true);
 		const out = parse(r.content);
 		expect(out.count).toBe(3);
-		expect(out.results[0]).toEqual({
+		expect((out.results as unknown[])[0]).toEqual({
 			title: "Blue Bottle Cafe (@bluebottle_syd) • Instagram photos",
 			link: "https://www.instagram.com/bluebottle_syd/",
 			snippet: "Newtown, Sydney NSW.",

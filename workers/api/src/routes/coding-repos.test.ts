@@ -97,7 +97,7 @@ function buildApp(repo?: Record<string, unknown>) {
 
 async function addRepo(body: Record<string, unknown>) {
 	const { app, env, insertedRepo, issued } = buildApp();
-	const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+	const token = await signSession(UID, SECRET, { roles: [] });
 	const res = await app.request(
 		`/v1/instances/${INSTANCE}/coding/repos`,
 		{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
@@ -350,7 +350,7 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		const routes = new Hono<{ Bindings: Env }>();
 		registerRepoRoutes(routes);
 		app.route("/v1/instances", routes);
-		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const token = await signSession(UID, SECRET, { roles: [] });
 		const res = await app.request(`/v1/instances/${INSTANCE}/coding/repos`, { headers: { Authorization: `Bearer ${token}` } }, env);
 		return { body: (await res.json()) as { repos: Array<Record<string, unknown>>; recheck?: Record<string, unknown> }, issued };
 	}
@@ -488,7 +488,7 @@ describe("GET /coding/repos/:id/issues — dispatched by provider, refused hones
 
 	const get = async (path: string, repo: Record<string, unknown>) => {
 		const { app, env } = buildApp(repo);
-		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const token = await signSession(UID, SECRET, { roles: [] });
 		const res = await app.request(`/v1/instances/${INSTANCE}/coding/repos/repo-1${path}`, { headers: { Authorization: `Bearer ${token}` } }, env);
 		return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 	};
@@ -655,7 +655,7 @@ describe("PUT /coding/repos/:id — the folder is editable, and checked when it 
 		registerRepoRoutes(routes);
 		app.route("/v1/instances", routes);
 		app.onError((err, c) => c.json({ error: (err as Error).message }, err instanceof HttpError ? (err.status as 400) : 500));
-		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const token = await signSession(UID, SECRET, { roles: [] });
 		const res = await app.request(
 			`/v1/instances/${INSTANCE}/coding/repos/repo-1`,
 			{ method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
@@ -827,7 +827,7 @@ describe("POST /coding/repos/:id/recheck — a verdict can be re-taken on purpos
 
 	async function recheck(repo: Record<string, unknown> | null) {
 		const { app, env, issued } = buildApp(repo ?? undefined);
-		const token = await signSession({ uid: UID, email: "o@example.com", roles: [] }, SECRET);
+		const token = await signSession(UID, SECRET, { roles: [] });
 		const res = await app.request(
 			`/v1/instances/${INSTANCE}/coding/repos/repo-1/recheck`,
 			{ method: "POST", headers: { Authorization: `Bearer ${token}` } },

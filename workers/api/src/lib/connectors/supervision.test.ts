@@ -201,7 +201,8 @@ describe("list_subordinates", () => {
 
 describe("resolveSubordinate — a name is what the model actually holds (#320)", () => {
 	const row = (over: Partial<SubordinateRow>): SubordinateRow => ({
-		instanceId: "id-1", name: "FAS platform", subscription: "active", columns: [], requiresRunner: false, ...over,
+		instanceId: "id-1", name: "FAS platform", subscription: "active", columns: [], requiresRunner: false,
+		configRaw: null, agentConfigRaw: null, settingsSchema: [], direction: null, ...over,
 	});
 	const roster = [row({}), row({ instanceId: "id-2", name: "FWS platform" })];
 

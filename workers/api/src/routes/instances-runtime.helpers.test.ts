@@ -362,13 +362,13 @@ function buildApp(opts: {
 
 const tokenFor = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
 
-async function post(app: Hono, env: unknown, path: string, body: unknown, tok: string) {
+async function post(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok: string) {
 	return app.request(path, { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
 }
-async function put(app: Hono, env: unknown, path: string, body: unknown, tok: string) {
+async function put(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok: string) {
 	return app.request(path, { method: "PUT", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
 }
-async function get(app: Hono, env: unknown, path: string, tok?: string) {
+async function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
 	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
 

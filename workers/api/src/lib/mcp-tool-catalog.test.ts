@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { grantsAllowTool, isDestructiveToolName, ALL_TOOLS, type McpConsentRow } from "./mcp-consent.js";
-import type { Env } from "./types.js";
+import type { Env } from "../types.js";
 import {
 	describeImportedTool,
 	endpointSlug,

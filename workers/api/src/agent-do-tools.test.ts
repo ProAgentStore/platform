@@ -230,12 +230,12 @@ describe("surface options govern the drive tools (#154)", () => {
 	it("a plain coding agent KEEPS them — the #119 invariant is the default", () => {
 		// Dropping these silently once left an orchestrator unable to send tasks, after which
 		// it deflected or hallucinated success. Nothing about this changes for existing agents.
-		const names = toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: null });
+		const names = toolNamesFor(caps(["coding"]));
 		for (const t of CODING) expect(names.has(t)).toBe(true);
 	});
 
 	it("keeps them even when a declared allowlist omits them", () => {
-		const names = toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: null, tools: ["github_list_issues"] });
+		const names = toolNamesFor({ ...caps(["coding"]), tools: ["github_list_issues"] });
 		for (const t of CODING) expect(names.has(t)).toBe(true);
 	});
 
@@ -269,8 +269,8 @@ describe("surface options govern the drive tools (#154)", () => {
 		// An option must never change a surface the agent does not have. Note the baseline: a
 		// surface-less agent gets the FULL catalog by design, so the assertion is that the
 		// option changes nothing — not that the tools are absent.
-		const base = toolNamesFor({ surfaces: [], runtime: null, workflow: null });
-		const withOpt = toolNamesFor({ surfaces: [], runtime: null, workflow: null, surfaceOptions: { coding: { drive: false } } } as never);
+		const base = toolNamesFor(caps([]));
+		const withOpt = toolNamesFor({ ...caps([]), surfaceOptions: { coding: { drive: false } } });
 		expect([...withOpt].sort()).toEqual([...base].sort());
 	});
 });

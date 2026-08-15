@@ -31,9 +31,13 @@ describe("platform cost estimation (issue #44)", () => {
 
 describe("recordPlatformUsage", () => {
 	function mockDb() {
+		// The parameter lists mirror D1's: `prepare(sql)` then `bind(...values)`. They are spelled
+		// out rather than left implicit because the assertions below read the bind values by
+		// POSITION, and an untyped `vi.fn(() => …)` records a zero-length tuple that no index can
+		// be checked against.
 		const run = vi.fn(async () => ({}));
-		const bind = vi.fn(() => ({ run }));
-		const prepare = vi.fn(() => ({ bind }));
+		const bind = vi.fn((..._values: unknown[]) => ({ run }));
+		const prepare = vi.fn((_sql: string) => ({ bind }));
 		return { db: fake({ DB: { prepare } }), prepare, bind, run };
 	}
 

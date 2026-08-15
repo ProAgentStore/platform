@@ -12,7 +12,7 @@ function b64url(bytes: Uint8Array): string {
 async function genVapid(): Promise<VapidConfig> {
 	const kp = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
 	const pub = new Uint8Array((await crypto.subtle.exportKey("raw", kp.publicKey)) as ArrayBuffer);
-	const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+	const jwk = (await crypto.subtle.exportKey("jwk", kp.privateKey)) as JsonWebKey;
 	return { publicKey: b64url(pub), privateKey: jwk.d as string, subject: "mailto:test@example.com" };
 }
 

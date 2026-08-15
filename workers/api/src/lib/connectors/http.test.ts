@@ -63,7 +63,9 @@ function safeParse(s: string): Record<string, unknown> {
 		// same way (pipeline.ts `parseOutput`), so unfencing here IS the production read path.
 		return JSON.parse(unfenceUntrusted(s));
 	} catch {
-		return undefined;
+		// Not an envelope (a refusal is prose): hand back an empty record so every field read
+		// below is undefined — a test that expects an envelope field then fails, as it should.
+		return {};
 	}
 }
 
@@ -175,7 +177,7 @@ describe("http_request — responseMap extraction", () => {
 		mockFetch(200, places);
 		const r = await run({ url: "https://places.example/search", responseMap: "places[].id", includeRaw: true });
 		expect(r.parsed.data).toEqual(["1", "2"]);
-		expect(r.parsed.raw.nextPageToken).toBe("TOKEN123");
+		expect((r.parsed.raw as Record<string, unknown>).nextPageToken).toBe("TOKEN123");
 	});
 });
 

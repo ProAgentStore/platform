@@ -94,7 +94,7 @@ beforeEach(async () => {
 			true,
 			["sign", "verify"],
 		)) as CryptoKeyPair;
-		const jwk = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as Record<string, unknown>;
+		const jwk = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as JsonWebKey;
 		jwks = { keys: [{ ...jwk, kid: KID, alg: "RS256" }] };
 	}
 	vi.stubGlobal(

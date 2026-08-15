@@ -91,7 +91,13 @@ describe("the schema the model sees", () => {
 
 	it("accepts null on every field, so a setting can be undone and not only changed", () => {
 		for (const id of SELF_WRITABLE_FIELDS) {
-			const prop = def.jsonSchema.properties[id] as { type: string[] };
+			// Through `unknown`, because the two types genuinely disagree and the RUNTIME one is right.
+			// `JsonSchema` (lib/connectors/types.ts:111) declares `properties[k].type` as `string`, but
+			// draft-07 allows a string OR an array of them, and `behaviourToolSchema`
+			// (agent-behaviour.ts:580-602) emits `["number","null"]` — which nothing catches because
+			// that builder's local is a `Record<string, unknown>`. Narrowing the declared type is a
+			// change to a shared production interface, so it is reported rather than made here.
+			const prop = def.jsonSchema.properties[id] as unknown as { type: string[] };
 			expect(prop.type, id).toContain("null");
 		}
 	});

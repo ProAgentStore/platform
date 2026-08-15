@@ -14,6 +14,8 @@ import { adminRoutes } from "./admin.js";
  */
 const jsonBody = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
 const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : []);
+/** The object counterpart of `rows` — a non-object degrades to `{}` so the `expect` still fails loudly instead of throwing. */
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 const TEST_SECRET = "test-secret";
 
@@ -166,15 +168,15 @@ describe("GET /v1/admin/users", () => {
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
 		expect(body.total).toBe(2);
-		expect(body.users[0].roles).toEqual(["user", "admin"]);
-		expect(body.users[0].key_providers).toEqual(["anthropic", "openai"]);
-		expect(body.users[0].value30dMicros).toBe(12345);
+		expect(rows(body.users)[0].roles).toEqual(["user", "admin"]);
+		expect(rows(body.users)[0].key_providers).toEqual(["anthropic", "openai"]);
+		expect(rows(body.users)[0].value30dMicros).toBe(12345);
 		// Value and charge are separate columns, and the charged one carries the payer filter —
 		// a per-user figure an operator reads as a bill must not include a subscription's tokens.
-		expect(body.users[0].charged30dMicros).toBe(500);
+		expect(rows(body.users)[0].charged30dMicros).toBe(500);
 		// null roles / null providers degrade safely
-		expect(body.users[1].roles).toEqual(["user"]);
-		expect(body.users[1].key_providers).toEqual([]);
+		expect(rows(body.users)[1].roles).toEqual(["user"]);
+		expect(rows(body.users)[1].key_providers).toEqual([]);
 	});
 });
 
@@ -191,7 +193,7 @@ describe("GET /v1/admin/users/:id", () => {
 		const res = await req(app, env, "/v1/admin/users/u1", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.user.github_login).toBe("alice");
+		expect(obj(body.user).github_login).toBe("alice");
 		expect(body.agents).toEqual([]);
 		expect(body.recentErrors).toEqual([]);
 	});
@@ -217,8 +219,8 @@ describe("new operator views (#31/#33)", () => {
 		const res = await req(app, env, "/v1/admin/agents", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		const b = await jsonBody(res);
-		expect(b.agents[0].slug).toBe("coder");
-		expect(b.agents[0].instances).toBe(4);
+		expect(rows(b.agents)[0].slug).toBe("coder");
+		expect(rows(b.agents)[0].instances).toBe(4);
 	});
 
 	it("GET /v1/admin/agents/:id → 404 when missing, detail with connectors when found", async () => {
@@ -229,9 +231,9 @@ describe("new operator views (#31/#33)", () => {
 		const res = await req(app, env, "/v1/admin/agents/coder", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		const b = await jsonBody(res);
-		expect(b.agent.slug).toBe("coder");
-		expect(b.agent.connectors).toContain("github");
-		expect(b.connectorTools[0].connector).toBe("github");
+		expect(obj(b.agent).slug).toBe("coder");
+		expect(obj(b.agent).connectors).toContain("github");
+		expect(rows(b.connectorTools)[0].connector).toBe("github");
 	});
 
 	it("GET /v1/admin/agents passes visibility/status/owner filters through to the query", async () => {
@@ -298,8 +300,8 @@ describe("new operator views (#31/#33)", () => {
 		const res = await req(app, env, "/v1/admin/errors/summary", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		const b = await jsonBody(res);
-		expect(b.signatures[0].count).toBe(2);
-		expect(b.signatures[0].users).toBe(2);
+		expect(rows(b.signatures)[0].count).toBe(2);
+		expect(rows(b.signatures)[0].users).toBe(2);
 	});
 });
 
@@ -315,10 +317,10 @@ describe("GET /v1/admin/usage", () => {
 		const res = await req(app, env, "/v1/admin/usage?range=30d", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.totals.calls).toBe(2);
+		expect(obj(body.totals).calls).toBe(2);
 		expect(rows(body.byUser).map((b) => b.label).sort()).toEqual(["alice", "bob"]);
-		expect(body.split.platformPaid.calls).toBe(1);
-		expect(body.split.byok.calls).toBe(1);
+		expect(obj(obj(body.split).platformPaid).calls).toBe(1);
+		expect(obj(obj(body.split).byok).calls).toBe(1);
 	});
 });
 
@@ -328,11 +330,11 @@ describe("GET /v1/admin/spending", () => {
 		const res = await req(app, env, "/v1/admin/spending", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.byok.costMicros).toBe(10500);
+		expect(obj(body.byok).costMicros).toBe(10500);
 		expect(body.platformAiEnabled).toBe(true);
-		expect(body.platformPaid.metered).toBe(true);
-		expect(body.platformPaid.estimated).toBe(true);
-		expect(body.platformPaid.calls).toBe(1); // the platform embedding row
-		expect(body.topSpenders[0].label).toBe("alice");
+		expect(obj(body.platformPaid).metered).toBe(true);
+		expect(obj(body.platformPaid).estimated).toBe(true);
+		expect(obj(body.platformPaid).calls).toBe(1); // the platform embedding row
+		expect(rows(body.topSpenders)[0].label).toBe("alice");
 	});
 });

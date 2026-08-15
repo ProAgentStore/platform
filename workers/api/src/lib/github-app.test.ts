@@ -9,7 +9,9 @@ async function makePem(): Promise<{ pem: string; publicKey: CryptoKey }> {
 		true,
 		["sign", "verify"],
 	)) as CryptoKeyPair;
-	const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+	// workers-types declares one `exportKey` returning `ArrayBuffer | JsonWebKey` rather than the
+	// per-format overloads the DOM lib has, so the format has to be restated at the call site.
+	const pkcs8 = new Uint8Array((await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer);
 	let bin = "";
 	for (const b of pkcs8) bin += String.fromCharCode(b);
 	const b64 = btoa(bin).replace(/(.{64})/g, "$1\n");

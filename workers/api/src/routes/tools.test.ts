@@ -165,10 +165,10 @@ describe("GET /v1/instances/:id/tools", () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/tools?schemas=true", {}, await tok("u1"));
 		const body = await jsonBody(res);
-		const tool = rows(body.tools).find((t) => t.name === "github_workflow_runs");
-		expect(tool.jsonSchema.type).toBe("object");
-		expect(tool.jsonSchema.properties.repo.type).toBe("string");
-		expect(tool.jsonSchema.required).toContain("repo");
+		const tool = rec(rows(body.tools).find((t) => t.name === "github_workflow_runs"));
+		expect(rec(tool.jsonSchema).type).toBe("object");
+		expect(rec(rec(rec(tool.jsonSchema).properties).repo).type).toBe("string");
+		expect(rec(tool.jsonSchema).required).toContain("repo");
 		// The old ad-hoc `parameters` map is gone from the wire shape.
 		expect(tool.parameters).toBeUndefined();
 	});
@@ -177,7 +177,7 @@ describe("GET /v1/instances/:id/tools", () => {
 		const { app, env } = testApp();
 		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
 		const body = await jsonBody(res);
-		const tool = rows(body.tools).find((t) => t.name === "github_workflow_runs");
+		const tool = rec(rows(body.tools).find((t) => t.name === "github_workflow_runs"));
 		expect(tool.jsonSchema).toBeUndefined();
 		// …and the row is still a full audit row.
 		expect(tool.name).toBe("github_workflow_runs");
@@ -307,7 +307,7 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		// #308: the envelope is fenced as untrusted remote text at the connector, so this surface
 		// gets it fenced too — which is the point (fencing at the chat surface would leave this
 		// route, the pipeline step and MCP bare). Unwrapped the way the pipeline binder does.
-		expect(JSON.parse(unfenceUntrusted(body.content)).data).toEqual([{ id: "p1", name: "Cafe" }]);
+		expect(JSON.parse(unfenceUntrusted(String(body.content))).data).toEqual([{ id: "p1", name: "Cafe" }]);
 		fetchSpy.mockRestore();
 	});
 });
@@ -318,8 +318,8 @@ describe("GET /v1/instances/:id/pipelines (issue #97)", () => {
 		const res = await req(app, env, "/v1/instances/i1/pipelines", {}, await tok("u1"));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.pipelines).toHaveLength(1);
-		expect(body.pipelines[0]).toMatchObject({ name: "sweep", steps: 1, sink: "results", valid: true });
+		expect(rows(body.pipelines)).toHaveLength(1);
+		expect(rows(body.pipelines)[0]).toMatchObject({ name: "sweep", steps: 1, sink: "results", valid: true });
 	});
 
 	it("404s when the instance isn't owned", async () => {
@@ -383,7 +383,7 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 	});
 
 	it("kicks the durable workflow with the def + params and returns run ids", async () => {
-		const create = vi.fn(async () => ({ id: "wf-99" }));
+		const create = vi.fn(async (_arg: unknown) => ({ id: "wf-99" }));
 		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE), create });
 		const res = await req(app, env, "/v1/instances/i1/pipelines/sweep/run", { method: "POST", body: JSON.stringify({ params: { repo: "owner/name" } }) }, await tok("u1"));
 		expect(res.status).toBe(200);
@@ -395,8 +395,8 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 		const arg = rec(create.mock.calls[0][0]);
 		expect(rec(rec(arg.params).pipeline).name).toBe("sweep");
 		expect(rec(arg.params).params).toEqual({ repo: "owner/name" });
-		expect(arg.params.trigger).toBe("api");
-		expect(arg.params.userId).toBe("u1");
+		expect(rec(arg.params).trigger).toBe("api");
+		expect(rec(arg.params).userId).toBe("u1");
 	});
 });
 
@@ -481,15 +481,15 @@ describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {
 		const res = await req(app, env, "/v1/instances/i1/pipeline-runs", {}, await tok("u1"));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
-		expect(body.runs).toHaveLength(1);
-		expect(body.runs[0].pipeline).toBe("leads");
-		expect(body.runs[0].seen).toBe(3);
-		expect(body.runs[0].params).toEqual({ city: "Sydney" });
+		expect(rows(body.runs)).toHaveLength(1);
+		expect(rows(body.runs)[0].pipeline).toBe("leads");
+		expect(rows(body.runs)[0].seen).toBe(3);
+		expect(rows(body.runs)[0].params).toEqual({ city: "Sydney" });
 	});
 });
 
 describe("supervision edges (#183)", () => {
-	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
+	const tok = () => signSession("u1", SECRET, { roles: ["user"] });
 
 	// A supervisor's AGENT has to declare a supervision tool, or the edge it wires can never be
 	// used (#354) — so the fixture for the graph rules declares one, and the tests below that are
@@ -548,7 +548,7 @@ describe("supervision edges (#183)", () => {
 });
 
 describe("durable agent loop (#158)", () => {
-	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
+	const tok = () => signSession("u1", SECRET, { roles: ["user"] });
 
 	it("starts a server-driven run and returns its id", async () => {
 		let started: unknown = null;
@@ -1006,7 +1006,7 @@ describe("POST /v1/instances/:id/mcp/test (connection diagnostics)", () => {
  * verdict rather than growing a second one that can drift from it.
  */
 describe("a loop run carries its health verdict (#580)", () => {
-	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
+	const tok = () => signSession("u1", SECRET, { roles: ["user"] });
 	const NOW = 1_800_000_000_000;
 
 	// The route calls `Date.now()` and so does the expectation, so the clock is frozen: otherwise

@@ -154,6 +154,9 @@ importers:
         specifier: '>=18'
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@types/node':
+        specifier: ^22.19.20
+        version: 22.19.20
       '@types/react':
         specifier: ^19.2.0
         version: 19.2.17
@@ -256,6 +259,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20250530.0
         version: 4.20260605.1
+      '@types/node':
+        specifier: ^22.19.20
+        version: 22.19.20
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -290,6 +296,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20250530.0
         version: 4.20260605.1
+      '@types/node':
+        specifier: ^22.19.20
+        version: 22.19.20
       ajv:
         specifier: ^8.17.1
         version: 8.20.0

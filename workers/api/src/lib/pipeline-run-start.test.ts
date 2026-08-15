@@ -31,6 +31,11 @@ beforeEach(() => {
 	openBudget.mockClear();
 });
 
+/** The PIPELINE_RUN `create` stub. Declared WITH its one argument: a zero-arg `vi.fn` records a
+ *  zero-length call tuple, so `create.mock.calls[0][0]` — the kicked payload every assertion
+ *  below reads — would not exist. */
+const createStub = (id: string) => vi.fn(async (_arg: unknown) => ({ id }));
+
 /** Env whose agent_instances row carries a config with a pipelines map.
  *
  *  `agentConfig` answers the capability join (`agent_instances ⨝ agents`) separately, because that
@@ -74,7 +79,7 @@ describe("loadPipeline", () => {
 
 describe("startPipelineRun", () => {
 	it("kicks the PIPELINE_RUN workflow with the loaded def + params", async () => {
-		const create = vi.fn(async () => ({ id: "wf-42" }));
+		const create = createStub("wf-42");
 		const env = envWithConfig({ pipelines: { leads: PIPE } }, create);
 		const res = await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "chat");
 		expect(res.ok).toBe(true);
@@ -92,7 +97,7 @@ describe("startPipelineRun", () => {
 	});
 
 	it("returns an error (does not kick) for an unknown pipeline", async () => {
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: {} }, create);
 		const res = await startPipelineRun(env, "i1", "u1", "nope", {}, "api");
 		expect(res.ok).toBe(false);
@@ -108,7 +113,7 @@ describe("startPipelineRun — the declared-tools gate", () => {
 	it("refuses a pipeline naming an undeclared connector tool, and does NOT kick", async () => {
 		// Before this the run started, the workflow walked, and the tool ran — `runRegistryTool`
 		// asks about connector scope and write consent, never about whose agent this is.
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: CONNECTOR_PIPE } }, create, { capabilities: { tools: ["web_search"] } });
 		const res = await startPipelineRun(env, "i1", "u1", "leads", {}, "trigger");
 		expect(res.ok).toBe(false);
@@ -117,7 +122,7 @@ describe("startPipelineRun — the declared-tools gate", () => {
 	});
 
 	it("kicks when the agent declares the tool, carrying the allowlist to the runner", async () => {
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: CONNECTOR_PIPE } }, create, { capabilities: { tools: ["places"] } });
 		expect((await startPipelineRun(env, "i1", "u1", "leads", {}, "api")).ok).toBe(true);
 		expect((create.mock.calls[0][0] as { params: { declaredTools?: string[] } }).params.declaredTools).toEqual(["places"]);
@@ -131,7 +136,7 @@ describe("startPipelineRun — the declared-tools gate", () => {
 		// the definition looked exempt: attach passed, kick passed, the workflow opened a run row and
 		// the FIRST step was refused by `runRegistryTool` — a run that started, spent and stopped,
 		// which is exactly what the kick check exists to prevent.
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: GEO_PIPE } }, create, { capabilities: { tools: [] } });
 		const res = await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger");
 		expect(res.ok).toBe(false);
@@ -141,7 +146,7 @@ describe("startPipelineRun — the declared-tools gate", () => {
 	});
 
 	it("kicks the same pipeline once the agent declares what geocode needs", async () => {
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: GEO_PIPE } }, create, { capabilities: { tools: ["http_request"] } });
 		expect((await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger")).ok).toBe(true);
 		expect(create).toHaveBeenCalledTimes(1);
@@ -161,7 +166,7 @@ describe("startPipelineRun — caller > subscriber setting > declared default", 
 	it("fills an unsupplied param from the definition's default", async () => {
 		// The live wiring passes {city, type, radius} and nothing else. Without this the `slice`
 		// limit resolves to undefined, `slice` keeps everything, and the sweep is unbounded again.
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: CAPPED } }, create);
 		await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger");
 		expect(kicked(create)).toEqual({ city: "Sydney", max_places: 300 });
@@ -171,21 +176,21 @@ describe("startPipelineRun — caller > subscriber setting > declared default", 
 		// The point of putting the knob in settingsSchema: before this, settings reached the chat
 		// prompt only, so an agent whose behaviour IS its pipelines had a Settings card that
 		// changed nothing about what those pipelines did.
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: CAPPED }, settings: { max_places: 120 } }, create, { settingsSchema: SETTINGS_SCHEMA });
 		await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney" }, "trigger");
 		expect(kicked(create)).toEqual({ city: "Sydney", max_places: 120 });
 	});
 
 	it("still lets an explicit argument win over both", async () => {
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: CAPPED }, settings: { max_places: 120 } }, create, { settingsSchema: SETTINGS_SCHEMA });
 		await startPipelineRun(env, "i1", "u1", "leads", { city: "Sydney", max_places: 40 }, "chat");
 		expect(kicked(create)).toEqual({ city: "Sydney", max_places: 40 });
 	});
 
 	it("leaves a definition without defaults, on an agent without settings, exactly as it was", async () => {
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: PIPE } }, create);
 		await startPipelineRun(env, "i1", "u1", "leads", { city: "Hobart" }, "api");
 		expect(kicked(create)).toEqual({ city: "Hobart" });
@@ -197,7 +202,7 @@ describe("startPipelineRun — one delegation pool per run", () => {
 	it("opens ONE pool for a definition that delegates, and hands it to every step", async () => {
 		// Before this no pool was opened here at all, so `delegateToInstance` took its `??` branch
 		// and opened a fresh ROOT pool per call — 288 a day on a 5-minute cron.
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const def = { name: "fleet", steps: [{ tool: "subordinate_status" }, { tool: "delegate_goal" }] };
 		const env = envWithConfig({ pipelines: { fleet: def } }, create);
 		expect((await startPipelineRun(env, "i1", "u1", "fleet", {}, "trigger")).ok).toBe(true);
@@ -208,7 +213,7 @@ describe("startPipelineRun — one delegation pool per run", () => {
 	it("opens NO pool for an ordinary source → transform → sink pipeline", async () => {
 		// The lead-finder sweeps every 5 minutes and never delegates; a pool per tick would be three
 		// D1 operations and a permanent unused row, forever, to bound nothing.
-		const create = vi.fn(async () => ({ id: "wf" }));
+		const create = createStub("wf");
 		const env = envWithConfig({ pipelines: { leads: PIPE } }, create);
 		expect((await startPipelineRun(env, "i1", "u1", "leads", {}, "trigger")).ok).toBe(true);
 		expect(openBudget).not.toHaveBeenCalled();

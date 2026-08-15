@@ -14,10 +14,10 @@ import siteDeploy from "./site-deploy.json" with { type: "json" };
 import leadFinder from "./lead-finder.json" with { type: "json" };
 import { declaredParamDefaults, validatePipeline } from "../pipeline.js";
 import { agentCapabilities } from "../agent-capabilities.js";
-import { pipelineDeclarationError, undeclaredPipelineTools } from "../pipeline-tool-policy.js";
+import { pipelineDeclarationError, undeclaredPipelineTools, type ToolNamingSteps } from "../pipeline-tool-policy.js";
 import { getRegistryTool } from "../tool-registry.js";
 
-const MIGRATION = fileURLToPath(new URL("../../../migrations/0057_seed_site_builder_agent.sql", import.meta.url));
+const MIGRATION = fileURLToPath(new URL("../../../migrations/0057_seed_site_builder_agent.sql", import.meta.url).href);
 
 /** Pull the agent's config JSON back out of the migration's `json('…')` literal. */
 function seededAgentConfig(): Record<string, unknown> {
@@ -78,7 +78,7 @@ describe("migration 0057 — the seeded agent", () => {
 //
 // A second file, because 0057 has already run in production and editing an applied migration
 // changes nothing there while a fresh database gets the new text.
-const TOOLS_MIGRATION = fileURLToPath(new URL("../../../migrations/0096_site_builder_declared_tools.sql", import.meta.url));
+const TOOLS_MIGRATION = fileURLToPath(new URL("../../../migrations/0096_site_builder_declared_tools.sql", import.meta.url).href);
 
 describe("migration 0096 — the seeded agent declares what its pipelines dispatch", () => {
 	/** The tool names out of the migration's `json('[…]')` literal. */
@@ -122,7 +122,7 @@ describe("migration 0096 — the seeded agent declares what its pipelines dispat
 // `agents.config.pipelines` on subscribe, and the agent row had no `pipelines` key at all. So the
 // fix reached nobody, and the one live instance stayed on a hand-attached 8-step copy missing
 // exactly the two steps the fix added. 0111 seeds it; this describes what must stay true of it.
-const LEAD_FINDER_MIGRATION = fileURLToPath(new URL("../../../migrations/0111_seed_lead_finder_pipeline.sql", import.meta.url));
+const LEAD_FINDER_MIGRATION = fileURLToPath(new URL("../../../migrations/0111_seed_lead_finder_pipeline.sql", import.meta.url).href);
 
 /**
  * Every `json('…')` literal in a migration, in order, with SQL's doubled single quotes undone.
@@ -163,7 +163,11 @@ describe("migration 0111 — the seeded lead-finder pipeline", () => {
 	const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 	// Picked by SHAPE, not by position, so re-ordering the statements cannot silently swap what
 	// each assertion is talking about.
-	const seededDef = literals.find((l) => isRecord(l) && Array.isArray(l.steps)) as Record<string, unknown>;
+	// `& ToolNamingSteps` so the kick-gate assertion below can pass it straight to
+	// `pipelineDeclarationError`. The claim is not taken on trust: "embeds the SAME definition as
+	// the reference JSON" and "passes validatePipeline" both run against this same value, and
+	// either would fail first if the steps were not the tool-naming shape.
+	const seededDef = literals.find((l) => isRecord(l) && Array.isArray(l.steps)) as Record<string, unknown> & ToolNamingSteps;
 	const seededSchema = literals.find((l) => Array.isArray(l) && l.every(isRecord)) as Array<{ id: string; type: string; default?: unknown }>;
 	const seededTools = literals.find((l) => Array.isArray(l) && l.every((x) => typeof x === "string")) as string[];
 

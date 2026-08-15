@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeStorageTool } from "./storage-tools.js";
 import { AgentStorageEngine } from "../agent-storage.js";
+import type { Env } from "../types.js";
 
 function mockDoStorage() {
 	const store = new Map<string, unknown>();
@@ -67,7 +68,10 @@ function mockRuntimeEnv(opts?: { profile?: Record<string, unknown> }) {
 					},
 				}),
 			},
-		} as unknown as { DB: D1Database },
+			// Only the bindings the apply path touches are stubbed; `executeStorageTool` takes the
+			// real `Env`, so the stand-in is cast to it rather than to a narrower shape the callee
+			// would then have to be widened past.
+		} as unknown as Env,
 		prepare,
 		bind,
 		first,
@@ -252,7 +256,9 @@ describe("storage tools", () => {
 	it("creates job application task with caller-provided candidate details", async () => {
 		const engine = makeEngine();
 		const runtime = mockRuntimeEnv();
-		const fetchMock = vi.fn(async () => new Response(
+		// Declared WITH fetch's arguments: a zero-arg `vi.fn` records a zero-length call tuple, and
+		// the assertion below reads the request body back out of `calls[0][1]`.
+		const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(
 			JSON.stringify({ id: "task_123", status: "needs_approval" }),
 			{ status: 200, headers: { "content-type": "application/json" } },
 		));

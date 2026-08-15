@@ -29,7 +29,15 @@ describe("codingSessionIdFromCardId", () => {
 	});
 });
 
-const run = (runId: string, status: string, at: number, detail = ""): CodingRunFact => ({ runId, status, detail, at });
+/**
+ * `waitingReason`/`waitingUntil` carry the production DEFAULTS, not nothing. `runFactsFor`
+ * (board-runs.ts:203) normalises the two columns with `?? ""` and `?? null`, so a fact that reaches
+ * the reconciler in production is never missing them — but this factory omitted both, and until #599
+ * put this file in front of tsc nothing said so. Every test here was therefore driving the reconciler
+ * with `waitingReason: undefined`, a value the real mapper cannot emit. Overridable, so a test about
+ * a parked run (#580) can state the park instead of building a second factory.
+ */
+const run = (runId: string, status: string, at: number, detail = "", waitingReason = "", waitingUntil: number | null = null): CodingRunFact => ({ runId, status, detail, at, waitingReason, waitingUntil });
 
 describe("reconcileCodingCard — attempts is the RUNS behind the session", () => {
 	it("reports nine runs for the nine-run session, with the failure among them (#592 case 1)", () => {

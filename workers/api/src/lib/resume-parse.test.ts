@@ -3,21 +3,39 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // Mock the collaborators so we exercise parseResumeIntoProfile's branching without
 // touching Claude, the DO, or the DB. Each mock records calls so we can assert the
 // exact user-facing outcome (notifyUser title/body) for a given input.
-const notifyUser = vi.fn(async () => undefined);
+//
+// Each recorder mirrors the REAL parameter list of the collaborator it stands in for. The
+// assertions below read arguments positionally (notifyUser's title at [3], body at [4];
+// upsertProfile's merged fields at [2]), so typing the parameters is what makes the compiler
+// — not just a careful reader — catch it if one of those signatures ever gains or loses an
+// argument and every index silently shifts by one.
+const notifyUser = vi.fn(
+	async (
+		_env: Env,
+		_userId: string,
+		_type: string,
+		_title: string,
+		_body: string,
+		_url?: string,
+		_opts?: NotifyOptions,
+	): Promise<void> => undefined,
+);
 const runUserWorkersAi = vi.fn();
-const getProfile = vi.fn(async () => ({}));
-const upsertProfile = vi.fn(async () => undefined);
-const logError = vi.fn(async () => undefined);
+const getProfile = vi.fn(async (_env: Env, _userId: string): Promise<Profile> => ({}));
+const upsertProfile = vi.fn(async (_env: Env, _userId: string, _fields: Profile): Promise<void> => undefined);
+const logError = vi.fn(async (_env: Env, _e: ErrorLogInput): Promise<void> => undefined);
 
-vi.mock("../routes/push.js", () => ({ notifyUser: (...a: unknown[]) => notifyUser(...a) }));
-vi.mock("./error-log.js", () => ({ logError: (...a: unknown[]) => logError(...a) }));
+vi.mock("../routes/push.js", () => ({
+	notifyUser: (...a: Parameters<typeof notifyUser>) => notifyUser(...a),
+}));
+vi.mock("./error-log.js", () => ({ logError: (...a: Parameters<typeof logError>) => logError(...a) }));
 vi.mock("./profile.js", async () => {
 	// Keep the real PROFILE_FIELDS shape so field-merge logic runs for real.
 	const actual = await vi.importActual<typeof import("./profile.js")>("./profile.js");
 	return {
 		...actual,
-		getProfile: (...a: unknown[]) => getProfile(...a),
-		upsertProfile: (...a: unknown[]) => upsertProfile(...a),
+		getProfile: (...a: Parameters<typeof getProfile>) => getProfile(...a),
+		upsertProfile: (...a: Parameters<typeof upsertProfile>) => upsertProfile(...a),
 	};
 });
 vi.mock("./user-ai.js", () => {
@@ -31,6 +49,9 @@ vi.mock("./user-ai.js", () => {
 import { parseResumeIntoProfile } from "./resume-parse.js";
 import { UserAiCredentialsError as FakeUserAiCredentialsError } from "./user-ai.js";
 import type { Env } from "../types.js";
+import type { ErrorLogInput } from "./error-log.js";
+import type { Profile } from "./profile.js";
+import type { NotifyOptions } from "../routes/push.js";
 
 function fakeEnv(): Env {
 	// AGENT DO stub — only reached on the PDF success path.

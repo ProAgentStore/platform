@@ -55,6 +55,10 @@ const repo: CodingRepo = {
 	branch: "",
 	cloneStatus: "ready",
 	workdir: "/Users/x/dev/fws",
+	// Required on `CodingRepo` and absent here until #599 compiled this file. `"local"` is what
+	// `toRepo` (coding-store.ts:74) resolves for a repo that has a `workdir` and no `github_repo`,
+	// so this is the value the fixture was always standing in for.
+	provider: "local",
 	createdAt: "",
 	updatedAt: "",
 };
@@ -167,7 +171,10 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		vi.mocked(store.getActiveSessionForRepo).mockResolvedValueOnce(null).mockResolvedValueOnce(session("csess_winner"));
 		vi.mocked(store.createSession).mockRejectedValue(new Error("UNIQUE constraint failed"));
 		vi.mocked(runner.callRunner).mockRejectedValue(new Error("no runner"));
-		vi.mocked(store.getRepo).mockResolvedValue({ ...repo, cloneError: null });
+		// `undefined`, not `null`: `toRepo` maps the column with `?? undefined` (coding-store.ts:81),
+		// so a repo with no clone error can only ever reach this code as `undefined`. The `null` here
+		// was a shape the store cannot emit.
+		vi.mocked(store.getRepo).mockResolvedValue({ ...repo, cloneError: undefined });
 		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: false });
 	});
 

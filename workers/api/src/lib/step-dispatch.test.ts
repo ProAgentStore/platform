@@ -99,7 +99,7 @@ const FROM_DECLARATIONS: Map<string, Set<string>> = (() => {
 })();
 
 const asObject = (m: Map<string, Set<string>>) =>
-	Object.fromEntries([...m].map(([k, v]) => [k, [...v].sort()]).sort(([a], [b]) => a.localeCompare(b)));
+	Object.fromEntries([...m].map(([k, v]): [string, string[]] => [k, [...v].sort()]).sort(([a], [b]) => a.localeCompare(b)));
 
 describe("a step handler's declared dispatches match what it actually calls", () => {
 	it("declares every nested runRegistryTool call, and nothing it does not make", () => {
