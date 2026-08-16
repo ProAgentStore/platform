@@ -116,4 +116,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// through when `my_instances` became `{"instances":[…]}` under a frozen version, so the bump
 	// is justified twice over here as it was for 0.1.5. Appended, never edited: 0.1.5 is published.
 	"0.1.6": "sha256:bdf6eb2efd98c4df362bbc6762537ca8b687dc9a03ce21a519326a73c21b9e98",
+	// 0.1.7 (#672): `whoami` registered — a new tool NAME in the always-on `account` group,
+	// the first bullet of `MCP_SERVER_VERSION`'s list, so the served surface grew by one and
+	// this hash moves. It reads the new `GET /v1/auth/me/account` and is annotated `read`
+	// (`readOnlyHint: true`), matching its ungated gate. Appended, never edited: 0.1.6 is published.
+	"0.1.7": "sha256:5a0bca0af76e29fa7ac6dcd673d76a8ba7a32dc9c6d506f3aa7b2e30c99eade8",
 };

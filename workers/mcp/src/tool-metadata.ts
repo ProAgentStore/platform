@@ -167,6 +167,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	ticket_thread: "read",
 	usage_summary: "read",
 	vector_stats: "read",
+	whoami: "read",
 
 	// ── write: adds to or updates PAGS state, and this server grants it on a default
 	//    connection. Announced `readOnlyHint: false, destructiveHint: false`. ──
@@ -270,7 +271,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 /** How the surface splits. A ratchet in BOTH directions: silently losing a read-only
  *  annotation is as much a regression as silently gaining one. */
 export const MCP_RISK_COUNTS: Record<McpScope, number> = {
-	read: 67,
+	read: 68,
 	write: 40,
 	runtime: 15,
 	destructive: 14,

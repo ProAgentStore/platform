@@ -71,7 +71,7 @@ src/
     ├── settings.ts       11 tools — settings, name, instructions, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
     ├── composition.ts    8 tools — supervision (#183), connections (#182), loops
-    ├── account.ts        7 tools — billing, usage, keys, email, profile, budget limits
+    ├── account.ts        8 tools — whoami, billing, usage, keys, email, profile, budget limits
     ├── connectors.ts     4 tools — connector status and folder grants
     ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
     │   ── surface-gated ──
@@ -80,18 +80,18 @@ src/
     └── coding.ts         system_status + coding_timeline (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**136 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
-inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 92 across
-`instance-tools/`. 117 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
+**137 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 93 across
+`instance-tools/`. 118 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
 
 Those three numbers ADD UP to the headline, and that is the point of stating them: 31 + 13
-+ 92 = 136. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 93 = 137. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
 file a tool landed in when nobody decided where it went, and the largest in the repo. That
-86 is history and is not the current count (92); it is kept because it is what makes the
+86 is history and is not the current count (93); it is kept because it is what makes the
 1871 lines legible. The nine ungated groups above are that file split along the
 registration boundaries it already had; the blocks moved verbatim.
 
@@ -100,7 +100,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 `repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
-under `instance-tools/` — 92 of them — to a table of **group, scope, confirmation string,
+under `instance-tools/` — 93 of them — to a table of **group, scope, confirmation string,
 dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the

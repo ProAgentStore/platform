@@ -46,6 +46,17 @@ function buildApp(opts: { seedRoles?: string; env?: Partial<Env> } = {}) {
 									const u = users.find((x) => x.id === args[0]);
 									return u ? { roles: u.roles ?? (opts.seedRoles ?? null), github_login: u.github_login } : null;
 								}
+								// The /me/account identity read — distinguished from /me by selecting created_at.
+								if (sql.includes("created_at") && sql.includes("SELECT id, github_login")) {
+									const u = users.find((x) => x.id === args[0]);
+									if (!u) return null;
+									return {
+										id: u.id,
+										github_login: u.github_login,
+										roles: u.roles ?? '["user"]',
+										created_at: "2026-01-01T00:00:00Z",
+									};
+								}
 								if (sql.startsWith("SELECT id, github_login")) {
 									const u = users.find((x) => x.id === args[0]);
 									if (!u) return null;
@@ -395,5 +406,53 @@ describe("GET /v1/auth/me + PUT /v1/auth/me (integration)", () => {
 		expect(upd!.args[0]).toBe("u1");
 		expect(upd!.args).toContain("hi");
 		expect(upd!.args).toContain("https://me.dev");
+	});
+});
+
+describe("GET /v1/auth/me/account (integration)", () => {
+	const tokenFor = (uid: string, roles: string[] = ["user"]) => signSession(uid, SECRET, { roles });
+
+	it("401s without a bearer token", async () => {
+		const { app, env } = buildApp();
+		const res = await app.request("/v1/auth/me/account", {}, env);
+		expect(res.status).toBe(401);
+	});
+
+	it("404s a token whose user row doesn't exist", async () => {
+		const { app, env } = buildApp();
+		const res = await app.request("/v1/auth/me/account", { headers: { Authorization: `Bearer ${await tokenFor("ghost")}` } }, env);
+		expect(res.status).toBe(404);
+	});
+
+	it("derives the github provider + surfaces no email for a bare-numeric uid", async () => {
+		const { app, env, users } = buildApp();
+		users.push({ id: "12345", github_login: "octo", github_name: "Octo", avatar_url: "https://a", roles: '["user","creator"]' });
+		const token = await tokenFor("12345", ["user", "creator"]);
+		const res = await app.request("/v1/auth/me/account", { headers: { Authorization: `Bearer ${token}` } }, env);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.id).toBe("12345");
+		expect(body.login).toBe("octo");
+		expect(body.provider).toBe("github");
+		expect(body.providerLabel).toBe("GitHub");
+		// A GitHub login is a username, not an address — never surfaced as email.
+		expect(body.email).toBeNull();
+		expect(body.roles).toEqual(["user", "creator"]);
+		expect(body.createdAt).toBe("2026-01-01T00:00:00Z");
+		// tokenExpiry is the session's own exp, rendered ISO — parseable and in the future.
+		expect(Number.isNaN(Date.parse(body.tokenExpiry as string))).toBe(false);
+		expect(Date.parse(body.tokenExpiry as string)).toBeGreaterThan(Date.now());
+	});
+
+	it("derives the google provider + surfaces the stored email for a google: uid", async () => {
+		const { app, env, users } = buildApp();
+		users.push({ id: "google:99", github_login: "user@example.com", github_name: "User", avatar_url: "https://a", roles: '["user"]' });
+		const res = await app.request("/v1/auth/me/account", { headers: { Authorization: `Bearer ${await tokenFor("google:99")}` } }, env);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.provider).toBe("google");
+		expect(body.providerLabel).toBe("Google");
+		expect(body.email).toBe("user@example.com");
+		expect(body.login).toBe("user@example.com");
 	});
 });

@@ -16,6 +16,20 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 	const { env, tokenFor, safetyFor } = ctx;
 
 	server.tool(
+		"whoami",
+		"Which account this connection is signed in as: id, login, sign-in provider — the string `github` or `google` — plus a display label, email (only when signed in with Google — a GitHub login is a username, not an address, and comes back as `login`), roles, account createdAt, and this token's tokenExpiry. Answers 'who am I connected as?' — nothing here is a secret. For plan/billing use billing_status; for BYOK keys use keys_status.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/auth/me/account", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"billing_status",
 		"Read your billing/plan status (free vs Pro, whether the paywall is enforced, whether a billing account exists). Upgrades happen in the console (browser redirect).",
 		{

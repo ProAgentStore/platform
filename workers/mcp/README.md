@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**136 tool registrations.** 117 are always registered; 19 are gated to the console
+**137 tool registrations.** 118 are always registered; 19 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -367,6 +367,7 @@ immediately instead of a whole transcript.
 | `list_pipeline_runs` | Declarative-pipeline runs with counts | — | | |
 | `get_instance_pipeline` | Read back a single stored pipeline definition (with validity) | — | | |
 | `mcp_audit_log` | Recent MCP write/runtime/dry-run/denied events for this account | read | | |
+| `whoami` | Which account you are connected as — id, login, sign-in provider, email (Google only), roles, createdAt, token expiry | — | | |
 | `billing_status` | Free vs Pro, paywall enforcement | — | | |
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |
