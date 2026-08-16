@@ -690,11 +690,20 @@ describe("subordinate_status — the observe verb", () => {
 		const env = {
 			DB: {
 				prepare(sql: string) {
-					return { bind() { return { async all() {
-						if (sql.includes("FROM agent_supervision")) return { results: [{ supervisor_instance_id: "sup", subordinate_instance_id: "sub" }] };
-						if (sql.includes("FROM agent_instances")) return { results: [{ id: "sub", status: "active", config: null, agent_name: "Repo Coder" }] };
-						throw new Error("D1 unavailable");
-					} }; } };
+					return { bind() { return {
+						// `run` is what the error logger reaches for once the work read below throws.
+						// Omitting it made the logger fail too, printing `[error-log] failed to persist`
+						// three times per run — noise that proved nothing about supervision and, being
+						// adjacent in the interleaved output of a parallel run, is what got this file
+						// blamed for another file's unhandled rejection in #624. The read still fails;
+						// only the reporting of it is now mocked honestly.
+						run: async () => ({}),
+						async all() {
+							if (sql.includes("FROM agent_supervision")) return { results: [{ supervisor_instance_id: "sup", subordinate_instance_id: "sub" }] };
+							if (sql.includes("FROM agent_instances")) return { results: [{ id: "sub", status: "active", config: null, agent_name: "Repo Coder" }] };
+							throw new Error("D1 unavailable");
+						},
+					}; } };
 				},
 			},
 		} as unknown as Env;

@@ -1,7 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isTransientInfraError, logUnhandled } from "./on-error.js";
 import { HttpError } from "./auth.js";
 import type { Env } from "../types.js";
+
+/**
+ * `logUnhandled` reports to `console.error` with the prefix `Unhandled error:`, and these tests
+ * drive it on purpose — so a green run has always emitted five of those lines.
+ *
+ * They read exactly like vitest's own wording for an unhandled rejection, and in a parallel run
+ * another worker's `stderr | <file> > <test>` header lands above them. That is precisely how #624
+ * was filed against `connectors/supervision.test.ts`, which produces no rejections at all: the
+ * lines were this file's, the header was that file's, and six agents spent an afternoon proving a
+ * red suite was not theirs. Captured rather than printed, and asserted below, so the log stays
+ * evidence of behaviour instead of a false lead.
+ */
+let errorLines: unknown[][];
+
+beforeEach(() => {
+	errorLines = [];
+	vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+		errorLines.push(args);
+	});
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 /** Mock env whose DB records every prepare() SQL + its bind args. logError also
  *  mirrors to agent_events, so we filter to the error_log insert in each test. */
@@ -15,6 +39,12 @@ function mockEnv() {
 						calls.push({ sql, args });
 						return { run: async () => ({}) };
 					},
+					// `error-log.ts`'s opportunistic retention prune fires on `Math.random() < 0.02`
+					// and runs UNBOUND, so it never reaches the `bind` above. Without this it threw
+					// `prepare(...).run is not a function`, the logger swallowed it to console, and
+					// the line appeared in roughly one run in ten — intermittent noise with a 2%
+					// coin-flip behind it, which is exactly the kind of evidence #624 was misfiled on.
+					run: async () => ({}),
 				};
 			},
 		},
@@ -42,6 +72,14 @@ describe("logUnhandled", () => {
 		expect(ctx.method).toBe("POST");
 		expect(typeof ctx.stack).toBe("string");
 		expect(ctx.stack.length).toBeGreaterThan(0);
+		// The console report is a deliberate part of this: a Worker's tail is the only place an
+		// unhandled exception is visible before the D1 write lands. Asserted so capturing the line
+		// silences the SUITE without silencing the behaviour — the whole risk of a console spy.
+		// `toContainEqual`, not `toEqual`: the logger also mirrors to `agent_events` and prunes on a
+		// 2% coin flip, both best-effort and both able to append a line here at a moment of their
+		// choosing. Asserting this array's exact contents makes the test a hostage to that timing —
+		// which it briefly was, and which would have replaced one intermittent failure with another.
+		expect(errorLines).toContainEqual(["Unhandled error:", "Error: boom kaboom", expect.stringContaining("Error: boom kaboom")]);
 	});
 
 	it("does NOT log a 4xx HttpError (expected client error)", async () => {
