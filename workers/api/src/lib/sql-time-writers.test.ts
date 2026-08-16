@@ -131,17 +131,37 @@ describe("#634 — instance_runtime_tasks.updated_at is one ordering, not two", 
 		});
 		// `upsertWorkCard` swallows its own errors, so the row it was asked to write is asserted
 		// rather than assumed — without it the claims below would both "succeed" against an empty
-		// table and prove nothing.
-		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM instance_runtime_tasks WHERE id = 'live-apply'").get()).toMatchObject({ n: 1 });
+		// table and prove nothing. Its FORMAT is asserted here as well, because the production
+		// writer's output is what the two cutoffs below are compared against.
+		const live = d1.sqlite.prepare("SELECT updated_at AS v FROM instance_runtime_tasks WHERE id = 'live-apply'").get() as
+			| { v: string }
+			| undefined;
+		expect(live?.v, "the live card `upsertWorkCard` wrote is what the cutoffs are compared against").toMatch(
+			/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+		);
+
+		// The card is then pinned to a chosen instant, and both cutoffs are derived from it.
+		// `sql-time.ts` states the invariant as holding "for two stamps on the same date": `' '`
+		// (0x20) sorts below `'T'` (0x54) at index 10, so an ISO cutoff loses the comparison — but
+		// only while the DATES are equal. Read against a `datetime('now')` card, a cutoff built
+		// from `Date.now() - 4h` is on the previous date for the four hours after midnight UTC, and
+		// there the ISO cutoff correctly WINS and the claim is refused: a true statement about byte
+		// ordering, and a false one about the bug. That is not a property of the code under test,
+		// it is the time of day — and it red-lined `main` and blocked the API deploy nightly
+		// between 00:00 and 04:00 UTC (#677). Deriving both stamps from one pinned instant makes
+		// the arm measure the CUTOFF's format, which is what it owns; the writer's own format is
+		// pinned by the arms above and by the assertion just made.
+		const cardAt = Date.parse(`${sqliteToday(d1)}T12:00:00.000Z`);
+		d1.sqlite.prepare("UPDATE instance_runtime_tasks SET updated_at = ?1 WHERE id = 'live-apply'").run(sqlTime(cardAt));
+		const staleAt = cardAt - 4 * 60 * 60 * 1000; // same UTC date as the card, by construction
 		const run = (cutoff: string) =>
 			d1.sqlite.prepare(claimSql.replace(/\?(\d)/g, "?$1")).run("claim-1", "i1", "u1", sqlTime(), cutoff);
 
 		// An ISO cutoff loses the byte comparison against the live card and grants the claim.
-		const iso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-		expect(run(iso).changes).toBe(1);
+		expect(run(new Date(staleAt).toISOString()).changes).toBe(1);
 		d1.sqlite.exec("DELETE FROM instance_runtime_tasks WHERE id = 'claim-1'");
 		// The cutoff the code now binds sees it and refuses.
-		expect(run(sqlTime(Date.now() - 4 * 60 * 60 * 1000)).changes).toBe(0);
+		expect(run(sqlTime(staleAt)).changes).toBe(0);
 		d1.close();
 	});
 });
