@@ -14,10 +14,12 @@ import type { Env } from "../types.js";
  */
 
 const installationTokenForOwner = vi.fn();
+const repoScopedInstallationToken = vi.fn();
 const readConnectorRefreshToken = vi.fn();
 
 vi.mock("./github-app.js", () => ({
 	installationTokenForOwner: (...args: unknown[]) => installationTokenForOwner(...args),
+	repoScopedInstallationToken: (...args: unknown[]) => repoScopedInstallationToken(...args),
 }));
 vi.mock("./connector-oauth.js", () => ({
 	readConnectorRefreshToken: (...args: unknown[]) => readConnectorRefreshToken(...args),
@@ -29,7 +31,48 @@ const env = {} as Env;
 
 beforeEach(() => {
 	installationTokenForOwner.mockReset();
+	repoScopedInstallationToken.mockReset();
+	// The default for the pre-existing cases below: scoping unavailable, so the installation-wide
+	// token is what resolves — the exact behaviour these tests were written against.
+	repoScopedInstallationToken.mockResolvedValue(null);
 	readConnectorRefreshToken.mockReset();
+});
+
+/**
+ * The credential embedded in a managed clone's `origin` is scoped to the ONE repo (#676).
+ *
+ * An installation-wide token left every managed checkout able to `git push` to any sibling repo
+ * in the org, which is the write reach nobody granted. These pin the narrowing AND the fallback,
+ * because the fallback is what keeps a clone that works today from starting to fail.
+ */
+describe("GitHub — the clone credential is scoped to the repository (#676)", () => {
+	it("prefers a repo-scoped token, asked for by owner AND name", async () => {
+		repoScopedInstallationToken.mockResolvedValue("ghs_scoped");
+		installationTokenForOwner.mockResolvedValue("ghs_org_wide");
+		const cred = await resolveCloneCredential(env, "u1", {
+			provider: "github",
+			githubRepo: "ProAgentStore/platform",
+			cloneUrl: "https://github.com/ProAgentStore/platform.git",
+		});
+		expect(cred).toEqual({ username: "x-access-token", token: "ghs_scoped" });
+		expect(repoScopedInstallationToken).toHaveBeenCalledWith(env, "u1", "ProAgentStore", "platform");
+		// The org-wide token is not even reached when a scoped one resolves.
+		expect(installationTokenForOwner).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the installation-wide token rather than failing the clone", async () => {
+		// No verified binding, or the App's installation does not list this repo. Widening is the
+		// deliberate choice: the alternative breaks a clone that works today.
+		repoScopedInstallationToken.mockResolvedValue(null);
+		installationTokenForOwner.mockResolvedValue("ghs_org_wide");
+		expect((await resolveCloneCredential(env, "u1", { provider: "github", githubRepo: "o/r" }))?.token).toBe("ghs_org_wide");
+	});
+
+	it("falls back when the scoped mint THROWS, not only when it declines", async () => {
+		repoScopedInstallationToken.mockRejectedValue(new Error("GitHub is down"));
+		installationTokenForOwner.mockResolvedValue("ghs_org_wide");
+		expect((await resolveCloneCredential(env, "u1", { provider: "github", githubRepo: "o/r" }))?.token).toBe("ghs_org_wide");
+	});
 });
 
 describe("GitHub — unchanged", () => {

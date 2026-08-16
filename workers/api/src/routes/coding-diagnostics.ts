@@ -251,9 +251,28 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			};
 		});
 
-		// 5. GitHub App status
+		// 5. GitHub App status, and WHAT THIS INSTANCE MAY WRITE TO (#676 item 5)
+		//
+		// `configured` alone answered "can the platform talk to GitHub at all", which is not the
+		// question an owner has before handing over autonomous work. That question is "what can this
+		// thing change", and until #676 nothing on any surface answered it — the registered repo was
+		// a working-directory default that read like a boundary.
+		//
+		// `enforcement` is stated because a half-answer here would be worse than none. This is a
+		// detect-and-halt gate on the acts the Engine reports, NOT a credential the Engine is
+		// confined by: it runs on the owner's machine under the machine's own `gh` login, so a first
+		// wrong-repo write still lands and is then stopped and named. An owner reading "writeScope:
+		// [x]" must not conclude a write to anything else is impossible.
+		const writeScope = dbRepos.map((r) => r.githubRepo).filter((s): s is string => !!s && s.includes("/"));
 		const githubApp = {
 			configured: githubAppConfigured(env),
+			/** The repositories a write may name. Empty = no GitHub coordinates, so nothing is checked. */
+			writeScope,
+			enforcement: writeScope.length ? "acts-observed-halt" : "none",
+			/** Only a stream-json engine reports acts (#294), so on any other engine this sees nothing. */
+			enforcementNote: writeScope.length
+				? "A write naming a repository outside this list halts the run and is recorded. The first such write still LANDS — the engine uses this machine's own git and gh credentials, which are not scoped."
+				: "No GitHub repository is registered for this instance, so write scope is not checked.",
 		};
 
 		// 6. Auto-detected issues

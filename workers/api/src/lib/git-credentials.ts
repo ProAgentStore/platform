@@ -18,7 +18,7 @@
  * private-repo access.
  */
 import { readConnectorRefreshToken } from "./connector-oauth.js";
-import { installationTokenForOwner } from "./github-app.js";
+import { installationTokenForOwner, repoScopedInstallationToken } from "./github-app.js";
 import { gitProviderFor, mayAttachCloneCredential, type GitProvider } from "./git-providers.js";
 import type { Env } from "../types.js";
 
@@ -47,6 +47,11 @@ export interface CloneTarget {
  */
 function ownerOf(slug: string): string {
 	return slug.split("/")[0] ?? "";
+}
+
+/** The repository half of an `owner/repo` — what GitHub's `repositories:` scoping is keyed by. */
+function nameOf(slug: string): string {
+	return slug.split("/")[1] ?? "";
 }
 
 /**
@@ -88,7 +93,19 @@ export async function resolveCloneCredential(env: Env, userId: string, repo: Clo
 		case "github-app": {
 			const owner = ownerOf(slug);
 			if (!owner) return null;
-			const token = await installationTokenForOwner(env, userId, owner).catch(() => null);
+			// SCOPED TO THE ONE REPO BEING CLONED (#676). This credential does not stay in the
+			// request: `authenticatedCloneUrl` embeds it in the checkout's `origin`, so an
+			// installation-wide token left a managed clone able to push to every sibling repo in
+			// the org — a write reach nobody granted and nothing checked. GitHub rejects a scoped
+			// token for any other repository, so the refusal is the credential's, not ours.
+			//
+			// Falls back to the installation-wide token when scoping is unavailable (no verified
+			// binding, or the App's installation does not list this repo). That is a deliberate
+			// widening, not an oversight: the alternative is failing a clone that works today, and
+			// this function's whole contract is that an unauthenticated clone must still be tried.
+			const name = nameOf(slug);
+			const scoped = name ? await repoScopedInstallationToken(env, userId, owner, name).catch(() => null) : null;
+			const token = scoped ?? (await installationTokenForOwner(env, userId, owner).catch(() => null));
 			return token ? { username: provider.gitUsername, token } : null;
 		}
 		case "vault-token": {

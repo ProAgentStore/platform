@@ -110,11 +110,21 @@ async function installationsOrFault(env: Env): Promise<InstallationsResult> {
 }
 
 /** Mint a fresh installation access token (valid ~1h). */
-async function mintInstallationToken(env: Env, installationId: number): Promise<{ token: string; expiresAt: string } | null> {
+async function mintInstallationToken(
+	env: Env,
+	installationId: number,
+	opts?: { repositories?: readonly string[] },
+): Promise<{ token: string; expiresAt: string } | null> {
 	const jwt = await appJwt(env);
+	// `repositories` is GitHub's OWN scoping mechanism: the resulting token is rejected by GitHub
+	// for any repo not named, so the refusal happens at the credential rather than in our code
+	// (#676). Omitted entirely when not asked for — an empty array would mean "no repositories",
+	// which is not the same request and would silently break every existing caller.
+	const scoped = opts?.repositories?.length ? { repositories: [...opts.repositories] } : null;
 	const res = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
 		method: "POST",
 		headers: GH_HEADERS(jwt),
+		...(scoped ? { body: JSON.stringify(scoped) } : {}),
 	});
 	if (!res.ok) return null;
 	const data = (await res.json()) as { token: string; expires_at: string };
@@ -405,6 +415,53 @@ export async function installationTokenForOwner(env: Env, userId: string, owner:
 	if (!owner) return null;
 	const r = await resolveGithubAccess(env, userId, owner).catch(() => ({ ok: false }) as const);
 	return r.ok ? r.token : null;
+}
+
+/**
+ * An installation token GitHub itself restricts to ONE repository (#676).
+ *
+ * The ordinary token is installation-wide: it can write to every repo in the org the App is
+ * installed on. `resolveCloneCredential` embeds it in the clone URL, so a managed checkout's
+ * `origin` carried an org-wide write credential — `git push` from that checkout to a SIBLING repo
+ * authenticated fine. This mints one GitHub will reject for anything but `owner/repo`.
+ *
+ * ── NEVER CACHED, and that is the point ──
+ *
+ * `installationTokenResult` caches per `(user_id, installation_id)` — ONE slot per installation,
+ * shared by `github-issues.ts`, `hosted-repo.ts` and the connectors. Writing a repo-scoped token
+ * into it would silently narrow all of them to a single repository, which is precisely the
+ * "reads must stay broad" property #676 protects. So this mints fresh every time and writes
+ * nothing back. Installation tokens last an hour and a clone is one call, so the cost is a
+ * request, not a pattern.
+ *
+ * The verified-binding guard is kept: minting still requires the `github_installations` row that
+ * `authorizeInstallation` creates only after proving the user controls the account. Without it
+ * this would be a second, unguarded path to the cross-tenant IDOR the cache path exists to close.
+ *
+ * Returns null — never throws — when the App is not configured, the owner has no installation, the
+ * user has no verified binding, or the installation does not include that repository. Every caller
+ * treats null as "no credential", which is the same contract `installationTokenForOwner` has.
+ */
+export async function repoScopedInstallationToken(
+	env: Env,
+	userId: string,
+	owner: string,
+	repo: string,
+): Promise<string | null> {
+	if (!githubAppConfigured(env) || !owner.trim() || !repo.trim()) return null;
+	const list = await installationsOrFault(env).catch(() => ({ ok: false }) as const);
+	if (!list.ok) return null;
+	const match = list.installs.find((i) => i.account?.login?.toLowerCase() === owner.trim().toLowerCase());
+	if (!match) return null;
+	// The binding is the authorization proof — same check `installationTokenResult` makes before it
+	// will mint. A missing row means this user never demonstrated control of this installation.
+	const binding = await env.DB.prepare("SELECT id FROM github_installations WHERE user_id = ?1 AND installation_id = ?2")
+		.bind(userId, match.id)
+		.first<{ id: string }>()
+		.catch(() => null);
+	if (!binding) return null;
+	const minted = await mintInstallationToken(env, match.id, { repositories: [repo.trim()] }).catch(() => null);
+	return minted?.token ?? null;
 }
 
 /**

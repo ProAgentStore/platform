@@ -1154,7 +1154,15 @@ const PINS = {
 	// workflow holds the run-scoped count, so the line cannot live anywhere else, and the file sat
 	// EXACTLY on its pin, so there was no line to spend. The reason is carried in `CodingGoal`'s
 	// docblock rather than here, and the seam above is unchanged and still the right one.
-	"workers/api/src/workflows/coding-session.ts": 873,
+	// +37 at #676: a SECOND authority gate in the Pilot loop — merge policy bounds what a run may
+	// make irreversible, write scope bounds WHERE. They are independent (run csess_f686f1ff was
+	// inside its merge policy the whole time and in the wrong organisation), so the gate is wired
+	// at both places acts are drained — the capture tick, which can still halt, and the final
+	// drain, where a run that ends WITH its pull request lands and only the record is left to
+	// write. Splitting the file was considered and rejected here: the two gates read the same
+	// drained acts in the same step, and separating them would put the halt further from the
+	// thing it halts.
+	"workers/api/src/workflows/coding-session.ts": 911,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1289,7 +1297,12 @@ const PINS = {
 	// the point of running the bar there, but the pin and the growth did not travel together.
 	// +10 at #627/#629: the runner.ts raise above is one number and seven lines of why the guard has
 	// to sit inside the method rather than beside it. Plus this note.
-	"scripts/check-file-size.mjs": 1374,
+	// +11 at #676: the coding-session.ts raise above and this note. The ratchet also caught
+	// coding-store.ts crossing 800 in the same change, and that one was NOT pinned — the function
+	// it had gained (`registeredRepoSlugs`) moved into `repo-write-scope.ts`, where the rest of the
+	// same question already lived. A pin was the easy answer and the wrong one; the gate asking for
+	// a decision is what produced the better placement.
+	"scripts/check-file-size.mjs": 1386,
 };
 
 /**

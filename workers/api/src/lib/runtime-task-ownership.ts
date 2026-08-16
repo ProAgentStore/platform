@@ -78,6 +78,7 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	"coding.uncommitted": "cloud", // lib/repo-policies.ts — a standing-policy observation
 	"coding.off_branch": "cloud", // lib/repo-policies.ts — ditto
 	"coding.unauthorized_act": "cloud", // lib/coding-authority.ts
+	"coding.out_of_scope_write": "cloud", // lib/repo-write-scope.ts — a write outside the registered repos
 	"setup.pags_browser_runtime": "cloud", // synthetic "run pags up" advisory
 	"setup.cloudflare_workers_ai": "cloud", // synthetic "add credentials" advisory
 };

@@ -42,6 +42,7 @@ import {
 	unauthorizedActs,
 	type MergePolicy,
 } from "../lib/coding-authority.js";
+import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSlugs, unscopedWrites } from "../lib/repo-write-scope.js";
 import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason } from "../lib/agent-loop-store.js";
@@ -88,6 +89,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 */
 		const mergePolicy = (await step.do("merge-authority", () => readMergePolicyForRun(env, { instanceId, userId, repoId }))) as MergePolicy;
 		goal.mergePolicy = mergePolicy;
+		/**
+		 * WHICH repositories may this run write to? (#676)
+		 *
+		 * Resolved once, here, for the reason `mergePolicy` is: a gate that means different things
+		 * at different moments of one run is not a gate. Distinct from `mergePolicy`, which bounds
+		 * WHAT a run may make irreversible — this bounds WHERE. Run `csess_f686f1ff` was inside its
+		 * merge policy the whole time; it was in the wrong organisation.
+		 */
+		const writeScope = (await step.do("repo-write-scope", () => registeredRepoSlugs(env, instanceId, userId))) as string[];
 		// The Pilot must convert "resets at 10:30pm" into an absolute instant, and "10:30pm" is 10:30pm
 		// SOMEWHERE (#541). Resolved once, like mergePolicy; unset stays unset and renders as UTC.
 		goal.timeZone = ((await step.do("owner-timezone", async () => (await accountTimeZone(env, userId)) ?? null)) as string | null) ?? undefined;
@@ -201,7 +211,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const note = runOutcomeNote({
 				outcome: outcome.outcome,
 				detail,
-				breach: unauthorizedActs(mergePolicy, acts).map((a) => describeViolation(mergePolicy, a)).join(" "),
+				// Both gates, one line. A run that wrote to the wrong repository must say so in the
+				// report the owner actually reads — #676's whole complaint is that the closing
+				// summary described the target as "the PAGS platform repo" and nothing contradicted it.
+				breach: [
+					...unauthorizedActs(mergePolicy, acts).map((a) => describeViolation(mergePolicy, a)),
+					...unscopedWrites(writeScope, acts).map(({ act, refused }) => describeRepoScopeViolation(refused, writeScope, act)),
+				].join(" "),
 				authorityNote,
 				actLine,
 			});
@@ -421,6 +437,19 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				reported,
 			).catch(() => null);
 			if (stopReason) return { ...pane, cancelled: true, stopReason };
+			// WRITE SCOPE (#676). The same shape as the merge gate above and independent of it: this
+			// asks WHERE the act landed, not what it was. Run `csess_f686f1ff` opened a pull request
+			// in another organisation and reported success, because nothing compared the repository
+			// it wrote to against the one it was registered for. Halting here cannot undo that first
+			// write — the Engine holds the machine's own `gh` login — but it stops the run and names
+			// the repository, instead of letting the run finish and claim the work landed.
+			const scopeStop = await recordRepoScopeViolations(
+				env,
+				{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
+				writeScope,
+				reported,
+			).catch(() => null);
+			if (scopeStop) return { ...pane, cancelled: true, stopReason: scopeStop };
 			// A Pilot capturing is the session being USED (#275). The claim heartbeat already says
 			// so on every action, but a single round can sit in `waitIdle` for minutes with no
 			// action at all — so the invariant "anything driving the engine keeps it alive" is
@@ -782,6 +811,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						env,
 						{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
 						mergePolicy,
+						closing,
+					).catch(() => null);
+					// A run routinely ends WITH the pull request it opened, so the wrong-org write of
+					// #676 lands in exactly this drain. Nothing is left to halt; the breach still has
+					// to be recorded, or the run that reported success stays the only account of it.
+					await recordRepoScopeViolations(
+						env,
+						{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
+						writeScope,
 						closing,
 					).catch(() => null);
 					return null;
