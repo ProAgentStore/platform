@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText, text } from "../http.js";
+import { authRequired, authedCall, jsonText, text, type McpEnv } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
 import { clearFinishedSentence } from "../state-vocabulary.js";
 import { groupBoard, type InstanceToolsCtx, isRec } from "./shared.js";
@@ -15,6 +15,48 @@ import { groupBoard, type InstanceToolsCtx, isRec } from "./shared.js";
  * is grounded in that one ticket's record and CANNOT act — is a property of the board's
  * approval gate, not of chat.
  */
+/**
+ * Resolve a board `jobKey` to the task id the ticket routes take (PAS #137).
+ *
+ * The two identifiers address different things and nothing maps between them outside the
+ * board itself. `set_board_item_status` never needs the mapping — `/board/status` writes a
+ * SEPARATE jobKey-keyed overlay table and never touches the task — and the grouping that
+ * turns tasks into cards only exists inside the API's `buildInstanceBoard`. So the board is
+ * asked, rather than the key being guessed at.
+ *
+ * (For a ticket the two happen to coincide: `jobKeyForTask` falls back to the task id for
+ * anything without a job URL. Relying on that would be a latent bug — it is a fallback in a
+ * function whose other branches key by URL, not a contract.)
+ *
+ * Returns the card's `latestTaskId` — the ticket the card opens. A card that exists only as
+ * a status overlay (moved by hand, its runs since cleared) carries an EMPTY `latestTaskId`;
+ * that is reported as its own failure rather than sent on as a request to patch task "".
+ */
+async function resolveJobKeyToTaskId(
+	instanceId: string,
+	jobKey: string,
+	sessionToken: string,
+	env: McpEnv,
+): Promise<{ taskId: string } | { error: string }> {
+	let data: unknown;
+	try {
+		data = await authedCall(`/v1/instances/${instanceId}/board`, sessionToken, {}, env);
+	} catch (e) {
+		return { error: `board unavailable: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	if (isRec(data) && data.error) return { error: String(data.error) };
+	const items = isRec(data) && Array.isArray(data.items) ? data.items : [];
+	const card = items.find((it) => isRec(it) && it.jobKey === jobKey);
+	if (!card || !isRec(card)) return { error: `no board card with jobKey "${jobKey}" — get it from instance_board` };
+	const taskId = typeof card.latestTaskId === "string" ? card.latestTaskId : "";
+	if (!taskId) {
+		return {
+			error: `board card "${jobKey}" has no ticket to edit: it exists only as a moved card, or its runs have been cleared`,
+		};
+	}
+	return { taskId };
+}
+
 export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 
@@ -88,6 +130,67 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_board_item_status", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"update_board_ticket",
+		"Amend an existing board ticket's WORDING — its title, description and/or reasoning (PAS #137). Address the card by `job_key` from instance_board, the same key set_board_item_status takes. Only the fields you pass change: omit one and it is left alone, pass \"\" to clear it. Everything else about the ticket — its column, its declared action, when it was created — is untouched. To MOVE a card between columns use set_board_item_status; this tool never changes status. Use it to correct a ticket filed with wrong or imprecise wording instead of filing a second, corrected one.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			job_key: z.string().describe("The card's jobKey from instance_board"),
+			title: z.string().optional().describe("Replacement title (max 200 chars). Omit to leave it alone."),
+			description: z.string().optional().describe("Replacement one-line detail under the title (max 2000 chars). Omit to leave it alone, \"\" to clear it."),
+			reasoning: z.string().optional().describe("Replacement 'Why:' block — the decision/audit shown on the card (max 8000 chars). Omit to leave it alone, \"\" to clear it."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, job_key, title, description, reasoning, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+
+			// Built from what was PASSED, not from what is non-empty: "" is a real instruction
+			// (clear this field) and must survive into the patch, while an omitted field must not
+			// appear at all — that difference is the whole merge contract.
+			const patch: Record<string, string> = {};
+			if (title !== undefined) patch.title = title;
+			if (description !== undefined) patch.description = description;
+			if (reasoning !== undefined) patch.reasoning = reasoning;
+			if (Object.keys(patch).length === 0) {
+				return jsonText({ error: "provide at least one of title, description, reasoning" });
+			}
+
+			// The audited input names WHICH fields were amended, not their contents: a ticket's
+			// prose can be long and is already stored on the card.
+			const input = { instance_id, job_key, fields: Object.keys(patch) };
+			const denied = await requirePermission(safetyFor(token), "write", "update_board_ticket", input);
+			if (denied) return denied;
+
+			// The dry run answers BEFORE the jobKey is resolved, and the endpoint it reports is
+			// therefore templated rather than concrete. Resolving first would read better — a
+			// preview could then reject an unknown jobKey — but resolution is a board fetch, and a
+			// declared dry run reaching the network is exactly what `contract.test.ts` forbids.
+			// A preview that quietly makes a request is not a preview.
+			if (dry_run) {
+				return dryRun(safetyFor(token), "update_board_ticket", "amend board ticket wording", input, {
+					endpoint: `/v1/instances/${instance_id}/tasks/<taskId resolved from job_key>`,
+					method: "PATCH",
+					fields: Object.keys(patch),
+				});
+			}
+
+			// jobKey addresses a CARD, the ticket routes address a TASK, and only the board maps
+			// between them — see resolveJobKeyToTaskId.
+			const resolved = await resolveJobKeyToTaskId(instance_id, job_key, sessionToken, env);
+			if ("error" in resolved) return jsonText(resolved);
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tasks/${resolved.taskId}`,
+				sessionToken,
+				{ method: "PATCH", body: JSON.stringify(patch) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "update_board_ticket", action: "completed", input, result: data });
 			return jsonText(data);
 		},
 	);

@@ -135,4 +135,13 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.7 is published.
 	"0.1.8": "sha256:599bfad95dd9c388d3c10719eb91037881c8d69601784c406180d42f571331d2",
+	// 0.1.9 (PAS #137): one new tool NAME in the always-on `board` group, `update_board_ticket`.
+	// A board ticket could be filed and moved but never edited, so correcting one word meant
+	// filing a replacement and cancelling the original, leaving a dead card behind.
+	//
+	// The set of registered tool names is the first bullet of server-version.ts's bump list, and
+	// it is the one a caching host is most exposed to: a host holding the 0.1.8 list does not know
+	// this tool exists, and unlike a widened `inputSchema` there is no degraded call it can still
+	// make. Appended, never edited: 0.1.8 is published.
+	"0.1.9": "sha256:48d7f82fa78bef415b3b87c61d7e9860c18f65901aec20c74f892ad23d77ff04",
 };

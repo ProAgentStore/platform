@@ -67,7 +67,7 @@ src/
     ├── runtime.ts        10 tools — the `pags up` runtime + its task queue
     ├── knowledge.ts      10 tools — documents, files, vectors, memory
     ├── observability.ts  9 tools — messages, activity, errors, trace, pipeline runs, feedback
-    ├── board.ts          8 tools — the board, its columns, the per-ticket thread (#150)
+    ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
     ├── settings.ts       11 tools — settings, name, instructions, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
     ├── composition.ts    8 tools — supervision (#183), connections (#182), loops
@@ -80,9 +80,9 @@ src/
     └── coding.ts         system_status + coding_timeline (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**140 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+**141 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
 inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 93 across
-`instance-tools/`. 121 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
+`instance-tools/`. 122 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
 
 Those three numbers ADD UP to the headline, and that is the point of stating them: 31 + 13
 + 93 = 140. They said 88 until #602, which made the paragraph sum to 132 — a total the

@@ -304,6 +304,7 @@ const TABLE: Record<string, Row> = {
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_stats_schema: ["stats", "write", null, "envelope", "agent_id,cards,dry_run,token"],
 	set_board_item_status: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,status,token"],
+	update_board_ticket: ["board", "write", null, "envelope", "description,dry_run,instance_id,job_key,reasoning,title,token"],
 	set_instance_board_config: ["board", "write", null, "envelope", "columns,dry_run,instance_id,reset,token,view"],
 	set_instance_instructions: ["settings", "write", null, "envelope", "dry_run,instance_id,instructions,token"],
 	set_instance_model: ["settings", "write", null, "envelope", "dry_run,instance_id,model,token"],

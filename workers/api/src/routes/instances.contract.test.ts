@@ -267,6 +267,7 @@ const ROUTES = [
 	"PUT /:instanceId/board-config",
 	"POST /:instanceId/tasks",
 	"POST /:instanceId/tasks/direct",
+	"PATCH /:instanceId/tasks/:taskId",
 	"POST /:instanceId/tasks/:taskId/run",
 	"GET /:instanceId/tasks/:taskId/thread",
 	"POST /:instanceId/tasks/:taskId/thread",
@@ -389,6 +390,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"PUT /:instanceId/board-config",
 		"POST /:instanceId/tasks",
 		"POST /:instanceId/tasks/direct",
+		"PATCH /:instanceId/tasks/:taskId",
 		"POST /:instanceId/tasks/:taskId/run",
 		"GET /:instanceId/tasks/:taskId/thread",
 		"POST /:instanceId/tasks/:taskId/thread",
@@ -560,6 +562,10 @@ const GATES: Record<string, [number, number]> = {
 	"PUT /:instanceId/board-config": [401, 404],
 	"POST /:instanceId/tasks": [401, 404],
 	"POST /:instanceId/tasks/direct": [401, 404],
+	// Editing a ticket's wording (PAS #137). Gated before the body is looked at, so a
+	// stranger is refused whether or not the patch itself is well-formed — which is why
+	// this needs no BODIES entry.
+	"PATCH /:instanceId/tasks/:taskId": [401, 404],
 	"POST /:instanceId/tasks/:taskId/run": [401, 404],
 	"GET /:instanceId/tasks/:taskId/thread": [401, 404],
 	"POST /:instanceId/tasks/:taskId/thread": [401, 404],

@@ -206,6 +206,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_tool: "write",
 	set_translation_config: "write",
 	stop_instance_loop: "write",
+	update_board_ticket: "write",
 	subscribe_agent: "write",
 	update_agent: "write",
 	update_agent_board_config: "write",
@@ -279,7 +280,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// deliberately — it changes where calls are ROUTED without itself driving anything on the
 	// machine, so it does not belong in the scope that means "this spends something out there".
 	read: 70,
-	write: 41,
+	write: 42,
 	runtime: 15,
 	destructive: 14,
 };
