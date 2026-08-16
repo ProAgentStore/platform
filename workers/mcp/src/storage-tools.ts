@@ -25,7 +25,7 @@ export function registerStorageTools(
 		"list_collections",
 		"List all data collections (tables) for an agent. Shows schema and record counts.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 		},
 		async ({ token, agent_id }) => {
@@ -40,7 +40,7 @@ export function registerStorageTools(
 		"create_collection",
 		"Create a new data collection for an agent. Define fields with types and indexing.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			name: z.string().describe("Collection name (lowercase, a-z0-9_)"),
 			fields: z.string().describe('JSON array of field defs: [{"name":"email","type":"string","required":true,"indexed":true,"unique":true}]'),
@@ -66,7 +66,7 @@ export function registerStorageTools(
 		"query_records",
 		"Query records from a collection. Filter by field values, sort, paginate.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			collection: z.string().describe("Collection name"),
 			where: z.string().optional().describe('JSON filter: {"status":"submitted"}'),
@@ -90,7 +90,7 @@ export function registerStorageTools(
 		"insert_record",
 		"Insert a new record into a collection.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			collection: z.string().describe("Collection name"),
 			data: z.string().describe("JSON object with field values"),
@@ -116,7 +116,7 @@ export function registerStorageTools(
 		"update_record",
 		"Update fields on an existing record.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			collection: z.string().describe("Collection name"),
 			record_id: z.string().describe("Record ID"),
@@ -246,7 +246,7 @@ export function registerStorageTools(
 		"list_agent_files",
 		"List files stored by an agent (resumes, documents, etc.).",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			tags: z.string().optional().describe("Comma-separated tags to filter"),
 		},
@@ -265,7 +265,7 @@ export function registerStorageTools(
 		"upload_agent_file",
 		"Upload a text file to an agent's storage.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			name: z.string().describe("Filename with extension"),
 			content: z.string().describe("File content (text)"),
@@ -298,7 +298,7 @@ export function registerStorageTools(
 		"search_agent_knowledge",
 		"Semantic search across an agent's knowledge base, conversation history, and files.",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			query: z.string().describe("Natural language search query"),
 			top_k: z.number().optional().describe("Number of results (default 5)"),
@@ -321,7 +321,7 @@ export function registerStorageTools(
 		"agent_activity",
 		"Get recent activity log for an agent (chat, tool calls, file uploads, etc.).",
 		{
-			token: z.string().optional(),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			limit: z.number().optional().describe("Number of events (default 20)"),
 		},
