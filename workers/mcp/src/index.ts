@@ -718,8 +718,19 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		this.server.tool(
 			"agent_deploy_status",
 			"Check the latest GitHub Actions deploy runs for an agent repo.",
-			{ agent_id: z.string().describe("Agent ID or slug") },
-			async ({ agent_id }) => {
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				agent_id: z.string().describe("Agent ID or slug"),
+			},
+			async ({ token, agent_id }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				const input = { agent_id };
+				const denied = await requirePermission(this.safety(token), "read", "agent_deploy_status", input);
+				if (denied) return denied;
+				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
+					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
+				}
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				return text(await deployStatus(this.env, org, repoNameFor(agent_id)));
 			},

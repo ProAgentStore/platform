@@ -144,4 +144,15 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// this tool exists, and unlike a widened `inputSchema` there is no degraded call it can still
 	// make. Appended, never edited: 0.1.8 is published.
 	"0.1.9": "sha256:48d7f82fa78bef415b3b87c61d7e9860c18f65901aec20c74f892ad23d77ff04",
+	// 0.1.10 (#681): `agent_deploy_status` gained a `token` argument — the audit found it was
+	// the sole GitHub-backed tool taking no token and running no `ownsAgent()` check, reaching
+	// GitHub with the worker's own credential for any repo name in the org. Adding the token
+	// lands in `inputSchema`, which IS in the fingerprint, so this hash moves. The paired
+	// `ownsAgent()` + `requirePermission("read", …)` guards are handler internals — a change to
+	// WHEN a call is refused, not WHAT is published — and do not themselves move the surface.
+	// The nine `storage-tools.ts` `.describe()` additions shipped in the same change are on the
+	// tools' own token params but are DESCRIPTIONS, excluded from the fingerprint on purpose.
+	// (Originally authored as 0.1.8 pre-rebase; 0.1.8 and 0.1.9 landed first, so this is 0.1.10.)
+	// Appended, never edited: 0.1.9 is published.
+	"0.1.10": "sha256:5ad96d5d35a9dbc8a3b30a64d756789ea8838321655c8178803edb9754387b6d",
 };

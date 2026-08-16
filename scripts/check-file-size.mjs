@@ -631,7 +631,13 @@ const PINS = {
 	// pages. The eight lines here are the two arguments, their descriptions and the call; the
 	// SHAPING is in `src/agent-listing.ts`, a new pure module, precisely so that this file did not
 	// absorb it. That is the split this ratchet asks for, taken in the same commit as the growth.
-	"workers/mcp/src/index.ts": 1169,
+	// +11 at #681: `agent_deploy_status` was the sole GitHub-backed tool with no `token` and no
+	// `ownsAgent()` check, reaching GitHub with the worker's own credential for any repo name in
+	// the org. It now carries the same guard chain as its sibling `trigger_agent_deploy` — token
+	// param, `requirePermission("read")`, and the ownership check. Raised rather than split: the
+	// eleven lines ARE the security fix, inline handler logic that mirrors the tool directly above
+	// it in this file and cannot be extracted without separating the guard from what it guards.
+	"workers/mcp/src/index.ts": 1180,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1310,7 +1316,10 @@ const PINS = {
 	// +4 at #653: this file grows when a pin is raised, because a raised pin without its reason is
 	// the thing this registry exists to prevent. Its own ceiling has to follow, or recording WHY
 	// would itself be the violation.
-	"scripts/check-file-size.mjs": 1394,
+	// +9 at #681: the index.ts raise above (agent_deploy_status's ownership guard, six lines of why)
+	// and this note. Same self-referential growth #653 records — the ceiling follows the pins it
+	// stores, because a raised pin without its reason is exactly what this registry exists to catch.
+	"scripts/check-file-size.mjs": 1403,
 };
 
 /**
