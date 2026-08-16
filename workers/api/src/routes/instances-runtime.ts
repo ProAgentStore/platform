@@ -524,11 +524,27 @@ export async function mirroredRuntimeEvents(
 }
 
 /**
- * The event stream of ONE ticket, oldest→newest. The instance-wide reader above is
- * newest-first over every task, which the ticket thread cannot use: it would have to pull
- * a large window and filter client-side just to be sure it had this ticket's oldest turns
- * (which is exactly what the run-detail page does today, capped at 500 and silently lossy
- * for a long-running ticket). This seeks the `(task_id, created_at)` index instead.
+ * The event stream of ONE ticket — the NEWEST `limit` events, returned oldest→newest.
+ *
+ * The instance-wide reader above is newest-first over every task, which the ticket thread cannot
+ * use: it would have to pull a large window and filter client-side just to be sure it had this
+ * ticket's turns (which is exactly what the run-detail page does today, capped at 500 and silently
+ * lossy for a long-running ticket). This seeks the `(task_id, created_at)` index instead.
+ *
+ * ── Which END the cap keeps (#653)
+ *
+ * This selected ASC, so it kept the OLDEST 200 and dropped everything after. Past 200 events a
+ * ticket's thread stopped updating — including the question the owner had just posted, which
+ * `POST /tasks/:taskId/thread` persists BEFORE the model call — and every later answer was built
+ * from a frozen window, with nothing saying the newest turns had not been read. That is exactly
+ * the failure `TICKET_CHAT_SYSTEM` guards against: an answer read as the audit trail, grounded in
+ * a record that had stopped moving. 200 is reachable, not theoretical — the runner has 24
+ * `addTaskEvent` call sites, several in polling loops that emit once per poll on the same task.
+ *
+ * Both callers want the tail, and one says so twice: the thread renders newest-last and
+ * `buildTicketChatMessages` then takes `.slice(-TICKET_THREAD_CONTEXT_TURNS)`. DESC + reverse gives
+ * them that while the order they RECEIVE is unchanged, so no caller had to move. Same defect as
+ * #674 in the other surface; there is no second direction to offer, because nothing pages this.
  */
 export async function mirroredTaskEvents(
 	env: Env,
@@ -540,12 +556,14 @@ export async function mirroredTaskEvents(
 	const { results } = await env.DB.prepare(
 		`SELECT payload FROM instance_runtime_task_events
      WHERE instance_id = ?1 AND user_id = ?2 AND task_id = ?3
-     ORDER BY created_at ASC
+     ORDER BY created_at DESC
      LIMIT ?4`,
 	)
 		.bind(instanceId, userId, taskIdValue, limit)
 		.all<RuntimeTaskEventMirrorRow>();
-	return results.map((row) => parsePayload(row.payload));
+	// Selected newest-first so the LIMIT keeps the newest; reversed so callers still read
+	// oldest→newest, which is the order the thread renders and the prompt is assembled in.
+	return results.map((row) => parsePayload(row.payload)).reverse();
 }
 
 export function syntheticEventsFromTasks(tasks: unknown[]): unknown[] {

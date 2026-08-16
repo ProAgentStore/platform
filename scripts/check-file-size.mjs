@@ -929,7 +929,12 @@ const PINS = {
 	// rather than moving to lib/: it is the endpoint's own filter, and the SQL two lines below is
 	// its only consumer in this worker. Raising 17 to delete a whole class of drift is the trade
 	// this ratchet exists to make visible, not to prevent.
-	"workers/api/src/routes/instances-runtime.ts": 878,
+	// +14 at #653, all comment on ONE function. `mirroredTaskEvents` kept the OLDEST 200 events of
+	// a ticket and dropped the rest, so a long thread froze and the model answered from a window
+	// that had stopped moving. It is now DESC + reverse — invisible at both call sites, which get
+	// the order they always did, and therefore exactly the line someone "tidies" back to ASC. Not
+	// split: another lane holds this file and a structural move would collide for no gain.
+	"workers/api/src/routes/instances-runtime.ts": 892,
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
@@ -1302,7 +1307,10 @@ const PINS = {
 	// it had gained (`registeredRepoSlugs`) moved into `repo-write-scope.ts`, where the rest of the
 	// same question already lived. A pin was the easy answer and the wrong one; the gate asking for
 	// a decision is what produced the better placement.
-	"scripts/check-file-size.mjs": 1386,
+	// +4 at #653: this file grows when a pin is raised, because a raised pin without its reason is
+	// the thing this registry exists to prevent. Its own ceiling has to follow, or recording WHY
+	// would itself be the violation.
+	"scripts/check-file-size.mjs": 1394,
 };
 
 /**
