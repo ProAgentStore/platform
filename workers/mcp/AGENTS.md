@@ -12,7 +12,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    unless the user explicitly overrides this.
 
 2. **Discover the surface before using it.** The tool list is versioned and
-   *per-connection*: of the 137 tool registrations, 19 are gated to the console surfaces
+   *per-connection*: of the 140 tool registrations, 19 are gated to the console surfaces
    of the agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A
    tool you used last week may be absent today, and a tool present for one user is absent
    for another. Call `tools/list` first; never assume a name exists.

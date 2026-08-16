@@ -47,6 +47,16 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// it a poll; omitting `session_id` resolves the newest active session, or — the half that
 		// answers #527 — the most recently updated one when the run has already ended.
 		//
+		// Giving one tool both jobs is also what produced #674, and the fix is in the DEFAULT rather
+		// than in a second tool. A page with no cursor used to be the OLDEST one; every instruction
+		// in a run precedes every piece of output, so page 1 was `brain, brain, command` and the
+		// owner reading it here concluded the engine's output was not recorded — while it sat one
+		// page away, further away the more work the run had done. A caller who names no cursor now
+		// gets the newest page, `before` walks back, and `since_seq` polls forward exactly as it did.
+		// The two rejected alternatives (defaulting by session state; guaranteeing a `terminal` row
+		// per page) are argued in `lib/coding-timeline.ts`'s header — the first has a race, because
+		// the Pilot ends a session on every finished run and would re-point a live poll mid-loop.
+		//
 		// WHAT IT CARRIES, and what it still does not — stated here because the description is where
 		// a model reads it. The first version of this comment said the tool was a NARRATIVE and "not
 		// a structured tool-call log with arguments and results"; #581 AC7 closed that half, and the
@@ -67,15 +77,16 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// made it.
 		server.tool(
 			"coding_timeline",
-			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome, oldest→newest. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); use coding_session_capture for a live session's full pane. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\").",
+			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome. Call it with no cursor and you get the NEWEST page (rows within a page always read oldest→newest), which is what you want when asking what a run just did or where it stopped. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Walk back through history with `before`: pass the previous reply's `oldest_seq`, and `has_more` says whether anything older still exists. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); use coding_session_capture for a live session's full pane. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\").",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
 				session_id: z.string().optional().describe("A specific coding session. Omit for the newest active one, else the most recently updated."),
-				since_seq: z.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it. Pass the previous reply's `nextSeq`."),
+				since_seq: z.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it, oldest-first. Pass the previous reply's `nextSeq` to poll a live run. Cannot be combined with `before`."),
+				before: z.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK — returns the page of events OLDER than it. Pass the previous reply's `oldestSeq`. Cannot be combined with `since_seq`."),
 				limit: z.number().int().min(1).max(200).optional().describe("Events per page (default 40). Not the payload bound: a page also stops at a byte budget, and `hasMore` says so — raising this cannot make one call return more bytes."),
 			},
-			async ({ token, instance_id, session_id, since_seq, limit }) => {
+			async ({ token, instance_id, session_id, since_seq, before, limit }) => {
 				const sessionToken = tokenFor(token);
 				if (!sessionToken) return authRequired();
 				const denied = await requirePermission(safetyFor(token), "read", "coding_timeline", { instance_id, session_id });
@@ -84,6 +95,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				const qs = new URLSearchParams();
 				if (session_id) qs.set("session_id", session_id);
 				if (since_seq !== undefined) qs.set("since", String(since_seq));
+				if (before !== undefined) qs.set("before", String(before));
 				if (limit !== undefined) qs.set("limit", String(limit));
 				const path = `/v1/instances/${encodeURIComponent(id)}/coding/timeline${qs.toString() ? `?${qs.toString()}` : ""}`;
 				// A page of terminal tails is machine-read data: this one measured 44,313 bytes

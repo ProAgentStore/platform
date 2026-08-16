@@ -121,4 +121,18 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// this hash moves. It reads the new `GET /v1/auth/me/account` and is annotated `read`
 	// (`readOnlyHint: true`), matching its ungated gate. Appended, never edited: 0.1.6 is published.
 	"0.1.7": "sha256:5a0bca0af76e29fa7ac6dcd673d76a8ba7a32dc9c6d506f3aa7b2e30c99eade8",
+	// 0.1.8 (#674/#671): two surface changes in one bump, because they ship in one commit.
+	//
+	//   · `coding_timeline` gained `before`, the backward cursor. An argument lands in
+	//     `inputSchema`, which IS in the fingerprint. The change that PROMPTED it is invisible to
+	//     this hash and is the more consequential one: a call with no cursor now returns the NEWEST
+	//     page rather than the oldest. That is a result-shape change of the kind #561 fell through
+	//     under a frozen version — `has_more` still means "there is more", but in the other
+	//     direction — so the bump is justified twice over here, as it was for 0.1.5 and 0.1.6.
+	//   · Three tool NAMES registered in the always-on `runtime` group — `list_runner_nodes`,
+	//     `instance_runner_node`, `set_instance_runner_node` — which is the first bullet of
+	//     `MCP_SERVER_VERSION`'s list. 137 tools to 140, 118 always-on to 121.
+	//
+	// Appended, never edited in place: 0.1.7 is published.
+	"0.1.8": "sha256:599bfad95dd9c388d3c10719eb91037881c8d69601784c406180d42f571331d2",
 };

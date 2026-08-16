@@ -110,7 +110,10 @@ describe("loadTimelineFeed cursor semantics (#581 AC2)", () => {
 		const all = await loadTimelineFeed(env, { sessionId: "csess-1", limit: 100 });
 		expect(all.events).toHaveLength(25);
 
-		const first = await loadTimelineFeed(env, { sessionId: "csess-1", limit: 10 });
+		// `sinceSeq: 0` is the explicit "walk me forward from the start" poll. It used to be what an
+		// absent cursor meant; since #674 an absent cursor means the NEWEST page, and this test is
+		// about the forward walk, so it names its direction rather than relying on a default.
+		const first = await loadTimelineFeed(env, { sessionId: "csess-1", sinceSeq: 0, limit: 10 });
 		expect(first.events).toHaveLength(10);
 		expect(first.hasMore).toBe(true);
 		expect(first.nextSeq).toBe(first.events[9].seq);
@@ -198,9 +201,12 @@ describe("payload bounds (#581 AC4, #569's lesson)", () => {
 		expect(page.events.length).toBeLessThan(SEEDED);
 		expect(page.hasMore).toBe(true);
 		expect(page.truncated?.events).toBe(page.events.length);
-		// And the cursor still advances, so the withheld rows are reachable rather than stranded.
-		const next = await loadTimelineFeed(env, { sessionId: "csess-1", sinceSeq: page.nextSeq, limit: 200 });
-		expect(next.events[0].seq).toBeGreaterThan(page.nextSeq);
+		// And the withheld rows are reachable rather than stranded. The direction is BACKWARD since
+		// #674: a page with no cursor keeps the NEWEST rows and withholds the older ones, so the
+		// budget's overflow is reached with `before`, not by polling forward off the end.
+		const older = await loadTimelineFeed(env, { sessionId: "csess-1", before: page.oldestSeq, limit: 200 });
+		expect(older.events.length).toBeGreaterThan(0);
+		expect(older.events[older.events.length - 1].seq).toBeLessThan(page.events[0].seq);
 
 		console.log(
 			`✓ feed page: ${page.events.length}/${SEEDED} rows of 12,000-char panes, ${bytes} B ` +

@@ -159,6 +159,9 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_settings.settings": "get_instance_settings",
 	"set_instance_instructions.instructions": "get_instance_instructions",
 	"set_instance_model.model": "get_instance_state",
+	// #671. Readable by the tool added alongside it — the gap this closed was precisely that the
+	// pin could be neither read nor written here, so a reader had to exist for the writer to land.
+	"set_instance_runner_node.runner_node": "instance_runner_node",
 	"set_agent_settings_schema.settings_schema": "get_agent_settings_schema",
 	"set_translation_config.enabled": "get_translation_config",
 	"set_translation_config.target": "get_translation_config",

@@ -36,6 +36,14 @@ import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
  * `coding_session_capture` answering a real, finished, 6-minute run with `runState:"idle"` and an
  * empty pane, which is indistinguishable from a session that never did anything — and no runner
  * is asked about a session it no longer holds, so `idle` there is not even a reading.
+ *
+ * ── Which end of the log a caller gets (#674)
+ *
+ * `since` polls forward, `before` walks back, and a caller who names NEITHER gets the newest page.
+ * It used to get the oldest, which meant page 1 of a real run was `brain, brain, command` — every
+ * instruction precedes every piece of output — and the owner watching a run over MCP concluded the
+ * engine's output was never recorded. See `lib/coding-timeline.ts`'s header for the full reasoning
+ * and for the two alternatives that were rejected.
  */
 export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void {
 	codingRoutes.get("/:instanceId/coding/timeline", async (c) => {
@@ -51,7 +59,19 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 			const n = Number.parseInt(c.req.query(q) ?? "", 10);
 			return Number.isFinite(n) ? n : undefined;
 		};
-		const feed = await loadTimelineFeed(c.env, { sessionId: session.id, sinceSeq: num("since"), limit: num("limit") });
+		// `since` and `before` are opposite directions and `loadTimelineFeed` refuses both at once;
+		// surfaced as a 400 rather than a 500 because it is the caller's mistake, not the server's.
+		let feed: Awaited<ReturnType<typeof loadTimelineFeed>>;
+		try {
+			feed = await loadTimelineFeed(c.env, {
+				sessionId: session.id,
+				sinceSeq: num("since"),
+				before: num("before"),
+				limit: num("limit"),
+			});
+		} catch (err) {
+			throw new HttpError(400, err instanceof Error ? err.message : "Bad cursor");
+		}
 		const { runState, runnerConnected } = await readRunState(c.env, instanceId, uid, session);
 		return c.json({
 			sessionId: session.id,

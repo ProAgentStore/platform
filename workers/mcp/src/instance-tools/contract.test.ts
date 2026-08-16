@@ -226,7 +226,9 @@ const TABLE: Record<string, Row> = {
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],
-	coding_timeline: ["coding", "read", null, null, "instance_id,limit,session_id,since_seq,token"],
+	// `before` added by #674 — the backward arm, so a caller can walk a run's history after the
+	// default page stopped being the oldest one.
+	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
@@ -269,6 +271,10 @@ const TABLE: Record<string, Row> = {
 	// `before` added at #566: the response has always carried `nextCursor`/`hasMore` and no input
 	// could use either, so every message older than the newest page was unreachable over MCP.
 	instance_messages: ["observability", "none", null, null, "before,instance_id,limit,token"],
+	// #671: the routing view for ONE instance — which machine its calls go to, and what else it could
+	// be pinned to. Ungated like its `instance_runtime_status` neighbour: it is a read of the owner's
+	// own placement.
+	instance_runner_node: ["runtime", "none", null, null, "instance_id,token"],
 	instance_runtime_status: ["runtime", "none", null, null, "instance_id,probe,token"],
 	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,token"],
 	keys_status: ["account", "none", null, null, "token"],
@@ -284,6 +290,8 @@ const TABLE: Record<string, Row> = {
 	get_instance_pipeline: ["observability", "none", null, null, "instance_id,pipeline,token"],
 	list_feedback: ["observability", "none", null, null, "instance_id,limit,status,token"],
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
+	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
+	list_runner_nodes: ["runtime", "none", null, null, "token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
 	my_instances: ["base", "none", null, null, "token"],
 	register_instance_runtime: ["runtime", "runtime", null, "envelope", "capabilities,dry_run,endpoint_url,instance_id,placement,runner_token,runner_version,token"],
@@ -299,6 +307,9 @@ const TABLE: Record<string, Row> = {
 	set_instance_board_config: ["board", "write", null, "envelope", "columns,dry_run,instance_id,reset,token,view"],
 	set_instance_instructions: ["settings", "write", null, "envelope", "dry_run,instance_id,instructions,token"],
 	set_instance_model: ["settings", "write", null, "envelope", "dry_run,instance_id,model,token"],
+	// #671: `write` rather than `runtime` — it changes where calls are ROUTED, it does not itself
+	// drive anything on the machine.
+	set_instance_runner_node: ["runtime", "write", null, "envelope", "dry_run,instance_id,runner_node,token"],
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],

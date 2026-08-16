@@ -64,7 +64,7 @@ src/
     ├── shared.ts         TokenResolver/SafetyResolver, trigger config, board grouping
     │   ── ungated: every subscriber gets these ──
     ├── base.ts           7 tools — the connector-tool gate, subscribe/cancel, chat
-    ├── runtime.ts        7 tools — the `pags up` runtime + its task queue
+    ├── runtime.ts        10 tools — the `pags up` runtime + its task queue
     ├── knowledge.ts      10 tools — documents, files, vectors, memory
     ├── observability.ts  9 tools — messages, activity, errors, trace, pipeline runs, feedback
     ├── board.ts          8 tools — the board, its columns, the per-ticket thread (#150)
@@ -80,12 +80,12 @@ src/
     └── coding.ts         system_status + coding_timeline (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**137 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+**140 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
 inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 93 across
-`instance-tools/`. 118 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
+`instance-tools/`. 121 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
 
 Those three numbers ADD UP to the headline, and that is the point of stating them: 31 + 13
-+ 93 = 137. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 93 = 140. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 

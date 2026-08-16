@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**137 tool registrations.** 118 are always registered; 19 are gated to the console
+**140 tool registrations.** 121 are always registered; 19 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -267,6 +267,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `register_instance_runtime` | Register a local or managed browser runtime | runtime | yes | |
 | `instance_runtime_status` | Is a runtime registered? | — | | |
 | `unregister_instance_runtime` | Remove the registered runtime endpoint | destructive | yes | `unregister_instance_runtime` |
+| `list_runner_nodes` | Every machine running a CLI, across all agents | — | | |
+| `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
+| `set_instance_runner_node` | Pin an instance to a machine (empty clears the pin) | write | yes | |
 
 ### Coding (gated to `surfaces: ["coding"]`)
 

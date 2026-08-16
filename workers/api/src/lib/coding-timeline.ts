@@ -133,7 +133,7 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 //      otherwise a single large row would stall the cursor forever, which is a liveness bug
 //      wearing a size fix's clothes.
 //
-// ── Cursor semantics: `since`, matching the `before` convention #566 settled
+// ── Cursor semantics: TWO arms, and which end a caller who names neither gets (#674)
 //
 // `since` is an EXCLUSIVE `seq`, rows come back oldest→newest, and `nextSeq` is the last seq
 // returned — so the next call resumes strictly after it and consecutive pages can neither overlap
@@ -142,6 +142,39 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 // beginning of the session next time (the same rule `loadTerminalSnapshots`' `after` arm follows).
 // `seq` is the table's AUTOINCREMENT primary key and `idx_coding_timeline_session (session_id,
 // seq)` covers the scan, so a row appended mid-poll cannot shift a page.
+//
+// `before` is the other arm, and it is the same one `loadTerminalSnapshots` below already carries
+// over this same table: EXCLUSIVE, selected descending and reversed, so a page still renders
+// oldest→newest while the WINDOW walks backwards. `hasMore` and `oldestSeq` describe the OLD end —
+// whether history exists behind this page — which is a different question from the forward arm's
+// `hasMore` ("more is waiting for your next poll"), and the reason both are not one field.
+//
+// ── Why an absent cursor answers with the NEWEST page, and what that fixed (#674)
+//
+// It used to answer with the oldest. A caller that passes no cursor has said nothing about where it
+// wants to be, and for an append-only log the useful end is the end — the same reasoning
+// `loadRepoTimeline` states below ("the cap has to keep the LATEST rows, and `ORDER BY seq ASC
+// LIMIT n` would keep the oldest"). This reader was the one place in the file that contradicted it.
+//
+// The cost was measured, not theorised. Every instruction in a run precedes every piece of output,
+// so page 1 of a real run was `brain, brain, command` with `hasMore: true`, and the owner watching
+// it over MCP concluded the engine's output was not recorded at all (#674). It was recorded; it was
+// behind paging. And it scaled the wrong way — the more work a run did, the further its latest
+// output sat from page 1, on the tool whose stated purpose is finding out what a run is doing.
+//
+// What was deliberately NOT done, because both treat the symptom or buy it with a race:
+//
+//   · **Defaulting by session state** (finished ⇒ newest, live ⇒ oldest). The Pilot ends a session
+//     on every finished run, so a live poller walking forward would be re-pointed at the newest
+//     page MID-POLL — silently re-delivering or skipping, which is exactly the guarantee the
+//     forward cursor exists to provide. It is also invisible: the caller can neither ask for a
+//     direction nor tell from the reply which rule applied.
+//   · **Guaranteeing one `terminal` row per page.** It leaves the scaling problem in place, and it
+//     cannot be honoured under {@link FEED_BYTE_BUDGET} without either breaking the budget or
+//     dropping the narrative rows that say why the terminal looks like that.
+//
+// A caller that passes `since` is untouched, byte for byte. That is the whole compatibility story:
+// the poller names its cursor and keeps its direction, and only the caller who named nothing moves.
 
 /** Rows per page when the caller does not say. */
 export const FEED_DEFAULT_LIMIT = 40;
@@ -214,9 +247,20 @@ export interface FeedEvent {
 
 export interface TimelineFeed {
 	events: FeedEvent[];
-	/** Pass as the next call's `since`. Echoes the cursor back when the page is empty. */
+	/**
+	 * Pass as the next call's `since` to POLL FORWARD from this page. Echoes the cursor back when a
+	 * forward page is empty; on a backward page it is the newest seq returned, which is what lets a
+	 * caller read the newest page and then switch to polling from it.
+	 */
 	nextSeq: number;
+	/**
+	 * More rows exist in the direction this page was travelling — forward of `nextSeq` on a `since`
+	 * page, OLDER than `oldestSeq` on a backward one. The two are not the same question, which is
+	 * why `oldestSeq` accompanies it rather than being inferred from `events[0]`.
+	 */
 	hasMore: boolean;
+	/** Oldest seq on this page — pass as the next call's `before` to walk back. Backward pages only. */
+	oldestSeq?: number;
 	/** How much was withheld by the per-row caps, when anything was. */
 	truncated?: { events: number; chars: number };
 }
@@ -249,28 +293,61 @@ async function anchorAt(env: Env, sessionId: string, since: number): Promise<Eng
 	return row ? toolCallsForSnapshot(row.content, null).anchor : null;
 }
 
-/** A page of a session's timeline strictly newer than `sinceSeq`, bounded by rows AND by bytes. */
+/**
+ * A page of a session's timeline, bounded by rows AND by bytes.
+ *
+ * Direction is chosen by the cursor the caller names, and a caller who names neither gets the
+ * NEWEST page — see the header for what that fixed (#674) and what was rejected instead.
+ *
+ *   · `sinceSeq` — forward from an exclusive cursor. The live poll.
+ *   · `before`   — backward from an exclusive cursor. Walking a finished run's history.
+ *   · neither    — the newest page, i.e. `before` at the end of the log.
+ */
 export async function loadTimelineFeed(
 	env: Env,
-	args: { sessionId: string; sinceSeq?: number; limit?: number },
+	args: { sessionId: string; sinceSeq?: number; before?: number; limit?: number },
 ): Promise<TimelineFeed> {
+	// Refused rather than resolved by precedence: the two arms answer opposite questions, and a
+	// caller that sent both has a bug this would otherwise hide behind a plausible-looking page.
+	if (args.sinceSeq !== undefined && args.before !== undefined) {
+		throw new Error("coding timeline: pass `since` or `before`, not both — they page in opposite directions");
+	}
 	const limit = Math.max(1, Math.min(FEED_MAX_LIMIT, args.limit ?? FEED_DEFAULT_LIMIT));
-	const since = Number.isFinite(args.sinceSeq) && (args.sinceSeq as number) > 0 ? (args.sinceSeq as number) : 0;
+	// `undefined` and `0` are DIFFERENT: `since=0` is an explicit "poll me from the beginning" and
+	// must stay on the forward arm, while an absent cursor is the one that now means "the newest".
+	const forward = args.sinceSeq !== undefined;
+	const since = forward && Number.isFinite(args.sinceSeq) && (args.sinceSeq as number) > 0 ? (args.sinceSeq as number) : 0;
+	const before = Number.isFinite(args.before) && (args.before as number) > 0 ? (args.before as number) : Number.MAX_SAFE_INTEGER;
+
 	// One row over the limit, purely to answer `hasMore` without a second COUNT query.
-	const { results } = await env.DB.prepare(
-		"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
-	)
-		.bind(args.sessionId, since, limit + 1)
-		.all<Row>();
-	const rows = (results ?? []).map(toEntry);
-	let hasMore = rows.length > limit;
+	const { results } = forward
+		? await env.DB.prepare(
+				"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
+			)
+				.bind(args.sessionId, since, limit + 1)
+				.all<Row>()
+		: await env.DB.prepare(
+				"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
+			)
+				.bind(args.sessionId, before, limit + 1)
+				.all<Row>();
+	const selected = (results ?? []).map(toEntry);
+	let hasMore = selected.length > limit;
+	// The backward arm selected newest-first so the LIMIT would keep the newest rows; the page is
+	// reversed here because render order is oldest→newest on both arms, and because the tool-call
+	// anchor below only means anything walking forwards.
+	const rows = hasMore ? selected.slice(0, limit) : selected;
+	const page = forward ? rows : [...rows].reverse();
+
 	const encoder = new TextEncoder();
-	const events: FeedEvent[] = [];
-	let anchor = await anchorAt(env, args.sessionId, since);
-	let bytes = 0;
+	const built: FeedEvent[] = [];
+	// The row the page RESUMES from: the cursor on the forward arm, the row before this page's
+	// first on the backward one. Without it the first `terminal` row would re-emit its whole
+	// overlapping window — see {@link anchorAt}.
+	let anchor = await anchorAt(env, args.sessionId, forward ? since : (page.length ? page[0].seq - 1 : 0));
 	let cutEvents = 0;
 	let cutChars = 0;
-	for (const entry of hasMore ? rows.slice(0, limit) : rows) {
+	for (const entry of page) {
 		const ev = budgetFeedEvent(entry);
 		if (entry.type === "terminal") {
 			const found = toolCallsForSnapshot(entry.content, anchor);
@@ -284,23 +361,43 @@ export async function loadTimelineFeed(
 				if (found.gap) ev.toolCallGap = true;
 			}
 		}
+		built.push(ev);
+	}
+
+	// ── The byte budget, applied from the end the page is travelling AWAY from
+	//
+	// Forward pages drop their newest rows (the next poll fetches them); backward pages drop their
+	// OLDEST (the next `before` fetches them). Trimming the wrong end would hand a caller asking for
+	// the newest page a budget-shaped slice of the middle. Either way `hasMore` says so and no row
+	// is dropped silently, and the first row of the direction of travel is always emitted — a row
+	// bigger than the whole budget must not stall the cursor forever.
+	const events: FeedEvent[] = [];
+	let bytes = 0;
+	const order = forward ? built : [...built].reverse();
+	for (const ev of order) {
 		const cost = encoder.encode(JSON.stringify(ev)).length + 1; // +1 for the array separator
-		// Always emit the first row, whatever it costs — see the header on cursor liveness.
 		if (events.length > 0 && bytes + cost > FEED_BYTE_BUDGET) {
 			hasMore = true;
 			break;
 		}
 		bytes += cost;
 		events.push(ev);
+	}
+	if (!forward) events.reverse();
+	for (const ev of events) {
 		if (ev.chars !== undefined) {
 			cutEvents++;
 			cutChars += ev.chars - ev.content.length;
 		}
 	}
+
 	return {
 		events,
-		nextSeq: events.length ? events[events.length - 1].seq : since,
+		// Always the NEWEST seq on the page, on both arms: it is the cursor you poll forward from,
+		// which is how a caller reads the newest page and then tails it.
+		nextSeq: events.length ? events[events.length - 1].seq : forward ? since : 0,
 		hasMore,
+		...(forward ? {} : { oldestSeq: events.length ? events[0].seq : undefined }),
 		...(cutEvents ? { truncated: { events: cutEvents, chars: cutChars } } : {}),
 	};
 }

@@ -86,6 +86,8 @@ jobs:
         # a list is precisely how #585 and #602 happened.
         #
         # First run: 161 console capabilities, 80 reachable, 10 excluded, 71 recorded (#613).
+        # #671 closed three of them (list nodes, read and set an instance's runner-node pin):
+        # 83 reachable, 68 recorded. The ratchet only ever moves this way — a new gap fails.
         run: node scripts/check-mcp-parity.mjs
       - name: Design tokens — no dead colour utility (#367)
         # Tailwind v4 has no error state. A utility naming a token `@theme` does not declare

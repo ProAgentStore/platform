@@ -130,6 +130,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	instance_activity: "read",
 	instance_board: "read",
 	instance_messages: "read",
+	instance_runner_node: "read",
 	instance_runtime_status: "read",
 	instance_task_events: "read",
 	keys_status: "read",
@@ -149,6 +150,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_triggers: "read",
 	list_knowledge: "read",
 	list_pipeline_runs: "read",
+	list_runner_nodes: "read",
 	list_supervision: "read",
 	mcp_audit_log: "read",
 	my_agents: "read",
@@ -198,6 +200,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_board_config: "write",
 	set_instance_instructions: "write",
 	set_instance_model: "write",
+	set_instance_runner_node: "write",
 	set_instance_settings: "write",
 	set_instance_stats: "write",
 	set_instance_tool: "write",
@@ -271,8 +274,12 @@ export const TOOL_RISK: Record<string, McpScope> = {
 /** How the surface splits. A ratchet in BOTH directions: silently losing a read-only
  *  annotation is as much a regression as silently gaining one. */
 export const MCP_RISK_COUNTS: Record<McpScope, number> = {
-	read: 68,
-	write: 40,
+	// +2 read, +1 write at #671: `list_runner_nodes` and `instance_runner_node` read machine
+	// placement, `set_instance_runner_node` writes the pin. The write is `write` and not `runtime`
+	// deliberately — it changes where calls are ROUTED without itself driving anything on the
+	// machine, so it does not belong in the scope that means "this spends something out there".
+	read: 70,
+	write: 41,
 	runtime: 15,
 	destructive: 14,
 };
