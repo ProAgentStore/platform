@@ -12,6 +12,25 @@ import type { Env } from "../types.js";
  * never reaches the read loop that would arm the timer. So the CONSTANTS are shrunk instead, with
  * the module mocked here and nowhere else. That keeps real timers, real streams and a real reader,
  * and tests the arithmetic that actually ships — only the two numbers change.
+ *
+ * ── Why one arm owns its clock (#668)
+ *
+ * Shrinking the constants is right for the two arms that assert a deadline DOES fire: the promise
+ * they race against never resolves, so the deadline wins no matter how loaded the machine is.
+ *
+ * It was wrong for the arm that asserts one does NOT fire. That arm fed the stream from
+ * `setTimeout(20)` per frame — 14 frames, ~280ms of wall clock, against a 300ms ceiling measured
+ * from an ABSOLUTE `startedAt`. The frames slip under load; the ceiling does not. A 7% margin on a
+ * box running 9,400 other tests is not a margin, and it failed for whoever happened to be running
+ * the suite — twice in four concurrent runs when measured. The pending frame timer then fired after
+ * `readAnthropicStream` had cancelled the reader and enqueued into a closed controller, which vitest
+ * counts as an unhandled error and pins on an unrelated file.
+ *
+ * The fix is not a bigger number — that only moves the margin. `Date.now` is stubbed for that arm
+ * so the deadline ARITHMETIC is exact, and the frames arrive on microtasks so they cannot lose a
+ * race to a timer. This is not `vi.useFakeTimers`, and it is why it does not hit the deadlock above:
+ * real timers, real streams and real WebCrypto all still run: only the clock the code MEASURES with
+ * is the test's, so 20ms gaps and a 280ms total are what they say they are on any machine.
  */
 vi.mock("./ai-deadlines.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./ai-deadlines.js")>();
@@ -71,8 +90,28 @@ function endlessPings(everyMs: number): Response {
 	);
 }
 
+/**
+ * A clock the TEST advances, for the one arm that asserts a deadline is NOT reached (#668).
+ *
+ * `readAnthropicStream` measures with `Date.now()` and waits with `setTimeout`. Stubbing only the
+ * first makes the arithmetic deterministic while leaving the plumbing real — so "each gap is 20ms"
+ * and "the total is 280ms" become facts rather than hopes about scheduling. The timer the code arms
+ * from those numbers is still a real one; it simply never wins, because the frame it races is
+ * delivered on a microtask and microtasks run before any timer.
+ */
+function virtualClock(startMs = 1_700_000_000_000) {
+	let now = startMs;
+	vi.spyOn(Date, "now").mockImplementation(() => now);
+	return (ms: number) => {
+		now += ms;
+	};
+}
+
 afterEach(() => {
 	vi.unstubAllGlobals();
+	// Puts the real `Date.now` back. Without it the stub would outlive its test and silently
+	// freeze the clock for every file sharing this worker.
+	vi.restoreAllMocks();
 });
 
 describe("a stream that goes quiet, and one that never ends (#427)", () => {
@@ -97,11 +136,14 @@ describe("a stream that goes quiet, and one that never ends (#427)", () => {
 					),
 			),
 		);
-		const started = Date.now();
+		// "Well short of the total ceiling" is asserted by naming WHICH deadline fired, not by timing
+		// the run. `retryable` is the machine-readable half of the same verdict (#518) and the two
+		// kinds disagree about it — stall is worth retrying, the ceiling never is — so this pins the
+		// stall deadline exactly as a wall-clock bound was trying to. It does so without measuring the
+		// wall clock, which on a loaded box measures the box (#668).
 		await expect(
 			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
-		).rejects.toMatchObject({ status: 504, message: expect.stringMatching(/stopped sending mid-reply/) });
-		expect(Date.now() - started).toBeLessThan(250);
+		).rejects.toMatchObject({ status: 504, retryable: true, message: expect.stringMatching(/stopped sending mid-reply/) });
 	});
 
 	it("stops a reply still arriving at the total ceiling, and tells the user a retry will not help", async () => {
@@ -112,7 +154,10 @@ describe("a stream that goes quiet, and one that never ends (#427)", () => {
 		vi.stubGlobal("fetch", vi.fn(async () => endlessPings(20)));
 		await expect(
 			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
-		).rejects.toMatchObject({ status: 504, message: expect.stringMatching(/will fail the same way/) });
+			// The other side of the pair above: the ceiling is the one deadline a retry cannot help,
+			// so the two arms now disagree about `retryable` and a regression that swapped the kinds
+			// could not pass both.
+		).rejects.toMatchObject({ status: 504, retryable: false, message: expect.stringMatching(/will fail the same way/) });
 	});
 
 	it("a steady stream that finishes inside the ceiling is not a timeout", async () => {
@@ -130,17 +175,41 @@ describe("a stream that goes quiet, and one that never ends (#427)", () => {
 			'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":80}}\n\n',
 			'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 		];
+		// The gap is spent on BOTH clocks, and for two different reasons.
+		//
+		// Real, because the per-frame race is decided by timer ORDER, and that is already immune to
+		// load: the frame's 20ms timer and the stall's 60ms timer are armed in the same tick, so the
+		// frame is due first however long the process is descheduled — a starved box fires both late,
+		// in the same order. Shrink the stall budget under 20 and the stall correctly wins.
+		//
+		// Virtual, because the CEILING is not a race. It is an absolute stamp taken once from
+		// `startedAt`, so it never slips while the frames do, and real elapsed drifting past it was
+		// the whole of #668. Advancing the clock exactly one gap per frame makes the total the
+		// arithmetic sees exactly 13 x 20ms, on an idle box and a saturated one alike.
+		const GAP_MS = 20;
+		const advance = virtualClock();
+		let cancelled = false;
 		vi.stubGlobal("fetch", vi.fn(async () => {
 			let i = 0;
 			return new Response(
 				new ReadableStream<Uint8Array>({
+					// `readAnthropicStream` cancels the reader in its `finally`. Without this latch a
+					// timer still in flight enqueues into a closed controller, which vitest reports as
+					// an unhandled error against whichever file is unlucky (#668). `endlessPings`
+					// above has always had it; this arm was written without one.
+					cancel() {
+						cancelled = true;
+					},
 					pull(controller) {
 						return new Promise<void>((resolve) => {
 							setTimeout(() => {
-								if (i >= frames.length) controller.close();
-								else controller.enqueue(new TextEncoder().encode(frames[i++]));
+								advance(GAP_MS);
+								if (!cancelled) {
+									if (i >= frames.length) controller.close();
+									else controller.enqueue(new TextEncoder().encode(frames[i++]));
+								}
 								resolve();
-							}, 20);
+							}, GAP_MS);
 						});
 					},
 				}),
@@ -149,8 +218,11 @@ describe("a stream that goes quiet, and one that never ends (#427)", () => {
 		const result = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
 			messages: [{ role: "user", content: "hi" }],
 		})) as { response: string; stopReason?: string };
-		// Total elapsed (~13 frames x 20ms = 260ms) exceeds the mocked 60ms stall budget several times
-		// over: progress, not duration, is what keeps the call alive.
+		// Each gap (20ms) is inside the mocked 60ms stall budget, while the total the frames take
+		// (13 x 20ms = 260ms) exceeds it fourfold and still lands under the 300ms ceiling: progress,
+		// not duration, is what keeps the call alive. All three numbers are now exact on any machine,
+		// which is what makes the assertion mean something — drop the ceiling to 200 and this arm
+		// fails, which is the property the first attempt at this fix quietly lost.
 		expect(result.response).toBe("part 0 part 1 part 2 part 3 part 4 part 5 part 6 part 7 ");
 		expect(result.stopReason).toBe("end_turn");
 	});
