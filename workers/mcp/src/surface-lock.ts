@@ -116,4 +116,14 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// through when `my_instances` became `{"instances":[…]}` under a frozen version, so the bump
 	// is justified twice over here as it was for 0.1.5. Appended, never edited: 0.1.5 is published.
 	"0.1.6": "sha256:bdf6eb2efd98c4df362bbc6762537ca8b687dc9a03ce21a519326a73c21b9e98",
+	// 0.1.7 (PAS #137): a new tool NAME, `update_board_ticket` — the first bump here for an
+	// addition rather than a paging argument. A board ticket could be filed and moved but never
+	// edited, so correcting one word meant filing a replacement and cancelling the original,
+	// leaving a dead card behind.
+	//
+	// The set of registered tool names is the first bullet of server-version.ts's bump list, and
+	// it is the one a caching host is most exposed to: a host holding the 0.1.6 list does not know
+	// this tool exists, and unlike a widened `inputSchema` there is no degraded call it can still
+	// make. Appended, never edited: 0.1.6 is published.
+	"0.1.7": "sha256:e038b7156b6790dbc48ab020e5d53d918c1b69d265ab2aa5def73b6e657806b2",
 };

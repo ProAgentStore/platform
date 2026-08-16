@@ -3019,6 +3019,50 @@ paths:
               schema: { type: object, properties: { ok: { type: boolean } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Amend a board ticket
+      description: |
+        Merge new wording into an existing ticket: `title`, `description`, `reasoning`. A field
+        that is absent is left alone; `""` clears it. Identity and history are not editable —
+        `id`, `type` and `createdAt` are pinned from the stored row.
+
+        This exists because POSTing `/tasks/direct` with an existing `id` is a REPLACE, not an
+        edit: that route rebuilds the task from the request body, so amending one field blanks
+        `description` and `reasoning`, resets `status`, and drops an actionable ticket's `action`.
+
+        Deliberately cannot set `status`. Moving a card between columns is
+        `POST /v1/instances/{instanceId}/board/status`, which validates the target against the
+        agent's configured columns; accepting one here would be a second, unvalidated way to
+        move a card.
+      operationId: updateInstanceBoardTicket
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                title: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 2000 }
+                reasoning: { type: string, maxLength: 8000 }
+      responses:
+        "200":
+          description: The amended ticket
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: No amendable field supplied, or a field of the wrong type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/instances/{instanceId}/tasks/{taskId}/approve:
     post:

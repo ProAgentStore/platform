@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**136 tool registrations.** 117 are always registered; 19 are gated to the console
+**137 tool registrations.** 118 are always registered; 19 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -251,6 +251,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_board_config` | Read board columns + preferred view | — | | |
 | `set_instance_board_config` | Override columns / view per instance | write | yes | |
 | `set_board_item_status` | Move a card, or reset it to automation | write | yes | |
+| `update_board_ticket` | Amend an existing ticket's title / description / reasoning (never its column) | write | yes | |
 | `run_instance_task` | Create a task on the registered runtime | runtime | yes | |
 | `approve_instance_task` | Approve a task waiting for human approval | runtime | yes | |
 | `cancel_instance_task` | Cancel a runtime task | destructive | yes | `cancel_instance_task` |

@@ -202,6 +202,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_tool: "write",
 	set_translation_config: "write",
 	stop_instance_loop: "write",
+	update_board_ticket: "write",
 	subscribe_agent: "write",
 	update_agent: "write",
 	update_agent_board_config: "write",
@@ -271,7 +272,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
  *  annotation is as much a regression as silently gaining one. */
 export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	read: 67,
-	write: 40,
+	write: 41,
 	runtime: 15,
 	destructive: 14,
 };

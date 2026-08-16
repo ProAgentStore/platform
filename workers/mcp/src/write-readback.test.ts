@@ -124,6 +124,12 @@ const READBACK: Record<string, string | null> = {
 	// #574: the fix. `instance_board(reasoning:true)` returns it; `board-reasoning.test.ts`
 	// proves that by driving the tool, not by trusting this line.
 	"create_instance_ticket.reasoning": "instance_board",
+	// PAS #137 — the same three fields, amended rather than filed. They read back through the
+	// same card, so if `instance_board` ever stops returning one of them BOTH the create and
+	// the edit path go unreadable together, which is the honest coupling.
+	"update_board_ticket.title": "instance_board",
+	"update_board_ticket.description": "instance_board",
+	"update_board_ticket.reasoning": "instance_board",
 
 	// ── conversation ──
 	"chat_with_agent.message": "instance_messages",

@@ -12,7 +12,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    unless the user explicitly overrides this.
 
 2. **Discover the surface before using it.** The tool list is versioned and
-   *per-connection*: of the 136 tool registrations, 19 are gated to the console surfaces
+   *per-connection*: of the 137 tool registrations, 19 are gated to the console surfaces
    of the agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A
    tool you used last week may be absent today, and a tool present for one user is absent
    for another. Call `tools/list` first; never assume a name exists.
@@ -267,7 +267,7 @@ work.
 | Verify retrieval | `vector_stats`, `search_instance_knowledge`, `list_instance_files` |
 | Shape its behaviour | `set_instance_instructions`, `set_instance_settings`, `write_instance_memory`, `set_instance_model`, `set_instance_tool` |
 | Structured data | `list_instance_collections`, `query_instance_records`, `insert_instance_record` |
-| Work board | `instance_board`, `set_board_item_status`, `create_instance_ticket`, `run_instance_task`, `approve_instance_task` |
+| Work board | `instance_board`, `set_board_item_status`, `update_board_ticket`, `create_instance_ticket`, `run_instance_task`, `approve_instance_task` |
 | Local runtime | `register_instance_runtime`, `instance_runtime_status`, coding session tools |
 | Automate | `create_instance_trigger`, `run_instance_trigger`, `create_connection`, `create_supervision` |
 | Observe | `agent_trace`, `list_errors`, `instance_activity`, `list_pipeline_runs`, `usage_summary`, `mcp_audit_log` |

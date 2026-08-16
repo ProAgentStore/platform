@@ -338,6 +338,76 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 	});
 
 	/**
+	 * Amend a board ticket's WORDING — title, description, reasoning (PAS #137).
+	 *
+	 * A ticket filed with imprecise wording could previously only be replaced: file a
+	 * corrected one and cancel the first, leaving a dead card behind for what should be a
+	 * one-field fix.
+	 *
+	 * POSTing `/tasks/direct` with an existing `id` looks like it would already do this —
+	 * `mirrorRuntimeTask` is an upsert (`ON CONFLICT(id) DO UPDATE`) — but it is a REPLACE,
+	 * not an edit. That route rebuilds the task from the request body, so amending one field
+	 * blanks `description` and `reasoning`, resets `status` to completed, drops an actionable
+	 * ticket's `action`, and moves `createdAt`. This route MERGES: absent means leave alone.
+	 *
+	 * Identity and history are not editable. `id`, `type` and `createdAt` are pinned from the
+	 * stored row. `status` is deliberately NOT patchable here — moving a card is
+	 * `POST /board/status`, which validates the target against the agent's configured columns.
+	 * Accepting a status here would be a second, unvalidated way to move a card, and the
+	 * validation is the whole reason that route exists.
+	 *
+	 * Reads and writes the D1 mirror only, with no runtime call. A ticket is runner-less by
+	 * construction (`/tasks/direct` never reaches a runtime), so there is no live runner
+	 * holding a fresher copy to reconcile against — unlike `GET /tasks/:taskId` above.
+	 */
+	router.patch("/:instanceId/tasks/:taskId", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const taskId = c.req.param("taskId");
+
+		const stored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+		if (!isRecord(stored)) return c.json({ error: "Task not found" }, 404);
+
+		const body = await c.req
+			.json<{ title?: unknown; description?: unknown; reasoning?: unknown }>()
+			.catch(() => ({}) as Record<string, never>);
+
+		// Same caps as `/tasks/direct`, so a field cannot be grown past its create limit by
+		// editing it afterwards.
+		const patch: Record<string, unknown> = {};
+		if (body.title !== undefined) {
+			if (typeof body.title !== "string" || !body.title.trim()) {
+				return c.json({ error: "title must be a non-empty string" }, 400);
+			}
+			patch.title = body.title.slice(0, 200);
+		}
+		if (body.description !== undefined) {
+			if (typeof body.description !== "string") return c.json({ error: "description must be a string" }, 400);
+			patch.description = body.description.slice(0, 2000);
+		}
+		if (body.reasoning !== undefined) {
+			if (typeof body.reasoning !== "string") return c.json({ error: "reasoning must be a string" }, 400);
+			patch.reasoning = body.reasoning.slice(0, 8000);
+		}
+		// An empty patch is a 400, not a cheerful 200. A caller that sent only unrecognised
+		// keys has a bug, and answering "ok" would hide it behind an unchanged card.
+		if (Object.keys(patch).length === 0) {
+			return c.json({ error: "provide at least one of title, description, reasoning" }, 400);
+		}
+
+		const updated = {
+			...stored,
+			...patch,
+			id: typeof stored.id === "string" && stored.id ? stored.id : taskId,
+			createdAt: stored.createdAt ?? stored.created_at ?? new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+		await mirrorRuntimeTask(c.env, instanceId, session.uid, updated);
+		return c.json(updated);
+	});
+
+	/**
 	 * Run an actionable ticket — the runner-less approval gate. Reads the ticket's declared
 	 * `action` (fixed when the agent created it; this route never accepts new work), executes it
 	 * through the SAME executeTriggerAction path a trigger or connection uses, and moves the
