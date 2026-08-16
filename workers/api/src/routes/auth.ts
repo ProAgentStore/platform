@@ -569,3 +569,45 @@ authRoutes.get("/me", async (c) => {
 		boardConfig: parseJsonOrNull(row.board_config),
 	});
 });
+
+/**
+ * GET /v1/auth/me/account — "which account am I connected as?"
+ *
+ * The gap this closes (mirrors ProAppStore #136): over the MCP connector a caller holds
+ * a session but has no tool that names the identity behind it. `/me` above is the SDK-ish
+ * profile shape (name/avatar/subscription/board); this is the narrower identity answer —
+ * who, via which provider, since when, and how long this token is still good for.
+ *
+ * Plain `requireUser` is the only gate. Unlike ProAppStore, PAGS does NOT de-privilege an
+ * MCP-origin session to `['user']` and does NOT ship this shape into creator-controlled app
+ * JS (there is no SDK `User` contract carrying it), so the internal-token second gate PAS
+ * needed here would be net-new plumbing guarding a leak PAGS does not have. The row returned
+ * is always the caller's OWN — there is no lookup-by-id parameter to abuse.
+ *
+ * `provider` is derived from the uid shape the OAuth callbacks mint: Google uids are
+ * `google:<id>` (see /google/callback), GitHub uids are the bare numeric id. `email` is only
+ * meaningful for Google, whose callback stores the address in `github_login`; a GitHub
+ * `github_login` is a username, not an address, so it is surfaced as `login`, never `email`.
+ */
+authRoutes.get("/me/account", async (c) => {
+	const session = await requireUser(c);
+	const row = await c.env.DB.prepare(
+		"SELECT id, github_login, roles, created_at FROM users WHERE id = ?1",
+	)
+		.bind(session.uid)
+		.first<{ id: string; github_login: string; roles: string; created_at: string }>();
+	if (!row) return c.json({ error: "User not found" }, 404);
+
+	const isGoogle = session.uid.startsWith("google:");
+	const roles = JSON.parse(row.roles || '["user"]') as string[];
+	return c.json({
+		id: row.id,
+		login: row.github_login,
+		provider: isGoogle ? "google" : "github",
+		providerLabel: isGoogle ? "Google" : "GitHub",
+		email: isGoogle ? row.github_login : null,
+		roles,
+		createdAt: row.created_at,
+		tokenExpiry: new Date(session.exp * 1000).toISOString(),
+	});
+});

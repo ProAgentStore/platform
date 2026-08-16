@@ -1068,6 +1068,49 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /v1/auth/me/account:
+    get:
+      summary: Get current account identity
+      description: >
+        Which account this session is connected as — id, login, sign-in provider
+        (github/google) and label, email (surfaced only for Google, whose sign-in
+        stores the address; a GitHub login is a username, returned as `login`), roles,
+        account createdAt, and this token's tokenExpiry. Narrower than GET /v1/auth/me
+        (which is the profile shape); exists so an MCP `whoami` can name the identity.
+        Gated by the session Bearer only — the row returned is always the caller's own.
+      operationId: getMeAccount
+      tags: [Auth]
+      responses:
+        "200":
+          description: Account identity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  login: { type: string }
+                  provider: { type: string, enum: [github, google] }
+                  providerLabel: { type: string }
+                  email: { type: string, nullable: true }
+                  roles:
+                    type: array
+                    items: { type: string }
+                  createdAt: { type: string }
+                  tokenExpiry: { type: string, format: date-time }
+        "401":
+          description: Not authenticated or token expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   # ── Agents ────────────────────────────────────────────────────────────────
 
   /v1/agents/my/agents:

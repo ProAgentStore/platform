@@ -316,6 +316,7 @@ const TABLE: Record<string, Row> = {
 	// 64 KiB limit, so the inventory is paged. Still ungated — paging a read changes nothing
 	// about what it may see.
 	vector_stats: ["knowledge", "none", null, null, "instance_id,limit,offset,token"],
+	whoami: ["account", "none", null, null, "token"],
 	write_instance_memory: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,key,token,type"],
 };
 
