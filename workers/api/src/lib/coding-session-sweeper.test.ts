@@ -4,11 +4,17 @@ import {
 	IDLE_SESSION_MS,
 	LEGACY_IDLE_REAP_PREFIXES,
 	ORPHAN_QUIET_MS,
+	SLEEP_NOTIFY_KEY,
+	type SleptRepo,
 	idleReapNotice,
 	lastIdleReapForRepo,
+	resumeDeadlineFor,
+	sleepNotification,
 	sweepCodingSessions,
 	trackedSessionIds,
 } from "./coding-session-sweeper.js";
+import { RESUME_WINDOW_MS } from "./coding-session-continuity.js";
+import { notificationDedupeKey } from "./notifications.js";
 import type { Env } from "../types.js";
 
 describe("trackedSessionIds (#275)", () => {
@@ -37,12 +43,24 @@ describe("trackedSessionIds (#275)", () => {
 
 interface Call { sql: string; args: unknown[] }
 
+interface IdleRow {
+	id: string;
+	instance_id: string;
+	user_id: string;
+	repo_id: string;
+	runner_node: string | null;
+	client_type?: string;
+	last_activity_at?: number | null;
+	repo_name?: string | null;
+	instance_name?: string | null;
+}
+
 /**
  * D1 + relay stub. `idle` feeds the reap query, `quiet` the reconcile query, and `tracked` is what
  * the fake runner reports from /coding/diagnostics.
  */
 function stub(opts: {
-	idle?: Array<{ id: string; instance_id: string; user_id: string; repo_id: string; runner_node: string | null }>;
+	idle?: IdleRow[];
 	quiet?: Array<{ instance_id: string; user_id: string }>;
 	diagnostics?: unknown;
 	/** No relay socket → getBoundRunnerConn resolves null. */
@@ -60,7 +78,7 @@ function stub(opts: {
 					return {
 						async all() {
 							calls.push({ sql, args });
-							if (sql.includes("SELECT id, instance_id, user_id, repo_id, runner_node")) return { results: opts.idle ?? [] };
+							if (sql.includes("FROM coding_sessions s")) return { results: opts.idle ?? [] };
 							if (sql.includes("SELECT DISTINCT instance_id, user_id")) return { results: opts.quiet ?? [] };
 							return { results: [] };
 						},
@@ -146,7 +164,7 @@ describe("sweepCodingSessions — idle reaping (#275)", () => {
 		const now = 1_800_000_000_000;
 		const { env, calls } = stub({});
 		await sweepCodingSessions(env, now);
-		const reap = calls.find((c) => c.sql.includes("SELECT id, instance_id, user_id, repo_id, runner_node"));
+		const reap = calls.find((c) => c.sql.includes("FROM coding_sessions s"));
 		expect(reap?.args[0]).toBe(now - IDLE_SESSION_MS);
 		const reconcile = calls.find((c) => c.sql.includes("SELECT DISTINCT instance_id, user_id"));
 		expect(reconcile?.args[0]).toBe(now - ORPHAN_QUIET_MS);
@@ -157,6 +175,180 @@ describe("sweepCodingSessions — idle reaping (#275)", () => {
 		// hours of legitimate quiet before the run even gives up. The window has to clear that with
 		// room, because reaping early destroys a live CLI context that cannot be recovered.
 		expect(IDLE_SESSION_MS).toBeGreaterThan(3 * 60 * 60_000);
+	});
+});
+
+describe("the sleep notification (#698)", () => {
+	const HOUR = 3_600_000;
+	const LAST = Date.UTC(2026, 7, 16, 1, 11); // 2026-08-16 01:11 UTC
+	const repo = (over: Partial<SleptRepo> = {}): SleptRepo => ({
+		instanceId: "inst-1",
+		instanceName: "Chess coder 2",
+		repoName: "apps/chess-academy",
+		keptUntil: LAST + RESUME_WINDOW_MS,
+		strayProcess: false,
+		...over,
+	});
+
+	it("says until WHEN the work is resumable, not that something ended", () => {
+		// The whole point of the notification. "A session ended" is our lifecycle; "your
+		// conversation is kept until X" is the only part of it the user can act on, and it is
+		// computable — RESUME_WINDOW_MS from the same `last_activity_at` the reaper measured
+		// idleness against.
+		const n = sleepNotification([repo()], "Australia/Melbourne");
+		expect(n?.title).toBe("😴 Chess coder 2 went to sleep");
+		expect(n?.body).toContain("apps/chess-academy");
+		expect(n?.body).toMatch(/Your conversation is kept until Thu 20 Aug/);
+		expect(n?.title).not.toMatch(/session/i);
+		expect(n?.body).not.toMatch(/session/i);
+	});
+
+	it("names the TIME as well as the date, so the promise is one it can keep", () => {
+		// "Kept until 20 Aug" is the tempting form and it is a broken promise: the window expires at
+		// an instant, 11:11 Melbourne in this fixture, so a user coming back that evening would find
+		// the conversation gone having been told it would be there.
+		expect(sleepNotification([repo()], "Australia/Melbourne")?.body).toMatch(/Thu 20 Aug, 11:11/);
+	});
+
+	it("falls back to UTC and SAYS UTC when the owner has set no zone", () => {
+		// `accountTimeZone` returns undefined for "nobody has told us", which is a first-class
+		// state — a silently-assumed zone is a ten-hour error in this product's own timezone.
+		expect(sleepNotification([repo()], undefined)?.body).toMatch(/Thu 20 Aug, 01:11 UTC/);
+		// An invalid stored zone must not lose the notification over a label.
+		expect(sleepNotification([repo()], "Mars/Olympus")?.body).toMatch(/UTC/);
+	});
+
+	it("promises nothing about a raw engine, which has no conversation to keep", () => {
+		// Codex/Grok/a custom command are spawned raw and their "history" is whatever scrolled past
+		// on stdout. Telling those users their conversation is safe is a confident false statement
+		// at the exact moment they are deciding whether to write their context down.
+		const n = sleepNotification([repo({ keptUntil: null })], "UTC");
+		expect(n?.body).not.toMatch(/kept until/);
+		expect(n?.body).toContain("apps/chess-academy");
+	});
+
+	it("derives that from the continuity policy rather than a second copy of it", () => {
+		// `resumeDeadlineFor` asks `resolveSessionContinuity` the same question the next open will
+		// ask. A local `clientType === "claude"` would be right today and silently wrong the moment
+		// another engine grows a resume protocol.
+		expect(resumeDeadlineFor({ id: "csess_1", clientType: "claude", lastActivityAt: LAST })).toBe(LAST + RESUME_WINDOW_MS);
+		expect(resumeDeadlineFor({ id: "csess_1", clientType: "codex", lastActivityAt: LAST })).toBeNull();
+		// A legacy row with no stamp: unknown age is not "recent", and a deadline cannot be invented.
+		expect(resumeDeadlineFor({ id: "csess_1", clientType: "claude", lastActivityAt: null })).toBeNull();
+	});
+
+	it("batches one owner's whole sweep into ONE notification", () => {
+		// THE judgement call the issue leaves open. People stop working all at once, so one
+		// evening's repos idle out in the same per-minute tick; three separate 3am pings is the
+		// failure mode, and batching here is what turns them into one.
+		const n = sleepNotification(
+			[
+				repo({ repoName: "chess-academy" }),
+				repo({ repoName: "site-monitor" }),
+				repo({ instanceId: "inst-2", instanceName: "Repo coder", repoName: "platform" }),
+			],
+			"UTC",
+		);
+		expect(n?.title).toBe("😴 2 agents went to sleep");
+		expect(n?.body).toContain("chess-academy, site-monitor and platform");
+		// Several instances have no single page to link, so it links nowhere rather than somewhere
+		// arbitrary.
+		expect(n?.url).toBeUndefined();
+	});
+
+	it("counts agents, not repos, and links the one there is", () => {
+		const n = sleepNotification([repo({ repoName: "a" }), repo({ repoName: "b" })], "UTC");
+		expect(n?.title).toBe("😴 Chess coder 2 went to sleep on 2 repos");
+		expect(n?.body).toMatch(/Your conversations are kept until/);
+		expect(n?.url).toContain("inst-1");
+	});
+
+	it("states the EARLIEST deadline across the batch", () => {
+		// "Kept until X" has to be true of everything the sentence covers; the latest would
+		// over-promise for every other repo in it.
+		const n = sleepNotification([repo({ keptUntil: LAST + RESUME_WINDOW_MS + 48 * HOUR }), repo()], "UTC");
+		expect(n?.body).toMatch(/Thu 20 Aug, 01:11\./);
+		expect(n?.body).not.toMatch(/22 Aug/);
+	});
+
+	it("carries the stray-process ask, which is the one thing only the user can do", () => {
+		// The `engineStopped: false` branch is a connected machine refusing /coding/end — a child
+		// process still resident on their hardware. Nothing else carries that ask anywhere.
+		const n = sleepNotification([repo({ strayProcess: true })], "UTC");
+		expect(n?.body).toMatch(/One engine could not be stopped on your machine/);
+		expect(sleepNotification([repo({ strayProcess: true }), repo({ strayProcess: true })], "UTC")?.body).toMatch(
+			/2 engines could not be stopped/,
+		);
+		expect(sleepNotification([repo()], "UTC")?.body).not.toMatch(/could not be stopped/);
+	});
+
+	it("bounds the repo list, because this goes in a push body", () => {
+		const many = ["a", "b", "c", "d", "e"].map((r) => repo({ repoName: r }));
+		expect(sleepNotification(many, "UTC")?.body).toContain("a, b, c and 2 more");
+	});
+
+	it("returns null for an empty sweep so the caller has nothing to decide", () => {
+		expect(sleepNotification([], "UTC")).toBeNull();
+	});
+});
+
+describe("the sweep announces what it did (#698)", () => {
+	it("writes ONE notification row for a sweep that put two of an owner's repos to sleep", async () => {
+		// Before this the reap released a process on the user's own machine and its only record was
+		// a row in the session's own timeline — visible exclusively to someone who had already come
+		// back and opened that repo. The owner found out the next morning by reading a dead pane.
+		const last = Date.now() - 7 * 3_600_000;
+		const { env, calls } = stub({
+			idle: [
+				{ id: "csess_1", instance_id: "inst", user_id: "u", repo_id: "r1", runner_node: "mac", client_type: "claude", last_activity_at: last, repo_name: "chess-academy", instance_name: "Chess coder 2" },
+				{ id: "csess_2", instance_id: "inst", user_id: "u", repo_id: "r2", runner_node: "mac", client_type: "claude", last_activity_at: last, repo_name: "platform", instance_name: "Chess coder 2" },
+			],
+		});
+		expect((await sweepCodingSessions(env)).reaped).toBe(2);
+		const inserts = calls.filter((c) => c.sql.includes("INSERT INTO notifications"));
+		expect(inserts).toHaveLength(1);
+		const body = inserts[0].args.map(String).join(" | ");
+		expect(body).toContain("Chess coder 2 went to sleep on 2 repos");
+		expect(body).toContain("chess-academy and platform");
+		expect(body).toContain("kept until");
+		// A stable EVENT key, so two batches a few ticks apart collapse into ONE interruption inside
+		// `notifyUser`'s duplicate window while both still write their row. Derived from the event,
+		// never from the prose — a body naming different repos each night would defeat the window
+		// exactly when it is needed.
+		expect(inserts[0].args).toContain(notificationDedupeKey("coding", SLEEP_NOTIFY_KEY, "", ""));
+	});
+
+	it("notifies each owner separately — a sweep is cross-tenant", async () => {
+		const last = Date.now() - 7 * 3_600_000;
+		const { env, calls } = stub({
+			idle: [
+				{ id: "csess_1", instance_id: "i1", user_id: "u1", repo_id: "r1", runner_node: null, client_type: "claude", last_activity_at: last, repo_name: "a", instance_name: "A" },
+				{ id: "csess_2", instance_id: "i2", user_id: "u2", repo_id: "r2", runner_node: null, client_type: "claude", last_activity_at: last, repo_name: "b", instance_name: "B" },
+			],
+		});
+		await sweepCodingSessions(env);
+		const inserts = calls.filter((c) => c.sql.includes("INSERT INTO notifications"));
+		expect(inserts).toHaveLength(2);
+		expect(inserts.map((i) => i.args[1])).toEqual(["u1", "u2"]);
+	});
+
+	it("is `update`, never `alert` — nothing is blocked on the user", async () => {
+		// An alert is documented as "a human is blocked on this" and is UNMUTABLE. A 3am ping people
+		// cannot turn off is how they learn to stop reading notifications, which is the same
+		// reasoning `coding-pause.ts` applies to a usage-limit park.
+		const { env, calls } = stub({
+			idle: [{ id: "csess_1", instance_id: "inst", user_id: "u", repo_id: "r", runner_node: null, client_type: "claude", last_activity_at: Date.now() - 7 * 3_600_000, repo_name: "a", instance_name: "A" }],
+		});
+		await sweepCodingSessions(env);
+		const insert = calls.find((c) => c.sql.includes("INSERT INTO notifications"));
+		expect(insert?.args).toContain("update");
+		expect(insert?.args).not.toContain("alert");
+	});
+
+	it("reaps nothing quietly — no sleep, no notification", async () => {
+		const { env, calls } = stub({});
+		await sweepCodingSessions(env);
+		expect(calls.filter((c) => c.sql.includes("INSERT INTO notifications"))).toHaveLength(0);
 	});
 });
 

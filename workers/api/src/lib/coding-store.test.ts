@@ -207,7 +207,7 @@ describe("session activity + idle listing (#275)", () => {
 		// leak: the run loses its engine mid-step with no explanation anywhere.
 		const { env, reads } = readEnv();
 		await listIdleSessions(env, 123, 50);
-		expect(reads[0].sql).toContain("driver_at IS NULL OR driver_at < ?2");
+		expect(reads[0].sql).toContain("s.driver_at IS NULL OR s.driver_at < ?2");
 		expect(reads[0].args).toEqual([123, 123, 50]);
 	});
 
@@ -216,7 +216,7 @@ describe("session activity + idle listing (#275)", () => {
 		// against the cutoff is never true, so without the COALESCE that row would be immortal.
 		const { env, reads } = readEnv();
 		await listIdleSessions(env, 1, 1);
-		expect(reads[0].sql).toContain("COALESCE(last_activity_at, CAST(strftime('%s', updated_at) AS INTEGER) * 1000)");
+		expect(reads[0].sql).toContain("COALESCE(s.last_activity_at, CAST(strftime('%s', s.updated_at) AS INTEGER) * 1000)");
 	});
 });
 
