@@ -5499,13 +5499,21 @@ test.describe("mobile — an open says whether the agent still remembers you (#6
 		await expect(banner).not.toContainText("session");
 		// `fresh` is the surprise, so it wears the warning tint the expected case does not.
 		await expect(banner).toHaveClass(/text-warning/);
-
-		// A long sentence above a `<pre>` on a 390px phone is where a horizontal scrollbar is born.
-		const { mainOv, docOv, wide } = await measureOverflow(page);
-		expect(mainOv, `<main> pans by ${mainOv}px`).toBeLessThanOrEqual(1);
-		expect(docOv, `page overflows by ${docOv}px`).toBeLessThanOrEqual(1);
-		expect(wide, `content past the right edge: ${wide.join(", ")}`).toEqual([]);
 	});
+
+	// Both widths, like the #549 spec above: a long unbroken sentence above a `<pre>` is where a
+	// horizontal scrollbar is born, and 320px is the width that finds it. The reason here is the
+	// longest shape the server can hand over, so what is measured is the worst case.
+	for (const width of [320, 390]) {
+		test(`the notice fits ${width}px`, async ({ page }) => {
+			await openWith(page, { mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 6 days ago" }, width);
+			await expect(page.locator("#inst-coding-continuity")).toBeVisible();
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
 
 	test("an API that answers without a continuity block shows nothing", async ({ page }) => {
 		// The reuse path and the create-race loser both answer without it, and so does any older
