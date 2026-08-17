@@ -386,8 +386,11 @@ export function sessionOpenedNotice(input: {
 	resumed?: boolean;
 }): string {
 	const where = input.node ? ` on ${input.node}` : "";
+	// The SAME fact the reap wrote into the timeline, phrased the same way on purpose (#695): this
+	// is the other surface for one event, and two spellings of it is how a user learns there are
+	// two things.
 	const previous = input.reapedPrevious
-		? ` The previous session for this repo had been closed automatically after ${input.idleHours ?? Math.round(IDLE_SESSION_MS / 3_600_000)} hours with no activity, which is why there was none to read.`
+		? ` This repo had gone to sleep after ${input.idleHours ?? Math.round(IDLE_SESSION_MS / 3_600_000)} hours with no activity, which is why there was no terminal left to read.`
 		: "";
 	let continuity = "";
 	if (input.resumed === true) {
@@ -401,8 +404,13 @@ export function sessionOpenedNotice(input: {
 	} else if (input.continuity) {
 		continuity = ` It started a fresh conversation — ${input.continuity.reason}.`;
 	}
+	// "Started work on", not "started a coding session for" (#695). The closing instruction below
+	// makes the model REPEAT this sentence to the user, so it is the widest channel the platform has
+	// for teaching a noun the user should never have needed — and "session" is the noun #257 and
+	// #408 spent two issues removing. The id stays: it is the handle for a support question, and it
+	// is labelled as an id rather than named as a thing the user owns.
 	return (
-		`Started a coding session for ${input.repoName}${where} — the ${input.engine} Engine is running there now (session ${input.sessionId}).${previous}${continuity}` +
+		`Started work on ${input.repoName}${where} — the ${input.engine} Engine is running there now (id ${input.sessionId}).${previous}${continuity}` +
 		" Say in your reply that you started it, and whether it kept the previous conversation:" +
 		" a process just appeared on the user's machine, they did not ask for one, and what it does or does not remember changes what they should tell it next."
 	);

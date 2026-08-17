@@ -98,28 +98,58 @@ export function trackedSessionIds(diagnostics: unknown): string[] | null {
 
 /**
  * The opening words of every sentence a reap writes, and the ONLY handle another surface has on
- * "this session was taken away by the platform, not by you" (#407).
+ * "this was taken away by the platform, not by you" (#407).
  *
  * The timeline entry was written for the Co-pilot view, which is the one place a chat user never
- * looks — so from chat a session simply stopped existing and the next question failed for a reason
+ * looks — so from chat the work simply stopped existing and the next question failed for a reason
  * nothing had stated. `lastIdleReapForRepo` reads it back, and both live here because a marker
  * whose writer and reader are in different files is a marker that drifts. There is deliberately NO
  * new column: the fact is already durable, it was just unreadable from the other side.
+ *
+ * SLEEP, not death (#695). This row is the last line of the repo history a returning user reads,
+ * and it used to open "Session closed automatically after" — teaching the noun that #257 and #408
+ * went to trouble to make unnecessary, in the one place the user had no way to avoid reading it.
+ * Nothing ended: the engine was released, the conversation is kept for {@link RESUME_WINDOW_MS},
+ * and the next engagement continues it.
  */
-export const IDLE_REAP_PREFIX = "Session closed automatically after";
+export const IDLE_REAP_PREFIX = "Went to sleep after";
 
 /**
- * What the reap tells the human, in the session's own record.
+ * Prefixes this marker has been spelled with BEFORE, which `lastIdleReapForRepo` must still match.
+ *
+ * Never delete an entry. The marker is not a constant the code merely agrees on — it is the literal
+ * text of rows already written into `coding_timeline` in production, and the reader is a `LIKE`. So
+ * rewording {@link IDLE_REAP_PREFIX} without carrying the old spelling here does not "rename" the
+ * marker; it makes every reap written before the rename invisible, and the chat surface goes quiet
+ * again for exactly the users #407 was about.
+ */
+export const LEGACY_IDLE_REAP_PREFIXES = ["Session closed automatically after"] as const;
+
+/**
+ * What the reap tells the human, in the repo's own record.
+ *
+ * Two things it deliberately does NOT do (#695):
+ *
+ *   • It does not instruct. The old sentence ended "Start a new session to pick the work back up",
+ *     which was both an instruction the user has nothing to do about and a false description of
+ *     what happens — the platform reattaches by itself, and "new" is the opposite of the resume
+ *     `resolveSessionContinuity` performs. An announcement the user must act on, for an action the
+ *     platform already takes, is how a returning user concluded their work was gone.
+ *   • It does not promise the conversation. Whether the next open continues it is
+ *     `resolveSessionContinuity`'s decision, made later against facts this moment does not have —
+ *     which engine gets launched, and how long the user stays away. The reassurance belongs where
+ *     it can be true: the notice on re-open (#697) and the sleep notification (#698).
  *
  * `engineStopped` is not cosmetic. "Offline machine, nothing of ours left to stop" and "connected
  * machine, `/coding/end` failed" close the same row, and claiming "the engine process was released"
  * about a child still running on someone's laptop writes the leak into the record that is supposed
- * to disclose it.
+ * to disclose it. That branch keeps its ask — a stray process on somebody's hardware is the one
+ * thing here they genuinely have to know.
  */
 export function idleReapNotice(idleHours: number, engineStopped: boolean): string {
 	const head = `${IDLE_REAP_PREFIX} ${idleHours} hours with no activity`;
 	return engineStopped
-		? `${head} — the engine process was released. Start a new session to pick the work back up.`
+		? `${head} — the engine on your machine was released.`
 		: `${head}, but the engine could not be stopped on your machine — it may still be running. Check it there if you need the process gone.`;
 }
 
@@ -141,15 +171,18 @@ export async function lastIdleReapForRepo(
 	userId: string,
 	repoId: string,
 ): Promise<{ sessionId: string; endedAt: string | null } | null> {
+	// Every spelling the marker has ever had, current first. See `LEGACY_IDLE_REAP_PREFIXES`.
+	const markers = [IDLE_REAP_PREFIX, ...LEGACY_IDLE_REAP_PREFIXES].map((p) => `${p}%`);
+	const matches = markers.map((_, i) => `t.content LIKE ?${4 + i}`).join(" OR ");
 	const row = await env.DB.prepare(
 		`SELECT s.id AS session_id, s.ended_at AS ended_at,
 		        (SELECT COUNT(*) FROM coding_timeline t
-		          WHERE t.session_id = s.id AND t.type = 'outcome' AND t.content LIKE ?4) AS reaped
+		          WHERE t.session_id = s.id AND t.type = 'outcome' AND (${matches})) AS reaped
 		   FROM coding_sessions s
 		  WHERE s.instance_id = ?1 AND s.user_id = ?2 AND s.repo_id = ?3 AND s.status IN ('ended', 'error')
 		  ORDER BY s.ended_at DESC, s.updated_at DESC LIMIT 1`,
 	)
-		.bind(instanceId, userId, repoId, `${IDLE_REAP_PREFIX}%`)
+		.bind(instanceId, userId, repoId, ...markers)
 		.first<{ session_id: string; ended_at: string | null; reaped: number }>();
 	if (!row?.reaped) return null;
 	return { sessionId: row.session_id, endedAt: row.ended_at ?? null };

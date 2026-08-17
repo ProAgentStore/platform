@@ -46,6 +46,26 @@ describe("resolveSessionContinuity — resume or start clean (#408)", () => {
 		}
 	});
 
+	it("phrases every reason without the word 'session' (#695)", () => {
+		// `reason` is not diagnostics — the console shows it on open (#697) and MCP returns it
+		// (#696), so it is read by the user, verbatim, at the exact moment they are wondering
+		// whether their work survived. #257 and #408 spent two issues making "session" a concept
+		// nobody has to learn; a reason string is the cheapest place to teach it back to them.
+		const decisions = [
+			resolveSessionContinuity({ engine: "claude", previous: null, forceFresh: true, now: NOW }),
+			resolveSessionContinuity({ engine: "claude", previous: null, now: NOW }),
+			resolveSessionContinuity({ engine: "codex", previous: prev(), now: NOW }),
+			resolveSessionContinuity({ engine: "claude", previous: prev({ status: "error" }), now: NOW }),
+			resolveSessionContinuity({ engine: "claude", previous: prev({ lastActivityAt: null }), now: NOW }),
+			resolveSessionContinuity({ engine: "claude", previous: prev({ clientType: "codex" }), now: NOW }),
+			resolveSessionContinuity({ engine: "claude", previous: prev({ lastActivityAt: NOW - 9 * 24 * 3_600_000 }), now: NOW }),
+			resolveSessionContinuity({ engine: "claude", previous: prev(), now: NOW }),
+		];
+		// Every branch, not a sample: the check is only worth having if adding a branch trips it.
+		expect(new Set(decisions.map((d) => d.reason)).size).toBe(decisions.length);
+		for (const d of decisions) expect(d.reason).not.toMatch(/session/i);
+	});
+
 	it("does not resume a raw engine, whichever way round the mismatch is", () => {
 		// `--resume` is a Claude Code flag and `buildClaudeArgs` is only reached in stream-json
 		// mode, so a resume key handed to a codex/grok session is silently inert. Deciding "resume"

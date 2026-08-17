@@ -250,7 +250,7 @@ describe("ensureSessionForChat — the chat surface may open one too (#407)", ()
 		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
 		vi.mocked(sweeper.lastIdleReapForRepo).mockResolvedValue({ sessionId: "csess_old", endedAt: "2026-08-08 01:00:00" });
 		const res = await ensureSessionForChat(env, "inst", "u", repo);
-		expect(res.ok && res.notice).toMatch(/closed automatically after 6 hours/);
+		expect(res.ok && res.notice).toMatch(/gone to sleep after 6 hours/);
 	});
 
 	it("blames the start failure, not the runner, when the runner is up", async () => {
@@ -273,7 +273,28 @@ describe("sessionOpenedNotice", () => {
 		expect(n).toMatch(/Say in your reply/);
 		expect(n).toContain("chess-academy");
 		expect(n).toContain("csess_1");
-		expect(n).not.toMatch(/closed automatically/);
+		expect(n).not.toMatch(/gone to sleep/);
+	});
+
+	it("does not hand the model the word 'session' to repeat at the user (#695)", () => {
+		// This notice is the widest channel the platform has for teaching that noun: the closing
+		// instruction makes the model REPEAT the sentence, so "Started a coding session for X"
+		// became "I started a coding session" in the user's chat. #257 and #408 spent two issues
+		// making the concept unnecessary; one tool result was undoing both.
+		const n = sessionOpenedNotice({
+			repoName: "chess-academy",
+			sessionId: "csess_1",
+			engine: "claude",
+			node: "mac",
+			reapedPrevious: true,
+			idleHours: 6,
+		});
+		expect(n).not.toMatch(/session/i);
+		// The disclosure it exists for survives: a process appeared on their machine, and the id is
+		// still there as the handle for a support question.
+		expect(n).toMatch(/Engine is running there now/);
+		expect(n).toContain("csess_1");
+		expect(n).toMatch(/gone to sleep after 6 hours/);
 	});
 
 	it("claims a resume ONLY when the machine confirmed one (#408)", () => {

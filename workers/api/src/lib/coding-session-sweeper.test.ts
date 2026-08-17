@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	IDLE_REAP_PREFIX,
 	IDLE_SESSION_MS,
+	LEGACY_IDLE_REAP_PREFIXES,
 	ORPHAN_QUIET_MS,
 	idleReapNotice,
 	lastIdleReapForRepo,
@@ -135,9 +136,9 @@ describe("sweepCodingSessions — idle reaping (#275)", () => {
 			endFails: true,
 		});
 		expect((await sweepCodingSessions(env, Date.now())).reaped).toBe(1);
-		const said = calls.flatMap((c) => c.args).filter((a): a is string => typeof a === "string" && a.includes("closed automatically"));
+		const said = calls.flatMap((c) => c.args).filter((a): a is string => typeof a === "string" && a.startsWith(IDLE_REAP_PREFIX));
 		expect(said.join(" ")).toMatch(/may still be running/i);
-		expect(said.join(" ")).not.toMatch(/process was released/i);
+		expect(said.join(" ")).not.toMatch(/was released/i);
 	});
 
 	it("asks for sessions quiet for the full idle window, not for any quiet session", async () => {
@@ -204,8 +205,50 @@ describe("the reap, read back from somewhere else (#407)", () => {
 		// the query matching nothing — silently, and with the chat surface going quiet again.
 		expect(idleReapNotice(6, true).startsWith(IDLE_REAP_PREFIX)).toBe(true);
 		expect(idleReapNotice(6, false).startsWith(IDLE_REAP_PREFIX)).toBe(true);
-		expect(idleReapNotice(6, true)).toMatch(/process was released/);
+		expect(idleReapNotice(6, true)).toMatch(/engine on your machine was released/);
 		expect(idleReapNotice(6, false)).toMatch(/may still be running/);
+	});
+
+	it("neither instructs the user nor teaches them the word 'session' (#695)", () => {
+		// This row is the LAST LINE of the repo history a returning user reads. It used to say
+		// "Session closed automatically after 6 hours … Start a new session to pick the work back
+		// up" — a noun #257 and #408 exist to make unnecessary, attached to an instruction for
+		// something the platform does by itself, using a word ("new") that describes the opposite of
+		// the resume that actually happens. The owner read it and concluded their work was gone.
+		for (const notice of [idleReapNotice(6, true), idleReapNotice(6, false)]) {
+			expect(notice).not.toMatch(/session/i);
+			expect(notice).not.toMatch(/start a new/i);
+			expect(notice).not.toMatch(/closed/i);
+		}
+		// The stray-process branch keeps its ask: that one IS something only the user can do, on
+		// their own hardware, and it is the reason the branch exists (#325).
+		expect(idleReapNotice(6, false)).toMatch(/Check it there/);
+	});
+
+	it("still recognises reaps written under the marker's PREVIOUS spelling", async () => {
+		// The marker is not a constant the code merely agrees on — it is the literal text of rows
+		// already in `coding_timeline`, read back with a LIKE. Renaming it without carrying the old
+		// spelling does not rename the marker; it hides every reap written before the rename, and
+		// the chat surface goes quiet again for exactly the users #407 was about.
+		let seen: { sql: string; args: unknown[] } | null = null;
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind: (...args: unknown[]) => ({
+							async first() {
+								seen = { sql, args };
+								return { session_id: "csess_old", ended_at: null, reaped: 1 };
+							},
+						}),
+					};
+				},
+			},
+		} as unknown as Env;
+		await lastIdleReapForRepo(env, "inst", "u", "repo_1");
+		const q = seen as unknown as { sql: string; args: unknown[] };
+		for (const p of [IDLE_REAP_PREFIX, ...LEGACY_IDLE_REAP_PREFIXES]) expect(q.args).toContain(`${p}%`);
+		expect(LEGACY_IDLE_REAP_PREFIXES).toContain("Session closed automatically after");
 	});
 
 	it("asks whether the repo's MOST RECENT finished session was reaped, not whether any was", async () => {

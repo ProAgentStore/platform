@@ -59,6 +59,11 @@ export interface SessionContinuity {
 	/**
 	 * Why, phrased so a reply can use it verbatim after "started a fresh conversation — ".
 	 * Empty-ish reasons are not allowed: an unexplained fresh start is the bug report #408 predicts.
+	 *
+	 * It is READ BY THE USER — the console renders it on open (#697) and MCP returns it (#696) — so
+	 * it says "conversation", never "session" (#695). The two words describe the same row, but only
+	 * one of them is a concept the user has to be taught, and #257/#408 exist to make sure they
+	 * never are.
 	 */
 	reason: string;
 }
@@ -116,15 +121,15 @@ export function resolveSessionContinuity(input: {
 	// Claude Code is the only engine driven through a protocol that has a conversation to resume;
 	// every other preset is spawned raw and its "history" is whatever scrolled past on stdout.
 	if (engine !== "claude") return fresh(`the ${engine || "configured"} engine has no conversation to continue`);
-	if (!previous) return fresh("there was no earlier session on this repo to continue");
+	if (!previous) return fresh("there was no earlier conversation on this repo to continue");
 	// Switching engine is switching brains. The stored resume key belongs to the other one.
-	if (previous.clientType !== engine) return fresh("the previous session on this repo ran a different engine");
+	if (previous.clientType !== engine) return fresh("the previous conversation on this repo ran a different engine");
 	// `error` is the status `ensureActiveSession` writes when the engine never launched — there is
 	// no conversation behind that row, only a failed spawn.
-	if (previous.status === "error") return fresh("the previous session never got its engine running");
+	if (previous.status === "error") return fresh("the previous attempt on this repo never got its engine running");
 	// A legacy row predating `last_activity_at`. Unknown age is not "recent"; the whole point of the
 	// window is that it is measured.
-	if (previous.lastActivityAt == null) return fresh("the previous session did not record when it was last used");
+	if (previous.lastActivityAt == null) return fresh("the previous conversation did not record when it was last used");
 
 	// Clock skew between the writer and this reader can make the age negative. Treat that as "just
 	// now" rather than as an enormous age — the alternative is a spurious fresh start.

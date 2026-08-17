@@ -112,7 +112,7 @@ describe("read_terminal opens a session rather than refusing (#407)", () => {
 		// One turn: the session opened AND the pane came back, in the same tool result. Two turns
 		// would mean the model has to notice a refusal and pick a different tool, which is the
 		// behaviour that made the user press the button themselves.
-		expect(res.content).toContain("Started a coding session for chess-academy");
+		expect(res.content).toContain("Started work on chess-academy");
 		expect(res.content).toContain("csess_new");
 		expect(res.content).toContain("all good");
 		expect(res.content).not.toMatch(/No active session/);
@@ -162,13 +162,13 @@ describe("read_terminal opens a session rather than refusing (#407)", () => {
 		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
 		vi.mocked(sweeper.lastIdleReapForRepo).mockResolvedValue({ sessionId: "csess_old", endedAt: "2026-08-08 01:00:00" });
 		const res = await executeStorageTool({ name: "read_terminal", input: { repo_name: "chess-academy" } }, engine, ctx);
-		expect(res.content).toMatch(/closed automatically after 6 hours/);
+		expect(res.content).toMatch(/gone to sleep after 6 hours/);
 	});
 
 	it("says nothing extra when it reused a live session", async () => {
 		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
 		const res = await executeStorageTool({ name: "read_terminal", input: { repo_name: "chess-academy" } }, engine, ctx);
-		expect(res.content).not.toMatch(/Started a coding session/);
+		expect(res.content).not.toMatch(/Started work on/);
 		expect(res.content).toMatch(/\[live · idle\]/);
 	});
 });
@@ -183,7 +183,7 @@ describe("send_to_cli opens a session rather than refusing (#407)", () => {
 			ctx,
 		);
 		expect(res.success).toBe(true);
-		expect(res.content).toContain("Started a coding session for chess-academy");
+		expect(res.content).toContain("Started work on chess-academy");
 		expect(res.content).toContain('Sent to chess-academy: "run the tests"');
 		const act = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/act");
 		expect(act?.[2]).toMatchObject({ sessionId: "csess_new" });
