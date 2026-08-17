@@ -237,6 +237,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",
+	// Opens a repo's conversation, which launches the engine on the user's machine — the same
+	// act `coding_session_fresh` performs, so it takes the same class (#696).
+	coding_session_open: "runtime",
 	coding_session_restart: "runtime",
 	register_instance_runtime: "runtime",
 	run_instance_task: "runtime",
@@ -279,9 +282,12 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// placement, `set_instance_runner_node` writes the pin. The write is `write` and not `runtime`
 	// deliberately — it changes where calls are ROUTED without itself driving anything on the
 	// machine, so it does not belong in the scope that means "this spends something out there".
+	// +1 runtime at #696: `coding_session_open`, the opener that lets #408's continuity be
+	// reached from MCP at all. `runtime` and not `write` because it starts a CLI process on
+	// somebody's laptop — the distinction the two classes exist to make.
 	read: 70,
 	write: 42,
-	runtime: 15,
+	runtime: 16,
 	destructive: 14,
 };
 

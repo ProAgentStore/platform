@@ -50,7 +50,7 @@ dependency-light (it imports only `./http.js`) and keep `safety.test.ts` passing
 
 ```
 src/
-├── index.ts              PagsMcp (McpAgent DO) + 31 tool registrations + OAuthProvider export
+├── index.ts              PagsMcp (McpAgent DO) + 21 tool registrations + OAuthProvider export
 ├── oauth-provider.ts     /authorize, /authorize/continue, /oauth/callback, /health, root
 ├── session.ts            verifyMcpSession (HMAC session → uid)
 ├── registration.ts       the one seam every `server.tool(...)` call passes through
@@ -58,6 +58,8 @@ src/
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
+├── coding-tools.ts       11 tools — the coding surface: open/capture/message/restart/end a
+│                         repo's conversation, repos, overseer, diagnostics (#696)
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
 └── instance-tools/
     ├── index.ts          builds the ctx, calls the fourteen group registrars
@@ -80,18 +82,20 @@ src/
     └── coding.ts         system_status + coding_timeline (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
-**141 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
-inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 93 across
-`instance-tools/`. 122 are always registered; 19 are surface-gated (apply=4, repo=3, coding=12).
+**142 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 11 in
+`coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
+`storage-tools.ts`, and 97 across `instance-tools/`. 122 are always registered; 20 are
+surface-gated (apply=4, repo=3, coding=13).
 
-Those three numbers ADD UP to the headline, and that is the point of stating them: 31 + 13
-+ 93 = 140. They said 88 until #602, which made the paragraph sum to 132 — a total the
-same sentence contradicted two clauses earlier. The per-file rows in the tree above are
+Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 11
++ 13 + 97 = 142. They said 88 until #602, which made the paragraph sum to 132 — a total the
+same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
+headline of 141 until #696 re-counted them. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
 file a tool landed in when nobody decided where it went, and the largest in the repo. That
-86 is history and is not the current count (93); it is kept because it is what makes the
+86 is history and is not the current count (97); it is kept because it is what makes the
 1871 lines legible. The nine ungated groups above are that file split along the
 registration boundaries it already had; the blocks moved verbatim.
 
@@ -100,7 +104,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 `repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
-under `instance-tools/` — 93 of them — to a table of **group, scope, confirmation string,
+under `instance-tools/` — 97 of them — to a table of **group, scope, confirmation string,
 dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the
@@ -197,7 +201,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 19 tools are surface-gated.
+  given connection, because 20 tools are surface-gated.
 
 ## Bindings and secrets
 

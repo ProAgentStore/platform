@@ -249,6 +249,7 @@ const READBACK: Record<string, string | null> = {
 	"remove_repo.repo_url": "ingest_repo_status",
 	"coding_repo_add.path": "coding_repos_list",
 	"coding_session_fresh.engine_id": "coding_sessions_list",
+	"coding_session_open.engine_id": "coding_sessions_list",
 
 	// ── apply ──
 	"apply_to_job.url": "instance_board",

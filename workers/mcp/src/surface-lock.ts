@@ -155,4 +155,17 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// (Originally authored as 0.1.8 pre-rebase; 0.1.8 and 0.1.9 landed first, so this is 0.1.10.)
 	// Appended, never edited: 0.1.9 is published.
 	"0.1.10": "sha256:5ad96d5d35a9dbc8a3b30a64d756789ea8838321655c8178803edb9754387b6d",
+	// 0.1.11 (#696): one new tool NAME in the surface-gated `coding` group,
+	// `coding_session_open`, plus a reworded `session_id` PARAMETER on `coding_session_message`
+	// — a `.describe()` on an argument lands inside `inputSchema`, which IS in the fingerprint,
+	// unlike a tool's own description.
+	//
+	// The name is the half a caching host cannot work around: #408's four-day conversation
+	// continuity was reachable only from the console, because the sole MCP opener
+	// (`coding_session_fresh`) hardcodes the flag that turns it off. A host holding the 0.1.10
+	// list does not know the opener exists, and there is no degraded call it can make instead.
+	// (Authored as 0.1.10 pre-rebase; #681 landed that number first — the same collision the
+	// entry above records, and the reason this map is append-only rather than renumbered.)
+	// Appended, never edited: 0.1.10 is published.
+	"0.1.11": "sha256:5b9c234f3e8b6f35ee19c890c3fb1b18e9e31f523692817e3cc9f45d3a27022a",
 };

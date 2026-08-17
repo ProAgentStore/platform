@@ -637,7 +637,13 @@ const PINS = {
 	// param, `requirePermission("read")`, and the ownership check. Raised rather than split: the
 	// eleven lines ARE the security fix, inline handler logic that mirrors the tool directly above
 	// it in this file and cannot be extracted without separating the guard from what it guards.
-	"workers/mcp/src/index.ts": 1180,
+	//
+	// −247 at #696: the ten coding-surface registrations moved verbatim to `src/coding-tools.ts`,
+	// where the eleventh (`coding_session_open`) joined them. The file was at one line of headroom
+	// against its pin, so the ratchet's own instruction decided the shape of the fix: split rather
+	// than raise. Recorded at the new floor in the same commit, which is the half that makes it a
+	// ratchet — #138's 126 reclaimed lines were back inside hours.
+	"workers/mcp/src/index.ts": 933,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1319,7 +1325,11 @@ const PINS = {
 	// +9 at #681: the index.ts raise above (agent_deploy_status's ownership guard, six lines of why)
 	// and this note. Same self-referential growth #653 records — the ceiling follows the pins it
 	// stores, because a raised pin without its reason is exactly what this registry exists to catch.
-	"scripts/check-file-size.mjs": 1403,
+	//
+	// +6 at #696: the mcp/index.ts entry above comes DOWN by 247, and a lowered pin costs this
+	// file the same lines a raised one does — which is the price of recording that the split
+	// happened rather than leaving the reclaimed headroom silently available.
+	"scripts/check-file-size.mjs": 1413,
 };
 
 /**

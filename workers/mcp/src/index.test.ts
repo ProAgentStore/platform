@@ -476,11 +476,49 @@ describe("coding_session_message (coding surface)", () => {
 		expect(h.auditEvents().some((e) => e.tool === "coding_session_message")).toBe(true);
 	});
 
-	it("reports no session when none is active, without POSTing", async () => {
+	// ── Waking a sleeping repo (#696) ────────────────────────────────────────
+	//
+	// This used to answer "No active coding session found." — a caller who asked to talk to an
+	// agent, told a fact about our process lifecycle. After the idle reaper has run that is the
+	// state a repo spends most of its life in, so the refusal was the common case.
+
+	it("wakes the only repo when nothing is running, and says which conversation it got", async () => {
 		const h = await setup({ groups: ["coding"] });
 		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", { body: { repos: [{ id: "repo-1", name: "platform" }] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", {
+			body: { session: { id: "sess-9" }, runnerConnected: true, resumed: true, continuity: { mode: "resume", reason: "the previous conversation on this repo was last touched 3 hours ago" } },
+		});
+		h.fetchStub.respond((u, m) => u.endsWith("/sess-9/message") && m === "POST", { body: { ok: true } });
+		const res = await h.tools.get("coding_session_message")!.handler({ instance_id: "i1", message: "keep going" });
+		// The wake goes through the continuity policy — no `fresh` flag anywhere near it.
+		const open = h.fetchStub.calls.find((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")!;
+		expect(JSON.parse(open.body!)).toEqual({ repoId: "repo-1" });
+		expect(res.content[0].text).toContain("the previous conversation on this repo was last touched 3 hours ago");
+		expect(res.content[0].text).toContain('Sent to session sess-9: "keep going"');
+		expect(h.auditEvents().some((e) => e.tool === "coding_session_message" && (e.input as Record<string, unknown>).woke === true)).toBe(true);
+	});
+
+	it("asks WHICH repo when several are idle, opening nothing and sending nothing", async () => {
+		// Guessing here would type someone's instruction into the wrong checkout and report success.
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", {
+			body: { repos: [{ id: "repo-1", name: "platform" }, { id: "repo-2", name: "console" }] },
+		});
 		const res = await h.tools.get("coding_session_message")!.handler({ instance_id: "i1", message: "x" });
-		expect(res.content[0].text).toContain("No active coding session");
+		expect(res.content[0].text).toContain("repo_id: repo-1");
+		expect(res.content[0].text).toContain("repo_id: repo-2");
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/message"))).toBe(false);
+	});
+
+	it("says there is no repo at all rather than inventing one", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", { body: { repos: [] } });
+		const res = await h.tools.get("coding_session_message")!.handler({ instance_id: "i1", message: "x" });
+		expect(res.content[0].text).toContain("no repo attached");
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/message"))).toBe(false);
 	});
 
@@ -502,6 +540,91 @@ describe("coding_session_message (coding surface)", () => {
 		const res = await h.tools.get("coding_session_message")!.handler({ instance_id: "i1", message: "x" });
 		expect(res.content[0].text).toContain("read-only mode");
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/message"))).toBe(false);
+	});
+});
+
+// ── coding_session_open: the door #408's continuity was behind (#696) ────────
+
+describe("coding_session_open", () => {
+	/** One repo, and a server answer the test can vary. */
+	function withOneRepo(h: Awaited<ReturnType<typeof setup>>, open: Record<string, unknown>) {
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", { body: { repos: [{ id: "repo-1", name: "platform" }] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: open });
+	}
+
+	it("POSTs WITHOUT `fresh`, so the server's continuity policy decides", async () => {
+		// The whole point of the tool. `coding_session_fresh` hardcodes `fresh: true` — correctly,
+		// that is what it is for — which left #408's four-day continuity reachable only from the
+		// console. `engineId` is absent too: omitting it lets the API fall through to the
+		// INSTANCE default, the setting the owner actually controls (#549).
+		const h = await setup({ groups: ["coding"] });
+		withOneRepo(h, { session: { id: "sess-2" }, runnerConnected: true, resumed: true, continuity: { mode: "resume", reason: "the previous conversation on this repo was last touched 2 hours ago" } });
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		const post = h.fetchStub.calls.find((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")!;
+		expect(JSON.parse(post.body!)).toEqual({ repoId: "repo-1" });
+		// The reason is quoted VERBATIM — the route computes it, and a second phrasing here is how
+		// the console and MCP end up telling one user two different stories about one open.
+		expect(res.content[0].text).toContain("the previous conversation on this repo was last touched 2 hours ago");
+		expect(res.content[0].text).toContain("Continuing this repo's previous conversation on platform");
+		expect(res.content[0].text).toContain("session_id sess-2");
+		expect(h.auditEvents().some((e) => e.tool === "coding_session_open")).toBe(true);
+	});
+
+	it("passes an explicit engine when the caller names one", async () => {
+		const h = await setup({ groups: ["coding"] });
+		withOneRepo(h, { session: { id: "sess-2" }, continuity: { mode: "fresh", reason: "there was no earlier session on this repo to continue" } });
+		await h.tools.get("coding_session_open")!.handler({ instance_id: "i1", repo_id: "repo-7", engine_id: "codex" });
+		const post = h.fetchStub.calls.find((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")!;
+		expect(JSON.parse(post.body!)).toEqual({ repoId: "repo-7", engineId: "codex" });
+	});
+
+	it("reports a clean start as a clean start, with the server's reason", async () => {
+		const h = await setup({ groups: ["coding"] });
+		withOneRepo(h, { session: { id: "sess-3" }, continuity: { mode: "fresh", reason: "the previous session on this repo ran a different engine" } });
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("Started a fresh conversation on platform — the previous session on this repo ran a different engine");
+	});
+
+	it("does not claim continuity the runner never confirmed", async () => {
+		// `continuity.mode` is a DECISION; `resumed` is the runner saying the engine came up
+		// carrying it. Reporting the decision as the outcome is worse than the cold start it hides.
+		const h = await setup({ groups: ["coding"] });
+		withOneRepo(h, { session: { id: "sess-4" }, resumed: false, continuity: { mode: "resume", reason: "the previous conversation on this repo was last touched 5 hours ago" } });
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("the runner did not confirm it came up with it");
+	});
+
+	it("asks which repo when several exist, rather than opening one of them", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", {
+			body: { repos: [{ id: "repo-1", name: "platform" }, { id: "repo-2" }] },
+		});
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("repo_id: repo-1");
+		expect(res.content[0].text).toContain("(unnamed) (repo_id: repo-2)");
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
+	});
+
+	it("says a conversation was already open rather than reporting a new one", async () => {
+		const h = await setup({ groups: ["coding"] });
+		withOneRepo(h, { session: { id: "sess-1" }, reused: true, notice: "It is running codex." });
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("Already talking to platform");
+		expect(res.content[0].text).toContain("It is running codex.");
+	});
+
+	it("warns when no runner is connected instead of implying work is happening", async () => {
+		const h = await setup({ groups: ["coding"] });
+		withOneRepo(h, { session: { id: "sess-5" }, runnerConnected: false, continuity: { mode: "fresh", reason: "there was no earlier session on this repo to continue" } });
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("pags up");
+	});
+
+	it("is blocked in read-only mode (opening one launches a CLI on someone's machine)", async () => {
+		const h = await setup({ groups: ["coding"], env: { MCP_READ_ONLY: "1" } });
+		const res = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("read-only mode");
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
 	});
 });
 
