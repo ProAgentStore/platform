@@ -13,6 +13,8 @@ import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
 import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
+import { openNotices, type OpenNotice } from "./open-notice";
+import OpenNoticeBanners from "./OpenNoticeBanners";
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
 import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import { useTerminalScrollback } from "./use-terminal-scrollback";
@@ -124,8 +126,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 * been in the response since it was written with nothing rendering it. So a user who changed
 	 * their CLI engine and pressed start got the previous engine, silently. A running child
 	 * process cannot change which binary it is, so the honest fix is to say so and let them end it.
+	 *
+	 * A LIST since #697, which added the second thing an open knows: whether the engine continues
+	 * this repo's previous conversation, and why. Neither may replace the other — the composition,
+	 * and the tone each one earns, are in ./open-notice.
 	 */
-	const [openNotice, setOpenNotice] = useState<string | null>(null);
+	const [openNotice, setOpenNotice] = useState<OpenNotice[]>([]);
 	// With no Co-pilot there is only one view, and it is the terminal.
 	const [view, setView] = useState<"summary" | "terminal">(copilot ? "summary" : "terminal");
 	// The REPO's history, across every session it has ever had (#257).
@@ -548,6 +554,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const closeTerminal = useCallback(() => {
 		autoOpenedRef.current = true; // stay on the list — don't let a sessions refresh re-open
 		setOpenSession(null);
+		setOpenNotice([]); // once per OPEN (#697): re-entry takes a shortcut that asks the server nothing
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding`, { replace: true });
 	}, [instanceId, navigate]);
@@ -712,17 +719,20 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		const active = activeSessionFor(sessionsRef.current, repoId);
 		if (active) return openTerminal(active);
 		setOpenError(null);
-		setOpenNotice(null);
+		setOpenNotice([]);
 		setOpeningRepoId(repoId);
 		try {
-			const d = await api<{ session: CodingSession; notice?: string | null }>(`/v1/instances/${instanceId}/coding/sessions`, {
+			// `continuity` stays `unknown` — parsing it, and answering a response that predates it,
+			// belong to ./open-notice where they are tested.
+			const d = await api<{ session: CodingSession; notice?: string | null; continuity?: unknown }>(`/v1/instances/${instanceId}/coding/sessions`, {
 				method: "POST",
 				body: JSON.stringify({ repoId, engineId: defaultEngine }),
 			});
 			// Set BEFORE `openTerminal`, and kept when it succeeds: the case worth reporting is
 			// precisely the one where nothing looks wrong — a terminal opens, work happens, and it
-			// is the engine the user thought they had stopped using.
-			setOpenNotice(d.notice ?? null);
+			// is the engine the user thought they had stopped using, or an agent that has forgotten
+			// everything the last one knew (#697).
+			setOpenNotice(openNotices(d));
 			if (d.session) {
 				loadCoding();
 				openTerminal(d.session);
@@ -1027,16 +1037,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		: null;
 
 	/**
-	 * Rendered in the SESSION view, not on the landing strip beside `openError` (#549).
-	 *
-	 * A reuse always returns a session, so `openTerminal` runs and the landing strip unmounts in
-	 * the same tick — a notice there would be written and never seen. The one place the user is
-	 * certain to be looking after pressing start is the terminal they were just taken to.
-	 */
-	/**
 	 * The ENGINE refused its last turn (#545).
 	 *
-	 * Hoisted beside {@link reusedEngineBanner} rather than written inline, because there are TWO
+	 * Hoisted beside `<OpenNoticeBanners>` rather than written inline, because there are TWO
 	 * session views — the single-repo surface returns ~120 lines above the multi-repo one — and a
 	 * notice in only one of them is a notice most Coder subscribers never see. That is not
 	 * hypothetical: the first placement was inline in the multi-repo view alone, and the phone spec
@@ -1060,10 +1063,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			</div>
 		);
 	})();
-
-	const reusedEngineBanner = openNotice ? (
-		<div id="inst-coding-reused-engine" className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-xs font-semibold">{openNotice}</div>
-	) : null;
 
 	// Claude Code signed-out CTA — the headless engine surfaces a login error in its transcript
 	// when the runner machine has no (or expired) Claude credentials. The pattern (and the
@@ -1128,7 +1127,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					</div>
 				</div>
 
-				{reusedEngineBanner}
+				<OpenNoticeBanners notices={openNotice} />
 				{engineTurnBanner}
 
 				{claudeSignedOut && soloView === "terminal" && (
@@ -1248,7 +1247,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
 					</div>
 				)}
-				{reusedEngineBanner}
+				<OpenNoticeBanners notices={openNotice} />
 				{engineTurnBanner}
 				{workModeMsg && (
 					<div data-testid="work-mode-error" className="bg-danger-soft border border-danger-line text-danger rounded-lg p-2.5 m-2 text-xs font-semibold">

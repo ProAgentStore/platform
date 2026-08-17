@@ -5427,6 +5427,95 @@ test.describe("mobile — a reused session names the engine it is actually runni
 });
 
 /**
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * mobile — an open says whether the agent still remembers you (#697)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * `resolveSessionContinuity` decides on every open whether the engine continues this repo's
+ * previous conversation, and phrases WHY as a sentence meant to be read verbatim. The route has
+ * returned it as `continuity` since it was written; `grep -c continuity CodingTab.tsx` answered 0.
+ * So a resumed open and a cold one were indistinguishable — both land on the same blank pane. The
+ * owner hit that on 2026-08-17: the resume had WORKED, and the only reasonable conclusion from the
+ * screen was that the work was gone.
+ *
+ * Asserted after the terminal has opened, for the same reason the #549 spec above is: an open that
+ * has something to report always returns a session, so the landing strip is gone in the same tick.
+ *
+ * The `reason` strings below are FIXTURES. Their wording belongs to
+ * `workers/api/src/lib/coding-session-continuity.ts` and its own suite; what this pins is that
+ * whatever arrives is rendered after the mode's opener, and that the opener never says "session"
+ * (#257, #408, #695).
+ */
+test.describe("mobile — an open says whether the agent still remembers you (#697)", () => {
+	const soloCoder = [
+		{
+			id: "inst-1",
+			name: "Repo Coder",
+			slug: "repo-coder",
+			category: "code",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", surfaceOptions: { coding: { repos: "single" } } },
+		},
+	];
+	const REPO = { id: "repo-1", name: "platform", githubRepo: "ProAgentStore/platform", provider: "github", cloneStatus: "ready" };
+	const SESSION = { id: "csess-1", repoId: "repo-1", clientType: "claude", status: "active", launchCommand: "claude --dangerously-skip-permissions" };
+
+	async function openWith(page: Page, continuity: unknown, width = 390) {
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, { instances: soloCoder });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (route.request().method() === "POST" && url.includes("/sessions")) return json({ session: SESSION, runnerConnected: true, resumed: true, continuity });
+			if (url.includes("/repos")) return json({ repos: [REPO] });
+			if (url.includes("/engines")) return json({ engines: [{ id: "claude", label: "Claude", command: "claude --dangerously-skip-permissions" }], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			if (url.includes("/timeline")) return json({ entries: [] });
+			if (url.includes("/capture")) return json({ pane: "", runState: "idle" });
+			if (url.includes("/builds")) return json({ builds: [] });
+			if (url.includes("/issues")) return json({ repo: REPO.githubRepo, issues: [] });
+			if (url.includes("/pulls")) return json({ repo: REPO.githubRepo, pulls: [] });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+		await page.locator("#coding-solo-tabs").waitFor();
+		await page.locator("[placeholder='Send a message to the Engine...']").waitFor();
+	}
+
+	test("a resume reads as reassurance, and carries the server's reason", async ({ page }) => {
+		const reason = "the previous conversation on this repo was last touched 11 hours ago";
+		await openWith(page, { mode: "resume", resumeFrom: "csess-0", reason });
+		const banner = page.locator("#inst-coding-continuity");
+		await expect(banner).toBeVisible();
+		await expect(banner).toHaveText(`Picking up where you left off — ${reason}.`);
+	});
+
+	test("a cold start is the loud one, and never calls it a session", async ({ page }) => {
+		await openWith(page, { mode: "fresh", resumeFrom: null, reason: "you asked for a clean slate" });
+		const banner = page.locator("#inst-coding-continuity");
+		await expect(banner).toHaveText("Started a fresh conversation — you asked for a clean slate.");
+		// The half this surface writes itself. #695 removed the noun from the coding surface; the
+		// one line a user is most likely to read is where reintroducing it would undo that.
+		await expect(banner).not.toContainText("session");
+		// `fresh` is the surprise, so it wears the warning tint the expected case does not.
+		await expect(banner).toHaveClass(/text-warning/);
+
+		// A long sentence above a `<pre>` on a 390px phone is where a horizontal scrollbar is born.
+		const { mainOv, docOv, wide } = await measureOverflow(page);
+		expect(mainOv, `<main> pans by ${mainOv}px`).toBeLessThanOrEqual(1);
+		expect(docOv, `page overflows by ${docOv}px`).toBeLessThanOrEqual(1);
+		expect(wide, `content past the right edge: ${wide.join(", ")}`).toEqual([]);
+	});
+
+	test("an API that answers without a continuity block shows nothing", async ({ page }) => {
+		// The reuse path and the create-race loser both answer without it, and so does any older
+		// API. None of them may render half a sentence.
+		await openWith(page, undefined);
+		await expect(page.locator("#inst-coding-continuity")).toHaveCount(0);
+	});
+});
+
+/**
  * #545 — the engine's exit code was in the pane and read as ordinary output.
  *
  * The production capture of `csess_22d08431`, replayed: three Codex turns, three
