@@ -38,7 +38,8 @@
 // class of bug: "a row stuck at `running` forever tells every supervisor its subordinate is still
 // working".
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
-import { endSession, listIdleSessions, listInstancesWithQuietSessions, reconcileOrphanedSessions } from "./coding-store.js";
+import { endSession, reconcileOrphanedSessions } from "./coding-store.js";
+import { listIdleSessions, listInstancesWithQuietSessions } from "./coding-sweep-queries.js";
 import { appendTimeline } from "./coding-timeline.js";
 import { logUnhandled } from "./on-error.js";
 import { accountTimeZone } from "./account-timezone.js";

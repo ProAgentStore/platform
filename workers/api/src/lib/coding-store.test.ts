@@ -3,7 +3,6 @@ import {
 	ACTIVITY_TOUCH_MS,
 	createRepo,
 	getRepo,
-	listIdleSessions,
 	reassignSessionNode,
 	reconcileOrphanedSessions,
 	resumeSessionsForNode,
@@ -165,24 +164,6 @@ describe("reconcileOrphanedSessions (#139)", () => {
 
 describe("session activity + idle listing (#275)", () => {
 	/** Records SELECTs too — `mockEnv` only captures writes, and these two are read queries. */
-	function readEnv(): { env: Env; reads: Write[] } {
-		const reads: Write[] = [];
-		const DB = {
-			prepare(sql: string) {
-				return {
-					bind(...args: unknown[]) {
-						return {
-							async all() { reads.push({ sql, args }); return { results: [] }; },
-							async first() { return null; },
-							async run() { return { meta: { changes: 0 } }; },
-						};
-					},
-				};
-			},
-		};
-		return { env: { DB } as unknown as Env, reads };
-	}
-
 	it("touchSessionActivity throttles itself in the WHERE clause, not with a read", async () => {
 		// `/capture` polls every 3 seconds per open session and the Pilot every 2. A read-then-write
 		// would double the statements and race; the predicate makes 19 calls out of 20 a statement
@@ -202,22 +183,6 @@ describe("session activity + idle listing (#275)", () => {
 		expect(writes[0].sql).toContain("status = 'active'");
 	});
 
-	it("listIdleSessions refuses to hand the sweeper a session whose driver claim is still fresh", async () => {
-		// Reaping a session out from under a live Pilot is the one outcome strictly worse than the
-		// leak: the run loses its engine mid-step with no explanation anywhere.
-		const { env, reads } = readEnv();
-		await listIdleSessions(env, 123, 50);
-		expect(reads[0].sql).toContain("s.driver_at IS NULL OR s.driver_at < ?2");
-		expect(reads[0].args).toEqual([123, 123, 50]);
-	});
-
-	it("listIdleSessions falls back to updated_at for a row written before the backfill", async () => {
-		// A session created by an in-flight isolate mid-deploy has a NULL stamp. Comparing NULL
-		// against the cutoff is never true, so without the COALESCE that row would be immortal.
-		const { env, reads } = readEnv();
-		await listIdleSessions(env, 1, 1);
-		expect(reads[0].sql).toContain("COALESCE(s.last_activity_at, CAST(strftime('%s', s.updated_at) AS INTEGER) * 1000)");
-	});
 });
 
 // ── Provider-neutral repo identity (#221, migration 0097) ────────────────────────────────────
