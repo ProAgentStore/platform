@@ -643,7 +643,10 @@ const PINS = {
 	// against its pin, so the ratchet's own instruction decided the shape of the fix: split rather
 	// than raise. Recorded at the new floor in the same commit, which is the half that makes it a
 	// ratchet — #138's 126 reclaimed lines were back inside hours.
-	"workers/mcp/src/index.ts": 933,
+	// −11 at #703: `PLATFORM_GUIDE` moved verbatim to `src/platform-guide.ts`. Recorded at the new
+	// floor in the same commit, for the reason the #696 note above gives. SLACK would have tolerated
+	// leaving it at 933, but that keeps 11 lines of headroom on a file already split twice.
+	"workers/mcp/src/index.ts": 922,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1329,7 +1332,10 @@ const PINS = {
 	// +6 at #696: the mcp/index.ts entry above comes DOWN by 247, and a lowered pin costs this
 	// file the same lines a raised one does — which is the price of recording that the split
 	// happened rather than leaving the reclaimed headroom silently available.
-	"scripts/check-file-size.mjs": 1413,
+	// +6 at #703: the mcp/index.ts entry above comes DOWN again, by 11. Same cost and same reason as
+	// the #696 note directly above — SLACK would have let this shrink go unrecorded, and that is
+	// exactly the case where the reclaimed headroom is silently available to the next commit.
+	"scripts/check-file-size.mjs": 1419,
 };
 
 /**

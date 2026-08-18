@@ -9,6 +9,7 @@ import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
+import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
 import { annotationsFor, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
@@ -874,18 +875,6 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		);
 	}
 }
-
-const PLATFORM_GUIDE = `# ProAgentStore Platform Guide
-
-Marketplace for server-powered AI agents. Creators build agent templates, clients subscribe and run them on their own data.
-
-## Agent Types: Agents | Workers | Tools
-## CLI: pags init <name> --template worker|cron|api, pags check, pags publish
-## MCP creator tools: scaffold_agent, list_agent_repo_files, read_agent_file, write_agent_file, batch_write_agent_files, get_agent_board_config, update_agent_board_config, trigger_agent_deploy, agent_deploy_status
-## MCP runtime tools: subscribe_agent, my_instances, add_instance_knowledge, chat_with_instance, instance_messages, list_instance_triggers, create_instance_trigger, run_instance_trigger, list_instance_trigger_events, delete_instance_trigger, register_instance_runtime, instance_runtime_status, unregister_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, instance_task_events
-## Public trial: chat_with_agent calls /v1/public/agents/:id/try and is for previews, not the main user runtime
-## URLs: Store proagentstore.online, API api.proagentstore.online, MCP mcp.proagentstore.online/mcp
-## Key endpoints: GET /v1/agents, POST /v1/public/agents/:id/try, POST /v1/instances/:id/subscribe, POST /v1/instances/:instanceId/chat`;
 
 const SDK_REFERENCE = `# SDK: import { initPro } from '@proagentstore/sdk'
 const agent = initPro({ agentId: '...', token: '...' })

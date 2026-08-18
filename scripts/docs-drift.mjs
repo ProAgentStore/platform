@@ -68,6 +68,7 @@ import {
 import { SUBSET_CLAIMS, checkClaimShape } from "./lib/claim-shape.mjs";
 import { docFiles as collectDocFiles, requireInputs, servedHtmlFiles as collectServedHtml } from "./lib/doc-files.mjs";
 import { checkMcpSplit } from "./lib/mcp-split.mjs";
+import { checkPlatformGuide } from "./lib/platform-guide.mjs";
 import { checkRunLifecycle } from "./lib/run-lifecycle.mjs";
 import { checkWireSurface } from "./lib/wire-surface.mjs";
 
@@ -484,6 +485,30 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 				`${SUBSET_CLAIMS.length} exempt) + ${registeredPerFile.size} per-file counts`,
 		);
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6a. PLATFORM_GUIDE — the one MCP document a MODEL reads (#703)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Every check above holds a document a DEVELOPER reads to the registered surface. This one holds
+ * the string the always-on `platform_guide` tool RETURNS, which is the capability document a model
+ * reads — and until #703 was the only MCP doc `grep -rn PLATFORM_GUIDE scripts/docs-drift.mjs`
+ * found nothing for. It hand-listed 26 of 141 tools and named no coding or observability tool.
+ *
+ * The comparison and its reasoning live in `scripts/lib/platform-guide.mjs`, unit-tested against
+ * strings. `registered` is the SAME set check 5 holds the README's table to, passed in rather than
+ * recomputed, so the two cannot come to disagree about what is registered.
+ */
+{
+	const { failures: guideFailures, notes: guideNotes } = checkPlatformGuide({
+		guideSrc: read(p("workers/mcp/src/platform-guide.ts")),
+		toolCountSrc: read(p("workers/mcp/src/tool-count.ts")),
+		registered,
+	});
+	for (const f of guideFailures) fail(f.check, f.message);
+	for (const n of guideNotes) ok(n);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
