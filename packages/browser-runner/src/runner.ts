@@ -10,6 +10,7 @@ import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
 import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
+import { resolveHandoffStatus } from "./handoff-status.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
@@ -1162,12 +1163,11 @@ export class LocalRunner {
 		// must never relaunch the browser or claim a lost handoff is done.
 		if (!session) return { solved: false, challenge: null };
 		const page = session.page;
-		if (page.isClosed()) return { solved: true, challenge: null };
-		// A needs_input handoff resumes once the user supplies the value.
-		if (session.reason === "needs_input") return { solved: !!session.inputValue, challenge: null, value: session.inputValue };
-		// A stuck handoff resumes only when the human explicitly clicks Resume —
-		// there's nothing to auto-detect.
-		if (session.reason === "stuck") return { solved: !!session.humanDone, challenge: null };
+		// Every answer that needs no live DOM — including a GONE page, which used to report
+		// solved:true and resume past an unsolved challenge (#641) — comes from
+		// handoff-status.ts; null means only an open challenge's own DOM can answer.
+		const offline = resolveHandoffStatus({ reason: session.reason, pageClosed: page.isClosed(), inputValue: session.inputValue, humanDone: session.humanDone });
+		if (offline) return offline;
 		// A challenge resumes when the token/widget clears OR the human clicks Done —
 		// custom captchas (e.g. PageUp's "not a robot") have no detectable token, so
 		// the human's explicit Done is the authority; never strand them.
