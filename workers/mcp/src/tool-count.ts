@@ -20,7 +20,7 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 142;
+export const MCP_TOOL_COUNT = 143;
 
 /** Registered for every connection, whatever the user is subscribed to. */
 export const MCP_TOOL_ALWAYS_ON = 122;

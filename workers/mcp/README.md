@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**142 tool registrations.** 122 are always registered; 20 are gated to the console
+**143 tool registrations.** 122 are always registered; 21 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -283,6 +283,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_sessions_list` | All sessions, active and ended | — | | |
 | `coding_session_capture` | Live terminal output + run state (LIVE sessions only — an ended one answers with an empty pane) | — | | |
 | `coding_timeline` | What a run is doing, cursored by `since_seq` — objective, each instruction driven, pane tails, outcome. Works on a finished run too | read | | |
+| `coding_terminal` | The stored terminal snapshots UNCUT, one per call, `before` walking back — the finished-run pane `coding_session_capture` can no longer read and `coding_timeline` only tails | read | | |
 | `coding_session_open` | Open a repo's conversation, CONTINUING the last one (#408's four-day window); says which one it got | runtime | | |
 | `coding_session_message` | Say something to the CLI on the runner node; wakes a sleeping repo instead of refusing | runtime | | |
 | `coding_session_restart` | Restart the CLI, same session id | runtime | | |

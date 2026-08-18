@@ -3,7 +3,7 @@ import { HttpError } from "../lib/auth.js";
 import { resolveRunState } from "../lib/coding-run-state.js";
 import { listSessions } from "../lib/coding-store.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
-import { loadTimelineFeed } from "../lib/coding-timeline.js";
+import { loadTerminalSnapshots, loadTimelineFeed } from "../lib/coding-timeline.js";
 import { callRunner, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
 import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
@@ -44,6 +44,12 @@ import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
  * instruction precedes every piece of output — and the owner watching a run over MCP concluded the
  * engine's output was never recorded. See `lib/coding-timeline.ts`'s header for the full reasoning
  * and for the two alternatives that were rejected.
+ *
+ * ── `?terminal=1`: the same session, its panes UNCUT (#699)
+ *
+ * The feed's per-row tail is right for a feed and is 5% of what is stored. The arm below answers
+ * the other read — whole snapshots, one or a few at a time, `before` walking back — off the same
+ * resolution, so a finished run's terminal text has a reader. The reasoning is at the call site.
  */
 export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void {
 	codingRoutes.get("/:instanceId/coding/timeline", async (c) => {
@@ -59,6 +65,41 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 			const n = Number.parseInt(c.req.query(q) ?? "", 10);
 			return Number.isFinite(n) ? n : undefined;
 		};
+		// ── `?terminal=1` — the SNAPSHOTS, whole, on the same session resolution (#699) ──
+		//
+		// The feed above cuts a `terminal` row to its 400-character tail, because a page of forty
+		// events cannot carry forty 8,000-character panes under `FEED_BYTE_BUDGET`. Measured live on
+		// 2026-08-18: an ended session with 8 stored snapshots holds 64,000 characters and the feed
+		// reaches 3,200 of them, i.e. 5%. The whole text was never absent — `loadTerminalSnapshots`
+		// has served it uncapped to the console's scrollback since #432 — but only from the
+		// SESSION-scoped route next door, which needs a session id the caller of this one does not
+		// have. So the pane of a finished run was reachable by no MCP tool at all: the feed returns a
+		// tail, and `coding_session_capture` correctly answers a finished session with an empty pane
+		// because the pane is a runner buffer that no longer exists.
+		//
+		// It is an ARM of this route rather than a route of its own precisely so the resolution rule
+		// above — the session asked for, else the newest active, else the most recently updated — is
+		// the same code and not a second statement of it. That fallback is what makes it answer for a
+		// run that has already ended, which is the case #527 established and the only case this arm
+		// exists for.
+		//
+		// Bounded by ROW COUNT, not bytes. A snapshot is indivisible here: half a pane cut mid-line is
+		// not a smaller answer, it is a different one, and the tail cut is exactly what this arm is
+		// undoing. `loadTerminalSnapshots` clamps `limit` to 1..50 and `before` walks back, so the
+		// caller pages by whole panes and `hasMore` says whether history remains. `after` is
+		// deliberately NOT plumbed: its tail/gap semantics belong to the console's snapshot cache
+		// (#550), and a reader walking backwards through history has no cache to extend.
+		if (c.req.query("terminal") === "1") {
+			const page = await loadTerminalSnapshots(c.env, { sessionId: session.id, before: num("before"), limit: num("limit") });
+			return c.json({
+				sessionId: session.id,
+				sessionStatus: session.status,
+				entries: page.entries,
+				hasMore: page.hasMore,
+				oldestSeq: page.oldestSeq,
+				newestSeq: page.newestSeq,
+			});
+		}
 		// `since` and `before` are opposite directions and `loadTimelineFeed` refuses both at once;
 		// surfaced as a 400 rather than a 500 because it is the caller's mistake, not the server's.
 		let feed: Awaited<ReturnType<typeof loadTimelineFeed>>;

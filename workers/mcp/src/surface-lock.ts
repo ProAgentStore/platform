@@ -168,4 +168,20 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// entry above records, and the reason this map is append-only rather than renumbered.)
 	// Appended, never edited: 0.1.10 is published.
 	"0.1.11": "sha256:5b9c234f3e8b6f35ee19c890c3fb1b18e9e31f523692817e3cc9f45d3a27022a",
+	// 0.1.12 (#699): one new tool NAME in the surface-gated `coding` group, `coding_terminal` —
+	// the first bullet of `MCP_SERVER_VERSION`'s list, so 142 registrations become 143 and 20
+	// surface-gated become 21. `MCP_TOOL_ALWAYS_ON` does not move: the registration sits inside
+	// the same `groups.has("coding")` gate as `coding_timeline`.
+	//
+	// It is the name a caching host cannot work around, and this one has no degraded substitute at
+	// all: a finished run's terminal text was reachable through `?terminal=1` on a route MCP never
+	// called, while the only MCP reader served a 400-character tail — 3,200 of 64,000 stored
+	// characters on the session measured on 2026-08-18, i.e. 5%. A host holding the 0.1.11 list
+	// does not know this tool exists and its alternatives are the tail and an empty pane.
+	//
+	// The two description changes that ship with it — `coding_timeline` and
+	// `coding_session_capture` naming it for the finished-session case — are NOT what moved this
+	// hash; descriptions are excluded from the fingerprint on purpose. Appended, never edited in
+	// place: 0.1.11 is published.
+	"0.1.12": "sha256:5c7324bc914e95114c5aada181c29a1c6b3effe8f85ad90ec9529c2807e3fff8",
 };

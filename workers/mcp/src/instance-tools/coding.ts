@@ -77,7 +77,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// made it.
 		server.tool(
 			"coding_timeline",
-			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome. Call it with no cursor and you get the NEWEST page (rows within a page always read oldest→newest), which is what you want when asking what a run just did or where it stopped. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Walk back through history with `before`: pass the previous reply's `oldest_seq`, and `has_more` says whether anything older still exists. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); use coding_session_capture for a live session's full pane. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\").",
+			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome. Call it with no cursor and you get the NEWEST page (rows within a page always read oldest→newest), which is what you want when asking what a run just did or where it stopped. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Walk back through history with `before`: pass the previous reply's `oldest_seq`, and `has_more` says whether anything older still exists. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); for the whole pane use coding_session_capture on a LIVE session and coding_terminal on one that has ENDED — coding_terminal reads the same stored snapshots this feed tails, uncut. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\").",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
@@ -102,6 +102,60 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				// pretty-printed against 40,304 compact (#581). `jsonText` is compact for every tool
 				// since #586 — the `{compact:true}` that used to be here is gone because the option
 				// is gone, not because this tool stopped caring about the 4 KB.
+				return jsonText(await authedCall(path, sessionToken, {}, env));
+			},
+		);
+
+		// ── The pane itself, whole, after the run has ended (#699) ──
+		//
+		// `coding_timeline` above serves a `terminal` row as a 400-character TAIL, and that is right
+		// for a feed: a page holds forty events under `FEED_BYTE_BUDGET`, and forty 8,000-character
+		// panes do not fit in one MCP reply — five of them alone overflow a 64 KiB host limit. But it
+		// meant the engine's own prose, the analysis between the tool calls, was reachable at 5% of
+		// what D1 holds. Measured live on 2026-08-18: an ended session with 8 snapshots stores 64,000
+		// characters and MCP could reach 3,200.
+		//
+		// `coding_session_capture` is not the missing reader and correctly cannot be: the pane is a
+		// runner buffer, so an ENDED session answers with an empty one — verified on the same session,
+		// 65,076 characters live at 09:04 and `pane:""` eight minutes later, while its 16,000 stored
+		// characters never moved. The full text was reachable for eight minutes through a route MCP
+		// does not call, and afterwards through no MCP tool at all.
+		//
+		// So this is a THIRD read, not a flag on either of the other two. A `full_text: true` on
+		// `coding_timeline` would swing one tool's reply by 20x on a boolean, which is the shape #578
+		// measured as a defect on `list_instance_tools`' opt-in path. Two tools, two bounds.
+		//
+		// BOUNDED BY ROWS, and the default is 1. `FEED_BYTE_BUDGET` cannot be reused here because a
+		// byte budget must be free to cut a row, and a snapshot cut mid-line is a different answer
+		// rather than a smaller one. The arithmetic behind the 1: a stored `terminal` row is hard
+		// capped at `TERMINAL_SNAPSHOT_CHARS` = 8,000 by `snapshotForStore` — which is where the
+		// production mean of 8,068 comes from, and the 12,000 max the corpus in
+		// `lib/coding-timeline.ts` records is from rows written before that cap. So one row is ~8 KB of
+		// the 64 KiB a host allows, and even a pathological pane of nothing but control characters (six
+		// bytes each once JSON-escapes them to \u001b) is 48,000 B and still fits. At `limit: 2` that
+		// worst case does not, which is why the default is one rather than two. `max(4)` is
+		// the ceiling a caller may ask for: four realistic panes are ~33 KB, and `hasMore` plus
+		// `before` carry the rest at no risk of a reply the host refuses whole.
+		server.tool(
+			"coding_terminal",
+			"Read a coding session's terminal snapshots in FULL — the engine's own output, uncut. This is the tool for a run that has ENDED: coding_session_capture reads the live pane off the runner, so a finished session answers it with an empty pane, and coding_timeline serves the same snapshots as a 400-character tail (~5% of an 8,000-character pane) because a page of forty events cannot carry forty whole panes. Omit session_id and it resolves the same session coding_timeline would — the newest active one, or the most recently updated when the run has ended. One snapshot per call by default, newest first: pass the reply's `oldestSeq` back as `before` to walk into the history, and `hasMore` says whether anything older is left. Consecutive snapshots overlap heavily by design (each is the tail of the same scrolling pane), so read them newest-first and stop when you have what you need. For the run's narrative — objective, instructions, tool calls, outcome — read coding_timeline; this tool returns only the pane text.",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				instance_id: z.string().describe("Instance ID or slug"),
+				session_id: z.string().optional().describe("A specific coding session. Omit for the newest active one, else the most recently updated — the same rule coding_timeline uses."),
+				before: z.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK through the stored snapshots. Pass the previous reply's `oldestSeq`."),
+				limit: z.number().int().min(1).max(4).optional().describe("Snapshots per call (default 1). A snapshot is up to 8,000 characters and is never truncated, so this is the payload bound — 4 is the ceiling that still fits a calling host's 64 KiB limit."),
+			},
+			async ({ token, instance_id, session_id, before, limit }) => {
+				const sessionToken = tokenFor(token);
+				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(safetyFor(token), "read", "coding_terminal", { instance_id, session_id });
+				if (denied) return denied;
+				const id = await resolveId(sessionToken, instance_id);
+				const qs = new URLSearchParams({ terminal: "1", limit: String(limit ?? 1) });
+				if (session_id) qs.set("session_id", session_id);
+				if (before !== undefined) qs.set("before", String(before));
+				const path = `/v1/instances/${encodeURIComponent(id)}/coding/timeline?${qs.toString()}`;
 				return jsonText(await authedCall(path, sessionToken, {}, env));
 			},
 		);

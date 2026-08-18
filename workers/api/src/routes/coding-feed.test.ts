@@ -301,3 +301,128 @@ describe("the route resolves a session and says what the engine is doing", () =>
 		expect(body.runState).toBe("idle");
 	});
 });
+
+/**
+ * `?terminal=1` — the arm that gives a finished run's pane a reader (#699).
+ *
+ * The feed above is measured against its byte budget and passes; this is the read it deliberately
+ * cannot serve. A `terminal` row is stored whole (8,000 chars, capped by `snapshotForStore`) and
+ * served to this feed as a 400-character tail, so an MCP client could reach 5% of what D1 holds —
+ * measured live on 2026-08-18 at 64,000 stored characters against 3,200 reachable.
+ *
+ * Both arms are driven THROUGH THE ROUTE rather than against `loadTerminalSnapshots` directly. The
+ * store function has had cursor tests since #432; what was missing is that the cursor is reachable
+ * on a session the caller cannot name, which is a property of the resolution above it.
+ */
+describe("?terminal=1 — the stored panes, uncut (#699)", () => {
+	/** A snapshot the size production writes: `TERMINAL_SNAPSHOT_CHARS` exactly. */
+	const pane = (i: number) => `[snapshot ${i}] ${"claude working on the thing\n".repeat(400)}`.slice(0, 8_000);
+
+	async function readTerminal(qs: string) {
+		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?terminal=1${qs}`);
+		return {
+			status: res.status,
+			body: (await res.json()) as {
+				sessionId: string;
+				sessionStatus: string;
+				entries: { seq: number; content: string }[];
+				hasMore: boolean;
+				oldestSeq: number | null;
+				newestSeq: number | null;
+			},
+		};
+	}
+
+	it("reaches all 64,000 stored characters of an ENDED session the caller cannot name, where the feed reaches 3,200", async () => {
+		// The shape of `csess_613d1455-c882-4899-9117-1e3670e94027`, the session #699 measured: eight
+		// `terminal` rows, ended, no active session on the instance. Reconstructed here at the real
+		// sizes rather than hit live — the row count and the 8,000-char row are the measurement.
+		seedSession("csess-done", "ended", "2026-08-18 09:12:00");
+		for (let i = 0; i < 8; i++) await append("csess-done", "terminal", pane(i));
+
+		// G1 — the denominator, before any claim about what is reachable (ADR 0002). A seed that
+		// stored short rows would let every assertion below pass by being small.
+		const stored = d1.sqlite.prepare("SELECT COUNT(*) n, SUM(LENGTH(content)) c FROM coding_timeline WHERE type = 'terminal'").get() as { n: number; c: number };
+		expect(stored).toEqual({ n: 8, c: 64_000 });
+
+		// What the FEED reaches on the same rows: eight 400-character tails. This is the 5%.
+		const feed = await loadTimelineFeed(env, { sessionId: "csess-done", limit: 40 });
+		const feedChars = feed.events.reduce((n, e) => n + e.content.length, 0);
+		expect(feed.events).toHaveLength(8);
+		expect(feedChars).toBe(8 * FEED_TERMINAL_CHARS);
+
+		// What THIS arm reaches, walking back one snapshot at a time from no cursor at all — the
+		// caller names neither a session nor a seq, which is AC1.
+		const seen: { seq: number; content: string }[] = [];
+		let cursor = "";
+		for (let call = 0; call < 8; call++) {
+			const { status, body } = await readTerminal(`&limit=1${cursor}`);
+			expect(status).toBe(200);
+			// Resolution is the feed's own: no active session, so the most recently updated one.
+			expect(body.sessionId).toBe("csess-done");
+			expect(body.sessionStatus).toBe("ended");
+			expect(body.entries).toHaveLength(1);
+			seen.push(body.entries[0]);
+			expect(body.hasMore).toBe(call < 7);
+			cursor = `&before=${body.oldestSeq}`;
+		}
+
+		// Every row, once, uncut — 64,000 characters against the feed's 3,200.
+		const reached = seen.reduce((n, e) => n + e.content.length, 0);
+		expect(new Set(seen.map((e) => e.seq)).size).toBe(8);
+		expect(reached).toBe(64_000);
+		expect(seen.every((e) => e.content.length === 8_000)).toBe(true);
+		// Newest first, and the CONTENT is what was written rather than a tail of it.
+		expect(seen.map((e) => e.content.slice(0, 12))).toEqual([7, 6, 5, 4, 3, 2, 1, 0].map((i) => `[snapshot ${i}]`));
+		// …and the page after the oldest is empty rather than looping.
+		const past = await readTerminal(`&limit=1&before=${seen[7].seq}`);
+		expect(past.body.entries).toEqual([]);
+		expect(past.body.hasMore).toBe(false);
+
+		console.log(
+			`✓ coding_terminal reach: ${reached} of ${stored.c} stored chars across 8 calls; ` +
+				`the same rows through the feed are ${feedChars} chars (${Math.round((feedChars / stored.c) * 100)}%)`,
+		);
+	});
+
+	it("walks `before` back through every snapshot with no overlap and no gap", async () => {
+		// The disjointness arm the forward cursor already carries, applied to this one. Pages of 3
+		// over 8 rows so the last page is partial — a cursor that is off by one shows up there first.
+		seedSession("csess-live", "active", "2026-08-18 09:12:00");
+		for (let i = 0; i < 8; i++) await append("csess-live", "terminal", pane(i));
+
+		const all = (await readTerminal("&limit=4")).body;
+		expect(all.entries).toHaveLength(4);
+
+		const seqs: number[] = [];
+		let cursor = "";
+		for (let page = 0; page < 3; page++) {
+			const { body } = await readTerminal(`&limit=3${cursor}`);
+			seqs.push(...body.entries.map((e) => e.seq));
+			cursor = `&before=${body.oldestSeq}`;
+			expect(body.hasMore).toBe(page < 2);
+		}
+		// Disjoint (no seq twice), complete (all eight), ordered (each page oldest→newest, the
+		// window walking backwards).
+		expect(new Set(seqs).size).toBe(seqs.length);
+		expect([...seqs].sort((a, b) => a - b)).toHaveLength(8);
+		expect(seqs.slice(0, 3)).toEqual([...seqs.slice(0, 3)].sort((a, b) => a - b));
+		expect(Math.min(...seqs.slice(0, 3))).toBeGreaterThan(Math.max(...seqs.slice(3, 6)));
+
+		// The arm does not probe the runner: it reads stored text, and `runState` is coding_timeline's
+		// job. A capture round trip here would cost a subrequest per call to answer nothing.
+		expect(getRunnerConn).not.toHaveBeenCalled();
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("reads a session the caller names, and 404s an instance with none", async () => {
+		expect((await readTerminal("")).status).toBe(404);
+		seedSession("csess-a", "ended", "2026-08-18 09:00:00");
+		seedSession("csess-b", "ended", "2026-08-18 09:30:00");
+		await append("csess-a", "terminal", pane(1));
+		await append("csess-b", "terminal", pane(2));
+		// Named wins over the resolution; without it the newer of the two ended sessions answers.
+		expect((await readTerminal("&session_id=csess-a")).body.sessionId).toBe("csess-a");
+		expect((await readTerminal("")).body.sessionId).toBe("csess-b");
+	});
+});

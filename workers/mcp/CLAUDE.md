@@ -79,23 +79,24 @@ src/
     │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
-    └── coding.ts         system_status + coding_timeline (gated to surfaces:["coding"]) + 3 loop tools
+    └── coding.ts         system_status + coding_timeline + coding_terminal (gated to
+                          surfaces:["coding"]) + 3 loop tools
 ```
 
-**142 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 11 in
+**143 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 11 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 97 across `instance-tools/`. 122 are always registered; 20 are
-surface-gated (apply=4, repo=3, coding=13).
+`storage-tools.ts`, and 98 across `instance-tools/`. 122 are always registered; 21 are
+surface-gated (apply=4, repo=3, coding=14).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 11
-+ 13 + 97 = 142. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 98 = 143. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
 file a tool landed in when nobody decided where it went, and the largest in the repo. That
-86 is history and is not the current count (97); it is kept because it is what makes the
+86 is history and is not the current count (98); it is kept because it is what makes the
 1871 lines legible. The nine ungated groups above are that file split along the
 registration boundaries it already had; the blocks moved verbatim.
 
@@ -104,7 +105,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 `repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
-under `instance-tools/` — 97 of them — to a table of **group, scope, confirmation string,
+under `instance-tools/` — 98 of them — to a table of **group, scope, confirmation string,
 dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the
@@ -136,7 +137,7 @@ tells you exactly what you changed about it.
    refuses.) **`jsonText` is compact and takes no formatting option (#586)** — the reader is
    a host with a byte ceiling, not a person, and the indented default cost ~22% of every
    result and defeated two byte guards in one day. Do not hand-roll
-   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 136 tools through a
+   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 143 tools through a
    real client and fails any result whose text is indented JSON, however it was produced.
 5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
    it, in a comment above the registration (#328). The caller is usually a model: without
@@ -201,7 +202,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 20 tools are surface-gated.
+  given connection, because 21 tools are surface-gated.
 
 ## Bindings and secrets
 

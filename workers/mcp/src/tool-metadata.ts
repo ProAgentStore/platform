@@ -108,6 +108,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_status: "read",
 	coding_repos_list: "read",
 	coding_session_capture: "read",
+	coding_terminal: "read",
 	coding_timeline: "read",
 	coding_sessions_list: "read",
 	connector_status: "read",
@@ -285,7 +286,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 runtime at #696: `coding_session_open`, the opener that lets #408's continuity be
 	// reached from MCP at all. `runtime` and not `write` because it starts a CLI process on
 	// somebody's laptop — the distinction the two classes exist to make.
-	read: 70,
+	// +1 read at #699: `coding_terminal`, which reads stored `coding_timeline` rows and asks no
+	// runner anything — the pane it returns is the one D1 already holds, not a fresh capture.
+	read: 71,
 	write: 42,
 	runtime: 16,
 	destructive: 14,
