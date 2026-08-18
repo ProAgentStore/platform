@@ -18,6 +18,7 @@ import type { Context, Hono } from "hono";
 import { callRunner, getRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured } from "../lib/github-app.js";
 import { engineAuthFor, engineAuthReport, readEngines, type EngineAuthResolved } from "../lib/coding-engines.js";
+import { type TrackedGhGuard, writeEnforcementReport } from "../lib/coding-write-enforcement.js";
 import { codingRunsForSessions, type CodingRunFact } from "../lib/board-runs.js";
 import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
@@ -159,7 +160,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// orphanedTmux/tmuxTotal/pagsTmuxTotal figures described something that could never exist
 		// for these sessions. `engineLabel` replaces `tmuxSession`, which only ever looked like a
 		// tmux target a user could attach to.
-		const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean; authResolved?: EngineAuthResolved }> } | null;
+		const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean; authResolved?: EngineAuthResolved; ghGuard?: TrackedGhGuard }> } | null;
 		if (diagData?.tracked) {
 			for (const t of diagData.tracked) trackedIds.add(t.sessionId);
 		}
@@ -258,21 +259,19 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// thing change", and until #676 nothing on any surface answered it — the registered repo was
 		// a working-directory default that read like a boundary.
 		//
-		// `enforcement` is stated because a half-answer here would be worse than none. This is a
-		// detect-and-halt gate on the acts the Engine reports, NOT a credential the Engine is
-		// confined by: it runs on the owner's machine under the machine's own `gh` login, so a first
-		// wrong-repo write still lands and is then stopped and named. An owner reading "writeScope:
-		// [x]" must not conclude a write to anything else is impossible.
+		// `enforcement` is DERIVED from what the machine reported, never from what the cloud sent
+		// (#679). Until #679 this was the constant `"acts-observed-halt"` — detect-and-halt on the
+		// acts the Engine reports, with the first wrong-repo write still landing. A runner carrying
+		// the `gh` guard refuses that write before it runs; a runner published earlier does not, and
+		// the cloud cannot tell which machine this is except by asking it. `writeEnforcementReport`
+		// is where that judgement lives, with the vocabulary written out.
 		const writeScope = dbRepos.map((r) => r.githubRepo).filter((s): s is string => !!s && s.includes("/"));
 		const githubApp = {
 			configured: githubAppConfigured(env),
 			/** The repositories a write may name. Empty = no GitHub coordinates, so nothing is checked. */
 			writeScope,
-			enforcement: writeScope.length ? "acts-observed-halt" : "none",
-			/** Only a stream-json engine reports acts (#294), so on any other engine this sees nothing. */
-			enforcementNote: writeScope.length
-				? "A write naming a repository outside this list halts the run and is recorded. The first such write still LANDS — the engine uses this machine's own git and gh credentials, which are not scoped."
-				: "No GitHub repository is registered for this instance, so write scope is not checked.",
+			/** Only a stream-json engine reports acts (#294), so on any other engine the halt half sees nothing. */
+			...writeEnforcementReport(writeScope, diagData?.tracked ?? []),
 		};
 
 		// 6. Auto-detected issues

@@ -112,6 +112,31 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		expect(vi.mocked(runner.callRunner).mock.calls[0][1]).toBe("/coding/start");
 	});
 
+	it("sends the session's gh write scope to the runner, from D1 and not from the checkout (#679)", async () => {
+		// The wiring assertion, not the guard's own. `StartCodingInput.ghScope` is optional, and an
+		// optional field with no writer is the #570/#591 class this repo keeps paying for: the
+		// runner would install no guard, `coding_diagnostics` would honestly report "unguarded"
+		// forever, and everything would look implemented.
+		//
+		// It is sent from HERE rather than derived on the machine because the Engine has a shell in
+		// that checkout and could rewrite `git remote origin` — a locally-derived scope is a scope
+		// the Engine can widen itself.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_scope"));
+		await ensureActiveSession(env, "inst", "u", { ...repo, githubRepo: "ProAgentStore/platform" });
+		const start = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start");
+		expect((start?.[2] as { ghScope?: string[] }).ghScope).toEqual(["ProAgentStore/platform"]);
+	});
+
+	it("sends NO scope for a repo with no GitHub coordinates — absent means 'not said' (#679)", async () => {
+		// A local-only repo has nothing to compare a write against. Sending `[]` would make the
+		// runner refuse every `gh` write in that session, which is the failure direction that
+		// breaks working sessions rather than the one that leaves a known gap.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_local"));
+		await ensureActiveSession(env, "inst", "u", repo); // fixture has workdir, no githubRepo
+		const start = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start");
+		expect((start?.[2] as { ghScope?: string[] }).ghScope).toBeUndefined();
+	});
+
 	it("reports opened:true only for a session it created and started", async () => {
 		// The other direction: a session the run opened IS the run's to clean up, and if this
 		// reported false nothing would ever close it — the leak #275 is about.

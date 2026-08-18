@@ -1,8 +1,8 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand, mergeEnv } from "./headless.js";
+import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand } from "./headless.js";
 import { RESULT_RENDERED_MAX, toolResultBudget } from "./transcript-lines.js";
 
 /**
@@ -63,6 +63,11 @@ rl.on("line", (line) => {
   if (msg.type !== "user") return;
   process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, result: "the engine could not complete the turn" }) + "\\n");
 });
+`;
+
+/** A raw CLI that reports the `gh` its own PATH resolves — to prove the guard reaches the spawn. */
+const FAKE_WHICH_GH = `#!/bin/sh
+printf 'resolved: %s\\n' "$(command -v gh || echo none)"
 `;
 
 /** A raw CLI that prints its own argv — to prove preset flags reach the engine verbatim. */
@@ -348,6 +353,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let argvBin: string;
 	let wedgedBin: string;
 	let refuserBin: string;
+	let whichGhBin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-raw-"));
@@ -357,18 +363,21 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		argvBin = join(dir, "fake-argv.js");
 		wedgedBin = join(dir, "fake-wedged.js");
 		refuserBin = join(dir, "fake-refuser.js");
+		whichGhBin = join(dir, "fake-which-gh.sh");
 		writeFileSync(codexBin, FAKE_CODEX);
 		writeFileSync(slowBin, FAKE_SLOW);
 		writeFileSync(pauserBin, FAKE_PAUSER);
 		writeFileSync(argvBin, FAKE_ARGV);
 		writeFileSync(wedgedBin, FAKE_WEDGED);
 		writeFileSync(refuserBin, FAKE_REFUSER);
+		writeFileSync(whichGhBin, FAKE_WHICH_GH);
 		chmodSync(codexBin, 0o755);
 		chmodSync(slowBin, 0o755);
 		chmodSync(pauserBin, 0o755);
 		chmodSync(argvBin, 0o755);
 		chmodSync(wedgedBin, 0o755);
 		chmodSync(refuserBin, 0o755);
+		chmodSync(whichGhBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -497,6 +506,44 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.alive).toBe(true); // ...and a restart brings it back
 		s.stop();
 	}, 25_000);
+
+	it("spawns the engine with the `gh` guard ahead of the real binary on PATH (#679)", async () => {
+		// The wiring assertion. `installGhGuard` is unit-tested on its own; what this pins is that
+		// the shim actually reaches the process the Engine runs as — the whole containment is a
+		// `PATH` entry, and a `PATH` entry that never gets applied is indistinguishable from a
+		// tested feature that does nothing.
+		const guardRoot = join(dir, "guard-e2e");
+		const fakeGhDir = join(dir, "ghbin");
+		mkdirSync(fakeGhDir, { recursive: true });
+		writeFileSync(join(fakeGhDir, "gh"), "#!/bin/sh\nexit 0\n");
+		chmodSync(join(fakeGhDir, "gh"), 0o755);
+		const s = new HeadlessSession({
+			id: "gh-guard-e2e", workDir: dir, clientType: "codex", command: "codex", bin: whichGhBin,
+			ghScope: ["ProAgentStore/platform"], ghGuardRoot: guardRoot,
+			env: { PATH: `${fakeGhDir}:${process.env.PATH ?? ""}` },
+		});
+		s.start();
+		s.input("go");
+		await until(() => s.snapshot().includes("resolved: "), 12_000, "the engine to report its gh");
+		// It resolved OUR shim, not the fake real one two entries along.
+		expect(s.snapshot()).toContain(`resolved: ${guardRoot}`);
+		expect(s.ghGuard).toMatchObject({ installed: true, scope: ["proagentstore/platform"] });
+		expect(s.ghGuard.gaps.join(" ")).toContain("git push");
+		s.stop();
+	}, 20_000);
+
+	it("spawns UNGUARDED when the platform named no scope, and says which way it failed (#679)", async () => {
+		// An older cloud sends no scope. The guard must fail OPEN: a runner that could not install
+		// it still has to run the Engine, and a broken `gh` would be far worse than the gap.
+		const guardRoot = join(dir, "guard-e2e-none");
+		const s = new HeadlessSession({ id: "gh-guard-none", workDir: dir, clientType: "codex", command: "codex", bin: whichGhBin, ghGuardRoot: guardRoot });
+		s.start();
+		s.input("go");
+		await until(() => s.snapshot().includes("resolved: "), 12_000, "the engine to report its gh");
+		expect(s.snapshot()).not.toContain(guardRoot);
+		expect(s.ghGuard).toMatchObject({ installed: false, reason: "no-scope" });
+		s.stop();
+	}, 20_000);
 
 	it("passes EVERY preset param through to the engine, with the turn text last", async () => {
 		// "It should launch with any params provided" — the preset command is a prefix and the
@@ -808,35 +855,6 @@ function readState(path: string, id: string): string | null {
 		return null;
 	}
 }
-
-describe("mergeEnv — the platform's engine choice must beat the machine's", () => {
-	it("REMOVES a key the platform sends as empty", () => {
-		// The whole reason this exists: a developer with ANTHROPIC_API_KEY exported handed it to
-		// every engine, and Claude Code prefers an API key over the subscription token — so
-		// picking "subscription" billed per token anyway, silently.
-		const out = mergeEnv({ ANTHROPIC_API_KEY: "sk-ant-real", PATH: "/usr/bin" }, { CLAUDE_CODE_OAUTH_TOKEN: "tok", ANTHROPIC_API_KEY: "" });
-		expect("ANTHROPIC_API_KEY" in out).toBe(false);
-		expect(out.CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
-	});
-
-	it("keeps the rest of the machine env untouched", () => {
-		const out = mergeEnv({ PATH: "/usr/bin", HOME: "/Users/x" }, { CLAUDE_CODE_OAUTH_TOKEN: "tok" });
-		expect(out.PATH).toBe("/usr/bin");
-		expect(out.HOME).toBe("/Users/x");
-	});
-
-	it("still lets api-key mode SET the key", () => {
-		// Removal must not become a blanket ban — choosing api-key mode is legitimate.
-		const out = mergeEnv({}, { ANTHROPIC_API_KEY: "sk-ant-chosen" });
-		expect(out.ANTHROPIC_API_KEY).toBe("sk-ant-chosen");
-	});
-
-	it("passes the machine env straight through when the platform sends nothing", () => {
-		// "machine" auth: PAGS injects nothing and must not strip anything either.
-		const out = mergeEnv({ ANTHROPIC_API_KEY: "sk-ant-machine" }, undefined);
-		expect(out.ANTHROPIC_API_KEY).toBe("sk-ant-machine");
-	});
-});
 
 describe("HeadlessSession — a finishing turn must not clobber a newer one", () => {
 	let dir: string;

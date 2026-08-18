@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveEngineAuth } from "./engine-auth.js";
-import { mergeEnv } from "./headless.js";
+import { mergeEnv } from "./engine-env.js";
 
 // #248 — the money question ("subscription, or am I billing per token?") answered from the env the
 // process is actually spawned with, not from the setting that was supposed to produce it.

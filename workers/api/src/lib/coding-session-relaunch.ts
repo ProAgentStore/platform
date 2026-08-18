@@ -46,6 +46,10 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 		tokenUsername: input.tokenUsername,
 		clientType: input.clientType,
 		command: sess?.launchCommand || undefined,
+		// Resolved fresh here for the same reason the command and the env are (#679): a relaunch
+		// that omitted the scope would silently restore an UNGUARDED engine after every runner
+		// restart, which is exactly when nobody is looking.
+		ghScope: repo?.githubRepo ? [repo.githubRepo] : undefined,
 		env: engineEnv,
 	});
 }

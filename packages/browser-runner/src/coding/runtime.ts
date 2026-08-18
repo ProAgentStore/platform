@@ -11,6 +11,7 @@ import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type Repo
 import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
+import type { GhGuardReport } from "./gh-guard.js";
 
 /**
  * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
@@ -50,6 +51,15 @@ export interface StartCodingInput {
 	 * exactly what every re-open did before this existed.
 	 */
 	resumeFrom?: string;
+	/**
+	 * Repositories a `gh` WRITE from this session may name (#679).
+	 *
+	 * Comes from the CLOUD, never from the checkout: the Engine has a shell in that checkout and
+	 * could rewrite `git remote origin`, so a scope derived locally would be a scope the Engine can
+	 * widen itself. Absent (an older cloud) means the guard is not installed — "not said" is not
+	 * "allow nothing", and refusing every write on an absent field would break those sessions.
+	 */
+	ghScope?: string[];
 }
 
 /**
@@ -244,6 +254,7 @@ export class CodingRuntime {
 				env: input.env,
 				statePath: defaultStatePath(this.reposBaseDir),
 				resumeFrom: input.resumeFrom,
+				ghScope: input.ghScope,
 				bin: input.bin,
 			});
 			this.sessions.set(input.sessionId, session);
@@ -377,6 +388,8 @@ export class CodingRuntime {
 		takeover: boolean;
 		authResolved: EngineAuthResolved;
 		engineRuntime: "child-process";
+		/** What the `gh` write guard did on this machine (#679) — including what it does NOT stop. */
+		ghGuard: GhGuardReport;
 	}> {
 		return [...this.sessions.entries()].map(([sessionId, s]) => ({
 			sessionId,
@@ -390,6 +403,7 @@ export class CodingRuntime {
 			takeover: this.takeovers.has(sessionId),
 			authResolved: s.authResolved,
 			engineRuntime: s.engineRuntime,
+			ghGuard: s.ghGuard,
 		}));
 	}
 

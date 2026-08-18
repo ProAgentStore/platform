@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { payerForEngineAuth } from "./usage-payer.js";
 import { resolveEngineAuth } from "../../../../packages/browser-runner/src/coding/engine-auth.js";
-import { mergeEnv } from "../../../../packages/browser-runner/src/coding/headless.js";
+import { mergeEnv } from "../../../../packages/browser-runner/src/coding/engine-env.js";
 import type { Env } from "../types.js";
 
 /**

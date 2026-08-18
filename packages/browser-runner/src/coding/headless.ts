@@ -4,28 +4,9 @@ import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
+import { engineSpawnEnv, mergeEnv } from "./engine-env.js";
+import { type GhGuardReport, ghGuardStatus } from "./gh-guard.js";
 
-/**
- * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
- * REMOVE rather than "set to empty".
- *
- * Needed because the machine env is inherited wholesale: a developer with ANTHROPIC_API_KEY in
- * their shell handed it to every engine, and Claude Code prefers an API key over the
- * subscription token — so choosing "subscription" injected CLAUDE_CODE_OAUTH_TOKEN and then
- * silently lost, billing per token anyway. Without a way to express removal the setting could
- * not mean what it said.
- */
-export function mergeEnv(
-	base: NodeJS.ProcessEnv,
-	overlay: Record<string, string> | undefined,
-): NodeJS.ProcessEnv {
-	const out: NodeJS.ProcessEnv = { ...base };
-	for (const [k, v] of Object.entries(overlay ?? {})) {
-		if (v === "") delete out[k];
-		else out[k] = v;
-	}
-	return out;
-}
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
@@ -88,6 +69,10 @@ export interface HeadlessSessionConfig {
 	bin?: string;
 	/** Override the one-shot turn ceiling in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_MS}. */
 	maxTurnMs?: number;
+	/** Repositories a `gh` WRITE from this session may name (#679). Absent = the guard is not installed. */
+	ghScope?: string[];
+	/** Override where the generated `gh` guard is written (tests). Defaults to the runner's config dir. */
+	ghGuardRoot?: string;
 }
 
 type Run = "idle" | "thinking";
@@ -252,7 +237,17 @@ export class HeadlessSession {
 	 * Presence only: no key or token value leaves this class.
 	 */
 	get authResolved(): EngineAuthResolved {
-		return resolveEngineAuth(this.config.clientType, mergeEnv(process.env, this.config.env) as Record<string, string | undefined>);
+		return resolveEngineAuth(this.config.clientType, this.spawnEnv as Record<string, string | undefined>);
+	}
+
+	/** The env every turn is spawned with — one expression, three call sites. See engine-env.ts. */
+	private get spawnEnv(): NodeJS.ProcessEnv {
+		return engineSpawnEnv(this.config.env, this.config.ghScope, this.config.ghGuardRoot);
+	}
+
+	/** What the `gh` guard actually did on this machine (#679) — reported, never assumed. */
+	get ghGuard(): GhGuardReport {
+		return ghGuardStatus(this.config.ghScope, mergeEnv(process.env, this.config.env), this.config.ghGuardRoot);
 	}
 
 	/**
@@ -430,7 +425,7 @@ export class HeadlessSession {
 
 		const proc = spawn(this.cmdBin, args, {
 			cwd: this.config.workDir,
-			env: mergeEnv(process.env, this.config.env),
+			env: this.spawnEnv,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.proc = proc;
@@ -517,7 +512,7 @@ export class HeadlessSession {
 		this.turnLastLine = "";
 		const proc = spawn(this.cmdBin, [...this.cmdArgs, text], {
 			cwd: this.config.workDir,
-			env: mergeEnv(process.env, this.config.env),
+			env: this.spawnEnv,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		// A turn already running is aborted before its replacement starts: `input()` accepts a turn

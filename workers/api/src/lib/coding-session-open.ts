@@ -175,6 +175,13 @@ export async function startSessionOnRunner(
 			// every re-open had before the field existed. That degradation is why the notice reads
 			// the ANSWER below instead of assuming this request was honoured.
 			resumeFrom: opts?.resumeFrom || undefined,
+			// What a `gh` WRITE from this session may name (#679). The session's own registered
+			// repository, sent from HERE rather than derived on the machine: the Engine has a shell
+			// in that checkout and could rewrite `git remote origin`, so a locally-derived scope is
+			// one the Engine can widen itself. A runner older than #679 ignores it and behaves as it
+			// does today, which is why `coding_diagnostics` reports what the MACHINE confirmed rather
+			// than what was sent.
+			ghScope: repo.githubRepo ? [repo.githubRepo] : undefined,
 			env: engineEnv,
 		});
 		await recordStartVerdict(env, conn, repo);
