@@ -140,4 +140,13 @@ describe("renderPaneForPilot — the Pilot is told the size of its own blind spo
 		// …and the tail is still all there, unmodified.
 		expect(out.endsWith("A".repeat(PILOT_PANE_CHARS))).toBe(true);
 	});
+
+	it("points at the reply channel, not at a bounded slice (#700)", () => {
+		// This banner rides in the same request as the system prompt, so its remedy has to be the
+		// same one. "Ask for a bounded slice" told the Pilot to narrow a shell command, which cannot
+		// help: the runner has already cut the tool result to 240 characters before the pane exists.
+		const out = renderPaneForPilot("B".repeat(PILOT_PANE_CHARS + 10));
+		expect(out).toMatch(/put what you need in its REPLY/);
+		expect(out).not.toMatch(/bounded slice/);
+	});
 });

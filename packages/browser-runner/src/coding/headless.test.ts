@@ -113,6 +113,45 @@ process.stdout.write("wedged: " + (process.argv[2] || "") + "\\n");
 setInterval(() => {}, 1000);
 `;
 
+/**
+ * ~4,000 characters of source, in the shape the Pilot spent twelve rounds trying to read (#700):
+ * 92 indented lines, each individually identifiable, so a truncation can be located to the line.
+ */
+const FIXTURE_FILE_LINES = 92;
+function fixtureFile(): string {
+	const lines: string[] = [];
+	for (let i = 1; i <= FIXTURE_FILE_LINES; i++) {
+		lines.push(`  const marker${String(i).padStart(3, "0")} = "${"x".repeat(20)}";`);
+	}
+	return lines.join("\n");
+}
+
+/**
+ * A stream-json engine that returns the SAME file two ways (#700).
+ *
+ * A turn mentioning "quote" is answered in the engine's own assistant TEXT block; any other turn
+ * routes the file through a `Read` tool_result, which is what every `cat`/`sed`/`head`/`grep`
+ * instruction produces. The file content is byte-identical on both paths, so the only difference
+ * the test can observe is what `toolResult()` does to one of them.
+ */
+const FAKE_CLAUDE_FILE = `#!/usr/bin/env node
+const FILE = ${JSON.stringify(fixtureFile())};
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-file-1" }) + "\\n");
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  const asked = (msg.message?.content || []).map((b) => b.text || "").join(" ");
+  if (asked.indexOf("quote") >= 0) {
+    process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: FILE }] } }) + "\\n");
+  } else {
+    process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "web/e2e/helpers.ts" } }] } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "r1", content: FILE }] } }) + "\\n");
+  }
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }) + "\\n");
+});
+`;
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, timeoutMs = 8000, description = "condition"): Promise<void> {
 	const start = Date.now();
@@ -546,6 +585,85 @@ describe("HeadlessSession — a stream-json turn reports its own error (#545)", 
 		await until(() => s.lastTurn !== null, 8000, "the errored result event");
 		expect(s.lastTurn).toMatchObject({ verdict: "failed", exitCode: null, signal: null });
 		expect(s.lastTurn?.detail).toContain("could not complete the turn");
+		s.stop();
+	}, 15_000);
+});
+
+/**
+ * What a file's text loses on each of the two routes into the pane (#700).
+ *
+ * The run this pins spent twelve of sixteen Pilot decisions rephrasing one request — `cat`, then
+ * `sed -n '1,100p'`, then `cat -n | head -60`, then "print every character" — because the file
+ * never arrived and nothing told it why. Every one of those routes through a tool_result, and
+ * {@link toolResult} caps it at 240 characters and collapses `\s+` to a single space BEFORE the
+ * pane exists, so all four produce the same size and the same shape. The search space was empty.
+ *
+ * These two tests measure both routes against the SAME ~4,000-character file, because the prompt
+ * fix is only honest if the channel it points at is actually wider. The reply-text route is the
+ * one the prompt now names; if this pair ever stops holding, that advice is a placebo.
+ */
+describe("HeadlessSession — how much of a file reaches the pane (#700)", () => {
+	let dir: string;
+	let bin: string;
+	const file = fixtureFile();
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-file-dump-"));
+		bin = join(dir, "fake-claude-file.js");
+		writeFileSync(bin, FAKE_CLAUDE_FILE);
+		chmodSync(bin, 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("a tool_result loses ~94% of it — 240 chars, on one line, whatever command produced it", async () => {
+		expect(file.length).toBeGreaterThan(4000);
+		const s = new HeadlessSession({ id: "file-tool", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+
+		s.input("read web/e2e/helpers.ts"); // no "quote" — the engine uses its Read tool
+		await until(() => s.snapshot().includes("↳"), 8000, "the tool result line");
+		const pane = s.snapshot();
+
+		const resultLine = pane.split("\n").find((l) => l.startsWith("  ↳"));
+		expect(resultLine).toBeDefined();
+		// `"  ↳✓ "` (6) + the 240-char cap + the ellipsis. 246 is the maximum observed in production
+		// across 251 sampled result lines, and this is where that number comes from.
+		expect((resultLine as string).length).toBeLessThanOrEqual(246);
+		expect(resultLine as string).toMatch(/…$/);
+
+		// The head survives; everything past ~6 lines of a 92-line file does not.
+		expect(resultLine as string).toContain("marker001");
+		expect(resultLine as string).not.toContain("marker010");
+		expect(pane).not.toContain("marker092");
+
+		// And line structure is gone: not one line of the file survives as its own line, so
+		// `cat -n`, `sed -n '1,50p'` and `head -60` are indistinguishable at this resolution.
+		expect(pane.split("\n").some((l) => l.startsWith("  const marker"))).toBe(false);
+		s.stop();
+	}, 15_000);
+
+	it("the engine's own REPLY text arrives whole — the one channel a file can travel", async () => {
+		const s = new HeadlessSession({ id: "file-reply", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+
+		s.input("quote web/e2e/helpers.ts verbatim in your reply");
+		await until(() => s.snapshot().includes("marker092"), 8000, "the engine's quoted reply");
+		const pane = s.snapshot();
+
+		// Verbatim, with the newlines intact — `push()` stores the block as ONE transcript entry
+		// (timestamp-prefixed) and the only bound above it counts LINES, not characters. The single
+		// loss is `block.text.trim()` on the whole block, i.e. the leading indent of the first line
+		// and any trailing blank; the 4,000 characters in between are untouched.
+		expect(pane).toContain(file.trim());
+		expect(file.trim().length).toBeGreaterThan(4000);
+		expect(pane.split("\n").filter((l) => l.includes("const marker")).length).toBe(FIXTURE_FILE_LINES);
+
+		// The size that matters is the size the Pilot reads: PILOT_PANE_CHARS is 6,000 and the pane
+		// is well inside it, so this file reaches the decision in full rather than as a 240-char head.
+		expect(pane.length).toBeLessThan(6000);
+		expect(pane.length).toBeGreaterThan(4000);
 		s.stop();
 	}, 15_000);
 });

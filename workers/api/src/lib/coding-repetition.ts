@@ -16,15 +16,38 @@
  *
  * CAUSE B — an instruction the engine ANSWERED, which the Pilot could not see. Three escalating
  * "show me the full contents of this file" steps while the capture shows the engine complying every
- * time. The Pilot reads {@link PILOT_PANE_CHARS} characters of terminal while instructing a dump of
- * roughly twice that, so its own instruction is unverifiable by construction — and each repeat
- * pushes the answer further out of the window.
+ * time.
+ *
+ * CORRECTION (#700). This paragraph used to attribute B to {@link PILOT_PANE_CHARS}: "the Pilot
+ * reads 6,000 characters of terminal while instructing a dump of roughly twice that, so its own
+ * instruction is unverifiable by construction". That is the wrong limit, and a later run is the
+ * disproof — the dump was never in the pane at all, in any form, truncated or otherwise.
+ *
+ * The BINDING limit is in the runner, not here: `toolResult()` in
+ * `packages/browser-runner/src/coding/headless.ts` cuts every `tool_result` to **240 characters**
+ * and collapses `\s+` to a single space, before the pane is ever assembled. Measured across 20
+ * sessions of one instance, 150 of 251 stored tool-result lines (59.8%) hit that cap — 102 `Bash`,
+ * 43 `Read` — with a maximum line length of 246 (`"  ↳✓ "` + 240). Because the cap is applied to
+ * the RESULT and not to the request, `cat`, `sed -n '1,50p'`, `head -60` and `grep` produce
+ * byte-identical size and shape, so no rephrasing can widen it. The run that filed #700 spent
+ * twelve of its sixteen decisions on exactly that empty search space.
+ *
+ * {@link PILOT_PANE_CHARS} is the SECONDARY limit: real, and the reason a long narrative scrolls
+ * away, but not the one that stops a file arriving. The channel that IS wide enough is the engine's
+ * own assistant text, which `headless.ts` pushes to the transcript untruncated — pinned by
+ * "how much of a file reaches the pane (#700)" in `headless.test.ts`, which measures both routes
+ * against the same ~4,000-character file. The prompt in `coding-loop.ts` now names that channel
+ * instead of advising a bounded slice, which was a remedy for a limit that was not the limit.
+ *
+ * Deliberately NOT done in #700, and still open: raising the 240 cap (per-tool, so `Read`/`Bash`
+ * keep the framing `engine-tool-calls.ts` parses) and no longer collapsing whitespace. Both are
+ * runner changes, so they reach a machine only via a CLI version bump.
  *
  * {@link repetitionVerdict} bounds A (and any repeat whose payload recurs). It does NOT catch B as
- * observed: those three instructions are paraphrases, not repeats, and no honest normalisation of
- * our own prose unifies "read the full contents of X and Y" with "show me the full contents of X —
- * all 366 lines". B is addressed at its cause instead, by {@link renderPaneForPilot}: state the
- * measurement, so "I have not been answered" stops being an available reading of the evidence.
+ * observed: those instructions are paraphrases, not repeats, and no honest normalisation of our own
+ * prose unifies "read the full contents of X and Y" with "show me the full contents of X — all 366
+ * lines". B is addressed at its cause instead: {@link renderPaneForPilot} states the measurement,
+ * and the prompt states the bound that actually binds.
  */
 
 /**
@@ -192,7 +215,10 @@ export function renderPaneForPilot(pane: string, limit = PILOT_PANE_CHARS): stri
 	return (
 		`[${hidden.toLocaleString("en-US")} earlier characters of this terminal are NOT shown — you are reading the last ` +
 		`${limit.toLocaleString("en-US")} of ${pane.length.toLocaleString("en-US")}. Output longer than that can never be read in full here, ` +
-		"and re-sending the instruction that produced it only pushes it further away. Ask for a bounded slice instead.]\n" +
+		// NOT "ask for a bounded slice" any more (#700): a narrower shell command changes nothing,
+		// because the runner has already cut the tool result to 240 characters. Pointing at the
+		// channel that does work keeps this banner from contradicting the system prompt above it.
+		"and re-sending the instruction that produced it only pushes it further away. Ask the engine to put what you need in its REPLY instead.]\n" +
 		pane.slice(-limit)
 	);
 }

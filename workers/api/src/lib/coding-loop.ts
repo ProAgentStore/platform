@@ -539,7 +539,19 @@ export function systemPrompt(goal: CodingGoal): string {
 		// answer whose start had scrolled past read as an answer that never came — and the only move
 		// that reading suggests is to ask again, which pushes it further out. This states the
 		// measurement; renderPaneForPilot states the per-decision number on the pane itself.
-		`- You see only the LAST ~${PILOT_PANE_CHARS} characters of the terminal, never all of it. An instruction whose output is longer than that can never be verified by you: ask for a bounded slice (a line range, a grep, head/tail) rather than a full dump, and never re-send an instruction hoping earlier output will come back — it will not.`,
+		`- You see only the LAST ~${PILOT_PANE_CHARS} characters of the terminal, never all of it, and re-sending an instruction hoping earlier output will come back does not work — it will not come back.`,
+		// WHAT A TOOL RESULT COSTS (#700). The bullet above used to end "ask for a bounded slice (a
+		// line range, a grep, head/tail) rather than a full dump", and that advice cannot work: the
+		// runner truncates EVERY tool_result to 240 characters and collapses all whitespace before
+		// the pane exists (`headless.ts` `toolResult()`), so `cat`, `sed -n '1,50p'`, `head -60` and
+		// `grep` arrive at identical size and identical shape. One live run spent twelve of its
+		// sixteen decisions searching that empty space, and the twelfth concluded — reasonably, on
+		// the evidence in front of it — that "the CLI is summarizing file contents". It was not. The
+		// bound is the runner's, it is 240 and not 6,000, and it does not move with the range asked
+		// for. So state the real bound, and name the one channel that has full fidelity: the engine's
+		// assistant text is pushed to the transcript untruncated (pinned in headless.test.ts #700).
+		"- A tool's OUTPUT reaches you cut to ~240 characters on a single line with all newlines and indentation collapsed, whatever command produced it. `cat`, `sed -n '1,50p'`, `head -60` and `grep` all arrive the same size and the same shape, so narrowing the range will not help and NO shell command can show you the contents of a file.",
+		"- The engine's own REPLY text is NOT truncated. To learn what is in a file, ask the engine to answer you with it — \"quote lines 1-40 of src/x.ts verbatim in your reply\" — or ask it a question about the file and use its answer. Never re-ask for a dump in a different shell command; that is the same request with the same bound.",
 		"",
 		"Never output step-by-step thinking; just call one tool.",
 	);

@@ -499,13 +499,36 @@ describe("an instruction that speaks for the owner is stamped where it is SAID (
 
 describe("systemPrompt — the Pilot is told the size of its own window (#522 cause B)", () => {
 	it("states the character limit and that re-sending will not bring earlier output back", () => {
-		// The mechanism: the Pilot reads the last 6,000 characters while instructing a dump of roughly
-		// twice that, so its own instruction is unverifiable by construction — and the only move that
-		// "I have not been answered" suggests is to ask again, which pushes the answer further out.
+		// The mechanism: the Pilot reads the last 6,000 characters, so an answer whose start has
+		// scrolled past reads as an answer that never came — and the only move that reading suggests
+		// is to ask again, which pushes it further out.
 		const p = systemPrompt(GOAL);
 		expect(p).toMatch(/You see only the LAST ~6000 characters of the terminal/);
-		expect(p).toMatch(/ask for a bounded slice/);
-		expect(p).toMatch(/never re-send an instruction hoping earlier output will come back/);
+		expect(p).toMatch(/re-sending an instruction hoping earlier output will come back/);
+	});
+});
+
+describe("systemPrompt — the Pilot is told the bound that actually binds (#700)", () => {
+	it("states the ~240-character tool-result cap and that no shell command gets round it", () => {
+		// The advice this replaced — "ask for a bounded slice (a line range, a grep, head/tail)" —
+		// pointed at the 6,000-char pane, which is not the limit that stops a file arriving. The
+		// runner cuts every tool_result to 240 characters and collapses its whitespace, so all four
+		// of those commands land identically. One run spent twelve of sixteen decisions on that.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/~240 characters on a single line/);
+		expect(p).toMatch(/newlines and indentation collapsed/);
+		expect(p).toMatch(/NO shell command can show you the contents of a file/);
+		// And the old, impossible remedy is gone rather than merely outnumbered.
+		expect(p).not.toMatch(/bounded slice/);
+	});
+
+	it("names the reply-text channel, which is the one that is not truncated", () => {
+		// Verified in the runner's own harness (headless.test.ts, "how much of a file reaches the
+		// pane"): the same ~4,000-character file arrives whole as assistant text and as 240
+		// characters on one line as a tool_result. Without that, this advice would be a placebo.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/REPLY text is NOT truncated/);
+		expect(p).toMatch(/verbatim in your reply/);
 	});
 });
 
