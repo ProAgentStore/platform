@@ -4,6 +4,7 @@ import { decideWithinBudget } from "../lib/apply-decide-budget.js";
 import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { commitGuardSpec } from "../lib/commit-guard.js";
+import { fabricationBlockReason } from "../lib/fabrication-guard.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { instanceRunLink } from "../lib/console-links.js";
@@ -247,6 +248,38 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				const blocked = job.dryRun ? dryRunBlockReason(a as { action?: string; name?: string }, lastSnapshot) : null;
 				if (blocked) {
 					return { url: "", challenge: null as string | null, error: blocked };
+				}
+				// The OTHER promise the prompt made alone (#643): "NEVER invent data" and the EEO
+				// decline rule were sentences in `applySystemPrompt` and nothing else — `job.candidate`
+				// was read in exactly one place in the Worker, the line that renders it INTO that
+				// prompt. This is the same shape as the block above and for the same stated reason: a
+				// prompt cannot verify a prompt, and this one lands on a real employer's form under
+				// the owner's name. Deliberately NOT gated on `job.dryRun` like the block above: a
+				// rehearsal is not when fabrication matters, a real submission is.
+				//
+				// It REFUSES rather than substituting a correct value. A silent correction would be a
+				// second invisible behaviour on the exact path this exists to make visible; a refusal
+				// is a fact the loop already knows how to act on (it comes back as a failed action,
+				// which the prompt answers with `request_user_info`).
+				const unsourced = fabricationBlockReason(a, job, lastSnapshot);
+				if (unsourced) {
+					// Observable, through the channel this path already writes to (#643): the refusal
+					// comes back as an action error, which the loop emits as `agent.action_failed` —
+					// but that reads as "Playwright couldn't", not "the agent made this up". So the
+					// unsourced case gets its own `agent_events` row, at `warn`, carrying the value it
+					// tried to write. Redacted like every other sink here (#631), and best-effort: an
+					// events blip must not fail the step whose refusal already happened.
+					await logEvent(env, {
+						source: "apply",
+						event: "apply.unsourced_value",
+						level: "warn",
+						message: redact(`Refused an unsourced value: ${describeAction(a)}`).slice(0, 300),
+						userId,
+						instanceId,
+						traceId: taskId,
+						context: { action: a.action, name: a.name ?? "", value: redact(String(a.text ?? "")).slice(0, 120), reason: unsourced.slice(0, 200) },
+					}).catch(() => undefined);
+					return { url: "", challenge: null as string | null, error: unsourced };
 				}
 				try {
 					// Pass resumePath so the runner arms file-chooser auto-attach (résumé
