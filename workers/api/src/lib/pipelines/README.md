@@ -100,3 +100,35 @@ the size that used to kill the run. The four expressibility gaps the capstone fi
 access, `enrich`-merge, and type-predicate `getPath` — each useful well beyond this pipeline. The
 same `enrich` primitive also makes the #99 socials/email stage expressible. None of it touched
 the running lead-finder agent; the lead-finder class is now buildable with zero bespoke code.
+
+## `lead-outreach.json` — the second link of the chain (#706)
+
+The `draft_outreach` pipeline of the **Lead Outreach Assistant** (`lead-outreach-tj6qrr`). Lead
+Finder's `dedupe_upsert` emits `lead.created`; the pump (`agent_connections`) routes that record to
+this instance and runs this pipeline with the record's fields as params. Three steps, all core step
+library, all instance-local:
+
+`map` (shape the event payload into a lead record, `status: "new"`) → `ai_generate` (draft the
+message with the owner's BYOK model, onto `draft_message`) → `dedupe_upsert` (into the `prospects`
+collection, keyed by `place_id`, `mode: "update"` so a re-delivery revises rather than duplicates).
+
+It **emits nothing and reaches no connector** — which is what the storefront's "Draft-only — never
+sends" rests on, and why the seed declares no `capabilities.tools` (there is nothing gated to
+declare, and a declared list would replace the permissive per-surface default). Both facts are
+asserted against the real registry in `seed-drift.test.ts`.
+
+**The file name is the agent's; the KEY is the pipeline's.** It is filed under
+`config.pipelines.draft_outreach`, because `loadPipeline` resolves by key and every run row,
+connection and console line in production says `draft_outreach`.
+
+### Why it is here at all
+
+Until 2026-08-18 this definition existed in exactly one place — instance data on
+`3c09069a-e866-4218-978e-569f62f4ab10` — with no reference JSON, no importer, no test, and an empty
+`agents.config`. A new subscriber therefore got an inert agent, and the platform's only live
+demonstration of agent-to-agent choreography (100+ completed runs) was one cancelled subscription
+from unrecoverable. It was read back off the live instance via the #464 read path and committed
+verbatim; migration `0132` seeds it onto the agent row, and `lead-outreach.test.ts` drives it
+end-to-end through the real runner. The live instance is deliberately **not** re-synced (#496): the
+reference was derived from it, so there is no drift to repair and a propagation statement could only
+overwrite a working configuration with a copy of itself.

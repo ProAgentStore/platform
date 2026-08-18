@@ -1,0 +1,90 @@
+{
+  "name": "draft_outreach",
+  "params": {
+    "name": {
+      "type": "string"
+    },
+    "suburb": {
+      "type": "string"
+    },
+    "city": {
+      "type": "string"
+    },
+    "address": {
+      "type": "string"
+    },
+    "phone": {
+      "type": "string"
+    },
+    "website_status": {
+      "type": "string"
+    },
+    "place_id": {
+      "type": "string"
+    }
+  },
+  "steps": [
+    {
+      "tool": "map",
+      "bind": "lead",
+      "inputs": {
+        "items": [
+          {}
+        ],
+        "derive": {
+          "place_id": {
+            "$param": "place_id"
+          },
+          "name": {
+            "$param": "name"
+          },
+          "suburb": {
+            "$param": "suburb"
+          },
+          "city": {
+            "$param": "city"
+          },
+          "address": {
+            "$param": "address"
+          },
+          "phone": {
+            "$param": "phone"
+          },
+          "website_status": {
+            "$param": "website_status"
+          },
+          "status": "new"
+        }
+      }
+    },
+    {
+      "tool": "ai_generate",
+      "bind": "drafted",
+      "inputs": {
+        "items": {
+          "$ref": "lead.items"
+        },
+        "as": "draft_message",
+        "maxTokens": 300,
+        "system": "You write concise, friendly cold-outreach for a web-design freelancer contacting local small businesses that have NO website (or a broken one). 3-4 sentences, specific to the business, warm, no fluff, end with a soft CTA. Return ONLY the message text.",
+        "prompt": "Business: {{name}} in {{suburb}}, {{city}}. Address: {{address}}. Phone: {{phone}}. Website status: {{website_status}}. Draft a short outreach offering to build them a simple website."
+      }
+    },
+    {
+      "tool": "dedupe_upsert",
+      "bind": "stored",
+      "inputs": {
+        "items": {
+          "$ref": "drafted.items"
+        },
+        "collection": "prospects",
+        "key": "place_id",
+        "mode": "update"
+      }
+    }
+  ],
+  "sink": {
+    "collection": "prospects",
+    "keyField": "place_id"
+  }
+}

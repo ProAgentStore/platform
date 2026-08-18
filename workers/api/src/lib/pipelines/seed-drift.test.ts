@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import siteBuilder from "./site-builder.json" with { type: "json" };
 import siteDeploy from "./site-deploy.json" with { type: "json" };
 import leadFinder from "./lead-finder.json" with { type: "json" };
+import leadOutreach from "./lead-outreach.json" with { type: "json" };
 import { declaredParamDefaults, validatePipeline } from "../pipeline.js";
 import { agentCapabilities } from "../agent-capabilities.js";
 import { pipelineDeclarationError, undeclaredPipelineTools, type ToolNamingSteps } from "../pipeline-tool-policy.js";
@@ -345,5 +346,115 @@ describe("the #394 propagation migration — the seed reaches the instance that 
 		// definition is what makes that acceptable: the change is reversible by hand rather than
 		// destructive, and `$.pipelinesReplaced` is read by nothing.
 		expect(ddl()).toContain("'$.pipelinesReplaced.lead_finder'");
+	});
+});
+
+// ── #706 ────────────────────────────────────────────────────────────────────────
+// The Lead Outreach agent's `draft_outreach` pipeline had the same two-copy problem as the two
+// above, minus one copy: until 2026-08-18 it existed ONLY as instance data on
+// `3c09069a-e866-4218-978e-569f62f4ab10`, with no reference JSON, nothing importing it, and
+// `agents.config` = `{}`. So a new subscriber got an inert agent (subscribe copies
+// `agents.config.pipelines`), and the definition — second link of the platform's only live
+// agent-to-agent chain, 100+ runs — was one cancelled subscription from unrecoverable.
+//
+// The reference JSON was read back off that instance and committed; 0132 seeds it onto the agent
+// row. This is what stops the two drifting, and what pins the two decisions the migration made
+// deliberately rather than by default: no `capabilities.tools` statement, and no re-sync of the
+// live instance.
+const LEAD_OUTREACH_MIGRATION = readdirSync(fileURLToPath(new URL("../../../migrations", import.meta.url).href))
+	.filter((f) => f.endsWith("seed_lead_outreach_pipeline.sql"))
+	.map((f) => fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url).href));
+
+describe("the #706 lead-outreach seed — the definition stops living only in one instance", () => {
+	it("exists exactly once", () => {
+		// Found by suffix so a renumbering (two lanes landing at once) does not need this edited;
+		// two files matching would mean the migration was copied rather than renamed.
+		expect(LEAD_OUTREACH_MIGRATION).toHaveLength(1);
+	});
+
+	const literals = jsonLiterals(LEAD_OUTREACH_MIGRATION[0]);
+	const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+	const seededDef = literals.find((l) => isRecord(l) && Array.isArray(l.steps)) as Record<string, unknown> & ToolNamingSteps;
+
+	const ddl = () =>
+		readFileSync(LEAD_OUTREACH_MIGRATION[0], "utf8")
+			.split("\n")
+			.filter((l) => !l.trimStart().startsWith("--"))
+			.join("\n");
+
+	it("embeds the SAME definition as the reference JSON", () => {
+		// The reason this file exists. Editing lead-outreach.json without re-running the seed would
+		// leave every future subscriber on the old definition while lead-outreach.test.ts stayed
+		// green against the file.
+		expect(seededDef).toEqual(leadOutreach);
+	});
+
+	it("embeds a definition the runner will actually accept", () => {
+		expect(validatePipeline(seededDef)).toBeNull();
+	});
+
+	it("is filed under `draft_outreach`, and says so in its own name field", () => {
+		// The KEY is what resolves (`loadPipeline`), and production — the live instance,
+		// `pipeline_runs.pipeline`, the `lead.created` connection — says `draft_outreach`. Seeding
+		// under `lead-outreach` (the FILE's name, and the agent's) would have created a SECOND
+		// pipeline beside the live one, which is 0111's lesson restated one agent over.
+		expect(ddl()).toContain("'$.pipelines.draft_outreach'");
+		expect(ddl()).not.toContain("'$.pipelines.lead-outreach'");
+		// And key == name, because `defaultPipelinesFor` copies what it is given without running it
+		// through `pipelineDefForKey`.
+		expect(seededDef.name).toBe("draft_outreach");
+	});
+
+	it("reaches no connector tool, which is why the seed declares none", () => {
+		// Asked of the REAL registry through the REAL rule, not asserted by hand. 0111 needed a
+		// `capabilities.tools` statement because the lead finder reaches `http_request` from inside
+		// `geocode` and `fan_out`; this definition reaches nothing gated, so there is nothing to
+		// declare — and declaring a list anyway would REPLACE the permissive per-surface default
+		// (`toolNamesFor`) and strip this agent's chat of the storage tools it uses today.
+		//
+		// It is also what "Draft-only — never sends" rests on: a step that later reaches a connector
+		// makes this red, which is the moment to decide whether the storefront claim still holds.
+		const declaresNothing = agentCapabilities({ slug: "lead-outreach-tj6qrr", category: "general", config: JSON.stringify({ capabilities: { tools: [] } }) });
+		expect(undeclaredPipelineTools(leadOutreach, declaresNothing, getRegistryTool)).toEqual([]);
+		expect(ddl()).not.toContain("$.capabilities.tools");
+	});
+
+	it("passes the kick gate for an agent that declares nothing at all", () => {
+		// This agent's config is `{}`, so it resolves down the FALLBACK branch of the capability
+		// resolver with no declared tool list — the state a hand-built literal never exercises. A
+		// seed that is refused at kick is not a fix.
+		const caps = agentCapabilities({ slug: "lead-outreach-tj6qrr", category: "general", config: "{}" });
+		expect(pipelineDeclarationError(seededDef, caps, getRegistryTool)).toBeNull();
+	});
+
+	it("writes one targeted path on the agents row, by slug, and inserts nothing", () => {
+		// Never `SET config = json('…')`: another lane may be writing `$.capabilities` on seeded
+		// agents at the same time, and a whole-column write would revert whichever landed second.
+		// By slug rather than the uuid, and no INSERT — this is a real creator's row, so there is
+		// nothing to seed on a fresh database and nothing here fabricates one.
+		expect(ddl()).not.toMatch(/SET\s+config\s*=\s*json\('/);
+		expect(ddl()).toContain("WHERE slug = 'lead-outreach-tj6qrr'");
+		expect(ddl()).not.toContain("bf1de46a");
+		expect(ddl()).not.toMatch(/\bINSERT\b/i);
+	});
+
+	it("reaches an existing instance by FILLING an absent copy, never by overwriting one", () => {
+		// #496: `$.pipelines` is copied at subscribe and never re-read, so the agents-row statement
+		// alone reaches nobody already running the agent. The second statement is the route — but
+		// unlike 0130 it must not overwrite, and the reason is structural rather than cautious: the
+		// reference JSON was DERIVED FROM the live instance, so that instance already holds byte for
+		// byte what this seeds. Overwriting could only discard tuning made between this commit and
+		// the deploy, in exchange for writing back a copy of the instance's own value.
+		//
+		// Recorded as an assertion rather than a sentence in a comment, because "gated deliberately"
+		// and "forgot the gate" are indistinguishable in a diff — and an ungated version of this
+		// statement would pass every other check in this file.
+		const sql = ddl();
+		expect(sql).toMatch(/UPDATE\s+agent_instances/);
+		expect(sql).toContain("'$.pipelines.draft_outreach') IS NULL");
+		// Copied FROM the agents row, so there is no third copy of the definition to drift (0130's
+		// principle) — and the instance statement carries no literal of its own.
+		expect(sql).toMatch(/FROM agents a/);
+		expect(sql.match(/json\('/g) ?? []).toHaveLength(1);
 	});
 });

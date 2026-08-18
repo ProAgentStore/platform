@@ -76,6 +76,15 @@ const PROPAGATION: Record<string, string> = {
 	// proves that rather than trusting it. There is no migration answer here and there cannot be:
 	// identity is DO state.
 	"0118_operator_interactive_cli_protocol.sql": "connector-tool-prompt.ts TERMINAL_CLI_PROTOCOL",
+	// #706: the Lead Outreach agent's `draft_outreach` definition existed ONLY as instance data, so
+	// the seed and its route ship in one file and the route is that file — the second statement
+	// writes `agent_instances`. It differs from 0130 in one deliberate way: it FILLS an instance
+	// that has no copy and can never overwrite one that has. The definition was read back OFF the
+	// one live instance, so that instance is already correct by construction; overwriting it could
+	// only discard tuning in exchange for a copy of its own value. Splitting the halves into two
+	// files, as 0111 → 0130 had to nineteen migrations apart, would be re-creating the gap on
+	// purpose.
+	"0132_seed_lead_outreach_pipeline.sql": "seed_lead_outreach_pipeline.sql",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {
