@@ -113,6 +113,11 @@ function assertValidConfig(action: TriggerAction, type: TriggerType, config: unk
 	if (problems.length) throw new HttpError(400, problems.join(" "));
 }
 
+/** The keys this config actually carries — see the note at the update route's `stored`. */
+function definedOnly(config: Record<string, unknown>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(config).filter(([, v]) => v !== undefined));
+}
+
 /**
  * Refuse an action this instance's agent cannot perform (#358).
  *
@@ -313,7 +318,15 @@ triggerRoutes.put("/:id", async (c) => {
 	}
 	// Validate against the config that will END UP stored under the action that will end up set —
 	// an update that only changes `action` can strand config that was valid for the old one.
-	const stored = parseConfig(trigger.config) as Record<string, unknown>;
+	//
+	// `definedOnly` is load-bearing, not tidying. `parseConfig` builds a MAPPED type: it emits all
+	// 21 vocabulary keys and leaves the ones this row does not set as `undefined`. But
+	// `validateTriggerConfig` counts key PRESENCE, so the stored config of a `create_task` trigger
+	// read back as fifteen wrong-action fields and EVERY update that did not resend `config` — a
+	// rename, a disable, and the `{enabled:true}` this ticket is about — was rejected 400 before it
+	// reached any of the logic below. A key holding `undefined` is not a field the user set, and the
+	// row cannot be repaired by a message telling them to remove fields they never wrote.
+	const stored = definedOnly(parseConfig(trigger.config) as Record<string, unknown>);
 	const effectiveConfig = body.config === undefined ? stored : body.config;
 	assertValidConfig(action, trigger.type, effectiveConfig);
 	let schedule = trigger.schedule;
@@ -321,38 +334,77 @@ triggerRoutes.put("/:id", async (c) => {
 	let nextSlot = trigger.next_slot_at;
 	const timezone = typeof effectiveConfig.timezone === "string" ? effectiveConfig.timezone : undefined;
 	const zoneChanged = body.config !== undefined && timezone !== (typeof stored.timezone === "string" ? stored.timezone : undefined);
-	if (trigger.type === "cron" && (body.schedule !== undefined || zoneChanged)) {
+	const wasEnabled = trigger.enabled === 1;
+	const willBeEnabled = body.enabled === undefined ? wasEnabled : body.enabled;
+	let lastError = trigger.last_error;
+	if (trigger.type === "cron") {
 		schedule = body.schedule === undefined ? trigger.schedule : normalizeSchedule(body.schedule);
-		const jm = typeof effectiveConfig.jitterMinutes === "number" ? effectiveConfig.jitterMinutes : undefined;
-		// Changing the ZONE changes when the same expression fires, so the stored next_run_at is
-		// stale the moment it changes. Not recomputing here would leave the trigger firing on the
-		// old zone until its next run — and the console would show a next-run time that is wrong.
+		// Keyed on a REAL change, not on the field being present (#665). The old condition was
+		// `body.schedule !== undefined`, so a save that re-sent the same expression re-anchored the
+		// row at now and re-rolled its jitter — a console that PUTs the whole trigger on every edit
+		// walked the next fire time forward each time the user touched the name. That accident was
+		// also the ONLY recovery from the bug below, which is why it has to be replaced and not
+		// merely narrowed.
+		const scheduleChanged = schedule !== trigger.schedule;
+		// The row is (or is becoming) enabled and has no anchor, so it can never be swept (#665).
 		//
-		// Re-anchored at now with NO prior slot (#412): the old slot belongs to the old schedule
-		// or the old zone, so advancing from it would carry the previous meaning forward. Both
-		// halves are rewritten together — a slot from one schedule beside a fire time from another
-		// is the split-state this ticket exists to remove.
-		const advance = schedule ? advanceCron(schedule, { now: new Date(), timeZone: timezone, jitterMinutes: jm }) : null;
-		next = advance ? advance.fire : next;
-		nextSlot = advance ? advance.slot : nextSlot;
+		// `runDueTriggers` selects `enabled = 1 AND next_run_at IS NOT NULL`, and the auto-disable
+		// that fires on an invalid schedule clears `enabled`, `next_run_at` AND `next_slot_at`
+		// together. Re-enabling only restored `enabled`: the row then read as ON in every listing
+		// and could never be selected again — no error, no surfaced `last_error`, nothing in the
+		// console to look at. The disabling statement's scope and the re-enabling statement's scope
+		// have to match, and the reader's `next_run_at IS NOT NULL` is doing real work (it is what
+		// keeps webhook rows and un-anchored rows out of the cron sweep), so the fix belongs here.
+		const unanchored = willBeEnabled && !trigger.next_run_at;
+		if (scheduleChanged || zoneChanged || unanchored) {
+			const jm = typeof effectiveConfig.jitterMinutes === "number" ? effectiveConfig.jitterMinutes : undefined;
+			// Changing the ZONE changes when the same expression fires, so the stored next_run_at is
+			// stale the moment it changes. Not recomputing here would leave the trigger firing on the
+			// old zone until its next run — and the console would show a next-run time that is wrong.
+			//
+			// Re-anchored at now with NO prior slot (#412): the old slot belongs to the old schedule
+			// or the old zone, so advancing from it would carry the previous meaning forward. Both
+			// halves are rewritten together — a slot from one schedule beside a fire time from another
+			// is the split-state this ticket exists to remove.
+			//
+			// `advanceCron` re-validates through `normalizeSchedule`, which throws HttpError(400). On
+			// the re-enable path that is the point: a row auto-disabled because its schedule is no
+			// longer valid under the current grammar refuses the re-enable, naming the grammar's own
+			// reason, instead of being re-armed into a row the sweep will disable again next minute.
+			const advance = schedule ? advanceCron(schedule, { now: new Date(), timeZone: timezone, jitterMinutes: jm }) : null;
+			next = advance ? advance.fire : next;
+			nextSlot = advance ? advance.slot : nextSlot;
+		}
 	}
+	// Cleared on the OFF → ON transition, and only there (#665). `last_error` is the record of why
+	// this trigger stopped, not a diagnosis of what it is now: the auto-disable writes
+	// "Disabled: schedule … is no longer valid" in the same statement that clears `enabled`, and no
+	// statement anywhere ever cleared it again. So a trigger the owner had repaired and switched
+	// back on displayed a permanent error it could not shed. Turning it on is the owner asserting
+	// the condition is addressed — and for a cron that assertion is CHECKED, because the re-anchor
+	// above 400s if it is not. `failure_count` is deliberately left alone: the history of how often
+	// this row has failed is not the owner's to reset by flipping a switch, and the failures are
+	// still in `agent_trigger_events` either way.
+	if (!wasEnabled && willBeEnabled) lastError = null;
 	const secret = trigger.type === "webhook" && body.rotateSecret === true ? makeTriggerSecret() : trigger.secret_token;
 	await c.env.DB.prepare(
 		`UPDATE agent_triggers
-     SET name = ?2, action = ?3, enabled = ?4, secret_token = ?5, schedule = ?6, config = ?7, next_run_at = ?8, next_slot_at = ?10, updated_at = datetime('now')
+     SET name = ?2, action = ?3, enabled = ?4, secret_token = ?5, schedule = ?6, config = ?7, next_run_at = ?8, next_slot_at = ?10,
+         last_error = ?11, updated_at = datetime('now')
      WHERE id = ?1 AND user_id = ?9`,
 	)
 		.bind(
 			trigger.id,
 			name,
 			action,
-			body.enabled === undefined ? trigger.enabled : body.enabled ? 1 : 0,
+			willBeEnabled ? 1 : 0,
 			secret,
 			schedule,
 			body.config === undefined ? trigger.config : safeJson(body.config),
 			next,
 			session.uid,
 			nextSlot,
+			lastError,
 		)
 		.run();
 	const updated = await requireOwnedTrigger(c.env, session.uid, trigger.id);
