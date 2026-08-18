@@ -151,6 +151,12 @@ async function installationTokenResult(
 	env: Env,
 	userId: string,
 	installationId: number,
+	/**
+	 * The account this installation belongs to, when the CALLER already knows it from the live App
+	 * list. Never fetched for this: omitted means "this path has no opinion about the account
+	 * columns", which is exactly what a token refresh should say (#651).
+	 */
+	account?: { login: string; type?: string },
 ): Promise<{ ok: true; token: string } | { ok: false; reason: "no-binding" | "mint-failed" }> {
 	const row = await env.DB.prepare(
 		"SELECT id, token_ciphertext, token_dek, token_iv, token_expires_at FROM github_installations WHERE user_id = ?1 AND installation_id = ?2",
@@ -176,11 +182,33 @@ async function installationTokenResult(
 
 	const minted = await mintInstallationToken(env, installationId);
 	if (!minted) return { ok: false, reason: "mint-failed" };
-	await cacheInstallationToken(env, userId, installationId, minted.token, minted.expiresAt);
+	await cacheInstallationToken(env, userId, installationId, minted.token, minted.expiresAt, account);
 	return { ok: true, token: minted.token };
 }
 
-/** Persist (encrypt) the installation token + metadata for reuse. */
+/**
+ * Persist (encrypt) the installation token — and the account columns ONLY when the caller supplied
+ * them (#651).
+ *
+ * The account columns belong to the two BINDING writers, `authorizeInstallation` and
+ * `bindMemberOrgInstallations`, which have just proved who owns the installation. The token
+ * refresh in `installationTokenResult` knows the token and nothing else, and it runs at least
+ * hourly (an installation token lives one hour) — and on EVERY call when `KEY_ENCRYPTION_KEY` is
+ * unset, because the freshness branch also requires the stored ciphertext.
+ *
+ * That refresh used to bind `account?.login ?? ""` into an `ON CONFLICT … DO UPDATE SET
+ * account_login = excluded.account_login`, so every row blanked its own account within the hour.
+ * `githubAuthContext` (github-cache.ts) names a read's authority by matching that column against
+ * the repo owner; `''` matches nothing, it fail-closes to `null`, and both the read and write
+ * halves of the GitHub ETag cache short-circuit on a falsy context. The result was that every
+ * authenticated GitHub read stopped being conditionally cached, permanently, from the first
+ * refresh onward — deploy-watch's per-repo cron poll included, which is direct exposure to
+ * GitHub's primary rate limit.
+ *
+ * So the UPDATE touches those columns only when there is a verified account to write. The INSERT
+ * still needs a value for the NOT NULL columns; it is unreachable from the refresh path, which
+ * returns `no-binding` before minting when the row is absent.
+ */
 export async function cacheInstallationToken(
 	env: Env,
 	userId: string,
@@ -192,13 +220,14 @@ export async function cacheInstallationToken(
 	let cipher: { ciphertext: Uint8Array; dekWrapped: Uint8Array; iv: Uint8Array } | null = null;
 	if (env.KEY_ENCRYPTION_KEY) cipher = await encryptKey(token, env.KEY_ENCRYPTION_KEY);
 	const id = `ghinst_${userId}_${installationId}`;
+	const accountSet = account
+		? "account_login = excluded.account_login,\n\t\t   account_type = excluded.account_type,\n\t\t   "
+		: "";
 	await env.DB.prepare(
 		`INSERT INTO github_installations (id, user_id, installation_id, account_login, account_type, token_ciphertext, token_dek, token_iv, token_expires_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
 		 ON CONFLICT(user_id, installation_id) DO UPDATE SET
-		   account_login = excluded.account_login,
-		   account_type = excluded.account_type,
-		   token_ciphertext = excluded.token_ciphertext,
+		   ${accountSet}token_ciphertext = excluded.token_ciphertext,
 		   token_dek = excluded.token_dek,
 		   token_iv = excluded.token_iv,
 		   token_expires_at = excluded.token_expires_at,
@@ -383,9 +412,14 @@ export async function resolveGithubAccess(
 		return deny("not-installed", { installUrl: await installUrlFor(env) });
 	}
 
-	const token = await installationTokenResult(env, userId, match.id).catch(
-		() => ({ ok: false, reason: "mint-failed" }) as const,
-	);
+	// The account is already in hand from the live App list, so handing it to the refresh costs
+	// nothing and REPAIRS a row blanked by the pre-#651 upsert on the next authenticated read —
+	// which is why no backfill migration is needed. This is not a new authority claim: minting
+	// still requires the verified binding row, and `match` comes from GitHub, not from our column.
+	const token = await installationTokenResult(env, userId, match.id, {
+		login: match.account.login,
+		type: match.account.type,
+	}).catch(() => ({ ok: false, reason: "mint-failed" }) as const);
 	if (token.ok) return { ok: true, token: token.token };
 	return token.reason === "no-binding" ? deny("not-authorized") : deny("transient", { detail: "the installation token could not be minted" });
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appJwt, githubAccessDenial, githubAppConfigured, resolveGithubAccess } from "./github-app.js";
+import { realSchemaD1 } from "./d1-sqlite.js";
+import { appJwt, cacheInstallationToken, githubAccessDenial, githubAppConfigured, listUserInstallations, resolveGithubAccess } from "./github-app.js";
 import type { Env } from "../types.js";
 
 /** Export a generated RSA private key as PKCS#8 PEM (what GitHub gives you). */
@@ -245,5 +246,81 @@ describe("resolveGithubAccess — which condition it decides it is", () => {
 		const r = await resolveGithubAccess(env, "u1", "acme");
 		expect(r.ok).toBe(true);
 		if (r.ok) expect(r.token).toBe("ghs_x");
+	});
+});
+
+describe("cacheInstallationToken — the account columns belong to the binding writers (#651)", () => {
+	const hourFromNow = () => new Date(Date.now() + 3600e3).toISOString();
+	const readRow = (d1: ReturnType<typeof realSchemaD1>) =>
+		d1.sqlite
+			.prepare("SELECT account_login, account_type, token_expires_at FROM github_installations WHERE user_id = 'u1' AND installation_id = 7")
+			.get() as { account_login: string; account_type: string; token_expires_at: string };
+
+	const boundUser = () => {
+		const d1 = realSchemaD1();
+		d1.exec("INSERT INTO users (id, github_login) VALUES ('u1', 'octo')");
+		return d1;
+	};
+
+	it("a refresh that knows no account leaves the one the binding wrote", async () => {
+		// THE reported failure. An installation token lives one hour, so `installationTokenResult`
+		// re-caches at least hourly with no account; the old unconditional SET wrote `''` over the
+		// verified login every time, and nothing ever put it back.
+		const d1 = boundUser();
+		const env = { DB: d1.DB } as unknown as Env;
+		try {
+			await cacheInstallationToken(env, "u1", 7, "ghs_first", hourFromNow(), { login: "acme", type: "Organization" });
+			await cacheInstallationToken(env, "u1", 7, "ghs_refreshed", hourFromNow());
+
+			const row = readRow(d1);
+			expect(row.account_login).toBe("acme");
+			expect(row.account_type).toBe("Organization");
+			// The refresh still did its actual job.
+			expect(await listUserInstallations(env, "u1")).toEqual([{ id: 7, account: "acme", type: "Organization" }]);
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("a binding writer still corrects the account — that is the repair path", async () => {
+		const d1 = boundUser();
+		const env = { DB: d1.DB } as unknown as Env;
+		try {
+			await cacheInstallationToken(env, "u1", 7, "ghs_a", hourFromNow(), { login: "old-name", type: "User" });
+			await cacheInstallationToken(env, "u1", 7, "ghs_b", hourFromNow(), { login: "renamed", type: "Organization" });
+			const row = readRow(d1);
+			expect(row.account_login).toBe("renamed");
+			expect(row.account_type).toBe("Organization");
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("resolveGithubAccess repairs a row already blanked, from the live App list — no backfill needed", async () => {
+		const d1 = boundUser();
+		d1.exec(
+			"INSERT INTO github_installations (id, user_id, installation_id, account_login, account_type) VALUES ('ghinst_u1_7', 'u1', 7, '', '')",
+		);
+		const { pem } = await makePem();
+		const env = { GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: pem, DB: d1.DB } as unknown as Env;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				if (String(url).endsWith("/app/installations")) {
+					return { ok: true, status: 200, json: async () => [{ id: 7, account: { login: "acme", type: "Organization" } }] } as Response;
+				}
+				return { ok: true, status: 200, json: async () => ({ token: "ghs_x", expires_at: hourFromNow() }) } as Response;
+			}),
+		);
+		try {
+			const r = await resolveGithubAccess(env, "u1", "acme");
+			expect(r.ok).toBe(true);
+			// This is the value `githubAuthContext` matches against the repo owner; blank fails
+			// closed and silently disables the ETag cache for every authenticated read.
+			expect(readRow(d1).account_login).toBe("acme");
+		} finally {
+			vi.unstubAllGlobals();
+			d1.close();
+		}
 	});
 });
