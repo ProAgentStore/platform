@@ -496,11 +496,42 @@ export async function configureBoardForAgent(
 	};
 }
 
-/** Snapshot fields so a moved card can stand alone once its runs are gone. */
+/**
+ * Snapshot fields so a moved card can stand alone once its runs are gone.
+ *
+ * A field left `undefined` means ABSENT — "I am not saying anything about this one, leave
+ * whatever is stored alone". An explicit `""` means CLEAR it. Those are different
+ * instructions and {@link setBoardItemStatus} keeps them apart, because collapsing absent
+ * into `""` is exactly what wiped a card's title when a caller that only knows about
+ * status (MCP's `set_board_item_status`) moved a card the console had already labelled
+ * (#652).
+ */
 export interface BoardItemMeta {
 	title?: string;
 	subtitle?: string;
 	url?: string;
+}
+
+/**
+ * The display fields for a job as the board shows it RIGHT NOW — used to fill in what a
+ * caller did not send, so a first move records a real card rather than an empty one.
+ *
+ * Only a card still backed by runtime tasks is returned. A standalone card is built by
+ * {@link buildInstanceBoard} from the stored row as `title: row.title || jobKey`, so
+ * snapshotting one would write the jobKey back into the title column as though it were a
+ * title somebody chose — turning "nothing was ever recorded" into a stored fact, which is
+ * the failure this snapshot exists to prevent.
+ */
+export async function liveBoardItemMeta(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	jobKey: string,
+): Promise<BoardItemMeta | null> {
+	const board = await buildInstanceBoard(env, instanceId, userId);
+	const card = board.items.find((i) => i.jobKey === jobKey);
+	if (!card?.latestTaskId) return null;
+	return { title: card.title, subtitle: card.subtitle, url: card.url };
 }
 
 /** Set (or clear, when status is null/empty) the human status override for a job. */
@@ -518,17 +549,30 @@ export async function setBoardItemStatus(
 			.run();
 		return;
 	}
+	// An ABSENT display field binds NULL and the COALESCE leaves the stored value standing;
+	// an explicit "" binds "" and clears it (#652). The columns are NOT NULL, so a fresh row
+	// coalesces its own absent fields to "" instead — there is nothing there to preserve.
+	// Written against the parameters rather than `excluded.*`, because `excluded.title` is
+	// whatever the INSERT arm computed, which for an absent field is the "" we must not write.
 	await env.DB.prepare(
 		`INSERT INTO board_items (instance_id, user_id, job_key, user_status, title, subtitle, url, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, COALESCE(?5, ''), COALESCE(?6, ''), COALESCE(?7, ''), datetime('now'))
      ON CONFLICT(instance_id, user_id, job_key) DO UPDATE SET
        user_status = excluded.user_status,
-       title = excluded.title,
-       subtitle = excluded.subtitle,
-       url = excluded.url,
+       title = COALESCE(?5, board_items.title),
+       subtitle = COALESCE(?6, board_items.subtitle),
+       url = COALESCE(?7, board_items.url),
        updated_at = excluded.updated_at`,
 	)
-		.bind(instanceId, userId, jobKey.slice(0, 400), status.slice(0, 80), (meta.title ?? "").slice(0, 300), (meta.subtitle ?? "").slice(0, 300), (meta.url ?? "").slice(0, 1000))
+		.bind(
+			instanceId,
+			userId,
+			jobKey.slice(0, 400),
+			status.slice(0, 80),
+			meta.title === undefined ? null : meta.title.slice(0, 300),
+			meta.subtitle === undefined ? null : meta.subtitle.slice(0, 300),
+			meta.url === undefined ? null : meta.url.slice(0, 1000),
+		)
 		.run();
 }
 

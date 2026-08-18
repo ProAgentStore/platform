@@ -2,10 +2,12 @@ import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import {
+	type BoardItemMeta,
 	boardConfigForInstance,
 	buildInstanceBoard,
 	clearFinishedBoardItems,
 	columnsForInstance,
+	liveBoardItemMeta,
 	setBoardItemStatus,
 	setInstanceBoardConfig,
 } from "../lib/board.js";
@@ -153,11 +155,29 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			if (!valid.has(status)) return c.json({ error: `unknown board status: ${status}` }, 400);
 		}
 		// Snapshot the display fields so a moved card survives its runs being cleared.
-		const meta = {
-			title: typeof body.title === "string" ? body.title : "",
-			subtitle: typeof body.subtitle === "string" ? body.subtitle : "",
-			url: typeof body.url === "string" ? body.url : "",
-		};
+		//
+		// ABSENT is not "" (#652). This used to coerce every field the caller did not send to
+		// "" and write all three unconditionally, so MCP's `set_board_item_status` — which
+		// sends jobKey + status and nothing else — blanked the title, subtitle and url that a
+		// console move had stored. The card looked fine until its runs aged out, then stood on
+		// an empty snapshot and rendered its raw jobKey. Only what was actually PASSED goes in
+		// the patch; an explicit "" is still a real instruction and still clears the field.
+		const meta: BoardItemMeta = {};
+		if (typeof body.title === "string") meta.title = body.title;
+		if (typeof body.subtitle === "string") meta.subtitle = body.subtitle;
+		if (typeof body.url === "string") meta.url = body.url;
+		// A caller that sends none of them gets the snapshot the board is showing right now, so
+		// a card moved for the FIRST time over MCP records what it is rather than an empty row
+		// that degrades to the jobKey later. Paid for only when something is missing — the
+		// console sends all three — and it fills gaps, never overwrites what was passed.
+		if (status && (meta.title === undefined || meta.subtitle === undefined || meta.url === undefined)) {
+			const live = await liveBoardItemMeta(c.env, instanceId, session.uid, jobKey);
+			if (live) {
+				if (meta.title === undefined) meta.title = live.title;
+				if (meta.subtitle === undefined) meta.subtitle = live.subtitle;
+				if (meta.url === undefined) meta.url = live.url;
+			}
+		}
 		await setBoardItemStatus(c.env, instanceId, session.uid, jobKey, status || null, meta);
 		return c.json({ ok: true });
 	});

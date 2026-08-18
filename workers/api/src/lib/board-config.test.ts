@@ -9,6 +9,7 @@ import {
 	deleteBoardItem,
 	clearFinishedBoardItems,
 	buildInstanceBoard,
+	liveBoardItemMeta,
 	MAX_BOARD_COLUMNS,
 	FINISHED_STATUSES,
 } from "./board.js";
@@ -228,6 +229,35 @@ describe("setBoardItemStatus / deleteBoardItem / clearFinishedBoardItems", () =>
 		expect(writes[0].args.slice(0, 5)).toEqual(["inst-1", "u1", "job-key", "interview", "T"]);
 	});
 
+	// ── absent vs "" (#652) ──────────────────────────────────────────────────
+	//
+	// The snapshot columns exist so a moved card can outlive its runs. Every caller writes
+	// through this one function, and the two that exist disagree about which fields the
+	// request carries: the console sends all three, MCP's `set_board_item_status` sends
+	// jobKey + status and nothing else. While a missing field became "" and all three were
+	// written from `excluded.*`, a move over MCP silently blanked a title the console had
+	// stored — invisible until the runs aged out and the card rendered its raw jobKey.
+
+	it("binds NULL for a display field the caller omitted, so the stored snapshot survives", async () => {
+		const { env, writes } = mockEnv();
+		await setBoardItemStatus(env, "inst-1", "u1", "job-key", "interview", { title: "T" });
+		expect(writes).toHaveLength(1);
+		// The UPDATE arm reads the PARAMETER, not `excluded.*` — `excluded.title` is whatever
+		// the INSERT arm computed, which for an absent field is the "" that must not be written.
+		expect(writes[0].sql).toContain("COALESCE(?5, board_items.title)");
+		expect(writes[0].sql).toContain("COALESCE(?6, board_items.subtitle)");
+		expect(writes[0].sql).toContain("COALESCE(?7, board_items.url)");
+		// The INSERT arm still satisfies the NOT NULL columns for a brand-new row.
+		expect(writes[0].sql).toContain("COALESCE(?5, '')");
+		expect(writes[0].args.slice(4)).toEqual(["T", null, null]);
+	});
+
+	it("an explicit empty string CLEARS the field — it is an instruction, not an absence", async () => {
+		const { env, writes } = mockEnv();
+		await setBoardItemStatus(env, "inst-1", "u1", "job-key", "interview", { title: "", subtitle: "", url: "" });
+		expect(writes[0].args.slice(4)).toEqual(["", "", ""]);
+	});
+
 	it("setBoardItemStatus with a null status DELETEs the override instead of inserting", async () => {
 		const { env, writes } = mockEnv();
 		await setBoardItemStatus(env, "inst-1", "u1", "job-key", null);
@@ -386,5 +416,46 @@ describe("buildInstanceBoard", () => {
 		});
 		const board = await buildInstanceBoard(bare.env, "inst-1", "u1");
 		expect(board.items[0].reasoning).toBeUndefined();
+	});
+});
+
+// ————————————————————————————————————————————————————————————————
+// liveBoardItemMeta (#652) — what a caller that sent no display fields gets
+// ————————————————————————————————————————————————————————————————
+
+describe("liveBoardItemMeta", () => {
+	const nowIso = "2026-08-02T10:00:00.000Z";
+	const task = { id: "t1", type: "job.apply_agent", status: "running", title: "Acme — Engineer", subtitle: "acme.co", input: { url: "https://acme.co/careers/eng" }, updatedAt: nowIso };
+
+	function env(overlayRows: unknown[] = [], tasks: unknown[] = [task]) {
+		return mockEnv({
+			first: (sql) => sql.includes("JOIN agents")
+				? { slug: "job-application-assistant", category: "productivity", agent_config: "{}", instance_config: "{}" }
+				: null,
+			all: (sql) => {
+				if (sql.includes("instance_runtime_tasks")) return { results: tasks.map((t) => ({ payload: JSON.stringify(t) })) };
+				if (sql.includes("board_items")) return { results: overlayRows };
+				return { results: [] };
+			},
+		}).env;
+	}
+
+	it("returns the card's display fields exactly as the board is showing them", async () => {
+		// Taken from the board rather than re-derived, so the snapshot a move stores is by
+		// construction the label the user was looking at when they moved it.
+		const meta = await liveBoardItemMeta(env(), "inst-1", "u1", jobKeyForTask(task));
+		expect(meta).toEqual({ title: "Acme — Engineer", subtitle: "acme.co", url: "https://acme.co/careers/eng" });
+	});
+
+	it("returns null for a standalone card, so a synthesized jobKey is never stored as a title", async () => {
+		// `buildInstanceBoard` builds a standalone card as `title: row.title || jobKey`. Copying
+		// that back into the column would turn "no title was ever recorded" into a stored fact
+		// that reads as one — the exact failure the snapshot exists to prevent.
+		const overlay = [{ job_key: "ghost-job", user_status: "offer", title: "", subtitle: "", url: "", updated_at: nowIso }];
+		expect(await liveBoardItemMeta(env(overlay, []), "inst-1", "u1", "ghost-job")).toBeNull();
+	});
+
+	it("returns null for a jobKey the board does not have", async () => {
+		expect(await liveBoardItemMeta(env(), "inst-1", "u1", "no-such-job")).toBeNull();
 	});
 });
