@@ -106,6 +106,57 @@ const OPEN_RUN_STATUSES = new Set(["running", "needs_human"]);
 /** Said when the session died under a card that was still asking for a human. */
 const ABANDONED_LEAD = "The session ended while this was waiting for you — there is nothing left to take over.";
 
+/** What joins two leads on one card. Distinct from `cardDetail`'s own ` | `, which separates lead from note. */
+const LEAD_SEP = " · ";
+
+/**
+ * How the runs behind one card ENDED, counted — "9 runs: 8 completed, 1 failed".
+ *
+ * ── The contradiction this answers (#592, the residual left open after `37bb2ea`)
+ *
+ * Reading the fixed board live produced two cards sitting in **Done**, `status: "completed"`, whose
+ * detail said the run FAILED:
+ *
+ *   `csess_c960d431` — completed, `attempts: 9`, detail "outcome: failed — run error: UserAiProviderError…"
+ *   `csess_e4775bf7` — completed, `attempts: 2`, detail "outcome: failed — stuck not resolved in time"
+ *
+ * Both halves came from THIS function's caller and from two different places: the status is the
+ * card's own (written by the run that owns it, which for a session driven through
+ * `POST …/sessions/:sid/run` has no `agent_loop_runs` row at all — see `routes/coding.ts:688`,
+ * which creates the Workflow with no `loopRunId`), while the prose was borrowed from `runs[0]`,
+ * the newest row in a table that cannot see those runs. Nothing required the two to describe the
+ * same run, so a column saying success sat beside a sentence saying failure and a reader could not
+ * tell which run either referred to.
+ *
+ * ── The rule, which is the answer to the question the issue asked
+ *
+ * *"When a job has N runs with mixed outcomes, which one does `detail` describe, and should
+ * `status` reflect the last run, the best, or the fact that outcomes were mixed?"*
+ *
+ * **The card speaks with one run's voice, and counts the rest.** `detail` describes the run that
+ * AGREES with the status the card carries — the card's own run — so the two cannot contradict each
+ * other. `status` is left where it is: the card is written by the run that owns it, INCLUDING the
+ * runs this table cannot see, so "adopt the latest row's status" would let a stale historical run
+ * overwrite a live card. And the fact that outcomes were mixed is stated as a COUNT, so nine runs
+ * with a failure among them can never read as one clean success.
+ *
+ * Returns null when the runs all rest at the same status: the card's own verdict already says that,
+ * and a tally on every card would be noise on the many to serve the few.
+ */
+export function runOutcomeTally(runs: readonly CodingRunFact[]): string | null {
+	if (runs.length < 2) return null;
+	const counts = new Map<string, number>();
+	for (const r of runs) {
+		const status = r.status || "unknown";
+		counts.set(status, (counts.get(status) ?? 0) + 1);
+	}
+	if (counts.size < 2) return null;
+	// Biggest group first, ties by name — a stable order, so the same nine runs always read the same
+	// way and a diff of two boards is a difference in the data rather than in Map iteration.
+	const parts = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([status, n]) => `${n} ${status}`);
+	return `${runs.length} runs: ${parts.join(", ")}`;
+}
+
 /**
  * Reconcile one coding card against its runs and its session.
  *
@@ -126,6 +177,10 @@ const ABANDONED_LEAD = "The session ended while this was waiting for you — the
  *     while their run carried the full explanation; `setCodingSessionCardStatus` patches only the
  *     status, so the reason never reached the surface an owner reads.
  *
+ * …and the fourth, which fixing the first three exposed: the reason it carries is the reason of the
+ * run the card is ABOUT, and where the runs behind it ended differently that is stated as a count
+ * rather than quoted as a second verdict. See {@link runOutcomeTally}.
+ *
  * A human's own status move is NOT reconciled away — this returns `runStatus`, and `buildInstanceBoard`
  * still resolves `status = userStatus || runStatus` over it.
  */
@@ -140,19 +195,31 @@ export function reconcileCodingCard(input: CodingCardInput): CodingCardPatch {
 
 	let runStatus = input.runStatus;
 	let description = input.description;
+	const leads: string[] = [];
 
 	if (runStatus === "needs_human" && sessionEnded) {
 		if (latest && !OPEN_RUN_STATUSES.has(latest.status)) {
 			runStatus = latest.status;
 		} else {
 			runStatus = "failed";
-			description = cardDetail(description || latest?.detail || "", ABANDONED_LEAD);
+			// The parked run's own reason, deliberately quoted even though the card is now `failed`:
+			// WHY it was waiting is the explanation for the card, and it is the only run that has it.
+			if (!description) description = latest?.detail ?? "";
+			leads.push(ABANDONED_LEAD);
 		}
 	}
 
-	// The run's reason, wherever the card has none of its own. Not an override: a card that already
-	// carries a live progress line (`setWorkCardProgress`, #207B) keeps it.
-	if (!description && latest?.detail) description = cardDetail(latest.detail);
+	// The run's reason, wherever the card has none of its own — and only from a run that AGREES with
+	// the status the card carries, so the prose and the column describe ONE run (see
+	// `runOutcomeTally`). Not an override either way: a card that already carries a live progress
+	// line (`setWorkCardProgress`, #207B) keeps it.
+	if (!description) description = runs.find((r) => r.status === runStatus && r.detail)?.detail ?? "";
+
+	// The count goes FIRST and is never what gets cut — `card-detail.ts`'s stated rule (#568),
+	// applied to the fact that a card can stand for several runs.
+	const tally = runOutcomeTally(runs);
+	if (tally) leads.unshift(tally);
+	if (leads.length || description) description = cardDetail(description, leads.join(LEAD_SEP) || null);
 
 	return { runStatus, description, attempts, sessionEnded };
 }

@@ -5,6 +5,7 @@ import {
 	CODING_SESSION_TASK_TYPE,
 	codingSessionIdFromCardId,
 	reconcileCodingCard,
+	runOutcomeTally,
 	type CodingRunFact,
 } from "./board-runs.js";
 import type { Env } from "../types.js";
@@ -159,6 +160,78 @@ describe("reconcileCodingCard — the reason reaches the card", () => {
 	});
 });
 
+describe("reconcileCodingCard — one card, one run's voice, the rest counted (#592 residual)", () => {
+	// The two cards the fixed board produced live on 2026-08-15: sitting in Done, `completed`, with
+	// a detail saying the run failed. The status came from the card's own run; the prose was
+	// borrowed from the newest `agent_loop_runs` row, which was a different run.
+	const PROVIDER_STALL = "outcome: failed — run error: UserAiProviderError: The AI provider stopped sending mid-reply";
+
+	it("does not quote a failed run's verdict on a card its own run completed", () => {
+		const patch = reconcileCodingCard({
+			runStatus: "completed",
+			description: "",
+			attempts: [],
+			runs: [
+				run("9f3cf5ab", "failed", 9_000, PROVIDER_STALL),
+				run("026d4255", "completed", 8_000, "objective met"),
+			],
+		});
+		// The exact contradiction: a column saying success beside prose saying failure, with nothing
+		// telling the reader which run either of them referred to.
+		expect(patch.description).not.toContain("outcome: failed");
+		expect(patch.description).toContain("objective met");
+	});
+
+	it("states that the outcomes were mixed, so nine runs with a failure cannot read as one clean success", () => {
+		const runs = [
+			run("c7a03659", "completed", 9_000),
+			run("0cba259e", "completed", 8_000),
+			run("ea27fbfb", "completed", 7_000),
+			run("86a7ad7f", "completed", 6_000),
+			run("2ab928b6", "completed", 5_000),
+			run("0dce25fb", "completed", 4_000),
+			run("f19d0654", "completed", 3_000),
+			run("026d4255", "completed", 2_000),
+			run("9f3cf5ab", "failed", 1_000),
+		];
+		const patch = reconcileCodingCard({ runStatus: "completed", description: "", attempts: [], runs });
+		expect(patch.description).toContain("9 runs: 8 completed, 1 failed");
+	});
+
+	it("says nothing extra when every run behind the card ended the same way", () => {
+		// The card's own verdict already says that, and a tally on every card would be noise on the
+		// many to serve the few.
+		expect(runOutcomeTally([run("a", "completed", 2), run("b", "completed", 1)])).toBeNull();
+		expect(runOutcomeTally([run("a", "failed", 1)])).toBeNull();
+		expect(runOutcomeTally([])).toBeNull();
+		expect(runOutcomeTally([run("a", "failed", 2), run("b", "completed", 1)])).toBe("2 runs: 1 completed, 1 failed");
+	});
+
+	it("keeps the count when the borrowed reason is long enough to be cut", () => {
+		// `card-detail.ts`'s rule (#568): the count goes first and is never what gets cut. A card
+		// standing for nine runs must be able to say so out of its first thirty characters.
+		const long = "x".repeat(600);
+		const patch = reconcileCodingCard({
+			runStatus: "failed", description: "", attempts: [],
+			runs: [run("a", "failed", 2, long), run("b", "completed", 1)],
+		});
+		expect(patch.description.startsWith("2 runs: 1 completed, 1 failed")).toBe(true);
+		expect(patch.description.length).toBeLessThanOrEqual(300);
+	});
+
+	it("still says the session died under a parked card, with the count beside it", () => {
+		const patch = reconcileCodingCard({
+			runStatus: "needs_human", description: "", attempts: [],
+			runs: [run("a", "needs_human", 9_000, "waiting on a 2FA code"), run("b", "failed", 1_000)],
+			session: { status: "ended" },
+		});
+		expect(patch.runStatus).toBe("failed");
+		expect(patch.description).toContain("2 runs: 1 failed, 1 needs_human");
+		expect(patch.description).toContain("session ended while this was waiting for you");
+		expect(patch.description).toContain("2FA");
+	});
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The invariant, over a whole fixture board.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +298,15 @@ const FIXTURE: FixtureSession[] = [
 	{
 		sessionId: "csess_9228b52f", cardStatus: "running", sessionStatus: "active",
 		runs: [{ runId: "r-922-a", status: "running", at: 5_000 }, { runId: "r-922-b", status: "completed", at: 1_000 }],
+	},
+	// The two cards the FIXED board produced live: Done, `completed`, prose saying the run failed.
+	// The card's own run is the completed one; the failed row is the newest in `agent_loop_runs`.
+	{
+		sessionId: "csess_e4775bf7", cardStatus: "completed", sessionStatus: "ended",
+		runs: [
+			{ runId: "r-e47-a", status: "failed", at: 9_000, detail: "stuck not resolved in time" },
+			{ runId: "r-e47-b", status: "completed", at: 4_000, detail: "objective met" },
+		],
 	},
 	// Hand-driven: a session with no loop run at all.
 	{ sessionId: "csess_manual", cardStatus: "running", sessionStatus: "active", runs: [] },
@@ -296,6 +378,7 @@ describe("board invariant — every coding card agrees with the run and session 
 		expect(FIXTURE.length, "fixture must cover every observed combination").toBeGreaterThanOrEqual(9);
 
 		let checked = 0;
+		let mixed = 0;
 		const violations: string[] = [];
 		for (const f of FIXTURE) {
 			const card = byKey.get(codingCardId(f.sessionId));
@@ -332,11 +415,34 @@ describe("board invariant — every coding card agrees with the run and session 
 			}
 			// 3b. every card carries a timestamp.
 			if (!card.updatedAt) violations.push(`${f.sessionId}: card carries no timestamp`);
+
+			// 4. the card's prose describes the card's OWN run — never a run that ended differently.
+			// The one permitted exception is the run a `needs_human` card was waiting on when its
+			// session died: WHY it was waiting is the explanation for the card, and the card says so.
+			const abandoned = card.description.includes("session ended while this was waiting for you");
+			for (const r of runs) {
+				if (!r.detail || r.status === card.runStatus) continue;
+				if (abandoned && r === latest) continue;
+				if (card.description.includes(r.detail)) {
+					violations.push(`${f.sessionId}: card is ${card.runStatus} but quotes a ${r.status} run — "${r.detail}"`);
+				}
+			}
+			// 4b. …and where the runs behind it did NOT all end alike, the card says how many there
+			// were and how they went, so one verdict cannot stand for nine.
+			const distinct = new Set(runs.map((r) => r.status));
+			if (distinct.size > 1) {
+				mixed++;
+				if (!card.description.includes(`${runs.length} runs:`)) {
+					violations.push(`${f.sessionId}: ${runs.length} runs with ${distinct.size} outcomes, card states no tally`);
+				}
+			}
 		}
 
 		expect(violations, violations.join("\n")).toEqual([]);
-		// G2 — the denominator is in the passing output.
+		// G2 — the denominators are in the passing output. `mixed` is stated separately because rule
+		// 4b is the one this fixture could measure over zero cards while everything else passed.
 		expect(checked, `cards reconciled against their run + session`).toBe(FIXTURE.length);
+		expect(mixed, "cards standing for runs that ended differently").toBeGreaterThanOrEqual(4);
 	});
 
 	it("the nine-run card reports nine attempts and its failure, end to end", async () => {
