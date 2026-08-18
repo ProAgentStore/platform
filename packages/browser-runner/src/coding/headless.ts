@@ -3,6 +3,7 @@ import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTarget
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
+import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
 
 /**
  * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
@@ -468,10 +469,12 @@ export class HeadlessSession {
 		});
 	}
 
-	/** Send a user turn to the agent (it acts on it). */
-	input(text: string): void {
+	/** Send a user turn. `author` names who wrote it, because `role` cannot — see turn-author.ts (#505). */
+	input(text: string, opts: { author?: TurnAuthor } = {}): void {
+		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
+		const sent = authoredTurn(text, opts.author);
 		if (!this.alive) this.start();
-		this.push(`\n❯ [${stamp()}] ${text}`); // ❯ — your turn, timestamped
+		this.push(`\n❯ [${stamp()}] ${authorTag(opts.author)}${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
 		const now = Date.now();
 		this.lastOutputAt = now;
@@ -479,12 +482,14 @@ export class HeadlessSession {
 		this.sawOutputSinceInput = false; // arm the persistent-raw idle heuristic for THIS turn
 		try {
 			if (this.mode === "stream-json") {
-				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+				// `role` stays "user" — the only role this protocol accepts, which is why the
+				// disambiguation rides in the text instead (#505).
+				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: sent }] } });
 				this.proc?.stdin?.write(`${msg}\n`);
 			} else {
 				// Raw CLI: spawn THIS turn. See `oneShot` — there is no persistent process to
 				// write to, because a non-interactive binary would never have read it.
-				this.runOneShot(text);
+				this.runOneShot(sent);
 			}
 		} catch {
 			/* process may have died; the next snapshot reports not-alive */

@@ -10,6 +10,7 @@ import type { EngineAuthResolved } from "./engine-auth.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoTree, runRepoGit } from "./inspect.js";
 import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
+import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 
 /**
  * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
@@ -64,7 +65,13 @@ export interface StartCodingResult extends CodingSnapshot {
 }
 
 export type CodingAction =
-	| { kind: "message"; text: string }
+	/**
+	 * `author` is who WROTE this turn (#505). `/coding/act` is a shared door — the console's
+	 * manual `/message`, MCP, the Overseer's delegation and the Pilot all arrive through it — and
+	 * the Engine sees every one of them as `role: "user"`. Optional because a caller that does not
+	 * declare an author has said nothing, and `turn-author.ts` renders that as nothing.
+	 */
+	| { kind: "message"; text: string; author?: TurnAuthor }
 	/**
 	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
 	 * kind is gone from `CodingActionKind` there — but this runner is a published npm package
@@ -286,7 +293,9 @@ export class CodingRuntime {
 		const session = this.require(sessionId);
 		switch (action.kind) {
 			case "message":
-				session.input(action.text);
+				// Narrowed rather than trusted: this runner is a published package any caller can
+				// POST to, and an unrecognised author must read as "unstated", not become a label.
+				session.input(action.text, { author: asTurnAuthor(action.author) });
 				break;
 			case "keys": {
 				// A snapshot is no longer the whole answer (#448). `key()` records the attempt and

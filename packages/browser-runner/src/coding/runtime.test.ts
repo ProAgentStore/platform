@@ -156,6 +156,24 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(snap.runState).toBe("idle");
 	});
 
+	it("carries the action's author through to the engine, and narrows an invented one (#505)", async () => {
+		// `/coding/act` is a published HTTP surface any caller can POST to. The author has to reach
+		// `HeadlessSession.input` for the fix to exist at all, and an unrecognised value has to
+		// reach it as "unstated" rather than becoming a label the platform cannot stand behind.
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "auth-pass", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		rt.act("auth-pass", { kind: "message", text: "one", author: "pilot" });
+		await until(() => rt.snapshot("auth-pass").pane.includes("REPLY:"));
+		expect(rt.snapshot("auth-pass").pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] \(pilot\) one/);
+
+		rt.start({ sessionId: "auth-bogus", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		// `"the project owner"` is exactly the string this defect would invent for itself.
+		rt.act("auth-bogus", { kind: "message", text: "two", author: "the project owner" } as never);
+		await until(() => rt.snapshot("auth-bogus").pane.includes("REPLY:"));
+		expect(rt.snapshot("auth-bogus").pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] two/);
+		expect(rt.snapshot("auth-bogus").pane).not.toContain("[pags]");
+	});
+
 	it("reports a resting ONE-SHOT session as alive — this is the shape the Pilot reads", () => {
 		// `runCodingLoop` fails the whole goal on `!snap.alive`, and this snapshot is what it
 		// gets. A one-shot engine has no process until a turn arrives, so before the fix every

@@ -125,7 +125,7 @@ export interface CodingPaneSnapshot {
  * re-added, which is exactly how it survived the first fix. The engine is a child process with
  * no PTY; there is no keystroke to send, and the type now says so.
  */
-export type CodingActionKind = { kind: "message"; text: string } | { kind: "interrupt" };
+export type CodingActionKind = { kind: "message"; text: string; author?: "pilot" } | { kind: "interrupt" };
 
 /**
  * `waiting` is the only NON-TERMINAL member (#541): the Engine cannot work right now for a reason
@@ -623,7 +623,14 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 	const str = (v: unknown) => (typeof v === "string" ? v : "");
 	switch (call.name) {
 		case "send_message":
-			return { action: { kind: "message", text: str(a.text) } };
+			// `author` is set HERE, at the one place the Pilot's instruction is born, because it is
+			// the only place the platform can honestly answer "who wrote this" (#505, criterion 3).
+			// The Engine receives every turn as `role: "user"` and cannot tell the Pilot from the
+			// human — which is how a run came to tell the owner he had "explicitly chosen" a change
+			// he was never asked about. The other doors into `/coding/act` (the console's manual
+			// `/message`, MCP, the Overseer) declare nothing, and the runner renders that as
+			// nothing rather than as a claim; see `packages/browser-runner/src/coding/turn-author.ts`.
+			return { action: { kind: "message", text: str(a.text), author: "pilot" } };
 		case "press_keys":
 			// No longer offered; if an older/cached tool list produces one, say so honestly rather
 			// than routing it into a no-op that reads as success.

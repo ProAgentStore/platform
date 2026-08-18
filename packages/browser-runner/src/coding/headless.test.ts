@@ -195,6 +195,47 @@ describe("HeadlessSession (stream-json engine)", () => {
 		expect(s.alive).toBe(false);
 	});
 
+	it("tells the engine a Pilot turn is a Pilot turn, and sends the instruction unchanged (#505)", async () => {
+		// The naming collision this closes: `role` can only ever be "user" here, so the engine
+		// called its driver "the user" and a Pilot reading that back told the owner he had
+		// "explicitly chosen" a change he was never asked about. FAKE_CLAUDE echoes what it
+		// received, which is how this can observe the wire text at all.
+		const s = new HeadlessSession({ id: "author1", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle");
+
+		s.input("bump the version in pubspec.yaml", { author: "pilot" });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		const pane = s.snapshot();
+
+		// The engine RECEIVED the disambiguation…
+		expect(pane).toContain("Done: [pags] This turn was written by the Pilot");
+		// …and the instruction reached it whole. #505 promises annotate, never rewrite.
+		expect(pane).toContain("bump the version in pubspec.yaml");
+		// The owner's Terminal view carries a short marker, not the preamble: that pane is the
+		// Pilot's own fixed character budget, and 150 characters per turn would evict real output.
+		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] \(pilot\) bump the version in pubspec\.yaml/);
+		s.stop();
+	});
+
+	it("says nothing about an unauthored turn — silence is not a label (#505)", async () => {
+		// The console's manual `/message`, MCP and the Overseer all reach `/coding/act` without
+		// declaring an author, so an absent author must leave the bytes exactly as they were.
+		const s = new HeadlessSession({ id: "author2", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle");
+
+		s.input("bump the version in pubspec.yaml");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		const pane = s.snapshot();
+
+		expect(pane).toContain("Done: bump the version in pubspec.yaml"); // nothing prepended
+		expect(pane).not.toContain("[pags]");
+		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] bump the version in pubspec\.yaml/);
+		expect(pane).not.toContain("(pilot)");
+		s.stop();
+	});
+
 	it("accumulates the engine's own spend per turn, and a drain hands it over exactly once", async () => {
 		// The whole point of #267: the Engine's tokens are spent on the user's machine and passed
 		// through none of the cloud's three ledger choke points, so unless the `result` event is
@@ -341,6 +382,22 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.input("hi");
 		await until(() => s.snapshot().includes("done: hi"), 12_000, "raw stdout to include final line");
 		expect(s.takeUsage()).toEqual([]);
+		s.stop();
+	}, 20_000);
+
+	it("a RAW engine is told who wrote the turn too — the one-shot path is not exempt (#505)", async () => {
+		// `runOneShot` appends the turn as the final argv element, a completely separate send from
+		// the stream-json write. A fix that only covered Claude would leave every Codex/Grok/local
+		// engine with the same naming collision, silently.
+		const s = new HeadlessSession({ id: "raw-author", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
+		s.start();
+		s.input("bump the version in pubspec.yaml", { author: "pilot" });
+		await until(() => s.snapshot().includes("done: "), 12_000, "raw one-shot turn to finish");
+		const pane = s.snapshot();
+
+		expect(pane).toContain("thinking about: [pags] This turn was written by the Pilot");
+		expect(pane).toContain("bump the version in pubspec.yaml");
+		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] \(pilot\) bump the version in pubspec\.yaml/);
 		s.stop();
 	}, 20_000);
 

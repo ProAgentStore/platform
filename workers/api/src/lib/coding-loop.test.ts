@@ -641,6 +641,37 @@ describe("every tool the Pilot is offered maps to a decision", () => {
 	it("still routes a genuine human handoff to stuck", () => {
 		expect(toDecision({ name: "request_human", arguments: { why: "interactive login" } }).stuck?.why).toBe("interactive login");
 	});
+
+	it("stamps every Pilot instruction with its author, because the engine cannot tell (#505)", () => {
+		// The runner writes every turn as `role: "user"`, so the engine's transcript calls its
+		// driver "the user" — and a Pilot reading that back told the owner he had "explicitly
+		// chosen" a version bump he was never asked about. The runner can only name an author the
+		// caller declares, and this is the one place the Pilot's instruction is born.
+		const d = toDecision({ name: "send_message", arguments: { text: "bump the version in pubspec.yaml" } });
+		expect(d.action).toEqual({ kind: "message", text: "bump the version in pubspec.yaml", author: "pilot" });
+	});
+
+	it("carries the author all the way to the act the runner receives (#505)", async () => {
+		// The wiring assertion, not the helper's. An optional field with no writer is the class
+		// this repo keeps paying for (#570/#591): the type reads as implemented while nothing
+		// populates it, and `/coding/act` would go on sending unauthored Pilot turns forever.
+		const acted: Array<{ kind: string; author?: string }> = [];
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async (a) => {
+				acted.push({ kind: a.kind, ...(a.kind === "message" ? { author: a.author } : {}) });
+				return idle;
+			},
+			decide: async () =>
+				acted.length === 0
+					? toDecision({ name: "send_message", arguments: { text: "bump the version in pubspec.yaml" } })
+					: { finish: { status: "done", detail: "bumped" } },
+		};
+		await runCodingLoop(deps, GOAL);
+		expect(acted).toEqual([{ kind: "message", author: "pilot" }]);
+	});
 });
 
 /**
