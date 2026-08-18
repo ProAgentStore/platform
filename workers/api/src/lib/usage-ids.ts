@@ -53,6 +53,48 @@ export function usageRowsSql(withRange: boolean): string {
 	 ORDER BY u.created_at ASC`;
 }
 
+/**
+ * The JOINs and WHERE that scope `ai_usage` to ONE instance, resolving each row's instance exactly
+ * the way {@link usageRowsSql} does (#662). The caller writes `FROM ai_usage u` itself — see below.
+ *
+ * Four instance-scoped readers were left on the raw column after #526 fixed the Usage page —
+ * `instanceSpendMicros` (the delegation-budget settle), the two stats cards `usageTokens` and
+ * `usageValue`, and the admin instance detail. Every platform-paid embedding and summary row
+ * carried an instance id in `agent_id` and NULL in `instance_id` (see lib/meter-ids.ts), so all
+ * four saw none of them: the budget settle UNDER-charged the pool, which usage.ts names as the
+ * unsafe direction, and the per-instance stats cards disagreed with the Usage page about the same
+ * instance in the same window with nothing on screen saying why.
+ *
+ * Written here, once, rather than open-coded a fifth time — the four drifted because there were
+ * four of them. The `?N` positions are passed in because the callers bind in different orders.
+ *
+ * Two properties worth stating, since both are load-bearing:
+ *  - the instance joins are scoped to the ROW'S OWN user, so an id a writer misattributed can
+ *    never pull in another tenant's spend;
+ *  - `COALESCE(ia.id, ub.id)` prefers a resolvable `instance_id` over `agent_id`, so a row that
+ *    already names an instance correctly is unaffected. Only rows whose `instance_id` resolves to
+ *    nothing — the ones these readers could not see at all — fall through to `agent_id`.
+ *
+ * ── Why the FROM stays at the call site
+ *
+ * `lib/usage-aggregates.ts` (#346) judges every `SUM(cost_micros)` on the SQL AS WRITTEN inside one
+ * string literal, and it locates a statement's select list by finding the `FROM` after it. Folding
+ * `FROM ai_usage` into this helper took three money aggregates — the two here and admin instance
+ * detail's pair — out of that scanner's sight entirely: they kept summing dollars and stopped being
+ * asked to say whether the number is a charge or notional value. Leaving the six characters at the
+ * call site is what keeps them under the ratchet, and `usage-aggregates.test.ts` counts them.
+ *
+ * The `ai_usage` alias is `u`, matching `usageRowsSql`. Columns unique to `ai_usage`
+ * (`cost_micros`, `payer`, the token columns) are left unqualified so they read the same as
+ * before; `id`, `user_id`, `agent_id`, `instance_id` and `created_at` exist on both tables and
+ * MUST be written `u.<col>`.
+ */
+export function usageInstanceScopeSql(userParam: string, instanceParam: string): string {
+	return `LEFT JOIN agent_instances ia ON ia.id = u.instance_id AND ia.user_id = u.user_id
+	 LEFT JOIN agent_instances ub ON ub.id = u.agent_id    AND ub.user_id = u.user_id
+	 WHERE u.user_id = ${userParam} AND COALESCE(ia.id, ub.id) = ${instanceParam}`;
+}
+
 /** The instances a Usage response may need to name. Small, and read apart from the row scan:
  *  a display name lives inside the `config` blob, and dragging that onto thousands of ledger rows
  *  to read one field would dominate the response — while `json_extract` RAISES on malformed JSON,

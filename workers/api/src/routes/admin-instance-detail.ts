@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { HttpError, requireAdmin } from "../lib/auth.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { sqlTime } from "../lib/sql-time.js";
+import { usageInstanceScopeSql } from "../lib/usage-ids.js";
 import { CHARGED_SQL } from "../lib/usage-payer.js";
 import type { Env } from "../types.js";
 
@@ -111,15 +112,21 @@ adminInstanceDetailRoutes.get("/instances/:id/detail", async (c) => {
 		// `value_micros` is list price on every row — the operator's "how busy is this instance"
 		// number, which would read near-zero for a subscription-run Coder if it were filtered —
 		// and `charged_micros` is the subset anyone is actually billed for.
+		//
+		// Scoped through `usageInstanceScopeSql` (#662) so this agrees with the Usage page instead
+		// of contradicting it: platform-paid embedding/summary rows carry an instance id in
+		// `agent_id` and NULL in `instance_id`, and a raw `instance_id = ?` saw none of them. That
+		// also brings the owner into the query — the resolution joins are user-scoped, so a row
+		// misattributed by a writer can never drag in another tenant's spend.
 		c.env.DB.prepare(
 			`SELECT COUNT(*) AS calls,
 			        COALESCE(SUM(input_tokens), 0) AS input_tokens,
 			        COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			        COALESCE(SUM(cost_micros), 0) AS value_micros,
 			        COALESCE(SUM(CASE WHEN ${CHARGED_SQL} THEN cost_micros ELSE 0 END), 0) AS charged_micros
-			 FROM ai_usage
-			 WHERE instance_id = ?1 AND created_at >= ?2`,
-		).bind(id, thirtyDaysAgo()).first<{
+			 FROM ai_usage u
+			 ${usageInstanceScopeSql("?2", "?1")} AND u.created_at >= ?3`,
+		).bind(id, ownerId, thirtyDaysAgo()).first<{
 			calls: number;
 			input_tokens: number;
 			output_tokens: number;

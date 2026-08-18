@@ -59,6 +59,13 @@ describe("owner scoping", () => {
 	it("binds instance AND user on every D1-backed source, in the query", () => {
 		// This is the sentence that makes agent-authored stats safe: the card supplies WHICH VIEW,
 		// never WHOSE DATA. If a source ever filters in JS instead, this fails.
+		//
+		// The instance axis is matched by SHAPE rather than by one spelling, because the two
+		// `ai_usage` sources reach it through `usageInstanceScopeSql` (#662) — a row's instance is
+		// resolved by join, so the predicate reads `COALESCE(ia.id, ub.id) = ?1` instead of naming
+		// the raw column. Same axis, same bound position, same server-side scoping; asserting the
+		// literal text would have made the correct query look like a broken one.
+		const instanceAxis = /(?:\binstance_id|COALESCE\(ia\.id, ub\.id\))\s*=\s*\?1/;
 		const dbSources = STATS_SOURCES.filter((s) => !s.id.startsWith("collection."));
 		return Promise.all(
 			dbSources.map(async (s) => {
@@ -66,7 +73,7 @@ describe("owner scoping", () => {
 				const kind = s.kinds.includes("number") ? "number" : "bar";
 				await readPointInTime(ctx(env), card({ source: s.id, kind, params: { limit: 5 } }), statsPeriod("2026-08-06", 7));
 				expect(calls, s.id).toHaveLength(1);
-				expect(calls[0].sql, s.id).toContain("instance_id = ?1");
+				expect(calls[0].sql, s.id).toMatch(instanceAxis);
 				expect(calls[0].sql, s.id).toContain("user_id = ?2");
 				expect(calls[0].binds.slice(0, 2), s.id).toEqual(["inst-1", "user-1"]);
 			}),

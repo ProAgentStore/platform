@@ -9,7 +9,7 @@
 import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
 import { engineSessionFromRowId, engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
-import { bucketLabel, UNASSIGNED_KEY } from "./usage-ids.js";
+import { bucketLabel, UNASSIGNED_KEY, usageInstanceScopeSql } from "./usage-ids.js";
 import { payerCoverage } from "./usage-coverage.js";
 import type { UsageBucket, UsageDay, UsageSummary, UsageTotals } from "./usage-shape.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
@@ -582,8 +582,8 @@ export function denseDays(fromDay: string, toDay: string): string[] {
  */
 export async function instanceSpendMicros(env: Env, userId: string, instanceId: string): Promise<number> {
 	const row = await env.DB.prepare(
-		`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage
-		  WHERE user_id = ?1 AND instance_id = ?2 AND ${CHARGED_SQL}`,
+		`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage u
+		  ${usageInstanceScopeSql("?1", "?2")} AND ${CHARGED_SQL}`,
 	)
 		.bind(userId, instanceId)
 		.first<{ total: number }>();

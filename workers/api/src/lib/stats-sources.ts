@@ -3,9 +3,11 @@
  *
  * ## Every query is scoped by the SERVER, never by the card
  *
- * Each executor below binds `instance_id = ?1 AND user_id = ?2` itself. Nothing a card carries
- * reaches a WHERE clause as SQL: `params` are validated against the source's declared param table
- * (`validateStatsCard`) and then bound as values. That is the whole safety story for agent-authored
+ * Each executor below binds the instance as `?1` and the user as `?2` itself. The two `ai_usage`
+ * ones go through `usageInstanceScopeSql`, which resolves a row's instance by join rather than
+ * trusting the raw column (#662) — same axis, same two bound values, still server-side. Nothing a
+ * card carries reaches a WHERE clause as SQL: `params` are validated against the source's declared
+ * param table (`validateStatsCard`) and then bound as values. That is the whole safety story for agent-authored
  * cards — the schema says WHAT to show, never WHOSE data.
  *
  * ## No fifth record of what happened
@@ -27,6 +29,7 @@
  */
 import type { CollectionRecord, CollectionSchema } from "../agent-storage-types.js";
 import { COLLECTION_SCAN_CAP, MAX_CARD_LIMIT, STATS_SOURCES, type StatsCard, type StatsCardKind, type StatsUnit, unitFor } from "./stats-schema.js";
+import { usageInstanceScopeSql } from "./usage-ids.js";
 import type { Env } from "../types.js";
 
 export interface StatsCtx {
@@ -310,8 +313,8 @@ async function usageTokens(ctx: StatsCtx, period: StatsPeriod): Promise<number> 
 		ctx,
 		`SELECT COALESCE(SUM(input_tokens + output_tokens
 		        + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0)), 0) AS v
-		   FROM ai_usage
-		  WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3 AND created_at < ?4`,
+		   FROM ai_usage u
+		   ${usageInstanceScopeSql("?2", "?1")} AND u.created_at >= ?3 AND u.created_at < ?4`,
 		period.startText,
 		period.endText,
 	);
@@ -329,8 +332,8 @@ async function usageTokens(ctx: StatsCtx, period: StatsPeriod): Promise<number> 
 async function usageValue(ctx: StatsCtx, period: StatsPeriod): Promise<number> {
 	return scalar(
 		ctx,
-		`SELECT COALESCE(SUM(cost_micros), 0) AS value_micros FROM ai_usage
-		  WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3 AND created_at < ?4`,
+		`SELECT COALESCE(SUM(cost_micros), 0) AS value_micros FROM ai_usage u
+		   ${usageInstanceScopeSql("?2", "?1")} AND u.created_at >= ?3 AND u.created_at < ?4`,
 		period.startText,
 		period.endText,
 	);

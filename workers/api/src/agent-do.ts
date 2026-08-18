@@ -89,6 +89,7 @@ import {
 } from "./lib/message-page.js";
 import { isFabricatedRecord } from "./lib/fabricated-history.js";
 import { logError } from "./lib/error-log.js";
+import { resolveMeterIds } from "./lib/meter-ids.js";
 import { platformAiBinding } from "./lib/platform-settings.js";
 import { isTransientInfraError } from "./lib/on-error.js";
 import type { Env } from "./types.js";
@@ -155,11 +156,10 @@ export class AgentDO extends DurableObject<Env> {
 		// switch. Off → pass null AI, so embed/summary no-op and the platform never spends
 		// tokens (BYOK-only). LLM chat is BYOK regardless of this flag.
 		const platformAi = await platformAiBinding(this.env);
-		// When the acting user is known, meter platform-paid embeds/summaries into the
-		// ai_usage ledger (provider="platform") so operator spend is visible (issue #44).
-		const meter = platformAi && userId
-			? { db: this.env.DB, userId, agentId }
-			: null;
+		// Meter platform-paid embeds/summaries into the ai_usage ledger when the acting user is known (#44).
+		// WHICH id this DO's name is — agent or instance — is a lookup, never an assumption: lib/meter-ids.ts.
+		const meter =
+			platformAi && userId ? { db: this.env.DB, userId, ...(await resolveMeterIds(this.env, agentId)) } : null;
 		return new AgentStorageEngine(
 			this.ctx.storage,
 			this.env.STORAGE || null,
