@@ -24,41 +24,53 @@
   <header><div class="wrap"><a class="brand" href="/">Pro<span>Agent</span>Store</a></div></header>
   <main class="wrap">
     <h1>Privacy Policy</h1>
-    <p class="updated">Last updated: June 29, 2026</p>
+    <p class="updated">Last updated: August 18, 2026</p>
 
-    <h2>Overview</h2>
-    <p>ProAgentStore ("PAGS", "we", "our", or "the app") is a native app for operating private ProAgentStore AI agents. This policy explains what the app sends to ProAgentStore services and what it stores on your device.</p>
+    <h2>Scope</h2>
+    <p>ProAgentStore ("we", "our", "the platform") is a marketplace for server-powered AI agents. This policy covers the whole platform: the web console at proagentstore.online, the API, the MCP server, the <code>@proagentstore/cli</code> local runner, and the PAGS native app.</p>
 
-    <h2>Data We Collect</h2>
-    <p>The app communicates with the ProAgentStore API to provide core app functionality. Depending on how you use the service, this can include:</p>
+    <h2>What we collect</h2>
     <ul>
-      <li>Account identifiers needed to authenticate your ProAgentStore account.</li>
-      <li>Agent chat messages and responses.</li>
-      <li>Runtime task, approval, cancellation, and input events.</li>
-      <li>Coding repository metadata, session messages, terminal output, and activity timeline data.</li>
-      <li>Profile context and special instructions you save for your agents.</li>
+      <li>Account identifiers from your GitHub or Google sign-in. We never receive or store a password.</li>
+      <li>Agent chat messages, responses, and the memory and knowledge you save to an agent.</li>
+      <li>Run records: instructions sent to an agent, tool calls and their results, terminal output, task and approval events, and how each run ended.</li>
+      <li>Repository metadata and, for agents you point at a repository, indexed file content.</li>
+      <li>Profile context and standing instructions you save for your agents.</li>
+      <li>Usage and cost records for the model calls your agents make.</li>
     </ul>
 
-    <h2>On-Device Storage</h2>
-    <p>The app stores your ProAgentStore session token securely on your device (the iOS Keychain or Android Keystore). The app does not request access to your camera, microphone, contacts, photos, precise location, or health data.</p>
+    <h2>Where it is stored</h2>
+    <p>All account data is stored on Cloudflare — D1, R2, KV, Durable Objects and Vectorize. Each agent instance is an isolated Durable Object, and every request is scoped to the owning account.</p>
 
-    <h2>Tracking and Ads</h2>
-    <p>The app does not use third-party advertising, third-party analytics, or cross-app tracking.</p>
+    <h2>Credentials and keys</h2>
+    <p>API keys, site credentials and OAuth refresh tokens are envelope-encrypted before storage: an AES-256-GCM data key wrapped with AES-KW under a master key held as a Worker secret. Only your own model-provider key can be revealed back to your own browser, rate-limited. Gmail refresh tokens are never revealable. Encryption uses a service-held key, so this is not zero-knowledge: an operator with production access could decrypt stored credentials.</p>
 
-    <h2>Third-Party Services</h2>
-    <p>PAGS uses ProAgentStore services hosted at <code>api.proagentstore.online</code>. Agent runtimes may call tools, model providers, repositories, or other services that you configure or authorize in ProAgentStore.</p>
+    <h2>Your source code</h2>
+    <p>Coding agents do not upload your repository. The coding CLI runs on your own machine and is reached over an outbound WebSocket that your machine initiates when you run <code>pags up</code>. Where you ask an agent to index a repository for search, the extracted text is stored in a vector store scoped to that instance and is deleted when you remove the repository.</p>
 
-    <h2>Your Responsibilities</h2>
-    <p>Do not submit secrets, regulated data, or sensitive personal information to an agent unless you intend that agent and its configured tools to process it.</p>
+    <h2>Model providers</h2>
+    <p>Agents run on a key you supply. Prompts and the context assembled for them are sent to the provider you chose — Anthropic, OpenAI, Google AI, OpenRouter, Groq, xAI, or Cloudflare Workers AI — under that provider's terms, using your key. We do not train models on your data.</p>
 
-    <h2>Data Retention</h2>
-    <p>Data associated with your ProAgentStore account is retained to provide the service unless deleted through account or workspace controls. Deleting the app removes local app data from the device, but does not automatically delete server-side account, agent, or runtime data.</p>
+    <h2>Services you connect</h2>
+    <p>Optional connectors reach a third party only after you authorize it and grant it to a specific agent: GitHub (a GitHub App, using per-installation tokens), Google Drive, Gmail (read-only), Zoho WorkDrive, and the Google Places API. Revoking a grant stops that access.</p>
 
-    <h2>Deleting Your Account and Data</h2>
-    <p>You can request permanent deletion of your account and associated data at any time. See <a href="/app/delete/">Delete Your Account &amp; Data</a> for the steps, what is deleted, and what may be retained.</p>
+    <h2>Tracking</h2>
+    <p>No third-party advertising, no cross-app tracking, no third-party analytics.</p>
+
+    <h2>Your responsibilities</h2>
+    <p>Do not give an agent secrets, regulated data, or sensitive personal information unless you intend that agent and every tool you have granted it to process that data. An agent acts with the permissions of the credentials you give it.</p>
+
+    <h2>Retention</h2>
+    <p>Account data is retained to provide the service until you delete it. MCP audit events expire after 90 days. Deleting an instance deletes its messages, files, memory and indexed content. Deleting the native app removes local data from that device only.</p>
+
+    <h2>Deleting your account</h2>
+    <p>You can request permanent deletion at any time — see <a href="/app/delete/">Delete Your Account &amp; Data</a> for what is deleted and what may be retained.</p>
+
+    <h2>Open source</h2>
+    <p>The platform is open source under the MIT licence at <a href="https://github.com/ProAgentStore/platform">github.com/ProAgentStore/platform</a>, so the behaviour described here can be verified in the source.</p>
 
     <h2>Contact</h2>
-    <p>Questions about privacy can be sent to <a href="mailto:privacy@proagentstore.online">privacy@proagentstore.online</a>.</p>
+    <p>Privacy questions: <a href="mailto:privacy@proagentstore.online">privacy@proagentstore.online</a>.</p>
   </main>
   <footer><div class="wrap links"><a href="/">Home</a><a href="/app/support/">Support</a><a href="/app/terms/">Terms</a></div></footer>
 </body>

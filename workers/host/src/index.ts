@@ -31,6 +31,13 @@ const PAGES: Record<string, string> = {
 	"/app/privacy/": privacyPage,
 	"/app/terms": termsPage,
 	"/app/terms/": termsPage,
+	// Root aliases. The `/app/*` paths were minted for the native-app store submissions and are
+	// the ones already published there, so they stay. A marketplace listing asks for a policy URL
+	// and `/app/privacy` reads as app-only when the policy now covers the whole platform.
+	"/privacy": privacyPage,
+	"/privacy/": privacyPage,
+	"/terms": termsPage,
+	"/terms/": termsPage,
 	"/app/support": supportPage,
 	"/app/support/": supportPage,
 	"/app/delete": deletePage,
