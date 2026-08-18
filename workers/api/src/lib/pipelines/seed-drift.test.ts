@@ -6,7 +6,7 @@
 // This test is the thing that stops them drifting. Without it, editing site-builder.json
 // would leave every NEW subscriber on the old definition while site-builder.test.ts stayed
 // green against the file — the worst kind of drift, invisible and only reproducible in prod.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import siteBuilder from "./site-builder.json" with { type: "json" };
@@ -283,5 +283,67 @@ describe("migration 0111 — the seeded lead-finder pipeline", () => {
 		expect(ddl).toContain("WHERE slug = 'small-business-website-lead-finder'");
 		expect(ddl).not.toContain("4d9945ab");
 		expect(ddl).not.toMatch(/\bINSERT\b/i);
+	});
+});
+
+// ── #394 / #496 ─────────────────────────────────────────────────────────────────
+// 0111 seeded the fixed definition onto the AGENTS row, which is where a future subscriber gets it
+// from. It could not reach the one Lead Finder instance that already existed: subscribe copies
+// `agents.config.pipelines` once, and `loadPipeline` reads `agent_instances.config` with no
+// fallback. So the 1MiB fix was live in the runner, present in the catalog, and absent from the
+// only agent running it — which is #496's defect, one field over from identity.
+//
+// The remedy migration copies the definition FROM the agents row rather than embedding it, so
+// there is deliberately no third copy to drift. What can still drift is its GATE: it names the
+// eight-step shape it is willing to replace, and that shape is only meaningful as "the reference
+// minus the two steps the fix added". These derive it and assert the SQL says exactly that.
+const PROPAGATION_MIGRATION = readdirSync(fileURLToPath(new URL("../../../migrations", import.meta.url).href))
+	.filter((f) => f.endsWith("lead_finder_pipeline_reaches_live_instances.sql"))
+	.map((f) => fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url).href));
+
+describe("the #394 propagation migration — the seed reaches the instance that already existed", () => {
+	it("exists exactly once", () => {
+		// Found by suffix so a renumbering (two lanes landing at once) does not need this edited;
+		// two files matching would mean the migration was copied rather than renamed.
+		expect(PROPAGATION_MIGRATION).toHaveLength(1);
+	});
+
+	const ddl = () =>
+		readFileSync(PROPAGATION_MIGRATION[0], "utf8")
+			.split("\n")
+			.filter((l) => !l.trimStart().startsWith("--"))
+			.join("\n");
+
+	it("gates on the reference definition MINUS the two steps the 1MiB fix added", () => {
+		// The stale copy is the reference without `slice` (the cap) and without the second `map`
+		// (bind `classified`, the reshape that follows the responseMap projection). Derived from
+		// lead-finder.json rather than restated, so a definition change makes the gate's premise
+		// fail here instead of turning it into a clause that silently matches nothing — or, worse,
+		// something else.
+		const stale = leadFinder.steps.filter((s) => s.tool !== "slice" && s.bind !== "classified").map((s) => s.tool);
+		expect(stale).toHaveLength(leadFinder.steps.length - 2);
+		expect(ddl()).toContain(JSON.stringify(stale));
+	});
+
+	it("cannot match the FIXED definition, so it is not a re-run hazard", () => {
+		// The gate is an equality on the whole step sequence, so the 10-step definition it installs
+		// can never satisfy it. That is what makes the migration idempotent and what stops it
+		// overwriting the archive with the value it just wrote.
+		expect(ddl()).not.toContain(JSON.stringify(leadFinder.steps.map((s) => s.tool)));
+	});
+
+	it("copies from the agents row instead of embedding a third copy of the definition", () => {
+		// The drift this whole file exists to prevent. A migration that restated the definition
+		// would add a copy that no test compares to lead-finder.json, on top of the two that do.
+		expect(ddl()).toMatch(/FROM agents a/);
+		expect(ddl()).not.toContain('"steps"');
+		expect(ddl()).toMatch(/UPDATE agent_instances/);
+	});
+
+	it("keeps what it replaces, since the gate matches a shape and not the bytes", () => {
+		// An instance that edited an INPUT inside those eight steps matches too. Archiving the old
+		// definition is what makes that acceptable: the change is reversible by hand rather than
+		// destructive, and `$.pipelinesReplaced` is read by nothing.
+		expect(ddl()).toContain("'$.pipelinesReplaced.lead_finder'");
 	});
 });
