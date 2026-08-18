@@ -112,7 +112,19 @@ function fakeServer(into: Map<string, Captured>) {
 }
 
 const ALL_SCOPES = ["read", "write", "runtime", "destructive"];
-const env: McpEnv = { API_BASE: "https://api.test" };
+
+/** Audit writes, so the probe below can read back whether a tool recorded its own success.
+ *  Nothing else in this file depends on it; `audit()` no-ops without a KV, which is why the
+ *  question was unaskable here before (#701). */
+const auditStore = new Map<string, string>();
+const auditKv = {
+	get: async (k: string) => auditStore.get(k) ?? null,
+	put: async (k: string, v: string) => {
+		auditStore.set(k, v);
+	},
+	list: async () => ({ keys: [], list_complete: true }),
+} as unknown as KVNamespace;
+const env: McpEnv = { API_BASE: "https://api.test", OAUTH_KV: auditKv };
 
 /** Every instance tool, registered once. `scopes` is read at CALL time, so one
  *  registration serves every probe — the tool set cannot differ between them. */
@@ -478,6 +490,28 @@ describe("conventions the table has to keep", () => {
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
 		).toEqual(["call_instance_tool", "coding_loop_stop", "stop_instance_loop"]);
+	});
+
+	it("the generic connector invoker records its own success", async () => {
+		// `requirePermission` writes on its two DENIAL branches and returns `null` on the allow
+		// path, so a tool that never calls `audit()` itself is invisible in the log exactly when
+		// it worked. `call_instance_tool` was in that state and is the one where it mattered: a
+		// `write`-scoped generic invoker reaching `github_*`, `http_request` and `mcp_call_tool`,
+		// whose calls appeared in NO log anywhere — not here, and not in `agent_events`, because
+		// the API traces `runRegistryTool` only for a delegated call (#701).
+		//
+		// Asserted on THIS tool rather than swept across every mutating one, and the reason is
+		// worth stating because the sweep was written first and thrown away: this file drives
+		// every handler against one canned `{ok:true}` response, and several tools audit inside a
+		// branch that response never reaches (`subscribe_agent` audits `if (data.instanceId)`).
+		// The sweep therefore reported nine "silent" tools of which most were probe artefacts —
+		// a measurement that certifies ground it never walked (ADR 0002 G3). A sweep worth having
+		// needs a per-tool success fixture, which is `instance-tools.test.ts`'s job and where the
+		// payload shape of this row is asserted.
+		auditStore.clear();
+		await say("call_instance_tool");
+		const events = [...auditStore.values()].map((v) => JSON.parse(v) as { tool?: string; action?: string });
+		expect(events.map((e) => `${e.tool}:${e.action}`)).toEqual(["call_instance_tool:completed"]);
 	});
 
 	it("every tool takes the standard optional session token", () => {

@@ -41,3 +41,4 @@ a violation).
 | [0001](./0001-mute-is-always-available.md) | Mute is available at every moment of a voice session | Accepted |
 | [0002](./0002-a-guard-states-what-it-measured.md) | A guard states the size of what it measured | Accepted |
 | [0003](./0003-a-coder-engine-reports-its-own-turns.md) | A Coder engine reports its own turns | Accepted |
+| [0004](./0004-an-audit-event-points-at-content-it-does-not-copy.md) | An audit event points at content; it does not copy it | Accepted |

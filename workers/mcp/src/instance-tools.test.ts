@@ -579,7 +579,39 @@ describe("chat_with_instance", () => {
 		});
 		const res = await h.tools.get("chat_with_instance")!.handler({ instance_id: "i1", message: "hello" });
 		expect(res.content[0].text).toBe("Hi there");
-		expect(JSON.parse(h.fetchStub.calls[0].body!)).toEqual({ message: "hello" });
+		// `origin` rides alongside the message so the trace can tell an MCP turn from a console
+		// one. It is NOT `channel` — that field threads the DO's messages (#701).
+		expect(JSON.parse(h.fetchStub.calls[0].body!)).toEqual({ message: "hello", origin: "mcp" });
+	});
+
+	it("records the turn's traceId, which is the join to the prose it does not copy", async () => {
+		// ADR 0004: the audit event points at the content. `instance_messages` and the
+		// `chat.in`/`chat.out` trace rows for this turn all carry this same id, so the
+		// 1,519-byte prompt the event stores as four bytes is one join away.
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/chat") && m === "POST", {
+			body: { message: { content: "Hi there", traceId: "9f1c2b84-6d3e-4a55-9c07-2f8ab41d7e63" } },
+		});
+
+		await h.tools.get("chat_with_instance")!.handler({ instance_id: "i1", message: "hello" });
+
+		const events = h.auditEvents();
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			tool: "chat_with_instance",
+			action: "completed",
+			input: { instance_id: "i1", messageBytes: 5, traceId: "9f1c2b84-6d3e-4a55-9c07-2f8ab41d7e63" },
+		});
+	});
+
+	it("omits traceId rather than inventing one when the API does not return it", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/chat") && m === "POST", { body: { message: { content: "Hi" } } });
+
+		await h.tools.get("chat_with_instance")!.handler({ instance_id: "i1", message: "hello" });
+
+		const [event] = h.auditEvents();
+		expect(event.input).not.toHaveProperty("traceId");
 	});
 
 	it("requires runtime scope (blocked with only read+write)", async () => {
@@ -967,6 +999,42 @@ describe("call_instance_tool proxy", () => {
 		expect(call.url).toBe("https://api.test/v1/instances/i1/tools/github%20list%20issues");
 		expect(call.method).toBe("POST");
 		expect(JSON.parse(call.body!)).toEqual({ repo: "a/b" });
+	});
+
+	it("writes an audit row — key names and a size, never the argument values (#701)", async () => {
+		// This tool recorded nothing on EITHER side: no MCP audit row, and no `agent_events`
+		// row either, because the API traces `runRegistryTool` only for a delegated call. So an
+		// MCP-driven `github_create_issue` existed in no log anywhere — and it is the one gap a
+		// correlation id cannot close, because there is no persisted content to point AT.
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.includes("/tools/") && m === "POST", { body: { number: 12 } });
+
+		await h.tools.get("call_instance_tool")!.handler({
+			instance_id: "i1",
+			tool: "github_create_issue",
+			input: { repo: "a/b", title: "x", body: "y".repeat(4000) },
+		});
+
+		const [event] = h.auditEvents();
+		expect(event).toMatchObject({
+			tool: "call_instance_tool",
+			action: "completed",
+			input: { instance_id: "i1", invoked: "github_create_issue", argKeys: ["repo", "title", "body"] },
+			result: { ok: true },
+		});
+		expect((event.input as { argBytes: number }).argBytes).toBeGreaterThan(4000);
+		// The issue body was counted, not copied.
+		expect(JSON.stringify(event)).not.toContain("yyyy");
+	});
+
+	it("records a failed invocation as not-ok rather than as a success", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.includes("/tools/") && m === "POST", { status: 500, body: { error: "boom" } });
+
+		await h.tools.get("call_instance_tool")!.handler({ instance_id: "i1", tool: "github_create_issue" });
+
+		const [event] = h.auditEvents();
+		expect(event.result).toEqual({ ok: false });
 	});
 
 	it("is blocked in read-only mode (it is a write-scoped invoker)", async () => {

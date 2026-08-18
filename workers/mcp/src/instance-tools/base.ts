@@ -226,6 +226,27 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 				{ method: "POST", body: JSON.stringify(input || {}) },
 				env,
 			);
+			// This tool recorded NOTHING on either side (#701): no MCP audit row, and no
+			// `agent_events` row either, because `routes/tools.ts` calls `runRegistryTool`
+			// without a `traceId` and `lib/tool-registry.ts` only traces a delegated call. So an
+			// MCP-driven `github_create_issue` existed in no log anywhere — and unlike the chat
+			// tools there is no persisted content for a join key to point AT, which is why this
+			// is the one gap the correlation ids cannot close.
+			//
+			// `argKeys` + `argBytes` is the vocabulary `lib/connectors/mcp.ts` and
+			// `routes/tools.ts` already settled on, so this introduces no new privacy posture.
+			const args = JSON.stringify(input || {});
+			await audit(safetyFor(token), {
+				tool: "call_instance_tool",
+				action: "completed",
+				input: {
+					instance_id,
+					invoked: tool,
+					argKeys: Object.keys(input || {}),
+					argBytes: new TextEncoder().encode(args).length,
+				},
+				result: { ok: !(data as { error?: string }).error },
+			});
 			return jsonText(data);
 		},
 	);
@@ -323,16 +344,34 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 					messageBytes: new TextEncoder().encode(message).length,
 				});
 			}
+			// `origin: "mcp"` marks the turn's provenance in the trace. It is a SEPARATE field
+			// from `channel`, which the API route hardcodes to "chat" and the AgentDO uses for
+			// message threading — putting "mcp" there would land reaped-turn notices and system
+			// messages on a channel no client polls (#701).
 			const data = (await authedCall(
 				`/v1/instances/${instance_id}/chat`,
 				sessionToken,
-				{ method: "POST", body: JSON.stringify({ message }) },
+				{ method: "POST", body: JSON.stringify({ message, origin: "mcp" }) },
 				env,
 			)) as {
-				message?: { content?: string };
+				message?: { content?: string; traceId?: string };
 				error?: string;
 			};
-			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "chat_with_instance", action: "completed", input: { instance_id, messageBytes: new TextEncoder().encode(message).length } });
+			// `traceId` is the turn id the API mints before the DO is asked, and every
+			// `instance_messages` row and `agent_events` row for this turn carries it. Recording
+			// it costs zero extra bytes and is an EXACT join back to the prose the audit event
+			// deliberately does not copy — ADR 0004. Omitted when absent (an older API, or an
+			// error reply), which is additive rather than a broken field.
+			if (!(data as { error?: string }).error)
+				await audit(safetyFor(token), {
+					tool: "chat_with_instance",
+					action: "completed",
+					input: {
+						instance_id,
+						messageBytes: new TextEncoder().encode(message).length,
+						...(data.message?.traceId ? { traceId: data.message.traceId } : {}),
+					},
+				});
 			return text(data.message?.content || data.error || "No response");
 		},
 	);

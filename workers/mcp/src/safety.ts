@@ -110,6 +110,52 @@ export async function dryRun(
 	return jsonText(body);
 }
 
+/**
+ * The longest string an audit event may carry (ADR 0004).
+ *
+ * An id is the unit: a uuid is 36 characters, a commit SHA 40, a slug or a repo path fewer, and
+ * `/v1/instances/{uuid}/chat` about 50. 120 clears all of them with room to spare and still
+ * catches prose — the 1,519-byte chat prompt, the file `content` on a refused write, the
+ * objective handed to a loop.
+ */
+export const AUDIT_VALUE_MAX = 120;
+
+const byteLength = (s: string): number => new TextEncoder().encode(s).length;
+
+/**
+ * Reduce an audited payload to identities and sizes (ADR 0004).
+ *
+ * The refusal and dry-run paths pass the caller's `input` VERBATIM while the success paths pick
+ * their own fields, so the log kept the full text of a `write_agent_file` that was refused and
+ * four bytes for the one that ran — the file we would not write is on the record and the file we
+ * wrote is not (#701). Symmetry is restored by storing LESS, not more: a string too long to be an
+ * identifier becomes a byte count under a `…Bytes` key, which is the shape the success paths
+ * already chose by hand (`messageBytes`, `objectiveBytes`) and the vocabulary
+ * `lib/connectors/mcp.ts` and `routes/tools.ts` settled on.
+ *
+ * It runs inside `audit()` rather than at the three helpers, so all ~75 call sites are covered
+ * and a new one cannot opt out by not knowing about it.
+ */
+function summarize(value: unknown, depth = 0): unknown {
+	if (depth > 8) return "[truncated]";
+	if (typeof value === "string") {
+		// A bare long string has no key to hang a `…Bytes` name off, so it states its own size.
+		return value.length <= AUDIT_VALUE_MAX ? value : `[${byteLength(value)} bytes]`;
+	}
+	if (Array.isArray(value)) return value.map((item) => summarize(item, depth + 1));
+	if (!value || typeof value !== "object") return value;
+
+	const out: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value)) {
+		if (typeof item === "string" && item.length > AUDIT_VALUE_MAX) {
+			out[`${key}Bytes`] = byteLength(item);
+		} else {
+			out[key] = summarize(item, depth + 1);
+		}
+	}
+	return out;
+}
+
 export async function audit(
 	ctx: SafetyContext,
 	event: Record<string, unknown>,
@@ -124,7 +170,11 @@ export async function audit(
 		JSON.stringify({
 			time: now,
 			subject,
-			...(redact(event) as Record<string, unknown>),
+			// Summarise BEFORE redacting: `summarize` decides what is recorded at all, `redact`
+			// masks what survives. The other order would run the value-shape regex over prose
+			// that is about to be discarded, and would mask a secret into a string whose length
+			// then decided whether the field was kept.
+			...(redact(summarize(event)) as Record<string, unknown>),
 		}),
 		{ expirationTtl: 90 * 86_400 },
 	);

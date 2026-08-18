@@ -47,8 +47,18 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			.first<InstanceRow>();
 		if (!instance) throw new HttpError(404, "Instance not found");
 
-		const { message, audioKey, dictation } = await c.req.json<{ message: string; audioKey?: string; dictation?: string }>();
+		const { message, audioKey, dictation, origin } = await c.req.json<{ message: string; audioKey?: string; dictation?: string; origin?: string }>();
 		if (!message) throw new HttpError(400, "message required");
+
+		// Where the turn came FROM, recorded on the trace so an MCP-driven turn is
+		// distinguishable from one a human typed in the console (#701). Nothing marked this
+		// before, so "what was sent over MCP" was unanswerable even where the text existed.
+		//
+		// Deliberately NOT `channel`: that field is load-bearing for the AgentDO's message
+		// threading (`agent-do.ts`), and a turn stamped `channel:"mcp"` would put its
+		// reaped-turn notices and system messages on a channel no client polls. An allowlist
+		// rather than a free string, so the trace's own vocabulary stays closed.
+		const chatOrigin = origin === "mcp" ? "mcp" : "console";
 
 		const doId = c.env.AGENT.idFromName(instanceId);
 		const stub = c.env.AGENT.get(doId);
@@ -117,9 +127,9 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			// lands within a few ms of the user message's own createdAt and the two are matchable.
 			// `startedAt < now` always, so listEvents' ts ordering still reads in → tools → out.
 			const now = Date.now();
-			await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: startedAt });
+			await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: startedAt, context: { origin: chatOrigin } });
 			if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: tools.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
-			await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1 });
+			await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1, context: { origin: chatOrigin } });
 			// Bump last_activity_at — chat is the primary signal for "used recently".
 			// Fire-and-forget: a write failure must not surface as a request error.
 			void touchInstanceActivity(c.env, instanceId, session.uid);

@@ -554,6 +554,43 @@ describe("POST /v1/instances/:id/chat (integration)", () => {
 		expect(inTs).toBeGreaterThanOrEqual(before);
 		expect(inTs).toBeLessThanOrEqual(outTs);
 	});
+
+	// #701. Nothing distinguished a turn that arrived over MCP from one a human typed in the
+	// console, so "what was sent over MCP" was unanswerable even where the text existed.
+	it("marks an MCP-originated turn in the trace WITHOUT touching the DO's channel", async () => {
+		const { app, env, writes, doCalls } = buildApp({ owns: [["inst-1", "u1"]] });
+
+		const res = await post(app, env, "/v1/instances/inst-1/chat", { message: "hello", origin: "mcp" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+
+		// The DO still receives `channel: "chat"`. That field threads its messages — a turn
+		// stamped "mcp" would put the reaped-turn notices and system messages that follow it on
+		// a channel no client polls, which is why `origin` is a separate field.
+		const chat = doCalls.find((d) => d.name === "inst-1" && d.path === "/chat");
+		expect((chat!.body as { channel: string }).channel).toBe("chat");
+
+		const context = new Map(
+			writes
+				.filter((w) => w.sql.startsWith("INSERT INTO agent_events"))
+				.map((w) => [w.args[7] as string, JSON.parse((w.args[9] as string) ?? "null")]),
+		);
+		expect(context.get("chat.in")).toEqual({ origin: "mcp" });
+		expect(context.get("chat.out")).toEqual({ origin: "mcp" });
+	});
+
+	it("defaults an unmarked turn to console rather than inventing an origin", async () => {
+		// An allowlist, not a free string: the trace's vocabulary stays closed even though the
+		// value arrives in a request body.
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+
+		await post(app, env, "/v1/instances/inst-1/chat", { message: "hi" }, await tokenFor("u1"));
+		await post(app, env, "/v1/instances/inst-1/chat", { message: "hi", origin: "smuggled" }, await tokenFor("u1"));
+
+		const origins = writes
+			.filter((w) => w.sql.startsWith("INSERT INTO agent_events") && w.args[7] === "chat.in")
+			.map((w) => JSON.parse((w.args[9] as string) ?? "null")?.origin);
+		expect(origins).toEqual(["console", "console"]);
+	});
 });
 
 // ————————————————————————————————————————————————————————————————

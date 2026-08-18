@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	audit,
+	AUDIT_VALUE_MAX,
 	dryRun,
 	listAuditEvents,
 	parseScopes,
@@ -154,5 +155,111 @@ describe("MCP safety helpers", () => {
 				nested: { password: "[redacted]" },
 			},
 		});
+	});
+});
+
+/**
+ * ADR 0004 — an audit event points at content; it does not copy it.
+ *
+ * This is the test the ADR names, and it exists because the obvious "improvement" to #701 —
+ * start logging the bodies — looks locally correct and passes everything else. It drives the
+ * three shared helpers that used to pass the caller's `input` verbatim, so a refusal and a
+ * rehearsal are now recorded the same way a success always was.
+ */
+describe("ADR 0004 — an audited value is an identity or a size, never a body", () => {
+	const CONTENT = `/**\n * QA Automation — implementation.\n */\n${"const x = 1;\n".repeat(400)}`;
+
+	function ctxWithKv(over: Partial<SafetyContext> = {}): SafetyContext {
+		return { env: { OAUTH_KV: makeKv() }, subject: "user-1", scopes: ["write"], ...over };
+	}
+
+	/** Every string anywhere in the event, so the budget is asserted over the whole payload
+	 *  rather than over the fields this test happened to think of. */
+	function strings(value: unknown, out: string[] = []): string[] {
+		if (typeof value === "string") out.push(value);
+		else if (Array.isArray(value)) for (const v of value) strings(v, out);
+		else if (value && typeof value === "object") for (const v of Object.values(value)) strings(v, out);
+		return out;
+	}
+
+	it("a REFUSED write records the file's size, not the file", async () => {
+		// The live event that prompted ADR 0004: one `write_agent_file` denied for a missing
+		// confirmation, with the whole source file on the record — while the fourteen that
+		// succeeded recorded `{agent_id, path, message}` and no content at all.
+		const ctx = ctxWithKv();
+
+		await requireConfirmation(ctx, "write_agent_file", undefined, "write_agent_file", {
+			agent_id: "qa-automation",
+			path: "src/agent.ts",
+			content: CONTENT,
+		});
+
+		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const input = event?.input as Record<string, unknown>;
+		expect(input.agent_id).toBe("qa-automation");
+		expect(input.path).toBe("src/agent.ts");
+		expect(input.content).toBeUndefined();
+		expect(input.contentBytes).toBe(new TextEncoder().encode(CONTENT).length);
+		expect(JSON.stringify(event)).not.toContain("QA Automation");
+	});
+
+	it("a DRY RUN records the prompt's size, not the prompt", async () => {
+		const ctx = ctxWithKv();
+		const message = "Act as the dev agent for issue #135. ".repeat(20);
+
+		await dryRun(ctx, "chat_with_instance", "send private instance chat message", { instance_id: "e4d2d031", message }, { endpoint: "/v1/instances/e4d2d031/chat", method: "POST" });
+
+		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const input = event?.input as Record<string, unknown>;
+		expect(input.instance_id).toBe("e4d2d031");
+		expect(input.message).toBeUndefined();
+		expect(input.messageBytes).toBe(new TextEncoder().encode(message).length);
+	});
+
+	it("a DENIED call on the scope path is summarised too", async () => {
+		const ctx = ctxWithKv({ scopes: ["read"] });
+
+		await requirePermission(ctx, "runtime", "coding_loop_start", { instance_id: "i1", objective: CONTENT });
+
+		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const input = event?.input as Record<string, unknown>;
+		expect(input.objective).toBeUndefined();
+		expect(input.objectiveBytes).toBe(new TextEncoder().encode(CONTENT).length);
+	});
+
+	it("no audited value anywhere exceeds the identifier budget, at any depth", async () => {
+		// The general form of the rule. A nested body is exactly how this would come back:
+		// `dryRun`'s `wouldDo` is an arbitrary object composed by the call site.
+		const ctx = ctxWithKv();
+
+		await dryRun(
+			ctx,
+			"batch_write_agent_files",
+			"write files",
+			{ agent_id: "a1", files: [{ path: "a.ts", content: CONTENT }] },
+			{ wrote: [{ path: "a.ts", body: CONTENT }], note: CONTENT },
+		);
+
+		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const long = strings(event).filter((s) => s.length > AUDIT_VALUE_MAX);
+		expect(long, `audited string(s) longer than an id: ${long.map((s) => s.slice(0, 40)).join(" | ")}`).toEqual([]);
+		// And the sizes survived — this is a summary, not a deletion.
+		expect(JSON.stringify(event)).toContain("contentBytes");
+		expect(JSON.stringify(event)).toContain("bodyBytes");
+	});
+
+	it("keeps identifiers, which are the whole point of the record", async () => {
+		const ctx = ctxWithKv();
+		const ids = {
+			instance_id: "bd43f4de-1111-2222-3333-444455556666",
+			session_id: "csess_6ce3627a-3c3f-439a-90f3-ff4a6de3167a",
+			traceId: "9f1c2b84-6d3e-4a55-9c07-2f8ab41d7e63",
+			path: "packages/browser-runner/src/coding/headless.ts",
+			messageBytes: 1519,
+		};
+
+		await audit(ctx, { tool: "chat_with_instance", action: "completed", input: ids });
+
+		expect((await listAuditEvents(ctx))[0]).toMatchObject({ input: ids });
 	});
 });
