@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand, mergeEnv } from "./headless.js";
+import { RESULT_RENDERED_MAX, toolResultBudget } from "./transcript-lines.js";
 
 /**
  * A stand-in for `claude -p --input-format stream-json --output-format stream-json`:
@@ -594,13 +595,14 @@ describe("HeadlessSession — a stream-json turn reports its own error (#545)", 
  *
  * The run this pins spent twelve of sixteen Pilot decisions rephrasing one request — `cat`, then
  * `sed -n '1,100p'`, then `cat -n | head -60`, then "print every character" — because the file
- * never arrived and nothing told it why. Every one of those routes through a tool_result, and
- * {@link toolResult} caps it at 240 characters and collapses `\s+` to a single space BEFORE the
- * pane exists, so all four produce the same size and the same shape. The search space was empty.
+ * never arrived and nothing told it why. Every one of those routes through a tool_result, which the
+ * runner cut to 240 characters with `\s+` collapsed to a single space BEFORE the pane existed, so
+ * all four produced the same size and the same shape. The search space was empty.
  *
- * These two tests measure both routes against the SAME ~4,000-character file, because the prompt
- * fix is only honest if the channel it points at is actually wider. The reply-text route is the
- * one the prompt now names; if this pair ever stops holding, that advice is a placebo.
+ * These tests measure both routes against the SAME ~4,000-character file, through a REAL spawned
+ * engine rather than by calling the renderer directly — the claim being pinned is end-to-end
+ * ("a file reaches the Pilot"), and the earlier attribution of this failure to the pane window
+ * rather than the runner is what a unit-level check would have missed again.
  */
 describe("HeadlessSession — how much of a file reaches the pane (#700)", () => {
 	let dir: string;
@@ -615,7 +617,7 @@ describe("HeadlessSession — how much of a file reaches the pane (#700)", () =>
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-	it("a tool_result loses ~94% of it — 240 chars, on one line, whatever command produced it", async () => {
+	it("a Read result arrives as LINES, ~1,500 characters of them, and says how much it lost", async () => {
 		expect(file.length).toBeGreaterThan(4000);
 		const s = new HeadlessSession({ id: "file-tool", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
 		s.start();
@@ -624,24 +626,45 @@ describe("HeadlessSession — how much of a file reaches the pane (#700)", () =>
 		s.input("read web/e2e/helpers.ts"); // no "quote" — the engine uses its Read tool
 		await until(() => s.snapshot().includes("↳"), 8000, "the tool result line");
 		const pane = s.snapshot();
+		const lines = pane.split("\n");
 
-		const resultLine = pane.split("\n").find((l) => l.startsWith("  ↳"));
-		expect(resultLine).toBeDefined();
-		// `"  ↳✓ "` (6) + the 240-char cap + the ellipsis. 246 is the maximum observed in production
-		// across 251 sampled result lines, and this is where that number comes from.
-		expect((resultLine as string).length).toBeLessThanOrEqual(246);
-		expect(resultLine as string).toMatch(/…$/);
+		// The framing `engine-tool-calls.ts` parses is intact: the call line, then the arrow line.
+		expect(lines.some((l) => l.startsWith("⚙ Read "))).toBe(true);
+		const arrow = lines.findIndex((l) => l.startsWith("  ↳"));
+		expect(arrow).toBeGreaterThanOrEqual(0);
+		expect(lines[arrow].startsWith("  ↳✓ ")).toBe(true);
 
-		// The head survives; everything past ~6 lines of a 92-line file does not.
-		expect(resultLine as string).toContain("marker001");
-		expect(resultLine as string).not.toContain("marker010");
+		// THE fix: the file's own lines are lines again. Before this, not one of them survived as
+		// its own line at any length, which is why `cat -n` and `sed -n '1,50p'` were the same
+		// request to the Pilot.
+		const body = lines.slice(arrow + 1).filter((l) => l.startsWith("  │ "));
+		expect(body.length).toBeGreaterThan(30);
+		expect(body[0]).toContain("marker002");
+
+		// ~34 of 92 lines rather than ~5, and the cut is disclosed WITH its size — the number that
+		// tells the Pilot how narrow a slice would arrive whole.
+		expect(pane).toContain("marker010"); // the old 240-char cap stopped short of this
+		expect(pane).toContain("marker030");
 		expect(pane).not.toContain("marker092");
+		expect(pane).toMatch(/…\[cut: 1,500 of 4,0\d\d chars\]/);
 
-		// And line structure is gone: not one line of the file survives as its own line, so
-		// `cat -n`, `sed -n '1,50p'` and `head -60` are indistinguishable at this resolution.
-		expect(pane.split("\n").some((l) => l.startsWith("  const marker"))).toBe(false);
+		// And it is still bounded: the whole block — content, per-line framing and the disclosure —
+		// honours RESULT_RENDERED_MAX, which is under a third of the Pilot's 6,000-character window,
+		// so two more results can follow it before anything is evicted.
+		const block = [lines[arrow], ...body].join("\n");
+		expect(block.length).toBeLessThanOrEqual(RESULT_RENDERED_MAX);
+		expect(RESULT_RENDERED_MAX * 3).toBeLessThanOrEqual(6000);
 		s.stop();
 	}, 15_000);
+
+	it("a status-string tool keeps the old 240, so the widening is paid for only where it buys something", async () => {
+		// Same pane, different tool: `FAKE_CLAUDE_TOOLS` answers a `Bash` and a `Read`. The point is
+		// the negative one — a per-tool cap means an `Edit`/`TodoWrite` receipt cannot spend the
+		// window. Measured here on the budget function's own boundary rather than by spawning a
+		// fourth fake engine.
+		expect(toolResultBudget("Edit")).toEqual({ chars: 240, lines: 6 });
+		expect(toolResultBudget("Read").chars).toBeGreaterThan(240);
+	});
 
 	it("the engine's own REPLY text arrives whole — the one channel a file can travel", async () => {
 		const s = new HeadlessSession({ id: "file-reply", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });

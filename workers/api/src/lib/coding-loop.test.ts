@@ -509,25 +509,38 @@ describe("systemPrompt — the Pilot is told the size of its own window (#522 ca
 });
 
 describe("systemPrompt — the Pilot is told the bound that actually binds (#700)", () => {
-	it("states the ~240-character tool-result cap and that no shell command gets round it", () => {
+	it("describes the cut by its MARKER, not by one number, because the runner's version varies", () => {
 		// The advice this replaced — "ask for a bounded slice (a line range, a grep, head/tail)" —
-		// pointed at the 6,000-char pane, which is not the limit that stops a file arriving. The
-		// runner cuts every tool_result to 240 characters and collapses its whitespace, so all four
-		// of those commands land identically. One run spent twelve of sixteen decisions on that.
+		// pointed at the 6,000-char pane, which was never the limit that stopped a file arriving.
+		// Its replacement stated a flat 240, which was true of every runner then published and
+		// stopped being true of an upgraded one; a prompt that names a number the machine no longer
+		// uses is the same defect pointing the other way. So the prompt names the SIGNAL — a cut
+		// result says it was cut, and by how much — which is readable on either machine.
 		const p = systemPrompt(GOAL);
-		expect(p).toMatch(/~240 characters on a single line/);
-		expect(p).toMatch(/newlines and indentation collapsed/);
-		expect(p).toMatch(/NO shell command can show you the contents of a file/);
+		expect(p).toMatch(/a cut result says so at the end/);
+		expect(p).toMatch(/cut: 1,500 of 18,432 chars/); // the shape of the disclosure it will see
+		expect(p).toMatch(/on an older machine it is 240 characters/);
 		// And the old, impossible remedy is gone rather than merely outnumbered.
 		expect(p).not.toMatch(/bounded slice/);
 	});
 
-	it("names the reply-text channel, which is the one that is not truncated", () => {
-		// Verified in the runner's own harness (headless.test.ts, "how much of a file reaches the
-		// pane"): the same ~4,000-character file arrives whole as assistant text and as 240
-		// characters on one line as a tool_result. Without that, this advice would be a placebo.
+	it("allows ONE narrowing retry, and says how to tell it did not work", () => {
+		// A slice that fits now does arrive whole, so "narrowing never helps" would be false advice
+		// on a current machine — but unbounded retrying is exactly the twelve-round loop this
+		// ticket is about. One retry, with a stated stopping rule: same size and shape twice means
+		// the cap is on the result, not on the request.
 		const p = systemPrompt(GOAL);
-		expect(p).toMatch(/REPLY text is NOT truncated/);
+		expect(p).toMatch(/ask for a slice that FITS/);
+		expect(p).toMatch(/but only ONCE/);
+		expect(p).toMatch(/same request with the same bound/);
+	});
+
+	it("names the reply-text channel, which is the one that is not truncated on ANY machine", () => {
+		// Verified in the runner's own harness (headless.test.ts, "how much of a file reaches the
+		// pane"): the same ~4,000-character file arrives whole as assistant text, and as a bounded
+		// head as a tool_result. Without that, this advice would be a placebo.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/REPLY text is NEVER truncated, on any machine/);
 		expect(p).toMatch(/verbatim in your reply/);
 	});
 });

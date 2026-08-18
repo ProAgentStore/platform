@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
 import { appendTimeline, FEED_TOOLCALL_BYTES, loadTimelineFeed } from "./coding-timeline.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { capToolCalls, type EngineToolCall, parseEngineToolCalls, TOOL_OUTCOME_MIN_CLI, toolCallsForSnapshot } from "./engine-tool-calls.js";
+import { capToolCalls, type EngineToolCall, parseEngineToolCalls, RESULT_LINES_MIN_CLI, TOOL_OUTCOME_MIN_CLI, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import type { Env } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -142,6 +142,94 @@ describe("parseEngineToolCalls", () => {
 		const calls = parseEngineToolCalls('⚙ Bash {"command":"cat notes"}\n  ↳ first\n  ↳ second');
 		expect(calls).toHaveLength(1);
 		expect(calls[0].output).toBe("first");
+	});
+});
+
+/**
+ * A result is many lines from {@link RESULT_LINES_MIN_CLI} on (#700), and reading only its first
+ * one would report the first line of a 34-line file read as the whole result.
+ *
+ * The fixtures are the runner's exact output shape — `transcript-lines.test.ts` pins the writer
+ * against the same strings, which is how two declarations of one format stay honest without the
+ * Worker importing the runner's Node package.
+ */
+describe("parseEngineToolCalls — a result that spans lines (#700)", () => {
+	const multi = [
+		'⚙ Read {"file_path":"web/e2e/helpers.ts"}',
+		'  ↳✓ import { test } from "@playwright/test";',
+		"  │ ",
+		"  │ export async function login(page) {",
+		'  │ \tawait page.goto("/");…[cut: 1,500 of 18,432 chars]',
+		'⚙ Bash {"command":"ls"}',
+		"  ↳✓ a.ts",
+	].join("\n");
+
+	it("reads every line of the result, not just the arrow line", () => {
+		const calls = parseEngineToolCalls(multi);
+		expect(calls).toHaveLength(2);
+		expect(calls[0].output).toBe('import { test } from "@playwright/test";\n\nexport async function login(page) {\n\tawait page.goto("/");…[cut: 1,500 of 18,432 chars]');
+		expect(calls[0].ok).toBe(true);
+		// The continuation lines belong to the FIRST call and must not leak into the next one.
+		expect(calls[1].output).toBe("a.ts");
+	});
+
+	it("reads the cut off the LAST line, and takes the figures with it", () => {
+		// The old detection was `text.endsWith('…')` on the arrow line, which is now the FIRST line
+		// of a long result — so a cut result would have read as a complete one, the #503 shape.
+		const calls = parseEngineToolCalls(multi);
+		expect(calls[0].outputCut).toBe(true);
+		expect(calls[0].output).toContain("of 18,432 chars");
+		expect(calls[1].outputCut).toBeUndefined();
+	});
+
+	it("still reads a bare ellipsis from a runner that states no figures", () => {
+		// Every machine below RESULT_LINES_MIN_CLI, which is most of them on the day this ships.
+		const calls = parseEngineToolCalls('⚙ Read {"file_path":"a.ts"}\n  ↳ export const…');
+		expect(calls[0].outputCut).toBe(true);
+	});
+
+	it("drops a continuation whose own arrow line was cut away by the 8,000-char window", () => {
+		// A stored row is `pane.slice(-8000)`, so a long result can begin above the window. Its
+		// orphaned tail must not be appended to whatever call happens to survive above it —
+		// that would attribute one call's output to another, which is worse than losing it.
+		const orphan = ['  │ \tawait page.goto("/");', '⚙ Bash {"command":"ls"}', "  ↳✓ a.ts"].join("\n");
+		expect(parseEngineToolCalls(orphan)).toEqual([{ tool: "Bash", input: '{"command":"ls"}', output: "a.ts", ok: true }]);
+	});
+
+	it("does not attach a continuation that follows something other than its own result", () => {
+		// `inResult`: the prefix alone is not enough, because narrative lines are free text. A `│`
+		// line reached after an already-answered call, or after ordinary output, is ignored.
+		const stray = ['⚙ Bash {"command":"ls"}', "  ↳✓ a.ts", "[12:00:00] I have listed the files.", "  │ not part of any result"].join("\n");
+		expect(parseEngineToolCalls(stray)[0].output).toBe("a.ts");
+	});
+
+	it("a call-dense row of WIDENED results still fits the per-row budget, so none is dropped", () => {
+		// The consequence #700 has on this module that is not about parsing at all. `capToolCalls`
+		// drops calls PERMANENTLY — no cursor reaches them — and its 12,000-byte knee was measured
+		// against results the runner had already cut to 240 characters. A production row's mean is
+		// 12.05 calls; at the widened cap that row serialises to ~25,000 B, so the old budget would
+		// have turned a wider pane into a feed that quietly reported a fraction of the record.
+		const wide = Array.from({ length: 12 }, (_, i) => ({
+			tool: "Read",
+			input: `{"file_path":"src/file${i}.ts"}`,
+			// The renderer's ceiling, newlines included, which is what actually crosses the wire.
+			output: Array.from({ length: 34 }, (_, l) => `  const marker${l} = "${"x".repeat(20)}";`).join("\n"),
+			ok: true,
+			outputCut: true as const,
+		}));
+		const { omitted } = capToolCalls(wide, FEED_TOOLCALL_BYTES);
+		expect(omitted).toBe(0);
+	});
+
+	it("names the CLI release that first writes continuations, and never one ahead of it", () => {
+		// Same rule as TOOL_OUTCOME_MIN_CLI: a version here that has not been published sends a
+		// user to a release that does not exist.
+		expect(RESULT_LINES_MIN_CLI).toMatch(/^\d+\.\d+\.\d+$/);
+		const cliPkg = join(__dirname, "../../../../packages/cli/package.json");
+		const cliVersion = (JSON.parse(readFileSync(cliPkg, "utf8")) as { version: string }).version;
+		const parts = (v: string) => v.split(".").map(Number);
+		const [a, b] = [parts(RESULT_LINES_MIN_CLI), parts(cliVersion)];
+		expect(a[0] * 1e6 + a[1] * 1e3 + a[2], `${RESULT_LINES_MIN_CLI} vs published CLI ${cliVersion}`).toBeLessThanOrEqual(b[0] * 1e6 + b[1] * 1e3 + b[2]);
 	});
 });
 

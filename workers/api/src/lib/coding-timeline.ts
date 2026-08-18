@@ -212,16 +212,25 @@ export const FEED_BYTE_BUDGET = 40_000;
  *     window (`toolCallGap`), and 35 of those 86 rows did — so the row that has to fit is the
  *     largest, not the average.
  *
- * 12,000 is the measured knee on that data, not a round number: omission reaches **0** and the
- * largest real row serialises to **11,331 B**. 16,000 and 24,000 deliver exactly the same 610 calls,
- * so nothing above this buys anything. #597's `ok` adds a fixed 10-11 B per call (`,"ok":null`), and
- * the number is not moved for it: 669 B of headroom on that largest row covers ~60 more calls than
- * it held, and the knee is where it is because omission was already at zero, not because the fit was
- * tight. A page of nothing but call-bearing snapshots simply returns
- * fewer rows with `hasMore: true` — which is the trade this is sized around, because a row dropped
- * by {@link FEED_BYTE_BUDGET} costs one more poll and a call dropped here is gone for good.
+ * 12,000 was the measured knee on that data, not a round number: omission reached **0** and the
+ * largest real row serialised to **11,331 B**. 16,000 and 24,000 delivered exactly the same 610
+ * calls, so nothing above it bought anything. #597's `ok` adds a fixed 10-11 B per call
+ * (`,"ok":null`) and did not move the number.
+ *
+ * **Raised to 24,000 for #700**, and the reason is arithmetic rather than a new measurement: that
+ * knee was measured against results the runner had already cut to 240 characters. A result may now
+ * be up to `RESULT_RENDERED_MAX` (~1,840 characters, ~2,100 B serialised once its newlines are
+ * escaped), so the same 12-call row that fitted in 11,331 B reaches ~25,000 B when most of its
+ * calls are `Read`/`Bash`. Leaving the cap at 12,000 would have converted a widened pane into
+ * PERMANENT omission in the feed — the one loss this constant exists to avoid — while the corpus
+ * that set the knee kept reading as if nothing had changed, because its rows predate the change.
+ * 24,000 is chosen from the two numbers already shown to be behaviour-identical on that corpus.
+ *
+ * A page of nothing but call-bearing snapshots simply returns fewer rows with `hasMore: true` —
+ * which is the trade this is sized around, because a row dropped by {@link FEED_BYTE_BUDGET} costs
+ * one more poll and a call dropped here is gone for good.
  */
-export const FEED_TOOLCALL_BYTES = 12_000;
+export const FEED_TOOLCALL_BYTES = 24_000;
 
 /** One timeline row, cut to fit. */
 export interface FeedEvent {

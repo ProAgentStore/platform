@@ -541,17 +541,22 @@ export function systemPrompt(goal: CodingGoal): string {
 		// measurement; renderPaneForPilot states the per-decision number on the pane itself.
 		`- You see only the LAST ~${PILOT_PANE_CHARS} characters of the terminal, never all of it, and re-sending an instruction hoping earlier output will come back does not work — it will not come back.`,
 		// WHAT A TOOL RESULT COSTS (#700). The bullet above used to end "ask for a bounded slice (a
-		// line range, a grep, head/tail) rather than a full dump", and that advice cannot work: the
-		// runner truncates EVERY tool_result to 240 characters and collapses all whitespace before
-		// the pane exists (`headless.ts` `toolResult()`), so `cat`, `sed -n '1,50p'`, `head -60` and
-		// `grep` arrive at identical size and identical shape. One live run spent twelve of its
-		// sixteen decisions searching that empty space, and the twelfth concluded — reasonably, on
-		// the evidence in front of it — that "the CLI is summarizing file contents". It was not. The
-		// bound is the runner's, it is 240 and not 6,000, and it does not move with the range asked
-		// for. So state the real bound, and name the one channel that has full fidelity: the engine's
-		// assistant text is pushed to the transcript untruncated (pinned in headless.test.ts #700).
-		"- A tool's OUTPUT reaches you cut to ~240 characters on a single line with all newlines and indentation collapsed, whatever command produced it. `cat`, `sed -n '1,50p'`, `head -60` and `grep` all arrive the same size and the same shape, so narrowing the range will not help and NO shell command can show you the contents of a file.",
-		"- The engine's own REPLY text is NOT truncated. To learn what is in a file, ask the engine to answer you with it — \"quote lines 1-40 of src/x.ts verbatim in your reply\" — or ask it a question about the file and use its answer. Never re-ask for a dump in a different shell command; that is the same request with the same bound.",
+		// line range, a grep, head/tail) rather than a full dump", and on the runner of the day that
+		// advice could not work: EVERY tool_result was cut to 240 characters with all whitespace
+		// collapsed before the pane existed, so `cat`, `sed -n '1,50p'`, `head -60` and `grep`
+		// arrived at identical size and identical shape. One live run spent twelve of its sixteen
+		// decisions searching that empty space, and the twelfth concluded — reasonably, on the
+		// evidence in front of it — that "the CLI is summarizing file contents". It was not.
+		//
+		// `transcript-lines.ts` now keeps line structure and gives a content tool 1,500 characters,
+		// so a slice that FITS does arrive whole — but only from a machine running
+		// RESULT_LINES_MIN_CLI or later, and the cloud cannot tell which machine this is. So the
+		// prompt states the mechanism rather than one number: a cut result SAYS it was cut, and says
+		// by how much, and that is the signal to act on. The untruncated reply channel is named
+		// either way, because it is the one that works on every runner ever published.
+		"- A tool's OUTPUT is CUT before it reaches you, and a cut result says so at the end: `…`, or `…[cut: 1,500 of 18,432 chars]` when the machine is recent enough to state the figures. Roughly 1,500 characters of a file read or a command's output survive, keeping their line structure; on an older machine it is 240 characters with every newline and indent collapsed to spaces, and there NO shell command can show you a file at all.",
+		"- So: if a result was cut, ask for a slice that FITS (`sed -n '1,40p'`) — but only ONCE. If the next result is cut at the same size and shape, this machine is capping every result identically and re-asking in a different command is the same request with the same bound.",
+		"- The engine's own REPLY text is NEVER truncated, on any machine. To learn what is in a file, ask the engine to answer you with it — \"quote lines 1-40 of src/x.ts verbatim in your reply\" — or ask it a question about the file and use its answer.",
 		"",
 		"Never output step-by-step thinking; just call one tool.",
 	);

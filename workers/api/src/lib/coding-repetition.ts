@@ -23,25 +23,30 @@
  * instruction is unverifiable by construction". That is the wrong limit, and a later run is the
  * disproof — the dump was never in the pane at all, in any form, truncated or otherwise.
  *
- * The BINDING limit is in the runner, not here: `toolResult()` in
- * `packages/browser-runner/src/coding/headless.ts` cuts every `tool_result` to **240 characters**
- * and collapses `\s+` to a single space, before the pane is ever assembled. Measured across 20
+ * The BINDING limit was in the runner, not here: `toolResult()` in
+ * `packages/browser-runner/src/coding/headless.ts` cut every `tool_result` to **240 characters**
+ * and collapsed `\s+` to a single space, before the pane was ever assembled. Measured across 20
  * sessions of one instance, 150 of 251 stored tool-result lines (59.8%) hit that cap — 102 `Bash`,
- * 43 `Read` — with a maximum line length of 246 (`"  ↳✓ "` + 240). Because the cap is applied to
- * the RESULT and not to the request, `cat`, `sed -n '1,50p'`, `head -60` and `grep` produce
- * byte-identical size and shape, so no rephrasing can widen it. The run that filed #700 spent
+ * 43 `Read` — with a maximum line length of 246 (`"  ↳✓ "` + 240). Because the cap was applied to
+ * the RESULT and not to the request, `cat`, `sed -n '1,50p'`, `head -60` and `grep` produced
+ * byte-identical size and shape, so no rephrasing could widen it. The run that filed #700 spent
  * twelve of its sixteen decisions on exactly that empty search space.
  *
- * {@link PILOT_PANE_CHARS} is the SECONDARY limit: real, and the reason a long narrative scrolls
- * away, but not the one that stops a file arriving. The channel that IS wide enough is the engine's
- * own assistant text, which `headless.ts` pushes to the transcript untruncated — pinned by
- * "how much of a file reaches the pane (#700)" in `headless.test.ts`, which measures both routes
- * against the same ~4,000-character file. The prompt in `coding-loop.ts` now names that channel
- * instead of advising a bounded slice, which was a remedy for a limit that was not the limit.
+ * That half is now fixed at its source: `packages/browser-runner/src/coding/transcript-lines.ts`
+ * keeps line structure and caps per tool — 1,500 characters over 60 lines for `Read`/`Bash`/`Grep`
+ * and their kin, 240 for status-string tools — and a cut states its own figures. **But only from
+ * `RESULT_LINES_MIN_CLI` on**: a machine that has not upgraded still cuts at 240 on one line, and
+ * the cloud cannot tell which machine it is talking to. That is why the prompt states the mechanism
+ * (a cut result says it was cut, and by how much) instead of a number, and why every reader here
+ * must keep tolerating a short, structureless result.
  *
- * Deliberately NOT done in #700, and still open: raising the 240 cap (per-tool, so `Read`/`Bash`
- * keep the framing `engine-tool-calls.ts` parses) and no longer collapsing whitespace. Both are
- * runner changes, so they reach a machine only via a CLI version bump.
+ * {@link PILOT_PANE_CHARS} is the SECONDARY limit: real, and the reason a long narrative scrolls
+ * away, but not the one that stopped a file arriving. It is also what BOUNDS the new cap — 1,500 is
+ * a quarter of it, so four consecutive content results coexist with the framing rather than
+ * evicting it, which is the trade a flat raise would have lost. The channel that is wide enough
+ * regardless is the engine's own assistant text, which `headless.ts` pushes to the transcript
+ * untruncated — pinned by "how much of a file reaches the pane (#700)" in `headless.test.ts`, which
+ * measures both routes against the same ~4,000-character file.
  *
  * {@link repetitionVerdict} bounds A (and any repeat whose payload recurs). It does NOT catch B as
  * observed: those instructions are paraphrases, not repeats, and no honest normalisation of our own

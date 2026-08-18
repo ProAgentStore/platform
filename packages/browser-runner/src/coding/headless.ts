@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
+import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 
 /**
  * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
@@ -191,6 +192,15 @@ export class HeadlessSession {
 	 * damages the record exactly as much as missing a real one.
 	 */
 	private awaitingResult = new Map<string, EngineActRecord[]>();
+	/**
+	 * `tool_use_id` → tool name, for the ONE decision the result event cannot make on its own: how
+	 * much of it reaches the pane (#700, `toolResultBudget` in `transcript-lines.ts`).
+	 *
+	 * Separate from {@link awaitingResult}, which holds only the small minority of calls that
+	 * classify as consequential acts. Entries are deleted when their result arrives and the whole
+	 * map is cleared at the turn boundary, where a call that never got one is known never to.
+	 */
+	private toolNames = new Map<string, string>();
 	/** Turn counter — only used to build a fallback id when the CLI's event has no `uuid`. */
 	private usageSeq = 0;
 	/**
@@ -669,7 +679,12 @@ export class HeadlessSession {
 					if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
 						this.push(`[${stamp()}] ${block.text.trim()}`); // timestamped agent reply
 					} else if (block.type === "tool_use") {
-						this.push(`⚙ ${String(block.name ?? "tool")} ${shortInput(block.input)}`); // ⚙
+						const name = String(block.name ?? "tool");
+						this.push(`⚙ ${name} ${shortInput(block.input)}`); // ⚙
+						// The result arrives in a LATER event carrying only `tool_use_id`, and how much
+						// of it reaches the pane depends on which tool it was (#700) — so the name is
+						// remembered here and read back in `settleAct`'s sibling branch below.
+						if (typeof block.id === "string" && block.id) this.toolNames.set(block.id, name);
 						this.noteAct(block);
 					}
 				}
@@ -677,7 +692,12 @@ export class HeadlessSession {
 			case "user": // tool results come back as a synthetic user message
 				for (const block of ev.message?.content ?? []) {
 					if (block.type === "tool_result") {
-						this.push(`  ↳${toolResultMark(block)} ${toolResult(block.content)}`); // ↳✓ / ↳✗ (#597)
+						const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+						// `""` when the call was not seen (a pane that began mid-turn, a runner restart):
+						// an unknown tool takes the conservative budget rather than the generous one.
+						const tool = this.toolNames.get(id) ?? "";
+						this.toolNames.delete(id);
+						this.push(renderToolResult(toolResultMark(block), block.content, tool)); // ↳✓ / ↳✗ (#597)
 						this.settleAct(block);
 					}
 				}
@@ -703,13 +723,16 @@ export class HeadlessSession {
 				// never saw whether it worked" is a materially different claim from silence, and
 				// silence is what a supervisor would read as "it did nothing".
 				this.flushAwaitingActs();
+				this.toolNames.clear(); // no further result is coming for anything still named here
 				this.run = "idle"; // the turn is OVER — a fact, not a guess
 				break;
 			}
 			default:
 				break;
 		}
-		// Keep the in-memory transcript bounded.
+		// Keep the in-memory transcript bounded. Counts ENTRIES, and an entry may now be a
+		// multi-line block (a result, or a long assistant reply) rather than one line — the
+		// character bound that matters is `MAX_PANE` in runtime.ts, applied on the way out.
 		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
 	}
 
@@ -735,8 +758,8 @@ export class HeadlessSession {
 	 *
 	 * The result carries more than the outcome: `gh pr create --fill` states its PR number nowhere
 	 * but its own stdout, so an unnumbered `pr.open`/`pr.merge` takes it from here (#417). It is read
-	 * from the RAW `block.content`, never from `toolResult()`'s display line — that truncates to 240
-	 * characters for the transcript and would cut the URL off a verbose result.
+	 * from the RAW `block.content`, never from `renderToolResult()`'s display lines — those are cut to
+	 * the pane's budget (`transcript-lines.ts`) and would drop the URL off a verbose result.
 	 *
 	 * This path (and `noteAct`) is reachable ONLY from the structured stream-json handling above
 	 * (`assistant` → `tool_use`, `user` → `tool_result`). A Codex/Grok session is a raw spawn with no
@@ -887,36 +910,6 @@ export function buildClaudeArgs(userArgs: string[], resumeId: string | null): st
 	if (!args.includes("--dangerously-skip-permissions")) args.push("--dangerously-skip-permissions");
 	if (resumeId) args.push("--resume", resumeId);
 	return args;
-}
-
-/** Strip ANSI/VT escape sequences so a raw CLI's coloured output reads as plain text. */
-function stripAnsi(s: string): string {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape/control codes from terminal output.
-	return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b[()][AB0-2]/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
-}
-
-/** Compact a tool_use input object to a single readable line. */
-function shortInput(input: unknown): string {
-	if (input == null) return "";
-	try {
-		const s = typeof input === "string" ? input : JSON.stringify(input);
-		return s.length > 160 ? `${s.slice(0, 160)}…` : s;
-	} catch {
-		return "";
-	}
-}
-
-/** Render a tool_result's content (string, or array of {type:text,text}) to text. */
-function toolResult(content: unknown): string {
-	let text = "";
-	if (typeof content === "string") text = content;
-	else if (Array.isArray(content)) {
-		text = content
-			.map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
-			.join(" ");
-	}
-	text = text.replace(/\s+/g, " ").trim();
-	return text.length > 240 ? `${text.slice(0, 240)}…` : text;
 }
 
 // ── tiny on-disk store: our session id → Claude's session id (resume key) ──────

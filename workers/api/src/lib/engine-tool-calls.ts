@@ -29,9 +29,11 @@
  *      corpus that already exists, for information the same corpus already carries;
  *   3. it stays behind the ONE place the platform already treats the runner's report as evidence
  *      rather than as truth (`engine-acts.ts`), so nothing new has to be trusted;
- *   4. its fidelity ceiling is the runner's own DISPLAY caps — 160 chars of input
- *      (`headless.ts:899`) and 240 of result (`:910`) — which is a separate and much smaller
- *      decision than inventing a second record, and one this module reports rather than hides.
+ *   4. its fidelity ceiling is the runner's own DISPLAY caps — 160 chars of input and, for a
+ *      result, whatever `transcript-lines.ts` allowed that tool (#700: 1,500 chars over 60 lines
+ *      for `Read`/`Bash`/`Grep`/…, 240 for the rest, 240 flat on an older machine) — which is a
+ *      separate and much smaller decision than inventing a second record, and one this module
+ *      reports rather than hides.
  *
  * ── Whether the call SUCCEEDED, and the three answers to it (#597)
  *
@@ -77,6 +79,22 @@ const RESULT_ARROW = "↳";
 const OK_MARK = "✓";
 /** The runner's marker for a call the engine reported as failed (`is_error: true`). */
 const FAIL_MARK = "✗";
+/**
+ * The prefix a result's SECOND and later lines carry, from {@link RESULT_LINES_MIN_CLI} on (#700).
+ *
+ * A result used to be one line by construction — the runner collapsed `\s+` to a single space
+ * before writing it — so `output` and "the arrow line" were the same thing. Now that line structure
+ * survives, reading only the arrow line would report the first line of a 40-line file read as the
+ * whole result, which is a smaller lie than the old one but still a lie. Mirrors
+ * `RESULT_CONT_PREFIX` in `packages/browser-runner/src/coding/transcript-lines.ts`; separate
+ * declarations for the same reason {@link RESULT_ARROW} is one, pinned by the fixtures below.
+ */
+const CONT_MARK = "  │ ";
+/**
+ * The runner's cut markers: a bare ellipsis from any runner, optionally followed by the figures the
+ * current one states. Anchored at the end, so an ellipsis inside a result's own prose is not a cut.
+ */
+const RESULT_CUT = /…(\[cut: [\d,]+ of [\d,]+ chars\])?$/;
 
 /**
  * The CLI release that first writes the outcome marker (#597).
@@ -88,6 +106,15 @@ const FAIL_MARK = "✗";
  * quote when someone asks why every `ok` on their machine is `null`.
  */
 export const TOOL_OUTCOME_MIN_CLI = "0.4.52";
+
+/**
+ * The CLI release that first keeps a result's line structure and caps it per tool (#700).
+ *
+ * Nothing gates on it either — {@link CONT_MARK} is read per line, so a pane is judged by what it
+ * contains and an older machine's single-line results parse exactly as they always did. This is the
+ * number to quote when someone asks why their `Read` results are still 240 characters on one line.
+ */
+export const RESULT_LINES_MIN_CLI = "0.4.55";
 
 /** One call the engine made, as the transcript recorded it. */
 export interface EngineToolCall {
@@ -113,23 +140,42 @@ export interface EngineToolCall {
 	ok: boolean | null;
 	/** The runner's 160-char input cap fired — the argument shown is not the whole one. */
 	inputCut?: true;
-	/** The runner's 240-char result cap fired. */
+	/**
+	 * The runner's result cap fired — the output shown is a head, not the whole of it.
+	 *
+	 * The cap is per tool since #700 (1,500 characters for `Read`/`Bash`/`Grep`/…, 240 for
+	 * everything else) and 240 flat on any runner below {@link RESULT_LINES_MIN_CLI}, so this flag
+	 * says THAT it was cut and never how much was lost. A current runner puts the figures in the
+	 * text itself.
+	 */
 	outputCut?: true;
 }
 
 /**
  * Read the tool calls out of one terminal snapshot.
  *
- * Line-based and total: a line that is not a call or a result is ignored, and a result with no call
- * before it is dropped. Both are expected rather than exceptional — a stored row is `pane.slice(-8000)`
- * (`terminal-snapshot.ts:61`), a RAW character cut, so the first line of every long snapshot is a
- * fragment. A fragment does not carry the `⚙` marker, so it parses to nothing, which is the
- * conservative direction: a half-read argument is never reported as a whole one.
+ * Line-based and total: a line that is not a call, a result or a result's continuation is ignored,
+ * and a result with no call before it is dropped. Both are expected rather than exceptional — a
+ * stored row is `pane.slice(-8000)` (`terminal-snapshot.ts:61`), a RAW character cut, so the first
+ * line of every long snapshot is a fragment. A fragment does not carry the `⚙` marker, so it parses
+ * to nothing, which is the conservative direction: a half-read argument is never reported as a whole
+ * one. A continuation whose own arrow line was cut away is dropped for the same reason — it would
+ * otherwise attach a stranded tail to whatever call happened to precede it.
  */
 export function parseEngineToolCalls(pane: string): EngineToolCall[] {
 	const out: EngineToolCall[] = [];
+	// Whether the PREVIOUS line was this result's own, which is what makes a `│` line safe to
+	// append: a continuation is only ever read as one when it directly follows the result it
+	// belongs to, never after arbitrary narrative that happens to start with the same character.
+	let inResult = false;
 	for (const raw of String(pane ?? "").split("\n")) {
+		if (raw.startsWith(CONT_MARK)) {
+			const last = out[out.length - 1];
+			if (inResult && last && last.output !== null) last.output = `${last.output}\n${raw.slice(CONT_MARK.length)}`;
+			continue;
+		}
 		if (raw.startsWith(CALL_MARK)) {
+			inResult = false;
 			const rest = raw.slice(CALL_MARK.length);
 			const sp = rest.indexOf(" ");
 			const tool = (sp < 0 ? rest : rest.slice(0, sp)).trim();
@@ -143,6 +189,7 @@ export function parseEngineToolCalls(pane: string): EngineToolCall[] {
 			out.push(call);
 			continue;
 		}
+		inResult = false;
 		const line = raw.trimStart();
 		if (!line.startsWith(RESULT_ARROW)) continue;
 		// The character AFTER the arrow is the outcome, and its position is what makes the reading
@@ -157,11 +204,14 @@ export function parseEngineToolCalls(pane: string): EngineToolCall[] {
 		// so a stray marker inside a result's own text cannot rewrite history.
 		const last = out[out.length - 1];
 		if (!last || last.output !== null) continue;
-		const text = after.slice(marked === null ? 0 : marked ? OK_MARK.length : FAIL_MARK.length).trim();
-		last.output = text;
+		last.output = after.slice(marked === null ? 0 : marked ? OK_MARK.length : FAIL_MARK.length).trim();
 		last.ok = marked;
-		if (text.endsWith("…")) last.outputCut = true;
+		inResult = true;
 	}
+	// After the loop, because a cut is marked on the LAST line of a result and a result may now be
+	// many lines long (#700). Both shapes count: a bare `…` from any runner, and the current
+	// runner's `…[cut: 1,500 of 18,432 chars]`, which says how much more there was.
+	for (const call of out) if (call.output !== null && RESULT_CUT.test(call.output)) call.outputCut = true;
 	return out;
 }
 
