@@ -15,6 +15,8 @@ function buildEnv(
 		insertChanges?: number;
 		/** Target instances as `id -> {agentName, config}` — what the #363 pipeline check reads. */
 		instances?: Record<string, { agentName?: string; config: unknown }>;
+		/** `agent_instances.status` per target id, for the #649 gate. Absent → 'active'. */
+		targetStatus?: Record<string, string>;
 	} = {},
 ) {
 	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
@@ -58,9 +60,18 @@ function buildEnv(
 								// deliverEvent: WHERE source_instance_id AND event_type. NOT filtered on
 								// `enabled` — the real SELECT stopped filtering it in SQL (#644) so a paused
 								// edge can be counted and reported rather than looking like an unwired one.
-								if (sql.includes("source_instance_id = ?1 AND event_type = ?2")) {
+								if (sql.includes("c.source_instance_id = ?1 AND c.event_type = ?2")) {
 									const [src, ev] = args as [string, string];
-									return { results: rows.filter((r) => r.source_instance_id === src && r.event_type === ev) as unknown as T[] };
+									// `target_status` comes from the LEFT JOIN the real statement carries
+									// (#649). This stub cannot model a join, so it answers 'active' unless a
+									// test seeds otherwise — which is exactly why the gate itself is measured
+									// against the real migrated schema in `connection-instance-status.test.ts`
+									// and not here.
+									return {
+										results: rows
+											.filter((r) => r.source_instance_id === src && r.event_type === ev)
+											.map((r) => ({ ...r, target_status: opts.targetStatus?.[r.target_instance_id] ?? "active" })) as unknown as T[],
+									};
 								}
 								return { results: rows as unknown as T[] };
 							}

@@ -17,6 +17,7 @@
  */
 import type { Env } from "../types.js";
 import { stableStringify } from "./stable-json.js";
+import { activeInstanceSql } from "./trigger-eligibility.js";
 import type { DeliveryFailureKind } from "./connectors/types.js";
 
 /** How many times a delivery is attempted before it becomes a dead letter. */
@@ -298,12 +299,36 @@ export async function claimDelivery(env: Env, row: DeliveryRow, now = new Date()
 	return (res.meta?.changes ?? 0) > 0 ? { id: row.id, hold } : null;
 }
 
-/** Pending deliveries whose next attempt is due (the cron sweep's only read). */
+/**
+ * Pending deliveries whose next attempt is due (the cron sweep's only read).
+ *
+ * Joined to the target instance and gated on its status (#649). A delivery outlives the run that
+ * produced it by up to ~4 hours of backoff, so the owner can cancel the consumer between the
+ * failure and the retry — and without this the retry ran anyway, on an instance the platform had
+ * retired, from a cron nobody is watching. That is the same defect the sweep had, one table over.
+ *
+ * Filtered in SQL rather than after the fetch for the reason `runDueTriggers` states: `LIMIT ?2`
+ * is a budget, and rows fetched only to be rejected still spend it, so a backlog of deliveries to
+ * cancelled instances could starve a live one out of the sweep indefinitely.
+ *
+ * An inner join drops nothing a correct outer join would keep: `target_instance_id` is
+ * `TEXT NOT NULL` (migration 0058) and both enqueue paths bind a real instance id — the pump binds
+ * `agent_connections.target_instance_id`, and a trigger retry binds its own `instance_id`. A row
+ * whose instance has since been DELETED is excluded, which is the same fail-closed answer the
+ * status gate gives.
+ *
+ * Excluded rows stay `pending` rather than being marked dead: this gates the READ and writes
+ * nothing, so the outbox still shows the work and `?status=pending` still lists it. Cancellation
+ * is terminal today (no route sets an instance back to `'active'`), so in practice they simply
+ * stop being attempted.
+ */
 export async function dueDeliveries(env: Env, now = new Date(), limit = 25): Promise<DeliveryRow[]> {
 	const { results } = await env.DB.prepare(
-		`SELECT * FROM agent_connection_deliveries
-     WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
-     ORDER BY next_attempt_at ASC LIMIT ?2`,
+		`SELECT d.* FROM agent_connection_deliveries d
+       JOIN agent_instances i ON i.id = d.target_instance_id
+     WHERE d.status = 'pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?1)
+       AND ${activeInstanceSql("i")}
+     ORDER BY d.next_attempt_at ASC LIMIT ?2`,
 	)
 		.bind(now.toISOString(), limit)
 		.all<DeliveryRow>();

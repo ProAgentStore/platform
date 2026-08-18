@@ -18,6 +18,7 @@ import {
 import { advanceCron, normalizeSchedule, previewRuns } from "../lib/cron-schedule.js";
 import { validateTriggerConfig } from "../lib/trigger-config.js";
 import { triggerActionDenial, triggerActionOffers } from "../lib/trigger-capability.js";
+import { activeInstanceSql, isActiveInstanceStatus } from "../lib/trigger-eligibility.js";
 import { agentCapabilities, capabilitiesForInstance, type AgentCapabilities } from "../lib/agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -35,7 +36,10 @@ async function requireOwnedInstance(env: Env, userId: string, instanceId: string
 		"SELECT id, agent_id, user_id, status FROM agent_instances WHERE id = ?1 AND user_id = ?2",
 	).bind(instanceId, userId).first<OwnedInstance>();
 	if (!row) throw new HttpError(404, "Instance not found");
-	if (row.status !== "active") throw new HttpError(409, "Instance is not active");
+	// The shared predicate, not a second `!== "active"` (#649): this file already refused every
+	// instance-scoped trigger operation on a cancelled instance, and the value it refuses on must
+	// be the one the sweep, the pump and the retry loop admit on, spelled once.
+	if (!isActiveInstanceStatus(row.status)) throw new HttpError(409, "Instance is not active");
 	return row;
 }
 
@@ -45,6 +49,36 @@ async function requireOwnedTrigger(env: Env, userId: string, triggerId: string):
 		.first<TriggerRow>();
 	if (!row) throw new HttpError(404, "Trigger not found");
 	return row;
+}
+
+/**
+ * The trigger, refused when its instance is not active (#649).
+ *
+ * Only `/run` uses this. Read, edit and DELETE deliberately keep the plain lookup: gating those
+ * would strand a cancelled instance's triggers — unreachable AND undeletable — which is the
+ * recovery problem this issue is half about, not a fix for it.
+ *
+ * `/run` is owner-initiated and explicit, which is the argument for leaving it open; it is gated
+ * anyway, for two reasons that outweigh it. First, `requireOwnedInstance` twelve lines up already
+ * 409s create/list/preview for a non-active instance, so an open `/run` is the same operation
+ * allowed through one door and refused through the other — an inconsistency, not a capability.
+ * Second, `/run` dispatches exactly what the cron would (`run_pipeline`, `start_apply`), so the
+ * spend it authorises is the spend #649 exists to stop; "the owner asked for it" does not make a
+ * retired instance able to do work. Cancellation is terminal today — no route writes
+ * `agent_instances.status = 'active'` — so no "test it after re-activating" case is lost.
+ */
+async function requireRunnableTrigger(env: Env, userId: string, triggerId: string): Promise<TriggerRow> {
+	const row = await env.DB.prepare(
+		`SELECT t.*, i.status AS instance_status FROM agent_triggers t
+       JOIN agent_instances i ON i.id = t.instance_id
+     WHERE t.id = ?1 AND t.user_id = ?2`,
+	)
+		.bind(triggerId, userId)
+		.first<TriggerRow & { instance_status: string }>();
+	if (!row) throw new HttpError(404, "Trigger not found");
+	if (!isActiveInstanceStatus(row.instance_status)) throw new HttpError(409, "Instance is not active");
+	const { instance_status: _status, ...trigger } = row;
+	return trigger as TriggerRow;
 }
 
 function publicOrigin(requestUrl: string): string {
@@ -444,16 +478,31 @@ triggerRoutes.get("/:id/events", async (c) => {
 
 triggerRoutes.post("/:id/run", async (c) => {
 	const session = await requireUser(c);
-	const trigger = await requireOwnedTrigger(c.env, session.uid, c.req.param("id"));
+	const trigger = await requireRunnableTrigger(c.env, session.uid, c.req.param("id"));
 	const payload = await c.req.json().catch(() => ({}));
 	await dispatchTrigger(c.env, trigger, "manual", payload);
 	return c.json({ success: true });
 });
 
-/** Public unauthenticated webhook endpoint. The token is a high-entropy capability URL. */
+/**
+ * Public unauthenticated webhook endpoint. The token is a high-entropy capability URL.
+ *
+ * Gated on the instance's status in the same statement that finds the trigger (#649). This is the
+ * path where cancellation mattered most: the token is a bearer capability that outlives the
+ * subscription, so anyone who was ever given the URL — a third-party SaaS, a Zap, a pasted curl —
+ * kept running the agent's action after the owner cancelled it, from outside the platform, with no
+ * console surface left to reach the trigger and switch it off.
+ *
+ * Filtered in SQL so the answer is indistinguishable from a bad token: a 404 either way tells the
+ * caller nothing about whether an instance exists or what became of it.
+ */
 triggerRoutes.post("/webhook/:token", async (c) => {
 	const token = c.req.param("token");
-	const trigger = await c.env.DB.prepare("SELECT * FROM agent_triggers WHERE secret_token = ?1 AND type = 'webhook'")
+	const trigger = await c.env.DB.prepare(
+		`SELECT t.* FROM agent_triggers t
+       JOIN agent_instances i ON i.id = t.instance_id
+     WHERE t.secret_token = ?1 AND t.type = 'webhook' AND ${activeInstanceSql("i")}`,
+	)
 		.bind(token)
 		.first<TriggerRow>();
 	if (trigger?.enabled !== 1) throw new HttpError(404, "Webhook trigger not found");

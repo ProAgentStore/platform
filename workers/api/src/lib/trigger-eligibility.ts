@@ -11,6 +11,20 @@
  * spending the owner's BYOK tokens. With the instance gone from every surface, there was no UI
  * path left to reach the trigger and turn it off.
  *
+ * ── Every path that dispatches work now asks this, and they are the callers to keep in step
+ *
+ * The cron sweep went first because it was the one spending money invisibly. The other three
+ * followed in the same shape — gate the read, one predicate:
+ *
+ *   • `lib/triggers.ts` `runDueTriggers` — the per-minute cron sweep.
+ *   • `lib/connections.ts` `deliverEvent` — the agent-to-agent pump. An edge outlives the
+ *     instance it points at, because ownership is checked at create time and never again.
+ *   • `lib/connection-deliveries.ts` `dueDeliveries` — the retry loop. A delivery outlives its
+ *     run by up to ~4h of backoff, so the cancel can land between the failure and the retry.
+ *   • `routes/triggers.ts` — the public webhook (a bearer token that outlives the subscription)
+ *     and the manual `/run`, plus `requireOwnedInstance`'s pre-existing 409, which used to
+ *     open-code `!== "active"` and now asks here.
+ *
  * ── Why the predicate lives here and not inline
  *
  * Three different routes write `agent_instances.status = 'canceled'` — the owner's own cancel

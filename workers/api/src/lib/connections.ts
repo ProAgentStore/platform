@@ -32,6 +32,7 @@ import { getConnector } from "./connectors/registry.js";
 import { getRegistryTool } from "./tool-registry.js";
 import { loadPipeline, pipelineInventory, type PipelineInventory } from "./pipeline.js";
 import { connectionPipelineWarning } from "./connection-pipeline.js";
+import { isActiveInstanceStatus } from "./trigger-eligibility.js";
 import { HttpError } from "./auth.js";
 
 /** The HTTP status an error carries, when it carries one — `HttpError` is what every connector
@@ -362,6 +363,17 @@ export async function deleteConnection(env: Env, userId: string, id: string): Pr
  * the whole chain reads as one story in the trace instead of N disconnected runs.
  *
  * Still non-blocking for the emitter: a failing target never fails the source pipeline.
+ *
+ * A cancelled TARGET takes nothing (#649). `createConnection` checks ownership of both ends at
+ * CREATE time and never again, so an edge outlives the instance it points at: the owner cancels
+ * the consumer, the producer keeps running, and every event it emits still runs a pipeline —
+ * spending the owner's BYOK tokens — on an agent the console no longer shows them. The predicate
+ * is the shared one (`isActiveInstanceStatus`), so this cannot drift from the sweep's.
+ *
+ * The SOURCE is deliberately not checked here: a cancelled source has no way to reach this
+ * function, because the reads that dispatch its work are gated already (the cron sweep, the
+ * webhook route, the retry loop). Re-asserting it on the emit path would be a second spelling of
+ * a decision made upstream, and one that would fire on a chain the producer is entitled to run.
  */
 export async function deliverEvent(
 	env: Env,
@@ -370,33 +382,51 @@ export async function deliverEvent(
 	eventType: string,
 	payloads: unknown[],
 	opts: { traceId?: string | null } = {},
-): Promise<{ connections: number; delivered: number; failed: number; queued: number; filtered: number; duplicate: number; disabled: number }> {
-	const empty = { connections: 0, delivered: 0, failed: 0, queued: 0, filtered: 0, duplicate: 0, disabled: 0 };
+): Promise<{ connections: number; delivered: number; failed: number; queued: number; filtered: number; duplicate: number; disabled: number; inactive: number }> {
+	const empty = { connections: 0, delivered: 0, failed: 0, queued: 0, filtered: 0, duplicate: 0, disabled: 0, inactive: 0 };
 	if (!payloads.length) return empty;
-	// Selected UNFILTERED and partitioned here, so a paused edge (#644) is a fact this function can
-	// report. Filtered in SQL, an event with every connection disabled read exactly like an event
-	// with nothing wired — and now that disabling is possible, "the chain is paused" has to be
-	// distinguishable from "the chain was never built".
-	const { results } = await env.DB.prepare("SELECT * FROM agent_connections WHERE source_instance_id = ?1 AND event_type = ?2")
+	// Selected UNFILTERED and partitioned here, so a paused edge (#644) — and now a cancelled
+	// target (#649) — is a fact this function can report. Filtered in SQL, an event with every
+	// connection disabled read exactly like an event with nothing wired, and "the chain is
+	// stopped because the consumer was cancelled" has to be distinguishable from both. This read
+	// carries no LIMIT, so nothing is starved by fetching a row in order to reject it — the
+	// opposite of the sweep, where the budget is the reason to filter in SQL.
+	//
+	// LEFT JOIN, not inner: an edge whose target row has been deleted must still be COUNTED, and
+	// a NULL status fails `isActiveInstanceStatus` anyway, so it is excluded on the same rule.
+	const { results } = await env.DB.prepare(
+		`SELECT c.*, i.status AS target_status
+       FROM agent_connections c
+       LEFT JOIN agent_instances i ON i.id = c.target_instance_id
+     WHERE c.source_instance_id = ?1 AND c.event_type = ?2`,
+	)
 		.bind(sourceInstanceId, eventType)
-		.all<ConnectionRow>();
+		.all<ConnectionRow & { target_status: string | null }>();
 	const all = results ?? [];
-	const conns = all.filter((c) => !!c.enabled);
-	const disabled = all.length - conns.length;
+	const enabled = all.filter((c) => !!c.enabled);
+	const disabled = all.length - enabled.length;
+	const conns = enabled.filter((c) => isActiveInstanceStatus(c.target_status));
+	const inactive = enabled.length - conns.length;
 	if (!conns.length) {
-		if (disabled) {
+		if (disabled || inactive) {
+			const reason = [
+				disabled ? `${disabled} connection(s) disabled` : "",
+				inactive ? `${inactive} connection(s) targeting a cancelled instance` : "",
+			]
+				.filter(Boolean)
+				.join(", ");
 			await logEvent(env, {
 				source: "connection",
 				event: "connection.paused",
 				level: "warn",
-				message: `${eventType}: ${disabled} connection(s) disabled — ${payloads.length} event(s) not delivered`,
+				message: `${eventType}: ${reason} — ${payloads.length} event(s) not delivered`,
 				userId,
 				instanceId: sourceInstanceId,
 				traceId: opts.traceId ?? undefined,
-				context: { eventType, disabled, payloads: payloads.length },
+				context: { eventType, disabled, inactive, payloads: payloads.length },
 			}).catch(() => undefined);
 		}
-		return { ...empty, disabled };
+		return { ...empty, disabled, inactive };
 	}
 
 	let delivered = 0;
@@ -451,13 +481,13 @@ export async function deliverEvent(
 	await logEvent(env, {
 		source: "connection",
 		event: "connection.delivered",
-		message: `${eventType}: ${delivered}/${queued} delivered to ${conns.length} connection(s)${failed ? `, ${failed} queued for retry` : ""}${filtered ? `, ${filtered} filtered out` : ""}${duplicate ? `, ${duplicate} duplicate` : ""}${disabled ? `, ${disabled} disabled` : ""}`,
+		message: `${eventType}: ${delivered}/${queued} delivered to ${conns.length} connection(s)${failed ? `, ${failed} queued for retry` : ""}${filtered ? `, ${filtered} filtered out` : ""}${duplicate ? `, ${duplicate} duplicate` : ""}${disabled ? `, ${disabled} disabled` : ""}${inactive ? `, ${inactive} cancelled target(s)` : ""}`,
 		userId,
 		instanceId: sourceInstanceId,
 		traceId: opts.traceId ?? undefined,
-		context: { eventType, connections: conns.length, delivered, failed, filtered, duplicate, disabled },
+		context: { eventType, connections: conns.length, delivered, failed, filtered, duplicate, disabled, inactive },
 	});
-	return { connections: conns.length, delivered, failed, queued, filtered, duplicate, disabled };
+	return { connections: conns.length, delivered, failed, queued, filtered, duplicate, disabled, inactive };
 }
 
 /**
