@@ -53,6 +53,12 @@
  *     to make in a gate, because a false positive that halts a run costs more than the finding.
  *     Explicit `gh api --method POST|PATCH|PUT|DELETE` with a `/repos/{owner}/{repo}` path IS
  *     classified.
+ *  4. **A write that names no repository is not gated.** `gh` then resolves the target from the
+ *     working directory's remote, which the shim cannot see without running git itself. In a
+ *     session that is the workdir the platform registered — but the Engine has a shell, so `cd`
+ *     into another checkout on this machine reaches that repository instead. Refusing every
+ *     unqualified write was rejected: it is the ordinary shape of `gh pr create` inside the repo
+ *     the session owns, so it would break the common case to narrow an uncommon one.
  *
  * All three are reported through {@link ghGuardReport} → `coding_diagnostics`, which is where the
  * `enforcement: "acts-observed-halt"` value they replace used to be. A gate that overstates itself
@@ -223,6 +229,7 @@ export const GH_GUARD_GAPS: readonly string[] = [
 	"`git push` is not gated — this machine's remotes are SSH, so there is no credential to withhold.",
 	"A PATH shim is bypassable: invoking `/opt/homebrew/bin/gh` by absolute path, or re-exporting PATH, skips it.",
 	"`gh api graphql` is not classified — a mutation can travel inside the query text.",
+	"A write with no `--repo` is not gated: gh resolves the target from the working directory, so a `cd` into another checkout on this machine reaches it.",
 ];
 
 /** Report for a session with no guard installed. */

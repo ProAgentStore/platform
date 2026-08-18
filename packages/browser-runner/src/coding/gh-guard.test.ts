@@ -92,7 +92,11 @@ describe("the gh guard lets everything else through untouched", () => {
 		}
 	});
 
-	it("a write with NO --repo runs — gh resolves it from the checkout the session owns", () => {
+	it("a write with NO --repo runs — gh resolves it from the working directory, which is a STATED gap", () => {
+		// Ordinarily the working directory IS the repo the session was registered for, and refusing
+		// this would break `gh pr create` inside the agent's own checkout — the common case. But the
+		// Engine has a shell and can `cd`, so this is not containment, and the gap list says so
+		// rather than the diagnostics implying otherwise.
 		const r = runGh(SCOPE, ["pr", "create", "--title", "x", "--body", "y"]);
 		expect(r.code).toBe(0);
 		expect(r.stdout).toContain("REAL GH: pr create");
@@ -147,6 +151,12 @@ describe("the guard fails OPEN, and says which way it failed", () => {
 		expect(report.gaps.join(" ")).toContain("git push");
 		expect(report.gaps.join(" ")).toContain("bypassable");
 		expect(report.gaps.join(" ")).toContain("graphql");
+		// The fourth is the one a reader would otherwise infer the opposite of, because the guard
+		// looks like it inspects every write: an unqualified write is resolved from the cwd and is
+		// not checked at all. Every gap the shim leaves has to be in this list, since
+		// `coding_diagnostics` reports it verbatim and nothing downstream re-derives it.
+		expect(report.gaps.join(" ")).toContain("no `--repo`");
+		expect(report.gaps).toHaveLength(4);
 	});
 });
 
