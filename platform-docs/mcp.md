@@ -207,6 +207,8 @@ it exactly what the annotations are for.
 
 Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account. Audit events are redacted before storage — both by key name (`token`, `secret`, `password`, `credential`, `api_key`, …) and by value shape (`sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs, bearer headers) — and expire after 90 days.
 
+The same events are readable over HTTP at `GET /v1/mcp-audit` (`?limit=`, max 200; `?tool=`), scoped to the calling account and needing no MCP connection — which matters precisely when the MCP connection is the thing that broke. The console surfaces it under **Profile → MCP activity**.
+
 ## Result And Error Shape
 
 Every tool returns a text content block. Two tools **also** return `structuredContent`,
@@ -379,6 +381,7 @@ looking and tells the user which console screen to use instead.
 | Stripe checkout and the customer portal | Browser redirects — a redirect URL is useless to a headless caller. `billing_status` reads; nothing writes. | — |
 | Binary routes — voice-audio, R2 multipart upload parts, file byte download | MCP results are text. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not. `upload_agent_file` takes text only; `upload_resume` is the single binary path, and is apply-scoped. | — |
 | Arbitrary shell execution, or a generic API proxy | No shell tool, no open proxy. `call_instance_tool` reaches only the connector tools an instance declares and its owner has left enabled. | — |
+| The MCP audit log over HTTP | MCP already reads these events, through `mcp_audit_log`. `GET /v1/mcp-audit` (#704) is the console's path to the SAME KV, and its whole reason to exist is that it needs no MCP connection — when the MCP connection is what broke, a tool that wraps it answers nothing. A second tool over the same bytes would add a surface, not a capability. | `check-mcp-parity.mjs` |
 | User deletion | Not modelled. | — |
 | Another user's data | Every instance route is owner-scoped server-side. `list_errors` with `scope: "all"` is the only cross-user read and is admin-only. | — |
 

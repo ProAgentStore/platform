@@ -132,6 +132,12 @@ const EXCLUSIONS = [
 		match: null,
 	},
 	{
+		label: "The MCP audit log over HTTP",
+		why:
+			"MCP already reads these events, through `mcp_audit_log`. `GET /v1/mcp-audit` (#704) is the console's path to the SAME KV, and its whole reason to exist is that it needs no MCP connection — when the MCP connection is what broke, a tool that wraps it answers nothing. A second tool over the same bytes would add a surface, not a capability.",
+		match: /^GET \/v1\/mcp-audit$/,
+	},
+	{
 		label: "User deletion",
 		why: "Not modelled.",
 		match: null,

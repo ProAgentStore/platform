@@ -36,6 +36,7 @@ import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { statsRoutes } from "./routes/stats.js";
+import { mcpAuditRoutes } from "./routes/mcp-audit.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminInstanceDetailRoutes } from "./routes/admin-instance-detail.js";
@@ -176,6 +177,7 @@ app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes —
 app.route("/v1/usage", usageRoutes); // platform: /v1/usage — token/cost transparency across agents
 app.route("/v1/budget", budgetRoutes); // platform: /v1/budget/limits — account daily circuit breakers
 app.route("/v1", statsRoutes); // per-agent stats cards: /v1/stats/sources, /v1/instances/:id/stats, /v1/agents/:id/stats-schema
+app.route("/v1", mcpAuditRoutes); // platform: /v1/mcp-audit — the caller's OWN MCP tool-call history
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google

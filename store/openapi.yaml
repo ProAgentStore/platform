@@ -8680,6 +8680,46 @@ paths:
                   range: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/mcp-audit:
+    get:
+      summary: Your own MCP tool-call history
+      description: |
+        The audit events the MCP server wrote for YOUR account — write, runtime, dry-run,
+        denied and destructive tool calls — newest first, kept 90 days. Scoped to the calling
+        account: there is no parameter that can name another subject.
+
+        This is the same ledger `mcp_audit_log` reads, over HTTP. It exists so the history is
+        reachable when the MCP connection is not, which is precisely when it is wanted.
+        Payloads are redacted on write and again on read.
+      operationId: getMcpAudit
+      tags: [Usage]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 200 } }
+        - { name: tool, in: query, description: Exact tool-name match., schema: { type: string } }
+      responses:
+        "200":
+          description: Audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  truncated: { type: boolean, description: More than 1000 keys exist for this subject; the window is not exhaustive. }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                      properties:
+                        id: { type: string }
+                        time: { type: string, format: date-time }
+                        tool: { type: string }
+                        action: { type: string, description: "`completed` | `dry_run` | `denied` | …" }
+                        reason: { type: string, description: "Set when `action` is `denied`: read_only | missing_scope | missing_confirmation." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "501": { description: The MCP audit KV namespace is not bound on this deployment. }
+
   # ── Stats ─────────────────────────────────────────────────────────────────
 
   /v1/stats/sources:

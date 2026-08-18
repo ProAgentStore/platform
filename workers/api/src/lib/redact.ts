@@ -26,16 +26,31 @@ export function redactText(s: string): string {
 	return (s || "").replace(SECRET_VALUE, "[redacted]");
 }
 
+export interface RedactOptions {
+	/**
+	 * Key names exempted from the NAME match above, for a call site that knows a
+	 * particular field is an opaque handle rather than a credential (#704). Scoped per
+	 * call site on purpose: narrowing `SECRET_KEY` itself would change what all four
+	 * consumers store, and some of the things it catches — a stateful MCP server's
+	 * `Mcp-Session-Id`, say — genuinely are capabilities.
+	 *
+	 * An exemption only skips the key-NAME rule. The value-shape net still runs over the
+	 * field, so an exempted key holding a real `ghp_…`/JWT/`Bearer …` is still masked.
+	 */
+	allowKeys?: RegExp;
+}
+
 /** Recursively redact an object: secret-named keys → "[redacted]", string values →
  *  value-pattern masked. Bounded depth so a pathological blob can't blow the stack. */
-export function redactSecrets(value: unknown, depth = 0): unknown {
+export function redactSecrets(value: unknown, depth = 0, opts: RedactOptions = {}): unknown {
 	if (depth > 8) return value;
 	if (typeof value === "string") return redactText(value);
-	if (Array.isArray(value)) return value.map((v) => redactSecrets(v, depth + 1));
+	if (Array.isArray(value)) return value.map((v) => redactSecrets(v, depth + 1, opts));
 	if (value && typeof value === "object") {
 		const out: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-			out[k] = SECRET_KEY.test(k) ? "[redacted]" : redactSecrets(v, depth + 1);
+			const named = SECRET_KEY.test(k) && !opts.allowKeys?.test(k);
+			out[k] = named ? "[redacted]" : redactSecrets(v, depth + 1, opts);
 		}
 		return out;
 	}

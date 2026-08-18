@@ -114,9 +114,19 @@ export async function listAuditEvents(
 ): Promise<unknown[]> {
 	if (!ctx.env.OAUTH_KV || !ctx.subject) return [];
 	const safeLimit = Math.max(1, Math.min(200, limit));
+	// KV returns keys in LEXICOGRAPHIC order and the key is `audit:{subject}:{ISO time}:{uuid}`,
+	// which sorts ASCENDING in time. So `list({limit: safeLimit})` handed back the OLDEST
+	// `safeLimit` events, and the `.sort()` below ordered THOSE newest-first — which is why the
+	// answer looked correct while reporting events from months ago (#704). The sibling reader
+	// `workers/api/src/routes/admin-mcp-audit.ts` already over-lists for exactly this reason.
+	//
+	// Over-list to the KV per-call cap, sort the KEY NAMES, and `get` only the top slice: the
+	// sort needs the names, not the values, so this still costs `safeLimit` reads (≤200), not
+	// the admin route's ≤1000. Correct up to 1000 events per subject; past that KV truncates
+	// the listing lexicographically and the window is wrong again — see #704 step 5.
 	const listed = await ctx.env.OAUTH_KV.list({
 		prefix: `audit:${ctx.subject}:`,
-		limit: safeLimit,
+		limit: 1000,
 	});
 	const rows = await Promise.all(
 		listed.keys

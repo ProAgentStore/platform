@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../lib/auth.js";
-import { redactSecrets } from "../lib/redact.js";
 import type { Env } from "../types.js";
+import { readMcpAuditEvents } from "./mcp-audit.js";
 
 /**
  * Admin: MCP tool-call audit log (cross-user).
@@ -30,19 +30,6 @@ import type { Env } from "../types.js";
  *  declare it, so we narrow locally rather than edit the shared type. */
 type EnvWithOAuthKV = Env & { OAUTH_KV?: KVNamespace };
 
-interface McpAuditEvent {
-	time?: string;
-	subject?: string;
-	tool?: string;
-	action?: string;
-	reason?: string;
-	requiredScope?: string;
-	scopes?: string[] | string | null;
-	input?: unknown;
-	result?: unknown;
-	[k: string]: unknown;
-}
-
 export const adminMcpAuditRoutes = new Hono<{ Bindings: Env }>();
 
 /**
@@ -69,43 +56,18 @@ adminMcpAuditRoutes.get("/mcp-audit", async (c) => {
 	const toolFilter = c.req.query("tool")?.trim() || undefined;
 	const userFilter = c.req.query("user")?.trim() || undefined;
 
-	// Keys are `audit:{subject}:{time}:{uuid}`. To filter by user we can narrow the KV
-	// list prefix; otherwise we sweep all `audit:` keys. We over-list (up to the KV
-	// per-call cap of 1000) and slice after sort so filters still surface enough rows.
+	// Keys are `audit:{subject}:{time}:{uuid}`. To filter by user we narrow the KV list
+	// prefix; otherwise we sweep all `audit:` keys. The listing, ordering and read-time
+	// redaction now live in `mcp-audit.ts` — one reader for the admin sweep and the
+	// owner-scoped route, so the two cannot drift the way the MCP-side reader did (#704).
 	const prefix = userFilter ? `audit:${userFilter}:` : "audit:";
-	const listed = await kv.list({ prefix, limit: 1000 });
-
-	// Key name sorts lexicographically by subject then ISO time; reverse for newest-first
-	// within a subject. We still sort loaded events by `time` below for a true global order.
-	const names = listed.keys.map((k) => k.name);
-
-	const loaded = await Promise.all(
-		names.map(async (name) => {
-			const raw = await kv.get(name);
-			if (!raw) return null;
-			try {
-				return JSON.parse(raw) as McpAuditEvent;
-			} catch {
-				return { raw } as McpAuditEvent;
-			}
-		}),
-	);
-
-	let events = loaded.filter((e): e is McpAuditEvent => e !== null);
-	if (toolFilter) events = events.filter((e) => e.tool === toolFilter);
-
-	events.sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
-	events = events.slice(0, limit);
-
-	// Defense-in-depth: tool input/result are untrusted — redact secret-shaped values
-	// on read (the write-time redact in the MCP worker is the first net, this is the second).
-	const safe = events.map((e) => ({
-		...e,
-		input: "input" in e ? redactSecrets(e.input) : e.input,
-		result: "result" in e ? redactSecrets(e.result) : e.result,
-	}));
-
-	return c.json({ count: safe.length, truncated: listed.list_complete === false, events: safe });
+	const result = await readMcpAuditEvents(kv, {
+		prefix,
+		limit,
+		tool: toolFilter,
+		subjectScoped: Boolean(userFilter),
+	});
+	return c.json(result);
 });
 
 /*
