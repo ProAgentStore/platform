@@ -19,6 +19,7 @@ import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
+import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
 import {
@@ -968,7 +969,12 @@ registerTaskRoutes(instanceRoutes);
 registerChatRoutes(instanceRoutes);
 registerKnowledgeRoutes(instanceRoutes);
 
-/** Cancel subscription / deactivate instance. */
+/**
+ * Cancel subscription / deactivate instance. Two writes answering DIFFERENT questions (#669):
+ * `agent_instances.status` is per instance and is the only per-instance authority (#649); the
+ * `subscriptions` row is keyed `(agent_id, user_id)`, shared by every instance of that agent, and
+ * so is retired only when this cancel takes the last live one — `lib/subscription-standing.ts`.
+ */
 instanceRoutes.post("/:instanceId/cancel", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
@@ -984,10 +990,7 @@ instanceRoutes.post("/:instanceId/cancel", async (c) => {
 		c.env.DB.prepare(
 			`UPDATE agent_instances SET status = 'canceled', updated_at = datetime('now') WHERE id = ?1`,
 		).bind(instanceId),
-		c.env.DB.prepare(
-			`UPDATE subscriptions SET status = 'canceled', canceled_at = datetime('now')
-       WHERE agent_id = ?1 AND user_id = ?2 AND status = 'active'`,
-		).bind(instance.agent_id, session.uid),
+		c.env.DB.prepare(retireSubscriptionSql()).bind(instance.agent_id, session.uid, instanceId),
 	]);
 
 	return c.json({ success: true });

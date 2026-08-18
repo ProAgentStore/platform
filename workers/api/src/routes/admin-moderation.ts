@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { recordAdminAction } from "../lib/admin.js";
 import { agentDeleteStatements, countAgentSubscribers, hasSubscriberRows } from "../lib/agent-cascade.js";
 import { HttpError, requireAdmin } from "../lib/auth.js";
+import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import type { Env, SessionPayload } from "../types.js";
 
 /**
@@ -292,14 +293,15 @@ adminModerationRoutes.post("/instances/:id/cancel", async (c) => {
 	).bind(id).first<{ id: string; agent_id: string; user_id: string; status: string }>();
 	if (!inst) throw new HttpError(404, "Instance not found");
 
+	// The `subscriptions` row is shared by every instance of this agent the owner holds (#669), so
+	// an operator cancelling ONE runaway instance must not retire the standing of the others. Same
+	// statement the owner's own cancel uses — a second spelling here is how the two routes came to
+	// disagree about what cancelling means in the first place.
 	await c.env.DB.batch([
 		c.env.DB.prepare(
 			"UPDATE agent_instances SET status = 'canceled', updated_at = datetime('now') WHERE id = ?1",
 		).bind(id),
-		c.env.DB.prepare(
-			`UPDATE subscriptions SET status = 'canceled', canceled_at = datetime('now')
-			 WHERE agent_id = ?1 AND user_id = ?2 AND status = 'active'`,
-		).bind(inst.agent_id, inst.user_id),
+		c.env.DB.prepare(retireSubscriptionSql()).bind(inst.agent_id, inst.user_id, id),
 	]);
 
 	await recordAdminAction(c.env, actor, "instance.cancel", { type: "instance", id }, {
