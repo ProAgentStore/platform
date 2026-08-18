@@ -7662,6 +7662,48 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/instances/{instanceId}/supervision/{sid}:
+    patch:
+      summary: Pause or resume a supervision link
+      description: |
+        Sets `enabled`. Until this existed the column had one writer — the literal `1` in the
+        INSERT — and only ONE of its six readers filtered on it, so disabling a link (had it
+        been possible) would have dropped the subordinate from the supervisor's voice
+        vocabulary and from nothing else: the graph, the roster, the delegation check and the
+        escalation ladder would all still have routed through it. All of them now honour it.
+
+        Deleting is not a pause. The edge's `config` carries its label, its per-edge budget
+        defaults and the subordinate's standing DIRECTION — the epic the owner wrote, which by
+        design only the owner can write, so re-wiring after a delete means retyping it.
+
+        A pause writes a warn-level `supervision.paused` to the unified trace, because every
+        consequence of one is an absence — a subordinate missing from the roster, a delegation
+        refused, an escalation that reaches the human instead of the Lead — and an absence
+        reads exactly like a link that was never wired.
+      operationId: setSupervisionEnabled
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: sid, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+                  description: Strictly a boolean — `"false"` and `0` are rejected rather than coerced, since coercion would do the opposite of what was asked on the one field whose job is to stop a supervisor spending money through this edge.
+      responses:
+        "200":
+          description: The updated supervision link
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       summary: Remove a supervision link
       operationId: deleteSupervision

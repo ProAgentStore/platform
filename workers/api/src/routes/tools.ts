@@ -32,7 +32,7 @@ import { pipelineDeclarationError } from "../lib/pipeline-tool-policy.js";
 import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection, setConnectionEnabled } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
-import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection } from "../lib/supervision.js";
+import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection, setSupervisionEnabled } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
 import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
@@ -869,6 +869,21 @@ toolRoutes.post("/:id/supervision", async (c) => {
 	});
 	if (!res.ok) throw new HttpError(res.status as 400, res.error);
 	return c.json(res.supervision, 201);
+});
+
+/** Pause or resume one edge (#664) — the reversible form of the DELETE below, which throws away the
+ *  edge's budget defaults and the owner's standing direction. Rationale in `setSupervisionEnabled`. */
+toolRoutes.patch("/:id/supervision/:sid", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown };
+	// Strictly a boolean: `"false"` and `0` are the shapes a hand-written body arrives in, and
+	// coercing them would silently do the opposite of what was asked on the one field whose job is
+	// to stop a supervisor spending money through this edge.
+	if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
+	const updated = await setSupervisionEnabled(c.env, session.uid, c.req.param("sid"), body.enabled);
+	if (!updated) throw new HttpError(404, "supervision link not found");
+	return c.json(updated);
 });
 
 toolRoutes.delete("/:id/supervision/:sid", async (c) => {

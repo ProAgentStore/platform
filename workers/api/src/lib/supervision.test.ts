@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { directionRosterFor, directionsForSupervisor, listSupervision, setSupervisionDirection } from "./supervision.js";
+import {
+	createSupervision,
+	directionRosterFor,
+	directionsForSupervisor,
+	listSupervision,
+	loadConfiguredGraph,
+	loadGraph,
+	rootInstanceOf,
+	setSupervisionDirection,
+	setSupervisionEnabled,
+	subordinateIdsOf,
+	supervisorIdOf,
+} from "./supervision.js";
 import type { Env } from "../types.js";
 
 /**
@@ -163,5 +175,235 @@ describe("setSupervisionDirection", () => {
 		const { env } = buildEnv({ concurrentWrite: JSON.stringify({ label: "renamed by someone else" }) });
 		const res = await setSupervisionDirection(env, "u1", { supervisorInstanceId: "sup", supervisionId: "link-1", text: "Ship it.", setBy: "user" });
 		expect(res).toMatchObject({ ok: false, status: 409 });
+	});
+});
+
+/**
+ * A multi-row D1 stub for the `enabled` half (#664), separate from the one above because the
+ * question is different: that one is about what ONE row's config does across a write, this one is
+ * about which rows a statement SEES.
+ *
+ * The one rule that makes this suite mean anything: the stub honours `enabled` ONLY when the
+ * statement it was handed actually says so. It reads the predicate out of the SQL rather than
+ * applying it itself, so deleting `AND enabled = 1` from any query under test turns these red
+ * instead of leaving them green against a stub that was quietly doing the filtering.
+ */
+interface Edge {
+	id: string;
+	user_id: string;
+	supervisor_instance_id: string;
+	subordinate_instance_id: string;
+	enabled: number;
+	config: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+function edge(p: Partial<Edge> = {}): Edge {
+	return {
+		id: p.id ?? "link-1",
+		user_id: p.user_id ?? "u1",
+		supervisor_instance_id: p.supervisor_instance_id ?? "lead",
+		subordinate_instance_id: p.subordinate_instance_id ?? "worker",
+		enabled: p.enabled ?? 1,
+		config: p.config ?? null,
+		created_at: p.created_at ?? "2026-08-01 00:00:00",
+		updated_at: p.updated_at ?? "2026-08-01 00:00:00",
+	};
+}
+
+function buildGraphEnv(rows: Edge[], opts: { instances?: string[] } = {}) {
+	const writes: { sql: string; args: unknown[] }[] = [];
+	const owned = opts.instances ?? ["lead", "worker", "other", "second-lead"];
+	// Honour the predicate the STATEMENT carries, never one of our own.
+	const seen = (sql: string) => rows.filter((r) => (sql.includes("enabled = 1") ? r.enabled === 1 : true));
+	const env = {
+		DB: {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async first() {
+								if (sql.includes("FROM agent_instances WHERE id = ?1 AND user_id = ?2")) {
+									return owned.includes(String(args[0])) && args[1] === "u1" ? { id: args[0] } : null;
+								}
+								if (sql.includes("FROM agent_supervision WHERE id = ?1 AND user_id = ?2")) {
+									return rows.find((r) => r.id === args[0] && r.user_id === args[1]) ?? null;
+								}
+								if (sql.includes("FROM agent_supervision WHERE id = ?1")) {
+									return rows.find((r) => r.id === args[0]) ?? null;
+								}
+								return null;
+							},
+							async all() {
+								const mine = seen(sql).filter((r) => r.user_id === args[0]);
+								if (sql.includes("SELECT supervisor_instance_id, subordinate_instance_id")) {
+									return { results: mine };
+								}
+								if (sql.includes("SELECT subordinate_instance_id, config")) {
+									return { results: mine.filter((r) => r.supervisor_instance_id === args[1]) };
+								}
+								if (sql.includes("JOIN agent_instances")) {
+									return {
+										results: mine
+											.filter((r) => r.supervisor_instance_id === args[1])
+											.map((r) => ({ id: r.subordinate_instance_id, sup_config: r.config, display_name: null, agent_name: r.subordinate_instance_id })),
+									};
+								}
+								if (sql.includes("SELECT * FROM agent_supervision")) {
+									return { results: sql.includes("supervisor_instance_id = ?2") ? mine.filter((r) => r.supervisor_instance_id === args[1]) : mine };
+								}
+								return { results: [] };
+							},
+							async run() {
+								writes.push({ sql, args });
+								if (sql.includes("UPDATE agent_supervision SET enabled")) {
+									// The function re-reads what it wrote, so the stub must actually write it —
+									// echoing the old row would report `enabled:true` from a call that disabled it.
+									// Scoped the way the STATEMENT is scoped, same rule as `seen()`: a stub that
+									// enforced ownership on its own would stay green after `AND user_id = ?2` was
+									// deleted from the UPDATE, which is the one mutation that turns this into an IDOR.
+									const row = rows.find((r) => r.id === args[0] && (sql.includes("user_id = ?2") ? r.user_id === args[1] : true));
+									if (!row) return { meta: { changes: 0 } };
+									row.enabled = args[2] as number;
+									return { meta: { changes: 1 } };
+								}
+								if (sql.includes("INSERT INTO agent_supervision")) {
+									const [id, user_id, sup, sub, config] = args as [string, string, string, string, string];
+									rows.push(edge({ id, user_id, supervisor_instance_id: sup, subordinate_instance_id: sub, config }));
+									return { meta: { changes: 1 } };
+								}
+								return { meta: { changes: 1 } };
+							},
+						};
+					},
+					async run() {
+						return { meta: { changes: 0 } };
+					},
+				};
+			},
+		},
+	} as unknown as Env;
+	return { env, writes, rows };
+}
+
+const traceEvents = (writes: { sql: string; args: unknown[] }[]) =>
+	writes.filter((w) => w.sql.includes("INSERT INTO agent_events")).map((w) => String(w.args[7]));
+
+// ── #664: the five readers that ignored `enabled` ──────────────────────────────────────────
+describe("a paused edge routes NOTHING (#664)", () => {
+	it("leaves the routing graph while staying in the configured one", async () => {
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await loadGraph(env, "u1")).toEqual([]);
+		expect(await loadConfiguredGraph(env, "u1")).toEqual([{ supervisorInstanceId: "lead", subordinateInstanceId: "worker" }]);
+	});
+
+	it("drops the subordinate from the fan-out, which is the delegation check", async () => {
+		// `delegateToInstance` refuses anything not in `subordinatesOf(loadGraph(...))`, so this IS
+		// "may this supervisor drive that agent". Before #664 a paused edge still said yes.
+		const { env } = buildGraphEnv([edge({ id: "a", subordinate_instance_id: "worker", enabled: 0 }), edge({ id: "b", subordinate_instance_id: "other" })]);
+		expect(await subordinateIdsOf(env, "u1", "lead")).toEqual(["other"]);
+	});
+
+	it("removes the escalation target, so a stuck run wakes the human instead", async () => {
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await supervisorIdOf(env, "u1", "worker")).toBeNull();
+	});
+
+	it("detaches the subtree from the budget root, so spend is not attributed upward", async () => {
+		// #184 attributes a delegation's spend to `rootOf`. A paused edge that still climbed would
+		// bill a supervisor for work it is no longer allowed to start.
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await rootInstanceOf(env, "u1", "worker")).toBe("worker");
+	});
+
+	it("disappears from the supervisor's roster and its directions", async () => {
+		const cfg = JSON.stringify({ direction: { text: "Finish the voice port.", setBy: "user", updatedAt: "2026-08-01T00:00:00.000Z" } });
+		const { env } = buildGraphEnv([edge({ enabled: 0, config: cfg })]);
+		expect(await directionRosterFor(env, "u1", "lead")).toEqual([]);
+		expect((await directionsForSupervisor(env, "u1", "lead")).size).toBe(0);
+	});
+
+	it("is STILL listed, marked disabled — the control surface is the one read that must not filter", async () => {
+		// An edge hidden while paused is an edge that cannot be resumed.
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		const [link] = await listSupervision(env, "u1", { supervisorInstanceId: "lead" });
+		expect(link).toMatchObject({ id: "link-1", enabled: false });
+	});
+});
+
+describe("wiring validates against the CONFIGURED graph, paused edges included (#664)", () => {
+	const wire = (env: Env, supervisorInstanceId: string, subordinateInstanceId: string) =>
+		createSupervision(env, "u1", { supervisorInstanceId, subordinateInstanceId });
+
+	it("still refuses a cycle through a paused edge", async () => {
+		// The hazard that makes this more than tidiness: nothing re-validates on resume, so if
+		// pausing hid lead→worker, wiring worker→lead would be accepted and re-enabling would close
+		// a delegation loop that spends money until something else stops it.
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await wire(env, "worker", "lead")).toMatchObject({ ok: false, status: 400 });
+	});
+
+	it("still refuses a second supervisor for a paused subordinate", async () => {
+		// `idx_supervision_subordinate` is UNIQUE and unconditional, so the row is reserved either
+		// way; validating on the routing graph would trade this message for a raw 409.
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await wire(env, "second-lead", "worker")).toMatchObject({ ok: false, status: 400 });
+	});
+
+	it("still refuses re-adding the edge that is merely paused", async () => {
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await wire(env, "lead", "worker")).toMatchObject({ ok: false, status: 400 });
+	});
+
+	it("wires a genuinely new edge, so the check is not simply rejecting everything", async () => {
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect(await wire(env, "lead", "other")).toMatchObject({ ok: true });
+	});
+});
+
+describe("setSupervisionEnabled — the writer that did not exist (#664)", () => {
+	it("writes enabled=0 and reports it back", async () => {
+		const { env, writes } = buildGraphEnv([edge()]);
+		expect((await setSupervisionEnabled(env, "u1", "link-1", false))?.enabled).toBe(false);
+		const update = writes.find((w) => w.sql.includes("UPDATE agent_supervision SET enabled"));
+		expect(update?.args).toEqual(["link-1", "u1", 0]);
+	});
+
+	it("resumes, so the pause is reversible", async () => {
+		const { env } = buildGraphEnv([edge({ enabled: 0 })]);
+		expect((await setSupervisionEnabled(env, "u1", "link-1", true))?.enabled).toBe(true);
+	});
+
+	it("is owner-scoped — another user's id matches no row", async () => {
+		const { env, rows } = buildGraphEnv([edge()]);
+		expect(await setSupervisionEnabled(env, "someone-else", "link-1", false)).toBeNull();
+		expect(rows[0].enabled).toBe(1);
+	});
+
+	it("returns null for an id that is not an edge", async () => {
+		const { env } = buildGraphEnv([edge()]);
+		expect(await setSupervisionEnabled(env, "u1", "no-such-link", false)).toBeNull();
+	});
+
+	it("keeps the owner's direction and the edge's config — that is the whole point vs delete", async () => {
+		// Deleting was the only pause available before this, and it destroys the standing direction
+		// (#330), which by design only the OWNER can write back.
+		const cfg = JSON.stringify({ label: "FWS", direction: { text: "Finish the voice port.", setBy: "user", updatedAt: "2026-08-01T00:00:00.000Z" } });
+		const { env, writes } = buildGraphEnv([edge({ config: cfg })]);
+		const view = await setSupervisionEnabled(env, "u1", "link-1", false);
+		expect(view?.config).toMatchObject({ label: "FWS" });
+		expect(view?.direction?.text).toBe("Finish the voice port.");
+		expect(writes.some((w) => w.sql.includes("DELETE FROM agent_supervision"))).toBe(false);
+	});
+
+	it("records the pause in the trace, because every other symptom of it is an ABSENCE", async () => {
+		// A missing subordinate, a refused delegation and an escalation that skips the Lead all read
+		// exactly like an edge that was never wired. This row is the only thing that tells them apart.
+		const { env, writes } = buildGraphEnv([edge()]);
+		await setSupervisionEnabled(env, "u1", "link-1", false);
+		expect(traceEvents(writes)).toEqual(["supervision.paused"]);
+		await setSupervisionEnabled(env, "u1", "link-1", true);
+		expect(traceEvents(writes)).toEqual(["supervision.paused", "supervision.resumed"]);
 	});
 });
