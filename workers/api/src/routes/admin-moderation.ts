@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { recordAdminAction } from "../lib/admin.js";
+import { agentDeleteStatements, countAgentSubscribers, hasSubscriberRows } from "../lib/agent-cascade.js";
 import { HttpError, requireAdmin } from "../lib/auth.js";
 import type { Env, SessionPayload } from "../types.js";
 
@@ -209,13 +210,21 @@ adminModerationRoutes.post("/agents/:id/unpublish", async (c) => {
  * Two guards, both because this is irreversible and cross-tenant:
  *  - `confirm` must equal the agent's own slug. A mistyped id then fails loudly
  *    instead of deleting a different creator's agent.
- *  - an agent with ACTIVE instances is refused unless `force` — deleting it silently
+ *  - an agent with ANY subscriber rows is refused unless `force` — deleting it silently
  *    strands paying subscribers on a template that no longer exists. With `force`,
- *    those instances are canceled in the same batch rather than left dangling.
+ *    those rows are removed in the same batch.
  *
  * Separate from the owner-or-admin DELETE in agents.ts on purpose: that one trusts
  * `session.roles`, which only sees the role baked into a token, while this goes
- * through `requireAdmin` (live roles + allowlist) and audits.
+ * through `requireAdmin` (live roles + allowlist) and audits. THIS is the only route
+ * allowed to destroy another tenant's instance rows, which is why the owner route now
+ * refuses that case and points here (#646).
+ *
+ * The count that gates it is every instance, not just the `'active'` ones. Cancelling
+ * an instance does not remove its row, and the row is what holds the foreign key — so
+ * gating on `active > 0` meant `force=true` returned a 500 on exactly the agents it
+ * exists for, and an agent whose instances were all cancelled skipped the guard and
+ * then failed the batch anyway.
  */
 adminModerationRoutes.delete("/agents/:id", async (c) => {
 	const actor = await requireAdmin(c);
@@ -232,38 +241,37 @@ adminModerationRoutes.delete("/agents/:id", async (c) => {
 		throw new HttpError(400, `Confirmation required: pass confirm='${agent.slug}' to delete this agent`);
 	}
 
-	const active = (await c.env.DB.prepare(
-		"SELECT COUNT(*) AS n FROM agent_instances WHERE agent_id = ?1 AND status = 'active'",
-	).bind(id).first<{ n: number }>())?.n ?? 0;
-	if (active > 0 && !force) {
-		throw new HttpError(409, `Agent has ${active} active instance(s); pass force=true to cancel them and delete`);
-	}
-
-	const stmts = [
-		c.env.DB.prepare("DELETE FROM agent_executions WHERE agent_id = ?1").bind(id),
-		c.env.DB.prepare("DELETE FROM usage WHERE agent_id = ?1").bind(id),
-		// No FK on agent_funnel_daily (migration 0095) — cascade by hand, like `usage` above.
-		c.env.DB.prepare("DELETE FROM agent_funnel_daily WHERE agent_id = ?1").bind(id),
-		c.env.DB.prepare("DELETE FROM agents WHERE id = ?1").bind(id),
-	];
-	if (active > 0) {
-		stmts.unshift(
-			c.env.DB.prepare(
-				`UPDATE agent_instances SET status = 'canceled', updated_at = datetime('now')
-				 WHERE agent_id = ?1 AND status = 'active'`,
-			).bind(id),
+	const counts = await countAgentSubscribers(c.env.DB, id, agent.owner_id);
+	const subscribed = hasSubscriberRows(counts);
+	if (subscribed && !force) {
+		throw new HttpError(
+			409,
+			`Agent has ${counts.instances} instance(s) (${counts.activeInstances} active) and ` +
+				`${counts.subscriptions} subscription(s); pass force=true to remove them and delete`,
 		);
 	}
-	await c.env.DB.batch(stmts);
+
+	await c.env.DB.batch(agentDeleteStatements(c.env.DB, id, { cascadeSubscribers: subscribed }));
 
 	await recordAdminAction(c.env, actor, "agent.delete", { type: "agent", id }, {
 		slug: agent.slug,
 		name: agent.name,
 		ownerId: agent.owner_id,
-		canceledInstances: active,
+		// `canceledInstances` keeps its name: the operator portal and its e2e spec read that field.
+		// It has always meant "the live subscriptions this delete ended", which is still what it is
+		// — those rows are now removed rather than left behind holding a foreign key.
+		canceledInstances: counts.activeInstances,
+		removedInstances: counts.instances,
+		removedSubscriptions: counts.subscriptions,
 		forced: force,
 	});
-	return c.json({ success: true, id, canceledInstances: active });
+	return c.json({
+		success: true,
+		id,
+		canceledInstances: counts.activeInstances,
+		removedInstances: counts.instances,
+		removedSubscriptions: counts.subscriptions,
+	});
 });
 
 // ── Instances ──────────────────────────────────────────────────────────────

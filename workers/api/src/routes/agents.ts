@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { agentDeleteStatements, countAgentSubscribers, foreignSubscriberRefusal, hasForeignSubscriberRows, hasSubscriberRows } from "../lib/agent-cascade.js";
 import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { workflowChoices } from "../lib/agent-workflows.js";
 import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
@@ -713,7 +714,20 @@ agentRoutes.post("/:id/clone", async (c) => {
 	return c.json({ id: newId, slug, clonedFrom: source.id }, 201);
 });
 
-/** Delete agent (owner only). */
+/**
+ * Delete agent (owner only).
+ *
+ * The cascade itself lives in `lib/agent-cascade.ts` and is shared with `routes/batch.ts` and
+ * `routes/admin-moderation.ts` — the three lists had drifted to three different sets of child
+ * tables, which is how a saved version could make THIS route fail on a foreign key while bulk
+ * delete succeeded (#646).
+ *
+ * The policy is this route's own. A creator may take their own template down, including their own
+ * instances of it, but an instance belonging to somebody else is that subscriber's workspace, and
+ * a delete here must not destroy it — so this refuses with a 409 that says how many and what to do
+ * instead. Until #646 that case was a raw D1 constraint message in the console's `alert()`, which
+ * is the same refusal with none of the information.
+ */
 agentRoutes.delete("/:id", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
@@ -728,15 +742,14 @@ agentRoutes.delete("/:id", async (c) => {
 		throw new HttpError(403, "Not your agent");
 	}
 
-	await c.env.DB.batch([
-		c.env.DB.prepare("DELETE FROM agent_executions WHERE agent_id = ?1").bind(
-			id,
-		),
-		c.env.DB.prepare("DELETE FROM usage WHERE agent_id = ?1").bind(id),
-		// Migration 0095 has no FK to `agents` (a view counter must never be the reason a delete
-		// fails), so the cascade is by hand here, as it already is for `usage`.
-		c.env.DB.prepare("DELETE FROM agent_funnel_daily WHERE agent_id = ?1").bind(id),
-		c.env.DB.prepare("DELETE FROM agents WHERE id = ?1").bind(id),
-	]);
-	return c.json({ success: true });
+	// Scoped to the AGENT'S owner, not the caller: an admin reaching this route on somebody else's
+	// agent gets the same refusal, and is pointed at the audited operator route rather than being
+	// handed a silent cross-tenant delete on the strength of a role baked into a 30-day token.
+	const counts = await countAgentSubscribers(c.env.DB, id, row.owner_id);
+	if (hasForeignSubscriberRows(counts)) throw new HttpError(409, foreignSubscriberRefusal(counts));
+
+	await c.env.DB.batch(
+		agentDeleteStatements(c.env.DB, id, { cascadeSubscribers: hasSubscriberRows(counts) }),
+	);
+	return c.json({ success: true, deletedInstances: counts.instances });
 });

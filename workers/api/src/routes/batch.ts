@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { agentDeleteStatements, countAgentSubscribers, foreignSubscriberRefusal, hasForeignSubscriberRows, hasSubscriberRows } from "../lib/agent-cascade.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { blockPublishReason } from "../lib/test-agent-guard.js";
 import type { Env } from "../types.js";
@@ -56,7 +57,17 @@ batchRoutes.post("/bulk-visibility", async (c) => {
 	return c.json({ success: true, updated: agentIds.length, visibility });
 });
 
-/** Bulk delete agents. */
+/**
+ * Bulk delete agents.
+ *
+ * Same act, same actor and therefore the same policy as `DELETE /v1/agents/:id`: the cascade comes
+ * from `lib/agent-cascade.ts` and an agent with somebody else's instances is refused. Before #646
+ * the two routes disagreed — only this one cleared `agent_versions`, so the same agent could be
+ * undeletable through one door and deletable through the other.
+ *
+ * Refused as a BATCH, like the publish guard above: a bulk delete that silently skipped some ids
+ * would leave the caller believing all of them went.
+ */
 batchRoutes.post("/bulk-delete", async (c) => {
 	const session = await requireUser(c);
 	const { agentIds } = await c.req.json<{ agentIds: string[] }>();
@@ -75,14 +86,27 @@ batchRoutes.post("/bulk-delete", async (c) => {
 		throw new HttpError(403, `Not authorized for ${notOwned.length} agent(s)`);
 	}
 
-	const stmts = agentIds.flatMap((id) => [
-		c.env.DB.prepare("DELETE FROM agent_executions WHERE agent_id = ?1").bind(id),
-		c.env.DB.prepare("DELETE FROM usage WHERE agent_id = ?1").bind(id),
-		c.env.DB.prepare("DELETE FROM agent_versions WHERE agent_id = ?1").bind(id),
-		// No FK on agent_funnel_daily (migration 0095) — cascade by hand, like `usage` above.
-		c.env.DB.prepare("DELETE FROM agent_funnel_daily WHERE agent_id = ?1").bind(id),
-		c.env.DB.prepare("DELETE FROM agents WHERE id = ?1").bind(id),
-	]);
+	// Counted against each agent's OWN owner, so an admin sweeping other people's agents in bulk
+	// cannot destroy a subscriber's workspace either — that needs the audited operator route.
+	const owners = new Map(results.map((a) => [a.id, a.owner_id]));
+	const counted = await Promise.all(
+		agentIds.map(async (id) => ({
+			id,
+			counts: await countAgentSubscribers(c.env.DB, id, owners.get(id) ?? session.uid),
+		})),
+	);
+	const blocked = counted.filter((a) => hasForeignSubscriberRows(a.counts));
+	if (blocked.length > 0) {
+		throw new HttpError(
+			409,
+			`Refusing to delete ${blocked.length} agent(s) with other users' data: ` +
+				blocked.map((b) => `${b.id} — ${foreignSubscriberRefusal(b.counts)}`).join(" "),
+		);
+	}
+
+	const stmts = counted.flatMap((a) =>
+		agentDeleteStatements(c.env.DB, a.id, { cascadeSubscribers: hasSubscriberRows(a.counts) }),
+	);
 	await c.env.DB.batch(stmts);
 
 	return c.json({ success: true, deleted: agentIds.length });

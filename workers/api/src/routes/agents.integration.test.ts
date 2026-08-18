@@ -318,7 +318,12 @@ describe("DELETE /v1/agents/:id", () => {
 		expect(res.status).toBe(403);
 	});
 
-	it("owner delete cascades via a batch (executions + usage + agent)", async () => {
+	// This test used to be the whole coverage of the delete, and it is why #646 shipped: the D1
+	// here records statements rather than running them, so a cascade that D1 would reject on a
+	// foreign key is indistinguishable from one it would accept. The behaviour now lives in
+	// `agent-delete.integration.test.ts`, against the real migrated schema with foreign keys on.
+	// What remains here is the shape of the batch.
+	it("owner delete cascades via one batch, agent_versions included", async () => {
 		const { app, env, batches } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
 		const res = await app.request("/v1/agents/a1", { method: "DELETE", headers: { Authorization: `Bearer ${await tokenFor("u1")}` } }, env);
 		expect(res.status).toBe(200);
@@ -327,7 +332,10 @@ describe("DELETE /v1/agents/:id", () => {
 		const sqls = batches[0].map((s) => s.sql);
 		expect(sqls.some((s) => s.includes("DELETE FROM agent_executions"))).toBe(true);
 		expect(sqls.some((s) => s.includes("DELETE FROM usage"))).toBe(true);
-		expect(sqls.some((s) => s.includes("DELETE FROM agents"))).toBe(true);
+		// The row only `batch.ts` cleared before #646 — one saved version was enough to make this
+		// route fail while bulk delete on the same agent succeeded.
+		expect(sqls.some((s) => s.includes("DELETE FROM agent_versions"))).toBe(true);
+		expect(sqls[sqls.length - 1]).toContain("DELETE FROM agents");
 	});
 });
 

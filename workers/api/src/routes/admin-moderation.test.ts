@@ -92,6 +92,11 @@ function auditRows(recorded: Recorded[]) {
 const USER = { id: "u9", github_login: "victim", roles: '["user"]', suspended: 0 };
 const AGENT = { id: "a1", slug: "coder", name: "Coder", visibility: "published", owner_id: "u9" };
 const INSTANCE = { id: "i1", agent_id: "a1", user_id: "u9", status: "active" };
+/** The single subscriber-count read the delete route makes (`countAgentSubscribers`, #646). */
+const SUBSCRIBED: [string, unknown] = [
+	"AS foreign_subscriptions",
+	{ instances: 3, active_instances: 3, foreign_instances: 3, subscriptions: 3, foreign_subscriptions: 3 },
+];
 
 /**
  * The authorization boundary, asserted PER ROUTE rather than inferred from a shared
@@ -261,30 +266,49 @@ describe("DELETE /v1/admin/agents/:id", () => {
 		expect(recorded).toEqual([]);
 	});
 
-	it("409s when active instances exist and force was not given", async () => {
+	it("409s when subscriber rows exist and force was not given", async () => {
 		// Deleting the template out from under live subscribers strands them on an agent
 		// that no longer exists; the operator has to say so on purpose.
-		const { app, env, recorded } = testApp({ rows: [["FROM agents WHERE id", AGENT], ["COUNT(*) AS n FROM agent_instances", { n: 3 }]] });
+		const { app, env, recorded } = testApp({ rows: [["FROM agents WHERE id", AGENT], SUBSCRIBED] });
 		const res = await call(app, env, "DELETE", "/v1/admin/agents/a1", await token("op", ["admin"]), { confirm: "coder" });
 		expect(res.status).toBe(409);
 		expect(recorded).toEqual([]);
 	});
 
-	it("with force, cancels the active instances in the same batch and audits the count", async () => {
-		const { app, env, recorded } = testApp({ rows: [["FROM agents WHERE id", AGENT], ["COUNT(*) AS n FROM agent_instances", { n: 3 }]] });
+	it("409s on instances that are all CANCELED — the row holds the key, not the status", async () => {
+		// #646: the old guard counted `status = 'active'`, so this case skipped the 409 and then
+		// failed the batch on the foreign key — a 500 where a refusal was the intended answer.
+		const { app, env, recorded } = testApp({
+			rows: [["FROM agents WHERE id", AGENT], ["AS foreign_subscriptions", { instances: 3, active_instances: 0, foreign_instances: 3, subscriptions: 0, foreign_subscriptions: 0 }]],
+		});
+		const res = await call(app, env, "DELETE", "/v1/admin/agents/a1", await token("op", ["admin"]), { confirm: "coder" });
+		expect(res.status).toBe(409);
+		expect(((await res.json()) as { error: string }).error).toContain("3 instance(s) (0 active)");
+		expect(recorded).toEqual([]);
+	});
+
+	it("with force, removes the subscriber rows in the same batch and audits the count", async () => {
+		const { app, env, recorded } = testApp({ rows: [["FROM agents WHERE id", AGENT], SUBSCRIBED] });
 		const res = await call(app, env, "DELETE", "/v1/admin/agents/a1", await token("op", ["admin"]), { confirm: "coder", force: true });
 		expect(res.status).toBe(200);
-		expect(await res.json()).toMatchObject({ success: true, canceledInstances: 3 });
-		expect(recorded.some((r) => r.sql.includes("SET status = 'canceled'"))).toBe(true);
+		// `canceledInstances` keeps its name and meaning (the live subscriptions this ended) because
+		// the operator portal and `e2e/admin.spec.ts` read it.
+		expect(await res.json()).toMatchObject({ success: true, canceledInstances: 3, removedInstances: 3 });
+		// The rows are DELETED now, not flipped to 'canceled' — a canceled row still holds the FK,
+		// which is why force used to 500 on exactly the agents it exists for (#646).
+		expect(recorded.some((r) => r.sql.includes("DELETE FROM agent_instances"))).toBe(true);
+		expect(recorded.some((r) => r.sql.includes("SET status = 'canceled'"))).toBe(false);
 		expect(recorded.some((r) => r.sql.includes("DELETE FROM agents"))).toBe(true);
 		expect(String(auditRows(recorded)[0].binds[5])).toContain('"canceledInstances":3');
 	});
 
-	it("deletes cleanly when there are no active instances", async () => {
-		const { app, env, recorded } = testApp({ rows: [["FROM agents WHERE id", AGENT], ["COUNT(*) AS n FROM agent_instances", { n: 0 }]] });
+	it("deletes cleanly when nothing is subscribed, and clears agent_versions", async () => {
+		const { app, env, recorded } = testApp({ rows: [["FROM agents WHERE id", AGENT], ["AS foreign_subscriptions", { instances: 0, active_instances: 0, foreign_instances: 0, subscriptions: 0, foreign_subscriptions: 0 }]] });
 		const res = await call(app, env, "DELETE", "/v1/admin/agents/a1?confirm=coder", await token("op", ["admin"]));
 		expect(res.status).toBe(200);
 		expect(recorded.some((r) => r.sql.includes("DELETE FROM agents"))).toBe(true);
+		// The row only `batch.ts` used to clear. All three routes now share one cascade (#646).
+		expect(recorded.some((r) => r.sql.includes("DELETE FROM agent_versions"))).toBe(true);
 		expect(auditRows(recorded)[0].binds[2]).toBe("agent.delete");
 	});
 });
