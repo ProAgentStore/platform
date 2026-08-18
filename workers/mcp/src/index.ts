@@ -11,6 +11,7 @@ import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
+import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
 import { annotationsFor, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import {
 	AGENT_ID,
@@ -54,11 +55,21 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		return provided || this.userToken;
 	}
 
+	/** Survives across `safety()` calls, which is where the memo has to live: one tool call
+	 *  builds a context more than once, and each one audits (#702). */
+	private tokenSubjectCache = newTokenSubjectCache();
+
 	private safety(provided?: string): SafetyContext {
 		return {
 			env: this.env,
 			subject: provided ? undefined : this.subject,
 			scopes: provided ? null : this.scopes,
+			// A per-call `token` is an IDENTITY, not an anonymiser: it resolves to an audit
+			// subject so a scripted mutation stops being invisible (#702). `scopes` stays null
+			// (→ DEFAULT_SCOPES) — this is a coverage fix, not an authorization change.
+			...(provided
+				? { resolveSubject: tokenSubjectResolver(this.env.SESSION_SIGNING_KEY, provided, this.tokenSubjectCache) }
+				: {}),
 		};
 	}
 

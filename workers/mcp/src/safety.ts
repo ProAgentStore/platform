@@ -14,6 +14,26 @@ export interface SafetyContext {
 	subject?: string;
 	scopes?: string[] | null;
 	readOnly?: boolean;
+	/**
+	 * Late-bound audit subject, for a caller that authenticated with a per-call `token`
+	 * argument instead of an OAuth grant (#702).
+	 *
+	 * `subject` cannot be filled in eagerly there: the identity is inside a signed token that
+	 * has to be verified, and verification is async while `SafetyResolver` — the shape ~100
+	 * call sites across `coding-tools.ts`, `storage-tools.ts` and `instance-tools/shared.ts`
+	 * consume — is synchronous. Making the resolver async would touch every one of them to
+	 * change nothing about what they do. So the async part stays where it is already async:
+	 * only `audit()` and `listAuditEvents()` await this, and only when `subject` is absent.
+	 *
+	 * The implementation MUST memoise, because one tool call audits more than once.
+	 */
+	resolveSubject?: () => Promise<string | undefined>;
+}
+
+/** The audit subject: the OAuth grant's, or the one a `token` argument resolves to. */
+async function subjectFor(ctx: SafetyContext): Promise<string | undefined> {
+	if (ctx.subject) return ctx.subject;
+	return ctx.resolveSubject ? await ctx.resolveSubject() : undefined;
 }
 
 export function parseScopes(value: string | string[] | null | undefined): McpScope[] {
@@ -94,14 +114,16 @@ export async function audit(
 	ctx: SafetyContext,
 	event: Record<string, unknown>,
 ): Promise<void> {
-	if (!ctx.env.OAUTH_KV || !ctx.subject) return;
+	if (!ctx.env.OAUTH_KV) return;
+	const subject = await subjectFor(ctx);
+	if (!subject) return;
 	const now = new Date().toISOString();
-	const key = `audit:${ctx.subject}:${now}:${crypto.randomUUID()}`;
+	const key = `audit:${subject}:${now}:${crypto.randomUUID()}`;
 	await ctx.env.OAUTH_KV.put(
 		key,
 		JSON.stringify({
 			time: now,
-			subject: ctx.subject,
+			subject,
 			...(redact(event) as Record<string, unknown>),
 		}),
 		{ expirationTtl: 90 * 86_400 },
@@ -112,7 +134,9 @@ export async function listAuditEvents(
 	ctx: SafetyContext,
 	limit = 50,
 ): Promise<unknown[]> {
-	if (!ctx.env.OAUTH_KV || !ctx.subject) return [];
+	if (!ctx.env.OAUTH_KV) return [];
+	const subject = await subjectFor(ctx);
+	if (!subject) return [];
 	const safeLimit = Math.max(1, Math.min(200, limit));
 	// KV returns keys in LEXICOGRAPHIC order and the key is `audit:{subject}:{ISO time}:{uuid}`,
 	// which sorts ASCENDING in time. So `list({limit: safeLimit})` handed back the OLDEST
@@ -125,7 +149,7 @@ export async function listAuditEvents(
 	// the admin route's ≤1000. Correct up to 1000 events per subject; past that KV truncates
 	// the listing lexicographically and the window is wrong again — see #704 step 5.
 	const listed = await ctx.env.OAUTH_KV.list({
-		prefix: `audit:${ctx.subject}:`,
+		prefix: `audit:${subject}:`,
 		limit: 1000,
 	});
 	const rows = await Promise.all(

@@ -646,7 +646,21 @@ const PINS = {
 	// −11 at #703: `PLATFORM_GUIDE` moved verbatim to `src/platform-guide.ts`. Recorded at the new
 	// floor in the same commit, for the reason the #696 note above gives. SLACK would have tolerated
 	// leaving it at 933, but that keeps 11 lines of headroom on a file already split twice.
-	"workers/mcp/src/index.ts": 922,
+	//
+	// +11 at #702: a per-call `token` argument set `subject: undefined`, and `audit()` no-ops
+	// without a subject — so a scripted caller wrote NO audit row from any tool, mutating or
+	// not, including the one that runs code on the owner's machine. Split rather than absorbed:
+	// the resolver, its one-entry `exp`-aware memo and the rationale all went to the new
+	// `src/audit-subject.ts`, which is also what keeps `safety.ts` importing only `./http.js`
+	// the way the other OFO stores vendor it. The eleven lines that stayed are the cache field
+	// and the `safety()` branch that hands the thunk over — the wiring cannot leave the class
+	// that owns `this.env` and the per-connection state.
+	//
+	// The two landed in the same batch and cancel to the pin's previous value. Both notes stay:
+	// the number is the ledger's conclusion, not its content, and a net-zero that erased the
+	// shrink would leave #703's eleven lines silently available — which is the case the #696
+	// note above exists to name.
+	"workers/mcp/src/index.ts": 933,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1335,7 +1349,11 @@ const PINS = {
 	// +6 at #703: the mcp/index.ts entry above comes DOWN again, by 11. Same cost and same reason as
 	// the #696 note directly above — SLACK would have let this shrink go unrecorded, and that is
 	// exactly the case where the reclaimed headroom is silently available to the next commit.
-	"scripts/check-file-size.mjs": 1419,
+	// +17 at #702: the `workers/mcp/src/index.ts` entry above (nine lines of why for eleven lines
+	// of code, because the raise has to say what was split OUT before it can justify what stayed),
+	// the note reconciling it with #703's shrink, and this line. The ratchet applied to itself,
+	// again: these comments ARE the record, and two entries that cancel still cost two entries.
+	"scripts/check-file-size.mjs": 1437,
 };
 
 /**

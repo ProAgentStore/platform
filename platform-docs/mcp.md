@@ -146,9 +146,11 @@ Two authentication paths resolve to the same ProAgentStore session:
   ProAgentStore's own GitHub or Google sign-in, and the callback is bound to the browser
   that started the flow. Access tokens live 24 hours.
 - **A per-call `token` argument**. Every authenticated tool accepts an optional PAGS
-  session token. This bypasses the OAuth grant, so it carries no scope set (the default
-  grant applies) and no audit subject (nothing is written to the audit log). Prefer OAuth
-  unless you are scripting.
+  session token. This bypasses the OAuth grant, so it carries no scope set — the default
+  grant applies. It **is** audited: the token is a signed session, and the audit subject is
+  the `uid` inside it, so a scripted mutation appears in `mcp_audit_log` exactly as an OAuth
+  one does. (Until #702 it did not: supplying `token` erased the subject and the call wrote
+  no row at all, mutating or not.) Prefer OAuth unless you are scripting.
 
 ## Auth Scopes And Safety
 
@@ -404,8 +406,10 @@ gaps it records today are exactly that — recorded, not accepted.
 - Tools are purpose-specific; there is no generic shell or arbitrary API proxy tool.
 - Mutating tools support dry-run previews where useful.
 - Destructive and repository overwrite tools require explicit confirmation.
-- MCP audit events are stored for authenticated OAuth sessions, redacted by key name and
-  by value shape, and expire after 90 days.
+- MCP audit events are stored for every authenticated caller — an OAuth session or a
+  per-call `token` argument alike — redacted by key name and by value shape, and expire
+  after 90 days. Read tools are not recorded; the log covers write, runtime, dry-run,
+  denied and destructive calls.
 - Browser actions are task-based and can require explicit approval.
 - Private instance runtime uses caller-owned AI credentials.
 - Connector tools are gated twice: the instance must declare the tool, and its owner must
