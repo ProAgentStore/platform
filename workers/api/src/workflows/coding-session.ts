@@ -47,7 +47,7 @@ import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason } from "../lib/agent-loop-store.js";
 import { traceCodingRun } from "../lib/coding-run-trace.js";
-import { codingCrashReport, runOutcomeNote } from "../lib/coding-run-report.js";
+import { codingCrashReport, outcomeWord, runOutcomeNote } from "../lib/coding-run-report.js";
 import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
 import { classifyCodingFailure, driverResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
@@ -208,8 +208,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// said nothing, that fact is stamped on. Annotated, never rewritten — the owner has to
 			// see the claim in order to distrust it. The composition around it is `runOutcomeNote`.
 			const detail = annotateOwnerAttribution(outcome.detail ?? "", ownerTurns);
+			// ONE value: the word the note leads with and the reason the row records are the same
+			// reading of this run, so a card cannot say `outcome: failed` beside a row saying
+			// `interrupted` (#523). `stopReasonFor` is the pure table (#541); `crashReason` overrides
+			// it for the deaths that are not the objective failing at all (#546).
+			const reason = crashReason ?? stopReasonFor(outcome.outcome);
 			const note = runOutcomeNote({
-				outcome: outcome.outcome,
+				outcome: outcomeWord(outcome.outcome, reason),
 				detail,
 				// Both gates, one line. A run that wrote to the wrong repository must say so in the
 				// report the owner actually reads — #676's whole complaint is that the closing
@@ -223,11 +228,6 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			});
 			if (event.payload.loopRunId) {
 				await step.do(`delegation-run-done${suffix}`, async () => {
-					// A pure table (#541) — `stopReasonFor`. The chain this replaces mapped every
-					// non-failed, non-cancelled, non-max_steps outcome to `done`, which was true only
-					// while `stuck` could never survive to here. `crashReason` overrides it for the
-					// deaths that are not the objective failing at all (#546) — see `coding-run-report`.
-					const reason = crashReason ?? stopReasonFor(outcome.outcome);
 					// The Pilot drives its own loop and never called `recordIteration`, so
 					// `check_delegation` reported "iteration: 0 of 10" for a run that took a dozen
 					// steps — the supervisor's only progress signal, permanently reading zero.

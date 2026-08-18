@@ -71,11 +71,72 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 		return { detail: `run error: ${message}`, stopReason: null };
 	}
 	return {
+		// ORDER IS THE FIX, not just the words (#523). The card this lands on has 300 characters
+		// (`card-detail.ts`), and measured on the ticket's own run they were spent — in order — on the
+		// outcome, the raw Cloudflare message, 81 characters of Wrangler URL, and then a cut mid-word
+		// at "unaffected; …", with `| Acts: pushed directly to the trunk origin main; and 14 more.`
+		// falling off the end entirely. The owner therefore read a docs link for a Worker he does not
+		// own and no record of the fifteen pushes that had already landed. What a reader must ACT on
+		// comes first; the vendor's own text, which is evidence rather than instruction, comes last
+		// and is the thing that gets cut. The raw message is unaltered in the durable error log —
+		// `recordCodingFailure` is handed the error itself — so nothing is lost by not repeating it
+		// here.
 		detail:
-			`Interrupted by the platform, not by the objective — ${message}. ` +
-			"Whatever this run had already committed or pushed is unaffected; check the repository before starting it again.",
+			"Interrupted by the platform, not by the objective — whatever this run had already committed " +
+			`or pushed is unaffected; check the repository before starting it again. ${withoutVendorAdvice(message)}`,
 		stopReason: "interrupted",
 	};
+}
+
+/**
+ * Drop advice addressed to whoever OPERATES the Worker from a sentence addressed to its subscriber.
+ *
+ * "To configure this limit, refer to <wrangler docs>" is true, actionable and aimed at us: the
+ * limit lives in `workers/api/wrangler.toml`, which was raised to `subrequests = 100_000` under this
+ * same ticket. A subscriber cannot act on it, and it cost 81 of the card's 300 characters — the
+ * ticket's title is that link appearing where the account of his run should have been.
+ *
+ * Textual, and deliberately narrow: only Cloudflare's own docs URLs and the clause that introduces
+ * one. Everything else the platform says about itself survives, because a message this cannot parse
+ * must reach the owner intact rather than be quietly emptied.
+ */
+export function withoutVendorAdvice(message: string): string {
+	return message
+		.replace(/\s*\bto configure this limit,?\s*refer to\s+\S+/gi, "")
+		.replace(/\s*\b(?:see|refer to)\s+https?:\/\/(?:developers|dash)\.cloudflare\.com\/\S*/gi, "")
+		.replace(/\s*https?:\/\/(?:developers|dash)\.cloudflare\.com\/\S*/gi, "")
+		.trim();
+}
+
+/**
+ * The word the note LEADS with — the run's own outcome, unless the platform overruled it.
+ *
+ * ── Why this is not just `input.outcome` (#523)
+ *
+ * The workflow's catch sets `result = { outcome: "failed", … }` for every death, because "failed"
+ * is the only `CodingOutcome` a run that threw can carry. {@link codingCrashReport} then corrects
+ * the SENTENCE and `statusFor` corrects the COLUMN — an interruption lands in "Needs you",
+ * not "Failed" — but the note's first four words were still composed from that placeholder. So the
+ * one string that both the board card and `check_delegation` show read, in full:
+ *
+ *   > outcome: failed — Interrupted by the platform, not by the objective — Too many API requests…
+ *
+ * A sentence that contradicts itself inside its own first line, on the surface a supervisor reads
+ * to decide whether to re-run two hours of work that had already been pushed. #523's acceptance
+ * says it outright: it "must not be reported as `outcome: failed` with no qualification".
+ *
+ * The stop reason is the correction, and the caller passes the SAME value `finishLoopRun` records —
+ * so the word the owner reads and the reason the platform filed cannot disagree. Only `interrupted`
+ * overrides: it is the only reason `codingCrashReport` produces, and the only one that is a
+ * statement about the platform rather than about the objective. `stopReasonFor` cannot produce it
+ * from any outcome (asserted in `coding-run-report.test.ts`), so no ordinary ending is reworded.
+ *
+ * The workflow is required to compose its note through this — `coding-run-report.test.ts` reads
+ * `workflows/coding-session.ts` and fails if the call goes back to passing the raw outcome, which
+ * is the only way the placeholder could return.
+ */
+export function outcomeWord(outcome: string, stopReason?: LoopStopReason | null): string {
+	return stopReason === "interrupted" ? "interrupted" : outcome;
 }
 
 /**
@@ -87,7 +148,10 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
  * shows the authority it ran under.
  */
 export function runOutcomeNote(input: {
-	/** The `CodingOutcome`, as its own word. */
+	/**
+	 * The word this run ends on — {@link outcomeWord} of the outcome and the reason being recorded,
+	 * never the raw `CodingOutcome`, which is a placeholder for every death (#523).
+	 */
 	outcome: string;
 	/** The run's own account of itself, already owner-attributed (#505). */
 	detail: string;
