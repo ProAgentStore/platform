@@ -459,13 +459,16 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 	it("PUT capabilities merges power fields, coerces unknown enums, and preserves customSurfaces", async () => {
 		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: JSON.stringify({ capabilities: { customSurfaces: [{ id: "notes", label: "Notes", bundleUrl: "https://cdn.example.com/n.js" }] } }) }] });
 		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", {
-			surfaces: ["coding", "bogus"], runtime: "gpu", workflow: "CODING_SESSION", tools: ["read_terminal"],
+			// `workflow: "CODING_SESSION"` used to ride along here with `runtime: "gpu"`. It now
+			// 400s (#705) and has its own test below: coercing the unknown runtime to null under a
+			// workflow that needs one is precisely the combination no runner can ever satisfy.
+			surfaces: ["coding", "bogus"], runtime: "gpu", workflow: null, tools: ["read_terminal"],
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		const body = await jsonBody(res);
 		expect(body.surfaces).toEqual(["coding"]); // unknown surface dropped
 		expect(body.runtime).toBeNull(); // unknown runtime → null
-		expect(body.workflow).toBe("CODING_SESSION");
+		expect(body.workflow).toBeNull();
 		expect(body.tools).toEqual(["read_terminal"]);
 		// A capabilities-only PATCH must NOT wipe the pre-existing code-bundle surfaces.
 		expect(body.customSurfaces).toHaveLength(1);
@@ -531,5 +534,116 @@ describe("a fully-declared agent is creatable in ONE call (self-serve, no migrat
 		const cfg = JSON.parse(String(cfgWrite!.args[0]));
 		expect(cfg.capabilities.runtime).toBeNull();
 		expect(cfg.capabilities.surfaces).toEqual(["coding"]);
+	});
+});
+
+/**
+ * A workflow that needs hands may not be declared without the runtime that supplies them (#705).
+ *
+ * The failure this closes, exactly: `{workflow: "BROWSER_TASK", runtime: null}` was accepted at all
+ * three declaring doors, because `sanitizeDeclaredCapabilities` validates each field against its
+ * own closed set and never reads the other. Downstream, `pags up` filters every instance whose
+ * agent declares `runtime: null` out of the list it registers, so no runner can EVER be registered
+ * for that agent on any machine — and `triggers.ts` records the resulting 503 as a transient skip
+ * rather than a failure. The owner is told to run `pags up` forever, the failure count stays at 0,
+ * and the trigger never auto-disables. It is the one class of capability error the platform has no
+ * way to report, which is why it is refused at declaration time, where it is a static fact.
+ */
+describe("workflow/runtime mismatch is refused at all three declaring doors (#705)", () => {
+	const creator = () => tokenFor("u1", ["user", "creator"]);
+
+	it("POST /agents 400s on a workflow with no runtime, naming both fields and what is required", async () => {
+		const { app, env, writes, doCalls } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", {
+			slug: "ghost-watcher", name: "Ghost Watcher",
+			capabilities: { surfaces: [], runtime: null, workflow: "BROWSER_TASK" },
+		}, await creator());
+		expect(res.status).toBe(400);
+		const err = String((await jsonBody(res)).error);
+		expect(err).toContain("capabilities.workflow");
+		expect(err).toContain("BROWSER_TASK");
+		expect(err).toContain("capabilities.runtime");
+		expect(err).toContain("browser");
+		// Refused BEFORE anything is written: a rejected declaration must not leave a half-built
+		// agent row and an initialized Durable Object behind for the creator to clean up.
+		expect(writes.some((w) => w.sql.includes("INSERT INTO agents"))).toBe(false);
+		expect(doCalls).toHaveLength(0);
+	});
+
+	it("PUT /agents/:id 400s when the patch clears the runtime out from under a stored workflow", async () => {
+		// The mismatch is reachable from BOTH sides, which is why the check runs on the merged
+		// block rather than on the patch: nothing in this body is invalid on its own.
+		const stored = JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } });
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: stored }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1", { capabilities: { runtime: null } }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(String((await jsonBody(res)).error)).toContain("CODING_SESSION");
+		expect(writes.some((w) => w.sql.includes("config ="))).toBe(false);
+	});
+
+	it("PUT /agents/:id 400s when the patch declares a workflow onto an agent that has no runtime", async () => {
+		const stored = JSON.stringify({ capabilities: { surfaces: [], runtime: null, workflow: null } });
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: stored }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1", { capabilities: { workflow: "JOB_APPLY" } }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(String((await jsonBody(res)).error)).toContain("JOB_APPLY");
+		expect(writes.some((w) => w.sql.includes("config ="))).toBe(false);
+	});
+
+	it("PUT /agents/:id/capabilities 400s on the same mismatch", async () => {
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: "{}" }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", {
+			surfaces: [], runtime: null, workflow: "JOB_APPLY",
+		}, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(String((await jsonBody(res)).error)).toContain("browser");
+		expect(writes.find((w) => w.sql.includes("UPDATE agents SET config"))).toBeUndefined();
+	});
+
+	it("PUT /agents/:id/capabilities 400s when an UNKNOWN runtime coerces to null under a workflow", async () => {
+		// The sanitizer drops `"gpu"` to null — correct on its own, and previously the fastest way
+		// into the broken state, because a typo in the runtime silently produced exactly the
+		// combination that can never run. Now it is refused instead of stored.
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: "{}" }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", { runtime: "gpu", workflow: "CODING_SESSION" }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(writes.find((w) => w.sql.includes("UPDATE agents SET config"))).toBeUndefined();
+	});
+
+	it("still accepts a runtime with NO workflow — the tmux Operator / tmux-coder shape", async () => {
+		// Deliberately not symmetric: `runtime: "coding"` with `workflow: null` is shipped and
+		// legitimate (both agents drive a CLI through registry tools with no Pilot), so the check
+		// must never read in that direction or it would refuse three live catalog agents.
+		const { app, env, writes } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", {
+			slug: "operator-clone", name: "Operator Clone",
+			capabilities: { surfaces: ["tmux"], runtime: "coding", workflow: null },
+		}, await creator());
+		expect(res.status).toBe(201);
+		const cfg = JSON.parse(String(writes.find((w) => w.sql.includes("UPDATE agents SET config"))!.args[0]));
+		expect(cfg.capabilities.runtime).toBe("coding");
+		expect(cfg.capabilities.workflow).toBeNull();
+	});
+
+	it("still accepts a matched workflow + runtime — the Coder shape", async () => {
+		const { app, env, writes } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", {
+			slug: "coder-clone", name: "Coder Clone",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+		}, await creator());
+		expect(res.status).toBe(201);
+		const cfg = JSON.parse(String(writes.find((w) => w.sql.includes("UPDATE agents SET config"))!.args[0]));
+		expect(cfg.capabilities.workflow).toBe("CODING_SESSION");
+	});
+
+	it("lets a stale workflow value the platform no longer runs be CLEARED by saving", async () => {
+		// `INSURANCE_QUOTES` was in the enum and is not any more (#375). The sanitizer drops it to
+		// null, and refusing that write would strand the agent: the only way to clear the value is
+		// to save, so a denial here would make the stored value unremovable.
+		const stored = JSON.stringify({ capabilities: { surfaces: [], runtime: null, workflow: "INSURANCE_QUOTES" } });
+		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: stored }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", { workflow: "INSURANCE_QUOTES" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect((await jsonBody(res)).workflow).toBeNull();
 	});
 });

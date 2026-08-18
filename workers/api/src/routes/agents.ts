@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { agentDeleteStatements, countAgentSubscribers, foreignSubscriberRefusal, hasForeignSubscriberRows, hasSubscriberRows } from "../lib/agent-cascade.js";
 import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
-import { workflowChoices } from "../lib/agent-workflows.js";
+import { workflowChoices, workflowRuntimeDenial } from "../lib/agent-workflows.js";
 import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
 import { AI_LEDGER_FOR_AGENT } from "./analytics.js";
 import { HttpError, isSuspended, requireCreator, requireUser } from "../lib/auth.js";
@@ -328,6 +328,14 @@ agentRoutes.post("/", async (c) => {
 		);
 	}
 
+	// Declarative capabilities (#141), validated HERE rather than after the INSERT below: a
+	// refused declaration must not leave a half-built agent row and an initialized DO behind.
+	// See the comment on the config write for what this block is and why settingsSchema rides
+	// along with it.
+	const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
+	const capsDenial = workflowRuntimeDenial(declaredCaps.workflow, declaredCaps.runtime ?? null);
+	if (capsDenial) throw new HttpError(400, capsDenial);
+
 	// Check slug uniqueness
 	const existing = await c.env.DB.prepare(
 		"SELECT id FROM agents WHERE slug = ?1",
@@ -364,7 +372,8 @@ agentRoutes.post("/", async (c) => {
 	// "create, then remember to also…" — and a half-declared agent looks fine and does
 	// nothing. Stored at the TOP level, which is where agent-capabilities.ts reads it;
 	// nested under capabilities it parses and renders nothing.
-	const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
+	//
+	// `declaredCaps` was sanitized and refused-if-invalid above, before anything was written.
 	const declaredSettings = body.settingsSchema === undefined ? null : sanitizeSettingsSchema(body.settingsSchema);
 	const initialConfig: Record<string, unknown> = {};
 	if (Object.keys(declaredCaps).length > 0) initialConfig.capabilities = declaredCaps;
@@ -476,6 +485,12 @@ agentRoutes.put("/:id", async (c) => {
 		try { config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {}; } catch { config = {}; }
 		const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
 		Object.assign(caps, declaredCaps);
+		// Against the MERGED block, not the patch (#705): the invalid combination is reachable
+		// from either side — declaring a workflow onto an agent with no runtime, or clearing the
+		// runtime out from under a workflow that is already stored — and a patch-shaped check
+		// would only see one of them.
+		const denial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null);
+		if (denial) throw new HttpError(400, denial);
 		config.capabilities = caps;
 		resolvedConfig = JSON.stringify(config);
 		params.push(resolvedConfig);
@@ -588,6 +603,10 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	if ("runtime" in declared) caps.runtime = declared.runtime;
 	if ("workflow" in declared) caps.workflow = declared.workflow;
 	if (declared.tools !== undefined) caps.tools = declared.tools;
+
+	// Same merged-block check as `PUT /:id` (#705) — this is the third door onto the same write.
+	const runtimeDenial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null);
+	if (runtimeDenial) throw new HttpError(400, runtimeDenial);
 
 	config.capabilities = caps;
 	const resolvedConfig = JSON.stringify(config);

@@ -367,7 +367,9 @@ const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "r
 /** Closed enums for the WRITABLE power fields. A creator can only declare capabilities
  *  the platform already implements — no arbitrary code, so the blast radius is bounded
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
-const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
+/** The runtime vocabulary, exported so `agent-workflows.test.ts` can assert that the
+ *  `requiresRuntime` values on the workflow table are drawn from exactly this set (#705). */
+export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
 // Workflows are NOT listed here: `isAgentWorkflow` asks the catalog that the picker is served
 // from, so the vocabulary a creator is offered and the vocabulary this validator accepts are one
 // list. They were two, and each had drifted the other way (#375).

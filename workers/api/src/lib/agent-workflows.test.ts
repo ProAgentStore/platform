@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AGENT_WORKFLOWS, isAgentWorkflow, workflowChoices } from "./agent-workflows.js";
+import { AGENT_WORKFLOWS, isAgentWorkflow, workflowChoices, workflowRequiredRuntime, workflowRuntimeDenial } from "./agent-workflows.js";
+import { KNOWN_RUNTIMES } from "./agent-capabilities.js";
 import { triggerActionRequirement } from "./trigger-capability.js";
 
 const VALUES = AGENT_WORKFLOWS.map((w) => w.value);
@@ -94,5 +95,69 @@ describe("workflowChoices — what the creator's picker renders", () => {
 		expect(workflowChoices("BROWSER_TASK")).toEqual(workflowChoices());
 		expect(workflowChoices("")).toEqual(workflowChoices());
 		expect(workflowChoices(42)).toEqual(workflowChoices());
+	});
+});
+
+describe("every workflow states whether it needs hands (#705)", () => {
+	it("declares requiresRuntime on every entry, drawn from the runtime vocabulary", () => {
+		// The `StyleBranch.lengthDefault` guard, applied here: the field is REQUIRED on the
+		// interface, so a fourth workflow cannot be added without stating whether it needs a
+		// physical executor. This asserts the runtime half too — the vocabulary is stated in
+		// `agent-workflows.ts` to keep that module a leaf of the import graph, and this is what
+		// stops the two copies drifting the way #375's four copies of the workflow enum did.
+		const vocabulary = new Set<unknown>([...KNOWN_RUNTIMES, null]);
+		for (const w of AGENT_WORKFLOWS) {
+			expect(Object.hasOwn(w, "requiresRuntime"), `${w.value} declares no requiresRuntime`).toBe(true);
+			expect(vocabulary.has(w.requiresRuntime), `${w.value} requires "${w.requiresRuntime}", which is not a runtime`).toBe(true);
+		}
+	});
+
+	it("matches what each workflow's implementation actually reaches for", () => {
+		// Grounded in the code, not in the table's own say-so — the same argument as the
+		// wrangler.toml check above. A workflow whose implementation calls the runner needs a
+		// runtime by construction; declaring `requiresRuntime: null` for it would restore exactly
+		// the accepted-and-unrunnable combination this table now refuses.
+		for (const w of AGENT_WORKFLOWS) {
+			const file = join(__dirname, "../workflows", `${w.value.toLowerCase().replaceAll("_", "-")}.ts`);
+			const src = readFileSync(file, "utf8");
+			const usesRunner = /\bcallRunner\b|\bcallRuntime\b|\brequireLiveRuntime\b/.test(src);
+			expect(usesRunner, `${w.value}: implementation ${usesRunner ? "does" : "does not"} drive a runner`).toBe(w.requiresRuntime !== null);
+		}
+	});
+
+	it("reads only one way — a runtime without a workflow is legitimate", () => {
+		// `runtime: "coding"` with `workflow: null` is what the tmux Operator, `tmux-coder` and
+		// `single-pane-operator` all declare: they drive a CLI through registry tools with no
+		// Pilot. Inferring a workflow's runtime in that direction would refuse three live agents.
+		expect(workflowRuntimeDenial(null, "coding")).toBeNull();
+		expect(workflowRuntimeDenial(null, "browser")).toBeNull();
+		expect(workflowRuntimeDenial(null, null)).toBeNull();
+	});
+
+	it("refuses every workflow that needs hands when the runtime cannot supply them", () => {
+		for (const w of AGENT_WORKFLOWS) {
+			if (w.requiresRuntime === null) continue;
+			const denial = workflowRuntimeDenial(w.value, null);
+			expect(denial, `${w.value} with runtime null`).toBeTruthy();
+			// The message has to be actionable on its own: which field, which value, what to set.
+			expect(denial).toContain("capabilities.workflow");
+			expect(denial).toContain(w.value);
+			expect(denial).toContain("capabilities.runtime");
+			expect(denial).toContain(w.requiresRuntime);
+			// …and the wrong non-null runtime is refused too, not just the absent one.
+			const other = w.requiresRuntime === "browser" ? "coding" : "browser";
+			expect(workflowRuntimeDenial(w.value, other), `${w.value} with runtime ${other}`).toBeTruthy();
+			// The matched pair is the whole point of the field.
+			expect(workflowRuntimeDenial(w.value, w.requiresRuntime)).toBeNull();
+		}
+	});
+
+	it("says nothing about a value this platform does not run", () => {
+		// The sanitizer drops an unknown workflow to null anyway; denying the write instead would
+		// mean a creator could never clear a stale `INSURANCE_QUOTES` by saving.
+		expect(workflowRuntimeDenial("INSURANCE_QUOTES", null)).toBeNull();
+		expect(workflowRuntimeDenial("PIPELINE_RUN", null)).toBeNull();
+		expect(workflowRequiredRuntime("INSURANCE_QUOTES")).toBeNull();
+		for (const junk of [undefined, "", 7, {}, "job_apply"]) expect(workflowRuntimeDenial(junk, null), String(junk)).toBeNull();
 	});
 });
