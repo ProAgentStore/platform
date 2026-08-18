@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
+import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
 import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
@@ -191,7 +192,11 @@ export class LocalRunner {
 
 	cancelTask(id: string): RunnerTask {
 		const task = this.requireTask(id);
-		if (task.status === "completed" || task.status === "failed") return task;
+		// Already finished, whichever way — the old `completed || failed` pair missed `cancelled`, so
+		// a second Stop rewrote the timestamps and appended a duplicate event (#636). A run that
+		// genuinely completed or failed is NOT relabelled: it ended before the Stop arrived. Off THIS
+		// return the cloud mirrored `task.cancelled` carrying `{status:"failed"}` — fixed in the cloud.
+		if (isTerminalTaskStatus(task.status)) return task;
 		task.status = "cancelled";
 		task.updatedAt = new Date().toISOString();
 		task.completedAt = task.updatedAt;
@@ -1208,22 +1213,17 @@ export class LocalRunner {
 		return { ok: true };
 	}
 
-	/** Finalize an agent-driven application (submitted/expired → completed; else failed). */
+	/** Finalize an agent-driven application — the outcome→status table lives in apply-outcome.ts. */
 	async browserComplete(taskId: string, outcome: string, detail?: string): Promise<{ ok: boolean }> {
 		await this.endTakeover(taskId).catch(() => undefined);
 		const task = this.store.getTask(taskId);
 		if (task) {
-			const success = outcome === "submitted" || outcome === "ready" || outcome === "expired";
-			// 'blocked' = the agent stopped and needs the USER (email verification, can't
-			// proceed truthfully) — it's needs-attention, not a failure, so keep it a
-			// distinct status (the console shows it as an active ticket, not buried).
-			task.status = outcome === "blocked" ? "blocked" : success ? "completed" : "failed";
-			task.output = { outcome, detail };
-			if (!success) task.error = detail || outcome;
-			task.updatedAt = new Date().toISOString();
-			task.completedAt = task.updatedAt;
+			// A TOTAL table, not a chain of string comparisons: `cancelled` matched none of
+			// them and fell through to `failed`, so a run the owner stopped was filed as an
+			// error with a Retry button on it (#636). See apply-outcome.ts.
+			const { event } = settleTaskOutcome(task, outcome, detail);
 			this.store.putTask(task);
-			this.addTaskEvent(task, success ? "task.completed" : "task.failed", detail || `Application ${outcome}`, { outcome, detail });
+			this.addTaskEvent(task, event, detail || `Application ${outcome}`, { outcome, detail });
 		}
 		await this.closeStalePages().catch(() => undefined);
 		return { ok: true };

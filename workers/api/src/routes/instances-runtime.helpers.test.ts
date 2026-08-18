@@ -6,6 +6,7 @@ import { defaultPipelinesFor, instanceRoutes } from "./instances.js";
 import {
 	getRuntime,
 	getRuntimeNode,
+	mirrorTaskLifecycleEvents,
 	getRuntimeForNode,
 	listRuntimeNodes,
 	requireOwnedInstance,
@@ -909,5 +910,54 @@ describe("defaultPipelinesFor — a pipeline agent arrives usable", () => {
 		expect(defaultPipelinesFor(JSON.stringify({ capabilities: {} }))).toEqual({});
 		expect(defaultPipelinesFor("{not json")).toEqual({});
 		expect(defaultPipelinesFor(null)).toEqual({});
+	});
+});
+
+describe("mirrorTaskLifecycleEvents — a cancel is announced only when one happened", () => {
+	/**
+	 * #636. The cancel route posts at the runner, gets a task back, mirrors it, and then mirrors a
+	 * SYNTHETIC `task.cancelled` for the phase it asked for. It asked for the phase unconditionally,
+	 * so the event was written even when the runner had refused the cancel — `cancelTask` early-
+	 * returns on an already-terminal task and hands it back UNCHANGED, which is right (a run that
+	 * genuinely failed did not get cancelled, it ended first).
+	 *
+	 * The measured result on the live apply instance: five `task.cancelled` events, every one of
+	 * them carrying `data:{status:"failed"}`, against a Cancelled column that had never held a card.
+	 * The event and the status it carries contradicting each other on the same row.
+	 */
+	const EVENTS = "instance_runtime_task_events";
+	const task = (status: string) => ({ id: "task_1", type: "job.apply_agent", status, updatedAt: "2026-07-05T05:31:25.843Z", completedAt: "2026-07-05T05:31:25.843Z" });
+	const cancelEvents = (writes: Write[]) => writes.filter((w) => w.sql.includes(EVENTS) && String(w.args[4]) === "task.cancelled");
+
+	it("writes task.cancelled when the runner actually cancelled the task", async () => {
+		const { env, writes } = mockEnv();
+		await mirrorTaskLifecycleEvents(env, "inst-1", "u1", { tasks: [task("cancelled")] }, "cancelled");
+		const events = cancelEvents(writes);
+		expect(events).toHaveLength(1);
+		expect(JSON.parse(String(events[0].args[5])).data).toEqual({ status: "cancelled" });
+	});
+
+	it("writes nothing when the runner handed back a task that had already failed", async () => {
+		// Neuter the fix — drop `&& task.status === "cancelled"` — and this goes red with one event
+		// whose payload is the exact `{"status":"failed"}` observed in production five times.
+		const { env, writes } = mockEnv();
+		await mirrorTaskLifecycleEvents(env, "inst-1", "u1", { tasks: [task("failed")] }, "cancelled");
+		expect(cancelEvents(writes)).toHaveLength(0);
+	});
+
+	it("writes nothing when the task had already completed", async () => {
+		const { env, writes } = mockEnv();
+		await mirrorTaskLifecycleEvents(env, "inst-1", "u1", { tasks: [task("completed")] }, "cancelled");
+		expect(cancelEvents(writes)).toHaveLength(0);
+	});
+
+	it("leaves the created and approved phases exactly as they were", async () => {
+		// The guard is scoped to the cancel phase: `task.created` announces a task that exists, not
+		// a state it reached, and the approved phase already branches on the status itself.
+		const { env, writes } = mockEnv();
+		await mirrorTaskLifecycleEvents(env, "inst-1", "u1", { tasks: [task("running")] }, "created");
+		await mirrorTaskLifecycleEvents(env, "inst-1", "u1", { tasks: [{ ...task("completed"), approval: { prompt: "p", approvedAt: "2026-07-05T05:00:00.000Z" } }] }, "approved");
+		const types = writes.filter((w) => w.sql.includes(EVENTS)).map((w) => String(w.args[4]));
+		expect(types).toEqual(["task.created", "task.approved", "task.completed"]);
 	});
 });

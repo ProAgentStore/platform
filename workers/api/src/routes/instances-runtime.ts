@@ -488,10 +488,10 @@ export async function mirrorTaskLifecycleEvents(
 				});
 			}
 		}
-		if (phase === "cancelled") {
-			await mirrorSyntheticTaskEvent(env, instanceId, userId, task, "task.cancelled", task.updatedAt, {
-				status: task.status,
-			});
+		// Announce a cancel only when one HAPPENED (#636). `cancelTask` early-returns on an already-terminal task and hands it back unchanged,
+		// so a Stop on a card that had already failed still mirrored `task.cancelled` with `{status:"failed"}` — five such rows on the live apply instance.
+		if (phase === "cancelled" && task.status === "cancelled") {
+			await mirrorSyntheticTaskEvent(env, instanceId, userId, task, "task.cancelled", task.updatedAt, { status: task.status });
 		}
 	}));
 }
