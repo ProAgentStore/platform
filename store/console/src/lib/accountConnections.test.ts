@@ -4,6 +4,7 @@ import {
 	connectionSummary,
 	disconnectedMessage,
 	disconnectPromptFor,
+	needsReconnect,
 	type ConnectorEntry,
 } from "./accountConnections";
 
@@ -103,5 +104,79 @@ describe("disconnectedMessage", () => {
 	it("stays quiet when nothing was revoked — a zero is not worth a sentence", () => {
 		expect(disconnectedMessage(entry(), { grants: 0, instances: 0 })).toBe("Google Drive disconnected.");
 		expect(disconnectedMessage(entry())).toBe("Google Drive disconnected.");
+	});
+});
+
+// ── #713/#714: a connection can be connected AND short of scope ──────────────
+
+describe("needsReconnect", () => {
+	const gmail = (over: Partial<ConnectorEntry> = {}): ConnectorEntry =>
+		({
+			id: "gmail",
+			label: "Gmail",
+			auth: "oauth",
+			grantModel: "user",
+			configured: true,
+			connected: true,
+			account: "me@example.test",
+			connectedAt: "2026-01-01",
+			reach: null,
+			flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" },
+			scopes: { read: true, write: true },
+			...over,
+		}) as ConnectorEntry;
+
+	it("is false for a connection that holds everything declared", () => {
+		expect(needsReconnect(gmail({ missingScopes: [] }))).toBe(false);
+	});
+
+	it("is true when the grant provably lacks a declared scope", () => {
+		expect(needsReconnect(gmail({ missingScopes: ["https://www.googleapis.com/auth/gmail.send"] }))).toBe(true);
+	});
+
+	it("is true when the grant predates recording AND the connector can write", () => {
+		// The migration-0133 population. Unknown is treated as stale: one unnecessary reconnect
+		// beats an agent finding out as a provider 403 halfway through a task.
+		expect(needsReconnect(gmail({ missingScopes: null }))).toBe(true);
+	});
+
+	it("is FALSE for an unrecorded grant on a read-only connector — nothing to add", () => {
+		// Drive/WorkDrive. Flagging them would be a reconnect that changes nothing.
+		expect(needsReconnect(gmail({ missingScopes: null, scopes: { read: true, write: false } }))).toBe(false);
+	});
+
+	it("is false for a connector that is not connected at all", () => {
+		expect(needsReconnect(gmail({ connected: false, missingScopes: null }))).toBe(false);
+	});
+});
+
+describe("connectionSummary — scope shortfall", () => {
+	const base: ConnectorEntry = {
+		id: "gmail",
+		label: "Gmail",
+		auth: "oauth",
+		grantModel: "user",
+		configured: true,
+		connected: true,
+		account: "me@example.test",
+		connectedAt: "2026-01-01",
+		reach: null,
+		flow: { start: "/s", disconnect: "/d" },
+		scopes: { read: true, write: true },
+	} as ConnectorEntry;
+
+	it("names the shortfall and the remedy on the row itself", () => {
+		expect(connectionSummary({ ...base, missingScopes: null })).toBe(
+			"connected as me@example.test · read-only — reconnect to allow sending",
+		);
+	});
+
+	it("says nothing extra once the grant is complete", () => {
+		expect(connectionSummary({ ...base, missingScopes: [] })).toBe("connected as me@example.test");
+	});
+
+	it("keeps the grant counts a file connector reports, shortfall or not", () => {
+		const drive = { ...base, id: "google_drive", label: "Google Drive", grantModel: "instance-resource" as const, reach: { grants: 2, instances: 1 }, scopes: { read: true, write: false }, missingScopes: null };
+		expect(connectionSummary(drive)).toBe("connected as me@example.test · 2 folder grants on 1 agent");
 	});
 });

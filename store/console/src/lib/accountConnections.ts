@@ -35,6 +35,30 @@ export interface ConnectorEntry {
 	reach: ConnectorReach | null;
 	/** The live endpoints, named by the server. `null` = no connect step exists. */
 	flow: { start: string; disconnect: string } | null;
+	/** Scopes this stored grant actually holds. `null` = made before we recorded them (#713). */
+	grantedScopes?: string[] | null;
+	/** Declared scopes the grant is missing. `null` = unanswerable, which is NOT the same as none. */
+	missingScopes?: string[] | null;
+	/** Does the connector declare any write reach at all? */
+	scopes?: { read: boolean; write: boolean };
+}
+
+/**
+ * Is this connection short of what the connector now declares — and therefore due a reconnect?
+ *
+ * Two distinct causes, one remedy. `missingScopes` non-empty is the certain case: the grant is
+ * recorded and provably lacks something. `missingScopes === null` on a CONNECTED, write-capable
+ * connector is the uncertain one: the grant predates the recording, so it was made when the
+ * connector asked for less, and for Gmail that population is exactly the read-only set (#713).
+ *
+ * Treating "unknown" as stale is the fail direction that costs a user one unnecessary reconnect,
+ * against the alternative of an agent discovering the gap as a provider 403 mid-task. Only for a
+ * connector that declares write, because a read-only one has nothing a reconnect would add.
+ */
+export function needsReconnect(entry: ConnectorEntry): boolean {
+	if (!entry.connected) return false;
+	if (entry.missingScopes?.length) return true;
+	return entry.missingScopes === null && entry.scopes?.write === true;
 }
 
 /**
@@ -53,15 +77,19 @@ export function accountConnections(entries: ConnectorEntry[]): ConnectorEntry[] 
 		.sort((a, b) => Number(b.connected) - Number(a.connected) || a.label.localeCompare(b.label));
 }
 
-/** The status line for a row: which account, and — where reach is grants — how far it goes. */
+/** The status line for a row: which account, how far it reaches, and whether it is short of scope. */
 export function connectionSummary(entry: ConnectorEntry): string {
 	if (!entry.connected) return "not connected";
 	const who = entry.account ? `connected as ${entry.account}` : "connected";
+	// Said on the row rather than left for an agent to discover: a connection that cannot do what
+	// the connector now offers is a state the OWNER has to fix, in Settings, not in a chat
+	// transcript where a tool refusal would otherwise be the first anyone hears of it.
+	const short = needsReconnect(entry) ? " · read-only — reconnect to allow sending" : "";
 	const reach = entry.reach;
-	if (!reach || reach.grants === 0) return who;
+	if (!reach || reach.grants === 0) return `${who}${short}`;
 	const folders = `${reach.grants} folder grant${reach.grants === 1 ? "" : "s"}`;
 	const agents = `${reach.instances} agent${reach.instances === 1 ? "" : "s"}`;
-	return `${who} · ${folders} on ${agents}`;
+	return `${who}${short} · ${folders} on ${agents}`;
 }
 
 /**

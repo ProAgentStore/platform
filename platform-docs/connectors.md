@@ -4,14 +4,11 @@ ProAgentStore has two connector layers, for two different jobs.
 
 1. **Ingest connectors** (this page's original subject): account-level OAuth providers —
    **Google Drive / Google Docs** and **Zoho WorkDrive** — whose files are imported into an
-   agent instance's knowledge, narrowed by per-folder grants. (Gmail is a related OAuth
-   integration used by the apply flow to read verification emails; it is not a knowledge-ingest
-   connector.)
+   agent instance's knowledge, narrowed by per-folder grants.
 2. **Registry connectors** (the tool framework, issues #84–#90): a declared registry of
    integrations an agent drives as **tools** — GitHub, HTTP/REST, Web Search, Meta, Terminal,
-   legacy tmux, local repo inspection, supervision, outbound MCP, Google Sheets, and the
-   experimental browser. See [Registry connectors](#registry-connectors)
-   below.
+   legacy tmux, local repo inspection, supervision, outbound MCP, Google Sheets, **Gmail**, and
+   the experimental browser. See [Registry connectors](#registry-connectors) below.
 
 ## Registry connectors
 
@@ -396,8 +393,77 @@ grant (`reason: "no_knowledge"`). Gmail is always reported reachable (`reason: "
 its inbox tool is granted by the per-agent inbox permission on the agent's Settings tab, not by the
 tool allowlist.
 
+Gmail used to be reported that way too, and no longer is: it now declares tools of its own, so it
+is judged on them like any other tool-bearing connector. That is a tightening, not a loosening —
+see [Gmail](#gmail) below.
+
 This is a **visibility** answer, not a second permission gate: a folder grant's reach is still
 checked on every Drive route, and an agent that declares no tool allowlist at all stays permissive.
+
+## Gmail
+
+Gmail reads the owner's mailbox and, since #713, replies from it. Two OAuth scopes are requested,
+and they are deliberately separate powers:
+
+| Scope | What it allows |
+|---|---|
+| `gmail.readonly` | Search, read a message, download its attachments. |
+| `gmail.send` | Send a message. **Send only** — it cannot read, delete or modify. |
+
+`gmail.modify` would cover sending as well and is **not** requested: it would also let a bug
+delete the owner's mail.
+
+### Tools
+
+| Tool | Scope | What it does |
+|---|---|---|
+| `gmail_search` | read | Gmail search syntax; returns ids, senders, subjects, snippets, attachment names. |
+| `gmail_read_message` | read | Full body, recipients, threading headers, and the attachment manifest. |
+| `gmail_download_attachment` | read | Saves one attachment into the agent's **file store** and returns its `file_id`. It never returns the bytes — they would be useless in the model's context and large enough to evict everything else. |
+| `gmail_reply` | **write** | Replies in-thread, optionally attaching files by id. |
+| `gmail_send` | **write** | Sends a new message to an address you name. |
+
+`find_confirmation_link` is separate and stays a built-in: it is granted only by the per-agent
+email permission and is never creator-selectable, so a creator cannot grant a read of the owner's
+mailbox by declaration.
+
+### Three gates on a send
+
+Sending mail is the most irreversible thing an agent here can do — it leaves under the owner's own
+name, to a real person, and cannot be recalled. So it passes three independent gates:
+
+1. **The owner's email permission** on that agent (Settings → Permissions & Connections). Checked
+   by *every* Gmail tool at call time, reads included.
+2. **The agent's `capabilities.tools`** allowlist, like any connector tool.
+3. **Per-instance write consent** (#90), which applies because the connector declares
+   `scopes.write` — derived from its tools, not hand-written.
+
+### A reply's recipient is not the agent's choice
+
+`gmail_reply` addresses the reply to the parent message's sender and **cannot be overridden**. An
+agent that has just read untrusted mail is exactly the one whose "who should this go to" answer
+cannot be trusted; a prompt-injected reply-to would be a silent exfiltration channel out of the
+owner's own mailbox. Use `gmail_send` when a different recipient is genuinely wanted — there the
+address is explicit and auditable.
+
+### Connections made before sending existed
+
+A Gmail connection made before #713 holds `gmail.readonly` alone. Its refresh token keeps working
+and keeps minting access tokens, so **nothing looks broken** until a send is refused by Google
+with "insufficient authentication scopes".
+
+The platform records what each grant was actually authorised for, so it can say this in advance
+rather than discovering it mid-task:
+
+- `GET /v1/email/status` reports `canSend`.
+- `GET /v1/connectors` reports `grantedScopes` and `missingScopes` for every OAuth connector.
+  `missingScopes: null` means the grant predates recording — which is *not* the same as nothing
+  being missing, and is rendered as a shortfall rather than as completeness.
+- The console shows such a row as **"connected — read-only, reconnect to allow sending"**.
+- `gmail_reply` / `gmail_send` refuse before the API call, naming the reconnect.
+
+Reconnecting re-prompts Google for consent, so the new scope is actually granted rather than the
+old grant being silently returned.
 
 ## Google Docs Through Google Drive
 

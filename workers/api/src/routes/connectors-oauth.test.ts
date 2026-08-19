@@ -35,6 +35,7 @@ vi.mock("../lib/connector-oauth.js", () => ({
 import { Hono } from "hono";
 import { connectorRoutes } from "./connectors.js";
 import { resolveOauthConfig } from "../lib/connectors/client.js";
+import { missingScopesFor } from "./connectors.js";
 // The REAL declarations (#352 Stage 1) — not a fixture. Their whole claim is that a hand-written
 // flow and the generic one resolve the same credentials, which a copied fixture could not test.
 import { GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "../lib/connectors/connected-accounts.js";
@@ -258,5 +259,33 @@ describe("GET /v1/connectors — the catalog, resolved for the caller", () => {
 		const wired = { ...envWithKeys([]), ZOHO_CLIENT_ID: "zid", ZOHO_CLIENT_SECRET: "zsec" } as unknown as Env;
 		const byWired = await list(wired);
 		expect(byWired.get("zoho_workdrive")).toMatchObject({ configured: true });
+	});
+});
+
+// ── #713/#714: the catalog reports what a grant was authorised FOR ───────────
+
+describe("missingScopesFor", () => {
+	const gmail = { oauth: { scopes: ["openid", "https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"] } };
+
+	it("names the declared scopes a recorded grant does not hold", () => {
+		expect(missingScopesFor(gmail, "openid https://www.googleapis.com/auth/gmail.readonly")).toEqual([
+			"https://www.googleapis.com/auth/gmail.send",
+		]);
+	});
+
+	it("returns [] when the grant holds everything declared", () => {
+		expect(missingScopesFor(gmail, "openid https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send")).toEqual([]);
+	});
+
+	it("returns null — not [] — for a grant made before scopes were recorded", () => {
+		// The distinction is the point: "nothing is missing" and "we never wrote it down" would
+		// otherwise render identically, and the second is exactly the read-only population.
+		expect(missingScopesFor(gmail, null)).toBeNull();
+		expect(missingScopesFor(gmail, "")).toBeNull();
+	});
+
+	it("returns null for a connector that declares no scopes to compare against", () => {
+		expect(missingScopesFor({}, "anything")).toBeNull();
+		expect(missingScopesFor({ oauth: { scopes: [] } }, "anything")).toBeNull();
 	});
 });

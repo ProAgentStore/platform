@@ -107,12 +107,31 @@ function connectFlow(connector: Connector): { start: string; disconnect: string 
  * over `instance_connector_grants`: the account page states what a disconnect would revoke BEFORE
  * the click (#355/#357), and it has to state it for every row, not the one being confirmed.
  */
+/**
+ * Which of a connector's declared OAuth scopes this stored grant does NOT have.
+ *
+ * `null` means unanswerable — either the connector declares no scopes, or the grant predates
+ * `granted_scopes` and we genuinely do not know. Callers must render that differently from an
+ * empty array; see the field comment below.
+ */
+export function missingScopesFor(
+	connector: { oauth?: { scopes?: readonly string[] } },
+	grantedScopes: string | null | undefined,
+): string[] | null {
+	const declared = connector.oauth?.scopes;
+	if (!declared?.length || !grantedScopes) return null;
+	const held = new Set(grantedScopes.split(/\s+/).filter(Boolean));
+	// `https://mail.google.com/` subsumes every Gmail scope; a provider-specific superset like
+	// that is why this compares membership rather than asserting set equality.
+	return declared.filter((s) => !held.has(s));
+}
+
 connectorRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
 	const [rows, reachByProvider] = await Promise.all([
-		c.env.DB.prepare("SELECT provider, created_at, account_label FROM user_api_keys WHERE user_id = ?1")
+		c.env.DB.prepare("SELECT provider, created_at, account_label, granted_scopes FROM user_api_keys WHERE user_id = ?1")
 			.bind(session.uid)
-			.all<{ provider: string; created_at: string; account_label: string | null }>(),
+			.all<{ provider: string; created_at: string; account_label: string | null; granted_scopes: string | null }>(),
 		connectorGrantReachByProvider(c.env, session.uid),
 	]);
 	const stored = new Map((rows.results ?? []).map((r) => [r.provider, r]));
@@ -140,6 +159,20 @@ connectorRoutes.get("/", async (c) => {
 				reach: connector.grantModel === "instance-resource"
 					? (reachByProvider.get(connector.id) ?? { grants: 0, instances: 0 })
 					: null,
+				// What this stored grant was actually authorised FOR (migration 0133), and which of
+				// the connector's DECLARED scopes it is missing.
+				//
+				// Generic rather than Gmail-specific, though Gmail is what forced it (#713): any
+				// connector that gains a scope leaves its existing connections holding the old one,
+				// and the refresh token goes on minting access tokens perfectly happily, so nothing
+				// looks broken until the provider refuses one call. Comparing the two is the only
+				// way to say "connected, but not for that" before it happens.
+				//
+				// `null`, not `[]`, when the grant predates the column: "we did not record this" and
+				// "nothing is missing" are different answers, and collapsing them would report an
+				// old read-only connection as fully capable.
+				grantedScopes: row?.granted_scopes ? row.granted_scopes.split(/\s+/).filter(Boolean) : null,
+				missingScopes: missingScopesFor(connector, row?.granted_scopes),
 				flow: connectFlow(connector),
 			};
 		}),
