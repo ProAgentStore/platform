@@ -89,6 +89,9 @@ function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string)
 function put(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok: string) {
 	return app.request(path, { method: "PUT", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
 }
+function patch(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok: string) {
+	return app.request(path, { method: "PATCH", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+}
 
 describe("GET /v1/instances/:id/tools (integration)", () => {
 	it("401s without a bearer token (auth boundary)", async () => {
@@ -184,5 +187,60 @@ describe("consent routes (integration, cross-boundary write + read)", () => {
 		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: true }, await tokenFor("u1"));
 		expect(res.status).toBe(404);
 		expect(writes).toHaveLength(0);
+	});
+});
+
+// ── The pause routes: `enabled` is strictly a boolean (#644, #664, #667) ─────────────────
+//
+// Both PATCH handlers refuse anything that is not a boolean rather than coercing it. That rule
+// was written down in a comment and enforced by one `typeof` with nothing holding it, and it is
+// the rule two new clients now depend on — the console toggle and the MCP `set_*_enabled` tools
+// both produce the value in tested code because the route will not clean up after them.
+//
+// The reason coercion is wrong here and merely sloppy elsewhere: `"false"` and `0` are the shapes
+// a hand-written body arrives in, and JS reads `"false"` as TRUTHY. A coercing route handed a
+// pause would RESUME the edge — the exact opposite of what was asked, on the one field whose only
+// job is to stop work, and silently, since the 200 would carry a perfectly healthy-looking row.
+describe("PATCH connections/supervision — enabled must be a real boolean (integration)", () => {
+	const paths = ["/v1/instances/inst-1/connections/c-1", "/v1/instances/inst-1/supervision/link-1"];
+
+	it("400s on the non-boolean shapes a hand-written body arrives in, and writes nothing", async () => {
+		for (const path of paths) {
+			for (const enabled of ["false", "true", 0, 1, null, undefined]) {
+				const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+				const res = await patch(app, env, path, { enabled }, await tokenFor("u1"));
+				expect(res.status, `${path} <- ${JSON.stringify(enabled)}`).toBe(400);
+				expect((await jsonBody(res)).error).toContain("enabled must be true or false");
+				// The refusal is worthless if the UPDATE ran anyway.
+				expect(writes.some((w) => /UPDATE agent_(connections|supervision)/.test(w.sql))).toBe(false);
+			}
+		}
+	});
+
+	it("reaches the writer for both booleans", async () => {
+		for (const path of paths) {
+			for (const enabled of [true, false]) {
+				const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+				const res = await patch(app, env, path, { enabled }, await tokenFor("u1"));
+				expect(res.status, `${path} <- ${enabled}`).not.toBe(400);
+				const update = writes.find((w) => /UPDATE agent_(connections|supervision) SET enabled/.test(w.sql));
+				expect(update, `${path} <- ${enabled}`).toBeTruthy();
+				// Stored as the integer the column holds — the boundary converts, it does not accept.
+				expect(update!.args).toContain(enabled ? 1 : 0);
+			}
+		}
+	});
+
+	// The ownership gate runs before the body is read, so a stranger cannot even learn which
+	// shapes the route rejects.
+	it("404s a caller who does not own the instance, and never reaches the writer", async () => {
+		for (const path of paths) {
+			const { app, env, writes } = buildApp({ owns: [] });
+			const res = await patch(app, env, path, { enabled: false }, await tokenFor("u1"));
+			expect(res.status).toBe(404);
+			// The status alone does not distinguish "refused" from "wrote, then could not read
+			// the row back" — the writers return null on a zero-row UPDATE, which is also a 404.
+			expect(writes.some((w) => /UPDATE agent_(connections|supervision)/.test(w.sql))).toBe(false);
+		}
 	});
 });

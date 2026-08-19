@@ -198,6 +198,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_agent_stats_schema: "write",
 	set_board_item_status: "write",
 	set_budget_limits: "write",
+	set_connection_enabled: "write",
 	set_instance_board_config: "write",
 	set_instance_instructions: "write",
 	set_instance_model: "write",
@@ -205,6 +206,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_settings: "write",
 	set_instance_stats: "write",
 	set_instance_tool: "write",
+	set_supervision_enabled: "write",
 	set_translation_config: "write",
 	stop_instance_loop: "write",
 	update_board_ticket: "write",
@@ -288,8 +290,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// somebody's laptop — the distinction the two classes exist to make.
 	// +1 read at #699: `coding_terminal`, which reads stored `coding_timeline` rows and asks no
 	// runner anything — the pane it returns is the one D1 already holds, not a fresh capture.
+	// +2 write at #667: `set_connection_enabled` and `set_supervision_enabled` — the pause that
+	// `agent_connections.enabled` (#644) and `agent_supervision.enabled` (#664) each got a writer
+	// and a route for and no tool. `write` rather than `destructive` on purpose: this IS the
+	// reversible form of the delete beside it, and classing a pause as destructive would put it
+	// behind the scope a default connection never holds — i.e. would leave the gap open.
 	read: 71,
-	write: 42,
+	write: 44,
 	runtime: 16,
 	destructive: 14,
 };

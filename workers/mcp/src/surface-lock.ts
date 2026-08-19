@@ -184,4 +184,20 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// hash; descriptions are excluded from the fingerprint on purpose. Appended, never edited in
 	// place: 0.1.11 is published.
 	"0.1.12": "sha256:5c7324bc914e95114c5aada181c29a1c6b3effe8f85ad90ec9529c2807e3fff8",
+	// 0.1.13 (#667): two new tool NAMES in the always-on `composition` group,
+	// `set_supervision_enabled` and `set_connection_enabled` — the first bullet of
+	// `MCP_SERVER_VERSION`'s list, so 143 registrations become 145 and 122 always-on become 124.
+	// `MCP_TOOL_GATED` does not move: composition is registered ungated, like base.
+	//
+	// They are the pause `agent_connections.enabled` (#644) and `agent_supervision.enabled` (#664)
+	// each got a writer and a `PATCH …/{id} {enabled}` route for and no tool. A host holding the
+	// 0.1.12 list does not know they exist, and unlike a widened `inputSchema` there is no degraded
+	// call it can make instead — the only substitute on that surface is `delete_supervision`, which
+	// is the destructive act the pause exists to avoid: it throws away the subordinate's standing
+	// direction, or the connection's routing filter and target pipeline, and orphans the outbox
+	// rows that say what is stuck. A stale list therefore does not merely omit the tool; it leaves
+	// the caller with a worse one that looks like the answer.
+	//
+	// Appended, never edited in place: 0.1.12 is published.
+	"0.1.13": "sha256:442ab86457e43cdf6e11ecf72d7280a68f402ebaf0439607b1cb10a11a815ee2",
 };

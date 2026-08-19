@@ -317,6 +317,12 @@ const TABLE: Record<string, Row> = {
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_stats_schema: ["stats", "write", null, "envelope", "agent_id,cards,dry_run,token"],
 	set_board_item_status: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,status,token"],
+	// No `dry_run` on either pause (#667), and that is a decision recorded in composition.ts:
+	// the call is fully determined by one id and one boolean, so a preview could only echo the id
+	// back with less information than `list_connections`/`list_supervision` already give. `write`
+	// rather than `destructive` because this IS the reversible form of `delete_supervision` above
+	// — putting it behind a scope a default connection never holds would leave the gap open.
+	set_connection_enabled: ["composition", "write", null, null, "connection_id,enabled,instance_id,token"],
 	update_board_ticket: ["board", "write", null, "envelope", "description,dry_run,instance_id,job_key,reasoning,title,token"],
 	set_instance_board_config: ["board", "write", null, "envelope", "columns,dry_run,instance_id,reset,token,view"],
 	set_instance_instructions: ["settings", "write", null, "envelope", "dry_run,instance_id,instructions,token"],
@@ -327,6 +333,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],
+	set_supervision_enabled: ["composition", "write", null, null, "enabled,supervision_id,supervisor_instance_id,token"],
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
@@ -484,12 +491,21 @@ describe("conventions the table has to keep", () => {
 		//   coding_loop_stop     the same tool by another name since #502 — it cancels the same
 		//                        durable run through the same route, so it inherits the same
 		//                        argument for having no preview.
+		//   set_connection_enabled,
+		//   set_supervision_enabled
+		//                        the two pauses added by #667, on `stop_instance_loop`'s reasoning:
+		//                        the call is fully determined by one edge id and one boolean —
+		//                        there is no config to get wrong and no direction to swap — and
+		//                        "which edge is that?" is answered better, with both ends named,
+		//                        by `list_connections` / `list_supervision`. Pausing is also the
+		//                        safe direction: it is reversible by the same call, which is the
+		//                        whole reason the tools exist rather than a delete.
 		//
-		// All three carry that reasoning in a comment above their registration. Anything joining
+		// All five carry that reasoning in a comment above their registration. Anything joining
 		// this list needs the same — the entry here is the index, not the argument.
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
-		).toEqual(["call_instance_tool", "coding_loop_stop", "stop_instance_loop"]);
+		).toEqual(["call_instance_tool", "coding_loop_stop", "set_connection_enabled", "set_supervision_enabled", "stop_instance_loop"]);
 	});
 
 	it("the generic connector invoker records its own success", async () => {

@@ -107,7 +107,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.12`
+- `serverInfo.version`: `0.1.13`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -198,7 +198,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 143 tools under two different scope sets and reads the required scope out
+which drives all 145 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -324,7 +324,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **143 tools**. 122 are always present. The remaining 21 are gated to
+The server registers **145 tools**. 124 are always present. The remaining 21 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 

@@ -13,7 +13,10 @@ import {
 	describeFilter,
 	parseLiteral,
 	parseTs,
+	pauseControl,
 	readFilter,
+	supervisionState,
+	toneClass,
 	type Connection,
 	type Delivery,
 } from "./teamwork";
@@ -354,5 +357,74 @@ describe("directionState — a proposal must not look like the owner's brief (#3
 		const s = directionState({ text: "Rewrite it in Rust.", setBy: "agent" });
 		expect(s.tone).toBe("warn");
 		expect(s.label).toMatch(/carries no authority/);
+	});
+});
+
+// ── Pausing an edge, and the two things it must not be confused with (#667) ──────────────
+//
+// `agent_connections.enabled` (#644) and `agent_supervision.enabled` (#664) each got a writer and
+// a `PATCH …/{id} {enabled}` route and neither got a control, so the console could RENDER a paused
+// edge and could not produce or clear one. These are the rules the toggle is built on.
+describe("pauseControl — the toggle, and the boolean it sends", () => {
+	it("offers Pause on a live edge and Resume on a paused one", () => {
+		expect(pauseControl(true).action).toBe("Pause");
+		expect(pauseControl(false).action).toBe("Resume");
+	});
+
+	it("sends the value that flips the edge, so the button does what it says", () => {
+		expect(pauseControl(true).next).toBe(false);
+		expect(pauseControl(false).next).toBe(true);
+	});
+
+	// The route rejects `"false"` and `0` instead of coercing them, because coercing the one
+	// field whose job is to stop deliveries would silently do the OPPOSITE of what was asked.
+	// A caller that lets a non-boolean reach the body gets a 400, not a pause — so the value
+	// is produced here, where it can be asserted, rather than inline in JSX.
+	it("sends a real boolean on every path — never a string, never a number", () => {
+		for (const enabled of [true, false, undefined]) {
+			const { next, paused } = pauseControl(enabled);
+			expect(typeof next).toBe("boolean");
+			expect(typeof paused).toBe("boolean");
+		}
+	});
+
+	// A listing row from before `enabled` was on the view has no such field. Reading that as
+	// paused would offer "Resume" on an edge that is already running.
+	it("reads a missing `enabled` as live, matching the column's DEFAULT 1", () => {
+		expect(pauseControl(undefined)).toEqual({ paused: false, action: "Pause", next: false });
+	});
+});
+
+describe("paused must not read as broken", () => {
+	// Three states, three tones. The console already had two vocabularies for "something is off"
+	// — the health line and the server's `warnings[]` — and a pause is neither: it is a state the
+	// owner chose. If it painted the same as a failure, the eye stops telling them apart.
+	it("paints a paused connection differently from a failing and from a retrying one", () => {
+		const paused = connectionHealth(conn({ enabled: false }), []);
+		const broken = connectionHealth(conn(), [del({ status: "dead" })]);
+		const retrying = connectionHealth(conn(), [del({ status: "pending", attempts: 2 })]);
+		expect(paused.tone).toBe("idle");
+		expect(new Set([toneClass(paused.tone), toneClass(broken.tone), toneClass(retrying.tone)]).size).toBe(3);
+	});
+
+	// `warnings[]` render in the warning tone. A paused edge KEEPS its warnings — it is still
+	// wired, and the reason it is broken does not stop being true because it is paused — so the
+	// health line must stay out of that colour or the row says one thing twice.
+	it("keeps a paused connection out of the warning and danger tones even when it carries a warning", () => {
+		const health = connectionHealth(conn({ enabled: false, warnings: ["names a pipeline the target does not have"] }), []);
+		expect(toneClass(health.tone)).not.toBe("text-warning");
+		expect(toneClass(health.tone)).not.toBe("text-danger");
+	});
+
+	it("says a supervision link is paused, in the same tone a paused connection uses", () => {
+		const link = supervisionState(false);
+		expect(link.label).toMatch(/^Paused —/);
+		expect(link.tone).toBe(connectionHealth(conn({ enabled: false }), []).tone);
+	});
+
+	// The absence of the sentence is what makes its presence mean something.
+	it("says nothing about a live link", () => {
+		expect(supervisionState(true).label).toBe("");
+		expect(supervisionState(undefined).label).toBe("");
 	});
 });

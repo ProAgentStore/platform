@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { z } from "zod";
 import { registerInstanceTools } from "./instance-tools/index.js";
 import type { McpEnv } from "./http.js";
 import type { SafetyContext } from "./safety.js";
@@ -920,6 +921,73 @@ describe("delete_supervision requires confirmation before it cuts anything", () 
 		const res = await h.tools.get("delete_supervision")!.handler({ ...args, confirm: "delete_supervision" });
 		expect(res.content[0].text).toContain('requires MCP scope "destructive"');
 		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+});
+
+// ── Pausing an edge: the reversible twin of the delete above (#667) ──────────
+//
+// `agent_connections.enabled` (#644) and `agent_supervision.enabled` (#664) each got a writer and
+// a `PATCH …/{id} {enabled}` route and neither got a tool, so over MCP the only way to stop an
+// edge was `delete_supervision` — the destructive act the pause exists to avoid, since it takes
+// the subordinate's standing direction, or the connection's routing filter and target pipeline,
+// with it. These pin the three things that make the pause a pause: it is a PATCH, it carries a
+// real boolean, and it is `write` rather than `destructive` so a default connection can reach it.
+
+describe("set_supervision_enabled / set_connection_enabled — the pause (#667)", () => {
+	const sup = { supervisor_instance_id: "sup-1", supervision_id: "link-9" };
+	const conn = { instance_id: "inst-1", connection_id: "c-9" };
+
+	it("PATCHes the edge and audits, without deleting anything", async () => {
+		const h = setup();
+		await h.tools.get("set_supervision_enabled")!.handler({ ...sup, enabled: false });
+		await h.tools.get("set_connection_enabled")!.handler({ ...conn, enabled: false });
+		const patches = h.fetchStub.calls.filter((c) => c.method === "PATCH");
+		expect(patches.map((c) => c.url)).toEqual([
+			"https://api.test/v1/instances/sup-1/supervision/link-9",
+			"https://api.test/v1/instances/inst-1/connections/c-9",
+		]);
+		expect(h.fetchStub.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+		for (const tool of ["set_supervision_enabled", "set_connection_enabled"]) {
+			expect(h.auditEvents().some((e) => e.tool === tool && e.action === "completed")).toBe(true);
+		}
+	});
+
+	// The route rejects `"false"` and `0` rather than coercing them — coercion on the one field
+	// whose job is to STOP work would silently do the opposite of what was asked — so a body
+	// carrying a string would be a 400, not a pause.
+	it("puts a JSON boolean on the wire, in both directions", async () => {
+		const h = setup();
+		await h.tools.get("set_supervision_enabled")!.handler({ ...sup, enabled: false });
+		await h.tools.get("set_connection_enabled")!.handler({ ...conn, enabled: true });
+		const bodies = h.fetchStub.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
+		expect(bodies).toEqual(['{"enabled":false}', '{"enabled":true}']);
+	});
+
+	// The schema is what the SDK enforces before a handler ever runs, so this is the boundary
+	// that keeps a model's `"false"` from arriving as a pause it did not ask for.
+	it("declares `enabled` as a strict boolean the SDK will not coerce", () => {
+		const { tools } = setup();
+		for (const name of ["set_supervision_enabled", "set_connection_enabled"]) {
+			const enabled = tools.get(name)!.schema.enabled as z.ZodTypeAny;
+			expect(enabled.safeParse(false).success).toBe(true);
+			expect(enabled.safeParse(true).success).toBe(true);
+			for (const bad of ["false", "true", 0, 1, null]) {
+				expect(enabled.safeParse(bad).success).toBe(false);
+			}
+		}
+	});
+
+	// `write`, not `destructive`: this IS the reversible form of the delete, and a default
+	// connection never holds `destructive`. Classing a pause there would have left the gap open.
+	it("is reachable on a default connection and refused read-only", async () => {
+		const dflt = setup({ scopes: ["read", "write"] });
+		await dflt.tools.get("set_connection_enabled")!.handler({ ...conn, enabled: false });
+		expect(dflt.fetchStub.calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+
+		const ro = setup({ readOnly: true });
+		const res = await ro.tools.get("set_supervision_enabled")!.handler({ ...sup, enabled: false });
+		expect(res.content[0].text).toMatch(/read-only/i);
+		expect(ro.fetchStub.calls).toHaveLength(0);
 	});
 });
 

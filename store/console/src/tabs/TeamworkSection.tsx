@@ -12,6 +12,8 @@ import {
 	describeDelivery,
 	describeFilter,
 	directionState,
+	pauseControl,
+	supervisionState,
 	toneClass,
 	MAX_DIRECTION_CHARS,
 	type Direction,
@@ -192,6 +194,39 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		setBusy(false);
 	};
 
+	/**
+	 * Pause or resume ONE edge — a supervision link (#664) or a connection (#644). Both columns
+	 * got their writer and their `PATCH …/{id} {enabled}` route in those tickets and neither got a
+	 * control (#667), so for a console user "stand this agent down" or "pause this chain" was
+	 * still only "delete the edge" — which throws away the subordinate's standing DIRECTION and
+	 * the edge's budget defaults, or a connection's routing filter and target pipeline, and
+	 * orphans the outbox rows that say what is stuck.
+	 *
+	 * The row is patched IN PLACE from the response rather than reloaded: the route returns the
+	 * full updated view, so a refetch would re-read four endpoints to learn one bit — and would
+	 * silently discard a direction the owner is mid-edit on, since `load()` is what clears
+	 * `directionDraft`'s sibling state around it.
+	 *
+	 * `pauseControl` produces the boolean. The route rejects `"false"` and `0` rather than
+	 * coercing them, because coercion on the one field whose job is to STOP work would do the
+	 * opposite of what was asked; keeping the value in a tested pure function is how that stays
+	 * true here as well as there.
+	 */
+	const toggleSupervision = async (link: SupervisionLink) => {
+		setBusy(true);
+		setMsg("");
+		try {
+			const updated = await api<SupervisionLink>(`/v1/instances/${instanceId}/supervision/${link.id}`, {
+				method: "PATCH",
+				body: JSON.stringify({ enabled: pauseControl(link.enabled).next }),
+			});
+			setLinks((ls) => ls.map((l) => (l.id === link.id ? { ...l, ...updated } : l)));
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
+	};
+
 	const removeSupervision = async (id: string) => {
 		setBusy(true);
 		try {
@@ -228,6 +263,22 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		} catch (e) {
 			// A filter the server can prove would never match is a 400 here rather than a chain
 			// that stops months later with every row still reading "enabled".
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
+	};
+
+	/** The connection half of {@link toggleSupervision}; same column, same route shape, same rule. */
+	const toggleConnection = async (cn: Connection) => {
+		setBusy(true);
+		setMsg("");
+		try {
+			const updated = await api<Connection>(`/v1/instances/${instanceId}/connections/${cn.id}`, {
+				method: "PATCH",
+				body: JSON.stringify({ enabled: pauseControl(cn.enabled).next }),
+			});
+			setConnections((cs) => cs.map((c) => (c.id === cn.id ? { ...c, ...updated } : c)));
+		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
 		setBusy(false);
@@ -310,6 +361,8 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				    direction, and only the owner saving it here makes it authoritative. */}
 				{links.map((l) => {
 					const state = directionState(l.direction);
+					const paused = supervisionState(l.enabled);
+					const control = pauseControl(l.enabled);
 					const draft = directionDraft[l.id];
 					const value = draft ?? l.direction?.text ?? "";
 					const dirty = draft !== undefined && draft.trim() !== (l.direction?.text ?? "");
@@ -319,8 +372,16 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					<div key={l.id} className="text-sm border border-line rounded-lg px-3 py-2 mb-1">
 						<div className="flex items-center justify-between gap-2">
 							<span className="truncate">{nameOf(l.subordinateInstanceId)}</span>
-							<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeSupervision(l.id)}>Remove</Button>
+							<div className="flex gap-2 shrink-0">
+								{/* Standing a subordinate down while it is reconfigured is an ordinary act;
+								    before this the only way to do it was Remove, which costs the epic. */}
+								<Button size="sm" className="shrink-0" disabled={busy} onClick={() => toggleSupervision(l)}>{control.action}</Button>
+								<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeSupervision(l.id)}>Remove</Button>
+							</div>
 						</div>
+						{/* Paused is NOT broken: the muted tone is the one a paused connection already
+						    uses, deliberately not the warning tone the failures are painted in. */}
+						{paused.label && <div className={`text-xs mt-1 ${toneClass(paused.tone)}`}>{paused.label}</div>}
 						<div className={`text-xs mt-1 ${toneClass(state.tone)}`}>{state.label}</div>
 						<div className="flex flex-col sm:flex-row gap-2 mt-1">
 							<input
@@ -381,7 +442,15 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 									<div key={w} className="text-2xs text-warning break-words">{w}</div>
 								))}
 							</div>
-							<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeConnection(cn.id)}>Remove</Button>
+							{/* Stacked, matching the delivery rows below, which already stack Replay above
+							    Run. Measured rather than assumed: side by side ALSO fits at 320 and 390
+							    in both engines, so this is consistency and not an overflow fix — the
+							    geometry guard in e2e/console.spec.ts stays green either way, and was
+							    proven able to go red on this row before it was believed. */}
+							<div className="flex flex-col gap-1 shrink-0">
+								<Button size="sm" className="shrink-0" disabled={busy} onClick={() => toggleConnection(cn)}>{pauseControl(cn.enabled).action}</Button>
+								<Button size="sm" className="shrink-0" disabled={busy} onClick={() => removeConnection(cn.id)}>Remove</Button>
+							</div>
 						</div>
 					);
 				})}

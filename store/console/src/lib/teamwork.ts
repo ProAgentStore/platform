@@ -340,3 +340,59 @@ export function directionState(direction: Direction | null | undefined): { tone:
 	if (direction.setBy === "user") return { tone: "ok", label: "You set this. It is on the Lead's prompt every turn." };
 	return { tone: "warn", label: "Proposed by the agent — it carries no authority until you confirm it." };
 }
+
+// ── pausing an edge ──────────────────────────────────────────────────────────
+
+/**
+ * The pause control for ONE edge — a connection (#644) or a supervision link (#664).
+ *
+ * Both columns got their writer and their `PATCH …/{id} {enabled}` route and neither got a
+ * control, so "pause this chain" was still only "delete this edge" — which destroys a
+ * connection's routing filter and target pipeline, or a supervision edge's budget defaults and
+ * the owner's standing DIRECTION, and orphans the outbox rows that say what is stuck. One rule
+ * for both, because it IS one rule: same column, same route shape, same boolean.
+ *
+ * `next` is the value the PATCH sends, and it is a real `boolean` on every path. The route
+ * rejects `"false"` and `0` rather than coercing them — deliberately, because coercing the one
+ * field whose job is to STOP deliveries would silently do the opposite of what was asked — so a
+ * caller that lets a string reach the body gets a 400, not a pause. Producing the value here
+ * rather than inline in JSX is what makes that assertable.
+ *
+ * `enabled` absent reads as LIVE, matching the server's `DEFAULT 1`: a row from a listing that
+ * predates the column being on the view must not appear paused, or the console would offer
+ * "Resume" on an edge that is already running.
+ */
+export interface PauseControl {
+	paused: boolean;
+	/** What the button says — the action it performs, not the state it is in. */
+	action: "Pause" | "Resume";
+	/** The value to PATCH. Boolean on every path; see above. */
+	next: boolean;
+}
+
+export function pauseControl(enabled: boolean | undefined): PauseControl {
+	const paused = enabled === false;
+	// Resuming a paused edge sends `true`; pausing a live one sends `false`. So `next` is
+	// `paused` — the same bit read the other way round, not a coincidence worth compressing.
+	return { paused, action: paused ? "Resume" : "Pause", next: paused };
+}
+
+/**
+ * What a supervision row should SAY about being paused — the twin of {@link connectionHealth}'s
+ * first line, and deliberately in the SAME tone.
+ *
+ * Paused is not broken, and the console already had two vocabularies for "something is off": a
+ * `warn`/`bad` health line, and the server's `warnings[]`. A paused edge is neither. It is a state
+ * the owner CHOSE, so it reads `idle` — the tone reserved for "nothing is happening here", the one
+ * `connectionHealth` already gives a disabled connection. Adding a third colour for it would put
+ * a deliberate act next to two failures and let the eye stop telling them apart.
+ *
+ * Empty label when the link is live: a green "active" line on every row is noise, and the absence
+ * of the sentence is what makes its presence mean something.
+ */
+export function supervisionState(enabled: boolean | undefined): { tone: Tone; label: string } {
+	if (enabled === false) {
+		return { tone: "idle", label: "Paused — it delegates nothing, and this agent escalates past it." };
+	}
+	return { tone: "idle", label: "" };
+}

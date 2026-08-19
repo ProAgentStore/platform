@@ -5743,3 +5743,153 @@ test.describe("mobile — the Coding banner names the machine, not a command (#5
 		await expect(page.locator("#inst-coding-offline")).toHaveCount(0);
 	});
 });
+
+/**
+ * Pausing a teamwork edge from the console (#667).
+ *
+ * `agent_connections.enabled` (#644) and `agent_supervision.enabled` (#664) each got a writer and a
+ * `PATCH …/{id} {enabled}` route and neither got a control, so the console could RENDER a paused
+ * edge and could not produce or clear one: "pause this chain" was still only "delete this
+ * connection", which destroys the routing filter and the target pipeline and orphans the outbox
+ * rows that say what is stuck, and "stand this agent down" was "delete the supervision link",
+ * which costs the owner's standing direction.
+ *
+ * `mobile — ` on purpose, which puts this block in the WebKit project (#384). Both rows GREW a
+ * button beside Remove, and the escape class this file exists to catch lives in Safari and nowhere
+ * else. The rows also carry the two states a pause must not be confused with — a `warnings[]` line
+ * and a dead-letter health line — so the fixture renders all three at once rather than a paused row
+ * on a clean page.
+ *
+ * NON-VACUITY, measured before the green was believed: with an un-shrinkable sibling injected into
+ * the connection row, `escapes` reports it at 320 and 390 in BOTH engines (220px and 150px past its
+ * container). So the geometry arm can go red on this row. What it does NOT distinguish is stacked
+ * versus side-by-side buttons — both fit at both widths — which is why TeamworkSection.tsx records
+ * the stacking as a consistency choice rather than an overflow fix.
+ */
+test.describe("mobile — pausing a teamwork edge (#667)", () => {
+	interface Wired { patches: Array<{ url: string; body: unknown }>; listings: number }
+
+	async function openTeamwork(page: Page, opts: { connectionEnabled?: boolean; linkEnabled?: boolean } = {}): Promise<Wired> {
+		const wired: Wired = { patches: [], listings: 0 };
+		let connectionEnabled = opts.connectionEnabled ?? true;
+		let linkEnabled = opts.linkEnabled ?? true;
+		await mockSignedInConsole(page, {
+			instances: [
+				{ id: "inst-1", name: "Lead Finder", slug: "lead-finder", category: "productivity", capabilities: { surfaces: [] } },
+				{ id: "inst-2", name: "Website Builder", slug: "site-builder", category: "productivity", capabilities: { surfaces: [] } },
+			],
+		});
+
+		const json = (route: Parameters<Parameters<Page["route"]>[1]>[0], data: unknown) =>
+			route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+
+		const connection = () => ({
+			id: "conn-1",
+			eventType: "lead.created",
+			targetInstanceId: "inst-2",
+			action: "run_pipeline",
+			enabled: connectionEnabled,
+			config: { pipeline: "site-builder", filter: [{ field: "suburb", op: "eq", value: "Sydney" }] },
+			// A server warning, so the row carries "paused" and "broken" at the same time.
+			warnings: ["the target agent has no pipeline named site-builder"],
+		});
+		const link = () => ({
+			id: "link-1",
+			supervisorInstanceId: "inst-1",
+			subordinateInstanceId: "inst-2",
+			enabled: linkEnabled,
+			direction: { text: "Build the sites the finder turns up.", setBy: "user", updatedAt: "2026-08-07T00:00:00.000Z" },
+		});
+
+		await page.route("**/v1/instances/inst-1/connections**", async (route) => {
+			const url = new URL(route.request().url());
+			if (url.pathname.endsWith("/deliveries")) {
+				return json(route, {
+					deliveries: [
+						{ id: "del-dead", connectionId: "conn-1", source: "connection", eventType: "lead.created", action: "run_pipeline", sourceInstanceId: "inst-1", targetInstanceId: "inst-2", status: "dead", attempts: 5, lastError: "builder MCP unreachable", createdAt: "2026-07-12T23:30:00.000Z" },
+					],
+				});
+			}
+			if (route.request().method() === "PATCH") {
+				wired.patches.push({ url: url.pathname, body: route.request().postDataJSON() });
+				connectionEnabled = (route.request().postDataJSON() as { enabled: boolean }).enabled;
+				return json(route, connection());
+			}
+			wired.listings++;
+			return json(route, { connections: [connection()] });
+		});
+
+		await page.route("**/v1/instances/inst-1/supervision**", async (route) => {
+			const url = new URL(route.request().url());
+			if (route.request().method() === "PATCH") {
+				wired.patches.push({ url: url.pathname, body: route.request().postDataJSON() });
+				linkEnabled = (route.request().postDataJSON() as { enabled: boolean }).enabled;
+				return json(route, link());
+			}
+			wired.listings++;
+			return json(route, { supervision: [link()] });
+		});
+
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Teamwork" })).toBeVisible();
+		return wired;
+	}
+
+	test("Pause sends a real boolean and flips the row in place, without re-reading the listings", async ({ page }) => {
+		const wired = await openTeamwork(page);
+		await expect(page.getByRole("button", { name: "Pause", exact: true })).toHaveCount(2);
+		const listingsBefore = wired.listings;
+
+		await page.getByRole("button", { name: "Pause", exact: true }).first().click();
+		await page.getByRole("button", { name: "Pause", exact: true }).first().click();
+
+		await expect.poll(() => wired.patches.length).toBe(2);
+		// `"false"` and `0` are rejected by the route rather than coerced, and JS reads `"false"`
+		// as truthy — a coerced pause would RESUME the edge. So the wire must carry a boolean.
+		for (const p of wired.patches) expect(p.body).toEqual({ enabled: false });
+		expect(wired.patches.map((p) => p.url).sort()).toEqual([
+			"/v1/instances/inst-1/connections/conn-1",
+			"/v1/instances/inst-1/supervision/link-1",
+		]);
+
+		// Both rows now offer the way back — the whole point of a pause over a delete.
+		await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(2);
+		await expect(page.getByText("disabled — it routes nothing")).toBeVisible();
+		await expect(page.getByText("Paused — it delegates nothing, and this agent escalates past it.")).toBeVisible();
+		// Patched from the response, not reloaded: the route returns the full updated row, and a
+		// refetch here would also throw away a direction the owner is mid-edit on.
+		expect(wired.listings).toBe(listingsBefore);
+	});
+
+	test("a paused edge is painted differently from a broken one, in both directions", async ({ page }) => {
+		await openTeamwork(page, { connectionEnabled: false, linkEnabled: false });
+		const colourOf = (text: string) => page.getByText(text).first().evaluate((el) => getComputedStyle(el).color);
+
+		// Three states on one row: paused (the owner's choice), a server warning, and a dead letter.
+		const paused = await colourOf("disabled — it routes nothing");
+		const warned = await colourOf("the target agent has no pipeline named site-builder");
+		const stuck = await colourOf("1 event never arrived");
+		expect(new Set([paused, warned, stuck]).size).toBe(3);
+		expect(await colourOf("Paused — it delegates nothing")).toBe(paused);
+
+		// And it stays reversible: hiding a paused edge would make it unresumable, which is the
+		// reason `listSupervision` is deliberately not filtered on `enabled`.
+		await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(2);
+	});
+
+	for (const width of [320, 390]) {
+		test(`the row still fits at ${width}px with both buttons`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await openTeamwork(page, { connectionEnabled: false });
+			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(1);
+			await page.waitForTimeout(300);
+
+			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+		});
+	}
+});

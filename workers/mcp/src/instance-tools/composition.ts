@@ -126,6 +126,54 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	// PAUSING AN EDGE, AND WHY IT TAKES NO `dry_run` (#667).
+	//
+	// `agent_supervision.enabled` (#664) and `agent_connections.enabled` (#644) each got a writer
+	// and a `PATCH …/{id} {enabled}` route, and neither got a tool — so the only way an agent or a
+	// console user could stop an edge was to DELETE it. Deleting is not a pause: it throws away the
+	// subordinate's standing DIRECTION (#330) and the edge's budget defaults, or a connection's
+	// routing filter and target pipeline, and it orphans the outbox rows that explain what is
+	// stuck. Standing an agent down while it is reconfigured is an ordinary operation; making it
+	// cost the owner's epic is not.
+	//
+	// No `dry_run`, on the same reasoning `stop_instance_loop` records. A dry run answers "what
+	// would this call do?", and here the answer is fully determined by one id and one boolean —
+	// there is no config to get wrong and no direction to swap. The question worth asking first is
+	// "which edge is that?", and `list_supervision` / `list_connections` answer it with both ends
+	// named. A preview could only echo the id back with less information than the read tool
+	// already gives, while implying it was the safety step.
+	//
+	// `write`, not `destructive`, and that is the point of the ticket rather than a laxity: this
+	// tool is the REVERSIBLE form of the delete beside it. Resuming is the same call with
+	// `enabled: true`, and nothing about the edge is lost in between. It is also why the listings
+	// are deliberately not filtered on `enabled` — an edge hidden while paused is an edge that
+	// cannot be resumed.
+	server.tool(
+		"set_supervision_enabled",
+		"Pause or resume a supervision link without deleting it. While paused the supervisor cannot delegate to that agent and the subordinate escalates past it, but the link keeps its label, its budget defaults and the owner's standing direction — all of which a delete destroys. Reversible: call again with enabled=true. Get the link id from list_supervision, which lists paused links too.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			supervisor_instance_id: z.string(),
+			supervision_id: z.string().describe("Link id from list_supervision."),
+			enabled: z.boolean().describe("false pauses the link, true resumes it. Strictly a boolean — the API rejects \"false\" and 0 rather than coercing them, since coercion on the one field whose job is to stop work would do the opposite of what was asked."),
+		},
+		async ({ token, supervisor_instance_id, supervision_id, enabled }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { supervisor_instance_id, supervision_id, enabled };
+			const denied = await requirePermission(safetyFor(token), "write", "set_supervision_enabled", input);
+			if (denied) return denied;
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(supervisor_instance_id)}/supervision/${encodeURIComponent(supervision_id)}`,
+				sessionToken,
+				{ method: "PATCH", body: JSON.stringify({ enabled }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_supervision_enabled", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"list_connections",
 		"List the agent-to-agent event connections leaving an instance — how a fact it emits (e.g. lead.created) is routed to another agent.",
@@ -179,6 +227,34 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "create_connection", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
+
+	/** The connection half of `set_supervision_enabled` above — same column, same route shape,
+	 *  same reasoning about `dry_run` and about `write` rather than `destructive`. */
+	server.tool(
+		"set_connection_enabled",
+		"Pause or resume an event connection without deleting it. While paused the source's events are counted and logged as connection.paused rather than delivered, and the edge keeps its routing filter, its target pipeline and its delivery history — all of which a delete destroys, orphaning the outbox rows that say what is stuck. Reversible: call again with enabled=true. Get the connection id from list_connections, which lists paused connections too.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Source instance — the one that emits the event."),
+			connection_id: z.string().describe("Connection id from list_connections."),
+			enabled: z.boolean().describe("false pauses the connection, true resumes it. Strictly a boolean — the API rejects \"false\" and 0 rather than coercing them, since coercion on the one field whose job is to stop deliveries would do the opposite of what was asked."),
+		},
+		async ({ token, instance_id, connection_id, enabled }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, connection_id, enabled };
+			const denied = await requirePermission(safetyFor(token), "write", "set_connection_enabled", input);
+			if (denied) return denied;
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(instance_id)}/connections/${encodeURIComponent(connection_id)}`,
+				sessionToken,
+				{ method: "PATCH", body: JSON.stringify({ enabled }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_connection_enabled", action: "completed", input, result: { ok: true } });
 			return jsonText(data);
 		},
 	);

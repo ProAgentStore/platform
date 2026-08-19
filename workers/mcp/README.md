@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**143 tool registrations.** 122 are always registered; 21 are gated to the console
+**145 tool registrations.** 124 are always registered; 21 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -339,9 +339,11 @@ immediately instead of a whole transcript.
 |---|---|---|---|---|
 | `list_supervision` | Agents a supervisor oversees | read | | |
 | `create_supervision` | Put one agent in charge of another (loop/depth/fan-out checked) | write | yes | |
+| `set_supervision_enabled` | Pause or resume a link — the reversible form of the delete below, keeping the label, the budget defaults and the owner's standing direction | write | | |
 | `delete_supervision` | Remove a supervision link — silent afterwards: the supervisor stops reaching that subordinate rather than erroring | destructive | yes | `delete_supervision` |
 | `list_connections` | Event connections leaving an instance | read | | |
 | `create_connection` | Route an emitted fact to another agent (the pump) | write | yes | |
+| `set_connection_enabled` | Pause or resume a connection, keeping its routing filter, target pipeline and delivery history | write | | |
 
 ### Repo Chat (gated to `surfaces: ["repo"]`)
 
