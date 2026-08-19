@@ -103,22 +103,6 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 	// this epic exists to build reads a message, fills the form attached to it, and REPLIES. Seeding
 	// it now would put an agent in the catalog that does two thirds of what its description promises.
 	// It gets seeded with the send half (#713), and these three entries come out then.
-	gmail_search:
-		"Reachable but undeclared by design until the email agent is seeded (#710). Works today on any " +
-		"connected mailbox, and a subscriber can declare it on their own agent — what is missing is a " +
-		"FIRST-PARTY agent, which is held until fill_pdf_form (#712) lands so the seeded agent can do " +
-		"the whole task it will describe (read a message, fill the form attached to it, reply with it) " +
-		"rather than two thirds of it.",
-	gmail_read_message: "Same as gmail_search — awaiting the seeded email agent (#710).",
-	gmail_download_attachment: "Same as gmail_search — awaiting the seeded email agent (#710).",
-	gmail_reply: "Same as gmail_search — awaiting the seeded email agent (#710).",
-	gmail_send: "Same as gmail_search — awaiting the seeded email agent (#710).",
-	// #712. Their own catalog group ("documents") and deliberately NOT in FULL: an agent with no
-	// reason to produce documents should not carry three tools it will never call. Selectable
-	// today; the first-party agent that declares them is the email agent (#710).
-	inspect_pdf_form: "Reachable but undeclared by design until the email agent is seeded (#710). Selectable now — the `documents` group exists so an agent opts in rather than inheriting it.",
-	fill_pdf_form: "Same as inspect_pdf_form — awaiting the seeded email agent (#710).",
-	build_answer_sheet: "Same as inspect_pdf_form — awaiting the seeded email agent (#710).",
 	terminal_send_message:
 		"The generic terminal connector is for creator-built agents that declare it. The first-party " +
 		"tmux Operator declares the backend-specific `tmux_send_message` instead (migration 0117, #482), " +
