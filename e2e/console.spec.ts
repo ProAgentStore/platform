@@ -5840,8 +5840,15 @@ test.describe("mobile — pausing a teamwork edge (#667)", () => {
 		await expect(page.getByRole("button", { name: "Pause", exact: true })).toHaveCount(2);
 		const listingsBefore = wired.listings;
 
+		// Serialised on the ROW COUNT, not on `.first()` twice. Both buttons are `disabled={busy}`
+		// while a PATCH is in flight, so a second `.first()` issued immediately resolves onto row
+		// one's button and then waits for it to become actionable again — by which time that same
+		// DOM node says "Resume", and the click sends `enabled: true`. Measured: 1 run in 5 red in
+		// Chromium, the product behaving correctly throughout. Waiting for the first row to flip
+		// leaves exactly one "Pause" on the page, so there is nothing left to resolve ambiguously.
 		await page.getByRole("button", { name: "Pause", exact: true }).first().click();
-		await page.getByRole("button", { name: "Pause", exact: true }).first().click();
+		await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(1);
+		await page.getByRole("button", { name: "Pause", exact: true }).click();
 
 		await expect.poll(() => wired.patches.length).toBe(2);
 		// `"false"` and `0` are rejected by the route rather than coerced, and JS reads `"false"`
