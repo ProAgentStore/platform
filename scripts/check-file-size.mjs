@@ -117,6 +117,17 @@ const PINS = {
 	// construction, so the more thorough call was the only one that could not report a machine
 	// offline. Raised rather than split: the change is three expressions inside an existing
 	// handler, and the decision it feeds is pure and already lives in lib/runtime-response.ts.
+	// New entry at #712 — 799 → 809, crossing LIMIT by ten. The PDF form tools (inspect / fill /
+	// build an answer sheet) needed a home, and this file had been sitting one line under the
+	// threshold, so anything at all would have tripped it.
+	//
+	// Split FIRST, then raised: the ~130 lines of implementation live in lib/pdf-storage-tools.ts
+	// (and the pure part in lib/pdf-form.ts before that). What is left here is the ten lines that
+	// genuinely belong — one import, the spread that keeps STORAGE_TOOLS the single list of what
+	// an agent can do with its own storage, and a two-line delegation ahead of the switch that
+	// returns null for a name it does not own. Listing the three tool names here instead would
+	// have been a second copy of the module's own contents, kept in step by hand.
+	"workers/api/src/lib/storage-tools.ts": 809,
 	"workers/api/src/routes/instances.ts": 998,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
@@ -1353,7 +1364,8 @@ const PINS = {
 	// of code, because the raise has to say what was split OUT before it can justify what stayed),
 	// the note reconciling it with #703's shrink, and this line. The ratchet applied to itself,
 	// again: these comments ARE the record, and two entries that cancel still cost two entries.
-	"scripts/check-file-size.mjs": 1437,
+	// +12 at #712: this file grows by the reasoning for each entry, and one new entry was added.
+	"scripts/check-file-size.mjs": 1449,
 };
 
 /**

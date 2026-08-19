@@ -9,6 +9,7 @@
 	},
 	"dependencies": {
 		"hono": "^4.7.0",
+		"pdf-lib": "^1.17.1",
 		"unpdf": "1.6.2"
 	},
 	"devDependencies": {

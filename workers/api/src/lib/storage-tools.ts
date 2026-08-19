@@ -3,6 +3,7 @@
  * Extends the base AGENT_TOOLS with the new storage engine.
  */
 import { AgentStorageEngine } from "../agent-storage.js";
+import { executePdfTool, PDF_STORAGE_TOOLS } from "./pdf-storage-tools.js";
 import type { CollectionField } from "../agent-storage-types.js";
 import type { ToolCallResult, ToolDef } from "./tools.js";
 import { listRepos, listSessions } from "./coding-store.js";
@@ -204,6 +205,9 @@ export const STORAGE_TOOLS: ToolDef[] = [
 			cover_note: { type: "string", description: "Cover note text for the application form" },
 		},
 	},
+	// PDF forms (#712) — declared in their own module, spread here so STORAGE_TOOLS stays the
+	// one list of what an agent can do with its own storage.
+	...PDF_STORAGE_TOOLS,
 	{
 		name: "find_confirmation_link",
 		description: "Search the user's connected Gmail (read-only) for a recent confirmation/verification email and return the action link to open — e.g. to confirm a newly registered account. Only available when the user has connected Gmail and granted this agent email permission.",
@@ -254,6 +258,11 @@ export async function executeStorageTool(
 	ctx?: StorageToolContext,
 ): Promise<ToolCallResult> {
 	try {
+		// PDF forms (#712) — returns null for a name it does not own, so the switch below is
+		// untouched rather than carrying three more cases.
+		const pdf = await executePdfTool(call, engine, ctx);
+		if (pdf) return pdf;
+
 		switch (call.name) {
 			case "search_knowledge": {
 				const query = call.input.query as string;

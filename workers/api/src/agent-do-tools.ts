@@ -104,6 +104,19 @@ export const KB_READ = ["search_knowledge", "list_knowledge", "read_knowledge"] 
 const KB_WRITE = ["update_knowledge", "delete_knowledge", "add_knowledge"] as const;
 /** Binary file storage (R2). */
 const FILES = ["upload_file", "list_files", "read_file", "delete_file"] as const;
+
+/**
+ * PDF forms (#712) — inspect a form's fields, fill it, or generate an answer sheet when it has
+ * none. They act only on files already in this instance's store, so they compose with FILES
+ * rather than duplicating it.
+ *
+ * Its own group, and deliberately NOT in FULL: an agent that has no reason to produce documents
+ * should not carry three tools it will never call, and the group is what makes it one declaration
+ * for an agent that does. The same reasoning as COLLECTIONS_DESTRUCTIVE — being in the catalog is
+ * what makes a tool selectable; being in FULL is what makes it automatic, and those are different
+ * decisions.
+ */
+const DOCUMENTS = ["inspect_pdf_form", "fill_pdf_form", "build_answer_sheet"] as const;
 /**
  * Structured collections (agent-defined tables).
  *
@@ -170,6 +183,7 @@ export const TOOL_CATALOG: readonly ToolCatalogGroup[] = [
 	{ id: "kb_read", label: "Knowledge base — read (RAG)", tools: KB_READ, tier: "standard" },
 	{ id: "kb_write", label: "Knowledge base — write", tools: KB_WRITE, tier: "standard" },
 	{ id: "files", label: "File storage", tools: FILES, tier: "standard" },
+	{ id: "documents", label: "PDF forms — inspect, fill, generate", tools: DOCUMENTS, tier: "standard" },
 	{ id: "collections", label: "Structured collections", tools: COLLECTIONS, tier: "standard" },
 	{ id: "collections_destructive", label: "Structured collections — delete", tools: COLLECTIONS_DESTRUCTIVE, tier: "standard" },
 	{ id: "coding", label: "Live coding session", tools: CODING, tier: "runtime" },

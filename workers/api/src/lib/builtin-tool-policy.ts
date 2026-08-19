@@ -91,6 +91,11 @@ export const BUILTIN_TOOL_SCOPES: Readonly<Record<string, "read" | "write">> = {
 	fetch_url: "read",
 	configure_board: "write",
 	// ── STORAGE_TOOLS (lib/storage-tools.ts).
+	// PDF forms (#712). `fill_pdf_form` and `build_answer_sheet` are "write" because each
+	// stores a NEW file in the instance; neither modifies the source document.
+	inspect_pdf_form: "read",
+	fill_pdf_form: "write",
+	build_answer_sheet: "write",
 	search_knowledge: "read",
 	list_knowledge: "read",
 	read_knowledge: "read",

@@ -94,6 +94,10 @@ const MUTATING = new Set<string>([
 	// mutation on the platform, and the reason both sit behind the write-consent gate.
 	"gmail_reply",
 	"gmail_send",
+	// #712. Neither touches the SOURCE pdf — both write a NEW file into the instance's store,
+	// which is a change to this agent's own data and so a mutation. inspect_pdf_form only reads.
+	"fill_pdf_form",
+	"build_answer_sheet",
 	// ── built-ins, derived from BUILTIN_TOOL_SCOPES ──
 	"write_memory",
 	"delete_memory",

@@ -156,6 +156,11 @@ export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
 	run_pipeline: "platform",
 	create_ticket: "platform",
 	record_feedback: "platform",
+	// ── PDF forms (#712): read a file from this instance's store, write one back. The bytes
+	// never leave the platform, and nothing is fetched — pdf-lib runs in the isolate.
+	inspect_pdf_form: "platform",
+	fill_pdf_form: "platform",
+	build_answer_sheet: "platform",
 	// ── Pure pipeline steps: no I/O at all, by their own declarations in steps.ts.
 	map: "platform",
 	filter: "platform",
