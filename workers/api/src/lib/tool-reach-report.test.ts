@@ -118,6 +118,8 @@ const INTERNET = new Set<string>([
 	"gmail_search",
 	"gmail_read_message",
 	"gmail_download_attachment",
+	"gmail_reply", // sends mail as the owner, to a third party
+	"gmail_send",
 ]);
 
 describe("the listing reports what a tool can reach (#584)", () => {

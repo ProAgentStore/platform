@@ -258,3 +258,139 @@ describe("base64UrlToBase64", () => {
 		expect(base64UrlToBase64("YWJjZA==")).toBe("YWJjZA==");
 	});
 });
+
+// ── #713: sending ────────────────────────────────────────────────────────────
+
+describe("sanitizeHeaderValue / encodeHeaderValue", () => {
+	it("strips CR and LF — the header-injection guard", async () => {
+		const { sanitizeHeaderValue } = await import("./gmail.js");
+		// The attack: end the Subject header and start a Bcc, silently copying a third party.
+		expect(sanitizeHeaderValue("Re: forms\r\nBcc: attacker@evil.test")).toBe("Re: forms Bcc: attacker@evil.test");
+		expect(sanitizeHeaderValue("a\nb\r\nc")).toBe("a b c");
+	});
+
+	it("leaves plain ASCII alone and RFC-2047 encodes anything else", async () => {
+		const { encodeHeaderValue } = await import("./gmail.js");
+		expect(encodeHeaderValue("Summer Competition Form")).toBe("Summer Competition Form");
+		const encoded = encodeHeaderValue("回复：报名表");
+		expect(encoded).toMatch(/^=\?UTF-8\?B\?.+\?=$/);
+		// Round-trips: the decoded payload is the original, not mojibake.
+		const payload = encoded.slice("=?UTF-8?B?".length, -2);
+		expect(new TextDecoder().decode(Uint8Array.from(atob(payload), (c) => c.charCodeAt(0)))).toBe("回复：报名表");
+	});
+});
+
+describe("replySubject / replyHeaders", () => {
+	it("adds Re: once and never twice", async () => {
+		const { replySubject } = await import("./gmail.js");
+		expect(replySubject("Summer Comp")).toBe("Re: Summer Comp");
+		expect(replySubject("Re: Summer Comp")).toBe("Re: Summer Comp");
+		expect(replySubject("RE : Summer Comp")).toBe("RE : Summer Comp");
+	});
+
+	it("extends the parent's References chain rather than replacing it", async () => {
+		const { replyHeaders } = await import("./gmail.js");
+		expect(replyHeaders({ messageId: "<b@x>", references: "<a@x>" })).toEqual({
+			inReplyTo: "<b@x>",
+			references: "<a@x> <b@x>",
+		});
+	});
+
+	it("starts a chain when the parent has none", async () => {
+		const { replyHeaders } = await import("./gmail.js");
+		expect(replyHeaders({ messageId: "<b@x>", references: "" })).toEqual({ inReplyTo: "<b@x>", references: "<b@x>" });
+	});
+
+	it("returns nothing when the parent has no Message-ID — better unthreaded than lying", async () => {
+		const { replyHeaders } = await import("./gmail.js");
+		expect(replyHeaders({ messageId: "", references: "<a@x>" })).toEqual({});
+	});
+});
+
+describe("buildMimeMessage", () => {
+	it("builds a plain single-part message with a base64 UTF-8 body", async () => {
+		const { buildMimeMessage } = await import("./gmail.js");
+		const mime = buildMimeMessage({ to: "kelly@example.test", subject: "Entry", body: "Yes please — form attached." });
+		expect(mime).toContain("To: kelly@example.test");
+		expect(mime).toContain("Subject: Entry");
+		expect(mime).toContain('Content-Type: text/plain; charset="UTF-8"');
+		expect(mime).toContain("Content-Transfer-Encoding: base64");
+		expect(mime).not.toContain("multipart/mixed");
+		const body = mime.split("\r\n\r\n").slice(1).join("\r\n\r\n");
+		const bytes = Uint8Array.from(atob(body.replace(/\r\n/g, "")), (c) => c.charCodeAt(0));
+		// Decoded as UTF-8, not as a binary string — the em dash is the whole point of the charset.
+		expect(new TextDecoder().decode(bytes)).toBe("Yes please — form attached.");
+	});
+
+	it("builds a multipart message with each attachment as its own base64 part", async () => {
+		const { buildMimeMessage } = await import("./gmail.js");
+		const mime = buildMimeMessage({
+			to: "kelly@example.test",
+			subject: "Entry",
+			body: "Attached.",
+			attachments: [{ filename: "Form.pdf", mimeType: "application/pdf", base64: btoa("%PDF-1.4") }],
+		});
+		expect(mime).toContain("Content-Type: multipart/mixed;");
+		expect(mime).toContain('Content-Disposition: attachment; filename="Form.pdf"');
+		expect(mime).toContain('Content-Type: application/pdf; name="Form.pdf"');
+		// The closing boundary is what makes it a valid multipart body rather than a truncated one.
+		const boundary = /boundary="([^"]+)"/.exec(mime)?.[1] ?? "";
+		expect(boundary).not.toBe("");
+		expect(mime.trimEnd().endsWith(`--${boundary}--`)).toBe(true);
+	});
+
+	it("cannot be made to inject a header through the subject or a filename", async () => {
+		const { buildMimeMessage } = await import("./gmail.js");
+		const mime = buildMimeMessage({
+			to: "kelly@example.test",
+			subject: "Entry\r\nBcc: attacker@evil.test",
+			body: "hi",
+			attachments: [{ filename: 'x.pdf"\r\nBcc: attacker@evil.test', mimeType: "application/pdf", base64: btoa("x") }],
+		});
+		expect(mime).not.toMatch(/^Bcc:/m);
+		expect(mime).not.toContain("\r\nBcc:");
+	});
+
+	it("wraps attachment base64 at 76 characters, as RFC 2045 requires", async () => {
+		const { buildMimeMessage } = await import("./gmail.js");
+		const mime = buildMimeMessage({
+			to: "a@b.test",
+			subject: "s",
+			body: "b",
+			attachments: [{ filename: "big.bin", mimeType: "application/octet-stream", base64: btoa("x".repeat(500)) }],
+		});
+		// 76 is RFC 2045's limit on the ENCODED BODY, which is what this asserts. Header lines are
+		// governed by RFC 5322 instead (78 recommended, folding allowed), so they are checked
+		// separately rather than held to the body's rule.
+		const [headers, ...rest] = mime.split("\r\n\r\n");
+		expect(rest.join("\r\n\r\n").split("\r\n").filter((l) => l.length > 76)).toEqual([]);
+		expect(headers.split("\r\n").filter((l) => l.length > 78)).toEqual([]);
+	});
+});
+
+describe("scopesAllowSend", () => {
+	it("is false for a connection recorded before the send scope existed", async () => {
+		const { scopesAllowSend } = await import("./gmail.js");
+		// The migration-0133 population: granted_scopes is NULL. Fail closed — a wrong "yes"
+		// costs a raw 403 the owner cannot act on.
+		expect(scopesAllowSend(null)).toBe(false);
+		expect(scopesAllowSend(undefined)).toBe(false);
+		expect(scopesAllowSend("")).toBe(false);
+	});
+
+	it("is false for a read-only grant, true once send is present", async () => {
+		const { scopesAllowSend } = await import("./gmail.js");
+		expect(scopesAllowSend("openid email https://www.googleapis.com/auth/gmail.readonly")).toBe(false);
+		expect(scopesAllowSend("openid https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send")).toBe(true);
+	});
+
+	it("accepts the full-mailbox scope, which subsumes send", async () => {
+		const { scopesAllowSend } = await import("./gmail.js");
+		expect(scopesAllowSend("https://mail.google.com/")).toBe(true);
+	});
+
+	it("does not match on a prefix — gmail.send is not gmail.sendas", async () => {
+		const { scopesAllowSend } = await import("./gmail.js");
+		expect(scopesAllowSend("https://www.googleapis.com/auth/gmail.sendas")).toBe(false);
+	});
+});

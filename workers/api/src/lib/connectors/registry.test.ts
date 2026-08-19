@@ -31,23 +31,33 @@ describe("connector registry", () => {
 		// Gmail LEFT this group in #711. The assertion is kept, inverted, rather than deleted:
 		// "gmail declares no tools" was a deliberate decision, so the file should record that it
 		// was deliberately reversed rather than quietly lose the line.
-		it("Gmail now declares read tools of its own (#711)", () => {
+		it("Gmail declares tools of its own (#711 read, #713 send)", () => {
 			expect(getConnector("gmail")?.tools.map((t) => t.name)).toEqual([
 				"gmail_search",
 				"gmail_read_message",
+				"gmail_reply",
+				"gmail_send",
 				"gmail_download_attachment",
 			]);
-			// Every one of them is read-scoped and mutates nothing — the mailbox is not written to.
-			for (const t of getConnector("gmail")?.tools ?? []) {
-				expect(t.scope).toBe("read");
-				expect(t.mutates).toBe(false);
+			// Reading the mailbox mutates nothing; sending mutates the world and says so, which is
+			// what the #90 consent gate keys on.
+			const byName = new Map((getConnector("gmail")?.tools ?? []).map((t) => [t.name, t]));
+			for (const name of ["gmail_search", "gmail_read_message", "gmail_download_attachment"]) {
+				expect(byName.get(name)?.scope, name).toBe("read");
+				expect(byName.get(name)?.mutates, name).toBe(false);
+			}
+			for (const name of ["gmail_reply", "gmail_send"]) {
+				expect(byName.get(name)?.scope, name).toBe("write");
+				expect(byName.get(name)?.mutates, name).toBe(true);
 			}
 		});
 
-		it("is read-only across all three — no write path in drive.ts/workdrive.ts, and Gmail's tools are all read-scoped", () => {
-			for (const id of ["google_drive", "zoho_workdrive", "gmail"]) {
+		it("keeps the file connectors read-only — there is no write path in drive.ts/workdrive.ts", () => {
+			for (const id of ["google_drive", "zoho_workdrive"]) {
 				expect(getConnector(id)?.scopes).toEqual({ read: true, write: false });
 			}
+			// Gmail left this group in #713: it can send, so it declares write and is consent-gated.
+			expect(getConnector("gmail")?.scopes).toEqual({ read: true, write: true });
 		});
 
 		it("models Drive/WorkDrive reach as instance-resource and Gmail's as user", () => {

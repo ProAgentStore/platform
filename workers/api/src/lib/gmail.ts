@@ -452,3 +452,193 @@ export function base64UrlToBase64(input: string): string {
 	const remainder = swapped.length % 4;
 	return remainder === 0 ? swapped : swapped + "=".repeat(4 - remainder);
 }
+
+// ── Sending (#713) ───────────────────────────────────────────────────────────
+//
+// Everything above reads. This half writes, and it is the most consequential thing an agent on
+// this platform can do: mail leaves under the owner's own name, to a real person, and cannot be
+// recalled. The gates live in connectors/gmail.ts; what lives here is the part that has to be
+// correct rather than merely permitted — the MIME.
+
+/** The scope a send needs. `gmail.send` is send-only: it cannot read, delete or modify, which is
+ *  why it is requested instead of the far broader `gmail.modify` that would also cover it. */
+export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+
+/**
+ * Strip CR and LF from a header value.
+ *
+ * This is the header-injection guard, and it is not theoretical here: every header value below
+ * is model-supplied or derived from an email the model was told to read. A `\r\n` inside a
+ * subject ends the Subject header and starts whatever the injected text says — `Bcc:` being the
+ * interesting one, since the send would silently copy a third party.
+ *
+ * Stripping rather than rejecting is deliberate: a newline in a subject is a formatting mistake
+ * far more often than an attack, and failing the send teaches the model to retry rather than to
+ * fix it. The body is unaffected — it lives in the MIME part, where newlines are data.
+ */
+export function sanitizeHeaderValue(value: string): string {
+	return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+/** RFC 2047 encode a header value when it is not plain ASCII (subjects, display names).
+ *  Raw UTF-8 in a header is not legal and renders as mojibake in most clients. */
+export function encodeHeaderValue(value: string): string {
+	const clean = sanitizeHeaderValue(value);
+	if (!/[^\x20-\x7E]/.test(clean)) return clean;
+	const utf8 = new TextEncoder().encode(clean);
+	let binary = "";
+	for (const byte of utf8) binary += String.fromCharCode(byte);
+	return `=?UTF-8?B?${btoa(binary)}?=`;
+}
+
+/** Base64 with the 76-character line wrapping RFC 2045 requires of an attachment body. */
+function wrapBase64(b64: string): string {
+	return (b64.match(/.{1,76}/g) ?? []).join("\r\n");
+}
+
+export interface OutgoingAttachment {
+	filename: string;
+	mimeType: string;
+	/** STANDARD base64 (not base64url) of the file's bytes. */
+	base64: string;
+}
+
+export interface OutgoingMessage {
+	to: string;
+	cc?: string;
+	subject: string;
+	body: string;
+	/** Set on a reply: the parent's Message-ID, quoted so clients thread it. */
+	inReplyTo?: string;
+	/** Set on a reply: the parent's References chain plus the parent's own Message-ID. */
+	references?: string;
+	attachments?: OutgoingAttachment[];
+}
+
+/**
+ * Build an RFC 2822 message.
+ *
+ * The body is base64'd with an explicit UTF-8 charset rather than sent as 8-bit text. The
+ * motivating case for this whole feature was a mail forwarded from a Chinese iPhone, so "the
+ * body is ASCII" was never a safe assumption, and a quoted-printable encoder is a lot of code
+ * to get subtly wrong for no gain.
+ */
+export function buildMimeMessage(msg: OutgoingMessage): string {
+	// Kept short on purpose: a full UUID here pushed the Content-Type header past the 78-column
+	// RFC 5322 recommends, and an over-long unfolded header is exactly what a strict MTA rewrites.
+	const boundary = `----pags-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+	const headers: string[] = [
+		`To: ${sanitizeHeaderValue(msg.to)}`,
+		...(msg.cc ? [`Cc: ${sanitizeHeaderValue(msg.cc)}`] : []),
+		`Subject: ${encodeHeaderValue(msg.subject)}`,
+		...(msg.inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(msg.inReplyTo)}`] : []),
+		...(msg.references ? [`References: ${sanitizeHeaderValue(msg.references)}`] : []),
+		"MIME-Version: 1.0",
+	];
+
+	const bodyB64 = (() => {
+		const utf8 = new TextEncoder().encode(msg.body);
+		let binary = "";
+		for (const byte of utf8) binary += String.fromCharCode(byte);
+		return wrapBase64(btoa(binary));
+	})();
+
+	const attachments = msg.attachments ?? [];
+	if (attachments.length === 0) {
+		return [
+			...headers,
+			'Content-Type: text/plain; charset="UTF-8"',
+			"Content-Transfer-Encoding: base64",
+			"",
+			bodyB64,
+		].join("\r\n");
+	}
+
+	const parts: string[] = [
+		...headers,
+		`Content-Type: multipart/mixed; boundary="${boundary}"`,
+		"",
+		`--${boundary}`,
+		'Content-Type: text/plain; charset="UTF-8"',
+		"Content-Transfer-Encoding: base64",
+		"",
+		bodyB64,
+	];
+	for (const att of attachments) {
+		const name = sanitizeHeaderValue(att.filename).replace(/"/g, "'");
+		parts.push(
+			`--${boundary}`,
+			`Content-Type: ${sanitizeHeaderValue(att.mimeType)}; name="${name}"`,
+			`Content-Disposition: attachment; filename="${name}"`,
+			"Content-Transfer-Encoding: base64",
+			"",
+			wrapBase64(att.base64),
+		);
+	}
+	parts.push(`--${boundary}--`, "");
+	return parts.join("\r\n");
+}
+
+/** standard base64 → base64url, unpadded. What Gmail's `raw` field wants. */
+export function base64ToBase64Url(input: string): string {
+	return input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Build the reply headers for a parent message.
+ *
+ * `References` is the parent's own chain with the parent appended — that is what makes a client
+ * nest the reply under the original rather than showing it as a new conversation. Passing
+ * `threadId` to the API as well is necessary but NOT sufficient: it threads the copy in the
+ * SENDER's Gmail, and does nothing for the recipient, whose client only sees the headers.
+ */
+export function replyHeaders(parent: Pick<GmailMessage, "messageId" | "references">): {
+	inReplyTo?: string;
+	references?: string;
+} {
+	if (!parent.messageId) return {};
+	const chain = [parent.references, parent.messageId].filter(Boolean).join(" ").trim();
+	return { inReplyTo: parent.messageId, references: chain };
+}
+
+/** Prefix a subject with "Re: " unless it already carries one (any case, any leading whitespace). */
+export function replySubject(subject: string): string {
+	const s = subject.trim();
+	if (!s) return "Re:";
+	return /^re\s*:/i.test(s) ? s : `Re: ${s}`;
+}
+
+/** Send a built MIME message. `threadId` threads the sender's own copy. */
+export async function sendMessage(
+	accessToken: string,
+	mime: string,
+	threadId?: string,
+): Promise<{ id: string; threadId: string }> {
+	const utf8 = new TextEncoder().encode(mime);
+	let binary = "";
+	for (const byte of utf8) binary += String.fromCharCode(byte);
+	const res = await fetch(`${GMAIL_API}/messages/send`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify({ raw: base64ToBase64Url(btoa(binary)), ...(threadId ? { threadId } : {}) }),
+	});
+	if (!res.ok) {
+		throw new GmailError(`Gmail send failed (${res.status}): ${await gmailErrorReason(res)}`);
+	}
+	const sent = (await res.json()) as { id?: string; threadId?: string };
+	return { id: sent.id ?? "", threadId: sent.threadId ?? threadId ?? "" };
+}
+
+/**
+ * Does a recorded scope string cover sending?
+ *
+ * Answers the question BEFORE a send is attempted, from what was recorded at connect time
+ * (`user_api_keys.granted_scopes`, migration 0133). `null`/empty means the connection predates
+ * that column — which is precisely the population granted read-only, so it reads as "cannot
+ * send" and the user is told to reconnect. Fail-closed: a wrong "yes" here costs a raw 403 the
+ * user cannot act on, a wrong "no" costs one unnecessary reconnect.
+ */
+export function scopesAllowSend(grantedScopes: string | null | undefined): boolean {
+	if (!grantedScopes) return false;
+	return grantedScopes.split(/\s+/).some((s) => s === GMAIL_SEND_SCOPE || s === "https://mail.google.com/");
+}

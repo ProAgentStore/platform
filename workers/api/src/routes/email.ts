@@ -1,15 +1,24 @@
 /**
- * Gmail connection for the permissioned agent email tool.
+ * Gmail connection for the permissioned agent email tools.
  *
- * A user connects their Gmail (read-only) so agents they have granted email
- * permission can look up confirmation/verification links. We request offline
- * access and persist ONLY the refresh token, encrypted in the key vault as
- * provider "gmail". Access tokens are minted on demand and never stored.
+ * A user connects their Gmail so agents they have granted email permission can read it and —
+ * since #713 — reply from it. We request offline access and persist ONLY the refresh token,
+ * encrypted in the key vault as provider "gmail". Access tokens are minted on demand and never
+ * stored.
+ *
+ * Two scopes are requested: `gmail.readonly` and `gmail.send`. They are deliberately separate
+ * powers and `gmail.send` is send-ONLY — it cannot read, delete or modify. `gmail.modify` would
+ * cover sending too and is not requested, because it would also let a bug delete the owner's mail.
+ *
+ * A connection made before #713 holds `gmail.readonly` alone. Its refresh token keeps working and
+ * keeps minting access tokens, so nothing looks broken until a send 403s at Google. That is why
+ * the granted scopes are recorded (migration 0133) and surfaced as `canSend` — the read half of
+ * an old connection is unaffected, and the send half says "reconnect" instead of failing raw.
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
-import { GMAIL_SCOPE, mintGmailAccessToken } from "../lib/gmail.js";
+import { GMAIL_SCOPE, GMAIL_SEND_SCOPE, mintGmailAccessToken, scopesAllowSend } from "../lib/gmail.js";
 import { signConnectorState, verifyConnectorState } from "../lib/connector-oauth.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
@@ -52,9 +61,12 @@ emailRoutes.get("/google/start", async (c) => {
 	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
 	url.searchParams.set("redirect_uri", redirectUri(c));
 	url.searchParams.set("response_type", "code");
-	url.searchParams.set("scope", `openid email ${GMAIL_SCOPE}`);
+	url.searchParams.set("scope", `openid email ${GMAIL_SCOPE} ${GMAIL_SEND_SCOPE}`);
 	url.searchParams.set("access_type", "offline");
-	url.searchParams.set("prompt", "consent"); // force a refresh_token every time
+	// Forces a refresh_token every time — and, since #713, is also what re-prompts an ALREADY
+	// connected user for the newly-added send scope. Without it Google silently returns the old
+	// grant and the reconnect appears to succeed while changing nothing.
+	url.searchParams.set("prompt", "consent");
 	url.searchParams.set("state", state);
 	return c.json({ url: url.toString() });
 });
@@ -64,10 +76,10 @@ emailRoutes.get("/status", async (c) => {
 	const session = await requireUser(c);
 	const configured = !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET);
 	const row = await c.env.DB.prepare(
-		"SELECT created_at, account_label, key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
+		"SELECT created_at, account_label, granted_scopes, key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
 	)
 		.bind(session.uid)
-		.first<{ created_at: string; account_label: string | null; key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+		.first<{ created_at: string; account_label: string | null; granted_scopes: string | null; key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
 	let email = row?.account_label ?? null;
 	// Backfill the account email for a connection made before we captured it — this
 	// also verifies the token still works (a revoked one makes minting throw).
@@ -84,7 +96,16 @@ emailRoutes.get("/status", async (c) => {
 			/* token may be revoked/expired — leave email null, still "connected" per the row */
 		}
 	}
-	return c.json({ connected: !!row, email, connectedAt: row?.created_at ?? null, configured });
+	// `canSend` is the #713 distinction the console needs: a connection made before the send
+	// scope existed is CONNECTED but read-only, and the only fix is a reconnect. Reporting it
+	// here is what lets the UI say so instead of the agent discovering it as a 403 mid-reply.
+	return c.json({
+		connected: !!row,
+		email,
+		connectedAt: row?.created_at ?? null,
+		configured,
+		canSend: scopesAllowSend(row?.granted_scopes),
+	});
 });
 
 /** Disconnect Gmail. */
@@ -127,7 +148,7 @@ emailRoutes.get("/google/callback", async (c) => {
 		}),
 	});
 	if (!tokenRes.ok) return c.text(`Gmail token exchange failed (${tokenRes.status})`, 400);
-	const tok = (await tokenRes.json()) as { refresh_token?: string; access_token?: string };
+	const tok = (await tokenRes.json()) as { refresh_token?: string; access_token?: string; scope?: string };
 	if (!tok.refresh_token) {
 		return c.text(
 			"Google did not return a refresh token. Remove this app's access at myaccount.google.com/permissions and reconnect.",
@@ -152,17 +173,23 @@ emailRoutes.get("/google/callback", async (c) => {
 		tok.refresh_token,
 		c.env.KEY_ENCRYPTION_KEY,
 	);
+	// What Google ACTUALLY granted, not what we asked for. A user can untick a scope on the
+	// consent screen, and recording the request rather than the grant would make `canSend` lie in
+	// exactly the case it exists to catch (migration 0133).
+	const grantedScopes = tok.scope ?? null;
+
 	await c.env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, account_label, created_at)
-     VALUES (?1, 'gmail', ?2, ?3, ?4, ?5, datetime('now'))
+		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, created_at)
+     VALUES (?1, 'gmail', ?2, ?3, ?4, ?5, ?6, datetime('now'))
      ON CONFLICT(user_id, provider) DO UPDATE SET
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
        iv = excluded.iv,
        account_label = excluded.account_label,
+       granted_scopes = excluded.granted_scopes,
        created_at = excluded.created_at`,
 	)
-		.bind(uid, ciphertext, dekWrapped, iv, accountLabel)
+		.bind(uid, ciphertext, dekWrapped, iv, accountLabel, grantedScopes)
 		.run();
 
 	return c.html(

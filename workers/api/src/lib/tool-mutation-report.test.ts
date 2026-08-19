@@ -90,6 +90,10 @@ const MUTATING = new Set<string>([
 	"set_direction",
 	"mcp_call_tool",
 	"sheets_append",
+	// #713. Mail leaves under the owner's name and cannot be recalled — the most irreversible
+	// mutation on the platform, and the reason both sit behind the write-consent gate.
+	"gmail_reply",
+	"gmail_send",
 	// ── built-ins, derived from BUILTIN_TOOL_SCOPES ──
 	"write_memory",
 	"delete_memory",

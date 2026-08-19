@@ -104,10 +104,15 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 	// it now would put an agent in the catalog that does two thirds of what its description promises.
 	// It gets seeded with the send half (#713), and these three entries come out then.
 	gmail_search:
-		"Reachable but undeclared by design until the email agent is seeded with its send tools (#713). " +
-		"Works today on any connected mailbox; a subscriber can declare it on their own agent.",
-	gmail_read_message: "Same as gmail_search — awaiting the seeded email agent (#713).",
-	gmail_download_attachment: "Same as gmail_search — awaiting the seeded email agent (#713).",
+		"Reachable but undeclared by design until the email agent is seeded (#710). Works today on any " +
+		"connected mailbox, and a subscriber can declare it on their own agent — what is missing is a " +
+		"FIRST-PARTY agent, which is held until fill_pdf_form (#712) lands so the seeded agent can do " +
+		"the whole task it will describe (read a message, fill the form attached to it, reply with it) " +
+		"rather than two thirds of it.",
+	gmail_read_message: "Same as gmail_search — awaiting the seeded email agent (#710).",
+	gmail_download_attachment: "Same as gmail_search — awaiting the seeded email agent (#710).",
+	gmail_reply: "Same as gmail_search — awaiting the seeded email agent (#710).",
+	gmail_send: "Same as gmail_search — awaiting the seeded email agent (#710).",
 	terminal_send_message:
 		"The generic terminal connector is for creator-built agents that declare it. The first-party " +
 		"tmux Operator declares the backend-specific `tmux_send_message` instead (migration 0117, #482), " +

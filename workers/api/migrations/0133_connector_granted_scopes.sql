@@ -1,0 +1,17 @@
+-- What a stored connector grant was actually authorised FOR (#713).
+--
+-- Gmail is about to gain send tools, which need `gmail.send` on top of the `gmail.readonly`
+-- every existing connection was granted. A refresh token issued under the old scope set keeps
+-- minting access tokens perfectly happily — Google only refuses at the API call, with a 403 the
+-- user reads as "the agent is broken" rather than "reconnect to allow sending".
+--
+-- Recording the granted scopes at connect time makes "can this connection send?" answerable
+-- BEFORE a send is attempted, so the refusal can say what to do instead. Nullable on purpose:
+-- NULL means "connected before we recorded this", which is exactly the population that has to
+-- reconnect, and is therefore information rather than a gap to backfill. It is filled in
+-- naturally on the next reconnect, and /v1/email/status can also learn it from Google's
+-- tokeninfo without one.
+--
+-- Not Gmail-specific: every connector stored in user_api_keys through an OAuth flow has the
+-- same question, and answering it per-provider is how five copies of it start.
+ALTER TABLE user_api_keys ADD COLUMN granted_scopes TEXT;
