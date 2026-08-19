@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, fmtInt } from "../lib/api";
+import { capSuffix, capTitle, stuckSessionColor, stuckSessionLabel } from "../lib/ops-queue";
 import { Empty, ErrorBox, Loading, Panel, Stat } from "../lib/ui";
 
 interface StuckSession {
@@ -31,10 +32,9 @@ interface Ops {
 	staleRunners: StaleRunner[];
 	noKeyUsers: NoKeyUser[];
 	errors24h: number;
+	/** Row cap each list was truncated at. Optional: an older API response omits it. */
+	cap?: number;
 }
-
-const statusColor = (s: string) =>
-	s === "failed" || s === "blocked" ? "text-danger" : s === "needs_human" ? "text-warning" : "text-muted";
 
 export default function Ops() {
 	const [ops, setOps] = useState<Ops | null>(null);
@@ -52,10 +52,22 @@ export default function Ops() {
 			<h1 className="font-display text-xl font-bold mb-1">Ops queue</h1>
 			<p className="text-sm text-muted mb-4">What's wrong right now, across all users — triage the queue top to bottom.</p>
 
+			{/* Three of these four are LIST LENGTHS behind a `LIMIT`, so they stop counting at the
+			    cap; `capSuffix` renders the "+" that says so. `errors24h` is a real COUNT(*) and
+			    carries no cap — the same-looking tiles were not the same kind of number (#638). */}
 			<div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-				<Stat label="Stuck sessions" value={fmtInt(ops.stuckSessions.length)} accent={ops.stuckSessions.length > 0} />
-				<Stat label="Stale runners" value={fmtInt(ops.staleRunners.length)} accent={ops.staleRunners.length > 0} />
-				<Stat label="Users w/o API key" value={fmtInt(ops.noKeyUsers.length)} accent={ops.noKeyUsers.length > 0} />
+				{([
+					["Stuck sessions", ops.stuckSessions.length],
+					["Stale runners", ops.staleRunners.length],
+					["Users w/o API key", ops.noKeyUsers.length],
+				] as const).map(([label, n]) => (
+					<Stat
+						key={label}
+						label={label}
+						value={<span title={capTitle(n, ops.cap)}>{fmtInt(n)}{capSuffix(n, ops.cap)}</span>}
+						accent={n > 0}
+					/>
+				))}
 				<Stat label="Errors (24h)" value={fmtInt(ops.errors24h)} accent={ops.errors24h > 0} />
 			</div>
 
@@ -69,7 +81,9 @@ export default function Ops() {
 							<tbody>
 								{ops.stuckSessions.map((s) => (
 									<tr key={s.id} className="border-b border-line/50 align-top">
-										<td className={`py-1.5 font-semibold whitespace-nowrap ${statusColor(s.status)}`}>{s.status}</td>
+										<td className={`py-1.5 font-semibold whitespace-nowrap ${stuckSessionColor(s.status)}`}>
+											{stuckSessionLabel(s.status)}
+										</td>
 										<td className="whitespace-nowrap">{s.owner_login || s.user_id}</td>
 										<td className="text-muted whitespace-nowrap">{s.client_type}</td>
 										<td className="text-muted-soft truncate max-w-[180px]">{s.instance_id}</td>
