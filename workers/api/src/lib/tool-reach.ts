@@ -179,6 +179,13 @@ export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
 	submit_job_application: "internet",
 	// Reads the owner's connected Gmail — Google's servers, not ours.
 	find_confirmation_link: "internet",
+	// The declared Gmail tools (#711). Same reach as the line above and for the same reason: the
+	// mailbox is Google's. `gmail_download_attachment` is the one worth pausing on — it ends by
+	// writing into this instance's own file store, but it gets its bytes from Gmail, and reach is
+	// about where the data comes FROM as much as where it goes.
+	gmail_search: "internet",
+	gmail_read_message: "internet",
+	gmail_download_attachment: "internet",
 	// GETs a URL the caller names. `mutates:false` and still outside: reach is not mutation.
 	http_reachable: "internet",
 	// Dispatches a POST to Google Places from a fixed template.

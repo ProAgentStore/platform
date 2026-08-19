@@ -37,7 +37,8 @@ import { connectorRoutes } from "./connectors.js";
 import { resolveOauthConfig } from "../lib/connectors/client.js";
 // The REAL declarations (#352 Stage 1) — not a fixture. Their whole claim is that a hand-written
 // flow and the generic one resolve the same credentials, which a copied fixture could not test.
-import { GMAIL_CONNECTOR, GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "../lib/connectors/connected-accounts.js";
+import { GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "../lib/connectors/connected-accounts.js";
+import { GMAIL_CONNECTOR } from "../lib/connectors/gmail.js";
 import { HttpError } from "../lib/auth.js";
 import type { Env } from "../types.js";
 
@@ -204,9 +205,19 @@ describe("GET /v1/connectors — the catalog, resolved for the caller", () => {
 		expect(by.get("gmail")).toMatchObject({ grantModel: "user" });
 	});
 
-	it("reports the three connected accounts as tool-less — declaring them grants no agent anything", async () => {
+	it("reports the file accounts as tool-less — declaring them grants no agent anything", async () => {
 		const by = await list(envWithKeys([]));
-		for (const id of ["google_drive", "zoho_workdrive", "gmail"]) expect(by.get(id)).toMatchObject({ tools: [] });
+		for (const id of ["google_drive", "zoho_workdrive"]) expect(by.get(id)).toMatchObject({ tools: [] });
+	});
+
+	// Gmail was in the list above until #711. The catalog is where an owner reads what a
+	// connector can do, so the moment it gained tools this assertion had to say so out loud
+	// rather than be dropped for being inconvenient.
+	it("reports Gmail's declared read tools in the catalog (#711)", async () => {
+		const by = await list(envWithKeys([]));
+		expect(by.get("gmail")).toMatchObject({
+			tools: ["gmail_search", "gmail_read_message", "gmail_download_attachment"],
+		});
 	});
 
 	// #355: the account page shows connect/disconnect for every connector at once, so what a

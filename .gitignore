@@ -31,3 +31,4 @@ android/upload-keystore.jks
 .playwright-mcp/
 
 coverage/
+.DS_Store

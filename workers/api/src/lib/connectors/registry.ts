@@ -5,7 +5,8 @@
 import type { Env } from "../../types.js";
 import type { Connector, EnvTokenKey, ToolDef } from "./types.js";
 import { BROWSER_TOOLS } from "./browser.js";
-import { GMAIL_CONNECTOR, GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "./connected-accounts.js";
+import { GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "./connected-accounts.js";
+import { GMAIL_CONNECTOR } from "./gmail.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { MCP_TOOLS } from "./mcp.js";
@@ -142,13 +143,14 @@ export const CONNECTORS: Connector[] = [
 	// /v1/connectors/:id/oauth flow (#147), read + append rows. Inert until the Google OAuth app
 	// has the spreadsheets scope + the connector callback registered.
 	GOOGLE_SHEETS_CONNECTOR,
-	// The three connected ACCOUNTS (#352 Stage 1) — declared with `tools: []`, so
-	// `connectorTools()` is byte-identical and no agent gains anything. They were already
-	// connectors in storage (same `user_api_keys` row, same `instance_connector_grants`); this
-	// is the registry catching up to that, so "what connectors exist" stops having five answers.
-	// Why they have no tools, and why Gmail's is not moved: connected-accounts.ts.
+	// The connected ACCOUNTS (#352 Stage 1) — declared with `tools: []`, so `connectorTools()`
+	// is byte-identical for these two and no agent gains anything. They were already connectors
+	// in storage (same `user_api_keys` row, same `instance_connector_grants`); this is the
+	// registry catching up to that, so "what connectors exist" stops having five answers.
+	// Why they have no tools: connected-accounts.ts.
 	GOOGLE_DRIVE_CONNECTOR,
 	ZOHO_WORKDRIVE_CONNECTOR,
+	// Gmail (#711) — the same stored connection, now with declared read tools of its own.
 	GMAIL_CONNECTOR,
 ];
 

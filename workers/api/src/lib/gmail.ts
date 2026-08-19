@@ -61,7 +61,9 @@ function decodeBody(data: string): string {
 
 interface GmailPart {
 	mimeType?: string;
-	body?: { data?: string };
+	/** Present and non-empty on an attachment part; empty string on a body part. */
+	filename?: string;
+	body?: { data?: string; attachmentId?: string; size?: number };
 	parts?: GmailPart[];
 }
 
@@ -252,4 +254,201 @@ export function buildQuery(opts: {
 	if (opts.subject) parts.push(`subject:(${opts.subject})`);
 	parts.push(`newer_than:${Math.max(1, Math.min(opts.withinDays ?? 1, 7))}d`);
 	return parts.join(" ");
+}
+
+// ── Reading a message properly (#711) ────────────────────────────────────────
+//
+// Everything above this line is shaped around ONE job: find a confirmation link. That is why
+// `findMatchingMessage` returns only the newest match and truncates the body — a link either is
+// in the latest mail or is not worth waiting for.
+//
+// "Read the mail I was sent and act on what was attached" is a different job, and it needs the
+// three things that shape deliberately drops: more than one match, the threading headers a reply
+// has to quote, and the attachments. None of it needs a new OAuth scope — `gmail.readonly`
+// already covers `messages.attachments.get`.
+
+/** One attachment part, as named by the MIME tree. `attachmentId` is what fetches the bytes. */
+export interface GmailAttachment {
+	attachmentId: string;
+	filename: string;
+	mimeType: string;
+	/** Bytes, as Gmail reports them. Not always present; 0 when absent. */
+	size: number;
+}
+
+/**
+ * Walk the MIME tree and collect every part that is an attachment.
+ *
+ * The test is `filename` being non-empty AND an `attachmentId` being present, not the mimeType:
+ * an attached PDF and an inline logo are both non-text parts, but only a real attachment carries
+ * a filename, and only a part Gmail stores separately carries an attachmentId. A small part can
+ * arrive with its bytes inline in `body.data` and NO attachmentId — that is a legitimate
+ * attachment we cannot fetch by id, so it is reported with an empty id rather than dropped
+ * silently, and the download tool says why it cannot fetch it.
+ */
+export function collectAttachments(part: GmailPart | undefined): GmailAttachment[] {
+	if (!part) return [];
+	const out: GmailAttachment[] = [];
+	const filename = part.filename ?? "";
+	if (filename && (part.body?.attachmentId || part.body?.data)) {
+		out.push({
+			attachmentId: part.body?.attachmentId ?? "",
+			filename,
+			mimeType: part.mimeType || "application/octet-stream",
+			size: part.body?.size ?? 0,
+		});
+	}
+	for (const child of part.parts ?? []) out.push(...collectAttachments(child));
+	return out;
+}
+
+/** A message as a caller who intends to REPLY needs it: threading headers included. */
+export interface GmailMessage {
+	id: string;
+	threadId: string;
+	from: string;
+	to: string;
+	cc: string;
+	subject: string;
+	date: string;
+	/** RFC-2822 Message-ID of this message — what a reply's In-Reply-To must quote. */
+	messageId: string;
+	/** This message's own References chain, which a reply extends. */
+	references: string;
+	snippet: string;
+	text: string;
+	attachments: GmailAttachment[];
+}
+
+interface RawGmailMessage {
+	id: string;
+	threadId?: string;
+	snippet?: string;
+	payload?: GmailPart & { headers?: { name: string; value: string }[] };
+}
+
+function headerReader(msg: RawGmailMessage): (name: string) => string {
+	const headers = msg.payload?.headers ?? [];
+	return (name: string) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+}
+
+function toGmailMessage(msg: RawGmailMessage, maxChars: number): GmailMessage {
+	const header = headerReader(msg);
+	return {
+		id: msg.id,
+		threadId: msg.threadId ?? msg.id,
+		from: header("from"),
+		to: header("to"),
+		cc: header("cc"),
+		subject: header("subject"),
+		date: header("date"),
+		messageId: header("message-id"),
+		references: header("references"),
+		snippet: msg.snippet ?? "",
+		text: collectText(msg.payload).slice(0, maxChars),
+		attachments: collectAttachments(msg.payload),
+	};
+}
+
+/** One search hit — enough to decide which message to open, without paying for every body. */
+export interface GmailSearchHit {
+	id: string;
+	threadId: string;
+	from: string;
+	subject: string;
+	date: string;
+	snippet: string;
+	/** Attachment filenames only. The manifest with ids comes from `getMessage`. */
+	attachmentNames: string[];
+}
+
+/**
+ * Search the mailbox and return up to `max` matches, newest first.
+ *
+ * Uses `format=metadata` for the per-hit fetch: headers and snippet come back, bodies do not.
+ * A search over 10 messages otherwise drags 10 full bodies through the Worker to show a list.
+ * `metadataHeaders` cannot filter the payload structure though, so attachment names still come
+ * from the part tree Gmail returns — which it does at metadata level, without the body data.
+ */
+export async function listMessages(
+	accessToken: string,
+	query: string,
+	max = 10,
+): Promise<GmailSearchHit[]> {
+	const capped = Math.max(1, Math.min(25, Math.floor(max)));
+	const listRes = await gmailFetch(
+		accessToken,
+		`/messages?q=${encodeURIComponent(query)}&maxResults=${capped}`,
+	);
+	if (!listRes.ok) {
+		throw new GmailError(`Gmail search failed (${listRes.status}): ${await gmailErrorReason(listRes)}`);
+	}
+	const list = (await listRes.json()) as { messages?: { id: string }[] };
+	const ids = (list.messages ?? []).map((m) => m.id);
+	if (ids.length === 0) return [];
+
+	const hits: GmailSearchHit[] = [];
+	for (const id of ids) {
+		const res = await gmailFetch(accessToken, `/messages/${encodeURIComponent(id)}?format=metadata`);
+		// One unreadable message must not fail the whole search — the others are still useful.
+		if (!res.ok) continue;
+		const msg = (await res.json()) as RawGmailMessage;
+		const header = headerReader(msg);
+		hits.push({
+			id: msg.id,
+			threadId: msg.threadId ?? msg.id,
+			from: header("from"),
+			subject: header("subject"),
+			date: header("date"),
+			snippet: msg.snippet ?? "",
+			attachmentNames: collectAttachments(msg.payload).map((a) => a.filename),
+		});
+	}
+	return hits;
+}
+
+/** Fetch one message in full — body, threading headers, and the attachment manifest. */
+export async function getMessage(
+	accessToken: string,
+	id: string,
+	maxChars = 40000,
+): Promise<GmailMessage> {
+	const res = await gmailFetch(accessToken, `/messages/${encodeURIComponent(id)}?format=full`);
+	if (!res.ok) {
+		throw new GmailError(`Gmail message fetch failed (${res.status}): ${await gmailErrorReason(res)}`);
+	}
+	return toGmailMessage((await res.json()) as RawGmailMessage, maxChars);
+}
+
+/**
+ * Download one attachment's bytes.
+ *
+ * Returns Gmail's base64URL string UNCHANGED rather than decoded bytes. The only consumer is the
+ * instance file store, whose upload route takes `contentBase64` — so decoding here just to
+ * re-encode there would double peak memory on exactly the large files most likely to hit the
+ * Worker's limit. `base64UrlToBase64` does the alphabet translation with no size change.
+ */
+export async function downloadAttachment(
+	accessToken: string,
+	messageId: string,
+	attachmentId: string,
+): Promise<{ base64url: string; size: number }> {
+	const res = await gmailFetch(
+		accessToken,
+		`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+	);
+	if (!res.ok) {
+		throw new GmailError(`Gmail attachment fetch failed (${res.status}): ${await gmailErrorReason(res)}`);
+	}
+	const data = (await res.json()) as { data?: string; size?: number };
+	if (!data.data) throw new GmailError("Gmail returned no data for that attachment");
+	return { base64url: data.data, size: data.size ?? 0 };
+}
+
+/** base64url → standard base64. Gmail emits the URL alphabet; atob and the file store want the
+ *  standard one. Padding is re-added because Gmail omits it and atob rejects a bare remainder. */
+export function base64UrlToBase64(input: string): string {
+	const swapped = input.replace(/-/g, "+").replace(/_/g, "/");
+	const remainder = swapped.length % 4;
+	return remainder === 0 ? swapped : swapped + "=".repeat(4 - remainder);
 }

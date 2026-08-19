@@ -1,5 +1,9 @@
 /**
- * The three connected ACCOUNTS — Google Drive, Zoho WorkDrive, Gmail (#352 Stage 1).
+ * The connected ACCOUNTS that carry no tools — Google Drive and Zoho WorkDrive (#352 Stage 1).
+ *
+ * Gmail was declared here too until #711. It has moved to `connectors/gmail.ts` because it now
+ * declares real tools, which is the one thing this module is about NOT doing. The rest of the
+ * reasoning below is unchanged and still applies to the two that remain.
  *
  * These have been connectors in every respect except the registry: each stores its refresh
  * token through `saveConnectorRefreshToken` into `user_api_keys(user_id, provider=<id>)`,
@@ -39,7 +43,6 @@
  * generic redirect and retires them.
  */
 import { DRIVE_SCOPE } from "../drive.js";
-import { GMAIL_SCOPE } from "../gmail.js";
 import type { Connector } from "./types.js";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -83,23 +86,5 @@ export const ZOHO_WORKDRIVE_CONNECTOR: Connector = {
 	// these two are set, and `/v1/workdrive/status` has always said so. Declaring them keeps the
 	// catalog's `configured` from contradicting it (#355).
 	credentialEnv: ["ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET"],
-	tools: [],
-};
-
-export const GMAIL_CONNECTOR: Connector = {
-	id: "gmail",
-	label: "Gmail",
-	auth: "oauth",
-	scopes: { read: true, write: false },
-	// `user`, not `instance-resource`: there is no per-mailbox grant row. Reach is decided by the
-	// per-agent `permissions.email` flag, which lives in that agent's own state — see the header.
-	grantModel: "user",
-	oauth: {
-		authUrl: GOOGLE_AUTH_URL,
-		tokenUrl: GOOGLE_TOKEN_URL,
-		scopes: ["openid", "email", GMAIL_SCOPE],
-		clientIdEnv: "GOOGLE_CLIENT_ID",
-		secretEnv: "GOOGLE_CLIENT_SECRET",
-	},
 	tools: [],
 };

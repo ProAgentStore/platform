@@ -223,10 +223,13 @@ describe("GET /v1/instances/:id/connectors (#352)", () => {
 		expect(verdict(body, "google_drive")).toMatchObject({ allowed: false, reason: "no_knowledge" });
 	});
 
-	it("reports Gmail as reachable regardless — its gate is the per-agent permissions.email flag", async () => {
+	// Until #711 Gmail reported `permission` here, because it had no tools to judge. It has three
+	// now, so a terminal operator that declares none of them reports no Gmail reach — the same
+	// verdict any other tool-bearing connector would get.
+	it("judges Gmail on its declared tools (#711)", async () => {
 		const { app, env } = testApp({ agentConfig: TERMINAL_OPERATOR });
 		const body = await jsonBody(await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1")));
-		expect(verdict(body, "gmail")).toMatchObject({ allowed: true, reason: "permission" });
+		expect(verdict(body, "gmail")).toMatchObject({ allowed: false, reason: "no_tools" });
 	});
 
 	it("returns the whole catalog, so 'what can this agent reach' also says what it cannot", async () => {

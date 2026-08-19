@@ -36,12 +36,14 @@ describe("instance connector policy (#352)", () => {
 		expect(connectorPolicyOf(workdrive, undeclared).allowed).toBe(true);
 	});
 
-	// Gmail is deliberately NOT gated here. `find_confirmation_link` is excluded from
-	// CREATOR_SELECTABLE_TOOLS and granted at runtime by the owner's permissions.email flag; a
-	// second answer computed from the tool allowlist would either soften that gate or contradict it.
-	it("reports Gmail as reachable whatever the allowlist says, because its gate is elsewhere", () => {
-		expect(connectorPolicyOf(gmail, declaring("tmux_send_keys"))).toMatchObject({ allowed: true, reason: "permission" });
-		expect(connectorPolicyOf(gmail, declaring("search_knowledge"))).toMatchObject({ allowed: true, reason: "permission" });
+	// Gmail took the `permission` branch until #711, when it gained declared tools. It is now
+	// judged on them like any other connector — and that is a TIGHTENING, not a loosening: an
+	// agent that declares no Gmail tool is now reported as having no Gmail reach, where before it
+	// was reported as reachable. `permissions.email` is unchanged and still checked at call time
+	// by every one of those tools, so the flag remains the authority; this is a gate in front of it.
+	it("judges Gmail on its declared tools now that it has some (#711)", () => {
+		expect(connectorPolicyOf(gmail, declaring("gmail_search"))).toMatchObject({ allowed: true, reason: "tools" });
+		expect(connectorPolicyOf(gmail, declaring("tmux_send_keys"))).toMatchObject({ allowed: false, reason: "no_tools" });
 	});
 
 	// A connector WITH tools is the ordinary case, and its verdict must be the tool gate's verdict
@@ -96,9 +98,12 @@ describe("connectorRefusal — the sentence a 403 says", () => {
 		expect(msg).toContain("github_list_issues");
 	});
 
-	// Gmail's reach is the owner's permissions.email flag, which this rule deliberately does not
-	// evaluate — so it must never produce a refusal that implies it did.
-	it("never refuses a permission-gated connector", () => {
-		expect(connectorRefusal(connectorPolicyOf(gmail, operator))).toBeNull();
+	// Since #711 Gmail refuses like any tool-bearing connector, and the sentence must name the
+	// tools to declare — "turn on email permission" would be the WRONG advice here, because the
+	// permission is not what is missing.
+	it("refuses Gmail by naming its tools, not its permission flag", () => {
+		const refusal = connectorRefusal(connectorPolicyOf(gmail, operator));
+		expect(refusal).toContain("gmail_search");
+		expect(refusal).not.toMatch(/permission/i);
 	});
 });

@@ -114,6 +114,10 @@ const INTERNET = new Set<string>([
 	"web_search",
 	"sheets_read",
 	"sheets_append",
+	// ── gmail (#711): the owner's mailbox is Google's, wherever the result ends up ──
+	"gmail_search",
+	"gmail_read_message",
+	"gmail_download_attachment",
 ]);
 
 describe("the listing reports what a tool can reach (#584)", () => {

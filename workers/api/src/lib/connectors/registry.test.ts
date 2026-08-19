@@ -21,14 +21,30 @@ describe("connector registry", () => {
 			expect(getConnector("gmail")?.id).toBe("gmail");
 		});
 
-		it("declares no tools, so connectorTools() is unchanged and no agent gains reach", () => {
-			for (const id of ["google_drive", "zoho_workdrive", "gmail"]) {
+		it("declares no tools for the file accounts, so connectorTools() is unchanged for them", () => {
+			for (const id of ["google_drive", "zoho_workdrive"]) {
 				expect(getConnector(id)?.tools).toEqual([]);
 			}
-			expect(connectorTools().some((t) => ["google_drive", "zoho_workdrive", "gmail"].includes(t.connector ?? ""))).toBe(false);
+			expect(connectorTools().some((t) => ["google_drive", "zoho_workdrive"].includes(t.connector ?? ""))).toBe(false);
 		});
 
-		it("is read-only across all three — there is no write path in drive.ts/workdrive.ts/gmail.ts", () => {
+		// Gmail LEFT this group in #711. The assertion is kept, inverted, rather than deleted:
+		// "gmail declares no tools" was a deliberate decision, so the file should record that it
+		// was deliberately reversed rather than quietly lose the line.
+		it("Gmail now declares read tools of its own (#711)", () => {
+			expect(getConnector("gmail")?.tools.map((t) => t.name)).toEqual([
+				"gmail_search",
+				"gmail_read_message",
+				"gmail_download_attachment",
+			]);
+			// Every one of them is read-scoped and mutates nothing — the mailbox is not written to.
+			for (const t of getConnector("gmail")?.tools ?? []) {
+				expect(t.scope).toBe("read");
+				expect(t.mutates).toBe(false);
+			}
+		});
+
+		it("is read-only across all three — no write path in drive.ts/workdrive.ts, and Gmail's tools are all read-scoped", () => {
 			for (const id of ["google_drive", "zoho_workdrive", "gmail"]) {
 				expect(getConnector(id)?.scopes).toEqual({ read: true, write: false });
 			}

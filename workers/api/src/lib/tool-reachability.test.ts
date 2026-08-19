@@ -94,6 +94,20 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"The google_sheets connector is inert until the Sheets OAuth scope lands on the Google client; " +
 		"until then every call fails at consent, not at the tool.",
 	sheets_append: "Same as sheets_read — inert until the Sheets OAuth scope lands.",
+	// #711. Unlike the meta/sheets entries above, these are NOT inert: they run today against any
+	// already-connected mailbox, because gmail.readonly was always the granted scope and it covers
+	// attachment download. A subscriber can declare them on their own agent right now — they are in
+	// CREATOR_SELECTABLE_TOOLS via the auto-built `connector:gmail` group.
+	//
+	// What is missing is a FIRST-PARTY agent that declares them, and that is deliberate: the agent
+	// this epic exists to build reads a message, fills the form attached to it, and REPLIES. Seeding
+	// it now would put an agent in the catalog that does two thirds of what its description promises.
+	// It gets seeded with the send half (#713), and these three entries come out then.
+	gmail_search:
+		"Reachable but undeclared by design until the email agent is seeded with its send tools (#713). " +
+		"Works today on any connected mailbox; a subscriber can declare it on their own agent.",
+	gmail_read_message: "Same as gmail_search — awaiting the seeded email agent (#713).",
+	gmail_download_attachment: "Same as gmail_search — awaiting the seeded email agent (#713).",
 	terminal_send_message:
 		"The generic terminal connector is for creator-built agents that declare it. The first-party " +
 		"tmux Operator declares the backend-specific `tmux_send_message` instead (migration 0117, #482), " +
