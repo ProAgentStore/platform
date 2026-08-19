@@ -358,6 +358,15 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 	// assertion below therefore checks the property that matters — every node-passing call site
 	// names its node rather than defaulting to the shared row — instead of the count, which was
 	// only ever evidence for it.
+	//
+	// #598 closed the other half: EVERY call site now names its node, so the assertion below is
+	// no longer "at least three of eight" but "all of them". Five of the eight — the three in the
+	// `/tasks` revalidate and the two in `/task-events` — passed nothing, so they could refresh
+	// the shared `instance_runtimes` row but could not mark a specific machine down, which is the
+	// same asymmetry stated the other way round. (#598's body says four; the fifth is the
+	// `.catch(() => undefined)` sibling inside the same `try`.) Each of them holds the row
+	// `callRuntime` dispatched on, and `callRuntime` targets
+	// `relayNameForInstance(row.instance_id, row.runner_node)` — so the node was always in hand.
 	it("every node-passing call site writes a value the per-node column can hold", () => {
 		const dir = join(__dirname, "..");
 		const files: string[] = [];
@@ -383,8 +392,14 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 		// nothing.
 		expect(calls.length).toBeGreaterThanOrEqual(8);
 		const withNode = calls.filter((c) => c.split(",").length > 4);
-		// Three: the heartbeat (`"online"`, at registration) and the two probe outcomes (#587).
-		expect(withNode.length).toBeGreaterThanOrEqual(3);
+		// ALL of them (#598). A node-less write can refresh the shared `instance_runtimes` row but
+		// cannot mark a node down, so it is a writer that cannot express one of the transitions it
+		// is responsible for — the shape of #570 and #587. Every caller already holds the row it
+		// dispatched on, so there is no call site where the node is genuinely unknown; if one ever
+		// appears, this failure is the place to record WHY an instance-level write is right there.
+		const nodeless = calls.filter((c) => !withNode.includes(c));
+		expect(nodeless, `these cannot mark a node down:\n${nodeless.join("\n")}`).toEqual([]);
+		expect(withNode.length).toBe(calls.length);
 		// Both declared values of the per-node column are now written by application code. Before
 		// #587 only `"online"` was, which is what made the column a write-once field the serialiser
 		// had no business publishing.

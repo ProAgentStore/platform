@@ -105,18 +105,26 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		// it offline — that would knock out getRunnerConn for coding/apply and flash
 		// "not connected" while the runner is actually fine.
 		const recentlySeen = heartbeatFresh(runtime.last_seen_at);
+		// Every write below names `runtime.runner_node` — the machine `callRuntime` actually
+		// reached, since it dispatches to `relayNameForInstance(row.instance_id, row.runner_node)`
+		// (#598). Without the node these could only touch the SHARED `instance_runtimes` row and
+		// could not mark a specific node down at all, which is the asymmetry that produced #570
+		// and #587: a status writer that cannot express one of the transitions it is responsible
+		// for. `updateRuntimeStatus` treats an empty node as node-less, so a pre-0030 row that
+		// never said which machine it was behaves exactly as before.
+		const probedNode = runtime.runner_node;
 		const revalidate = (async () => {
 			try {
 				const res = await callRuntime(c.env, runtime, "/tasks");
 				if (res.ok) {
 					await mirrorRuntimeTasks(c.env, instanceId, session.uid, await runtimeJson(res));
-					await updateRuntimeStatus(c.env, instanceId, session.uid, "online");
+					await updateRuntimeStatus(c.env, instanceId, session.uid, "online", probedNode);
 				} else if (!recentlySeen) {
-					await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+					await updateRuntimeStatus(c.env, instanceId, session.uid, "offline", probedNode);
 				}
 			} catch {
 				if (!recentlySeen) {
-					await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
+					await updateRuntimeStatus(c.env, instanceId, session.uid, "offline", probedNode).catch(() => undefined);
 				}
 			}
 		})();
@@ -690,14 +698,18 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		// activity feed never blanks/lags on a flaky tunnel; refresh from the runner in the
 		// background. Falls back to events synthesised from tasks when there's no history.
 		const recentlySeen2 = heartbeatFresh(runtime.last_seen_at);
+		// Same node scope as /tasks above (#598): `runtime` here is the LIVE node's row
+		// (`getLiveRuntime`), so the machine we failed to reach is the one marked down — not
+		// whichever machine happens to own the shared `instance_runtimes` row.
+		const probedNode2 = runtime.runner_node;
 		const revalidate = (async () => {
 			try {
 				const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
 				if (res.ok) await mirrorRuntimeEvents(c.env, instanceId, session.uid, await runtimeJson(res));
-				else if (!recentlySeen2) await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+				else if (!recentlySeen2) await updateRuntimeStatus(c.env, instanceId, session.uid, "offline", probedNode2);
 			} catch {
 				if (!recentlySeen2) {
-					await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
+					await updateRuntimeStatus(c.env, instanceId, session.uid, "offline", probedNode2).catch(() => undefined);
 				}
 			}
 		})();

@@ -115,6 +115,49 @@ describe("every value marked `app` really is writable, and every `seed`/`none` r
 	}
 });
 
+describe("every unwritable value carries a recorded decision (#598)", () => {
+	/**
+	 * The half the guard could not express before.
+	 *
+	 * `#570`/`#587`/`#590` were decisions taken on unwritable values, and the assertion below
+	 * stops those. But the values themselves stayed — four of them, with nothing saying whether
+	 * each was a feature nobody has built yet or a word that was never going to mean anything.
+	 * Those have opposite fixes, so leaving the question open is what invites the next reader to
+	 * write the plausible-looking `if (status === 'paused')` the allowlist exists to reject.
+	 *
+	 * An EXACT set, in both directions, for the reason every other ratchet in this repo is: a
+	 * value that gains a writer must lose its decision, and one that loses its writer must gain
+	 * one. A `decisions` map that may quietly hold extra keys is a map that goes stale.
+	 */
+	for (const [column, domain] of Object.entries(STATUS_DOMAINS)) {
+		const unwritable = Object.entries(domain.values)
+			.filter(([, p]) => !isWritable(p))
+			.map(([v]) => v)
+			.sort();
+		if (!unwritable.length) continue;
+		it(`${column}`, () => {
+			expect(Object.keys(domain.decisions ?? {}).sort(), `${column}: every value nothing writes needs a stated decision`).toEqual(unwritable);
+			for (const value of unwritable) {
+				// Length is a crude proxy, and it is here on purpose: "TODO" and "dead" both pass a
+				// presence check, and neither tells the next reader which of the two opposite fixes
+				// applies. The four that exist today run 200–900 characters.
+				expect(domain.decisions?.[value]?.length ?? 0, `${column} = ${value}: the decision must say WHY`).toBeGreaterThan(80);
+			}
+		});
+	}
+
+	it("has a decision for every unwritable value in the schema, and no others", () => {
+		// The cross-column view, so the denominator is visible rather than split across the
+		// per-column tests above. #598 measured four; the number may fall, and if it rises the
+		// riser has to say why.
+		const decided = Object.entries(STATUS_DOMAINS)
+			.flatMap(([column, d]) => Object.keys(d.decisions ?? {}).map((v) => `${column} = ${v}`))
+			.sort();
+		expect(decided).toEqual(unreachableValues());
+		expect(decided.length).toBeGreaterThan(0);
+	});
+});
+
 describe("nothing decides on a status value the application cannot write", () => {
 	/**
 	 * The load-bearing assertion, and the one all three bugs would have failed.
