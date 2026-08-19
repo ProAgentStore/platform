@@ -38,6 +38,17 @@ import type { Env } from "../types.js";
 /**
  * Send an instruction to the repo's Claude (drive the CLI) + spin up the finish
  * watcher (deduped). Shared by the Agent endpoint's delegate path. Returns an ack.
+ *
+ * `author` is who WROTE `instruction`, and it is a PARAMETER rather than a constant because this
+ * one helper carries turns from both kinds of author (#505). The `@claude`/`/run` path hands it
+ * the OWNER's own words with the prefix stripped; the delegate path hands it a sentence the Agent
+ * chat's model composed after reading the terminal. Labelling both would be the same defect
+ * inverted — a machine label on a turn a person typed — so the caller that knows says, and the
+ * other says nothing. Unstated renders as nothing on the runner; see
+ * `packages/browser-runner/src/coding/turn-author.ts`.
+ *
+ * (The cross-repo Overseer does NOT come through here: `delegateToTarget` hands its objective to
+ * the durable Pilot, which labels itself at `lib/coding-loop.ts`.)
  */
 async function driveClaude(
 	c: Context<{ Bindings: Env }>,
@@ -46,6 +57,7 @@ async function driveClaude(
 	sessionId: string,
 	instruction: string,
 	summary?: string,
+	author?: "pilot",
 ): Promise<{ delegated: boolean; reply: string }> {
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) return { delegated: false, reply: "Coding session not found." };
@@ -56,7 +68,12 @@ async function driveClaude(
 	// NOTE: don't log a `command` turn here — the chat_assistant "On it — I asked
 	// Claude to: …" already records it; a command entry would show a 3rd duplicate
 	// bubble in the thread (loadChat surfaces commands as your turns).
-	const act = () => callRunner(conn, "/coding/act", { sessionId, action: { kind: "message", text: instruction } }).catch(() => null);
+	//
+	// The Engine receives every turn as `role: "user"` and cannot tell a machine driver from a
+	// person, which is how a run came to report a decision back to the owner as his own (#505).
+	// `author` is passed through from the caller — see the docstring. Held by
+	// `lib/turn-author-callsites.test.ts`.
+	const act = () => callRunner(conn, "/coding/act", { sessionId, action: { kind: "message", text: instruction, author } }).catch(() => null);
 	let snap = await act();
 	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 	if (snap === null && session && repo) {
@@ -337,7 +354,9 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// replayed (double-tap). Persisted with the turn.
 		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_user", content: raw, audioKey: body.audioKey }).catch(() => undefined);
 
-		// Explicit force-delegate.
+		// Explicit force-delegate. NO author: `cleaned` is the owner's own message with the
+		// `@claude`/`/run` prefix stripped — a person typed these words, and stamping them `"pilot"`
+		// would be #505's defect pointed the other way (#505).
 		if (/^(@claude|\/run)\b/i.test(raw)) {
 			const cleaned = raw.replace(/^(@claude|\/run)\s*/i, "").trim() || raw;
 			return c.json(await driveClaude(c, instanceId, uid, sessionId, cleaned));
@@ -381,7 +400,9 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 		const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
 		const summary = call && typeof call.arguments?.summary === "string" ? (call.arguments.summary as string).trim() : "";
-		if (instruction) return c.json(await driveClaude(c, instanceId, uid, sessionId, instruction, summary || undefined));
+		// `"pilot"`: `instruction` is a sentence the model above composed after reading the terminal —
+		// the owner asked for an outcome, not for these words (#505).
+		if (instruction) return c.json(await driveClaude(c, instanceId, uid, sessionId, instruction, summary || undefined, "pilot"));
 		const reply = res.response || "(no response)";
 		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
 		return c.json({ delegated: false, reply });

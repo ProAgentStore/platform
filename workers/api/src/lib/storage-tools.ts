@@ -709,10 +709,12 @@ export async function executeStorageTool(
 				if (!rConn) return fail(call.name, "Runner offline — cannot send. Start it with `pags up`.");
 				try {
 					// Runner expects POST /coding/act with { sessionId, action }
+					// `author: "pilot"` — the chat brain composed `msg`, so an unlabelled turn reaches the
+					// Engine as `role: "user"` (#505). Reasoning: `lib/turn-author-callsites.test.ts`.
 					await callRunner(
 						rConn,
 						"/coding/act",
-						{ sessionId: rSession.id, action: { kind: "message", text: msg } },
+						{ sessionId: rSession.id, action: { kind: "message", text: msg, author: "pilot" } },
 						{ timeoutMs: READ_TIMEOUT_MS },
 					);
 					// Set the expectation BEFORE the brain reads back. A one-shot engine runs the turn
