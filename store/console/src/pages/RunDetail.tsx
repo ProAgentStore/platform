@@ -4,6 +4,7 @@ import Page from "../components/Page";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
 import { usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
+import { isRunFinished } from "../lib/runStatus";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Play, Pause, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import Card from "../components/Card";
@@ -394,7 +395,11 @@ export default function RunDetail() {
 	usePolling(load, 3000, !!running);
 
 	const needsHuman = task?.status === "needs_human";
-	const isFinished = task ? ["completed", "cancelled", "failed", "blocked", "expired"].includes(task.status) : false;
+	// One vocabulary, in `lib/runStatus.ts`, matching the api-side sweep (#625). This was a
+	// hand-written list that named `expired` (unmatchable, #611) and counted `blocked` as
+	// finished — so deleting a run that was waiting on the user skipped the "it will be stopped
+	// first" warning below, on precisely the run that was still there to stop.
+	const isFinished = isRunFinished(task?.status);
 
 	// What the agent needs from you (from the handoff events) — same detection as the board.
 	const handoffEv = events.slice().reverse().find((e) => e.type === "job.human_handoff_required");
