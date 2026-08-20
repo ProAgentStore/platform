@@ -41,6 +41,43 @@ export interface ConnectorEntry {
 	missingScopes?: string[] | null;
 	/** Does the connector declare any write reach at all? */
 	scopes?: { read: boolean; write: boolean };
+	/** Every account the owner holds for this connector (#715). One entry is the ordinary case. */
+	accounts?: ConnectorAccountRow[];
+}
+
+/** One connected account within a connector row. */
+export interface ConnectorAccountRow {
+	accountId: string;
+	label: string | null;
+	connectedAt: string | null;
+	missingScopes?: string[] | null;
+}
+
+/**
+ * The accounts to render under a connector, and how each reads.
+ *
+ * Kept here rather than in the component for the reason the rest of this module exists: the
+ * sentence a permission surface shows is worth testing without a browser.
+ */
+export function accountRows(entry: ConnectorEntry): Array<{ accountId: string; name: string; note: string | null }> {
+	return (entry.accounts ?? []).map((a) => ({
+		accountId: a.accountId,
+		// An account with no captured address still has to be nameable, or it cannot be disconnected.
+		name: a.label?.trim() || a.accountId || "unnamed connection",
+		note: needsReconnect({ ...entry, missingScopes: a.missingScopes ?? null })
+			? "read-only — reconnect to allow sending"
+			: null,
+	}));
+}
+
+/**
+ * Does this connector hold more than one account, i.e. does an agent have to be told which to use?
+ *
+ * The threshold is two, not one: with a single account every agent resolves to it and nothing
+ * needs configuring, which is why nobody who never adds a second sees any change.
+ */
+export function needsPerAgentChoice(entry: ConnectorEntry): boolean {
+	return (entry.accounts?.length ?? 0) > 1;
 }
 
 /**

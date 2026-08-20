@@ -53,6 +53,21 @@ const denies = (state: "app-not-configured" | "owner-unknown" | "not-installed" 
 
 afterEach(() => vi.clearAllMocks());
 
+
+/** A DB whose vault holds exactly one unnamed credential — the pre-#715 shape. One row at
+ *  account_id '' is what every connection made before the multi-account vault looks like, and
+ *  what `chooseAccount` must pass straight through without asking anyone to choose. */
+function vaultWithOneLegacyRow() {
+	return {
+		prepare: () => ({
+			bind: () => ({
+				all: async () => ({ results: [{ account_id: "", account_label: null, created_at: null, granted_scopes: null }] }),
+				first: async () => null,
+			}),
+		}),
+	} as unknown as Env["DB"];
+}
+
 describe("connectorClient token dispatch", () => {
 	it("app auth → resolveGithubAccess, scoped to the resource owner", async () => {
 		grants("gh-token");
@@ -95,11 +110,11 @@ describe("connectorClient token dispatch", () => {
 		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ access_token: "access-abc" }), { status: 200 }),
 		);
-		const env = { GOOGLE_CLIENT_ID: "cid", GOOGLE_CLIENT_SECRET: "sec" } as Env;
+		const env = { GOOGLE_CLIENT_ID: "cid", GOOGLE_CLIENT_SECRET: "sec", DB: vaultWithOneLegacyRow() } as Env;
 		const c = connectorClient(env, "google_drive", caller);
 		const t = await c.token();
 		expect(t).toBe("access-abc");
-		expect(readConnectorRefreshToken).toHaveBeenCalledWith(env, "u1", "google_drive", "Drive");
+		expect(readConnectorRefreshToken).toHaveBeenCalledWith(env, "u1", "google_drive", "Drive", "");
 		const [url, init] = fetchSpy.mock.calls[0];
 		expect(String(url)).toBe("https://oauth2.googleapis.com/token");
 		expect(String((init as RequestInit).body)).toContain("refresh_token=refresh-xyz");
@@ -119,9 +134,10 @@ describe("connectorClient token dispatch", () => {
 
 	it("token auth (no env) → falls back to the user's stored key", async () => {
 		vi.mocked(readConnectorRefreshToken).mockResolvedValue("stored-key");
-		const c = connectorClient({} as Env, "user_token_conn", caller);
+		const env = { DB: vaultWithOneLegacyRow() } as Env;
+		const c = connectorClient(env, "user_token_conn", caller);
 		expect(await c.token()).toBe("stored-key");
-		expect(readConnectorRefreshToken).toHaveBeenCalledWith({}, "u1", "user_token_conn", "User Token");
+		expect(readConnectorRefreshToken).toHaveBeenCalledWith(env, "u1", "user_token_conn", "User Token", "");
 	});
 
 	it("none auth → empty token, no collaborators called", async () => {

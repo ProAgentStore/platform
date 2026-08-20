@@ -6477,6 +6477,99 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/connector-accounts:
+    get:
+      summary: Which of the owner's connected accounts this agent uses
+      description: |
+        An owner can connect several accounts of the same kind — two Gmail mailboxes, a personal
+        and a work Drive (#715). This reports, per connector the owner holds a credential for,
+        the accounts available and the one this agent is pinned to.
+
+        `resolves` is what a call would use RIGHT NOW, without making one. It is `null` when the
+        choice is unresolvable, and `blocked` then says why. The case worth designing for is
+        `ambiguous`: with two accounts connected and no pin, every call to that connector is
+        refused rather than resolving to one of them. Sending mail from the wrong identity
+        reaches a real person under a name the owner did not choose, so a refusal that names the
+        fix is the correct outcome, not a fallback.
+      operationId: listInstanceConnectorAccounts
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Per-connector accounts and this instance's choice
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        connector: { type: string, description: "Connector id, e.g. `gmail`." }
+                        label: { type: string }
+                        accounts:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              accountId: { type: string, description: "The provider's own id for the account — a mailbox address for Google. Empty string is the reserved id for a connection made before accounts were distinguished." }
+                              label: { type: string, nullable: true }
+                              connectedAt: { type: string, nullable: true }
+                        pinned: { type: string, nullable: true, description: "The account this agent is set to use, or null for 'resolve automatically'." }
+                        resolves: { type: string, nullable: true, description: "The accountId a call would use now. Null when blocked." }
+                        blocked:
+                          type: object
+                          nullable: true
+                          properties:
+                            reason: { type: string, enum: [not_connected, ambiguous, pinned_account_gone] }
+                            message: { type: string, description: "The sentence a tool surfaces verbatim — it names the connected accounts and where to choose one." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Pin this agent to one of the owner's connected accounts
+      description: |
+        Chooses among credentials the owner ALREADY holds; it can never establish one. Connect and
+        disconnect belong to the account page (#355) — an agent picking its own connection is the
+        misread that moved them there.
+
+        An empty or omitted `accountId` clears the pin, returning the agent to "resolve
+        automatically". With one account connected that resolves to it; with several it becomes a
+        refusal, which is the honest state rather than a silent revert to a default.
+
+        An `accountId` the owner does not hold is refused here, at write time, rather than stored
+        and discovered mid-run.
+      operationId: setInstanceConnectorAccount
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connector]
+              properties:
+                connector: { type: string, description: "Connector id, e.g. `gmail`." }
+                accountId: { type: string, nullable: true, description: "The account to use. Empty or null clears the pin." }
+      responses:
+        "200":
+          description: The pin as stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  connector: { type: string }
+                  pinned: { type: string, nullable: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/mcp/consent:
     get:
       summary: This instance's outbound-MCP grants, per server and per remote tool

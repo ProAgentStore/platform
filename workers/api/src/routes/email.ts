@@ -20,6 +20,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { GMAIL_SCOPE, GMAIL_SEND_SCOPE, mintGmailAccessToken, scopesAllowSend } from "../lib/gmail.js";
 import { signConnectorState, verifyConnectorState } from "../lib/connector-oauth.js";
+import { listConnectorAccounts } from "../lib/connector-accounts.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 
@@ -71,52 +72,97 @@ emailRoutes.get("/google/start", async (c) => {
 	return c.json({ url: url.toString() });
 });
 
-/** Whether the current user has Gmail connected — and which account. */
+/**
+ * Which Gmail accounts the current user has connected (#715).
+ *
+ * Was a single-row lookup, which stopped being correct the moment the vault could hold two
+ * mailboxes: the query still matched, `.first()` still returned something, and WHICH something
+ * was whatever SQLite felt like. A silent wrong-mailbox answer is precisely what this feature
+ * must not introduce, so the route now returns the list.
+ *
+ * The top-level `email` / `connectedAt` / `canSend` fields are kept for callers written before
+ * this, and describe the ONE account when there is exactly one. With several connected they go
+ * null / false — not "the first one" — because a single answer to "which mailbox is this?" does
+ * not exist any more, and inventing one is the bug.
+ */
 emailRoutes.get("/status", async (c) => {
 	const session = await requireUser(c);
 	const configured = !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET);
-	const row = await c.env.DB.prepare(
-		"SELECT created_at, account_label, granted_scopes, key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
-	)
-		.bind(session.uid)
-		.first<{ created_at: string; account_label: string | null; granted_scopes: string | null; key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
-	let email = row?.account_label ?? null;
-	// Backfill the account email for a connection made before we captured it — this
-	// also verifies the token still works (a revoked one makes minting throw).
-	if (row && !email && configured && c.env.KEY_ENCRYPTION_KEY) {
+	const accounts = await listConnectorAccounts(c.env, session.uid, "gmail");
+
+	// Backfill the address for a connection made before we captured it (and verify the token
+	// still works — a revoked one makes minting throw). Only for a lone unlabelled row: with
+	// several rows there is no way to know which mailbox a probe just described.
+	//
+	// It deliberately fills `account_label` only, not `account_id`. Changing an id would move a
+	// primary key and could collide with a row already at that address; the row identifies itself
+	// properly on its next reconnect, which is the cheap and safe moment.
+	if (accounts.length === 1 && !accounts[0].label && accounts[0].accountId === "" && configured && c.env.KEY_ENCRYPTION_KEY) {
 		try {
-			const refresh = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), c.env.KEY_ENCRYPTION_KEY);
-			const accessToken = await mintGmailAccessToken(c.env, refresh);
-			const ui = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
-			if (ui.ok) {
-				email = ((await ui.json()) as { email?: string }).email ?? null;
-				if (email) await c.env.DB.prepare("UPDATE user_api_keys SET account_label = ?1 WHERE user_id = ?2 AND provider = 'gmail'").bind(email, session.uid).run();
+			const row = await c.env.DB.prepare(
+				"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail' AND account_id = ''",
+			)
+				.bind(session.uid)
+				.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+			if (row) {
+				const refresh = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), c.env.KEY_ENCRYPTION_KEY);
+				const accessToken = await mintGmailAccessToken(c.env, refresh);
+				const ui = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
+				if (ui.ok) {
+					const found = ((await ui.json()) as { email?: string }).email ?? null;
+					if (found) {
+						await c.env.DB.prepare(
+							"UPDATE user_api_keys SET account_label = ?1 WHERE user_id = ?2 AND provider = 'gmail' AND account_id = ''",
+						)
+							.bind(found, session.uid)
+							.run();
+						accounts[0].label = found;
+					}
+				}
 			}
 		} catch {
-			/* token may be revoked/expired — leave email null, still "connected" per the row */
+			/* token may be revoked/expired — leave the label null, still "connected" per the row */
 		}
 	}
-	// `canSend` is the #713 distinction the console needs: a connection made before the send
-	// scope existed is CONNECTED but read-only, and the only fix is a reconnect. Reporting it
-	// here is what lets the UI say so instead of the agent discovering it as a 403 mid-reply.
+
+	const only = accounts.length === 1 ? accounts[0] : null;
 	return c.json({
-		connected: !!row,
-		email,
-		connectedAt: row?.created_at ?? null,
+		connected: accounts.length > 0,
+		email: only?.label ?? null,
+		connectedAt: only?.connectedAt ?? null,
 		configured,
-		canSend: scopesAllowSend(row?.granted_scopes),
+		// Fail-closed with several accounts: whichever one an agent resolves to must be able to
+		// send, so "yes" is only honest when every one of them can.
+		canSend: accounts.length > 0 && accounts.every((a) => scopesAllowSend(a.grantedScopes)),
+		accounts: accounts.map((a) => ({
+			accountId: a.accountId,
+			label: a.label,
+			connectedAt: a.connectedAt,
+			canSend: scopesAllowSend(a.grantedScopes),
+		})),
 	});
 });
 
-/** Disconnect Gmail. */
+/**
+ * Disconnect ONE Gmail account, or all of them.
+ *
+ * `?account=<id>` removes that mailbox; omitting it removes every Gmail connection, which is
+ * what the pre-#715 route did and what a caller written against it still expects. The response
+ * says how many rows went, so a console can report "disconnected 1 of 2" rather than implying
+ * the whole provider is gone.
+ */
 emailRoutes.delete("/google", async (c) => {
 	const session = await requireUser(c);
-	await c.env.DB.prepare(
-		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
-	)
-		.bind(session.uid)
-		.run();
-	return c.json({ success: true });
+	const account = c.req.query("account");
+	const result = account === undefined
+		? await c.env.DB.prepare("DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'").bind(session.uid).run()
+		: await c.env.DB.prepare("DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail' AND account_id = ?2").bind(session.uid, account).run();
+	const remaining = await listConnectorAccounts(c.env, session.uid, "gmail");
+	return c.json({
+		success: true,
+		removed: result.meta?.changes ?? 0,
+		remaining: remaining.map((a) => ({ accountId: a.accountId, label: a.label })),
+	});
 });
 
 /** OAuth callback — exchange the code, store the refresh token. */
@@ -178,10 +224,19 @@ emailRoutes.get("/google/callback", async (c) => {
 	// exactly the case it exists to catch (migration 0133).
 	const grantedScopes = tok.scope ?? null;
 
+	// The mailbox address IS the account id (#715). Reconnecting the same mailbox updates its
+	// row; authorising a DIFFERENT one adds a row beside it, which is the whole point — one
+	// person, several mailboxes, each agent choosing which it speaks as.
+	//
+	// An address we could not read falls back to '', the unnamed-default id. That collapses with
+	// any other unlabelled connection, which is the old single-slot behaviour and is the right
+	// fallback: it is what the row meant before this change.
+	const accountId = accountLabel ?? "";
+
 	await c.env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, created_at)
-     VALUES (?1, 'gmail', ?2, ?3, ?4, ?5, ?6, datetime('now'))
-     ON CONFLICT(user_id, provider) DO UPDATE SET
+		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, created_at)
+     VALUES (?1, 'gmail', ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+     ON CONFLICT(user_id, provider, account_id) DO UPDATE SET
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
        iv = excluded.iv,
@@ -189,7 +244,7 @@ emailRoutes.get("/google/callback", async (c) => {
        granted_scopes = excluded.granted_scopes,
        created_at = excluded.created_at`,
 	)
-		.bind(uid, ciphertext, dekWrapped, iv, accountLabel, grantedScopes)
+		.bind(uid, accountId, ciphertext, dekWrapped, iv, accountLabel, grantedScopes)
 		.run();
 
 	return c.html(

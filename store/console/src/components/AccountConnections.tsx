@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import {
 	accountConnections,
+	accountRows,
 	connectionSummary,
 	disconnectedMessage,
 	disconnectPromptFor,
 	type ConnectorEntry,
+	needsPerAgentChoice,
 } from "../lib/accountConnections";
 import type { ConnectorReach } from "../lib/connectorState";
 import Button from "./Button";
@@ -88,8 +90,23 @@ export default function AccountConnections() {
 		}
 	};
 
-	const disconnect = async (entry: ConnectorEntry) => {
+	const disconnect = async (entry: ConnectorEntry, accountId?: string, accountName?: string) => {
 		if (!entry.flow) return;
+		// Disconnecting ONE of several accounts (#715) is a different act from disconnecting the
+		// connector: it does not touch the others, so it gets its own confirmation rather than the
+		// provider-wide one, which would overstate what is about to happen.
+		if (accountId !== undefined) {
+			if (!confirm(`Disconnect the ${entry.label} account ${accountName ?? accountId}?\n\nYour other ${entry.label} accounts are unaffected. Any agent set to use THIS one will stop reading or sending until you point it at another.`)) return;
+			try {
+				const sep = entry.flow.disconnect.includes("?") ? "&" : "?";
+				await api(`${entry.flow.disconnect}${sep}account=${encodeURIComponent(accountId)}`, { method: "DELETE" });
+				setMsg(`${accountName ?? accountId} disconnected.`);
+				await load();
+			} catch (e) {
+				setMsg(e instanceof Error ? e.message : `Failed to disconnect ${accountName ?? accountId}`);
+			}
+			return;
+		}
 		// Re-read first: the reach quoted in the confirmation has to be the reach at the moment of
 		// the click. Another tab — or this account's other agents — may have granted folders since
 		// the page loaded, and this page is further from those grants than the old one was.
@@ -125,9 +142,10 @@ export default function AccountConnections() {
 		<Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Connections</h3>
 			<p className="text-xs text-muted mb-3">
-				Accounts your agents can reach. There is one of each per account, so connecting or
-				disconnecting here changes it for <b>every</b> agent at once. Which folders a particular
-				agent may read is granted on that agent's own Settings tab.
+				Accounts your agents can reach. Connecting and disconnecting happens <b>here</b>, never on
+				an agent — so a change on this page affects every agent that uses that account. You can
+				connect more than one of the same kind; each agent then picks which to use on its own
+				Settings tab, along with which folders it may read.
 			</p>
 
 			{/* GitHub — an identity link, not a stored token. See the component header. */}
@@ -182,17 +200,49 @@ export default function AccountConnections() {
 										Disconnecting revokes those grants everywhere. Reconnecting will not bring them back.
 									</p>
 								)}
+								{/* Only when there is a choice to be aware of. One account needs no list — the
+								    summary line above already names it, and a one-item list reads as a
+								    decision the reader has to make when there is none. */}
+								{needsPerAgentChoice(entry) && (
+									<ul className="mt-1.5 space-y-1">
+										{accountRows(entry).map((row) => (
+											<li key={row.accountId} className="flex items-center justify-between gap-2 text-2xs">
+												<span className="text-muted-soft">
+													{row.name}
+													{row.note && <span className="text-warning"> · {row.note}</span>}
+												</span>
+												<button
+													type="button"
+													className="shrink-0 text-danger underline underline-offset-2"
+													onClick={() => disconnect(entry, row.accountId, row.name)}
+												>
+													Disconnect
+												</button>
+											</li>
+										))}
+									</ul>
+								)}
+								{needsPerAgentChoice(entry) && (
+									<p className="text-2xs text-muted-soft mt-1">
+										Each agent must be told which of these to use, on its own Settings tab. Until it is,
+										that agent will not read or send anything through {entry.label}.
+									</p>
+								)}
 							</div>
 							{entry.connected ? (
 								<div className="flex gap-2 shrink-0">
 									{/* Reconnect exists so an expired token is not a reason to disconnect — now
 									    that disconnect revokes grants, that round trip is destructive. */}
-									<Button onClick={() => connect(entry)}>Reconnect</Button>
+									<Button onClick={() => connect(entry)}>
+										{needsPerAgentChoice(entry) ? "Add another" : "Reconnect"}
+									</Button>
 									{/* `danger` rather than the muted button with a red hover it used to be: this
 									    control revokes grants everywhere and does not give them back, which the
 									    paragraph above says out loud. A destructive action that only looks
 									    destructive once the pointer is already on it is telling you too late. */}
-									<Button variant="danger" onClick={() => disconnect(entry)}>Disconnect</Button>
+									{!needsPerAgentChoice(entry) && (
+										<Button variant="danger" onClick={() => disconnect(entry)}>Disconnect</Button>
+									)}
 								</div>
 							) : (
 								<Button onClick={() => connect(entry)} className="shrink-0">

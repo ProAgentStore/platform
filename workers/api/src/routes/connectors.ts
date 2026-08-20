@@ -129,15 +129,29 @@ export function missingScopesFor(
 connectorRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
 	const [rows, reachByProvider] = await Promise.all([
-		c.env.DB.prepare("SELECT provider, created_at, account_label, granted_scopes FROM user_api_keys WHERE user_id = ?1")
+		c.env.DB.prepare(
+			"SELECT provider, account_id, created_at, account_label, granted_scopes FROM user_api_keys WHERE user_id = ?1 ORDER BY created_at DESC, account_id ASC",
+		)
 			.bind(session.uid)
-			.all<{ provider: string; created_at: string; account_label: string | null; granted_scopes: string | null }>(),
+			.all<{ provider: string; account_id: string; created_at: string; account_label: string | null; granted_scopes: string | null }>(),
 		connectorGrantReachByProvider(c.env, session.uid),
 	]);
-	const stored = new Map((rows.results ?? []).map((r) => [r.provider, r]));
+	// GROUPED, not keyed (#715). This was `new Map(rows.map(r => [r.provider, r]))`, which with two
+	// Gmail rows silently kept whichever came last — the catalog would name one mailbox and the
+	// agent could use the other. A provider now carries its accounts, and the single-account
+	// fields below are computed from that list rather than from a row that happened to win.
+	const byProvider = new Map<string, typeof rows.results>();
+	for (const r of rows.results ?? []) {
+		const list = byProvider.get(r.provider) ?? [];
+		list.push(r);
+		byProvider.set(r.provider, list);
+	}
 	return c.json({
 		connectors: CONNECTORS.map((connector) => {
-			const row = stored.get(connector.id);
+			const accounts = byProvider.get(connector.id) ?? [];
+			// The legacy single-connection fields describe the ONE account when there is one, and
+			// go null when there are several — see /v1/email/status for the same reasoning.
+			const row = accounts.length === 1 ? accounts[0] : undefined;
 			// Only a connector that HOLDS a credential can be "connected". A relay/no-auth one has
 			// nothing to connect, and reporting `connected:false` for it would read as a gap.
 			const holdsCredential = connector.auth === "oauth" || (connector.auth === "token" && !connector.tokenEnv);
@@ -150,9 +164,17 @@ connectorRoutes.get("/", async (c) => {
 				unattended: unattendedClassOf(connector),
 				tools: connector.tools.map((t) => t.name),
 				configured: isConfigured(c.env, connector),
-				connected: holdsCredential ? !!row : null,
+				connected: holdsCredential ? accounts.length > 0 : null,
 				account: row?.account_label ?? null,
 				connectedAt: row?.created_at ?? null,
+				// Every credential the owner holds for this connector, so a console can list them
+				// and an instance can be pointed at one.
+				accounts: accounts.map((a) => ({
+					accountId: a.account_id ?? "",
+					label: a.account_label,
+					connectedAt: a.created_at,
+					missingScopes: missingScopesFor(connector, a.granted_scopes),
+				})),
 				// Only meaningful where a grant IS the reach. A `user`-model connector has no grants
 				// to count, and `{grants:0}` on it would read as "nothing uses this" rather than
 				// "this is not how its reach works".

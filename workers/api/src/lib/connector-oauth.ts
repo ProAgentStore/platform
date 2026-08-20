@@ -8,6 +8,18 @@ export interface ConnectorTokenInput {
 	provider: string;
 	refreshToken: string;
 	accountLabel?: string | null;
+	/**
+	 * WHICH account this credential belongs to (#715) — the provider's own id for it, which for
+	 * Google is the mailbox address. Omitted means '' , the reserved id for the account's single
+	 * unnamed credential, which is what every AI-provider key is and what callers that have not
+	 * been made account-aware still write.
+	 *
+	 * Using the provider's identifier rather than a surrogate key is what makes reconnecting the
+	 * SAME mailbox an update of the same row instead of a duplicate.
+	 */
+	accountId?: string;
+	/** What the provider actually granted (#713), space-separated. */
+	grantedScopes?: string | null;
 }
 
 function b64url(bytes: Uint8Array): string {
@@ -97,17 +109,26 @@ export async function verifyConnectorState(
 	}
 }
 
+/**
+ * Read one connector credential.
+ *
+ * `accountId` names WHICH of the owner's accounts (#715). Omitting it keeps the pre-#715
+ * behaviour for a caller that has not been made account-aware — but note that "the row at ''"
+ * is now a real, specific row rather than "the only row", so a caller that could face several
+ * accounts must resolve one first (lib/connector-accounts.ts) instead of relying on this.
+ */
 export async function readConnectorRefreshToken(
 	env: Env,
 	userId: string,
 	provider: string,
 	displayName: string,
+	accountId = "",
 ): Promise<string> {
 	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
 	const row = await env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
+		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ?3",
 	)
-		.bind(userId, provider)
+		.bind(userId, provider, accountId)
 		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
 	if (!row) throw new HttpError(400, `${displayName} is not connected`);
 	return decryptKey(
@@ -124,16 +145,28 @@ export async function saveConnectorRefreshToken(env: Env, input: ConnectorTokenI
 		input.refreshToken,
 		env.KEY_ENCRYPTION_KEY,
 	);
+	// The conflict target is the full key including account_id, so reconnecting the same account
+	// refreshes that row and connecting a different one adds a row beside it (#715).
 	await env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, account_label, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
-     ON CONFLICT(user_id, provider) DO UPDATE SET
+		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+     ON CONFLICT(user_id, provider, account_id) DO UPDATE SET
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
        iv = excluded.iv,
        account_label = excluded.account_label,
+       granted_scopes = excluded.granted_scopes,
        created_at = excluded.created_at`,
 	)
-		.bind(input.userId, input.provider, ciphertext, dekWrapped, iv, input.accountLabel ?? null)
+		.bind(
+			input.userId,
+			input.provider,
+			input.accountId ?? "",
+			ciphertext,
+			dekWrapped,
+			iv,
+			input.accountLabel ?? null,
+			input.grantedScopes ?? null,
+		)
 		.run();
 }

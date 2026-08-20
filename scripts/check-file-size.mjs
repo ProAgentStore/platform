@@ -1093,7 +1093,12 @@ const PINS = {
 	// that defines it, because two surfaces deriving health independently is the defect #580
 	// documents rather than the cure. A split would move a four-line decorator away from the two
 	// routes that are its only callers.
-	"workers/api/src/routes/tools.ts": 1107,
+	// +69 at #715: two routes that let an agent be pointed at ONE of the owner's several connected
+	// accounts (GET reports what a call would resolve to and why it might not; PUT stores the
+	// choice). Raised rather than split — both are ordinary instance-scoped handlers that belong
+	// beside the tool-policy routes they are read with, and the decision they encode is pure and
+	// already lives in lib/connector-accounts.ts, which is where the resolver and its tests are.
+	"workers/api/src/routes/tools.ts": 1176,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1364,8 +1369,8 @@ const PINS = {
 	// of code, because the raise has to say what was split OUT before it can justify what stayed),
 	// the note reconciling it with #703's shrink, and this line. The ratchet applied to itself,
 	// again: these comments ARE the record, and two entries that cancel still cost two entries.
-	// +12 at #712: this file grows by the reasoning for each entry, and one new entry was added.
-	"scripts/check-file-size.mjs": 1449,
+	// +12 at #712, +6 at #715: this file grows by the reasoning for each entry, and one new entry was added.
+	"scripts/check-file-size.mjs": 1455,
 };
 
 /**

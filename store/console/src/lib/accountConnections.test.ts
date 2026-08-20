@@ -4,6 +4,8 @@ import {
 	connectionSummary,
 	disconnectedMessage,
 	disconnectPromptFor,
+	accountRows,
+	needsPerAgentChoice,
 	needsReconnect,
 	type ConnectorEntry,
 } from "./accountConnections";
@@ -178,5 +180,86 @@ describe("connectionSummary — scope shortfall", () => {
 	it("keeps the grant counts a file connector reports, shortfall or not", () => {
 		const drive = { ...base, id: "google_drive", label: "Google Drive", grantModel: "instance-resource" as const, reach: { grants: 2, instances: 1 }, scopes: { read: true, write: false }, missingScopes: null };
 		expect(connectionSummary(drive)).toBe("connected as me@example.test · 2 folder grants on 1 agent");
+	});
+});
+
+// ── #715: several accounts of the same kind ─────────────────────────────────
+
+describe("accountRows", () => {
+	const withAccounts = (accounts: ConnectorEntry["accounts"]): ConnectorEntry =>
+		({
+			id: "gmail",
+			label: "Gmail",
+			auth: "oauth",
+			grantModel: "user",
+			configured: true,
+			connected: true,
+			account: null,
+			connectedAt: null,
+			reach: null,
+			flow: { start: "/s", disconnect: "/d" },
+			scopes: { read: true, write: true },
+			accounts,
+		}) as ConnectorEntry;
+
+	it("names each account by its address", () => {
+		const rows = accountRows(withAccounts([
+			{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: [] },
+			{ accountId: "b@x.test", label: "b@x.test", connectedAt: null, missingScopes: [] },
+		]));
+		expect(rows.map((r) => r.name)).toEqual(["a@x.test", "b@x.test"]);
+		expect(rows.every((r) => r.note === null)).toBe(true);
+	});
+
+	it("falls back to the id, then to a phrase, so every account can be disconnected", () => {
+		// An account with no name is still an account. If it cannot be named it cannot be removed,
+		// which would strand a credential the owner can see but not revoke.
+		const rows = accountRows(withAccounts([
+			{ accountId: "abc", label: null, connectedAt: null, missingScopes: [] },
+			{ accountId: "", label: "   ", connectedAt: null, missingScopes: [] },
+		]));
+		expect(rows.map((r) => r.name)).toEqual(["abc", "unnamed connection"]);
+	});
+
+	it("marks the accounts that are short of scope, per account", () => {
+		// The whole point of doing this per account: one mailbox can be send-capable while
+		// another, connected earlier, is not.
+		const rows = accountRows(withAccounts([
+			{ accountId: "new@x.test", label: "new@x.test", connectedAt: null, missingScopes: [] },
+			{ accountId: "old@x.test", label: "old@x.test", connectedAt: null, missingScopes: null },
+		]));
+		expect(rows[0].note).toBeNull();
+		expect(rows[1].note).toBe("read-only — reconnect to allow sending");
+	});
+});
+
+describe("needsPerAgentChoice", () => {
+	const entry = (n: number): ConnectorEntry =>
+		({
+			id: "gmail",
+			label: "Gmail",
+			auth: "oauth",
+			grantModel: "user",
+			configured: true,
+			connected: n > 0,
+			account: null,
+			connectedAt: null,
+			reach: null,
+			flow: { start: "/s", disconnect: "/d" },
+			accounts: Array.from({ length: n }, (_, i) => ({ accountId: `a${i}`, label: `a${i}`, connectedAt: null, missingScopes: [] })),
+		}) as ConnectorEntry;
+
+	it("is false for none or one — nobody who never adds a second configures anything", () => {
+		expect(needsPerAgentChoice(entry(0))).toBe(false);
+		expect(needsPerAgentChoice(entry(1))).toBe(false);
+	});
+
+	it("is true from two, which is when an agent has a decision to make", () => {
+		expect(needsPerAgentChoice(entry(2))).toBe(true);
+		expect(needsPerAgentChoice(entry(5))).toBe(true);
+	});
+
+	it("is false when the field is absent entirely, for a caller written before #715", () => {
+		expect(needsPerAgentChoice({ id: "x", label: "X" } as ConnectorEntry)).toBe(false);
 	});
 });

@@ -10,6 +10,7 @@ import { HttpError } from "../auth.js";
 import type { Env } from "../../types.js";
 import { resolveGithubAccess } from "../github-app.js";
 import { readConnectorRefreshToken } from "../connector-oauth.js";
+import { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } from "../connector-accounts.js";
 import { requireConnectorGrant, type ConnectorGrant } from "../connector-grants.js";
 import { safeFetch } from "../ssrf.js";
 import { getConnector } from "./registry.js";
@@ -76,6 +77,32 @@ async function mintOauthAccessToken(env: Env, connectorId: string, refreshToken:
  * returns a client that mints its token + enforces grant/scope. Throws HttpError(400)
  * for an unknown provider.
  */
+/**
+ * Which of the owner's accounts this call speaks as (#715).
+ *
+ * Resolved per CALL rather than cached, because the answer depends on the instance doing the
+ * calling — one agent's Gmail is not another's — and because a disconnect between two calls has
+ * to take effect immediately rather than at the end of some cache window.
+ *
+ * An unresolvable answer becomes an HttpError(400) carrying the resolver's own sentence, which
+ * already names the connected accounts and where to choose one. A tool surfaces that verbatim,
+ * so the model relays a fixable instruction instead of "something went wrong".
+ */
+async function chooseAccount(
+	env: Env,
+	caller: ConnectorClientCaller,
+	connector: Connector,
+): Promise<string> {
+	const accounts = await listConnectorAccounts(env, caller.userId ?? "", connector.id);
+	// Nothing connected, or the single legacy row: leave it to readConnectorRefreshToken, whose
+	// "not connected" message is the one every caller already expects.
+	if (accounts.length <= 1 && !accounts.some((a) => a.accountId !== "")) return "";
+	const pinned = await pinnedAccountFor(env, caller.instanceId, connector.id);
+	const resolved = resolveConnectorAccount(accounts, pinned, connector.label);
+	if (!resolved.ok) throw new HttpError(400, resolved.message);
+	return resolved.account.accountId;
+}
+
 export function connectorClient(env: Env, provider: string, caller: ConnectorClientCaller): ConnectorClient {
 	const resolved = getConnector(provider);
 	if (!resolved) throw new HttpError(400, `Unknown connector: ${provider}`);
@@ -124,7 +151,8 @@ export function connectorClient(env: Env, provider: string, caller: ConnectorCli
 				throw new HttpError(status, access.remedy ? `${access.message} ${access.remedy}` : access.message);
 			}
 			case "oauth": {
-				const refresh = await readConnectorRefreshToken(env, caller.userId ?? "", connector.id, connector.label);
+				const accountId = await chooseAccount(env, caller, connector);
+				const refresh = await readConnectorRefreshToken(env, caller.userId ?? "", connector.id, connector.label, accountId);
 				return mintOauthAccessToken(env, connector.id, refresh);
 			}
 			case "token": {
@@ -135,7 +163,7 @@ export function connectorClient(env: Env, provider: string, caller: ConnectorCli
 					if (!t) throw new HttpError(400, `${connector.label} is not configured`);
 					return t;
 				}
-				return readConnectorRefreshToken(env, caller.userId ?? "", connector.id, connector.label);
+				return readConnectorRefreshToken(env, caller.userId ?? "", connector.id, connector.label, await chooseAccount(env, caller, connector));
 			}
 		}
 	}

@@ -207,7 +207,10 @@ keysRoutes.get("/providers", async (c) => {
 keysRoutes.get("/status", async (c) => {
 	const session = await requireUser(c);
 	const { results } = await c.env.DB.prepare(
-		"SELECT provider, created_at, last_used_at FROM user_api_keys WHERE user_id = ?1",
+		// GROUP BY provider (#715): a connector can hold several accounts, and this answers "which
+		// providers do I have a credential for" — once each. MIN/MAX pick the earliest connection
+		// and the most recent use across them, which is what a per-provider row should say.
+		"SELECT provider, MIN(created_at) AS created_at, MAX(last_used_at) AS last_used_at FROM user_api_keys WHERE user_id = ?1 GROUP BY provider",
 	)
 		.bind(session.uid)
 		.all<{
@@ -268,9 +271,12 @@ keysRoutes.put("/:provider", async (c) => {
 	);
 
 	await c.env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
-     ON CONFLICT(user_id, provider) DO UPDATE SET
+		// account_id '' — the unnamed default. An AI provider key is singular by nature (you have
+		// one Anthropic key), so it stays in the slot it has always occupied; the multi-account
+		// vault (#715) is for connectors whose credential names a mailbox or a drive.
+		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, created_at)
+     VALUES (?1, ?2, '', ?3, ?4, ?5, datetime('now'))
+     ON CONFLICT(user_id, provider, account_id) DO UPDATE SET
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
        iv = excluded.iv,
@@ -368,7 +374,7 @@ keysRoutes.get("/:provider/reveal", async (c) => {
 	}
 	if (!c.env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
 	const row = await c.env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
+		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
 		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
@@ -380,7 +386,7 @@ keysRoutes.get("/:provider/reveal", async (c) => {
 		c.env.KEY_ENCRYPTION_KEY,
 	);
 	// Mark as used
-	await c.env.DB.prepare("UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2")
+	await c.env.DB.prepare("UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2 AND account_id = ''")
 		.bind(session.uid, providerId)
 		.run();
 	// Audited for the same reason the vault reveal is (#639): `last_used_at` records THAT a key
@@ -403,7 +409,7 @@ keysRoutes.delete("/:provider", async (c) => {
 	const session = await requireUser(c);
 	const providerId = c.req.param("provider");
 	await c.env.DB.prepare(
-		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
+		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
 		.run();
@@ -446,7 +452,7 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 
 	// Decrypt user's key
 	const row = await c.env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
+		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
 		.first<{
@@ -476,7 +482,7 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 
 	// Update last_used_at
 	await c.env.DB.prepare(
-		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2",
+		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
 		.run();

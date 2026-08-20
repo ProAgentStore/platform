@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import { listConnectorAccounts, pinnedAccountsFrom, resolveConnectorAccount } from "../lib/connector-accounts.js";
 import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
-import { getConnector } from "../lib/connectors/registry.js";
+import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
 import { instanceConnectorPolicy } from "../lib/instance-connector-access.js";
 import { connectorClient } from "../lib/connectors/client.js";
 import { probeMcpEndpoint, probeMcpSurface } from "../lib/connectors/mcp.js";
@@ -54,6 +55,75 @@ import type { Env } from "../types.js";
  * everywhere. Owner-scoped; tools run with the owner's own connector auth.
  */
 export const toolRoutes = new Hono<{ Bindings: Env }>();
+
+/**
+ * GET /v1/instances/:id/connector-accounts — which of the owner's accounts this agent uses (#715).
+ *
+ * Returns, per connector the owner holds a credential for, the accounts available and the one
+ * this instance is pinned to. `pinned: null` with more than one account is the state that makes
+ * every call to that connector refuse — reported here so a console can show it as a decision
+ * waiting, rather than leaving it to surface as a tool error mid-conversation.
+ */
+toolRoutes.get("/:id/connector-accounts", async (c) => {
+	const session = await requireUser(c);
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const pinned = pinnedAccountsFrom(instance.config ? JSON.parse(instance.config) : {});
+
+	const out: Array<Record<string, unknown>> = [];
+	for (const connector of CONNECTORS) {
+		const accounts = await listConnectorAccounts(c.env, session.uid, connector.id);
+		if (accounts.length === 0) continue;
+		const choice = pinned[connector.id];
+		const resolved = resolveConnectorAccount(accounts, choice, connector.label);
+		out.push({
+			connector: connector.id,
+			label: connector.label,
+			accounts: accounts.map((a) => ({ accountId: a.accountId, label: a.label, connectedAt: a.connectedAt })),
+			pinned: choice ?? null,
+			// What a call would do right now, without making one.
+			resolves: resolved.ok ? resolved.account.accountId : null,
+			blocked: resolved.ok ? null : { reason: resolved.reason, message: resolved.message },
+		});
+	}
+	return c.json({ connectors: out });
+});
+
+/**
+ * PUT /v1/instances/:id/connector-accounts — pin this agent to one of the owner's accounts.
+ *
+ * Body `{ connector, accountId }`. A null/empty `accountId` clears the pin, which returns the
+ * instance to "resolve automatically" — fine with one account connected, and a refusal with
+ * several, which is the honest state rather than a silent revert to a default.
+ *
+ * The account must be one the OWNER already holds: this route chooses among existing
+ * credentials and can never establish one. That is the line #355 drew — connect and disconnect
+ * belong to the account page, and an instance picks from what the account has.
+ */
+toolRoutes.put("/:id/connector-accounts", async (c) => {
+	const session = await requireUser(c);
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { connector?: string; accountId?: string | null };
+	const connectorId = (body.connector ?? "").trim();
+	if (!connectorId) throw new HttpError(400, "connector required");
+	const connector = getConnector(connectorId);
+	if (!connector) throw new HttpError(404, `Unknown connector "${connectorId}"`);
+
+	const requested = (body.accountId ?? "").trim();
+	if (requested) {
+		const accounts = await listConnectorAccounts(c.env, session.uid, connectorId);
+		if (!accounts.some((a) => a.accountId === requested)) {
+			// Refused at write time rather than stored and discovered at run time — a pin to an
+			// account that does not exist is the stale-pin failure, created deliberately.
+			throw new HttpError(400, `You have no ${connector.label} account "${requested}" connected.`);
+		}
+	}
+
+	const accountsMap = { ...pinnedAccountsFrom(instance.config ? JSON.parse(instance.config) : {}) };
+	if (requested) accountsMap[connectorId] = requested;
+	else delete accountsMap[connectorId];
+	await patchInstanceConfig(c.env, instance.id, session.uid, "connectorAccounts", accountsMap);
+	return c.json({ success: true, connector: connectorId, pinned: requested || null });
+});
 
 /**
  * GET /v1/instances/:id/tools — EVERY tool this instance could run, with its verdict on each.
