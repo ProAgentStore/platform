@@ -228,14 +228,28 @@ export default function AccountConnections() {
 										that agent will not read or send anything through {entry.label}.
 									</p>
 								)}
+								{/* Said on the row, because the choice that decides it is made on the PROVIDER's
+								    screen after you leave this one. Without it "Add or reconnect" reads as one
+								    action with one outcome. */}
+								{entry.connected && (
+									<p className="text-2xs text-muted-soft mt-0.5">
+										Choose the account at {entry.label} — picking the same one refreshes it, picking a
+										different one adds it alongside.
+									</p>
+								)}
 							</div>
 							{entry.connected ? (
 								<div className="flex gap-2 shrink-0">
-									{/* Reconnect exists so an expired token is not a reason to disconnect — now
-									    that disconnect revokes grants, that round trip is destructive. */}
-									<Button onClick={() => connect(entry)}>
-										{needsPerAgentChoice(entry) ? "Add another" : "Reconnect"}
-									</Button>
+									{/* ONE button, because there is one action: start the provider's flow. Whether it
+									    refreshes this account or adds a second is decided by which account you pick at
+									    the provider, not here — so a separate "Add another" button would be the same
+									    request wearing a different label.
+									
+									    It said "Reconnect" and offered "Add another" only once you HAD two accounts,
+									    which is backwards: the affordance you need to reach two was hidden until you
+									    were already there. Reconnect also remains the answer to an expired token —
+									    now that disconnect revokes grants, that round trip is destructive. */}
+									<Button onClick={() => connect(entry)}>Add or reconnect</Button>
 									{/* `danger` rather than the muted button with a red hover it used to be: this
 									    control revokes grants everywhere and does not give them back, which the
 									    paragraph above says out loud. A destructive action that only looks
