@@ -215,19 +215,33 @@ const MAX_OUTGOING_BYTES = 15 * 1024 * 1024;
  * raw Google 403 says "insufficient authentication scopes", which tells the owner nothing about
  * where the reconnect button is.
  */
+async function grantedScopesFor(env: Env, userId: string, instanceId: string | undefined): Promise<string | null | undefined> {
+	const { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } = await import("../connector-accounts.js");
+	const accounts = await listConnectorAccounts(env, userId, "gmail");
+	const resolved = resolveConnectorAccount(accounts, await pinnedAccountFor(env, instanceId, "gmail"), "Gmail");
+	return resolved.ok ? resolved.account.grantedScopes : null;
+}
+
+/** May the mailbox this agent resolves to be MODIFIED — archived, marked read, relabelled? */
+async function canModify(env: Env, userId: string, instanceId: string | undefined): Promise<boolean> {
+	const { scopesAllowModify } = await import("../gmail.js");
+	return scopesAllowModify(await grantedScopesFor(env, userId, instanceId));
+}
+
 async function canSend(env: Env, userId: string, instanceId: string | undefined): Promise<boolean> {
 	// Resolve WHICH mailbox first (#715). This read was `.first()` over `(user_id, provider)`,
 	// which stopped identifying one row the moment a second Gmail could exist: with two accounts
 	// connected it answered from whichever row SQLite returned, so a send could be waved through
 	// on the strength of a different mailbox's scopes — or blocked on it. The same defect class
 	// as /v1/email/status and the connector catalog, missed here in that sweep.
-	const { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } = await import("../connector-accounts.js");
-	const accounts = await listConnectorAccounts(env, userId, "gmail");
-	const resolved = resolveConnectorAccount(accounts, await pinnedAccountFor(env, instanceId, "gmail"), "Gmail");
-	if (!resolved.ok) return false;
 	const { scopesAllowSend } = await import("../gmail.js");
-	return scopesAllowSend(resolved.account.grantedScopes);
+	return scopesAllowSend(await grantedScopesFor(env, userId, instanceId));
 }
+
+const RECONNECT_TO_MODIFY =
+	"This Gmail account was not authorised to change messages, so it cannot archive or mark mail " +
+	"read. Reconnect it in the console (Preferences → Connections) and allow the manage-mail " +
+	"permission — reading and sending are unaffected either way.";
 
 const RECONNECT_TO_SEND =
 	"Gmail is connected but was authorised for reading only. Reconnect Gmail in the console " +
@@ -381,6 +395,45 @@ const sendHandler: ToolDef["handler"] = async (ctx, input) => {
 	}
 };
 
+/**
+ * Archive, or mark read — both are `messages.modify` with a label removed.
+ *
+ * Archiving is REVERSIBLE and that is why it is here while trashing is not: an archived message
+ * is still in All Mail and one search away, so the worst case of a wrong call is that the owner
+ * finds it again. Deleting is a different promise, needs no more scope than this, and is
+ * deliberately not offered — an agent acting on mail it just read should not be one prompt
+ * injection away from emptying an inbox.
+ */
+function labelChangeHandler(
+	action: "archive" | "mark_read",
+): NonNullable<ToolDef["handler"]> {
+	return async (ctx, input) => {
+		const messageId = typeof input.message_id === "string" ? input.message_id.trim() : "";
+		if (!messageId) return fail("message_id is required — get one from gmail_search.");
+		const resolved = await gmailToken(ctx);
+		if ("refusal" in resolved) return resolved.refusal;
+		const env = ctx.env;
+		if (!(await canModify(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_MODIFY);
+
+		const { modifyMessageLabels, INBOX_LABEL, UNREAD_LABEL, GmailError } = await import("../gmail.js");
+		try {
+			const remove = action === "archive" ? [INBOX_LABEL] : [UNREAD_LABEL];
+			const out = await modifyMessageLabels(resolved.token, messageId, { removeLabelIds: remove });
+			return ok({
+				message_id: out.id,
+				action,
+				labels_now: out.labelIds,
+				note:
+					action === "archive"
+						? "Removed from the inbox. It is still in All Mail and can be found by search."
+						: "Marked as read.",
+			});
+		} catch (e) {
+			return fail(e instanceof GmailError ? e.message : `Could not ${action} that message: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	};
+}
+
 export const GMAIL_MANIFEST: ConnectorManifest = {
 	id: "gmail",
 	label: "Gmail",
@@ -401,6 +454,15 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			"email",
 			"https://www.googleapis.com/auth/gmail.readonly",
 			"https://www.googleapis.com/auth/gmail.send",
+			// gmail.modify (#716) — archive, mark read, relabel. There is no narrower scope for it.
+			// It can also move mail to Trash, but NOT permanently delete: that needs
+			// https://mail.google.com/, which this codebase never requests. So the worst an agent
+			// can do to a message is recoverable by the owner.
+			//
+			// Declared, not required. Google's consent screen lets a person grant send but decline
+			// this, and only what was actually GRANTED is recorded — so an account without it keeps
+			// reading and sending, and only the two action tools refuse.
+			"https://www.googleapis.com/auth/gmail.modify",
 		],
 		clientIdEnv: "GOOGLE_CLIENT_ID",
 		secretEnv: "GOOGLE_CLIENT_SECRET",
@@ -458,6 +520,26 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			},
 		},
 		{
+			name: "gmail_archive",
+			scope: "write",
+			description:
+				"Archive a Gmail message — remove it from the inbox. It stays in All Mail and can still be found by search, so this is reversible. Needs the manage-mail permission on the connected account.",
+			handler: "gmail_archive",
+			params: {
+				message_id: { type: "string", required: true, description: "Message id from gmail_search.", maxLength: 100 },
+			},
+		},
+		{
+			name: "gmail_mark_read",
+			scope: "write",
+			description:
+				"Mark a Gmail message as read. Needs the manage-mail permission on the connected account.",
+			handler: "gmail_mark_read",
+			params: {
+				message_id: { type: "string", required: true, description: "Message id from gmail_search.", maxLength: 100 },
+			},
+		},
+		{
 			name: "gmail_download_attachment",
 			scope: "read",
 			description:
@@ -480,4 +562,6 @@ export const GMAIL_CONNECTOR: Connector = compileConnector(GMAIL_MANIFEST, {
 	gmail_download_attachment: downloadHandler,
 	gmail_reply: replyHandler,
 	gmail_send: sendHandler,
+	gmail_archive: labelChangeHandler("archive"),
+	gmail_mark_read: labelChangeHandler("mark_read"),
 }).connector;

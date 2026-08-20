@@ -37,6 +37,8 @@ describe("connector registry", () => {
 				"gmail_read_message",
 				"gmail_reply",
 				"gmail_send",
+				"gmail_archive",
+				"gmail_mark_read",
 				"gmail_download_attachment",
 			]);
 			// Reading the mailbox mutates nothing; sending mutates the world and says so, which is
@@ -46,7 +48,7 @@ describe("connector registry", () => {
 				expect(byName.get(name)?.scope, name).toBe("read");
 				expect(byName.get(name)?.mutates, name).toBe(false);
 			}
-			for (const name of ["gmail_reply", "gmail_send"]) {
+			for (const name of ["gmail_reply", "gmail_send", "gmail_archive", "gmail_mark_read"]) {
 				expect(byName.get(name)?.scope, name).toBe("write");
 				expect(byName.get(name)?.mutates, name).toBe(true);
 			}

@@ -94,6 +94,10 @@ const MUTATING = new Set<string>([
 	// mutation on the platform, and the reason both sit behind the write-consent gate.
 	"gmail_reply",
 	"gmail_send",
+	// #716. Reversible — an archived message is still in All Mail — but it changes what the
+	// owner sees in their inbox, which is a mutation by any reading.
+	"gmail_archive",
+	"gmail_mark_read",
 	// #712. Neither touches the SOURCE pdf — both write a NEW file into the instance's store,
 	// which is a change to this agent's own data and so a mutation. inspect_pdf_form only reads.
 	"fill_pdf_form",

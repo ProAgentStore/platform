@@ -642,3 +642,56 @@ export function scopesAllowSend(grantedScopes: string | null | undefined): boole
 	if (!grantedScopes) return false;
 	return grantedScopes.split(/\s+/).some((s) => s === GMAIL_SEND_SCOPE || s === "https://mail.google.com/");
 }
+
+// ── Acting on a message (#716) ───────────────────────────────────────────────
+//
+// Archiving, marking read and labelling are all one Gmail call — `messages.modify`, which adds
+// and removes label ids. "Archive" is not its own verb: the INBOX label IS the inbox, so
+// archiving is removing it.
+
+/**
+ * The scope `messages.modify` needs. There is no narrower one — Gmail offers read, send, modify
+ * and full, and archiving is a modify.
+ *
+ * It is a real escalation and worth being precise about what it does and does not open: modify
+ * can move mail to Trash, but it CANNOT permanently delete — that needs `https://mail.google.com/`,
+ * which is deliberately not requested here or anywhere else in this codebase. Mail an agent
+ * trashes is recoverable by the owner for 30 days.
+ */
+export const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+
+/** Gmail's own id for the inbox. Removing it is what archiving IS. */
+export const INBOX_LABEL = "INBOX";
+export const UNREAD_LABEL = "UNREAD";
+
+/** Add and/or remove labels on one message. Returns the label set it ends up with. */
+export async function modifyMessageLabels(
+	accessToken: string,
+	messageId: string,
+	change: { addLabelIds?: string[]; removeLabelIds?: string[] },
+): Promise<{ id: string; labelIds: string[] }> {
+	const res = await fetch(`${GMAIL_API}/messages/${encodeURIComponent(messageId)}/modify`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify({
+			addLabelIds: change.addLabelIds ?? [],
+			removeLabelIds: change.removeLabelIds ?? [],
+		}),
+	});
+	if (!res.ok) {
+		throw new GmailError(`Gmail modify failed (${res.status}): ${await gmailErrorReason(res)}`);
+	}
+	const out = (await res.json()) as { id?: string; labelIds?: string[] };
+	return { id: out.id ?? messageId, labelIds: out.labelIds ?? [] };
+}
+
+/**
+ * Does a recorded scope string allow modifying labels?
+ *
+ * Same fail-closed reading as `scopesAllowSend`: an unrecorded grant is "no", because the
+ * population with no recorded scopes is exactly the population granted less.
+ */
+export function scopesAllowModify(grantedScopes: string | null | undefined): boolean {
+	if (!grantedScopes) return false;
+	return grantedScopes.split(/\s+/).some((s) => s === GMAIL_MODIFY_SCOPE || s === "https://mail.google.com/");
+}

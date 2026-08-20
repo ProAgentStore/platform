@@ -409,9 +409,15 @@ and they are deliberately separate powers:
 |---|---|
 | `gmail.readonly` | Search, read a message, download its attachments. |
 | `gmail.send` | Send a message. **Send only** — it cannot read, delete or modify. |
+| `gmail.modify` | Archive, mark read, relabel. There is no narrower scope for these. |
 
-`gmail.modify` would cover sending as well and is **not** requested: it would also let a bug
-delete the owner's mail.
+`https://mail.google.com/` is **never** requested. That is the scope permanent deletion needs, so
+nothing an agent does to a message is unrecoverable: `gmail.modify` can move mail to Trash, where
+the owner has 30 days to retrieve it, and no tool exposes even that.
+
+Each scope is declared, not required. Google's consent screen lets a person grant reading and
+sending but decline manage-mail, and only what was actually **granted** is recorded — so such an
+account keeps reading and sending, and only the two action tools refuse.
 
 ### Tools
 
@@ -422,6 +428,12 @@ delete the owner's mail.
 | `gmail_download_attachment` | read | Saves one attachment into the agent's **file store** and returns its `file_id`. It never returns the bytes — they would be useless in the model's context and large enough to evict everything else. |
 | `gmail_reply` | **write** | Replies in-thread, optionally attaching files by id. |
 | `gmail_send` | **write** | Sends a new message to an address you name. |
+| `gmail_archive` | **write** | Removes the `INBOX` label. Reversible — the message stays in All Mail. Needs `gmail.modify`. |
+| `gmail_mark_read` | **write** | Removes the `UNREAD` label. Needs `gmail.modify`. |
+
+There is deliberately **no delete tool**. `gmail.modify` would allow moving mail to Trash;
+archiving is reversible and deleting is a different promise, and an agent acting on mail it has
+just read should not be one prompt injection away from emptying an inbox.
 
 `find_confirmation_link` is separate and stays a built-in: it is granted only by the per-agent
 email permission and is never creator-selectable, so a creator cannot grant a read of the owner's

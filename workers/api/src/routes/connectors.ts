@@ -127,6 +127,10 @@ const SCOPE_SUPERSETS: ReadonlyArray<{ scope: string; covers: (s: string) => boo
 	// Full-mailbox access. A caller holding this can do everything gmail.* allows, so reporting
 	// gmail.send "missing" against it would be a false alarm of the same family as the alias bug.
 	{ scope: "https://mail.google.com/", covers: (s) => s.startsWith("https://www.googleapis.com/auth/gmail.") },
+	// gmail.modify includes reading. Someone who grants modify but declines the separate readonly
+	// checkbox is not missing anything, and saying they are would send them round a reconnect that
+	// changes nothing — the failure this whole comparison was rewritten to stop.
+	{ scope: "https://www.googleapis.com/auth/gmail.modify", covers: (s) => s === "https://www.googleapis.com/auth/gmail.readonly" },
 ];
 
 function canonicalScope(scope: string): string {

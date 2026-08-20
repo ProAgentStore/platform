@@ -200,14 +200,18 @@ describe("gmail_download_attachment", () => {
 });
 
 describe("the declaration", () => {
-	it("asks for readonly + send, and NOT gmail.modify (#713)", () => {
+	// #713 asserted that gmail.modify was NOT requested. #716 reverses that deliberately, because
+	// archiving has no narrower scope. The assertion is inverted rather than deleted, and the ONE
+	// line that has not moved is kept: mail.google.com stays out, so nothing here can permanently
+	// delete a message. That is the boundary worth guarding, and it always was.
+	it("asks for readonly + send + modify, and never for full-mailbox access (#716)", () => {
 		expect(GMAIL_MANIFEST.auth).toMatchObject({ type: "oauth2" });
 		const scopes = (GMAIL_MANIFEST.auth as { scopes: string[] }).scopes;
 		expect(scopes).toContain("https://www.googleapis.com/auth/gmail.readonly");
 		expect(scopes).toContain("https://www.googleapis.com/auth/gmail.send");
-		// gmail.modify would cover sending too, and would also let a bug delete the owner's mail.
-		// Requesting the narrower scope is the decision; this is what stops it being widened quietly.
-		expect(scopes.some((x) => x.includes("gmail.modify") || x === "https://mail.google.com/")).toBe(false);
+		expect(scopes).toContain("https://www.googleapis.com/auth/gmail.modify");
+		// The line that has not moved: permanent deletion needs this, and it is never requested.
+		expect(scopes).not.toContain("https://mail.google.com/");
 	});
 
 	it("declares write reach now, which is what puts sending behind the #90 consent gate", () => {
@@ -215,7 +219,7 @@ describe("the declaration", () => {
 		// write:false connector is refused by assertScope before any handler runs.
 		expect(GMAIL_CONNECTOR.scopes).toEqual({ read: true, write: true });
 		const writeTools = GMAIL_CONNECTOR.tools.filter((t) => t.scope === "write").map((t) => t.name);
-		expect(writeTools).toEqual(["gmail_reply", "gmail_send"]);
+		expect(writeTools).toEqual(["gmail_reply", "gmail_send", "gmail_archive", "gmail_mark_read"]);
 	});
 
 	it("keeps find_confirmation_link OUT of the connector — its grant model is the odd one out", () => {
@@ -486,5 +490,83 @@ describe("canSend resolves WHICH mailbox before reading its scopes (#715)", () =
 		expect(res.success).toBe(false);
 		expect(res.content).toMatch(/reading only/);
 		expect(sent).toHaveLength(0);
+	});
+});
+
+// ── #716: acting on a message ────────────────────────────────────────────────
+
+const MODIFY_SCOPES = `${SEND_SCOPES} https://www.googleapis.com/auth/gmail.modify`;
+
+/** Capture what was POSTed to messages/{id}/modify. */
+function stubModify(ok = true) {
+	const calls: Array<{ url: string; body: { addLabelIds: string[]; removeLabelIds: string[] } }> = [];
+	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+		if (String(url).includes("/modify")) {
+			calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+			return ok
+				? new Response(JSON.stringify({ id: "m1", labelIds: ["IMPORTANT"] }), { status: 200 })
+				: new Response(JSON.stringify({ error: { message: "Insufficient Permission" } }), { status: 403 });
+		}
+		return new Response(JSON.stringify(PARENT), { status: 200 });
+	});
+	return calls;
+}
+
+describe("gmail_archive", () => {
+	it("archives by REMOVING the inbox label, which is what archiving is", async () => {
+		const calls = stubModify();
+		const res = await tool("gmail_archive")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), { message_id: "m1" });
+		expect(res.success).toBe(true);
+		expect(calls[0].body).toEqual({ addLabelIds: [], removeLabelIds: ["INBOX"] });
+		// The reply says it is findable again — an archive that reads as a delete is a bad answer.
+		expect(res.content).toMatch(/All Mail/);
+	});
+
+	it("refuses without the manage-mail scope, and never calls Gmail", async () => {
+		const calls = stubModify();
+		const res = await tool("gmail_archive")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), { message_id: "m1" });
+		expect(res.success).toBe(false);
+		// The refusal must not read as "reconnect to allow sending" — sending already works here.
+		expect(res.content).toMatch(/cannot archive or mark mail read/);
+		expect(res.content).toMatch(/reading and sending are unaffected/);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("still refuses when email permission is off, before it looks at scopes", async () => {
+		stubModify();
+		const res = await tool("gmail_archive")(ctxWith(envWithPermission(false)), { message_id: "m1" });
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/Email access is not enabled/);
+	});
+
+	it("requires a message id", async () => {
+		const res = await tool("gmail_archive")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {});
+		expect(res.success).toBe(false);
+	});
+
+	it("surfaces Google's own reason when it refuses at the API", async () => {
+		stubModify(false);
+		const res = await tool("gmail_archive")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), { message_id: "m1" });
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/Insufficient Permission/);
+	});
+});
+
+describe("gmail_mark_read", () => {
+	it("removes only the UNREAD label — it does not touch the inbox", async () => {
+		const calls = stubModify();
+		const res = await tool("gmail_mark_read")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), { message_id: "m1" });
+		expect(res.success).toBe(true);
+		expect(calls[0].body).toEqual({ addLabelIds: [], removeLabelIds: ["UNREAD"] });
+	});
+});
+
+describe("what is deliberately absent", () => {
+	it("offers no way to delete or trash a message", async () => {
+		// gmail.modify WOULD allow moving mail to Trash. No tool exposes it: archiving is
+		// reversible, deleting is a different promise, and an agent reading untrusted mail must
+		// not be one injection away from emptying an inbox.
+		const names = GMAIL_CONNECTOR.tools.map((t) => t.name);
+		expect(names.some((n) => /delete|trash|remove_message/i.test(n))).toBe(false);
 	});
 });

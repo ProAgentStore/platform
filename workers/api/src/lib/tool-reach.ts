@@ -191,6 +191,8 @@ export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
 	gmail_search: "internet",
 	gmail_read_message: "internet",
 	gmail_download_attachment: "internet",
+	gmail_archive: "internet",
+	gmail_mark_read: "internet",
 	// GETs a URL the caller names. `mutates:false` and still outside: reach is not mutation.
 	http_reachable: "internet",
 	// Dispatches a POST to Google Places from a fixed template.
