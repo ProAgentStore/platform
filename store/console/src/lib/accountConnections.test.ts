@@ -263,3 +263,47 @@ describe("needsPerAgentChoice", () => {
 		expect(needsPerAgentChoice({ id: "x", label: "X" } as ConnectorEntry)).toBe(false);
 	});
 });
+
+describe("the summary line does not answer for accounts it cannot see", () => {
+	const gmail = (accounts: ConnectorEntry["accounts"]): ConnectorEntry =>
+		({
+			id: "gmail",
+			label: "Gmail",
+			auth: "oauth",
+			grantModel: "user",
+			configured: true,
+			connected: true,
+			account: null,
+			connectedAt: null,
+			reach: null,
+			flow: { start: "/s", disconnect: "/d" },
+			scopes: { read: true, write: true },
+			// With several accounts the route sends null here on purpose — no single answer exists.
+			missingScopes: null,
+			accounts,
+		}) as ConnectorEntry;
+
+	it("stays quiet with several accounts, even when every one of them CAN send", () => {
+		// The reported bug: the row said "read-only — reconnect to allow sending" above a list in
+		// which each account was already stating its own verdict, and said it regardless of them.
+		const entry = gmail([
+			{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: [] },
+			{ accountId: "b@x.test", label: "b@x.test", connectedAt: null, missingScopes: [] },
+		]);
+		expect(needsReconnect(entry)).toBe(false);
+		expect(connectionSummary(entry)).toBe("connected");
+	});
+
+	it("still lets each account state its own verdict underneath", () => {
+		const entry = gmail([
+			{ accountId: "ok@x.test", label: "ok@x.test", connectedAt: null, missingScopes: [] },
+			{ accountId: "old@x.test", label: "old@x.test", connectedAt: null, missingScopes: null },
+		]);
+		expect(accountRows(entry).map((r) => r.note)).toEqual([null, "read-only — reconnect to allow sending"]);
+	});
+
+	it("still warns on the summary when there is exactly ONE account short of scope", () => {
+		const entry = gmail([{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: null }]);
+		expect(needsReconnect(entry)).toBe(true);
+	});
+});

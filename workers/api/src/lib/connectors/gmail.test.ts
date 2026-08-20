@@ -234,8 +234,16 @@ function sendEnv(opts: {
 }): Env {
 	return {
 		DB: {
-			prepare: () => ({
-				bind: () => ({ first: async () => ({ granted_scopes: opts.grantedScopes }) }),
+			prepare: (sql: string) => ({
+				bind: () => ({
+					// listConnectorAccounts — one account, so resolution is unambiguous and these
+					// tests stay about SCOPES rather than about which mailbox.
+					all: async () => ({
+						results: [{ account_id: "me@example.test", account_label: "me@example.test", created_at: "2026-08-01", granted_scopes: opts.grantedScopes }],
+					}),
+					// pinnedAccountFor reads agent_instances.config; nothing pinned here.
+					first: async () => (sql.includes("agent_instances") ? { config: null } : { granted_scopes: opts.grantedScopes }),
+				}),
 			}),
 		},
 		AGENT: {
@@ -421,5 +429,62 @@ describe("gmail_send", () => {
 		for (const input of [{ subject: "s", body: "b" }, { to: "a@b.test", body: "b" }, { to: "a@b.test", subject: "s" }]) {
 			expect((await tool("gmail_send")(ctxWith(env), input)).success).toBe(false);
 		}
+	});
+});
+
+describe("canSend resolves WHICH mailbox before reading its scopes (#715)", () => {
+	/** Two Gmail accounts: one send-capable, one read-only. */
+	function twoAccountEnv(pinned: string | null) {
+		return {
+			DB: {
+				prepare: (sql: string) => ({
+					bind: () => ({
+						all: async () => ({
+							results: [
+								{ account_id: "send@x.test", account_label: "send@x.test", created_at: "2026-08-02", granted_scopes: SEND_SCOPES },
+								{ account_id: "read@x.test", account_label: "read@x.test", created_at: "2026-08-01", granted_scopes: "https://www.googleapis.com/auth/gmail.readonly" },
+							],
+						}),
+						first: async () =>
+							sql.includes("agent_instances")
+								? { config: pinned ? JSON.stringify({ connectorAccounts: { gmail: pinned } }) : null }
+								: null,
+					}),
+				}),
+			},
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({
+					fetch: async (req: Request) =>
+						new URL(req.url).pathname === "/state"
+							? new Response(JSON.stringify({ permissions: { email: true } }), { status: 200 })
+							: new Response(JSON.stringify({ id: "f1" }), { status: 201 }),
+				}),
+			},
+		} as unknown as Env;
+	}
+
+	it("refuses when two accounts are connected and none is chosen", async () => {
+		const { sent } = stubGmail();
+		const res = await tool("gmail_reply")(ctxWith(twoAccountEnv(null)), { message_id: "m1", body: "hi" });
+		expect(res.success).toBe(false);
+		expect(sent).toHaveLength(0);
+	});
+
+	it("allows the send when the agent is pinned to the send-capable mailbox", async () => {
+		const { sent } = stubGmail();
+		const res = await tool("gmail_reply")(ctxWith(twoAccountEnv("send@x.test")), { message_id: "m1", body: "hi" });
+		expect(res.success).toBe(true);
+		expect(sent).toHaveLength(1);
+	});
+
+	it("refuses when pinned to the READ-ONLY mailbox, even though the other one could send", async () => {
+		// The defect this closes: `.first()` over (user_id, provider) answered from whichever row
+		// SQLite returned, so a send could be waved through on a different mailbox's scopes.
+		const { sent } = stubGmail();
+		const res = await tool("gmail_reply")(ctxWith(twoAccountEnv("read@x.test")), { message_id: "m1", body: "hi" });
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/reading only/);
+		expect(sent).toHaveLength(0);
 	});
 });

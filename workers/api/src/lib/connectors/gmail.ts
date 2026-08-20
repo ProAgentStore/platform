@@ -215,14 +215,18 @@ const MAX_OUTGOING_BYTES = 15 * 1024 * 1024;
  * raw Google 403 says "insufficient authentication scopes", which tells the owner nothing about
  * where the reconnect button is.
  */
-async function canSend(env: Env, userId: string): Promise<boolean> {
-	const row = await env.DB.prepare(
-		"SELECT granted_scopes FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
-	)
-		.bind(userId)
-		.first<{ granted_scopes: string | null }>();
+async function canSend(env: Env, userId: string, instanceId: string | undefined): Promise<boolean> {
+	// Resolve WHICH mailbox first (#715). This read was `.first()` over `(user_id, provider)`,
+	// which stopped identifying one row the moment a second Gmail could exist: with two accounts
+	// connected it answered from whichever row SQLite returned, so a send could be waved through
+	// on the strength of a different mailbox's scopes — or blocked on it. The same defect class
+	// as /v1/email/status and the connector catalog, missed here in that sweep.
+	const { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } = await import("../connector-accounts.js");
+	const accounts = await listConnectorAccounts(env, userId, "gmail");
+	const resolved = resolveConnectorAccount(accounts, await pinnedAccountFor(env, instanceId, "gmail"), "Gmail");
+	if (!resolved.ok) return false;
 	const { scopesAllowSend } = await import("../gmail.js");
-	return scopesAllowSend(row?.granted_scopes);
+	return scopesAllowSend(resolved.account.grantedScopes);
 }
 
 const RECONNECT_TO_SEND =
@@ -304,7 +308,7 @@ const replyHandler: ToolDef["handler"] = async (ctx, input) => {
 	const resolved = await gmailToken(ctx);
 	if ("refusal" in resolved) return resolved.refusal;
 	const env = ctx.env;
-	if (!(await canSend(env, ctx.userId ?? ""))) return fail(RECONNECT_TO_SEND);
+	if (!(await canSend(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_SEND);
 
 	const { getMessage, replyHeaders, replySubject, buildMimeMessage, sendMessage, GmailError } = await import("../gmail.js");
 	try {
@@ -354,7 +358,7 @@ const sendHandler: ToolDef["handler"] = async (ctx, input) => {
 	const resolved = await gmailToken(ctx);
 	if ("refusal" in resolved) return resolved.refusal;
 	const env = ctx.env;
-	if (!(await canSend(env, ctx.userId ?? ""))) return fail(RECONNECT_TO_SEND);
+	if (!(await canSend(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_SEND);
 
 	const { buildMimeMessage, sendMessage, GmailError } = await import("../gmail.js");
 	try {

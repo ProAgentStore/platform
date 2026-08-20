@@ -289,3 +289,38 @@ describe("missingScopesFor", () => {
 		expect(missingScopesFor({ oauth: { scopes: [] } }, "anything")).toBeNull();
 	});
 });
+
+describe("missingScopesFor — the forms a provider actually returns", () => {
+	const gmail = { oauth: { scopes: ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"] } };
+
+	it("accepts Google's canonical userinfo URL for the `email` alias it was asked with", () => {
+		// The live bug: Google takes `email` on the way in and returns
+		// `.../auth/userinfo.email` on the way out, so a string comparison reported `email`
+		// permanently missing and every Gmail account rendered "read-only — reconnect to allow
+		// sending" — including one connected seconds earlier with the send box ticked. No
+		// reconnect could ever clear it, because the mismatch was in the comparison.
+		const granted = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
+		expect(missingScopesFor(gmail, granted)).toEqual([]);
+	});
+
+	it("does the same for `profile`", () => {
+		const withProfile = { oauth: { scopes: ["profile"] } };
+		expect(missingScopesFor(withProfile, "https://www.googleapis.com/auth/userinfo.profile")).toEqual([]);
+	});
+
+	it("still reports a scope that is genuinely absent", () => {
+		const granted = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.readonly";
+		expect(missingScopesFor(gmail, granted)).toEqual(["https://www.googleapis.com/auth/gmail.send"]);
+	});
+
+	it("treats the full-mailbox scope as covering every gmail.* scope", () => {
+		// Granting https://mail.google.com/ allows everything gmail.* does, so reporting
+		// gmail.send missing against it is the same false alarm in a different costume.
+		expect(missingScopesFor(gmail, "openid email https://mail.google.com/")).toEqual([]);
+	});
+
+	it("does not let a superset cover a scope outside its family", () => {
+		const drive = { oauth: { scopes: ["https://www.googleapis.com/auth/drive.readonly"] } };
+		expect(missingScopesFor(drive, "https://mail.google.com/")).toEqual(["https://www.googleapis.com/auth/drive.readonly"]);
+	});
+});

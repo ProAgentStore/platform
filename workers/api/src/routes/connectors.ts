@@ -108,6 +108,32 @@ function connectFlow(connector: Connector): { start: string; disconnect: string 
  * the click (#355/#357), and it has to state it for every row, not the one being confirmed.
  */
 /**
+ * Google accepts `email` and `profile` on the way in and hands back the canonical userinfo URLs
+ * on the way out. Comparing the two forms as strings therefore NEVER matches (#715 follow-up).
+ *
+ * That is not a hypothetical: every Gmail connection reported `email` permanently missing, so
+ * every account rendered as "read-only — reconnect to allow sending" no matter what the owner had
+ * just granted, including a mailbox connected seconds earlier with the send box ticked. The
+ * reconnect it asked for could never clear it, because the mismatch is in the comparison rather
+ * than in the grant.
+ */
+const SCOPE_ALIASES: Readonly<Record<string, string>> = {
+	email: "https://www.googleapis.com/auth/userinfo.email",
+	profile: "https://www.googleapis.com/auth/userinfo.profile",
+};
+
+/** Scopes that CONTAIN other scopes. Granting one satisfies everything it covers. */
+const SCOPE_SUPERSETS: ReadonlyArray<{ scope: string; covers: (s: string) => boolean }> = [
+	// Full-mailbox access. A caller holding this can do everything gmail.* allows, so reporting
+	// gmail.send "missing" against it would be a false alarm of the same family as the alias bug.
+	{ scope: "https://mail.google.com/", covers: (s) => s.startsWith("https://www.googleapis.com/auth/gmail.") },
+];
+
+function canonicalScope(scope: string): string {
+	return SCOPE_ALIASES[scope] ?? scope;
+}
+
+/**
  * Which of a connector's declared OAuth scopes this stored grant does NOT have.
  *
  * `null` means unanswerable — either the connector declares no scopes, or the grant predates
@@ -120,10 +146,13 @@ export function missingScopesFor(
 ): string[] | null {
 	const declared = connector.oauth?.scopes;
 	if (!declared?.length || !grantedScopes) return null;
-	const held = new Set(grantedScopes.split(/\s+/).filter(Boolean));
-	// `https://mail.google.com/` subsumes every Gmail scope; a provider-specific superset like
-	// that is why this compares membership rather than asserting set equality.
-	return declared.filter((s) => !held.has(s));
+	const held = new Set(grantedScopes.split(/\s+/).filter(Boolean).map(canonicalScope));
+	const supersets = SCOPE_SUPERSETS.filter((sup) => held.has(sup.scope));
+	return declared.filter((raw) => {
+		const want = canonicalScope(raw);
+		if (held.has(want)) return false;
+		return !supersets.some((sup) => sup.covers(want));
+	});
 }
 
 connectorRoutes.get("/", async (c) => {

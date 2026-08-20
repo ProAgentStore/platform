@@ -64,7 +64,7 @@ export function accountRows(entry: ConnectorEntry): Array<{ accountId: string; n
 		accountId: a.accountId,
 		// An account with no captured address still has to be nameable, or it cannot be disconnected.
 		name: a.label?.trim() || a.accountId || "unnamed connection",
-		note: needsReconnect({ ...entry, missingScopes: a.missingScopes ?? null })
+		note: accountNeedsReconnect(a.missingScopes, entry.scopes?.write === true)
 			? "read-only — reconnect to allow sending"
 			: null,
 	}));
@@ -92,10 +92,22 @@ export function needsPerAgentChoice(entry: ConnectorEntry): boolean {
  * against the alternative of an agent discovering the gap as a provider 403 mid-task. Only for a
  * connector that declares write, because a read-only one has nothing a reconnect would add.
  */
+export function accountNeedsReconnect(missingScopes: string[] | null | undefined, connectorCanWrite: boolean): boolean {
+	if (missingScopes?.length) return true;
+	// Unknown is treated as stale, but only where a reconnect could ADD something: an unrecorded
+	// grant on a read-only connector is not short of anything.
+	return (missingScopes === null || missingScopes === undefined) && connectorCanWrite;
+}
+
 export function needsReconnect(entry: ConnectorEntry): boolean {
 	if (!entry.connected) return false;
-	if (entry.missingScopes?.length) return true;
-	return entry.missingScopes === null && entry.scopes?.write === true;
+	// With several accounts the connector-level scope fields describe none of them — the route
+	// sends null there on purpose, because a single answer to "which mailbox is this?" no longer
+	// exists. Reading that null as "unrecorded, therefore stale" made the summary line say
+	// "read-only" over a list in which each account was already stating its own verdict, and said
+	// it even when every one of them could send. The per-account rows are the answer here.
+	if ((entry.accounts?.length ?? 0) > 1) return false;
+	return accountNeedsReconnect(entry.missingScopes, entry.scopes?.write === true);
 }
 
 /**
