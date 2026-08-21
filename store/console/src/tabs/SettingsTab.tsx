@@ -345,7 +345,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 		setEmailPermission(on);
 		try {
 			await api(`/v1/instances/${instanceId}/state`, { method: "PUT", body: JSON.stringify({ permissions: { email: on } }) });
-			setEmailMsg(on ? "This agent can now read your inbox for sign-in links & codes." : "Email access turned off for this agent.");
+			setEmailMsg(on ? "This agent can now reach your Gmail. What it may do with it is the tool list above." : "Gmail access turned off for this agent.");
 		} catch (e) {
 			setEmailPermission(!on); // revert on failure
 			setEmailMsg(e instanceof Error ? e.message : "Failed");
@@ -576,7 +576,15 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				    an account row — so it stays. It is shown whenever the deployment can do Gmail at
 				    all, disabled rather than hidden while the account is disconnected, because
 				    `agent-think.ts` still offers `find_confirmation_link` on this flag alone: hiding
-				    the checkbox would remove the only control that turns off something still set. */}
+				    the checkbox would remove the only control that turns off something still set.
+
+				    The LABEL said "read my inbox for sign-in links & codes", which was exact when
+				    `find_confirmation_link` was the only Gmail tool and became badly wrong once this
+				    same flag started gating search, read, attachments, reply, send and archive
+				    (#711/#713/#716). Someone looking for the switch that lets an inbox agent read
+				    their mail would scan that line, decide it was about verification codes, and go
+				    on looking — which is exactly what happened. A permission control has to describe
+				    the permission, not the first thing that ever used it. */}
 				{showsEmail && (
 				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
 					<input
@@ -585,7 +593,14 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 						disabled={!emailStatus?.connected}
 						onChange={(e) => toggleEmailPermission(e.target.checked)}
 					/>
-					<span>Allow <b>this agent</b> to read my inbox for sign-in links &amp; codes</span>
+					<span>
+						Allow <b>this agent</b> to reach my Gmail
+						<span className="block text-xs text-muted-soft mt-0.5">
+							Without this it cannot read or act on any message, whatever tools it declares. Which
+							of them it may actually use is the list above — and sending, archiving and marking
+							read each need write access granted there as well.
+						</span>
+					</span>
 				</label>
 				)}
 				{showsEmail && !emailStatus?.connected && (
