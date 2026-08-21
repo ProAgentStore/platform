@@ -18,9 +18,21 @@ function actionsHeaders(token?: string): Record<string, string> {
 	};
 }
 
-/** Success carries the raw runs; failure carries the HTTP status (or `null` for a network
- *  error) so a caller can surface "GitHub returned 404" instead of a generic message. */
-export type WorkflowRunsResult = { runs: Array<Record<string, unknown>> } | { status: number | null };
+/**
+ * Success carries the raw runs; failure carries the HTTP status (or `null` for a network
+ * error) so a caller can surface "GitHub returned 404" instead of a generic message.
+ *
+ * `stale` is set ONLY on the cached path, and only when the stored copy was served because
+ * GitHub was unreachable (5xx/429/network) — see `githubConditionalJson`. It is optional and
+ * absent on every other path, so the "never throws, `{ status }` on failure" contract the five
+ * call sites rely on is unchanged and a caller that ignores it behaves exactly as before.
+ *
+ * It exists because a payload that is merely OLD is fine for a panel and wrong for a
+ * notification: #708's deploy watcher fired "✅ Deployed 4c86d53" nineteen days after that run
+ * finished, and a page served from store during a GitHub outage is one of the two ways it can
+ * see an old run as the newest one.
+ */
+export type WorkflowRunsResult = { runs: Array<Record<string, unknown>>; stale?: boolean } | { status: number | null };
 
 /**
  * Who is asking, and under what authority — the argument that turns a read into a CONDITIONAL
@@ -76,10 +88,13 @@ export async function fetchWorkflowRuns(
 			// answer to one is not the answer to the other (a `event=pull_request` page is not the
 			// Builds panel's page). The cache's own failure asymmetry is passed through unchanged —
 			// a 403/404 invalidated the entry and arrives here as a failure; a 5xx/network error
-			// served the stored copy and arrives as a success flagged stale. `fromCache`/`stale` are
-			// deliberately NOT surfaced on WorkflowRunsResult: no caller has a use for them today,
-			// and widening this union is how the "never throws, always `{ status }` on failure"
-			// contract every caller relies on starts to drift.
+			// served the stored copy and arrives as a success flagged stale.
+			//
+			// `stale` used to be dropped here, on the reasoning that no caller had a use for it. The
+			// deploy watcher does (#708): it is the one caller that INTERRUPTS someone, and a stored
+			// page served during a GitHub outage can name an old run as the newest. `fromCache` is
+			// still dropped — a 304 is fromCache and perfectly fresh, so it says nothing a caller
+			// can act on.
 			const res = await githubConditionalJson<{ workflow_runs?: Array<Record<string, unknown>> }>(cache.env, {
 				identity: cache.identity,
 				repo,
@@ -89,7 +104,7 @@ export async function fetchWorkflowRuns(
 				headers: actionsHeaders(token),
 			});
 			if (!res.ok) return { status: res.status };
-			return { runs: res.data?.workflow_runs ?? [] };
+			return { runs: res.data?.workflow_runs ?? [], stale: res.stale };
 		}
 		const res = await fetch(url, { headers: actionsHeaders(token) });
 		if (!res.ok) return { status: res.status };

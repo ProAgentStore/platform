@@ -1,0 +1,27 @@
+-- The deploy watermark gains an ORDER (#708).
+--
+-- `last_deploy_run_id` has held `sha:<commit>` since #359 and was compared for EQUALITY only, so
+-- the watcher had no notion of forward. GitHub's runs list occasionally answers an identical
+-- request with a weeks-old snapshot (reproduced live: ~1 in 290), and the conditional cache serves
+-- a stored page when GitHub is unreachable. Against an equality test an older commit is simply
+-- "not the one I last announced" and therefore news — and the sweep then wrote it back as the
+-- watermark, rolling it BACKWARDS, so the next correct read differed from it and fired again.
+--
+-- One bad read therefore cost exactly two notifications about a minute apart and left the state
+-- clean enough to do it again forever. Measured over 52h: 32 real deploys, 198 notification rows;
+-- `freeappstore-online/platform`, unpushed since 2026-08-14, produced 82 of them as two commits
+-- alternating 41 times each.
+--
+--   last_deploy_at   `updated_at` of the run that `last_deploy_run_id` was taken from. A page
+--                    whose newest deploy run predates this is a snapshot from before we last
+--                    spoke: the sweep says nothing AND leaves both columns untouched.
+--
+-- NULL means UNKNOWN, and unknown must mean "allow, then record" — never "block". Every existing
+-- row starts NULL, and a NULL read as a floor would silence every watched repo's next deploy
+-- exactly once, which is the same class of defect this migration is fixing. The column fills
+-- itself within one sweep per repo without a backfill, because the decision advances it on the
+-- `already-notified` branch too, which is where an idle repo sits every minute.
+--
+-- No index: the column is read as part of the row the rotation index already selects
+-- (idx_coding_repos_deploy_watch, migration 0076), never searched on.
+ALTER TABLE coding_repos ADD COLUMN last_deploy_at TEXT;

@@ -285,7 +285,7 @@ describe("Actions runs go through the conditional cache (#418)", () => {
 
 	it("stores the runs page under the `runs` resource and replays it on a 304", async () => {
 		const { env } = kvEnv();
-		expect(await seedRuns(env)).toEqual({ runs: runsBody(7).workflow_runs });
+		expect(await seedRuns(env)).toEqual({ runs: runsBody(7).workflow_runs, stale: false });
 
 		let sent: Record<string, string> = {};
 		globalThis.fetch = vi.fn(async (_u: unknown, init?: RequestInit) => {
@@ -296,7 +296,7 @@ describe("Actions runs go through the conditional cache (#418)", () => {
 		// The acceptance criterion: an unchanged repo's poll sends If-None-Match and spends no
 		// primary rate limit, while still answering with the real runs.
 		expect(sent["If-None-Match"]).toBe('W/"r1"');
-		expect(again).toEqual({ runs: runsBody(7).workflow_runs });
+		expect(again).toEqual({ runs: runsBody(7).workflow_runs, stale: false });
 	});
 
 	it("keeps `runs` apart from `issues` on the same repo and user", async () => {
@@ -341,16 +341,39 @@ describe("Actions runs go through the conditional cache (#418)", () => {
 		expect(store.size).toBe(0);
 	});
 
-	it("a 5xx / network error still SERVES the stored copy — unreachable says nothing about permission", async () => {
+	// ...and SAYS SO (#708). The page is still served — a Builds panel should render an old list
+	// rather than nothing — but the deploy watcher is the one caller that interrupts a person, and
+	// a stored page can name a run that is no longer the newest. Dropping this flag is how a
+	// notification came to assert a deploy nineteen days after it happened.
+	it("a 5xx / network error still SERVES the stored copy, flagged stale — unreachable says nothing about permission", async () => {
 		const { env } = kvEnv();
 		await seedRuns(env);
 		globalThis.fetch = vi.fn(async () => ghResponse(502, {})) as unknown as typeof fetch;
-		expect(await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 }, { env, identity: ALICE })).toEqual({ runs: runsBody(7).workflow_runs });
+		expect(await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 }, { env, identity: ALICE })).toEqual({ runs: runsBody(7).workflow_runs, stale: true });
 
 		globalThis.fetch = vi.fn(async () => {
 			throw new Error("network");
 		}) as unknown as typeof fetch;
-		expect(await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 }, { env, identity: ALICE })).toEqual({ runs: runsBody(7).workflow_runs });
+		expect(await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 }, { env, identity: ALICE })).toEqual({ runs: runsBody(7).workflow_runs, stale: true });
+	});
+
+	// A 304 is `fromCache` and perfectly FRESH — GitHub just confirmed nothing changed. Conflating
+	// the two would make the watcher decline every unchanged repo forever, which is silence rather
+	// than noise but is still the watcher not working.
+	it("does not call a 304 stale — the cheap path stays actionable", async () => {
+		const { env } = kvEnv();
+		await seedRuns(env);
+		globalThis.fetch = vi.fn(async () => ghResponse(304, null)) as unknown as typeof fetch;
+		expect(await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 }, { env, identity: ALICE })).toEqual({ runs: runsBody(7).workflow_runs, stale: false });
+	});
+
+	// The plain path has no store to serve from, so it can never be stale — and the absent key is
+	// what keeps `{ runs }` assignable everywhere it was before.
+	it("leaves `stale` unset on the uncached path", async () => {
+		globalThis.fetch = vi.fn(async () => ghResponse(200, runsBody(3), 'W/"r9"')) as unknown as typeof fetch;
+		const r = await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 });
+		expect(r).toEqual({ runs: runsBody(3).workflow_runs });
+		expect("stale" in r).toBe(false);
 	});
 
 	it("NEVER throws, and always reports a failure as `{ status }` — the contract five callers degrade on", async () => {
@@ -379,7 +402,7 @@ describe("Actions runs go through the conditional cache (#418)", () => {
 		await seedRuns(env); // Alice's entry exists.
 		globalThis.fetch = vi.fn(async () => ghResponse(200, runsBody(4), 'W/"r4"')) as unknown as typeof fetch;
 		const r = await fetchWorkflowRuns("acme/secret", "tok", { perPage: 1 }, { env, identity: { userId: "alice", authContext: null } });
-		expect(r).toEqual({ runs: runsBody(4).workflow_runs });
+		expect(r).toEqual({ runs: runsBody(4).workflow_runs, stale: false });
 		expect(store.size).toBe(1); // still only the seeded entry — nothing new written
 	});
 });

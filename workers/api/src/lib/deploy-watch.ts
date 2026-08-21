@@ -1,4 +1,5 @@
 import { codingBuildsLink } from "./console-links.js";
+import { logError } from "./error-log.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { resolveGithubRead } from "./github-cache.js";
 import { notifyUser } from "../routes/push.js";
@@ -32,13 +33,46 @@ export interface WatchedRun {
 	workflowName: string;
 	/** Workflow file path, e.g. `.github/workflows/deploy-api.yml`. */
 	workflowPath: string;
-	/** ISO — used only to order runs newest-first without trusting the API's order. */
+	/**
+	 * ISO. Orders runs newest-first without trusting the API's order — and since #708 it is also
+	 * the watermark's second half, which is what makes the watcher's progress MONOTONIC. Read the
+	 * note on `decideDeployNotification`.
+	 */
 	updatedAt: string;
 }
 
+/**
+ * What the watcher already knows about this repo, and when "now" is.
+ *
+ * Grouped rather than passed as four positional arguments because the three pieces of state
+ * have to move TOGETHER: `lastNotified` without `lastDeployAt` is exactly the watcher that had
+ * no notion of forward (#708), and a decision that advanced one without the other would
+ * reintroduce it a different way.
+ */
+export interface DeployWatchState {
+	/** The watermark — `sha:<commit>` of the last deploy announced, or `null`/legacy run id. */
+	lastNotified: string | null;
+	/**
+	 * `updated_at` of the run that watermark was taken from. `null` means UNKNOWN — a row written
+	 * before this column existed, or one that has not been swept since. Unknown must mean "allow
+	 * and then record", never "block": treating it as a floor would silence every repo's next
+	 * deploy exactly once, which is the same class of bug as the one being fixed.
+	 */
+	lastDeployAt: string | null;
+	/** ms epoch. Injected so the age floor below is testable rather than clock-dependent. */
+	now: number;
+}
+
 export type DeployNotifyDecision =
-	| { notify: false; seenId: string | null; reason: "no-run" | "still-running" | "already-notified" | "first-sight" }
-	| { notify: true; seenId: string; title: string; body: string; url: string };
+	| {
+			notify: false;
+			seenId: string | null;
+			seenAt: string | null;
+			reason: "no-run" | "still-running" | "already-notified" | "first-sight" | "stale-page";
+	  }
+	/** `seenAt` is nullable on this arm too: a run whose `updated_at` we cannot parse is still a
+	 *  real deploy worth announcing, it just leaves the order unknown for one more sweep. */
+	| { notify: true; seenId: string; seenAt: string | null; title: string; body: string; url: string };
 
 /**
  * How many recent runs one repo's sweep reads.
@@ -107,6 +141,36 @@ export function deployDeepLink(instanceId: string, repoId: string): string {
 /** The watermark's format. A stored value that is not one of these predates #359 — see below. */
 const SHA_WATERMARK = "sha:";
 
+/**
+ * How old the newest deploy run on a page may be before the watcher declines to speak about it,
+ * **when it has no recorded order to compare against** (`lastDeployAt === null`).
+ *
+ * This is the fallback arm of #708's fix, not the main one. Where the order IS known the
+ * comparison is exact and this horizon is deliberately NOT consulted: a run newer than the one
+ * we already announced is a deploy we have not announced, and announcing it late is right even
+ * if the sweep fell hours behind. Applying an age floor there could only silence a real deploy,
+ * which is the regression #708 names.
+ *
+ * It earns its place in the one window the exact test cannot judge: the first sweep of a row
+ * whose `last_deploy_at` is still NULL. A stale page read in that window would both misfire and
+ * record its own staleness, so something has to hold the line, and "a deploy that finished six
+ * hours ago is not news" is true independent of any watermark — a deploy notification exists to
+ * answer *is it green yet*, and one arriving six hours later has no reader.
+ *
+ * Six hours: the sweep is bounded at `DEPLOY_WATCH_BATCH` per minute across ALL users' repos, so
+ * its rotation period grows with the table and is not a per-user guarantee. Six hours is three
+ * orders of magnitude below the weeks-old snapshots actually observed and far above any
+ * plausible rotation lag.
+ */
+export const DEPLOY_MAX_UNORDERED_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** ms epoch, or `null` when the value is missing or not a date we can order by. */
+function instant(iso: string | null | undefined): number | null {
+	if (!iso) return null;
+	const t = Date.parse(iso);
+	return Number.isFinite(t) ? t : null;
+}
+
 /** Runs, newest first, without trusting the API's ordering. */
 function newestFirst(runs: WatchedRun[]): WatchedRun[] {
 	return [...runs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
@@ -135,30 +199,73 @@ function newestFirst(runs: WatchedRun[]): WatchedRun[] {
  * case: a watermark written by the PREVIOUS format is a run id, which can never equal a commit
  * sha, so it is treated as first sight and re-seeded silently rather than announcing a deploy
  * that already happened.
+ *
+ * **And the watermark only ever moves FORWARD** — #708, the fifth defect here and the first that
+ * is not about an event's identity. GitHub's runs list occasionally answers an identical request
+ * with a weeks-old snapshot (measured: ~1 in 290), and the cache serves a stored page when GitHub
+ * is unreachable. Against a watermark compared only for EQUALITY, an older commit is simply "not
+ * the one I last said" and therefore news; the sweep then wrote that older commit back as the
+ * watermark, so the next correct read differed from it and fired again. One bad read cost exactly
+ * two notifications a minute apart and left the state clean enough to do it again forever — 82
+ * rows in 52 hours for a repository nobody had pushed to in five days.
+ *
+ * So the decision now carries `seenAt` beside `seenId`, and a page whose newest deploy run
+ * predates the recorded one is refused: no notification, **and the watermark is returned
+ * unmoved**. Both halves are needed. Refusing to speak while still rolling the watermark back
+ * would leave the second buzz of the pair exactly where it was.
+ *
+ * `seenAt` advances on `already-notified` too, on purpose: an idle repo sits on that branch every
+ * minute, and it is the only path by which a row whose `last_deploy_at` is NULL ever acquires
+ * one. Without it the guard would stay dormant for precisely the repos that flap the most.
  */
 export function decideDeployNotification(
 	runs: WatchedRun[],
-	lastNotified: string | null,
+	state: DeployWatchState,
 	repoName: string,
 	/** Same-origin click target — see `deployDeepLink`. The GitHub run URL is NOT usable here. */
 	deepLink: string,
 ): DeployNotifyDecision {
+	const { lastNotified, lastDeployAt, now } = state;
+	/** Neither half of the watermark moves. The shape every refusal returns. */
+	const hold = (reason: "no-run" | "still-running" | "stale-page"): DeployNotifyDecision => ({
+		notify: false,
+		seenId: lastNotified,
+		seenAt: lastDeployAt,
+		reason,
+	});
+
 	const deploys = runs.filter((r) => isDeployWorkflow(r.workflowName, r.workflowPath) && r.sha);
-	if (!deploys.length) return { notify: false, seenId: lastNotified, reason: "no-run" };
+	if (!deploys.length) return hold("no-run");
 
 	// `completed` is the only state worth interrupting someone for, and only some conclusions
 	// are evidence of anything. queued/in_progress/cancelled come back round on a later sweep.
 	const reportable = newestFirst(
 		deploys.filter((r) => r.status === "completed" && REPORTABLE.has(r.conclusion ?? "")),
 	);
-	if (!reportable.length) return { notify: false, seenId: lastNotified, reason: "still-running" };
+	if (!reportable.length) return hold("still-running");
 
-	const sha = reportable[0].sha;
+	const newest = reportable[0];
+	const sha = newest.sha;
 	const seenId = `${SHA_WATERMARK}${sha}`;
-	if (lastNotified === seenId) return { notify: false, seenId, reason: "already-notified" };
+	// Fall back to the recorded instant when the run carries no usable timestamp, so a malformed
+	// `updated_at` cannot erase a good one.
+	const seenAt = newest.updatedAt || lastDeployAt;
+	if (lastNotified === seenId) return { notify: false, seenId, seenAt, reason: "already-notified" };
 	if (!lastNotified?.startsWith(SHA_WATERMARK)) {
 		// Seed the watermark, say nothing. See the note above.
-		return { notify: false, seenId, reason: "first-sight" };
+		return { notify: false, seenId, seenAt, reason: "first-sight" };
+	}
+
+	const at = instant(newest.updatedAt);
+	const recorded = instant(lastDeployAt);
+	if (recorded !== null) {
+		// The exact test. This commit differs from the watermark AND its run is older than the one
+		// the watermark was taken from, so this page is a snapshot from before we last spoke.
+		if (at !== null && at < recorded) return hold("stale-page");
+	} else if (at !== null && now - at > DEPLOY_MAX_UNORDERED_AGE_MS) {
+		// No recorded order to compare against — the one window where the age floor is the only
+		// thing standing between a stale snapshot and someone's phone.
+		return hold("stale-page");
 	}
 
 	// Everything this sweep can see about THIS commit — several deploy workflows for one push is
@@ -173,6 +280,7 @@ export function decideDeployNotification(
 		return {
 			notify: true,
 			seenId,
+			seenAt,
 			title: `❌ Deploy failed ${short}`,
 			body: `${repoName} — ${what} ${failed[0].conclusion || "failed"}. Open Builds to see why.`,
 			url: deepLink,
@@ -182,6 +290,7 @@ export function decideDeployNotification(
 	return {
 		notify: true,
 		seenId,
+		seenAt,
 		title: `✅ Deployed ${short}`,
 		body: what ? `${repoName} is live — ${what}.` : `${repoName} is live.`,
 		url: deepLink,
@@ -203,6 +312,65 @@ interface RepoRow {
 	 * per repo and no notification for a build that already went out.
 	 */
 	last_deploy_run_id: string | null;
+	/**
+	 * The watermark's other half (#708): `updated_at` of the run `last_deploy_run_id` was taken
+	 * from. It is what makes the watermark ORDERED rather than merely an identity — see
+	 * `decideDeployNotification`. NULL means unknown, which allows and then records.
+	 */
+	last_deploy_at: string | null;
+}
+
+/**
+ * Persist the watermark and stamp the rotation key, in one statement.
+ *
+ * The two columns are written together everywhere, including on the paths that advance neither,
+ * because the decision already computed what each should be. Splitting them into "sometimes we
+ * update the id, sometimes the instant" is how they would drift apart, and a `sha:` with a
+ * mismatched instant is worse than either alone.
+ */
+async function writeWatermark(env: Env, repoId: string, seenId: string | null, seenAt: string | null): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE coding_repos
+		    SET last_deploy_run_id = ?1, last_deploy_at = ?2, last_deploy_checked_at = datetime('now')
+		  WHERE id = ?3`,
+	)
+		.bind(seenId, seenAt, repoId)
+		.run()
+		.catch(() => undefined);
+}
+
+/**
+ * A sweep declined to act on what it read. Record it, and rotate on without moving the watermark.
+ *
+ * `warn`, not `error`: nothing is broken here — this is the guard doing its job, and GitHub
+ * serving an old snapshot is not a fault of ours to page anyone about. But it must be COUNTABLE.
+ * `logError` collapses repeats into one row with a count, so a watcher quietly refusing a repo's
+ * every sweep shows up as a rising number in the admin Errors view instead of as silence.
+ */
+async function recordDeclined(
+	env: Env,
+	repo: Pick<RepoRow, "id" | "user_id" | "github_repo" | "instance_id">,
+	why: string,
+	state: { lastNotified: string | null; lastDeployAt: string | null },
+): Promise<void> {
+	await logError(env, {
+		source: "deploy-watch",
+		level: "warn",
+		message: `declined a stale runs page for ${repo.github_repo}: ${why}`,
+		userId: repo.user_id,
+		context: {
+			repoId: repo.id,
+			instanceId: repo.instance_id,
+			githubRepo: repo.github_repo,
+			lastNotified: state.lastNotified,
+			lastDeployAt: state.lastDeployAt,
+		},
+	}).catch(() => undefined);
+	// The rotation key still moves — a declined repo must not pin the batch to itself.
+	await env.DB.prepare("UPDATE coding_repos SET last_deploy_checked_at = datetime('now') WHERE id = ?1")
+		.bind(repo.id)
+		.run()
+		.catch(() => undefined);
 }
 
 /**
@@ -215,7 +383,7 @@ export async function runDeployWatch(env: Env): Promise<void> {
 		// Oldest-checked first, so a bounded batch still rotates over every repo instead of
 		// starving the tail.
 		const { results } = await env.DB.prepare(
-			`SELECT id, instance_id, user_id, name, github_repo, last_deploy_run_id
+			`SELECT id, instance_id, user_id, name, github_repo, last_deploy_run_id, last_deploy_at
 			   FROM coding_repos
 			  WHERE github_repo IS NOT NULL AND github_repo <> ''
 			  ORDER BY COALESCE(last_deploy_checked_at, '') ASC
@@ -252,6 +420,17 @@ export async function runDeployWatch(env: Env): Promise<void> {
 				{ perPage: DEPLOY_WATCH_RUNS_PER_REPO, event: "push", status: "completed" },
 				{ env, identity: { userId: repo.user_id, authContext } },
 			);
+			if ("runs" in res && res.stale) {
+				// GitHub was unreachable and the conditional cache served its stored copy (#708).
+				// A panel should render that rather than nothing; a notification must not fire from
+				// it, because the stored page can name a run that is no longer the newest. Stamp the
+				// rotation key so the batch still moves on, and touch neither half of the watermark.
+				await recordDeclined(env, repo, "github unreachable — served a stored runs page", {
+					lastNotified: repo.last_deploy_run_id,
+					lastDeployAt: repo.last_deploy_at,
+				});
+				continue;
+			}
 			const runs: WatchedRun[] = ("runs" in res ? res.runs : []).map((raw) => {
 				const mapped = mapWorkflowRun(raw);
 				return {
@@ -271,7 +450,7 @@ export async function runDeployWatch(env: Env): Promise<void> {
 
 			const decision = decideDeployNotification(
 				runs,
-				repo.last_deploy_run_id,
+				{ lastNotified: repo.last_deploy_run_id, lastDeployAt: repo.last_deploy_at, now: Date.now() },
 				repo.name,
 				deployDeepLink(repo.instance_id, repo.id),
 			);
@@ -282,15 +461,21 @@ export async function runDeployWatch(env: Env): Promise<void> {
 				await notifyUser(env, repo.user_id, "deploy", decision.title, decision.body, decision.url, {
 					key: `deploy:${repo.id}:${decision.seenId}`,
 				}).catch(() => undefined);
+			} else if (decision.reason === "stale-page") {
+				// The rejection has to leave a trace somewhere other than the owner's phone. This
+				// failure mode survived four fixes precisely because it was invisible from the
+				// inside: every component reported success and the only evidence was the buzzing.
+				await recordDeclined(env, repo, "runs page is older than the deploy already reported", {
+					lastNotified: repo.last_deploy_run_id,
+					lastDeployAt: repo.last_deploy_at,
+				});
+				continue;
 			}
 			// Always stamp the check, even when nothing happened — it is the rotation key, and
-			// leaving it unset would pin the batch to the same repos forever.
-			await env.DB.prepare(
-				"UPDATE coding_repos SET last_deploy_run_id = ?1, last_deploy_checked_at = datetime('now') WHERE id = ?2",
-			)
-				.bind(decision.seenId, repo.id)
-				.run()
-				.catch(() => undefined);
+			// leaving it unset would pin the batch to the same repos forever. Both halves of the
+			// watermark are written together (#708): an id without its instant is the watcher that
+			// could not tell forward from backward.
+			await writeWatermark(env, repo.id, decision.seenId, decision.seenAt);
 		} catch {
 			// One repo's failure must not end the sweep for the rest.
 		}
