@@ -39,3 +39,38 @@ describe("lintResolvedAgentClaims (#362)", () => {
 		expect(lintResolvedAgentClaims({ description: null, slug: "kb", category: "general", config: null })).toEqual([]);
 	});
 });
+
+describe("lintResolvedAgentClaims — the safety family reaches the welcome message (#722)", () => {
+	const sends = (welcome: string) =>
+		JSON.stringify({
+			capabilities: { surfaces: [], runtime: null, workflow: null, tools: ["gmail_search", "gmail_read_message", "gmail_reply", "gmail_send"] },
+			identity: { welcomeMessage: welcome },
+		});
+
+	it("lints config.identity.welcomeMessage, not only the description", () => {
+		// The false promise that shipped lived in BOTH fields, and the welcome message is the one a
+		// subscriber reads first. Linting only the description would have caught half of it.
+		const warnings = lintResolvedAgentClaims({
+			description: "Talk to your inbox.",
+			slug: "inbox-chat",
+			category: "productivity",
+			config: sends("I will show you anything before it is sent or archived."),
+		});
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatch(/^Welcome message promises/);
+		expect(warnings[0]).toContain("gmail_reply, gmail_send");
+	});
+
+	it("reads the RESOLVED tool allowlist — no send tool, no finding", () => {
+		const config = JSON.stringify({
+			capabilities: { surfaces: [], runtime: null, workflow: null, tools: ["gmail_search", "gmail_read_message", "gmail_archive"] },
+			identity: { welcomeMessage: "I will show you anything before it is sent or archived." },
+		});
+		expect(lintResolvedAgentClaims({ description: "Talk to your inbox.", slug: "inbox-chat", category: "productivity", config })).toEqual([]);
+	});
+
+	it("survives a config with no identity at all", () => {
+		const config = JSON.stringify({ capabilities: { surfaces: [], runtime: null, workflow: null, tools: ["gmail_send"] } });
+		expect(lintResolvedAgentClaims({ description: "Sends the digest you asked for.", slug: "x", category: "general", config })).toEqual([]);
+	});
+});
