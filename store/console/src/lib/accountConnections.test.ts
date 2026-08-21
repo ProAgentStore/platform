@@ -7,8 +7,12 @@ import {
 	accountRows,
 	needsPerAgentChoice,
 	needsReconnect,
+	scopeShortfallNote,
 	type ConnectorEntry,
 } from "./accountConnections";
+
+const SEND = "https://www.googleapis.com/auth/gmail.send";
+const MODIFY = "https://www.googleapis.com/auth/gmail.modify";
 
 const entry = (over: Partial<ConnectorEntry> = {}): ConnectorEntry => ({
 	id: "google_drive",
@@ -305,5 +309,110 @@ describe("the summary line does not answer for accounts it cannot see", () => {
 	it("still warns on the summary when there is exactly ONE account short of scope", () => {
 		const entry = gmail([{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: null }]);
 		expect(needsReconnect(entry)).toBe(true);
+	});
+});
+
+// ── #717: the note says WHICH half is missing ───────────────────────────────
+
+describe("scopeShortfallNote — a shortfall is not binary, so the sentence is not either", () => {
+	it("stays silent when the grant holds everything declared", () => {
+		expect(scopeShortfallNote([], true)).toBeNull();
+	});
+
+	it("says read-only when send is what is missing", () => {
+		expect(scopeShortfallNote([SEND], true)).toBe("read-only — reconnect to allow sending");
+	});
+
+	// The reported state: an account that granted send but declined manage-mail was called
+	// read-only, which is false on both halves — it is not read-only, and what it lacks is not send.
+	it("names the action tools when only manage-mail is missing, and does NOT claim read-only", () => {
+		const note = scopeShortfallNote([MODIFY], true);
+		expect(note).toBe("cannot archive or mark read — reconnect to allow managing mail");
+		expect(note).not.toContain("read-only");
+	});
+
+	it("asks for both when both are missing", () => {
+		expect(scopeShortfallNote([SEND, MODIFY], true)).toBe("read-only — reconnect to allow sending and managing mail");
+	});
+
+	it("keeps the original sentence for an unrecorded grant — that population IS the read-only set", () => {
+		// migration 0133: we do not know what it holds, and for Gmail it predates the send scope.
+		expect(scopeShortfallNote(null, true)).toBe("read-only — reconnect to allow sending");
+		expect(scopeShortfallNote(undefined, true)).toBe("read-only — reconnect to allow sending");
+	});
+
+	it("says nothing for an unrecorded grant on a read-only connector — a reconnect adds nothing", () => {
+		expect(scopeShortfallNote(null, false)).toBeNull();
+	});
+
+	// The match is on the scope's last segment, not on a connector id: this module has no
+	// per-connector knowledge and is not gaining any. A connector whose missing scope is neither
+	// of Gmail's falls through to the generic sentence, exactly as before this change.
+	it("falls back to the generic sentence for a scope it has no specific wording for", () => {
+		expect(scopeShortfallNote(["https://api.example.test/auth/widgets.write"], true)).toBe(
+			"read-only — reconnect to allow sending",
+		);
+	});
+});
+
+describe("the note branching reaches both surfaces that show it", () => {
+	const gmail = (over: Partial<ConnectorEntry> = {}): ConnectorEntry =>
+		({
+			id: "gmail",
+			label: "Gmail",
+			auth: "oauth",
+			grantModel: "user",
+			configured: true,
+			connected: true,
+			account: "me@example.test",
+			connectedAt: "2026-01-01",
+			reach: null,
+			flow: { start: "/s", disconnect: "/d" },
+			scopes: { read: true, write: true },
+			...over,
+		}) as ConnectorEntry;
+
+	it("uses it on the summary line", () => {
+		expect(connectionSummary(gmail({ missingScopes: [MODIFY] }))).toBe(
+			"connected as me@example.test · cannot archive or mark read — reconnect to allow managing mail",
+		);
+	});
+
+	it("uses it per account, so two mailboxes can differ", () => {
+		const rows = accountRows(
+			gmail({
+				account: null,
+				accounts: [
+					{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: [MODIFY] },
+					{ accountId: "b@x.test", label: "b@x.test", connectedAt: null, missingScopes: [SEND] },
+					{ accountId: "c@x.test", label: "c@x.test", connectedAt: null, missingScopes: [] },
+				],
+			}),
+		);
+		expect(rows.map((r) => r.note)).toEqual([
+			"cannot archive or mark read — reconnect to allow managing mail",
+			"read-only — reconnect to allow sending",
+			null,
+		]);
+	});
+
+	// #715's short-circuit, re-asserted against the new wording: with several accounts the
+	// connector-level fields describe none of them, so the summary must stay quiet whatever the
+	// per-account notes say.
+	it("keeps the multi-account summary quiet, as #715 left it", () => {
+		const entry = gmail({
+			account: null,
+			missingScopes: null,
+			accounts: [
+				{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: [MODIFY] },
+				{ accountId: "b@x.test", label: "b@x.test", connectedAt: null, missingScopes: [] },
+			],
+		});
+		expect(needsReconnect(entry)).toBe(false);
+		expect(connectionSummary(entry)).toBe("connected");
+		expect(accountRows(entry).map((r) => r.note)).toEqual([
+			"cannot archive or mark read — reconnect to allow managing mail",
+			null,
+		]);
 	});
 });

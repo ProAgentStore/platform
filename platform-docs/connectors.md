@@ -402,8 +402,8 @@ checked on every Drive route, and an agent that declares no tool allowlist at al
 
 ## Gmail
 
-Gmail reads the owner's mailbox and, since #713, replies from it. Two OAuth scopes are requested,
-and they are deliberately separate powers:
+Gmail reads the owner's mailbox, replies from it, and can tidy it — archive a message or mark it
+read. Three OAuth scopes are requested, and they are deliberately separate powers:
 
 | Scope | What it allows |
 |---|---|
@@ -415,9 +415,14 @@ and they are deliberately separate powers:
 nothing an agent does to a message is unrecoverable: `gmail.modify` can move mail to Trash, where
 the owner has 30 days to retrieve it, and no tool exposes even that.
 
-Each scope is declared, not required. Google's consent screen lets a person grant reading and
-sending but decline manage-mail, and only what was actually **granted** is recorded — so such an
-account keeps reading and sending, and only the two action tools refuse.
+**What the consent screen shows.** All three appear as separate checkboxes, so you can tick reading
+and sending and leave manage-mail unticked. Only what was actually **granted** is recorded, so an
+account that declines it keeps reading and sending — `gmail_archive` and `gmail_mark_read` are the
+only two tools that then refuse, and Preferences → Connections says so on the row: *"cannot archive
+or mark read — reconnect to allow managing mail"*.
+
+Reconnecting genuinely re-asks. The flow sends `prompt=consent`, so an account connected before
+manage-mail existed is shown the new checkbox rather than being handed its old grant back.
 
 ### Tools
 

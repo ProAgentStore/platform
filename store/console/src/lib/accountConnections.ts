@@ -64,9 +64,7 @@ export function accountRows(entry: ConnectorEntry): Array<{ accountId: string; n
 		accountId: a.accountId,
 		// An account with no captured address still has to be nameable, or it cannot be disconnected.
 		name: a.label?.trim() || a.accountId || "unnamed connection",
-		note: accountNeedsReconnect(a.missingScopes, entry.scopes?.write === true)
-			? "read-only — reconnect to allow sending"
-			: null,
+		note: scopeShortfallNote(a.missingScopes, entry.scopes?.write === true),
 	}));
 }
 
@@ -97,6 +95,36 @@ export function accountNeedsReconnect(missingScopes: string[] | null | undefined
 	// Unknown is treated as stale, but only where a reconnect could ADD something: an unrecorded
 	// grant on a read-only connector is not short of anything.
 	return (missingScopes === null || missingScopes === undefined) && connectorCanWrite;
+}
+
+/**
+ * WHICH scopes are absent decides the sentence — not merely that some are (#717).
+ *
+ * The note used to be binary: any shortfall at all rendered as "read-only — reconnect to allow
+ * sending". The shortfall is not binary. An account that granted send but declined manage-mail
+ * was told it was read-only, which is false on both halves — it is not read-only, and what it
+ * lacks is not send. Being told the wrong thing about a permission is worse than being told
+ * nothing, because the remedy offered does not match the gap.
+ *
+ * Matched on the scope URL's last segment rather than on the connector id. This module is
+ * deliberately generic over connectors — there is no `if (id === "gmail")` here and the account
+ * page's whole design rests on there not being one — but a scope string IS the vocabulary of one
+ * provider, and pretending otherwise would mean either a per-connector table (the thing this file
+ * exists to avoid) or a sentence too vague to act on. A connector whose missing scopes are none of
+ * these falls through to the generic sentence, exactly as before.
+ *
+ * `null`/`undefined` missing-scopes is the unrecorded pre-migration-0133 grant: we do not know
+ * what it holds, and for Gmail that population is precisely the read-only set (#713), so it keeps
+ * the original sentence.
+ */
+export function scopeShortfallNote(missingScopes: string[] | null | undefined, connectorCanWrite: boolean): string | null {
+	if (!accountNeedsReconnect(missingScopes, connectorCanWrite)) return null;
+	const missing = new Set((missingScopes ?? []).map((s) => s.split("/").pop() ?? s));
+	const send = missing.has("gmail.send");
+	const modify = missing.has("gmail.modify");
+	if (send && modify) return "read-only — reconnect to allow sending and managing mail";
+	if (modify) return "cannot archive or mark read — reconnect to allow managing mail";
+	return "read-only — reconnect to allow sending";
 }
 
 export function needsReconnect(entry: ConnectorEntry): boolean {
@@ -133,7 +161,11 @@ export function connectionSummary(entry: ConnectorEntry): string {
 	// Said on the row rather than left for an agent to discover: a connection that cannot do what
 	// the connector now offers is a state the OWNER has to fix, in Settings, not in a chat
 	// transcript where a tool refusal would otherwise be the first anyone hears of it.
-	const short = needsReconnect(entry) ? " · read-only — reconnect to allow sending" : "";
+	// Which sentence comes from `scopeShortfallNote`, shared with `accountRows` so the summary and
+	// the rows beneath it cannot say different things about the same grant. WHETHER to say it is
+	// still `needsReconnect`'s call, because only it knows about the multi-account short-circuit.
+	const note = needsReconnect(entry) ? scopeShortfallNote(entry.missingScopes, entry.scopes?.write === true) : null;
+	const short = note ? ` · ${note}` : "";
 	const reach = entry.reach;
 	if (!reach || reach.grants === 0) return `${who}${short}`;
 	const folders = `${reach.grants} folder grant${reach.grants === 1 ? "" : "s"}`;
