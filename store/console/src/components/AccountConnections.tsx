@@ -239,7 +239,29 @@ export default function AccountConnections() {
 								)}
 							</div>
 							{entry.connected ? (
-								<div className="flex gap-2 shrink-0">
+								/* `sm:shrink-0`, not a bare `shrink-0`, and `flex-wrap` is useless without that
+								   change (#723). "Add or reconnect" is a longer label than the "Reconnect" it
+								   replaced, and this row also carries "Disconnect": at 320px/1.3x the pair ran
+								   5px past the viewport in Chromium and 2px in WebKit, which is the failure that
+								   held CI red for two days.
+
+								   `flex-wrap shrink-0` — the pattern at TriggersSection.tsx:587, and the one this
+								   issue proposed — was tried FIRST and measured to change nothing, in both
+								   engines. It cannot: a flex item's base size is its max-content width, the
+								   max-content width of a wrapping flex container is still the sum of its items on
+								   one line, and `shrink-0` forbids going below that. So the box stays 325px wide,
+								   the buttons fit inside it, and the wrap never triggers. The wrap only becomes
+								   reachable once the box is allowed to narrow. (That makes the `flex-wrap` on
+								   TriggersSection:587 inert too — it is not overflowing today, but it is not
+								   being held back by that class either. Left alone here; it is a separate row
+								   nobody has measured.)
+
+								   Shrinking is released only below `sm`, which is exactly where the OUTER row's
+								   `flex-wrap sm:flex-nowrap` (#384, above) has already dropped these buttons onto
+								   a line of their own — so there is no label column left for them to steal width
+								   from, and the desktop row keeps the pin that stops them collapsing. Same
+								   breakpoint, same reason, one row down. */
+								<div className="flex gap-2 flex-wrap justify-end sm:shrink-0">
 									{/* ONE button, because there is one action: start the provider's flow. Whether it
 									    refreshes this account or adds a second is decided by which account you pick at
 									    the provider, not here — so a separate "Add another" button would be the same
