@@ -3,6 +3,7 @@ import {
 	decideDeployNotification,
 	DEPLOY_MAX_UNORDERED_AGE_MS,
 	deployDeepLink,
+	deployEventKey,
 	type DeployWatchState,
 	isDeployWorkflow,
 	runDeployWatch,
@@ -403,7 +404,7 @@ describe("runDeployWatch persists a watermark that only moves forward (#708)", (
 	};
 
 	/** A D1 double that records every statement, so a test can assert what was WRITTEN. */
-	function sweepEnv(repo: Record<string, unknown> = REPO) {
+	function sweepEnv(repos: Array<Record<string, unknown>> = [REPO]) {
 		const statements: Array<{ sql: string; args: unknown[] }> = [];
 		const DB = {
 			prepare(sql: string) {
@@ -411,7 +412,7 @@ describe("runDeployWatch persists a watermark that only moves forward (#708)", (
 					bind(...args: unknown[]) {
 						statements.push({ sql, args });
 						return {
-							all: async () => ({ results: sql.includes("SELECT") ? [repo] : [] }),
+							all: async () => ({ results: sql.includes("SELECT") ? repos : [] }),
 							run: async () => ({ meta: { changes: 1 } }),
 							first: async () => null,
 						};
@@ -482,12 +483,100 @@ describe("runDeployWatch persists a watermark that only moves forward (#708)", (
 	// An idle repo never reaches the notify branch, so this is the only path by which a row
 	// written before the migration acquires an order at all.
 	it("records the order on a quiet sweep, so a NULL row arms itself without a backfill", async () => {
-		const { env, writes } = sweepEnv({ ...REPO, last_deploy_at: null });
+		const { env, writes } = sweepEnv([{ ...REPO, last_deploy_at: null }]);
 		vi.mocked(fetchWorkflowRuns).mockResolvedValue({ runs: [raw()] });
 
 		await runDeployWatch(env);
 
 		expect(notifyUser).not.toHaveBeenCalled();
 		expect(writes()[0].args).toEqual(["sha:abc1234def5678", "2026-08-07T10:00:00Z", "repo_1"]);
+	});
+});
+
+/**
+ * The fan-out (#709) — the second, independent multiplier on the same 198 rows.
+ *
+ * A repo is attached PER WORKSPACE, so the owner has four `coding_repos` rows pointing at
+ * `ProAgentStore/platform`. The sweep is per row, which is right; the EVENT KEY carried the row
+ * id, which meant the #361 floor saw four unrelated events and one push buzzed four times in 39
+ * seconds. 32 real deploys → 66 distinct (row, commit) events = 2.1×.
+ */
+describe("one deploy is one event, however many workspaces watch it (#709)", () => {
+	it("keys the event on the repository, never on the coding_repos row", () => {
+		const key = deployEventKey("ProAgentStore/platform", "sha:b91d340");
+		expect(key).toBe("deploy:proagentstore/platform:sha:b91d340");
+		expect(key).not.toContain("repo_");
+	});
+
+	// Two rows can spell one repository differently — GitHub is case-insensitive about
+	// `owner/name`, and a key that is not is a key that does not collapse.
+	it("normalises case, so two spellings of one repository are one event", () => {
+		expect(deployEventKey("ProAgentStore/Platform", "sha:b91d340")).toBe(
+			deployEventKey("proagentstore/platform", "sha:b91d340"),
+		);
+	});
+
+	// ...and two genuinely different repositories that happen to deploy the same commit — a fork,
+	// a mirror — stay two events, because the repository IS in the key.
+	it("keeps two repositories apart even on an identical commit", () => {
+		expect(deployEventKey("acme/app", "sha:b91d340")).not.toBe(deployEventKey("acme/app-fork", "sha:b91d340"));
+	});
+});
+
+describe("runDeployWatch collapses a deploy across workspaces (#709)", () => {
+	const raw = {
+		id: 900,
+		run_number: 12,
+		status: "completed",
+		conclusion: "success",
+		name: "Deploy API Worker",
+		path: ".github/workflows/deploy-api.yml",
+		head_sha: "b91d340feed12",
+		html_url: "https://github.com/acme/app/actions/runs/900",
+		updated_at: "2026-08-07T11:00:00Z",
+	};
+
+	/** Four workspaces on ONE repository, spelled two ways — the owner's measured shape. */
+	const rows = [
+		{ id: "repo_f60491cd", instance_id: "inst_a", user_id: "alice", name: "pags/platform", github_repo: "ProAgentStore/platform", last_deploy_run_id: "sha:old", last_deploy_at: "2026-08-07T09:00:00Z" },
+		{ id: "repo_2b2657fb", instance_id: "inst_a", user_id: "alice", name: "ProAgentStore/platform", github_repo: "proagentstore/platform", last_deploy_run_id: "sha:old", last_deploy_at: "2026-08-07T09:00:00Z" },
+		{ id: "repo_fed4078a", instance_id: "inst_b", user_id: "alice", name: "pags/platform", github_repo: "ProAgentStore/platform", last_deploy_run_id: "sha:old", last_deploy_at: "2026-08-07T09:00:00Z" },
+		{ id: "repo_1aa2c3f5", instance_id: "inst_c", user_id: "alice", name: "pags/platform", github_repo: "ProAgentStore/platform", last_deploy_run_id: "sha:old", last_deploy_at: "2026-08-07T09:00:00Z" },
+	];
+
+	it("hands the floor ONE event key for four workspaces, while each keeps its own deep link", async () => {
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind: () => ({
+						all: async () => ({ results: sql.includes("SELECT") ? rows : [] }),
+						run: async () => ({ meta: { changes: 1 } }),
+						first: async () => null,
+					}),
+				};
+			},
+		};
+		vi.mocked(notifyUser).mockClear();
+		vi.mocked(resolveGithubRead).mockResolvedValue({ token: "tok", authContext: null } as never);
+		vi.mocked(fetchWorkflowRuns).mockResolvedValue({ runs: [raw] });
+
+		await runDeployWatch({ DB } as unknown as Env);
+
+		const calls = vi.mocked(notifyUser).mock.calls;
+		expect(calls).toHaveLength(4);
+		// The floor (#361) collapses on the event key, and it can only do that if all four agree.
+		const keys = new Set(calls.map((c) => (c[6] as { key?: string })?.key));
+		expect(keys.size).toBe(1);
+		expect([...keys][0]).toBe("deploy:proagentstore/platform:sha:b91d340feed12");
+		// Four ROWS are still written, each pointing at its own workspace — the bell list is a log
+		// and #338's deep link is per workspace. Only the interruption collapses.
+		expect(new Set(calls.map((c) => c[5]))).toEqual(
+			new Set([
+				"/console/instances/inst_a/coding?builds=repo_f60491cd",
+				"/console/instances/inst_a/coding?builds=repo_2b2657fb",
+				"/console/instances/inst_b/coding?builds=repo_fed4078a",
+				"/console/instances/inst_c/coding?builds=repo_1aa2c3f5",
+			]),
+		);
 	});
 });

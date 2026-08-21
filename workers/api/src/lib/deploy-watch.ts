@@ -138,6 +138,33 @@ export function deployDeepLink(instanceId: string, repoId: string): string {
 	return codingBuildsLink(instanceId, repoId);
 }
 
+/**
+ * The identity of the EVENT a deploy notification is about, for the #361 floor.
+ *
+ * The repository, not the `coding_repos` row (#709). A repo is attached PER WORKSPACE, and
+ * attaching one repository to a Coder and to a tmux Coder is a supported shape — `createRepo`
+ * does not de-duplicate by `github_repo` and should not. But the deploy is ONE event in the
+ * world, and keying on the row made four workspaces watching `ProAgentStore/platform` look like
+ * four unrelated events: one push buzzed four times in 39 seconds, 0.3–1.0 minutes apart, well
+ * inside the floor's ten-minute window, which never got the chance to collapse them.
+ *
+ * The prose fallback would not have saved it either: each row's sweep reads the page seconds
+ * apart and names a different subset of the workflows ("Deploy MCP Worker" vs "Deploy Host
+ * Worker" vs all three), so a `title|body` key sees three distinct events. That is exactly the
+ * failure `lib/notifications.ts` documents and the reason an explicit event key exists. The
+ * reasoning was right; the key just stopped one level too low.
+ *
+ * Each row still WRITES its own notification row with its own deep link, so the bell list still
+ * says which workspace it came from and #338's link is untouched. Only the interruption
+ * collapses — which is precisely the split #360/#361 made.
+ *
+ * Lower-cased for the same reason `lib/github-cache.ts` normalises: GitHub is case-insensitive
+ * about `owner/name` and two rows can spell one repository differently.
+ */
+export function deployEventKey(githubRepo: string, seenId: string): string {
+	return `deploy:${githubRepo.toLowerCase()}:${seenId}`;
+}
+
 /** The watermark's format. A stored value that is not one of these predates #359 — see below. */
 const SHA_WATERMARK = "sha:";
 
@@ -459,7 +486,7 @@ export async function runDeployWatch(env: Env): Promise<void> {
 				// the watermark above were wrong again, one commit's deploy can buzz once per window.
 				// Belt and braces on purpose: this is the fourth defect in this area.
 				await notifyUser(env, repo.user_id, "deploy", decision.title, decision.body, decision.url, {
-					key: `deploy:${repo.id}:${decision.seenId}`,
+					key: deployEventKey(repo.github_repo, decision.seenId),
 				}).catch(() => undefined);
 			} else if (decision.reason === "stale-page") {
 				// The rejection has to leave a trace somewhere other than the owner's phone. This

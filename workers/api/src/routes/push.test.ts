@@ -214,3 +214,75 @@ describe("notifyUser", () => {
 		expect(fetchSpy).toHaveBeenCalled();
 	});
 });
+
+/**
+ * The floor doing the job #709 stopped it doing.
+ *
+ * Four `coding_repos` rows point at `ProAgentStore/platform` — a repo is attached per workspace,
+ * and that is a supported shape. The sweep is per row, so one push produced four notifyUser calls
+ * 0.3–1.0 minutes apart, comfortably inside `DUPLICATE_WINDOW_MINUTES`. The floor never got the
+ * chance to collapse them because the key carried the ROW id. Now it carries the repository.
+ */
+describe("notifyUser collapses one deploy reported by several workspaces (#709)", () => {
+	/** Stateful, unlike `notifyEnv` above: the point is that the SECOND call sees the first. */
+	function floorEnv() {
+		const rows: Array<{ dedupeKey: unknown; pushedAt: unknown }> = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async all() {
+								return { results: [] };
+							},
+							async run() {
+								if (/INSERT INTO notifications/i.test(sql)) rows.push({ dedupeKey: args[8], pushedAt: args[9] });
+								return {};
+							},
+							async first() {
+								if (/SELECT preferences FROM users/i.test(sql)) return { preferences: null };
+								if (/FROM notifications/i.test(sql)) {
+									const [, key, cutoff] = args as [string, string, string];
+									const hit = rows.some(
+										(r) => r.dedupeKey === key && typeof r.pushedAt === "string" && r.pushedAt > cutoff,
+									);
+									return hit ? { 1: 1 } : null;
+								}
+								return null;
+							},
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, rows };
+	}
+
+	it("writes a row per workspace and interrupts exactly once", async () => {
+		const { env, rows } = floorEnv();
+		// One repository, one commit — and deliberately DIFFERENT prose, because each row's sweep
+		// reads the page seconds apart and names a different subset of the workflows. That is why
+		// the derived `title|body` fallback could never have collapsed these, and why the explicit
+		// event key is the thing that has to be right.
+		const key = "deploy:proagentstore/platform:sha:b91d340";
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy MCP Worker.", "/a", { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy Host Worker.", "/b", { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "ProAgentStore/platform is live — Deploy Host Worker, Deploy MCP Worker.", "/c", { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy MCP Worker.", "/d", { key });
+
+		// The bell list stays complete — it is a LOG, and each row keeps its own workspace link.
+		expect(rows).toHaveLength(4);
+		// ...but the phone buzzed once. Only the first copy restarts the window.
+		expect(rows.filter((r) => typeof r.pushedAt === "string")).toHaveLength(1);
+		expect(rows[0].pushedAt).toBeTypeOf("string");
+	});
+
+	// The guard against over-collapsing: a fork or mirror deploying the same commit is a different
+	// repository, so its key differs and it still gets through.
+	it("does not collapse two different repositories on the same commit", async () => {
+		const { env, rows } = floorEnv();
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "live", "/a", { key: "deploy:acme/app:sha:b91d340" });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "live", "/b", { key: "deploy:acme/app-fork:sha:b91d340" });
+		expect(rows.filter((r) => typeof r.pushedAt === "string")).toHaveLength(2);
+	});
+});
