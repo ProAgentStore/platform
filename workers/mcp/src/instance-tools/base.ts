@@ -5,6 +5,25 @@ import { audit, dryRun, requireConfirmation, requirePermission } from "../safety
 import { findInstanceForAgent, type InstanceSummary, type InstanceToolsCtx } from "./shared.js";
 
 /**
+ * Did the tool call actually do what was asked (#726)?
+ *
+ * Three shapes reach here and they mean different things:
+ *   `{success:false, content:"…"}` — a GATE said no. HTTP 200, because a refusal is a valid
+ *                                    answer. This is the one that used to audit as a success.
+ *   `{error:"…"}`                  — a transport failure, synthesised by http.ts on a non-2xx.
+ *   anything else                  — it ran.
+ *
+ * `success` is checked first and only when present, so a tool result that has never carried the
+ * field is judged exactly as it was before.
+ */
+export function auditOk(data: unknown): boolean {
+	if (typeof data !== "object" || data === null) return true;
+	const shape = data as { success?: unknown; error?: unknown };
+	if (typeof shape.success === "boolean") return shape.success;
+	return !shape.error;
+}
+
+/**
  * The `tier` vocabulary a `list_instance_tools` row can carry, with the gloss the API worker's own
  * `ToolTier` carries (`workers/api/src/lib/builtin-tool-policy.ts`).
  *
@@ -245,7 +264,19 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 					argKeys: Object.keys(input || {}),
 					argBytes: new TextEncoder().encode(args).length,
 				},
-				result: { ok: !(data as { error?: string }).error },
+				// `success` FIRST, then `error` (#726). This read `!data.error` alone, and a tool that
+				// REFUSES does not set `error`: the route answers HTTP 200 with `{success:false}` and
+				// the refusal in `content`, because a gate saying no is a valid answer rather than a
+				// transport failure. So every refusal audited as a success.
+				//
+				// Measured on a live account: six `gmail_search` calls, five of them blocked by the
+				// email-permission gate and one that actually read a mailbox, recorded as six
+				// identical `ok:true` rows. An audit log that cannot tell a refused mailbox read from
+				// a completed one is worse than no audit log, because it is believed.
+				//
+				// `error` is still consulted for the transport failures `http.ts` synthesises on a
+				// non-2xx, which carry no `success` field at all.
+				result: { ok: auditOk(data) },
 			});
 			return jsonText(data);
 		},

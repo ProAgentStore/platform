@@ -37,6 +37,7 @@
 import type { Connector, RegistryToolCtx, RegistryToolResult, ToolDef } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Env } from "../../types.js";
+import { fenceUntrusted } from "../untrusted-fence.js";
 
 /** Raw bytes we are willing to pull through the Worker for one attachment.
  *  Base64 inflates by ~4/3 and the DO round-trip holds another copy, so this is well under the
@@ -49,6 +50,29 @@ function fail(message: string): RegistryToolResult {
 
 function ok(payload: unknown): RegistryToolResult {
 	return { content: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2), success: true };
+}
+
+/**
+ * A tool result carrying text SOMEONE ELSE WROTE (#725).
+ *
+ * The platform fenced a web page it fetched, a search result, an MCP resource and an HTTP body —
+ * and not the mail a stranger sent you. That was backwards. Anyone who knows the owner's address
+ * can put an instruction in a subject line and wait; unlike a search result, they do not even
+ * have to rank for anything. Mail is the most cheaply attacker-authored text this platform
+ * touches, and it was the one input reaching the model bare.
+ *
+ * Fenced in the CONNECTOR rather than at the chat surface, for the reason web-search gives: one
+ * line then covers chat, a pipeline step, `POST /v1/instances/:id/tools/:name` and MCP at once.
+ * The pipeline binder unwraps it (`unfenceUntrusted`), so a `$ref` off a message still resolves —
+ * the fence is for the model, and the binder is not one.
+ *
+ * Only the tools that return third-party prose use this. `gmail_archive`'s label list and
+ * `gmail_download_attachment`'s file id are OUR words about an outcome, and fencing those would
+ * teach the model that a fence means nothing in particular.
+ */
+function okUntrusted(payload: unknown, origin: string): RegistryToolResult {
+	const body = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+	return { content: fenceUntrusted(body, origin), success: true };
 }
 
 /**
@@ -120,8 +144,11 @@ const searchHandler: ToolDef["handler"] = async (ctx, input) => {
 	});
 	try {
 		const hits = await listMessages(resolved.token, query, typeof input.max === "number" ? input.max : 10);
+		// "No matches" is OUR sentence about an empty result — nothing in it came from a stranger.
 		if (hits.length === 0) return ok(`No messages matched: ${query}`);
-		return ok({ query, count: hits.length, messages: hits });
+		// Every field here is written by whoever sent the mail: the sender name, the subject, the
+		// snippet, and the attachment filenames.
+		return okUntrusted({ query, count: hits.length, messages: hits }, "the owner's Gmail inbox");
 	} catch (e) {
 		return fail(e instanceof GmailError ? e.message : `Gmail search failed: ${e instanceof Error ? e.message : String(e)}`);
 	}
@@ -135,7 +162,7 @@ const readHandler: ToolDef["handler"] = async (ctx, input) => {
 	const { getMessage, GmailError } = await import("../gmail.js");
 	try {
 		const msg = await getMessage(resolved.token, id);
-		return ok(msg);
+		return okUntrusted(msg, `an email from ${msg.from || "an unknown sender"}`);
 	} catch (e) {
 		return fail(e instanceof GmailError ? e.message : `Gmail message fetch failed: ${e instanceof Error ? e.message : String(e)}`);
 	}

@@ -127,7 +127,11 @@ const PINS = {
 	// an agent can do with its own storage, and a two-line delegation ahead of the switch that
 	// returns null for a name it does not own. Listing the three tool names here instead would
 	// have been a second copy of the module's own contents, kept in step by hand.
-	"workers/api/src/lib/storage-tools.ts": 809,
+	// +17 at #715-follow-up: find_confirmation_link resolves WHICH mailbox before reading a token,
+	// instead of .first()-ing over (user_id, provider). Raised rather than split — it is one
+	// resolution at an existing call site, and the decision it makes is pure and already lives in
+	// lib/connector-accounts.ts with its own tests.
+	"workers/api/src/lib/storage-tools.ts": 826,
 	"workers/api/src/routes/instances.ts": 998,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
@@ -1369,8 +1373,8 @@ const PINS = {
 	// of code, because the raise has to say what was split OUT before it can justify what stayed),
 	// the note reconciling it with #703's shrink, and this line. The ratchet applied to itself,
 	// again: these comments ARE the record, and two entries that cancel still cost two entries.
-	// +12 at #712, +6 at #715: this file grows by the reasoning for each entry, and one new entry was added.
-	"scripts/check-file-size.mjs": 1455,
+	// +12 at #712, +6 at #715, +3 at #725: this file grows by the reasoning for each entry, and one new entry was added.
+	"scripts/check-file-size.mjs": 1458,
 };
 
 /**

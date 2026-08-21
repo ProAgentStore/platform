@@ -564,11 +564,28 @@ export async function executeStorageTool(
 				if (!ctx.env.KEY_ENCRYPTION_KEY) {
 					return fail(call.name, "Key encryption is not configured on this deployment.");
 				}
-				// Read the encrypted Gmail refresh token from the user's vault.
+				// Resolve WHICH mailbox before reading a token from it (#715, missed here).
+				//
+				// This was `.first()` over `(user_id, provider)`, which identified one row only while
+				// a user could hold one Gmail. Since the multi-account vault it returns whichever row
+				// SQLite feels like — so a confirmation-link lookup could silently search the wrong
+				// mailbox and report "no matching email found yet", which reads as "it has not
+				// arrived" rather than "I looked somewhere else". The same defect was fixed in
+				// connectors/gmail.ts for `canSend` and this call site was missed in that sweep.
+				const { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } = await import("./connector-accounts.js");
+				const gmailAccounts = await listConnectorAccounts(ctx.env, ctx.userId, "gmail");
+				const chosen = resolveConnectorAccount(
+					gmailAccounts,
+					await pinnedAccountFor(ctx.env, ctx.agentId, "gmail"),
+					"Gmail",
+				);
+				// An ambiguous mailbox refuses rather than guessing, exactly as a send does: reading
+				// the wrong inbox for a sign-in link is a silent wrong answer, not a loud failure.
+				if (!chosen.ok) return fail(call.name, chosen.message);
 				const row = await ctx.env.DB.prepare(
-					"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
+					"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail' AND account_id = ?2",
 				)
-					.bind(ctx.userId)
+					.bind(ctx.userId, chosen.account.accountId)
 					.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
 				if (!row) {
 					return fail(

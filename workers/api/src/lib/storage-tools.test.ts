@@ -388,3 +388,62 @@ describe("knowledge base edit tools (editable via chat)", () => {
 		expect(d.content).toMatch(/No knowledge document/i);
 	});
 });
+
+// ── find_confirmation_link resolves WHICH mailbox (#715, missed in that sweep) ──
+
+describe("find_confirmation_link and the multi-account vault", () => {
+	/** A DB whose vault holds the given Gmail accounts, and an instance with no pin. */
+	function vault(accounts: Array<{ id: string; label: string }>) {
+		return {
+			DB: {
+				prepare: (sql: string) => ({
+					bind: () => ({
+						all: async () => ({
+							results: accounts.map((a) => ({
+								account_id: a.id,
+								account_label: a.label,
+								created_at: "2026-08-01",
+								granted_scopes: "https://www.googleapis.com/auth/gmail.readonly",
+							})),
+						}),
+						first: async () => (sql.includes("agent_instances") ? { config: null } : null),
+					}),
+				}),
+			},
+			KEY_ENCRYPTION_KEY: "kek",
+		} as unknown as Env;
+	}
+
+	const ctx = (env: Env) => ({ env, userId: "u1", agentId: "inst-1", emailPermitted: true });
+
+	it("refuses when two mailboxes are connected and none is chosen", async () => {
+		// Reading the WRONG inbox for a sign-in link is a silent wrong answer: it reports "no
+		// matching email found yet", which reads as "it has not arrived" rather than "I looked
+		// somewhere else". So it refuses, exactly as a send does.
+		const env = vault([
+			{ id: "work@x.test", label: "work@x.test" },
+			{ id: "home@x.test", label: "home@x.test" },
+		]);
+		const res = await executeStorageTool({ name: "find_confirmation_link", input: { from: "acme" } }, {} as never, ctx(env));
+		expect(res.success).toBe(false);
+		expect(res.content).toContain("work@x.test");
+		expect(res.content).toContain("home@x.test");
+	});
+
+	it("still says 'not connected' when there is no mailbox at all", async () => {
+		const res = await executeStorageTool({ name: "find_confirmation_link", input: {} }, {} as never, ctx(vault([])));
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/not connected/i);
+	});
+
+	it("is unaffected by the permission gate firing first", async () => {
+		const env = vault([{ id: "only@x.test", label: "only@x.test" }]);
+		const res = await executeStorageTool(
+			{ name: "find_confirmation_link", input: {} },
+			{} as never,
+			{ ...ctx(env), emailPermitted: false },
+		);
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/not enabled/i);
+	});
+});
