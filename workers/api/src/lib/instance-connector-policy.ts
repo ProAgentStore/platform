@@ -59,6 +59,20 @@ export interface ConnectorPolicyEntry {
 	id: string;
 	label: string;
 	grantModel: Connector["grantModel"];
+	/**
+	 * What granting this connector's WRITE scope permits, in the owner's terms (#720) — the
+	 * connector's own `writeMeaning`, carried here so the console's consent checkbox can render a
+	 * per-connector statement instead of one shared paragraph describing a browser.
+	 *
+	 * Absent for a read-only connector, and absent from an older API. The console falls back to the
+	 * connector id and STILL RENDERS THE CHECKBOX: an unchecked box is a claim that the agent
+	 * cannot act as you, so a missing sentence must cost the sentence and never the control.
+	 *
+	 * This does NOT make the connectors endpoint the source of the checkbox SET. That stays
+	 * `writeConnectors(toolPolicy)` — the server's own tool verdict (#351) — so the gate and the UI
+	 * cannot disagree about which grant a refusal is asking for. This is a lookup.
+	 */
+	writeMeaning?: string;
 	/** The connector's own tool names — empty for the three connected accounts. */
 	tools: string[];
 	/** Is this connector part of this agent at all? */
@@ -69,7 +83,13 @@ export interface ConnectorPolicyEntry {
 /** One connector's verdict, given the tool names this instance may actually run. */
 export function connectorPolicyOf(connector: Connector, allowedTools: ReadonlySet<string>): ConnectorPolicyEntry {
 	const tools = connector.tools.map((t) => t.name);
-	const base = { id: connector.id, label: connector.label, grantModel: connector.grantModel, tools };
+	const base = {
+		id: connector.id,
+		label: connector.label,
+		grantModel: connector.grantModel,
+		...(connector.writeMeaning ? { writeMeaning: connector.writeMeaning } : {}),
+		tools,
+	};
 	if (tools.length > 0) {
 		const allowed = tools.some((name) => allowedTools.has(name));
 		return { ...base, allowed, reason: allowed ? "tools" : "no_tools" };

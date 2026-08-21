@@ -85,6 +85,10 @@ export interface ConnectorManifest {
 	id: string;
 	label: string;
 	auth: ManifestAuth;
+	/** What granting this connector's write scope permits, in the owner's terms (#720). Copied
+	 *  verbatim onto the compiled `Connector`; required in fact whenever the compiled `scopes.write`
+	 *  comes out true, which for a manifest connector is decided by its tools rather than declared. */
+	writeMeaning?: string;
 	/** Joined with each tool's `path`. */
 	baseUrl?: string;
 	tools: ManifestTool[];
@@ -201,6 +205,7 @@ export function compileConnector(
 			read: tools.some((t) => t.scope === "read"),
 			write: tools.some((t) => t.scope === "write"),
 		},
+		...(m.writeMeaning ? { writeMeaning: m.writeMeaning } : {}),
 		grantModel: "user",
 		tools,
 	};

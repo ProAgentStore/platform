@@ -444,6 +444,17 @@ function labelChangeHandler(
 export const GMAIL_MANIFEST: ConnectorManifest = {
 	id: "gmail",
 	label: "Gmail",
+	// #720. The four write tools are gmail_reply, gmail_send, gmail_archive and gmail_mark_read.
+	// Sending leads because it is the irreversible one and the one that leaves the building: OAuth
+	// is on the owner's own mailbox, so mail really does go out under their name, to whoever the
+	// agent addresses it to.
+	//
+	// Archive and mark-read are named too, and NOT hedged on whether `gmail.modify` was actually
+	// granted on a given connection (#717 owns that): this sentence says what granting the
+	// connector PERMITS, and an owner deciding is entitled to the whole answer. There is no delete
+	// or trash tool, deliberately (#716), so nothing here says one.
+	writeMeaning:
+		"Send and reply to mail from your own mailbox, as you, to anyone the agent addresses. Sent mail cannot be recalled. It can also archive messages and mark them read; it cannot delete anything.",
 	auth: {
 		type: "oauth2",
 		authUrl: "https://accounts.google.com/o/oauth2/v2/auth",

@@ -263,6 +263,16 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 	id: "github",
 	label: "GitHub",
 	auth: { type: "app" },
+	// #720. Checked against the three write tools rather than against the connector's reputation:
+	// create, comment, update — and update is the broad one (close/reopen, relabel, reassign, edit
+	// title and body). There is no push, merge, branch or delete tool anywhere in this file.
+	//
+	// "as you" was in the proposed wording and is WRONG here, which is why it is not used: auth is
+	// `app`, so every write carries an App INSTALLATION token and lands under the GitHub App's own
+	// identity, not the owner's account. Saying "as you" would misdescribe the one thing an owner
+	// checks afterwards — whose name is on the comment.
+	writeMeaning:
+		"Open issues, comment on them, and change existing ones — including closing or reopening them and rewriting their title, body, labels and assignees — on any repository you have installed the GitHub App on. It cannot push code, merge, or delete anything. Changes appear under the App, not under your own GitHub account.",
 	tools: [
 		{
 			name: "github_workflow_runs",

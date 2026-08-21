@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changesAnything, consentChip, listedTools, mayWrite, type ToolPolicyEntry, reachesOutside, toolScopeSummary, writeConnectors, writesOwnData } from "./toolPolicy";
+import { changesAnything, consentChip, listedTools, mayWrite, type ToolPolicyEntry, reachesOutside, toolScopeSummary, writeConnectors, writeConsentCopy, writesOwnData } from "./toolPolicy";
 
 function tool(over: Partial<ToolPolicyEntry> & { name: string }): ToolPolicyEntry {
 	return {
@@ -336,5 +336,62 @@ describe("consentChip", () => {
 
 	it("never renders the word 'undefined' when the server omits the connector", () => {
 		expect(consentChip(tool({ name: "x", scope: "write", writeConsent: "required" }))).toBe("needs connector write access");
+	});
+});
+
+// ── The words on each write-consent checkbox (#720) ─────────────────────────────────────────
+//
+// The panel rendered ONE paragraph over every checkbox — "act as you, click, type and navigate,
+// through the connector on your machine" — plus `capitalize` on the raw id ("Github", "Mcp"). The
+// paragraph was written for `browser` (2ad71712) and is exact for it; measured live on 2026-08-21
+// it rendered on 32 of 43 instances and `browser` appeared on none of them. Both halves now come
+// from the connector's own declaration, via this lookup.
+describe("writeConsentCopy", () => {
+	// Exactly the shape `GET /v1/instances/:id/connectors` sends, per instance-connector-policy.ts.
+	const entries = [
+		{ id: "github", label: "GitHub", writeMeaning: "Open issues, comment on them, and change existing ones…" },
+		{ id: "mcp", label: "MCP server (generic, outbound)", writeMeaning: "MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below." },
+		{ id: "repo-local", label: "Local repository (read-only, via the runner)" },
+	];
+
+	it("names the connector the way every other surface does", () => {
+		expect(writeConsentCopy("github", entries).label).toBe("GitHub");
+		expect(writeConsentCopy("mcp", entries).label).toBe("MCP server (generic, outbound)");
+	});
+
+	it("carries the connector's own statement of what granting it permits", () => {
+		expect(writeConsentCopy("github", entries).meaning).toMatch(/^Open issues/);
+	});
+
+	// The regression most easily lost in the move. It is the only checkbox in the panel that grants
+	// no reach on its own (#262: per server AND per remote tool), so deleting the inline
+	// `connectors.includes("mcp")` branch without this rendering would make a ticked box read as a
+	// full grant.
+	it("still renders the MCP kill-switch sentence, now from the connector", () => {
+		expect(writeConsentCopy("mcp", entries).meaning).toBe(
+			"MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.",
+		);
+	});
+
+	// A connectors-endpoint failure must DEGRADE, not blank the panel. `ToolPermissions.tsx`
+	// records why at length: an unchecked box is a claim that the agent CANNOT act as you, so
+	// silently removing the control makes that claim falsely. The checkbox still renders; only the
+	// words are missing, and the id is what the panel showed before this ticket anyway.
+	it("falls back to the id, and never to nothing, when the endpoint gave nothing", () => {
+		expect(writeConsentCopy("github", [])).toEqual({ label: "github", meaning: null });
+		expect(writeConsentCopy("terminal", entries)).toEqual({ label: "terminal", meaning: null });
+		// Present but empty is the same case, not a blank label.
+		expect(writeConsentCopy("x", [{ id: "x", label: "   ", writeMeaning: "" }])).toEqual({ label: "x", meaning: null });
+	});
+
+	it("is a LOOKUP, not a second source for the checkbox set (#351)", () => {
+		// The set stays the server's TOOL verdict, so the gate and the UI cannot disagree about
+		// which grant a refusal asks for. `entries` describes `github` and says nothing about
+		// `terminal`; membership is unmoved by either fact — github gets no checkbox from being
+		// described, terminal keeps one despite being absent (and renders under its id).
+		expect(writeConnectors([tmuxRun])).toEqual(["terminal"]);
+		expect(entries.map((e) => e.id)).toContain("github");
+		expect(writeConnectors([tmuxRun]), "a described connector must not gain a checkbox").not.toContain("github");
+		expect(writeConsentCopy("terminal", entries).label, "an undescribed one keeps its control").toBe("terminal");
 	});
 });

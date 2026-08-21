@@ -84,6 +84,13 @@ export const META_MANIFEST: ConnectorManifest = {
 	id: "meta",
 	label: "Meta (WhatsApp + Instagram)",
 	auth: { type: "platform-token", tokenEnv: "META_ACCESS_TOKEN" },
+	// #720. Both tools SEND to a recipient the agent names, and neither can be undone. The
+	// attribution clause is the part an owner cannot work out from the checkbox: auth is
+	// `platform-token`, so the message leaves from the deployment's own Meta business account —
+	// not from the owner's WhatsApp or Instagram. Inert until Meta review, which changes when it
+	// can happen, not what granting it permits.
+	writeMeaning:
+		"Send WhatsApp messages and Instagram direct messages to any recipient this agent names. They go out from the platform's connected business account — not from your personal WhatsApp or Instagram — and cannot be unsent.",
 	tools: [
 		{
 			name: "whatsapp_send_message",

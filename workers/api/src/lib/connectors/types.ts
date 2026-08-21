@@ -226,6 +226,38 @@ export interface Connector {
 	/** What the connector can do. A read-only connector rejects write-scoped token requests. */
 	scopes: { read: boolean; write: boolean };
 	/**
+	 * What granting this connector's WRITE scope actually lets an agent do, in the owner's terms —
+	 * shown on the consent checkbox (#720). Required when `scopes.write` is true: a grant the owner
+	 * cannot evaluate is not consent. Say what it does to the world, not which API it calls.
+	 *
+	 * It is a FIELD because there was nowhere else to put a sentence. The write-consent panel
+	 * rendered one shared paragraph — "act as you, click, type and navigate, through the connector
+	 * on your machine" — over every checkbox. That was written for `browser` and is exact for it;
+	 * `github` is a cloud REST API where nothing is clicked and nothing happens on the owner's
+	 * machine. Measured live 2026-08-21 over 43 instances: the panel rendered on 32, 27 of those
+	 * showed a checkbox for a connector that is not on the owner's machine (github 23, mcp 3,
+	 * supervision 1, http 1), and `browser` — the only one the sentence described — rendered on
+	 * ZERO. Each connector was individually correct in declaring itself; none touched the copy,
+	 * because a connector had no way to declare what its grant meant.
+	 *
+	 * Somebody had already worked around that with a hardcoded `connectors.includes("mcp")` branch
+	 * in the console, which is the same fact in the wrong place. Gmail would have made three. The
+	 * fix is the field, not the third special case.
+	 *
+	 * NOT derived from `scopes`/`grantModel`/`tier`, for the reason `tool-reach.ts` records for
+	 * `reach`: `github` and `tmux` are structurally identical here (`grantModel:"user"`,
+	 * `scopes.write:true`) and permit entirely different things. It is also not per TOOL — the
+	 * consent is per connector, so seven Gmail tools would carry seven copies of one fact and the
+	 * panel would have to pick one. `ToolDef.description` is the per-tool, finer thing and is
+	 * already rendered beside each switch.
+	 *
+	 * Optional in the TYPE and required in FACT: `registry.test.ts` fails when a connector with
+	 * `scopes.write === true` has none. The compiler cannot ask for it, because `scopes` is derived
+	 * from the tools by `compileConnector` for every manifest connector — so the guard is a test,
+	 * and it is the part that keeps this from decaying the way the shared paragraph did.
+	 */
+	writeMeaning?: string;
+	/**
 	 *  user             — auth is the user's (installation/oauth/env); no per-resource grant.
 	 *  instance-resource — each tool call must target a resource granted to the instance.
 	 */

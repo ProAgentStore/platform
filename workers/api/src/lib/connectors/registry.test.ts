@@ -210,4 +210,67 @@ describe("connector registry", () => {
 		const declared = CONNECTORS.reduce((n, c) => n + c.tools.length, 0);
 		expect(connectorTools().length).toBe(declared);
 	});
+
+	// ── What granting WRITE means, declared per connector (#720) ────────────────────────────
+	//
+	// The write-consent panel rendered ONE paragraph over every checkbox — "act as you, click,
+	// type and navigate, through the connector on your machine" — which is exact for `browser`
+	// and false in every clause for `github`. Measured live on 2026-08-21 across the operator
+	// account's 43 instances: the panel rendered on 32, 27 of those showed a checkbox for a
+	// connector that is not on the owner's machine, and `browser` rendered on none of them.
+	//
+	// It survived seven connectors arriving because NOTHING ASSERTED ANYTHING ABOUT IT. That is
+	// what this test is: the decay guard, not a spelling check. Every clause below was measured
+	// against the connector's own write handlers, and the two the proposed wording got wrong were
+	// corrected there rather than here — `github` writes under the App installation and not "as
+	// you", and `meta` sends from the platform's business account and not the owner's.
+	describe("writeMeaning — a grant the owner cannot evaluate is not consent", () => {
+		const writable = CONNECTORS.filter((c) => c.scopes.write === true);
+
+		it("has one for EVERY write-capable connector — the assertion the shared paragraph never had", () => {
+			// The denominator, so "all present" over an empty set can never pass as a tick.
+			expect(writable.length).toBeGreaterThanOrEqual(9);
+			const missing = writable.filter((c) => !c.writeMeaning || c.writeMeaning.trim().length < 20).map((c) => c.id);
+			expect(
+				missing,
+				`${missing.join(", ")} can be write-granted with nothing to say what that permits. Declare \`writeMeaning\` on the connector — do NOT add a special case in ToolPermissions.tsx.`,
+			).toEqual([]);
+		});
+
+		it("says nothing about a connector that cannot be write-granted", () => {
+			// A meaning on a read-only connector would render nowhere and rot unread. `repo-local`
+			// is read-only ON PURPOSE (a read-only connector can never be write-consented), and
+			// that decision is worth not blurring.
+			for (const c of CONNECTORS.filter((x) => !x.scopes.write)) expect(c.writeMeaning, c.id).toBeUndefined();
+		});
+
+		it("keeps the MCP kill-switch sentence, which is the one that grants no reach on its own", () => {
+			// It lived in a hardcoded `connectors.includes("mcp")` branch in the console until #720.
+			// Moved verbatim: an owner who loses it reads a ticked `mcp` box as a full grant, when
+			// #262 grants reach per server AND per remote tool.
+			expect(getConnector("mcp")?.writeMeaning).toBe(
+				"MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.",
+			);
+		});
+
+		it("does not describe a browser for a connector that has none", () => {
+			// The defect, stated as an assertion. `browser` is the only connector these words are
+			// true of, so it is the only one allowed to use them.
+			for (const c of writable.filter((x) => x.id !== "browser")) {
+				expect(c.writeMeaning, c.id).not.toMatch(/\bclick\b/i);
+				expect(c.writeMeaning, c.id).not.toMatch(/\bnavigate\b/i);
+			}
+			expect(getConnector("browser")?.writeMeaning).toMatch(/click, type and navigate/i);
+		});
+
+		it("only claims 'on your own computer' for the connectors that are", () => {
+			// The other half of the same false sentence: `github`, `mcp`, `supervision` and `http`
+			// are cloud or platform-internal, and 27 of 32 panels were telling owners otherwise.
+			const local = new Set(["terminal", "tmux", "browser"]);
+			for (const c of writable) {
+				const claimsLocal = /your own computer|your machine/i.test(c.writeMeaning ?? "");
+				expect(claimsLocal, `${c.id} ${claimsLocal ? "claims" : "does not claim"} to run on the owner's machine`).toBe(local.has(c.id));
+			}
+		});
+	});
 });

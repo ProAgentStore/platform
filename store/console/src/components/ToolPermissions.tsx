@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import LoadFailed from "./LoadFailed";
 import McpConnections from "./McpConnections";
 import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
-import { consentChip, listedTools, type ToolPolicyEntry, toolScopeSummary, writeConnectors } from "../lib/toolPolicy";
+import { type ConnectorPolicyEntry, consentChip, listedTools, type ToolPolicyEntry, toolScopeSummary, writeConnectors, writeConsentCopy } from "../lib/toolPolicy";
 
 /**
  * "What can this agent actually do?" — the tool switches, the connector write-consent checkboxes
@@ -38,6 +38,12 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 	// edits them is <McpConnections/> (#266); this component only owns the list, because the
 	// connector checkboxes above have to reflect what granting a server did.
 	const [mcpGrants, setMcpGrants] = useState<McpGrant[]>([]);
+	// What each connector's WRITE grant permits, in the owner's terms (#720). A LOOKUP only: the
+	// checkbox set below is still `writeConnectors(toolPolicy)`, the server's own tool verdict, so
+	// the gate and the UI cannot disagree about which grant a refusal asks for (#351). Read
+	// separately from the two above precisely so a failure here costs the sentence and not the
+	// control — see the block below on why an absent checkbox is the worst outcome on this panel.
+	const [connectorInfo, setConnectorInfo] = useState<ConnectorPolicyEntry[]>([]);
 	// Why these two reads are the worst possible place for a silent fallback (#291).
 	//
 	// Every panel below is GATED on what they return, so a dropped request does not render an
@@ -68,6 +74,12 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 		try {
 			const d = await api<{ grants?: McpGrant[] }>(`/v1/instances/${instanceId}/mcp/consent`);
 			setMcpGrants(d.grants || []);
+		} catch (e) {
+			fail(e);
+		}
+		try {
+			const d = await api<{ connectors?: ConnectorPolicyEntry[] }>(`/v1/instances/${instanceId}/connectors`);
+			setConnectorInfo(d.connectors || []);
 		} catch (e) {
 			fail(e);
 		}
@@ -145,31 +157,46 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 				</div>
 			)}
 
-			{/* Connector write-consent (#90): the human gate for tools that act AS you (e.g. the
-			    browser agent's navigate/click/type). Off until you check it. */}
+			{/* Connector write-consent (#90): the human gate for a tool that acts with a credential of
+			    yours. Off until you check it. The SET comes from `writeConnectors(toolPolicy)` — the
+			    server's own tool verdict — and must keep doing so (#351): re-deriving it from the
+			    connectors response would let the gate and the UI disagree about which grant a refusal
+			    is asking for. `connectorInfo` is a lookup for the words, never for the membership. */}
 			{connectors.length > 0 && (
 				<div className="mb-3 pb-3 border-b border-line">
 					<div className="text-sm font-semibold mb-0.5">Agent write access</div>
+					{/* One paragraph that makes NO per-connector claim (#720). The sentence here used to
+					    read "act as you — click, type, and navigate — through the connector on your
+					    machine", which was written for `browser` and is exact for it. Measured live over
+					    43 instances: this panel rendered on 32, 27 of those showed a checkbox for a
+					    connector that is not on the owner's machine (github 23, mcp 3, supervision 1,
+					    http 1), and `browser` rendered on none of them. The specific claim now lives on
+					    each connector — `Connector.writeMeaning` — which is what stopped a second
+					    hardcoded `connectors.includes(...)` branch from being the fix. */}
 					<p className="text-2xs text-muted-soft mb-2">
-						Lets this agent act as you — click, type, and navigate — through the connector on your machine. Off by default; enable only what you want it to do.
+						Each of these lets the agent act with a credential of yours. Off by default; read what each one permits before enabling it.
 					</p>
-					{connectors.map((connector) => (
-						<label key={connector} className="flex items-center gap-2 text-sm cursor-pointer mb-1.5">
-							<input
-								type="checkbox"
-								checked={granted.includes(connector)}
-								onChange={(e) => toggleConsent(connector, e.target.checked)}
-							/>
-							<span className="capitalize font-semibold">{connector}</span>
-							<span className="text-muted">write access</span>
-						</label>
-					))}
+					{connectors.map((connector) => {
+						const { label, meaning } = writeConsentCopy(connector, connectorInfo);
+						return (
+							<label key={connector} className="flex items-start gap-2 text-sm cursor-pointer mb-2">
+								<input
+									type="checkbox"
+									className="mt-0.5"
+									checked={granted.includes(connector)}
+									onChange={(e) => toggleConsent(connector, e.target.checked)}
+								/>
+								{/* min-w-0 so a long meaning wraps inside the row instead of widening the
+								    card — the same shape the tool rows above use. */}
+								<span className="min-w-0">
+									<span className="font-semibold">{label}</span>
+									<span className="text-muted"> — write access</span>
+									{meaning && <span className="block text-2xs text-muted-soft leading-snug">{meaning}</span>}
+								</span>
+							</label>
+						);
+					})}
 					{consentMsg && <p className="text-xs text-success mt-1">{consentMsg}</p>}
-					{connectors.includes("mcp") && (
-						<p className="text-2xs text-muted-soft mt-1.5">
-							MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.
-						</p>
-					)}
 				</div>
 			)}
 

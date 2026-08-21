@@ -326,6 +326,20 @@ describe("GET /v1/instances/:id/connectors (#352)", () => {
 		expect(verdict(body, "gmail")).toMatchObject({ allowed: false, reason: "no_tools" });
 	});
 
+	// #720. The console's consent checkbox reads its label AND its sentence from here, so both have
+	// to be on the wire. A connector that cannot be write-granted sends no sentence — a meaning that
+	// renders nowhere is one that rots unread.
+	it("carries each connector's label and what granting its write scope permits (#720)", async () => {
+		const { app, env } = testApp({ agentConfig: TERMINAL_OPERATOR });
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1")));
+		expect(verdict(body, "github").label).toBe("GitHub");
+		expect(String(verdict(body, "github").writeMeaning)).toMatch(/^Open issues/);
+		// The load-bearing one: the only checkbox that grants no reach by itself (#262).
+		expect(String(verdict(body, "mcp").writeMeaning)).toMatch(/kill switch, not a permission/);
+		// Read-only connector → nothing to say.
+		expect(verdict(body, "repo-local").writeMeaning).toBeUndefined();
+	});
+
 	it("returns the whole catalog, so 'what can this agent reach' also says what it cannot", async () => {
 		const { app, env } = testApp({ agentConfig: TERMINAL_OPERATOR });
 		const body = await jsonBody(await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1")));

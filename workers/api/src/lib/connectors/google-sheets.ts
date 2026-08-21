@@ -54,6 +54,12 @@ const sheetsAppendHandler: ToolDef["handler"] = async (ctx: RegistryToolCtx, inp
 export const GOOGLE_SHEETS_MANIFEST: ConnectorManifest = {
 	id: "google_sheets",
 	label: "Google Sheets",
+	// #720. `sheets_append` is the only write, and append really is all it does: the URL ends in
+	// `:append`, so existing cells are never addressed. The scope granted at OAuth is the broad
+	// `spreadsheets` one, but what an agent can reach through it is bounded by the tools that
+	// exist — and there is no update, clear or delete tool here.
+	writeMeaning:
+		"Add rows to the end of a sheet in any spreadsheet on the Google account you connected, using your connection. It cannot change or delete rows that are already there.",
 	auth: {
 		type: "oauth2",
 		authUrl: "https://accounts.google.com/o/oauth2/v2/auth",

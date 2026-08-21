@@ -274,6 +274,39 @@ export function toolScopeSummary(policy: readonly ToolPolicyEntry[]): string {
 }
 
 /**
+ * One row of `GET /v1/instances/:id/connectors`, as the console reads it (#720).
+ *
+ * Only the two fields the consent checkbox needs. It is a LOOKUP table, never the source of which
+ * checkboxes exist — that stays {@link writeConnectors}, i.e. the server's own tool verdict (#351),
+ * so the gate and the UI cannot disagree about which grant a refusal is asking for.
+ */
+export interface ConnectorPolicyEntry {
+	id: string;
+	label?: string;
+	writeMeaning?: string;
+}
+
+/**
+ * What to write on ONE write-consent checkbox: the connector's registry label, and what granting
+ * it permits.
+ *
+ * Both fall back, and the fallbacks are the point. Until #720 the panel rendered `capitalize` over
+ * the raw id — "Github", "Mcp", "Tmux", "Http" — under one shared paragraph claiming every
+ * connector clicks and types on the owner's machine, which was true of `browser` alone and
+ * measured on ZERO of 43 instances. The label and the sentence now come from the connector's own
+ * declaration.
+ *
+ * A missing entry costs the sentence, NEVER the control. `ToolPermissions.tsx` explains at length
+ * why: an unchecked box is a claim that the agent CANNOT act as you, so a connectors-endpoint
+ * failure that removed the checkbox would make that claim falsely. So this returns the id and a
+ * null meaning rather than signalling "hide it".
+ */
+export function writeConsentCopy(connector: string, entries: readonly ConnectorPolicyEntry[]): { label: string; meaning: string | null } {
+	const entry = entries.find((e) => e.id === connector);
+	return { label: entry?.label?.trim() || connector, meaning: entry?.writeMeaning?.trim() || null };
+}
+
+/**
  * The consent state as a short chip, or null when nothing is in the way.
  *
  * Amber, not red, wherever this renders: an ungranted write tool is a switch the owner has not

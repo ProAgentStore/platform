@@ -53,6 +53,11 @@ export const CONNECTORS: Connector[] = [
 		// that does not scale (see `docs/capability-constraints.md`).
 		auth: "none",
 		scopes: { read: true, write: true },
+		// #720. Checked against the five write tools: run a command, send keys, send a message,
+		// and open OR kill a target. The last one is why the sentence names sessions as well as
+		// commands — an owner reading "type commands" would not expect a window to close.
+		writeMeaning:
+			"Type commands into a terminal on your own computer and press Enter, and open or close terminal sessions there. Whatever your shell can do, it can do — as you, on your machine.",
 		grantModel: "user",
 		tools: TERMINAL_TOOLS,
 	},
@@ -61,6 +66,11 @@ export const CONNECTORS: Connector[] = [
 		label: "tmux (local runner)",
 		auth: "none", // reached over the runner relay; no cloud credential
 		scopes: { read: true, write: true },
+		// The same five acts through tmux specifically, so the same sentence. Two connectors, one
+		// meaning, and it is stated twice rather than shared because the day they diverge the copy
+		// has to be able to diverge with them.
+		writeMeaning:
+			"Type commands into a terminal on your own computer and press Enter, and open or close terminal sessions there. Whatever your shell can do, it can do — as you, on your machine.",
 		grantModel: "user",
 		tools: TMUX_TOOLS,
 	},
@@ -72,6 +82,11 @@ export const CONNECTORS: Connector[] = [
 		// only, #103) and writes need the instance's "browser" write-consent (#90).
 		auth: "none",
 		scopes: { read: true, write: true },
+		// The connector the old shared paragraph was written for (2ad71712), and the only one it was
+		// ever true of. Kept almost verbatim, here, where it applies — measured live on 2026-08-21,
+		// it rendered on zero of 43 instances while every other checkbox wore it.
+		writeMeaning:
+			"Click, type and navigate in a browser on your own computer, as you, in the sessions you are already logged into.",
 		grantModel: "user",
 		tools: BROWSER_TOOLS,
 	},
@@ -100,6 +115,12 @@ export const CONNECTORS: Connector[] = [
 		// trusted from the caller.
 		auth: "none",
 		scopes: { read: true, write: true },
+		// #720. Its three writes are delegate_goal, transfer_conversation and set_direction — all
+		// between instances the SAME owner holds. Nothing leaves the platform, which is the fact an
+		// owner cannot read off the checkbox and the reason a structural derivation would get this
+		// connector wrong: it looks identical to `tmux` in every declared field.
+		writeMeaning:
+			"Hand goals to the other agents you have placed under this one, move a conversation between them, and change their standing direction. It stays inside ProAgentStore and spends your tokens.",
 		grantModel: "user",
 		tools: SUPERVISION_TOOLS,
 	},
@@ -111,6 +132,12 @@ export const CONNECTORS: Connector[] = [
 		// the configured header/query param itself (not as a Bearer header).
 		auth: "token",
 		scopes: { read: true, write: true },
+		// #720. `http_request` is honestly scope:"read" — the CALLER names the verb — and the gate
+		// runs per call on the RESOLVED method (#307). So the grant is exactly "the unsafe verbs",
+		// and the sentence names them rather than the tool. SAFE_METHODS (GET/HEAD/OPTIONS/TRACE)
+		// run without it.
+		writeMeaning:
+			"Send POST, PUT, PATCH and DELETE requests to any API endpoint it is configured with, using the key you stored for it. Reads work without this; this is the half that can change or remove data on the far side.",
 		grantModel: "user",
 		tools: HTTP_TOOLS,
 	},
@@ -132,6 +159,12 @@ export const CONNECTORS: Connector[] = [
 		// OAuth-protected with no refresh grant is interactive-only — and that can only be known
 		// by asking the server, which `discoverAuthServer` does at call time (#180/#181).
 		scopes: { read: true, write: true },
+		// #720. Moved VERBATIM from a hardcoded `connectors.includes("mcp")` branch in
+		// ToolPermissions.tsx — the tell that a connector had nowhere to declare this. It is the
+		// only checkbox in the panel that grants no reach on its own (#262: grants are per server
+		// AND per remote tool), so losing this sentence would make ticking it read as a full grant.
+		writeMeaning:
+			"MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.",
 		grantModel: "user",
 		tools: MCP_TOOLS,
 	},
