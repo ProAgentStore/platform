@@ -14,6 +14,7 @@ import { CREATOR_SELECTABLE_TOOLS } from "../agent-do-tools.js";
 
 const SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0134_seed_email_assistant.sql"), "utf8");
 const INBOX_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0136_seed_inbox_chat.sql"), "utf8");
+const INBOX_WIDEN_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0137_inbox_chat_handles_attachments.sql"), "utf8");
 
 /** The single json('…') literal the seed inserts as `config`. */
 function seededConfig(): Record<string, unknown> {
@@ -85,7 +86,22 @@ function inboxConfig(): Record<string, unknown> {
 	return JSON.parse(INBOX_SQL.slice(start + "json('".length, end).replace(/''/g, "'")) as Record<string, unknown>;
 }
 
-const inboxCaps = () => inboxConfig().capabilities as { tools: string[]; surfaces: string[]; runtime: null; workflow: null };
+/**
+ * The tool list Inbox Chat ends up with — 0136's seed as amended by 0137.
+ *
+ * Reading only the seed would test a state the database never reaches. The amendment sets the
+ * whole array, so the later one wins outright.
+ */
+function inboxTools(): string[] {
+	const marker = "'$.capabilities.tools',";
+	const at = INBOX_WIDEN_SQL.indexOf(marker);
+	if (at === -1) return (inboxConfig().capabilities as { tools: string[] }).tools;
+	const start = INBOX_WIDEN_SQL.indexOf("json('", at);
+	const end = INBOX_WIDEN_SQL.indexOf("')", start);
+	return JSON.parse(INBOX_WIDEN_SQL.slice(start + "json('".length, end)) as string[];
+}
+
+const inboxCaps = () => ({ ...(inboxConfig().capabilities as { surfaces: string[]; runtime: null; workflow: null }), tools: inboxTools() });
 
 describe("the seeded Inbox Chat", () => {
 	it("declares only tools that exist and are grantable", () => {
@@ -108,11 +124,19 @@ describe("the seeded Inbox Chat", () => {
 		expect(tools.some((t) => /delete|trash/i.test(t))).toBe(false);
 	});
 
-	it("is not the form-filling agent — that is 0134's job, and mixing them blurs both", () => {
+	// 0136 asserted the OPPOSITE: that Inbox Chat deliberately excluded the PDF tools, because
+	// 0134 owned form-filling. 0137 reverses that on the evidence — two agents for one mailbox
+	// meant the person who wanted an email agent had two and had to know which did what. The two
+	// jobs were never unrelated: both start by reading a message someone sent you.
+	it("also fills a form that arrived attached (#716, folded in by 0137)", () => {
 		const tools = new Set(inboxCaps().tools);
-		for (const name of ["fill_pdf_form", "inspect_pdf_form", "build_answer_sheet"]) {
-			expect(tools.has(name), name).toBe(false);
+		for (const name of ["inspect_pdf_form", "fill_pdf_form", "build_answer_sheet"]) {
+			expect(tools.has(name), name).toBe(true);
 		}
+	});
+
+	it("says so in its description, so the catalog does not promise less than it does", () => {
+		expect(INBOX_WIDEN_SQL).toMatch(/fill in a form that arrived attached/);
 	});
 
 	it("is cloud-only, and opens none of the gates that let it act", () => {
