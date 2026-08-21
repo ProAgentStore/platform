@@ -121,12 +121,18 @@ describe("builtinToolPolicyInputs", () => {
 	});
 
 	it("lists the permission-gated email tool rather than omitting it", () => {
-		// It is granted by `permissions.email`, not by declaration, so it reports not_declared —
-		// but an auditor asking "can this agent read my mail" gets a row instead of silence.
+		// It is granted by `permissions.email`, not by declaration, so with the permission off it is
+		// not runnable — but an auditor asking "can this agent read my mail" gets a row instead of
+		// silence.
+		//
+		// The reason is `needs_permission`, not `not_declared`, since #721. `not_declared` means
+		// "belongs to some other agent", which was false about the one tool in the catalog that no
+		// agent can declare: it is this agent's the moment one checkbox is ticked. The granted half
+		// of the pair, and the containment that keeps it honest, are in instance-tool-policy.test.ts.
 		expect(isBuiltinTool("find_confirmation_link")).toBe(true);
 		const entry = resolveToolPolicy(caps({}), [], allToolPolicyInputs()).find((t) => t.name === "find_confirmation_link");
 		expect(entry?.allowed).toBe(false);
-		expect(entry?.reason).toBe("not_declared");
+		expect(entry?.reason).toBe("needs_permission");
 	});
 
 	it("knows a registry name is not a built-in", () => {

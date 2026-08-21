@@ -6464,7 +6464,7 @@ paths:
                         scope: { type: string, enum: [read, write] }
                         allowed: { type: boolean, description: "Is this tool part of this agent at all (declared, and not switched off by the owner)? Deliberately NOT folded with write consent — see `writeConsent`." }
                         disabled: { type: boolean }
-                        reason: { type: string, enum: [ok, not_declared, disabled_by_owner], description: "Why `allowed` is what it is." }
+                        reason: { type: string, enum: [ok, not_declared, disabled_by_owner, needs_permission], description: "Why `allowed` is what it is. `needs_permission` is a tool an OWNER PERMISSION grants rather than the agent's declaration (`find_confirmation_link`, on `permissions.email`): it is this agent's the moment the permission is on, so `not_declared` would be false (#721)." }
                         writeConsent:
                           type: string
                           enum: [n/a, granted, required, per_call]

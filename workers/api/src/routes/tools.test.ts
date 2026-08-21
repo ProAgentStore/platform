@@ -55,6 +55,15 @@ function testApp(
 		mcpGrants?: Array<{ instance_id: string; user_id: string; endpoint: string; tool: string; created_at: string }>;
 		/** Connectors with write consent granted (#90). */
 		writeConsents?: string[];
+		/**
+		 * What the instance DO reports for `permissions.email` (#721) — the flag the tool listing
+		 * now resolves so `find_confirmation_link` is reported as this agent's when it is on.
+		 *
+		 * Omit it and NO `AGENT` binding is provided at all, which is deliberately the default: that
+		 * is the unreadable-state path, and every test in this file that does not care about the
+		 * mailbox exercises it. `"unreadable"` is the same failure with the binding present.
+		 */
+		emailPermission?: boolean | "unreadable";
 	} = { owned: true },
 ) {
 	const app = new Hono();
@@ -130,6 +139,22 @@ function testApp(
 				};
 			},
 		},
+		// The instance DO, present only when a test says what `permissions.email` should read
+		// (#721). `emailPermitted` swallows a throw into "not permitted", so its absence is the
+		// fail-closed path rather than a crash.
+		...(opts.emailPermission === undefined
+			? {}
+			: {
+					AGENT: {
+						idFromName: (n: string) => n,
+						get: () => ({
+							fetch: async () =>
+								opts.emailPermission === "unreadable"
+									? new Response("nope", { status: 500 })
+									: new Response(JSON.stringify({ permissions: { email: opts.emailPermission === true } })),
+						}),
+					},
+				}),
 		// Durable pipeline runner (issue #97) — stubbed to capture .create() calls.
 		PIPELINE_RUN: { create: opts.create ?? (async () => ({ id: "wf-test" })) },
 		// Durable agent loop (#158) — captures .create() so the start route is testable.
@@ -183,6 +208,75 @@ describe("GET /v1/instances/:id/tools", () => {
 		expect(tool.name).toBe("github_workflow_runs");
 		expect(typeof tool.description).toBe("string");
 		expect(tool.mutates).toBe(false);
+	});
+});
+
+// ── The tool an OWNER PERMISSION grants (#721) ──────────────────────────────────────────────
+//
+// Measured live before the fix, on the one instance of 43 with `permissions.email === true`:
+// `{"name":"find_confirmation_link","allowed":false,"disabled":false,"reason":"not_declared"}`.
+// The chat runtime was running it on that same instance. These pin the wire shape in both flag
+// states, because the wire shape is what the console reads and what an auditor calls.
+describe("GET /v1/instances/:id/tools — find_confirmation_link (#721)", () => {
+	const findLink = async (opts: Parameters<typeof testApp>[0]) => {
+		const { app, env } = testApp(opts);
+		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		expect(res.status).toBe(200);
+		return { status: res.status, row: rec(rows((await jsonBody(res)).tools).find((t) => t.name === "find_confirmation_link")) };
+	};
+
+	it("reports the mailbox reader as this agent's when the owner has granted the permission", async () => {
+		const { row } = await findLink({ emailPermission: true });
+		expect(row.allowed).toBe(true);
+		expect(row.reason).toBe("ok");
+		// The fixture agent declares five github/http tools and no gmail tool at all — which is the
+		// point: the chat runtime offers this one on the flag alone, so the listing must too.
+		expect(row.reach).toBe("internet");
+	});
+
+	it("says needs_permission — not not_declared — when the flag is off", async () => {
+		const { row } = await findLink({ emailPermission: false });
+		expect(row.allowed).toBe(false);
+		expect(row.reason).toBe("needs_permission");
+		expect(row.reason).not.toBe("not_declared");
+	});
+
+	// The regression this read introduces if it is written carelessly: a DO state read now sits in
+	// the /tools path, and this panel is the worst place for a failure to be loud OR to be
+	// permissive. It must degrade to "not permitted" and still serve the listing.
+	it("degrades to not-permitted on an unreadable DO state, and still returns the listing", async () => {
+		const { status, row } = await findLink({ emailPermission: "unreadable" });
+		expect(status).toBe(200);
+		expect(row.allowed).toBe(false);
+		expect(row.reason).toBe("needs_permission");
+	});
+
+	// `allowed:true` un-gates the generic invoker for a REGISTRY tool. This one is a BUILT-IN, so
+	// `getRegistryTool` misses it and the route answers before the policy is ever consulted — the
+	// reach does not widen with the grant. Asserted rather than assumed, because "allowed now means
+	// callable from anywhere" is exactly the side effect a reader would accept without checking.
+	it("stays chat-only over REST even when granted — invocableBy is not widened by a permission", async () => {
+		const { app, env } = testApp({ emailPermission: true });
+		const res = await req(app, env, "/v1/instances/i1/tools/find_confirmation_link", { method: "POST", body: "{}" }, await tok("u1"));
+		expect(res.status).toBe(404);
+		expect(String((await jsonBody(res)).error)).toContain("runs in the agent's own chat loop and nowhere else");
+
+		const listed = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		const row = rec(rows((await jsonBody(listed)).tools).find((t) => t.name === "find_confirmation_link"));
+		expect(row.invocableBy).toEqual(["chat"]);
+	});
+
+	// The owner's off-switch is a real switch once the row is theirs, and refuses to become a
+	// parking space for a tool they have not granted.
+	it("PUT switches it off when granted, and 403s toward the permission when not", async () => {
+		const on = testApp({ emailPermission: true });
+		const okRes = await req(on.app, on.env, "/v1/instances/i1/tools/find_confirmation_link", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+		expect(okRes.status).toBe(200);
+
+		const off = testApp({ emailPermission: false });
+		const denied = await req(off.app, off.env, "/v1/instances/i1/tools/find_confirmation_link", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+		expect(denied.status).toBe(403);
+		expect(String((await jsonBody(denied)).error)).toContain("Permissions & Connections");
 	});
 });
 

@@ -32,13 +32,16 @@ import { builtinToolPolicyInputs, callerChoosesMethod, type ToolInvocation, type
 import { registryTools } from "./tool-registry.js";
 import { reachOf, type ToolReach } from "./tool-reach.js";
 import { listConsents } from "./connector-consent.js";
+// The chat path's own fail-closed reader of `AgentState.permissions.email` (#721). Imported so
+// there is exactly one, for the reason its own doc comment gives.
+import { emailPermitted } from "./connectors/gmail.js";
 import type { Env } from "../types.js";
 // The reason vocabulary + its wording moved to a LEAF (#381) so a pipeline step can refuse with
 // the same sentence without importing the catalog/registry/consent graph this module needs.
 // Re-exported here, its original home, so every existing import keeps working.
-import { explainRefusal, type ToolPolicyReason } from "./tool-refusal.js";
+import { agentLacksTool, explainRefusal, type ToolPolicyReason } from "./tool-refusal.js";
 
-export { explainRefusal, type ToolPolicyReason };
+export { agentLacksTool, explainRefusal, type ToolPolicyReason };
 
 /**
  * What the write-consent machinery (#90 and the gates layered on it) will do to this tool, as
@@ -197,6 +200,35 @@ export function allToolPolicyInputs(): PolicyInput[] {
 }
 
 /**
+ * The tools an OWNER PERMISSION grants, which no creator declaration can (#721).
+ *
+ * `find_confirmation_link` reads the owner's connected Gmail and is deliberately excluded from
+ * `CREATOR_SELECTABLE_TOOLS` (`agent-do-tools.ts`) — "it is granted by what the agent IS". The
+ * chat runtime therefore adds it out of band, on `AgentState.permissions.email` alone
+ * (`agent-think.ts`, `buildAgentToolDefinitions`), and this listing did not: it resolved
+ * `toolNamesFor(capabilities)` and nothing else, so the one tool in the catalog that reads the
+ * owner's mail could only ever report `not_declared`, on the one instance that had been granted
+ * the mailbox. "Everything this agent is allowed to do" omitted it.
+ *
+ * ── Why HIDING THE CHECKBOX is not the fix, though it is the first one that suggests itself
+ *
+ * The Gmail permission control (`store/console/src/tabs/SettingsTab.tsx`) renders on every
+ * instance, including agents that declare no `gmail_*` tool, while its two neighbours consult the
+ * per-instance connector verdict. Narrowing it the same way looks like the tidier change and is a
+ * regression: `agent-think.ts` offers this tool on the FLAG ALONE, irrespective of
+ * `capabilities.tools`, so hiding the control would delete the only off-switch for a capability
+ * that stays live — a permission the owner cannot revoke. The checkbox is not in the wrong place;
+ * the listing above it was wrong. That argument is recorded here as well as at the checkbox
+ * because it is about the relationship between the two, and a reader arriving at either end has
+ * to meet it.
+ *
+ * A LIST rather than a field on the tool, because there is exactly one such tool and its grant
+ * model is the odd one out on purpose. Should a second appear, the honest move is a `grant`
+ * field on `PolicyInput` — not a longer list.
+ */
+export const EMAIL_PERMISSION_TOOLS: readonly string[] = ["find_confirmation_link"];
+
+/**
  * Resolve the policy for every registry tool. Pure — the caller supplies the agent's
  * capabilities and the owner's disabled list, so this is exhaustively testable and the two
  * gates can't drift between the chat runtime, the REST invoker and MCP.
@@ -204,20 +236,36 @@ export function allToolPolicyInputs(): PolicyInput[] {
  * Returns EVERY tool, not just the allowed ones: "what can this agent do" is only answerable
  * if the answer includes what it can't, and why. Callers that want the old shape filter on
  * `.allowed`.
+ *
+ * `grantedByPermission` (#721) is the same input the chat runtime has and this did not: the names
+ * an OWNER PERMISSION has granted on this instance, resolved by the caller (which is what keeps
+ * this pure) and unioned into the declared set. It is the identical shape of fix the eleven BASE
+ * names got above — the listing was missing an input the runtime uses, so it described a
+ * different agent — and it is passed as names rather than as a flag so this function keeps
+ * knowing nothing about Gmail.
  */
 export function resolveToolPolicy(
 	capabilities: AgentCapabilities,
 	disabledTools: readonly string[] = [],
 	tools: ReadonlyArray<PolicyInput> = allToolPolicyInputs(),
 	consentedConnectors: readonly string[] = [],
+	grantedByPermission: readonly string[] = [],
 ): ToolPolicyEntry[] {
-	const declared = toolNamesFor(capabilities);
+	const declared = new Set([...toolNamesFor(capabilities), ...grantedByPermission]);
 	const off = new Set(disabledTools);
 	const granted = new Set(consentedConnectors);
+	// The tools no declaration can reach, so "not_declared" is never the true answer for them.
+	const byPermission = new Set(EMAIL_PERMISSION_TOOLS);
 	return tools.map((t) => {
 		const isDeclared = declared.has(t.name);
 		const disabled = off.has(t.name);
-		const reason: ToolPolicyReason = !isDeclared ? "not_declared" : disabled ? "disabled_by_owner" : "ok";
+		const reason: ToolPolicyReason = !isDeclared
+			? byPermission.has(t.name)
+				? "needs_permission"
+				: "not_declared"
+			: disabled
+				? "disabled_by_owner"
+				: "ok";
 		return {
 			name: t.name,
 			connector: t.connector,
@@ -342,6 +390,21 @@ export async function instanceToolPolicy(
 	// The consent rows are read here rather than per tool: one query for the whole listing, and
 	// the failure mode matches the gate itself — `listConsents` returning nothing reports
 	// `required`, which is what runRegistryTool would then do (#90 is fail-closed).
-	const consented = (await listConsents(env, instanceId).catch(() => [])).filter((r) => r.scope === "write").map((r) => r.connector);
-	return resolveToolPolicy(capabilities, disabled, allToolPolicyInputs(), consented);
+	//
+	// The permission read (#721) is the second half of the same idea and is resolved HERE, at the
+	// single funnel all four `routes/tools.ts` call sites go through, rather than at each of them.
+	// It is one DO state read, paid once per listing and issued alongside the consent query rather
+	// than after it. `emailPermitted` is the chat path's own helper, imported rather than
+	// re-implemented, and it swallows every uncertainty into `false` — no instance id, an
+	// unreachable DO, an unparseable body — so an unreadable state means "not permitted" and never
+	// a 500. That direction matters more here than almost anywhere: this listing is the panel an
+	// owner reads to learn what their agent may do, and a failed read that took the panel down
+	// with it would be a silent claim that the agent can do nothing.
+	const [consented, emailOk] = await Promise.all([
+		listConsents(env, instanceId)
+			.then((rows) => rows.filter((r) => r.scope === "write").map((r) => r.connector))
+			.catch(() => [] as string[]),
+		emailPermitted(env, instanceId),
+	]);
+	return resolveToolPolicy(capabilities, disabled, allToolPolicyInputs(), consented, emailOk ? EMAIL_PERMISSION_TOOLS : []);
 }

@@ -58,8 +58,15 @@ function ok(payload: unknown): RegistryToolResult {
  * `agent-think.ts` reads it for the chat path (`state.permissions?.email === true`). Fail-closed
  * on every uncertainty: no instance id, no state, an unreadable response — all "not permitted".
  * A permission that defaults to granted when its source is unreachable is not a permission.
+ *
+ * EXPORTED since #721, and the reason is worth stating: the tool LISTING
+ * (`instance-tool-policy.ts`) now has to answer the same question the chat runtime answers, and
+ * the whole defect it fixes was two places computing "this agent's tools" from different inputs.
+ * A second reader of `https://agent/state` — with its own idea of what an unreadable response
+ * means — would be that defect again, one layer down. This is the one that fails closed and it
+ * stays the only one.
  */
-async function emailPermitted(env: Env, instanceId: string | undefined): Promise<boolean> {
+export async function emailPermitted(env: Env, instanceId: string | undefined): Promise<boolean> {
 	if (!instanceId) return false;
 	try {
 		const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));

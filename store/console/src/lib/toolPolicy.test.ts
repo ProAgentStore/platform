@@ -215,6 +215,37 @@ describe("the reach claim is derived from reach (#584)", () => {
 		expect(writeConnectors([readMemory, delegate])).toEqual(["supervision"]);
 	});
 
+	// #721. `find_confirmation_link` reads the owner's Gmail and `reach:"internet"` says so — but
+	// the server used to send it `allowed:false, reason:"not_declared"` even on the one instance
+	// whose owner had granted the mailbox, so `listedTools` dropped the row and this sentence went
+	// on asserting the negative over it. The fix is server-side (the row now arrives allowed); what
+	// this pins is that a listed mailbox reader is enough to stop the reach negative, so the fix
+	// cannot be undone by a change on this side.
+	it("stops claiming an otherwise platform-only agent reaches nothing once the mailbox is granted", () => {
+		const platformOnly = [readMemory, writeMemory];
+		expect(toolScopeSummary(platformOnly), "the precondition — this is the sentence at stake").toMatch(
+			/no tool that reaches outside the platform/,
+		);
+		// The row exactly as the server now sends it with `permissions.email` on.
+		const findLink = tool({ name: "find_confirmation_link", scope: "read", tier: "standard", invocableBy: ["chat"], mutates: false, reach: "internet" });
+		const summary = toolScopeSummary([...platformOnly, findLink]);
+		expect(summary).not.toMatch(/no tool that reaches outside/);
+		// It reads the mailbox and changes nothing out there, so the honest sentence is the
+		// read-that-leaves one — with the own-data half kept, per the clause above.
+		expect(summary).toMatch(/read from outside the platform/);
+		expect(summary).toMatch(/other systems/);
+		// It has no connector, so it must not invent a grant checkbox for one.
+		expect(writeConnectors([...platformOnly, findLink])).toEqual([]);
+	});
+
+	it("keeps the mailbox reader off the list while the permission is off", () => {
+		// `needs_permission`, not `not_declared` (#721) — and either way there is no switch to
+		// render, so the row is not listed and makes no claim in either direction.
+		const ungranted = tool({ name: "find_confirmation_link", allowed: false, disabled: false, reason: "needs_permission", mutates: false, reach: "internet" });
+		expect(listedTools([readMemory, ungranted]).map((t) => t.name)).toEqual(["read_memory"]);
+		expect(consentChip(ungranted)).toBeNull();
+	});
+
 	it("makes NO reach claim when the server did not send one", () => {
 		// An older API. The negative is unprovable here, so it is not asserted — the rule this
 		// module exists to keep, one layer above any particular field.

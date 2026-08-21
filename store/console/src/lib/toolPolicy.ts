@@ -78,7 +78,16 @@ export interface ToolPolicyEntry {
 	description: string;
 	allowed: boolean;
 	disabled: boolean;
-	reason: "ok" | "not_declared" | "disabled_by_owner";
+	/**
+	 * Mirrors ToolPolicyReason in workers/api/src/lib/tool-refusal.ts.
+	 *
+	 * `needs_permission` (#721) is the tool an OWNER PERMISSION grants rather than the creator's
+	 * declaration — `find_confirmation_link`, which reads the owner's Gmail. It used to report
+	 * `not_declared`, i.e. "belongs to some other agent", on the one instance that had actually
+	 * been granted the mailbox. Mirrored here so the console can tell the two apart; the row is
+	 * still not LISTED in that state, because there is nothing on it to switch.
+	 */
+	reason: "ok" | "not_declared" | "disabled_by_owner" | "needs_permission";
 	writeConsent?: ToolWriteConsent;
 	/** Catalog group (#525): `base` is a universal facility, `connector` reaches another system. */
 	tier?: "base" | "standard" | "runtime" | "connector";
@@ -102,7 +111,8 @@ export interface ToolPolicyEntry {
  * `allowed || disabled` rather than `allowed`, because the two are the on and off positions of the
  * same switch — a tool the owner turned off is still one of this agent's tools, and it has to stay
  * on screen or there is nothing to turn back on. Everything else in the registry is `not_declared`
- * and belongs to some other agent.
+ * and belongs to some other agent, or `needs_permission` and arrives here the moment the owner
+ * grants it (#721) — neither has a switch to render, so neither is listed.
  */
 export function listedTools(policy: readonly ToolPolicyEntry[]): ToolPolicyEntry[] {
 	return policy.filter((t) => t.allowed || t.disabled);

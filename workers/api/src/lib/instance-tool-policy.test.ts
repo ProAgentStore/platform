@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { explainRefusal, explainWriteConsent, readDisabledTools, resolveToolPolicy, writeConsentOf } from "./instance-tool-policy.js";
+import {
+	allToolPolicyInputs,
+	EMAIL_PERMISSION_TOOLS,
+	explainRefusal,
+	explainWriteConsent,
+	readDisabledTools,
+	resolveToolPolicy,
+	writeConsentOf,
+} from "./instance-tool-policy.js";
+import { toolNamesFor } from "../agent-do-tools.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 
 const caps = (over: Partial<AgentCapabilities>): AgentCapabilities =>
@@ -134,6 +143,86 @@ describe("resolveToolPolicy — writeConsent", () => {
 	});
 });
 
+// ── Tools an OWNER PERMISSION grants, which no declaration can (#721) ────────────────────
+//
+// The defect: `find_confirmation_link` reads the owner's Gmail and is excluded from
+// CREATOR_SELECTABLE_TOOLS on purpose, so the listing — which resolved `toolNamesFor` and nothing
+// else — could only ever report it `not_declared`, INCLUDING on the one instance in the account
+// where `permissions.email` was actually on. The console then dropped the row (`listedTools` keeps
+// `allowed || disabled`), so the panel captioned "Everything this agent is allowed to do" omitted
+// the only tool that reads the owner's mail.
+describe("resolveToolPolicy — grantedByPermission", () => {
+	const legacy = caps({});
+	const row = (grantedByPermission: readonly string[]) =>
+		resolveToolPolicy(legacy, [], allToolPolicyInputs(), [], grantedByPermission).find((t) => t.name === "find_confirmation_link");
+
+	it("reports the mailbox reader as this agent's once the owner has granted the permission", () => {
+		const t = row(EMAIL_PERMISSION_TOOLS);
+		expect(t?.allowed).toBe(true);
+		expect(t?.reason).toBe("ok");
+		// The reach is what makes the omission matter: it is the field `toolScopeSummary` reads
+		// before asserting an agent reaches nothing outside the platform.
+		expect(t?.reach).toBe("internet");
+	});
+
+	it("says needs_permission — never not_declared — when the permission is off", () => {
+		const t = row([]);
+		expect(t?.allowed).toBe(false);
+		// "not one of this agent's tools" is the false statement being removed: it IS this agent's,
+		// one checkbox away, and the checkbox sits directly under the panel that said otherwise.
+		expect(t?.reason).toBe("needs_permission");
+		expect(t?.reason).not.toBe("not_declared");
+	});
+
+	it("still lets the owner switch it off once granted — the row is a real switch, not a label", () => {
+		const t = resolveToolPolicy(legacy, ["find_confirmation_link"], allToolPolicyInputs(), [], EMAIL_PERMISSION_TOOLS).find(
+			(x) => x.name === "find_confirmation_link",
+		);
+		expect(t?.disabled).toBe(true);
+		expect(t?.reason).toBe("disabled_by_owner");
+	});
+
+	it("grants nothing else — a permission is not a second declaration route", () => {
+		const granted = resolveToolPolicy(legacy, [], allToolPolicyInputs(), [], EMAIL_PERMISSION_TOOLS);
+		const plain = resolveToolPolicy(legacy, [], allToolPolicyInputs(), [], []);
+		const differ = granted.filter((t, i) => t.allowed !== plain[i].allowed).map((t) => t.name);
+		expect(differ).toEqual(["find_confirmation_link"]);
+	});
+
+	// THE test, and the reason this ticket is not "hide the Gmail checkbox".
+	//
+	// `agent-think.ts` builds the executable set as `toolNamesFor(capabilities)` plus
+	// `find_confirmation_link` when `state.permissions?.email === true` — on the FLAG ALONE,
+	// whatever `capabilities.tools` says. So narrowing the checkbox to agents that declare a
+	// `gmail_*` tool would remove the only off-switch for a capability that stays live. This
+	// asserts the containment the resolver's own header names, extended to permission grants: the
+	// listing must never report as unrunnable a tool the chat runtime would execute. It fails on
+	// the tempting fix, which is what it is for.
+	const SHAPES: Array<[string, AgentCapabilities]> = [
+		["declares nothing (FULL)", caps({})],
+		["repo surface", caps({ surfaces: ["repo"] })],
+		["coding surface", caps({ surfaces: ["coding"] })],
+		["declared allowlist with no gmail tool", caps({ tools: ["repo_tree", "search_knowledge"] })],
+		["declared allowlist WITH gmail tools", caps({ tools: ["gmail_search", "gmail_read_message"] })],
+	];
+	it.each(SHAPES)("everything the chat runtime would run for %s is allowed:true here, flag on and off", (_label, capabilities) => {
+		for (const emailEnabled of [false, true]) {
+			// Exactly agent-think.ts's two lines, re-derived rather than restated.
+			const runtime = toolNamesFor(capabilities);
+			if (emailEnabled) runtime.add("find_confirmation_link");
+
+			const listed = new Map(
+				resolveToolPolicy(capabilities, [], allToolPolicyInputs(), [], emailEnabled ? EMAIL_PERMISSION_TOOLS : []).map((t) => [t.name, t]),
+			);
+			for (const name of runtime) {
+				const entry = listed.get(name);
+				expect(entry, `${name} runs in chat but is absent from GET /v1/instances/:id/tools`).toBeDefined();
+				expect(entry?.allowed, `${name} runs in chat (email=${emailEnabled}) but the listing reports it as not runnable`).toBe(true);
+			}
+		}
+	});
+});
+
 // A listing that reads only the DECLARED scope cannot see a gate that runs per call. Both of
 // today's per-call gates are derived from the tool's own declaration rather than a name list.
 describe("writeConsentOf — the gates that decide per call, not per tool", () => {
@@ -190,5 +279,14 @@ describe("explainRefusal", () => {
 		expect(explainRefusal("x", "not_declared")).toContain("not one of this agent's tools");
 		expect(explainRefusal("x", "disabled_by_owner")).toContain("switched off");
 		expect(explainRefusal("x", "disabled_by_owner")).toContain("Settings → Tools");
+	});
+
+	// The third fix, and it is a different one again: not "edit the agent" and not "turn it back
+	// on", but "tick the permission". A sentence that sent the owner to the tool switches would be
+	// sending them to a row that is not there yet.
+	it("sends a permission-gated refusal to the permission, not to the tool list", () => {
+		expect(explainRefusal("find_confirmation_link", "needs_permission")).toContain("permission");
+		expect(explainRefusal("find_confirmation_link", "needs_permission")).toContain("Permissions & Connections");
+		expect(explainRefusal("find_confirmation_link", "needs_permission")).not.toContain("not one of this agent's tools");
 	});
 });

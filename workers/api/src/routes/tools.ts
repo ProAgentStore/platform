@@ -3,7 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { listConnectorAccounts, pinnedAccountsFrom, resolveConnectorAccount } from "../lib/connector-accounts.js";
 import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
-import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
+import { agentLacksTool, DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
@@ -177,9 +177,9 @@ toolRoutes.put("/:id/tools/:name", async (c) => {
 	const policy = await instanceToolPolicy(c.env, instance.id, session.uid, instance.config);
 	const entry = policy.find((t) => t.name === name);
 	if (!entry) throw new HttpError(404, `Unknown tool: ${name}`);
-	if (entry.reason === "not_declared") {
-		throw new HttpError(403, explainRefusal(name, "not_declared"));
-	}
+	// BOTH absence verdicts (#721) — an ungranted permission-gated tool is as absent as an
+	// undeclared one, and parking an off-switch on it would fill the list with unrunnable names.
+	if (agentLacksTool(entry.reason)) throw new HttpError(403, explainRefusal(name, entry.reason));
 
 	const disabled = new Set(readDisabledTools(instance.config));
 	if (body.enabled) disabled.delete(name);

@@ -16,15 +16,44 @@
  * Keep this file a LEAF. It imports nothing; adding an import is how the cycle comes back.
  */
 
-/** Why a tool is or isn't runnable — surfaced to the UI/MCP so "blocked" is never a mystery. */
-export type ToolPolicyReason = "ok" | "not_declared" | "disabled_by_owner";
+/**
+ * Why a tool is or isn't runnable — surfaced to the UI/MCP so "blocked" is never a mystery.
+ *
+ * `needs_permission` (#721) is the fourth, and it exists because `not_declared` was answering for
+ * it and answering wrongly. A tool granted by an OWNER PERMISSION rather than by the creator's
+ * `capabilities.tools` — today only `find_confirmation_link`, which reads the owner's Gmail on
+ * `AgentState.permissions.email` — can never appear in a declaration, so the listing could only
+ * ever say "not one of this agent's tools". That is false in the way that matters: it IS this
+ * agent's, one checkbox away, and the checkbox is thirty-one pixels below the panel saying
+ * otherwise. The two need different fixes (edit the agent vs. tick a permission), which is the
+ * same distinction `disabled_by_owner` was split out for.
+ */
+export type ToolPolicyReason = "ok" | "not_declared" | "disabled_by_owner" | "needs_permission";
 
 /** Human-readable refusal, so an API 403, a pipeline step and an agent's own error all say the
  *  same thing about the same tool. */
 export function explainRefusal(name: string, reason: ToolPolicyReason): string {
-	return reason === "disabled_by_owner"
-		? `"${name}" is switched off for this agent. Turn it back on in the console (Settings → Tools) to use it.`
-		: `"${name}" is not one of this agent's tools. It can only run the tools its agent declares.`;
+	if (reason === "disabled_by_owner") {
+		return `"${name}" is switched off for this agent. Turn it back on in the console (Settings → Tools) to use it.`;
+	}
+	if (reason === "needs_permission") {
+		return `"${name}" needs a permission this agent has not been given. Grant it in the console (Settings → Permissions & Connections) to use it.`;
+	}
+	return `"${name}" is not one of this agent's tools. It can only run the tools its agent declares.`;
+}
+
+/**
+ * Does this verdict mean the tool is not part of this agent AT ALL — as opposed to being its tool
+ * with the owner's switch off?
+ *
+ * Two members answer yes and they are not interchangeable with each other, only with respect to
+ * this one question: an undeclared tool needs a capability edit, an ungranted one needs a
+ * permission ticked. Both are "there is nothing here to switch", which is what every caller
+ * refusing on absence actually wants — and writing that as a two-armed `||` at each of them is how
+ * `needs_permission` would have been forgotten at the second one (#721).
+ */
+export function agentLacksTool(reason: ToolPolicyReason): boolean {
+	return reason === "not_declared" || reason === "needs_permission";
 }
 
 /**
