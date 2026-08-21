@@ -85,6 +85,23 @@ const PROPAGATION: Record<string, string> = {
 	// files, as 0111 → 0130 had to nineteen migrations apart, would be re-creating the gap on
 	// purpose.
 	"0132_seed_lead_outreach_pipeline.sql": "seed_lead_outreach_pipeline.sql",
+	// #722: 0138 corrects a promise nothing implemented — "It never sends or archives anything
+	// until you have seen exactly what it is about to do." The half that the STORE published is
+	// the description, a plain column on `agents`, so the catalog, the agent detail page and every
+	// future subscriber are corrected the moment the migration applies. The half in `$.identity`
+	// (welcomeMessage + goal) is the DO snapshot, and no migration can reach it.
+	//
+	// There is deliberately no code route, and inventing one would be the wrong trade: identity is
+	// precisely what a subscriber may edit on their own copy, so resolving it live from the
+	// template would overwrite somebody's edited welcome message in order to fix wording. A live
+	// Inbox Chat instance therefore keeps the old welcome until its owner resets state.
+	//
+	// The residue is named rather than waved away: a stale copy repeats a promise the platform does
+	// not keep, on an agent that can send mail. It is bounded — Inbox Chat was seeded by 0136/0137
+	// one day before this fix, so the population is small, though the count is NOT measured here
+	// (this lane cannot query production). #722's Step 2, a real per-call gate, is what would make
+	// the sentence true instead of merely stale.
+	"0138_inbox_chat_honest_safety_copy.sql": "owner-initiated PUT /v1/instances/:id/state — the catalog column carries the correction; the DO copy is the owner's",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {

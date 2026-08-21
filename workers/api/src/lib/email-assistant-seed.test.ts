@@ -15,6 +15,7 @@ import { CREATOR_SELECTABLE_TOOLS } from "../agent-do-tools.js";
 const SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0134_seed_email_assistant.sql"), "utf8");
 const INBOX_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0136_seed_inbox_chat.sql"), "utf8");
 const INBOX_WIDEN_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0137_inbox_chat_handles_attachments.sql"), "utf8");
+const INBOX_HONEST_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0138_inbox_chat_honest_safety_copy.sql"), "utf8");
 
 /** The single json('…') literal the seed inserts as `config`. */
 function seededConfig(): Record<string, unknown> {
@@ -103,6 +104,21 @@ function inboxTools(): string[] {
 
 const inboxCaps = () => ({ ...(inboxConfig().capabilities as { surfaces: string[]; runtime: null; workflow: null }), tools: inboxTools() });
 
+/**
+ * The description Inbox Chat actually carries — 0136's seed as amended by 0137 (attachments) and
+ * then by 0138 (#722, the safety copy). Same reasoning as `inboxTools()`: reading an earlier
+ * migration tests a state the database has already left behind.
+ */
+function liveDescription(): string {
+	for (const sql of [INBOX_HONEST_SQL, INBOX_WIDEN_SQL, INBOX_SQL]) {
+		const m = /\n\s*description = '([\s\S]*?)',\n/.exec(sql);
+		if (m) return m[1].replace(/''/g, "'");
+	}
+	throw new Error("no migration sets the Inbox Chat description");
+}
+
+const LIVE_DESCRIPTION = liveDescription();
+
 describe("the seeded Inbox Chat", () => {
 	it("declares only tools that exist and are grantable", () => {
 		const tools = inboxCaps().tools;
@@ -136,7 +152,18 @@ describe("the seeded Inbox Chat", () => {
 	});
 
 	it("says so in its description, so the catalog does not promise less than it does", () => {
-		expect(INBOX_WIDEN_SQL).toMatch(/fill in a form that arrived attached/);
+		expect(LIVE_DESCRIPTION).toMatch(/fill in a form that arrived attached/);
+	});
+
+	// 0136/0137 also promised "It never sends or archives anything until you have seen exactly
+	// what it is about to do." Nothing implemented it: `runRegistryTool` checks the ONE-TIME
+	// connector consent and dispatches, and gmail_reply's own description says "there is no draft
+	// step and no undo". 0138 replaces the promise with the three protections that are real, and
+	// `agent-claims-lint.test.ts` is where the lint that now catches the sentence is pinned.
+	it("no longer promises a per-action gate the platform does not have (#722)", () => {
+		expect(LIVE_DESCRIPTION).not.toMatch(/until you have seen/);
+		expect(LIVE_DESCRIPTION).toMatch(/email permission/);
+		expect(LIVE_DESCRIPTION).toMatch(/write access for Gmail/);
 	});
 
 	it("is cloud-only, and opens none of the gates that let it act", () => {
