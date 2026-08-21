@@ -325,6 +325,31 @@ describe("instance repo ingestion (real URL validation)", () => {
 		expect(rec(ingest!.body).token).toBeUndefined();
 	});
 
+	/**
+	 * The reason there is no token travels with the job (#724).
+	 *
+	 * The route is the LAST place that knows which of `resolveGithubAccess`'s five conditions
+	 * applied: `installationTokenForOwner` collapses them all to `string | null`, and by the time
+	 * the tarball 404s one tick later inside the DO, "the App is not installed on TheRocketLab"
+	 * has become "no token" has become "connect GitHub for private repos" — which is what an owner
+	 * with sixteen installations was told. This asserts the channel exists and carries the state,
+	 * so the wordings pinned in repo-ingest.test.ts are reachable rather than theoretical.
+	 *
+	 * The env here has no GitHub App, so the condition under test is `app-not-configured`. The
+	 * other four need a configured App and a mocked GitHub, and are covered at the unit level —
+	 * this proves the plumbing, not every branch through it.
+	 */
+	it("hands the DO WHY there is no token, not just that there is none", async () => {
+		const { app, env, doCalls, setDoResponse } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
+		setDoResponse(() => Response.json({ status: "queued" }));
+		await json(app, env, "POST", "/v1/instances/i1/ingest-repo", { repoUrl: "https://github.com/TheRocketLab/mountain-unlocked" }, await tokenFor("u1"));
+		const auth = rec(rec(doCalls.find((c) => c.path === "/ingest-repo")!.body).auth);
+		expect(auth.authenticated).toBe(false);
+		expect(auth.state).toBe("app-not-configured");
+		// A bare `{authenticated:false}` would satisfy the type and lose the whole point.
+		expect(auth.state).not.toBeUndefined();
+	});
+
 	it("ingest-repo/status proxies a GET to the DO", async () => {
 		const { app, env, doCalls, setDoResponse } = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
 		setDoResponse(() => Response.json({ repos: [{ key: "octocat/hello", progress: 1 }] }));

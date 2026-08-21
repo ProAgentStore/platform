@@ -9,7 +9,7 @@
  * Repo vectors live in the engine as sourceType "repo", sourceId `${key}::${path}`
  * (incl. the overview at `${key}::OVERVIEW`).
  */
-import type { ExtractedFile, RepoMeta, RepoRef } from "./repo-ingest.js";
+import type { ExtractedFile, RepoAuthContext, RepoMeta, RepoRef } from "./repo-ingest.js";
 
 export const REPO_MAX_FILES = 300;
 export const REPO_MAX_FILE_BYTES = 32_000;
@@ -36,6 +36,13 @@ export interface RepoIngestJob {
 	repo: string;
 	branch?: string;
 	token?: string;
+	/**
+	 * Why the token above is (or is not) there — resolved once at add time by the route that can
+	 * see it, and carried so the 404 raised a tick later can name the actual condition (#724).
+	 * Absent on a job queued before this shipped, which `repoDownloadFailure` reads as
+	 * "undiagnosed" and answers with the old sentence.
+	 */
+	auth?: RepoAuthContext;
 	status: "fetching" | "indexing" | "summarizing" | "done" | "error";
 	total: number;
 	done: number;
@@ -72,7 +79,7 @@ export interface RepoEngine {
 /** GitHub + parsing dependencies (injected so tests can supply fakes). */
 export interface RepoFetchers {
 	fetchRepoMeta(ref: RepoRef, token?: string): Promise<RepoMeta | null>;
-	fetchRepoTarball(ref: RepoRef, branch?: string, token?: string): Promise<Uint8Array>;
+	fetchRepoTarball(ref: RepoRef, branch?: string, token?: string, auth?: RepoAuthContext | null): Promise<Uint8Array>;
 	extractTextFiles(tar: Uint8Array, opts: { maxFiles: number; maxFileBytes: number; maxTotalBytes: number }): { files: ExtractedFile[]; skipped: number };
 	buildRepoOverview(ref: RepoRef, input: { description?: string | null; language?: string | null; paths: string[]; readme?: string | null }): string;
 	findReadme(files: ExtractedFile[]): string | null;
@@ -116,7 +123,7 @@ export async function clearRepo(store: RepoStore, engine: RepoEngine | null, key
 export async function addRepo(
 	store: RepoStore,
 	engine: RepoEngine | null,
-	input: { ref: RepoRef; repoUrl: string; branch?: string; token?: string; now: string },
+	input: { ref: RepoRef; repoUrl: string; branch?: string; token?: string; auth?: RepoAuthContext; now: string },
 ): Promise<{ job?: RepoIngestJob; error?: string }> {
 	const key = `${input.ref.owner}/${input.ref.repo}`;
 	const existing = await getRepoIndex(store);
@@ -131,6 +138,7 @@ export async function addRepo(
 		repo: input.ref.repo,
 		branch: input.branch || undefined,
 		token: input.token || undefined,
+		auth: input.auth,
 		status: "fetching",
 		total: 0,
 		done: 0,
@@ -158,7 +166,9 @@ export async function statusList(store: RepoStore): Promise<Array<Partial<RepoIn
 	for (const key of await getRepoIndex(store)) {
 		const job = await getRepoJob(store, key);
 		if (!job) continue;
-		const { token: _t, queue: _q, readme: _r, ...pub } = job;
+		// `auth` is stripped alongside `token`: it is an internal diagnosis, and everything in it a
+		// reader needs has already been folded into `error` by `repoDownloadFailure` (#724).
+		const { token: _t, auth: _a, queue: _q, readme: _r, ...pub } = job;
 		repos.push(pub);
 	}
 	// Self-heal: with no repos, drop stale legacy memory / single-repo job key.
@@ -194,7 +204,7 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 				return true; // tick handled — job failed clearly, nothing more to index
 			}
 			const meta = await f.fetchRepoMeta(ref, job.token);
-			const tar = await f.fetchRepoTarball(ref, job.branch || meta?.defaultBranch || undefined, job.token);
+			const tar = await f.fetchRepoTarball(ref, job.branch || meta?.defaultBranch || undefined, job.token, job.auth);
 			const { files, skipped } = f.extractTextFiles(tar, { maxFiles: REPO_MAX_FILES, maxFileBytes: REPO_MAX_FILE_BYTES, maxTotalBytes: REPO_MAX_TOTAL_BYTES });
 			if (files.length === 0) {
 				await saveJob(store, job, { status: "error", error: "No indexable text files found in this repository.", finishedAt: f.now() });

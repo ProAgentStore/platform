@@ -73,6 +73,49 @@ async function drain(store: RepoStore, engine: RepoEngine, f: RepoFetchers, max 
 describe("repo-ingest-runner", () => {
 	const ref = { owner: "octo", repo: "demo" };
 
+	/**
+	 * The reason a token was absent has to survive the trip (#724).
+	 *
+	 * The message is composed at the point of failure — inside `fetchRepoTarball`, one alarm tick
+	 * after the route that diagnosed the access. So a perfect `repoDownloadFailure` is worth
+	 * nothing unless the diagnosis is actually carried into the job and handed back to the
+	 * fetcher. That plumbing is what these two pin; the wordings are pinned in repo-ingest.test.ts.
+	 */
+	it("carries the auth diagnosis from addRepo into the tarball fetch", async () => {
+		const store = memStore();
+		const engine = fakeEngine();
+		const auth = { authenticated: false, state: "not-installed", remedy: 'Install it on "octo": https://x' };
+		let seen: unknown = "never called";
+		const f = fakeFetchers(FILES, {
+			async fetchRepoTarball(_ref, _branch, _token, gotAuth) {
+				seen = gotAuth;
+				return new Uint8Array([1, 2, 3]);
+			},
+		});
+		await addRepo(store, engine, { ref, repoUrl: "octo/demo", auth, now: "t0" });
+		await repoAlarmTick(store, engine, f);
+		expect(seen).toEqual(auth);
+	});
+
+	it("a fetch refusal becomes the job's error verbatim, and the diagnosis is not leaked to the client", async () => {
+		const store = memStore();
+		const engine = fakeEngine();
+		const auth = { authenticated: false, state: "not-installed", remedy: 'Install it on "octo": https://x' };
+		const f = fakeFetchers(FILES, {
+			async fetchRepoTarball() { throw new Error('The App is not installed on "octo".'); },
+		});
+		await addRepo(store, engine, { ref, repoUrl: "octo/demo", auth, now: "t0" });
+		await repoAlarmTick(store, engine, f);
+		const job = await getRepoJob(store, "octo/demo");
+		expect(job?.status).toBe("error");
+		expect(job?.error).toBe('The App is not installed on "octo".');
+		// `auth` is internal, like `token`: everything the reader needs is already in `error`.
+		const pub = (await statusList(store))[0] as Record<string, unknown>;
+		expect(pub.error).toContain("not installed");
+		expect(pub.auth).toBeUndefined();
+		expect(pub.token).toBeUndefined();
+	});
+
 	it("runs the full lifecycle fetching → indexing → summarizing → done", async () => {
 		const store = memStore();
 		const engine = fakeEngine();

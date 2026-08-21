@@ -5,8 +5,8 @@
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { installationTokenForOwner } from "../lib/github-app.js";
-import { parseGithubUrl } from "../lib/repo-ingest.js";
+import { resolveGithubAccess } from "../lib/github-app.js";
+import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
 import type { Env } from "../types.js";
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
@@ -510,12 +510,31 @@ instanceStorageRoutes.post("/:id/ingest-repo", async (c) => {
 	if (!body.repoUrl) throw new HttpError(400, "repoUrl required");
 	const ref = parseGithubUrl(body.repoUrl);
 	if (!ref) throw new HttpError(400, "Not a recognizable GitHub repository URL");
-	// Private repos need an installation token; public repos work without one.
-	const token = await installationTokenForOwner(c.env, session.uid, ref.owner);
+	// Private repos need an installation token; public repos work without one — so a denial here
+	// is NOT a failure, it is one of two normal outcomes, and the fetch is attempted either way.
+	//
+	// `resolveGithubAccess` rather than `installationTokenForOwner` (#724). The wrapper collapses
+	// five conditions into `string | null`, and this was the last place that still knew which one
+	// it was: by the time the tarball 404s, one tick later inside the DO, "the App is not
+	// installed on TheRocketLab" has become "no token" has become "connect GitHub for private
+	// repos" — advice an owner with sixteen installations has already taken, naming a screen that
+	// already says connected. The reason travels with the job now.
+	//
+	// `diagnose: true` buys two extra GitHub calls, and this is exactly the caller the flag was
+	// written for (see its doc comment): a human added this repo by hand, once, and is going to
+	// read the answer. It is what separates "the App is not installed on `<owner>`" from
+	// "`<owner>` is not a GitHub account at all" — and the reported case could not be reproduced
+	// from the owner's own `gh` identity either, so telling those two apart is the whole question.
+	const access = await resolveGithubAccess(c.env, session.uid, ref.owner, { diagnose: true }).catch(
+		() => ({ ok: false as const, state: "transient" as const, remedy: null }),
+	);
+	const auth: RepoAuthContext = access.ok
+		? { authenticated: true }
+		: { authenticated: false, state: access.state ?? null, remedy: access.remedy ?? null };
 	return proxyDO(c, instance.id, "/ingest-repo", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ repoUrl: body.repoUrl, branch: body.branch, token: token ?? undefined }),
+		body: JSON.stringify({ repoUrl: body.repoUrl, branch: body.branch, token: access.ok ? access.token : undefined, auth }),
 	});
 });
 

@@ -56,6 +56,7 @@ import {
 	fetchRepoTarball,
 	findReadme,
 	parseGithubUrl,
+	type RepoAuthContext,
 } from "./lib/repo-ingest.js";
 import {
 	addRepo,
@@ -1187,12 +1188,12 @@ export class AgentDO extends DurableObject<Env> {
 	private async handleIngestRepo(request: Request): Promise<Response> {
 		const state = await this.getState();
 		if (!state) return json({ error: "Not initialized" }, 404);
-		const { repoUrl, branch, token } = await request.json<{ repoUrl: string; branch?: string; token?: string }>();
+		const { repoUrl, branch, token, auth } = await request.json<{ repoUrl: string; branch?: string; token?: string; auth?: RepoAuthContext }>();
 		if (!repoUrl) return json({ error: "repoUrl required" }, 400);
 		const ref = parseGithubUrl(repoUrl);
 		if (!ref) return json({ error: "Not a recognizable GitHub repository URL" }, 400);
 		const engine = await this.getStorageEngine(state.agentId);
-		const { job, error } = await addRepo(this.ctx.storage, engine, { ref, repoUrl, branch, token, now: new Date().toISOString() });
+		const { job, error } = await addRepo(this.ctx.storage, engine, { ref, repoUrl, branch, token, auth, now: new Date().toISOString() });
 		if (error || !job) return json({ error: error || "Failed to add repository" }, 400);
 		await this.ctx.storage.setAlarm(Date.now());
 		return json({ status: job.status, repo: job.key }, 202);

@@ -113,14 +113,94 @@ export async function fetchRepoMeta(ref: RepoRef, token?: string): Promise<RepoM
 	}
 }
 
+/**
+ * Why no installation token accompanied a repo fetch — carried from the route that resolved it
+ * (#724).
+ *
+ * `installationTokenForOwner` collapses five distinct conditions into `string | null`, and by the
+ * time a 404 was raised down here the reason had been thrown away. So every 404 printed one
+ * sentence ending "or connect GitHub for private repos" — advice an owner with sixteen
+ * installations has already taken, and which does not name the one thing that would work
+ * (installing the App on THAT owner). `resolveGithubAccess` has always known which condition it
+ * was; this is the channel that gets it here.
+ *
+ * Deliberately a plain string rather than an imported `GithubAccessState`: this module does one
+ * job — bytes off GitHub — and owns no auth logic. Keeping the type structural is what lets
+ * `repoDownloadFailure` stay pure and testable without a Worker binding.
+ */
+export interface RepoAuthContext {
+	/** Was an installation token actually sent with the request? */
+	authenticated: boolean;
+	/** The `GithubAccessState` that stopped one being minted. Absent when authenticated. */
+	state?: string | null;
+	/** The denial's remedy sentence — what the reader can actually do. */
+	remedy?: string | null;
+}
+
+/**
+ * The sentence for a failed repo download. PURE, so every wording this can produce is pinned by a
+ * test with no network — the same shape `githubAccessDenial` uses, and for the same reason: the
+ * text that regressed was accurate for exactly one of the cases it was emitted for.
+ *
+ * The 404 is genuinely ambiguous and the wording must stay ambiguous with it. GitHub returns 404
+ * both for "no such repository" and for "a private repository you may not see" — that is
+ * deliberate on GitHub's part, so a message asserting either one would be guessing. What we CAN
+ * state without guessing is the access fact: whether the App can reach that owner at all. Every
+ * branch below says that and lets the reader combine it with what they know.
+ */
+export function repoDownloadFailure(status: number, ref: RepoRef, auth?: RepoAuthContext | null): string {
+	const where = `${ref.owner}/${ref.repo}`;
+	const head = `Could not download ${where} (${status}).`;
+	// The pre-#724 sentence, kept for exactly the case it was right about: nothing diagnosed this
+	// call, so "is the URL right, and is it public" is all anyone can honestly say.
+	const undiagnosed = `${head} Check the URL is a public repo, or connect GitHub for private repos.`;
+	if (!auth) return undiagnosed;
+
+	if (auth.authenticated) {
+		// Access to the OWNER is proven — a token was minted and sent. So whatever this is, it is
+		// not a missing connection, and telling the reader to add one would send them to a screen
+		// that already says "connected".
+		return status === 404
+			? `${head} The ProAgentStore GitHub App does have access to "${ref.owner}", so this is not a missing connection: either the repository name is wrong, or "${ref.repo}" is not one of the repositories selected in that installation. Add it there, or check the name.`
+			: `${head} The ProAgentStore GitHub App has access to "${ref.owner}", so this is not a permission you need to grant.`;
+	}
+
+	const remedy = auth.remedy ? ` ${auth.remedy}` : "";
+	// "Either there is no repository at that name, or it is private" — both halves, every time.
+	// The reported case (#724) could not be reproduced from the owner's own `gh` identity either,
+	// so a message that assumed permissions would have been confidently wrong about a typo.
+	switch (auth.state) {
+		case "not-installed":
+			return `${head} Either there is no repository at that name, or it is private — and the ProAgentStore GitHub App is not installed on "${ref.owner}", so a private repository there cannot be read.${remedy}`;
+		case "not-authorized":
+			// The shared `githubAccessDenial` remedy for this state is "Connect GitHub in
+			// Settings", and it is deliberately NOT used here. An account reaching this state has
+			// a GitHub login linked already — that is why the App is visible on "<owner>" at all —
+			// so it sends the reader to a screen that says "connected" and offers them nothing.
+			// That is the identical defect this whole change is about, one state along. Stated as
+			// the identity requirement instead, which is true whatever the reader does next.
+			// (The shared wording still reaches the connectors path, which has its own pinned
+			// tests and is not this issue's to rewrite — recorded on #724 rather than widened.)
+			return `${head} Either there is no repository at that name, or it is private — and while the ProAgentStore GitHub App is installed on "${ref.owner}", this account is not authorized to use that installation. A token is only minted for a GitHub identity the platform has verified controls "${ref.owner}", which means the linked GitHub account must be that owner, or an active member of it if it is an organisation.`;
+		case "owner-unknown":
+			return `${head} "${ref.owner}" is not a GitHub account or organisation, so there is no repository to download and nothing to grant. Correct the owner in the URL.`;
+		case "app-not-configured":
+			return `${head} Check the URL is a public repo — private repositories cannot be read on this deployment at all, because it has no GitHub App configured.${remedy}`;
+		case "transient":
+			return `${head} GitHub could not be reached to check access to "${ref.owner}" just now, so if it is private this may be why.${remedy}`;
+		default:
+			return undiagnosed;
+	}
+}
+
 /** Fetch + gunzip the repo tarball. Returns the raw tar bytes. */
-export async function fetchRepoTarball(ref: RepoRef, branch?: string, token?: string): Promise<Uint8Array> {
+export async function fetchRepoTarball(ref: RepoRef, branch?: string, token?: string, auth?: RepoAuthContext | null): Promise<Uint8Array> {
 	const path = branch
 		? `${GH_API}/repos/${ref.owner}/${ref.repo}/tarball/${encodeURIComponent(branch)}`
 		: `${GH_API}/repos/${ref.owner}/${ref.repo}/tarball`;
 	const res = await fetch(path, { headers: GH_HEADERS(token) });
 	if (!res.ok || !res.body) {
-		throw new Error(`Could not download repository (${res.status}). Check the URL is a public repo, or connect GitHub for private repos.`);
+		throw new Error(repoDownloadFailure(res.status, ref, auth));
 	}
 	const gunzipped = res.body.pipeThrough(new DecompressionStream("gzip"));
 	// Read the decompressed stream incrementally with a hard ceiling. `.arrayBuffer()`

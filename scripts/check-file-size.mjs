@@ -757,7 +757,11 @@ const PINS = {
 	// the paragraph naming why the platform retries rather than the person. The decision, the
 	// bound and the consumption are pure and tested in lib/resumable-round.ts — the same split #442
 	// took, which is why this raise is wiring and prose rather than logic.
-	"workers/api/src/agent-do.ts": 1245,
+	// +1 for #724: a `type RepoAuthContext` import, so `handleIngestRepo` parses the ingest body
+	// with the exact type `addRepo` accepts rather than widening it at the seam. Signed rather than
+	// dodged — `Parameters<typeof addRepo>[2]["auth"]` would have bought the number by making the
+	// line harder to read, which is the opposite of what this ratchet is for.
+	"workers/api/src/agent-do.ts": 1246,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -1374,7 +1378,9 @@ const PINS = {
 	// the note reconciling it with #703's shrink, and this line. The ratchet applied to itself,
 	// again: these comments ARE the record, and two entries that cancel still cost two entries.
 	// +12 at #712, +6 at #715, +3 at #725: this file grows by the reasoning for each entry, and one new entry was added.
-	"scripts/check-file-size.mjs": 1458,
+	// +6 at #724: four lines of why for a one-line raise on agent-do.ts, plus these two. Recorded
+	// rather than absorbed into SLACK, for the reason the #702 note above gives.
+	"scripts/check-file-size.mjs": 1464,
 };
 
 /**
