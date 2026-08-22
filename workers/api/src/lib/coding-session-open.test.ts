@@ -338,7 +338,7 @@ describe("sessionOpenedNotice", () => {
 		// the request and starts clean, so announcing the intent would tell most of the fleet the
 		// opposite of what happened — a confident wrong answer to "do you remember what we were
 		// doing?", which is worse than the silence this notice was added to fix.
-		const asked = { mode: "resume", resumeFrom: "csess_old", reason: "the previous conversation on this repo was last touched 2 hours ago" } as const;
+		const asked = { mode: "resume", resumeFrom: "csess_old", seed: "repo-timeline", reason: "the previous conversation on this repo was last touched 2 hours ago" } as const;
 		const confirmed = sessionOpenedNotice({ repoName: "r", sessionId: "csess_2", engine: "claude", continuity: asked, resumed: true });
 		expect(confirmed).toMatch(/picked up this repo's previous conversation/);
 
@@ -389,7 +389,7 @@ describe("sessionOpenedNotice", () => {
 			repoName: "r",
 			sessionId: "csess_3",
 			engine: "claude",
-			continuity: { mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 9 days ago" },
+			continuity: { mode: "fresh", resumeFrom: null, seed: "repo-timeline", reason: "the previous conversation on this repo was last touched 9 days ago" },
 		});
 		expect(n).toContain("9 days ago");
 		expect(n).toMatch(/fresh conversation/);
