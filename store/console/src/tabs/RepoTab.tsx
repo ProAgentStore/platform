@@ -37,7 +37,6 @@ const PHASE_LABEL: Record<IngestStatus, string> = {
 export default function RepoTab({ instanceId }: Props) {
 	const [repos, setRepos] = useState<RepoState[]>([]);
 	const [loaded, setLoaded] = useState(false);
-	const [url, setUrl] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState("");
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -71,13 +70,20 @@ export default function RepoTab({ instanceId }: Props) {
 		return stopPoll;
 	}, [loadStatus, startPoll, stopPoll]);
 
-	const addRepo = async (repoUrl: string) => {
+	/**
+	 * Re-index — the SAME POST that connects a repo, and deliberately still here (#727).
+	 *
+	 * Adding a repo you do not have is setup and moved to Settings; refreshing one you already have
+	 * acts on a repo that is already connected, which is the distinction being drawn. It keeps the
+	 * status poll with it, because a re-index is the one case where the progress bar this tab owns
+	 * has to start from a click this tab made.
+	 */
+	const reindex = async (repoUrl: string) => {
 		if (!repoUrl.trim()) return;
 		setBusy(true);
 		setErr("");
 		try {
 			await api(`/v1/instances/${instanceId}/ingest-repo`, { method: "POST", body: JSON.stringify({ repoUrl: repoUrl.trim() }) });
-			setUrl("");
 			await loadStatus();
 			startPoll();
 		} catch (e) {
@@ -102,33 +108,16 @@ export default function RepoTab({ instanceId }: Props) {
 
 	return (
 		<div className="w-full max-w-2xl mx-auto">
-			{/* Add a repository */}
-			<div className="bg-panel border border-line rounded-xl p-5 mb-4">
-				<h3 className="text-base font-bold mb-1">Add a repository</h3>
-				<p className="text-sm text-muted mb-3">
-					Paste any GitHub URL. I'll read the whole codebase into my knowledge base, then you can ask about it in the Chat tab — by text or voice. You can index several repos and chat across all of them. Read-only: I explain, I never change your code.
-				</p>
-				<div className="flex gap-2">
-					<input
-						value={url}
-						onChange={(e) => setUrl(e.target.value)}
-						onKeyDown={(e) => e.key === "Enter" && addRepo(url)}
-						aria-label="GitHub repository URL to index"
-						placeholder="https://github.com/owner/repo"
-						className="flex-1"
-					/>
-					<Button variant="primary" size="lg" onClick={() => addRepo(url)} disabled={busy || !url.trim()} className="shrink-0">
-						{busy ? "…" : "Index"}
-					</Button>
-				</div>
-				{err && <p className="text-xs text-danger mt-2">{err}</p>}
-				<p className="text-xs text-muted-soft mt-2">Public repos work as-is. Private repos need GitHub connected. Up to 20 repos, 300 files each.</p>
-			</div>
-
-			{/* Indexed repositories */}
+			{/* Indexed repositories — this tab is management only (#727). The add form is on the
+			    Settings tab and is not duplicated here: two surfaces on one piece of state is the
+			    defect this move exists to avoid, and it is why the empty state points somewhere
+			    rather than offering a second input. */}
 			{loaded && repos.length === 0 && (
-				<p className="text-center py-6 text-muted-soft text-sm">No repositories yet. Add one above to start chatting with it.</p>
+				<p className="text-center py-6 text-muted-soft text-sm">No repositories yet. Connect one on the <b>Settings</b> tab to start chatting with it.</p>
 			)}
+			{/* Failures from Re-index and Remove — the actions this tab still owns. An indexing
+			    failure is reported on the repo's own row below, where the repo is, not here. */}
+			{err && <p className="text-xs text-danger mb-3" data-testid="repo-manage-error">{err}</p>}
 			<div className="flex flex-col gap-3">
 				{repos.map((r) => {
 					const active = ACTIVE.includes(r.status);
@@ -171,7 +160,7 @@ export default function RepoTab({ instanceId }: Props) {
 										</Button>
 									)}
 									{r.repoUrl && (
-										<Button size="sm" onClick={() => addRepo(r.repoUrl as string)} disabled={busy}>Re-index</Button>
+										<Button size="sm" onClick={() => reindex(r.repoUrl as string)} disabled={busy}>Re-index</Button>
 									)}
 									<Button size="sm" variant="danger" onClick={() => removeRepo(r.repoUrl, r.key)} disabled={busy}>Remove</Button>
 								</div>
@@ -188,7 +177,7 @@ export default function RepoTab({ instanceId }: Props) {
 			</div>
 
 			{repos.some((r) => r.status === "done") && (
-				<p className="text-sm text-accent font-semibold mt-4 text-center">→ Switch to the Chat tab and ask about your repositories.</p>
+				<p className="text-sm text-accent font-semibold mt-4 text-center">→ Switch to the Assistant tab and ask about your repositories.</p>
 			)}
 		</div>
 	);

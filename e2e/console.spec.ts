@@ -6018,3 +6018,129 @@ test.describe("Settings — the Gmail permission is its own group (#721)", () =>
 		});
 	}
 });
+
+/**
+ * Connecting a repository is setup and lives on Settings; the Repo tab manages what is already
+ * connected (#727).
+ *
+ * The owner's rule, verbatim: *"one-time action to connect to repo or save it is in settings. repo
+ * management (once connected) — separate tab."* The load-bearing assertion is that the add form
+ * exists in EXACTLY ONE place — the failure this move is guarding against is not "it is on the
+ * wrong tab", it is "it is on both", which is two surfaces over one piece of state and reads as
+ * fixed the moment someone adds the second one back for convenience.
+ *
+ * The fixture carries an errored repo on purpose. An indexing failure must stay visible where the
+ * repo is LISTED, not only where it was submitted — otherwise moving the form takes the failure
+ * report with it, to a tab the owner has already left.
+ */
+test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () => {
+	const REPO_INSTANCE = [{
+		id: "inst-1",
+		name: "Repo Chat",
+		slug: "repo-chat",
+		category: "productivity",
+		capabilities: { surfaces: ["repo"], runtime: null, workflow: null },
+	}];
+
+	const REPOS = [
+		{ key: "owner/ready", repoUrl: "https://github.com/owner/ready", status: "done", total: 42, paths: ["src/index.ts", "README.md"], description: "A repository that finished." },
+		{ key: "owner/busted", repoUrl: "https://github.com/owner/busted", status: "error", error: "That repository could not be downloaded." },
+		{ key: "owner/working", repoUrl: "https://github.com/owner/working", status: "indexing", total: 100, done: 40 },
+	];
+
+	/** Every POST the console made to ingest — the evidence for which surface actually connects. */
+	async function mockRepo(page: Page, opts: { width?: number; instances?: Array<Record<string, unknown>> } = {}) {
+		const posted: string[] = [];
+		await page.setViewportSize({ width: opts.width ?? 900, height: 1200 });
+		await mockSignedInConsole(page, { instances: opts.instances ?? REPO_INSTANCE });
+		await page.route("**/v1/instances/inst-1/ingest-repo/status", (route) =>
+			route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ repos: REPOS }) }));
+		await page.route("**/v1/instances/inst-1/ingest-repo", (route) => {
+			if (route.request().method() === "POST") posted.push((route.request().postDataJSON() as { repoUrl: string }).repoUrl);
+			return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+		});
+		return posted;
+	}
+
+	/** The add form, wherever it is: the one input that takes a repository URL. */
+	const addForm = (page: Page) => page.getByPlaceholder("https://github.com/owner/repo");
+
+	test("the Settings tab is where a repository is connected", async ({ page }) => {
+		const posted = await mockRepo(page);
+		await page.goto("/console/instances/inst-1/settings");
+
+		await expect(page.getByRole("heading", { name: "Repositories" })).toBeVisible();
+		await addForm(page).fill("https://github.com/owner/fresh");
+		// `exact` because the instance nav carries an "Indexing" tab — a substring match resolves
+		// to two buttons and Playwright refuses.
+		await page.getByRole("button", { name: "Index", exact: true }).click();
+
+		await expect.poll(() => posted).toEqual(["https://github.com/owner/fresh"]);
+		// It says where the progress went rather than pretending to show it — this panel does not
+		// own the status poll, and a silent success reads as a click that did nothing.
+		await expect(page.getByText("Indexing started")).toBeVisible();
+	});
+
+	test("the Repo tab manages what is connected, and offers no second add form", async ({ page }) => {
+		await mockRepo(page);
+		await page.goto("/console/instances/inst-1/repo");
+
+		// Everything the issue keeps on this side.
+		await expect(page.getByText("owner/ready")).toBeVisible();
+		await expect(page.getByRole("button", { name: "Re-index" }).first()).toBeVisible();
+		await expect(page.getByRole("button", { name: "Remove" }).first()).toBeVisible();
+		await expect(page.getByRole("button", { name: /Show files/ })).toBeVisible();
+		await expect(page.getByText("Indexing files…")).toBeVisible();
+		// A failed index is reported on the repo's own row, where the repo is.
+		await expect(page.getByText("That repository could not be downloaded.")).toBeVisible();
+
+		// And nothing that connects a new one.
+		await expect(addForm(page)).toHaveCount(0);
+		await expect(page.getByRole("button", { name: "Index", exact: true })).toHaveCount(0);
+		await expect(page.getByText("Add a repository")).toHaveCount(0);
+	});
+
+	test("Re-index still POSTs from the tab that owns the progress bar", async ({ page }) => {
+		const posted = await mockRepo(page);
+		await page.goto("/console/instances/inst-1/repo");
+		await page.getByRole("button", { name: "Re-index" }).first().click();
+		// Same endpoint as connecting, deliberately: it acts on a repo already connected, which is
+		// the distinction the split is drawn on.
+		await expect.poll(() => posted).toEqual(["https://github.com/owner/ready"]);
+	});
+
+	test("the add form exists in exactly one place", async ({ page }) => {
+		await mockRepo(page);
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(addForm(page)).toHaveCount(1);
+		await page.goto("/console/instances/inst-1/repo");
+		await expect(addForm(page)).toHaveCount(0);
+	});
+
+	test("the surface gate is unchanged — an agent without the repo surface gains nothing", async ({ page }) => {
+		await mockRepo(page, {
+			instances: [{ id: "inst-1", name: "Job Application Assistant", slug: "job-application-assistant", category: "productivity", capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "apply" } }],
+		});
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Instance name" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Repositories" })).toHaveCount(0);
+		await expect(addForm(page)).toHaveCount(0);
+	});
+
+	for (const width of [320, 390]) {
+		test(`mobile — the connect panel fits at ${width}px`, async ({ page }) => {
+			await mockRepo(page, { width });
+			await page.goto("/console/instances/inst-1/settings");
+			await expect(page.getByRole("heading", { name: "Repositories" })).toBeVisible();
+
+			// The input and the Index button share a row; at 320px that row is the whole reason to
+			// measure this in WebKit rather than assume it from the Chromium pass.
+			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+		});
+	}
+});

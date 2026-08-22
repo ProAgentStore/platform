@@ -15,6 +15,7 @@ import ToolPermissions from "../components/ToolPermissions";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
+import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
 import Card from "../components/Card";
 
@@ -439,6 +440,12 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				</div>
 			</Card>
 
+			{/* Connecting a repository is a ONE-TIME act, so it is setup and lives here; managing the
+			    ones already connected stays on the Repo tab (#727). High on the page because for a
+			    repo-surface agent it is the setup — the agent knows nothing at all until one is
+			    indexed. Gated on the surface, so no other agent gains a control it cannot use. */}
+			{isRepo && <RepoConnectPanel instanceId={instanceId} />}
+
 			{/* Agent settings — typed fields the agent declares (settingsSchema) */}
 			{agentFields.length > 0 && (
 				<Card className="mb-3 sm:mb-4">
@@ -528,7 +535,7 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 					{isApply && <li><b>Resume</b> & documents → Knowledge → Documents</li>}
 					{isApply && <li><b>Job application details</b> & preferences → Profile</li>}
 					{isCoding && <li><b>Repository</b> → configure it in the Coding tab</li>}
-					{isRepo && <li><b>Repository</b> → add it in the Repo tab</li>}
+					{isRepo && <li><b>Repository</b> → connect it here; manage it in the Repo tab</li>}
 					<li><b>Rules / special instructions</b> → Knowledge → Rules & Tips</li>
 					<li><b>Logins & secrets</b> → Knowledge → Credentials</li>
 				</ul>
