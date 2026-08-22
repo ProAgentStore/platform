@@ -5900,3 +5900,121 @@ test.describe("mobile — pausing a teamwork edge (#667)", () => {
 		});
 	}
 });
+
+/**
+ * The per-agent Gmail permission is a control of its own, not the last row of the write-consent
+ * block above it (#721, item 4).
+ *
+ * What was measured in WebKit at 420px on production: the permission checkbox's box top sat
+ * **31px** below the bottom of a write-consent checkbox reading *"Gmail — write access"*, under
+ * one heading, with no label of its own. Two adjacent Gmail checkboxes — an owner asked about
+ * "gmail / write access" directly above "reach my Gmail" concluded they were the same switch,
+ * which is the report this closes.
+ *
+ * The fixture reproduces that adjacency deliberately: a `gmail` write tool is what puts a
+ * "Gmail — write access" row in `ToolPermissions`, and without it the two controls never meet.
+ * A test that asserts the separation on a page where only one of them renders proves nothing.
+ *
+ * The load-bearing assertion is the HEADING between them, not the pixel gap: spacing is a
+ * judgement someone may legitimately retune, whereas re-flattening the control back into an
+ * unlabelled trailer is the regression. The gap is asserted too, as a floor well above the 31px
+ * that was reported and well below what the fix gives (~65px), because the report was a
+ * measurement and this is the same measurement.
+ */
+test.describe("Settings — the Gmail permission is its own group (#721)", () => {
+	/** A write tool for `gmail` (draws the write-consent row) and the built-in the flag grants. */
+	const TOOLS = [
+		{ name: "gmail_send", allowed: true, disabled: false, reason: "ok", scope: "write", connector: "gmail", reach: "internet", writeConsent: "required", description: "Send a message from the connected mailbox." },
+		{ name: "find_confirmation_link", allowed: true, disabled: false, reason: "ok", scope: "read", reach: "internet", description: "Read the connected mailbox for a confirmation or verification link." },
+	];
+
+	async function openSettings(page: Page, opts: { connected?: boolean; width?: number } = {}) {
+		const connected = opts.connected !== false;
+		await page.setViewportSize({ width: opts.width ?? 420, height: 1400 });
+		await mockSignedInConsole(page);
+		const reply = (route: Parameters<Parameters<Page["route"]>[1]>[0], data: unknown) =>
+			route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+
+		// Registered AFTER mockSignedInConsole so these win — Playwright matches handlers in
+		// reverse registration order, which is how every other spec in this file overrides.
+		await page.route("**/v1/email/status", (route) => reply(route, { connected, configured: true, email: connected ? "owner@example.com" : null }));
+		await page.route("**/v1/instances/inst-1/state", (route) => reply(route, { permissions: { email: connected } }));
+		await page.route("**/v1/instances/inst-1/tools", (route) => reply(route, { tools: TOOLS }));
+		await page.route("**/v1/instances/inst-1/connectors/consent", (route) => reply(route, { consents: [] }));
+		await page.route("**/v1/instances/inst-1/mcp/consent", (route) => reply(route, { grants: [] }));
+		await page.route("**/v1/instances/inst-1/connectors", (route) => reply(route, {
+			connectors: [{ id: "gmail", label: "Gmail", allowed: true, writeMeaning: "Send, archive and mark mail as read as you." }],
+		}));
+
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByText("Agent write access")).toBeVisible();
+		await expect(page.locator("[data-testid=settings-gmail-group]")).toBeVisible();
+	}
+
+	/** The write-consent checkbox for `gmail` — the row the permission was being read as part of. */
+	const consentBox = (page: Page) => page.locator("label", { hasText: "write access" }).locator("input[type=checkbox]").first();
+	const permissionBox = (page: Page) => page.locator("[data-testid=settings-gmail-group] input[type=checkbox]");
+
+	test("a labelled group separates it from the write-consent checkboxes", async ({ page }) => {
+		await openSettings(page);
+
+		const group = page.locator("[data-testid=settings-gmail-group]");
+		// The permission lives inside the group; the consent checkbox does not. That is the
+		// structural half — the two are no longer siblings in one undifferentiated list.
+		await expect(permissionBox(page)).toHaveCount(1);
+		await expect(group.locator("input[type=checkbox]")).toHaveCount(1);
+		await expect(group).toContainText("Gmail");
+		await expect(group).toContainText("connected (owner@example.com)");
+
+		const consent = await consentBox(page).boundingBox();
+		const permission = await permissionBox(page).boundingBox();
+		const heading = await group.locator("div").first().boundingBox();
+		if (!consent || !permission || !heading) throw new Error("a control the fixture renders had no box");
+
+		// The heading sits BETWEEN them — the separator, and the thing that names what follows.
+		expect(heading.y, "the group heading is below the write-consent checkbox").toBeGreaterThan(consent.y + consent.height);
+		expect(heading.y + heading.height, "the group heading is above the permission checkbox").toBeLessThanOrEqual(permission.y + 1);
+
+		// The measurement the report was: 31px, one heading, no label. Floor, not a pin.
+		const gap = permission.y - (consent.y + consent.height);
+		expect(gap, `the Gmail permission is only ${Math.round(gap)}px below the write-consent checkbox`).toBeGreaterThanOrEqual(48);
+	});
+
+	/**
+	 * The regression #721 names as the one a reader reaches for first: hiding or gating this
+	 * control while the account is disconnected. `agent-think.ts` offers `find_confirmation_link`
+	 * on this flag alone, so the checkbox is the only thing that can turn it back off — it is
+	 * disabled, never absent, and the group still says which account it is about.
+	 */
+	test("the control survives a disconnected account — disabled, not hidden", async ({ page }) => {
+		await openSettings(page, { connected: false });
+
+		const group = page.locator("[data-testid=settings-gmail-group]");
+		await expect(group).toContainText("not connected");
+		await expect(permissionBox(page)).toBeDisabled();
+		await expect(group).toContainText("Connect Gmail in");
+	});
+
+	/**
+	 * The same group on a phone, in BOTH engines.
+	 *
+	 * `mobile — ` is not decoration here: WebKit is where the 31px was measured, and it is the
+	 * only engine the geometry blocks in this file run in besides Chromium. The existing mobile
+	 * sweeps DO visit `/console/instances/inst-1/settings`, but the shared fixture never answers
+	 * `/v1/email/status`, so `showsConnector` returns false and this block has never once rendered
+	 * under them — the hollow-fixture failure #235 and #333 were both closed on. It renders here.
+	 */
+	for (const width of [320, 390]) {
+		test(`mobile — the Gmail group fits at ${width}px`, async ({ page }) => {
+			await openSettings(page, { width });
+			await expect(page.locator("[data-testid=settings-gmail-group]")).toContainText("Gmail");
+
+			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+		});
+	}
+});

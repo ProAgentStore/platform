@@ -585,26 +585,48 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				    their mail would scan that line, decide it was about verification codes, and go
 				    on looking — which is exactly what happened. A permission control has to describe
 				    the permission, not the first thing that ever used it. */}
+				{/* …and it is its OWN group, not a checkbox appended to the one above (#721 item 4).
+				    Every other control in this card is a named block — "Tools", "Agent write access"
+				    (both in ToolPermissions), "Google Drive", "Zoho WorkDrive" (FileConnectorPanel).
+				    This was the only unlabelled one, sitting 31px under a write-consent row that reads
+				    "Gmail — write access". Two adjacent Gmail checkboxes with one heading between
+				    them: an owner reasonably concluded they were the same switch, and that is what
+				    was measured in WebKit at 420px.
+
+				    A heading rather than a new rule, deliberately. The blocks above already end in
+				    `border-b`, so a `border-t` here would draw a second rule 12px under the first
+				    whenever one of them rendered — and when NEITHER renders (an agent that declares
+				    no tools) there is nothing above this to be confused with, so the rule is
+				    unnecessary exactly when it would be absent. The heading is present in both
+				    cases, which is the property the separator needs. */}
 				{showsEmail && (
-				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
-					<input
-						type="checkbox"
-						checked={emailPermission === true}
-						disabled={!emailStatus?.connected}
-						onChange={(e) => toggleEmailPermission(e.target.checked)}
-					/>
-					<span>
-						Allow <b>this agent</b> to reach my Gmail
-						<span className="block text-xs text-muted-soft mt-0.5">
-							Without this it cannot read or act on any message, whatever tools it declares. Which
-							of them it may actually use is the list above — and sending, archiving and marking
-							read each need write access granted there as well.
+				<div className="mt-4" data-testid="settings-gmail-group">
+					<div className="text-sm mb-2">
+						<span className="font-semibold">Gmail</span>
+						{emailStatus?.connected
+							? <span className="text-success"> · connected{emailStatus.email ? ` (${emailStatus.email})` : ""}</span>
+							: <span className="text-muted"> · not connected</span>}
+					</div>
+					<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
+						<input
+							type="checkbox"
+							checked={emailPermission === true}
+							disabled={!emailStatus?.connected}
+							onChange={(e) => toggleEmailPermission(e.target.checked)}
+						/>
+						<span>
+							Allow <b>this agent</b> to reach my Gmail
+							<span className="block text-xs text-muted-soft mt-0.5">
+								Without this it cannot read or act on any message, whatever tools it declares. Which
+								of them it may actually use is the list above — and sending, archiving and marking
+								read each need write access granted there as well.
+							</span>
 						</span>
-					</span>
-				</label>
-				)}
-				{showsEmail && !emailStatus?.connected && (
-					<p className="text-xs text-muted mt-1">Connect Gmail in <b>Preferences → Connections</b> to enable this.</p>
+					</label>
+					{!emailStatus?.connected && (
+						<p className="text-xs text-muted mt-1">Connect Gmail in <b>Preferences → Connections</b> to enable this.</p>
+					)}
+				</div>
 				)}
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
