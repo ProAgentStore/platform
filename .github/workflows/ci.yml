@@ -111,11 +111,48 @@ jobs:
         # session while #291's triage ran — gate where the tree is clean, ratchet where it
         # is not, the same rule the lint step below follows.
         run: node scripts/check-bare-catch.mjs
+      - name: Typecheck coverage — every workspace project, or a recorded reason (#740)
+        # The `tsc` steps at the bottom of this file are a hand-written list of directories.
+        # Each was added one at a time, after a real incident, each correct — so the list
+        # covered exactly the six projects that had already burned someone. Measured
+        # 2026-08-23 at a8c1927: a planted `const x: number = "not a number"` in five files at
+        # once — packages/cli, packages/browser-runner, packages/compliance,
+        # agents/job-application-assistant and workers/host — passed EVERY gate here,
+        # including the full 10,226-test vitest run, because vitest transpiles without
+        # typechecking. That is 12,662 lines nothing compiled, among them the CLI + runner
+        # bundle a user installs globally and runs on their own machine with their own
+        # credentials, and the worker that serves proagentstore.online.
+        #
+        # `pnpm -r typecheck` below closes ten of the eleven. This guard is what makes that
+        # countable: `pnpm -r` fails OPEN — it runs the script only where the script exists,
+        # prints `Scope: 11 of 12 workspace projects`, and names the one it dropped nowhere.
+        # So it also fails if the sweep is ever removed from this file.
+        run: node scripts/check-typecheck-coverage.mjs
       - name: Guard heavy-test isolation (#253)
         # Keeps real-browser / real-socket tests inside the `integration` project, which
         # is where they get a budget sized for real I/O instead of vitest's 5s default.
         run: node scripts/check-test-isolation.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Typecheck every workspace project (#740)
+        # The sweep the repo already had in `package.json` and CI never ran. It covers ten of
+        # the eleven workspace projects — including packages/cli, packages/browser-runner,
+        # packages/compliance and agents/job-application-assistant, which no gate compiled
+        # until now. workers/host is the eleventh and is recorded as exempt with its reason in
+        # scripts/check-typecheck-coverage.mjs, which runs above and fails if that exemption
+        # goes stale or if this step disappears.
+        #
+        # It runs HERE, immediately after install, rather than beside the per-project `tsc`
+        # steps at the bottom: those sit behind the Playwright matrix, and a type error in the
+        # CLI should not cost a full browser run before it is reported.
+        #
+        # The per-project steps below STAY. Three of them compile `tsconfig.test.json`, which
+        # is a different program from the project's own `typecheck` script — that is the whole
+        # content of #599, and workers/api's `typecheck` excludes `*.test.ts`. Replacing the
+        # list with this sweep would re-open #599 while closing #740.
+        #
+        # Cost measured 2026-08-23: 16.3s on a warm local checkout (8.2s reported in #740 on a
+        # hotter one), against a job that already runs a full Playwright matrix.
+        run: pnpm -r typecheck
       - name: Lint — packages/**, workers/** and store/** (#326)
         # `pnpm lint` has never been in CI, so every Biome rule in this repo is advisory:
         # the 300-issue count #326 is about is not a regression anyone was told about, it
