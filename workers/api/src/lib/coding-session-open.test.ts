@@ -38,12 +38,22 @@ vi.mock("./coding-session-sweeper.js", () => ({
 	IDLE_SESSION_MS: 6 * 60 * 60_000,
 	lastIdleReapForRepo: vi.fn(async () => null),
 }));
+// The READ is mocked, the RENDERING is not. `composeSeedBrief` stays real here on purpose: what
+// this file is testing is that the brief reaches `/coding/start` on every path that can hand back a
+// cold engine, and a mocked composer would let that pass while the body carried an empty string.
+vi.mock("./coding-timeline.js", () => ({ loadRepoTimeline: vi.fn(async () => []) }));
 
 const store = await import("./coding-store.js");
 const runner = await import("./runner-client.js");
 const connectivity = await import("./instance-connectivity.js");
 const sweeper = await import("./coding-session-sweeper.js");
 const engines = await import("./coding-engines.js");
+const timeline = await import("./coding-timeline.js");
+
+/** One row of the repo's record — enough that `composeSeedBrief` returns something real. */
+const RECORD = [{ seq: 1, type: "command" as const, content: "finish the health endpoint", createdAt: "2026-08-20T10:00:00Z" }];
+/** The `seed` field as it goes over the wire to `/coding/start`. */
+const seedSent = (call = 0) => (vi.mocked(runner.callRunner).mock.calls[call][2] as { seed?: string }).seed;
 const { ensureActiveSession, ensureSessionForChat, sessionOpenedNotice } = await import("./coding-session-open.js");
 
 const env = {} as Env;
@@ -339,6 +349,41 @@ describe("sessionOpenedNotice", () => {
 		}
 	});
 
+	it("says the engine was BRIEFED, and never that it remembers (#693, ADR 0005)", () => {
+		// The fourth outcome, and the sentence ADR 0005 forbids. This notice is repeated to the user
+		// by the model that reads it, so an engine told it has its old context back will say so — and
+		// nothing downstream can retract it. It must state the loss AND what replaced it, in that
+		// order, without ever claiming continuity.
+		const n = sessionOpenedNotice({
+			repoName: "r",
+			sessionId: "csess_4",
+			engine: "claude",
+			continuity: { mode: "fresh", resumeFrom: null, seed: "repo-timeline", reason: "the previous conversation on this repo was last touched 9 days ago" },
+			seeded: true,
+		});
+		expect(n).toMatch(/previous conversation is gone/);
+		expect(n).toMatch(/written brief/);
+		expect(n).toMatch(/a reconstruction, not the original/);
+		expect(n).not.toMatch(/picked up|as if it never/i);
+	});
+
+	it("prefers a CONFIRMED resume over a brief, and never claims both", () => {
+		// `--resume` is cheaper and higher fidelity, and the runner only reaches for the brief when
+		// it has no conversation — so the two can never both be true. Saying both would describe an
+		// engine holding its own history and a summary of the same history, which is neither what
+		// happened nor a thing that can happen.
+		const n = sessionOpenedNotice({
+			repoName: "r",
+			sessionId: "csess_5",
+			engine: "claude",
+			continuity: { mode: "resume", resumeFrom: "csess_old", seed: "repo-timeline", reason: "the previous conversation on this repo was last touched 2 hours ago" },
+			resumed: true,
+			seeded: true,
+		});
+		expect(n).toMatch(/picked up this repo's previous conversation/);
+		expect(n).not.toMatch(/written brief/);
+	});
+
 	it("says WHY it started clean, so a fresh start is never unexplained", () => {
 		const n = sessionOpenedNotice({
 			repoName: "r",
@@ -395,6 +440,113 @@ describe("continuity on the open path (#408)", () => {
 		await ensureSessionForChat(env, "inst", "u", repo);
 		expect(store.getLastFinishedSessionForRepo).not.toHaveBeenCalled();
 		expect((vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string }).resumeFrom).toBeUndefined();
+	});
+});
+
+describe("no open hands back a cold engine when the platform holds a record (ADR 0005, #693)", () => {
+	const priorClaude = { id: "csess_old", clientType: "claude", status: "ended", lastActivityAt: Date.now() - 3_600_000 };
+	const stale = { ...priorClaude, lastActivityAt: Date.now() - 30 * 24 * 3_600_000 };
+
+	beforeEach(() => {
+		vi.mocked(timeline.loadRepoTimeline).mockResolvedValue(RECORD as never);
+	});
+
+	it("sends the brief on every fresh-start branch, not only the one somebody remembered", async () => {
+		// The DENOMINATOR again, at the wiring layer this time. `resolveSessionContinuity` guarantees
+		// each branch DECLARES a seed source; this guarantees the declaration is acted on. The three
+		// here are the ones that differ in shape — a conversation too old to continue, an engine with
+		// no conversation protocol at all, and a repo with no predecessor — and all three started
+		// stone cold before this change.
+		const branches: Array<[string, unknown, string]> = [
+			["past the window", stale, "claude"],
+			["a raw engine", priorClaude, "codex"],
+			["nothing to continue", null, "claude"],
+		];
+		for (const [label, previous, engine] of branches) {
+			vi.clearAllMocks();
+			vi.mocked(runner.getRunnerConnIgnoringLiveness).mockResolvedValue(conn as never);
+			vi.mocked(runner.relayConnected).mockResolvedValue(true);
+			vi.mocked(runner.callRunner).mockResolvedValue({ seeded: true } as never);
+			vi.mocked(timeline.loadRepoTimeline).mockResolvedValue(RECORD as never);
+			vi.mocked(engines.resolveEngine).mockResolvedValue({ command: engine, clientType: engine } as never);
+			vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+			vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+			vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(previous as never);
+			const res = await ensureActiveSession(env, "inst", "u", repo);
+			expect(seedSent(), `${label}: the engine was started with no brief`).toContain("finish the health endpoint");
+			expect(res.ok && res.seeded).toBe(true);
+		}
+	});
+
+	it("sends the brief alongside a RESUME, so an unhonoured resume is not a cold engine", async () => {
+		// Case 3 in `sessionOpenedNotice`: the cloud asked to resume and the machine did not confirm
+		// it — an older `pags up`, or a resume key that is not on this machine. The notice already
+		// calls that outcome "a FRESH conversation", so withholding the brief here would leave the
+		// ADR's guarantee broken on a path the code already knows is cold.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(priorClaude);
+		vi.mocked(runner.callRunner).mockResolvedValue({ sessionId: "csess_new", pane: "", ready: true } as never);
+		await ensureActiveSession(env, "inst", "u", repo);
+		const body = vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string; seed?: string };
+		expect(body.resumeFrom).toBe("csess_old");
+		expect(body.seed).toContain("finish the health endpoint");
+	});
+
+	it("briefs a session RELOCATED to another machine — the case the ADR was written about (#694)", async () => {
+		// ADR 0005, enforcement clause 2. `reassignSessionNode` moves a live session to the machine
+		// that is connected now with a single-column UPDATE. The engine's conversation does not move
+		// with it: the resume store is a JSON file on the laptop it left, so the new machine looks up
+		// this session's id, finds nothing, and starts over in silence.
+		//
+		// This path has NO continuity object — it decided nothing, it re-attached — which is exactly
+		// why the brief is attached in `startSessionOnRunner` and not at the two open paths. A hook
+		// hung off the decision would have missed the case that produced the record.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_moved"));
+		vi.mocked(runner.relayConnected).mockResolvedValue(false);
+		vi.mocked(runner.getBoundRunnerConn).mockResolvedValue({ ...conn, runnerNode: "laptop" } as never);
+		vi.mocked(runner.callRunner).mockResolvedValue({ seeded: true } as never);
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(store.reassignSessionNode).toHaveBeenCalledWith(env, "inst", "u", "csess_moved", "laptop");
+		expect(seedSent(), "a relocated session was launched cold on the new machine").toContain("finish the health endpoint");
+		expect(res.ok && res.seeded).toBe(true);
+	});
+
+	it("sends NO brief when the user asked for a clean slate", async () => {
+		// The one legitimate cold start, and the reason it is spelled `cleanSlate` rather than
+		// inferred: the Fresh button and `coding_session_fresh` END a wedged conversation and open
+		// another in the same breath. Handing that user a written summary of the wedged conversation
+		// is the feature deleted by a default.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		const { startSessionOnRunner } = await import("./coding-session-open.js");
+		await startSessionOnRunner(env, "inst", "u", session("csess_new"), repo, { cleanSlate: true });
+		expect(seedSent()).toBeUndefined();
+		expect(timeline.loadRepoTimeline).not.toHaveBeenCalled();
+	});
+
+	it("does not claim a brief the machine never acknowledged", async () => {
+		// Same rule `resumed` follows, for the same reason: a `pags up` older than #693 drops the
+		// field, so the cloud's intent is not evidence. Reported false, and the notice falls back to
+		// the plain fresh-start sentence rather than promising the user a briefing that never landed.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(stale);
+		vi.mocked(runner.callRunner).mockResolvedValue({ sessionId: "csess_new", pane: "", ready: true } as never);
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(seedSent()).toContain("finish the health endpoint");
+		expect(res.ok && res.seeded).toBe(false);
+	});
+
+	it("still opens the session when the record cannot be read", async () => {
+		// A missing memory must never become a missing session. D1 hiccups; the brief is the
+		// optional half.
+		vi.mocked(timeline.loadRepoTimeline).mockRejectedValue(new Error("D1_ERROR"));
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res.ok).toBe(true);
+		expect(seedSent()).toBeUndefined();
 	});
 });
 

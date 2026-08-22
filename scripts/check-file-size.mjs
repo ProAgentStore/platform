@@ -1034,7 +1034,19 @@ const PINS = {
 	// TYPE and the rule that turns an exit into a verdict were split into coding/engine-turn.ts,
 	// beside engine-usage/engine-acts/engine-auth, where they are unit-tested without spawning a
 	// process. The raise is the residue after that split, not an alternative to it.
-	"packages/browser-runner/src/coding/headless.ts": 959,
+	// +45 at #693, and 38 of them are prose. The mechanics are three lines and one field: a `seed`
+	// config value, a `pendingSeed` cleared in the expression that reads it, and the first turn
+	// sending brief-then-instruction. What justifies the raise is that this file is where ADR 0005's
+	// guarantee is actually KEPT — "no code path may hand a user a cold engine when coding_timeline
+	// holds content for that repo" is enforced by the two lines here that prefer `--resume` and
+	// spend the brief only when there is nothing to prefer. Both are one edit away from being wrong
+	// in a way that still passes: seeding a resumed engine duplicates a conversation it is already
+	// in, and re-sending the brief on every turn is the unbounded context the ADR names as the cost
+	// of owning the conversation. A reader who finds `pendingSeed` without finding why it is
+	// consumed once, and why the cloud does not decide it, will do one of those. The COMPOSITION —
+	// what a brief says, what it must never claim, and its budget — is not here at all: it is pure,
+	// tested, and in workers/api/src/lib/coding-seed-brief.ts.
+	"packages/browser-runner/src/coding/headless.ts": 1005,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge
@@ -1380,7 +1392,7 @@ const PINS = {
 	// +12 at #712, +6 at #715, +3 at #725: this file grows by the reasoning for each entry, and one new entry was added.
 	// +6 at #724: four lines of why for a one-line raise on agent-do.ts, plus these two. Recorded
 	// rather than absorbed into SLACK, for the reason the #702 note above gives.
-	"scripts/check-file-size.mjs": 1464,
+	"scripts/check-file-size.mjs": 1477,
 };
 
 /**

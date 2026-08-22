@@ -11,6 +11,7 @@ import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
+import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { resolveSessionContinuity, type SessionContinuity } from "./coding-session-continuity.js";
@@ -52,6 +53,21 @@ export interface StartOnRunnerResult {
 	 * field as false is not an assumption — it is the behaviour.
 	 */
 	resumed: boolean;
+	/**
+	 * The runner CONFIRMED the engine came up with NO conversation of its own and is holding a
+	 * context brief to lead its first turn with (ADR 0005, #693).
+	 *
+	 * Confirmed, not assumed, for the same reason `resumed` is: a `pags up` older than #693 drops
+	 * the `seed` field and starts cold, so a cloud that reported its own intent would tell most of
+	 * the fleet it had briefed an engine that never saw a word of it.
+	 *
+	 * It is precisely `true` = "cold, and armed with a brief". It is NOT "the brief has been read":
+	 * delivery happens on the first turn, which may never come if the session is closed first.
+	 * Anything said to a user off the back of this must be phrased as what the engine WAS GIVEN —
+	 * which is also the honest phrasing for the thing itself, since a brief is a reconstruction and
+	 * `resumed` is the only value that means the original context came back.
+	 */
+	seeded: boolean;
 }
 
 /**
@@ -117,6 +133,21 @@ async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo):
  * `opts.resumeFrom` is set ONLY by a fresh open that has decided to continue the repo's previous
  * conversation (#408). A re-attach never sets it: that path's session id IS the conversation's key
  * on the runner, so passing a predecessor could only ever override the better answer.
+ *
+ * ── The seed brief is attached HERE, not at the two open paths (ADR 0005, #693)
+ *
+ * This function is the ONLY caller of `/coding/start` in the cloud, which makes it the only place
+ * the guarantee "no code path may hand a user a cold engine when `coding_timeline` holds content
+ * for that repo" can be made once instead of maintained in several. Attaching it at the open paths
+ * would have covered the fresh opens and MISSED the case the ADR was written about: a RE-ATTACH
+ * that relocates a session to another machine (`reassignSessionNode`, a few lines down) leaves the
+ * resume pointer behind as a file on the laptop it left, so the engine comes up cold on the new one
+ * with nothing said (#694). That path has no `continuity` object at all — it never decided anything
+ * — so a decision-shaped hook would not have reached it.
+ *
+ * `opts.cleanSlate` is the single suppressor, and it means the USER asked for one. It is the only
+ * legitimate cold start per ADR 0005, and it is spelled as a request rather than as the absence of
+ * a seed so that a caller has to state it.
  */
 export async function startSessionOnRunner(
 	env: Env,
@@ -124,7 +155,7 @@ export async function startSessionOnRunner(
 	uid: string,
 	session: CodingSessionRecord,
 	repo: CodingRepo,
-	opts?: { resumeFrom?: string | null },
+	opts?: { resumeFrom?: string | null; cleanSlate?: boolean },
 ): Promise<StartOnRunnerResult> {
 	// IGNORING LIVENESS, deliberately (#532) — the reclaim immediately below is what acts on a dead
 	// stamped node, and it probes the relay itself two lines down. Resolving live here would only
@@ -147,15 +178,21 @@ export async function startSessionOnRunner(
 			conn = fallback;
 		}
 	}
-	if (!conn) return { conn: null, resumed: false };
+	if (!conn) return { conn: null, resumed: false, seeded: false };
 	// Provider-dispatched (#221): GitHub still resolves through the App installation token, and a
 	// non-GitHub repo gets its own provider's credential — or none, which means "clone it
 	// publicly / with whatever this machine already has", the same thing a public GitHub repo
 	// has always got.
 	const credential = await resolveCloneCredential(env, uid, repo);
 	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
+	// Read AFTER the relocation above, so a session that just moved machines is briefed from the
+	// record the machine it left is not carrying. Unconditional apart from an explicit clean slate:
+	// this call cannot know whether the runner already holds this session (a warm re-attach ignores
+	// the seed), and paying one bounded, indexed D1 read to guarantee an engine is never silently
+	// cold is the trade ADR 0005 makes.
+	const seed = opts?.cleanSlate ? "" : await seedBriefForRepo(env, { instanceId, userId: uid, repoId: repo.id, repoName: repo.name });
 	try {
-		const started = await callRunner<{ resumed?: unknown }>(conn, "/coding/start", {
+		const started = await callRunner<{ resumed?: unknown; seeded?: unknown }>(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
 			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
@@ -175,6 +212,12 @@ export async function startSessionOnRunner(
 			// every re-open had before the field existed. That degradation is why the notice reads
 			// the ANSWER below instead of assuming this request was honoured.
 			resumeFrom: opts?.resumeFrom || undefined,
+			// The platform's own record of this repo, for the engine to lead its first turn with IF
+			// it comes up without a conversation of its own (ADR 0005, #693). The runner decides that,
+			// not this side: `--resume` is cheaper and higher fidelity, so a landed resume wins and the
+			// brief is dropped unread. A runner older than #693 ignores the field and starts cold —
+			// today's behaviour — which is why `seeded` below reads the machine's answer.
+			seed: seed || undefined,
 			// What a `gh` WRITE from this session may name (#679). The session's own registered
 			// repository, sent from HERE rather than derived on the machine: the Engine has a shell
 			// in that checkout and could rewrite `git remote origin`, so a locally-derived scope is
@@ -185,7 +228,7 @@ export async function startSessionOnRunner(
 			env: engineEnv,
 		});
 		await recordStartVerdict(env, conn, repo);
-		return { conn, resumed: started?.resumed === true };
+		return { conn, resumed: started?.resumed === true, seeded: started?.seeded === true };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
 		// A REPO'S STATE IS ONLY EVER WRITTEN BY SOMETHING THAT LOOKED AT THE REPO (#440).
@@ -207,7 +250,7 @@ export async function startSessionOnRunner(
 		if (!isRunnerUnreachable(e)) {
 			await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
 		}
-		return { conn: null, resumed: false, startError: msg };
+		return { conn: null, resumed: false, seeded: false, startError: msg };
 	}
 }
 
@@ -249,6 +292,16 @@ export type EnsureSessionResult =
 			continuity?: SessionContinuity;
 			/** The runner confirmed the engine came up with the previous conversation. */
 			resumed?: boolean;
+			/**
+			 * The runner confirmed the engine came up cold and was handed a context brief built from
+			 * `coding_timeline` instead (ADR 0005, #693). Mutually exclusive with `resumed` by
+			 * construction — the runner only reaches for the brief when it has no conversation.
+			 *
+			 * Set on the RE-ATTACH path too, unlike `continuity`. That is the point of #694: a
+			 * re-attach that relocated the session decided nothing, and is exactly the case where the
+			 * engine silently starts over.
+			 */
+			seeded?: boolean;
 	  }
 	/**
 	 * `session` is the one that EXISTS but could not be revived — set only on the re-attach path,
@@ -287,7 +340,7 @@ export async function ensureActiveSession(
 	// reasoning turns against a pane that never launched. Report what the fresh path reports.
 	const reattach = async (s: CodingSessionRecord): Promise<EnsureSessionResult> => {
 		const started = await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null);
-		if (started?.conn) return { ok: true, session: s, opened: false };
+		if (started?.conn) return { ok: true, session: s, opened: false, resumed: started.resumed, seeded: started.seeded };
 		// The launch's OWN reason first (#440). The row is the fallback for the case this call
 		// never got as far as raising one (a `.catch(() => null)` above, or a session that could
 		// not be created), and it is no longer the primary source: since a transport failure is
@@ -337,7 +390,7 @@ export async function ensureActiveSession(
 	// (`getLastFinishedSessionForRepo` only reads finished rows, but the ordering makes that a fact
 	// rather than a coincidence), and BEFORE the launch, because the runner needs the answer.
 	const continuity = await continuityForNewSession(env, instanceId, userId, repo.id, clientType);
-	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom });
+	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null });
 	if (!started.conn) {
 		// A session row whose engine never launched is worse than none: `getActiveSessionForRepo`
 		// would hand it to every later attempt, so the repo would be permanently stuck behind a
@@ -352,7 +405,7 @@ export async function ensureActiveSession(
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null };
 	}
-	return { ok: true, session, opened: true, continuity, resumed: started.resumed };
+	return { ok: true, session, opened: true, continuity, resumed: started.resumed, seeded: started.seeded };
 }
 
 /**
@@ -379,6 +432,19 @@ export async function ensureActiveSession(
  *      cloud that reported its own INTENT would tell most of the fleet the opposite of what
  *      happened, which is a worse bug than the silence #408 set out to fix — it would be a
  *      confident, wrong answer to "did you remember what we were doing?".
+ *
+ * ── A FOURTH outcome since #693, and the one sentence it may not say
+ *
+ * A cold engine can now be handed a brief built from `coding_timeline` (ADR 0005). That outcome
+ * sits between 1 and the rest and it is NOT a variant of either. The ADR is explicit: "seeding is
+ * reconstruction, not restoration… it must never be described to a user as 'as if it never died'."
+ * So the wording here says the conversation is gone AND that the work is not, in that order — the
+ * engine kept nothing, it was TOLD what happened. Collapsing this into case 1 would be the exact
+ * false claim the ADR forbids; collapsing it into case 2 or 3 would understate what the user has,
+ * which is how they end up re-explaining a task the engine can already describe.
+ *
+ * `seeded` is what the MACHINE confirmed, for the reason case 3 exists — a `pags up` older than
+ * #693 drops the field, so intent is not evidence.
  */
 export function sessionOpenedNotice(input: {
 	repoName: string;
@@ -391,6 +457,8 @@ export function sessionOpenedNotice(input: {
 	continuity?: SessionContinuity;
 	/** What the machine confirmed it did. Absent/false means the engine started clean. */
 	resumed?: boolean;
+	/** The machine confirmed the engine came up cold and holds a brief from the platform's record. */
+	seeded?: boolean;
 }): string {
 	const where = input.node ? ` on ${input.node}` : "";
 	// The SAME fact the reap wrote into the timeline, phrased the same way on purpose (#695): this
@@ -402,6 +470,13 @@ export function sessionOpenedNotice(input: {
 	let continuity = "";
 	if (input.resumed === true) {
 		continuity = " It picked up this repo's previous conversation, so the earlier context is still there.";
+	} else if (input.seeded === true) {
+		// Case 4 (#693). Ahead of cases 2 and 3 because it is a fact about what the engine HAS, and
+		// those two are facts about what it lost — a reader given the loss first stops reading.
+		continuity =
+			" The previous conversation is gone, but the engine did not start empty: it was given a written brief" +
+			" of this repo's recent history from ProAgentStore's own record — a reconstruction, not the original" +
+			" conversation, so it knows what was going on without remembering the details.";
 	} else if (input.continuity?.mode === "resume") {
 		// Case 3. Say what happened (clean) and why the intent did not land, without guessing which
 		// of the two causes it was — both are true statements about the boundary.
@@ -495,6 +570,7 @@ export async function ensureSessionForChat(
 			idleHours: Math.round(IDLE_SESSION_MS / 3_600_000),
 			continuity: ensured.continuity,
 			resumed: ensured.resumed,
+			seeded: ensured.seeded,
 		}),
 	};
 }

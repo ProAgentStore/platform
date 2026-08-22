@@ -48,6 +48,18 @@ export const RESUME_WINDOW_MS = 4 * 24 * 60 * 60_000;
 
 export type ContinuityMode = "resume" | "fresh";
 
+/**
+ * Where the platform's OWN record of this work comes from, when the engine's memory is not
+ * available (ADR 0005, #693).
+ *
+ * One member today, and it is a closed vocabulary rather than a boolean on purpose: the guarantee
+ * ADR 0005 states is "no code path may hand a user a cold engine when `coding_timeline` holds
+ * content for that repo", and a guarantee about a NAMED source is checkable — a branch that starts
+ * clean has to say which record it declined to use, and there is no way to spell "none, because I
+ * did not think about it".
+ */
+export type SeedSource = "repo-timeline";
+
 export interface SessionContinuity {
 	mode: ContinuityMode;
 	/**
@@ -56,6 +68,25 @@ export interface SessionContinuity {
 	 * decided against.
 	 */
 	resumeFrom: string | null;
+	/**
+	 * The platform's own record to seed the engine from when it comes up without a conversation
+	 * (ADR 0005, #693). Null in EXACTLY ONE case — the user asked for a clean slate — and set on
+	 * every other branch, including `resume`.
+	 *
+	 * Set on `resume` because a resume is a REQUEST, not an outcome. `startSessionOnRunner` reports
+	 * what the machine confirmed, and three things routinely make a confirmed-looking resume come
+	 * up cold: a `pags up` older than #408 drops `resumeFrom` entirely, the resume store is a file
+	 * on the machine that wrote it (so a relocated session finds nothing — #694), and `~/.claude`
+	 * can simply have been cleared. `sessionOpenedNotice` already has a whole branch for that case
+	 * and its wording is "It started a FRESH conversation". A cold engine is a cold engine however
+	 * it got there, so the brief rides along and the runner uses it ONLY when the engine came up
+	 * with no conversation of its own.
+	 *
+	 * That does not make seeding primary for Claude, which is deliberately NOT this slice: when
+	 * `--resume` lands it wins, because it is cheaper and higher fidelity than anything we can
+	 * reconstruct. The seed is what happens instead of nothing.
+	 */
+	seed: SeedSource | null;
 	/**
 	 * Why, phrased so a reply can use it verbatim after "started a fresh conversation — ".
 	 * Empty-ish reasons are not allowed: an unexplained fresh start is the bug report #408 predicts.
@@ -113,11 +144,20 @@ export function resolveSessionContinuity(input: {
 	forceFresh?: boolean;
 	now?: number;
 }): SessionContinuity {
-	const fresh = (reason: string): SessionContinuity => ({ mode: "fresh", resumeFrom: null, reason });
+	// A fresh decision SEEDS by default. The seed source is a parameter of this helper rather than
+	// a constant inside it so that the one branch which must not seed has to say so at the call
+	// site, in one word, next to the reason it is not seeding — and so a ninth branch added later
+	// gets the guarantee by writing nothing at all (ADR 0005).
+	const fresh = (reason: string, seed: SeedSource | null = "repo-timeline"): SessionContinuity => ({ mode: "fresh", resumeFrom: null, seed, reason });
 	const { engine, previous } = input;
 	const now = input.now ?? Date.now();
 
-	if (input.forceFresh) return fresh("you asked for a clean slate");
+	// The ONLY branch that hands back a cold engine, because it is the only one where cold is what
+	// was asked for. ADR 0005: "a clean slate someone requested is a feature; a clean slate nobody
+	// chose is the defect this record exists to prevent." Seeding here would delete the Fresh
+	// button and `coding_session_fresh` — a user escaping a wedged conversation would be handed a
+	// written summary of the wedged conversation.
+	if (input.forceFresh) return fresh("you asked for a clean slate", null);
 	// Claude Code is the only engine driven through a protocol that has a conversation to resume;
 	// every other preset is spawned raw and its "history" is whatever scrolled past on stdout.
 	if (engine !== "claude") return fresh(`the ${engine || "configured"} engine has no conversation to continue`);
@@ -139,6 +179,11 @@ export function resolveSessionContinuity(input: {
 	return {
 		mode: "resume",
 		resumeFrom: previous.id,
+		// Carried on a RESUME too — see `seed`. Asking to resume is not the same as resuming, and
+		// the three ways it fails (old runner, relocated session, cleared `~/.claude`) all end with
+		// an engine that has nothing. The runner prefers its own conversation and only reaches for
+		// this when it does not have one.
+		seed: "repo-timeline",
 		reason: `the previous conversation on this repo was last touched ${describeAge(age)} ago`,
 	};
 }

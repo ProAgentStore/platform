@@ -52,6 +52,16 @@ export interface StartCodingInput {
 	 */
 	resumeFrom?: string;
 	/**
+	 * The platform's own record of this repository, rendered as a context brief, for the engine to
+	 * lead its FIRST turn with if it comes up without a conversation of its own (ADR 0005, #693).
+	 *
+	 * The cloud always sends it (except when the user asked for a clean slate) and this side decides
+	 * whether it is needed, because only this side knows whether `--resume` actually landed. A runner
+	 * published before #693 ignores it and starts cold — today's behaviour — which is why the cloud
+	 * reports {@link StartCodingResult.seeded} rather than its own intent.
+	 */
+	seed?: string;
+	/**
 	 * Repositories a `gh` WRITE from this session may name (#679).
 	 *
 	 * Comes from the CLOUD, never from the checkout: the Engine has a shell in that checkout and
@@ -72,6 +82,15 @@ export interface StartCodingInput {
  */
 export interface StartCodingResult extends CodingSnapshot {
 	resumed: boolean;
+	/**
+	 * The engine came up with NO conversation of its own and is holding the cloud's context brief to
+	 * lead its first turn with (ADR 0005, #693).
+	 *
+	 * Never true at the same time as `resumed`: the brief is the fallback, and an engine that has its
+	 * own conversation is not given one. `false` when no brief was sent, when the engine resumed, or
+	 * when the session was already running here — a re-attach does not re-brief an engine mid-work.
+	 */
+	seeded: boolean;
 }
 
 export type CodingAction =
@@ -254,6 +273,7 @@ export class CodingRuntime {
 				env: input.env,
 				statePath: defaultStatePath(this.reposBaseDir),
 				resumeFrom: input.resumeFrom,
+				seed: input.seed,
 				ghScope: input.ghScope,
 				bin: input.bin,
 			});
@@ -263,8 +283,12 @@ export class CodingRuntime {
 		// clears its own key on that exit. Reporting after would say "started clean" about a launch
 		// that did carry a conversation, and the transcript (which shows the crash) would disagree.
 		const resumed = session.resumedConversation;
+		// Read alongside `resumed`, and BEFORE `start()` for the same reason: a bad `--resume` that
+		// kills the process on spawn clears the engine's key, and a seed answer read afterwards would
+		// describe a different launch from the one the caller asked about.
+		const seeded = session.seededConversation;
 		session.start();
-		return { ...this.snapshot(input.sessionId), resumed };
+		return { ...this.snapshot(input.sessionId), resumed, seeded };
 	}
 
 	/**

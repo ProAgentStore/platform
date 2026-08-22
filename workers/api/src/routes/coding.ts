@@ -199,10 +199,10 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// which end a session and open another in the same breath. Without the flag the policy would
 	// resume the session they just ended — the one the user is trying to get away from.
 	const continuity = await continuityForNewSession(c.env, instanceId, uid, repoId, clientType, { forceFresh: body.fresh === true });
-	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom });
+	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null });
 	// Bump last_activity_at — starting a coding session is a real user-driven event.
 	void touchInstanceActivity(c.env, instanceId, uid);
-	return c.json({ session, runnerConnected: started.conn != null, resumed: started.resumed, continuity }, 201);
+	return c.json({ session, runnerConnected: started.conn != null, resumed: started.resumed, seeded: started.seeded, continuity }, 201);
 });
 
 /**

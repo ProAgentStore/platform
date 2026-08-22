@@ -5459,13 +5459,15 @@ test.describe("mobile — an open says whether the agent still remembers you (#6
 	const REPO = { id: "repo-1", name: "platform", githubRepo: "ProAgentStore/platform", provider: "github", cloneStatus: "ready" };
 	const SESSION = { id: "csess-1", repoId: "repo-1", clientType: "claude", status: "active", launchCommand: "claude --dangerously-skip-permissions" };
 
-	async function openWith(page: Page, continuity: unknown, width = 390) {
+	async function openWith(page: Page, continuity: unknown, width = 390, seeded?: boolean) {
 		await page.setViewportSize({ width, height: 812 });
 		await mockSignedInConsole(page, { instances: soloCoder });
 		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
 			const url = route.request().url();
 			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
-			if (route.request().method() === "POST" && url.includes("/sessions")) return json({ session: SESSION, runnerConnected: true, resumed: true, continuity });
+			// `seeded` rides BESIDE `continuity`, which is how the route sends it: the decision and
+			// what the machine actually did are two facts, and only the machine knows the second.
+			if (route.request().method() === "POST" && url.includes("/sessions")) return json({ session: SESSION, runnerConnected: true, resumed: true, seeded, continuity });
 			if (url.includes("/repos")) return json({ repos: [REPO] });
 			if (url.includes("/engines")) return json({ engines: [{ id: "claude", label: "Claude", command: "claude --dangerously-skip-permissions" }], defaultEngineId: "claude" });
 			if (url.includes("/sessions")) return json({ sessions: [] });
@@ -5507,6 +5509,34 @@ test.describe("mobile — an open says whether the agent still remembers you (#6
 	for (const width of [320, 390]) {
 		test(`the notice fits ${width}px`, async ({ page }) => {
 			await openWith(page, { mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 6 days ago" }, width);
+			await expect(page.locator("#inst-coding-continuity")).toBeVisible();
+			const { mainOv, docOv, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("a briefed engine says it was told, not that it remembers (#693)", async ({ page }) => {
+		// ADR 0005's one prohibited claim, at the surface a human actually reads. The engine kept
+		// nothing; it was handed a reconstruction. A banner that reads as memory is how a user stops
+		// re-stating the thing the engine is missing.
+		await openWith(page, { mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 9 days ago" }, 390, true);
+		const banner = page.locator("#inst-coding-continuity");
+		await expect(banner).toContainText("Started a fresh conversation");
+		await expect(banner).toContainText("reconstructed from ProAgentStore's record");
+		await expect(banner).not.toContainText("Picking up");
+		await expect(banner).not.toContainText("session");
+		// A brief softens the surprise, it does not remove it — so it keeps the warning tint. The
+		// next thing the user types still has no antecedent in the engine's own memory.
+		await expect(banner).toHaveClass(/text-warning/);
+	});
+
+	// The briefed sentence is the LONGEST this banner can render — the server's reason plus a clause
+	// of our own — which makes it the worst case for the overflow the block above measures.
+	for (const width of [320, 390]) {
+		test(`the briefed notice fits ${width}px`, async ({ page }) => {
+			await openWith(page, { mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 6 days ago" }, width, true);
 			await expect(page.locator("#inst-coding-continuity")).toBeVisible();
 			const { mainOv, docOv, wide } = await measureOverflow(page);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);

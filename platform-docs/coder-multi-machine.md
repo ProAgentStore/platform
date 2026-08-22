@@ -64,6 +64,10 @@ Placement resolution is deliberately conservative in one direction and forgiving
 
 **A session reclaims itself on a machine switch.** A coding session is pinned to the node that started it. If that machine has gone away and you drive the session from another connected machine, the session is relocated to the live one and continues there rather than dead-ending. A session pinned to a machine that is still live stays put.
 
+**What moves with it, and what does not.** The session, its history and its work move. The *engine's own* conversation does not: a CLI like Claude Code keeps its transcript in its own store on the machine that ran it, and no database row can carry that across. So the engine on the new machine starts a new conversation — and it does not start empty. ProAgentStore seeds it with a **context brief** reconstructed from its own record of that repository: the instructions that were sent, what the engine did and how the turns ended.
+
+That is continuity of understanding, not the original context. The brief does not carry file contents, the engine's tool state, or anything it worked out without saying — and the console says so on the open rather than implying the conversation survived. The same brief is used anywhere an engine would otherwise start cold: a different engine, a conversation too old to continue, or a machine whose CLI store has been cleared. Starting genuinely clean happens only when you ask for it with **Fresh**.
+
 ## Why This Agent Is Not Attached
 
 When an agent has no live socket, the runtime status reports a diagnosis and the single command that fixes it:

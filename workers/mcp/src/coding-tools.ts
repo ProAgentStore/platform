@@ -44,6 +44,8 @@ export interface OpenConversationResult {
 	session?: { id?: string };
 	continuity?: { mode?: string; reason?: string };
 	resumed?: boolean;
+	/** The engine came up cold and was handed a brief built from the platform's record (#693). */
+	seeded?: boolean;
 	reused?: boolean;
 	notice?: string;
 	runnerConnected?: boolean;
@@ -83,17 +85,28 @@ export function repoLabel(repo: CodingRepoRow): string {
  * conversation. A `resume` decision that the runner did not confirm is reported as the decision it
  * was, not as the outcome it hoped for — claiming continuity that did not happen is worse than the
  * cold start it papers over.
+ *
+ * `seeded` is the same kind of fact about the OTHER outcome (ADR 0005, #693): the engine came up
+ * cold and was given a brief reconstructed from `coding_timeline`. It is said here for the reason
+ * the reason string is quoted verbatim — the console says it too, and one open telling an MCP
+ * caller and a console user two different stories is the failure this function exists to prevent.
+ * It is phrased as a briefing, never as memory: the ADR forbids describing a reconstruction as
+ * though the conversation survived.
  */
 export function openConversationText(label: string, d: OpenConversationResult): string {
 	const sid = d.session?.id ?? "(unknown)";
 	const runner = d.runnerConnected === false ? "\nNo runner is connected — run `pags up` on the machine that holds this repo; nothing will run until it is." : "";
 	if (d.reused) return `Already talking to ${label} — a conversation is open there (session_id ${sid}).${d.notice ? ` ${d.notice}` : ""}${runner}`;
 	const reason = d.continuity?.reason;
+	// What the engine HAS, before what the server asked for: a confirmed brief is the answer to
+	// "does it know what we were doing", and on a `resume` it means the machine could not honour the
+	// request (an older `pags up`, or a session that moved machines) and fell back.
+	const brief = d.seeded === true ? " It was given a brief of this repo's recent history, reconstructed from the platform's record — it knows what was going on, not the details." : "";
 	if (d.continuity?.mode === "resume") {
-		const confirmed = d.resumed === true ? "Continuing this repo's previous conversation" : "Asked the engine to continue this repo's previous conversation, and the runner did not confirm it came up with it";
-		return `${confirmed} on ${label} — ${reason}. session_id ${sid}.${runner}`;
+		if (d.resumed === true) return `Continuing this repo's previous conversation on ${label} — ${reason}. session_id ${sid}.${runner}`;
+		return `Asked the engine to continue this repo's previous conversation on ${label}, and the runner did not confirm it came up with it — ${reason}.${brief} session_id ${sid}.${runner}`;
 	}
-	if (d.continuity?.mode === "fresh") return `Started a fresh conversation on ${label} — ${reason}. session_id ${sid}.${runner}`;
+	if (d.continuity?.mode === "fresh") return `Started a fresh conversation on ${label} — ${reason}.${brief} session_id ${sid}.${runner}`;
 	return `Opened a conversation on ${label}, and the server reported no continuity decision — so whether it carries the previous one is not known. session_id ${sid}.${runner}`;
 }
 

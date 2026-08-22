@@ -65,6 +65,22 @@ export interface HeadlessSessionConfig {
 	 * byte-identical to what it was before this field existed.
 	 */
 	resumeFrom?: string;
+	/**
+	 * A context brief built by the cloud from `coding_timeline`, delivered as the lead of this
+	 * session's FIRST turn if — and only if — the engine came up with no conversation of its own
+	 * (ADR 0005, #693).
+	 *
+	 * The cloud cannot make that decision: it does not know whether the resume key existed on THIS
+	 * machine, and the three ways a requested resume comes up cold (an older `pags up`, a session
+	 * relocated to another laptop, a cleared `~/.claude`) are all invisible from there. So the brief
+	 * is always sent and this side spends it or drops it. Preferring the engine's own conversation is
+	 * deliberate and stays: `--resume` is cheaper and higher fidelity than any reconstruction.
+	 *
+	 * A RAW engine has no conversation under any circumstance, so it always takes the brief. That is
+	 * first-turn context, not memory: a one-shot engine still forgets between turns, and giving it
+	 * multi-turn memory is a separate change.
+	 */
+	seed?: string;
 	/** Override the spawned binary (tests). Defaults to "claude". */
 	bin?: string;
 	/** Override the one-shot turn ceiling in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_MS}. */
@@ -139,6 +155,16 @@ export class HeadlessSession {
 	private run: Run = "idle";
 	/** Claude Code's own session id (from the init event) — used to --resume. */
 	private claudeSessionId: string | null = null;
+	/**
+	 * The cloud's context brief, until the first turn spends it (ADR 0005, #693). Null once
+	 * delivered, and null from the start when the engine resumed its own conversation.
+	 *
+	 * Consumed ONCE, by construction rather than by convention: it is cleared in the same expression
+	 * that reads it. A brief re-sent on every turn would be the "unbounded brief… a token bill that
+	 * grows every turn" the ADR names as the cost of owning the conversation, and it would also start
+	 * contradicting the engine's own memory of the turns since.
+	 */
+	private pendingSeed: string | null = null;
 	/** "stream-json" for Claude (structured) · "raw" for any other CLI (stdout capture). */
 	private readonly mode: "stream-json" | "raw";
 	private readonly cmdBin: string;
@@ -266,12 +292,28 @@ export class HeadlessSession {
 		return this.mode === "stream-json" && this.claudeSessionId !== null;
 	}
 
+	/**
+	 * Did this engine come up cold AND with a brief to lead its first turn (ADR 0005, #693)?
+	 *
+	 * Read by `/coding/start` so the sentence the user is shown is one this side CONFIRMED. It is
+	 * armed-not-delivered: the brief goes out with the first `input()`, which may never arrive if
+	 * the session is closed first. That is why the cloud's wording is "it was given a brief" — true
+	 * the moment the engine holds one — and never "it has read your history".
+	 */
+	get seededConversation(): boolean {
+		return this.pendingSeed !== null;
+	}
+
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;
 		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`.
 		this.claudeSessionId = readState(config.statePath, config.id) ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom) : null);
 		// Claude is the structured engine; everything else is a raw CLI.
 		this.mode = config.clientType === "claude" ? "stream-json" : "raw";
+		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,
+		// so an engine that found its own conversation drops it unread rather than being handed a
+		// summary of the conversation it is already in.
+		this.pendingSeed = this.resumedConversation ? null : config.seed?.trim() || null;
 		const { bin, args } = parseCommand(config.command);
 		// When no explicit command is configured, fall back to THIS engine's default
 		// command (codex/gemini/grok/…) — not a hard-coded "claude", which would drive a
@@ -468,7 +510,15 @@ export class HeadlessSession {
 	input(text: string, opts: { author?: TurnAuthor } = {}): void {
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
+		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:
+		// the pane gets the one-line marker below, because the transcript is what the owner and the
+		// Pilot re-read through `/coding/capture` and twelve thousand characters of reconstructed
+		// history would evict the live output they are looking at — the same budget argument
+		// `turn-author.ts` makes for its two-word marker.
+		const seed = this.pendingSeed;
+		this.pendingSeed = null;
 		if (!this.alive) this.start();
+		if (seed) this.push("[pags] a context brief from ProAgentStore's record was delivered with this turn — a reconstruction, not the previous conversation");
 		this.push(`\n❯ [${stamp()}] ${authorTag(opts.author)}${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
 		const now = Date.now();
@@ -476,15 +526,18 @@ export class HeadlessSession {
 		this.turnStartedAt = now;
 		this.sawOutputSinceInput = false; // arm the persistent-raw idle heuristic for THIS turn
 		try {
+			// Brief first, instruction second, and never the other way round: it is background for
+			// the request, and an engine that reads the request last acts on the request.
+			const withSeed = seed ? `${seed}\n\n${sent}` : sent;
 			if (this.mode === "stream-json") {
 				// `role` stays "user" — the only role this protocol accepts, which is why the
 				// disambiguation rides in the text instead (#505).
-				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: sent }] } });
+				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: withSeed }] } });
 				this.proc?.stdin?.write(`${msg}\n`);
 			} else {
 				// Raw CLI: spawn THIS turn. See `oneShot` — there is no persistent process to
 				// write to, because a non-interactive binary would never have read it.
-				this.runOneShot(sent);
+				this.runOneShot(withSeed);
 			}
 		} catch {
 			/* process may have died; the next snapshot reports not-alive */

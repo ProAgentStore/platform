@@ -334,6 +334,58 @@ describe("HeadlessSession (stream-json engine)", () => {
 		const raw = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", command: "codex", bin, statePath });
 		expect(raw.resumedConversation).toBe(false);
 	});
+
+	it("leads the FIRST turn with the cloud's brief when it came up cold, and only the first (#693)", async () => {
+		// ADR 0005 from the machine's end. The fake engine echoes back whatever text it received, so
+		// this reads what the ENGINE actually got rather than what this side intended to send.
+		const statePath = defaultStatePath(dir);
+		const s = new HeadlessSession({ id: "seeded1", workDir: dir, clientType: "claude", bin, statePath, seed: "BRIEF: we were fixing the health endpoint" });
+		expect(s.seededConversation).toBe(true);
+		s.input("carry on");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		expect(s.snapshot()).toContain("BRIEF: we were fixing the health endpoint");
+		// The brief is background and the instruction is the request, so the instruction is LAST.
+		const echoed = s.snapshot();
+		expect(echoed.indexOf("BRIEF:")).toBeLessThan(echoed.lastIndexOf("carry on"));
+
+		// Spent, not repeated. Re-sending it every turn is the unbounded context ADR 0005 names as
+		// the cost of owning the conversation, and by turn three it would also be contradicting the
+		// engine's own memory of the turns since.
+		expect(s.seededConversation).toBe(false);
+		s.input("and now the other one");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: and now"));
+		expect(s.snapshot().split("BRIEF:").length - 1).toBe(1);
+		s.stop();
+	});
+
+	it("drops the brief unread when it resumed its own conversation (#693)", async () => {
+		// `--resume` is preferred and stays preferred: it is cheaper and higher fidelity than any
+		// reconstruction. Handing a resumed engine a summary of the conversation it is already in
+		// would duplicate its context and invite it to re-litigate finished turns — which is why the
+		// cloud sends the brief unconditionally and this side decides, being the only side that
+		// knows whether the resume key was actually here.
+		const statePath = defaultStatePath(dir);
+		const first = new HeadlessSession({ id: "warm1", workDir: dir, clientType: "claude", bin, statePath });
+		first.start();
+		await until(() => readState(statePath, "warm1") === "sess-abc-123");
+		first.stop();
+
+		const s = new HeadlessSession({ id: "warm1", workDir: dir, clientType: "claude", bin, statePath, seed: "BRIEF: should never be sent" });
+		expect(s.resumedConversation).toBe(true);
+		expect(s.seededConversation).toBe(false);
+		s.input("carry on");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		expect(s.snapshot()).not.toContain("BRIEF:");
+		s.stop();
+	});
+
+	it("reports no brief when the cloud sent none, or sent an empty one", () => {
+		// A `pags up` newer than the cloud, and a repo with no record, are the same case: nothing to
+		// say. `seeded` must read false so the cloud does not tell a user their engine was briefed.
+		const statePath = defaultStatePath(dir);
+		expect(new HeadlessSession({ id: "none1", workDir: dir, clientType: "claude", bin, statePath }).seededConversation).toBe(false);
+		expect(new HeadlessSession({ id: "none2", workDir: dir, clientType: "claude", bin, statePath, seed: "   " }).seededConversation).toBe(false);
+	});
 });
 
 /**

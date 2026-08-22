@@ -724,7 +724,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		try {
 			// `continuity` stays `unknown` — parsing it, and answering a response that predates it,
 			// belong to ./open-notice where they are tested.
-			const d = await api<{ session: CodingSession; notice?: string | null; continuity?: unknown }>(`/v1/instances/${instanceId}/coding/sessions`, {
+			const d = await api<{ session: CodingSession; notice?: string | null; continuity?: unknown; seeded?: unknown }>(`/v1/instances/${instanceId}/coding/sessions`, {
 				method: "POST",
 				body: JSON.stringify({ repoId, engineId: defaultEngine }),
 			});

@@ -65,29 +65,51 @@ export interface SessionContinuityPayload {
  * but "Picking up where you left off." is a true sentence without it, whereas
  * "Picking up where you left off — ." is the garbage that a trailing concatenation produces.
  */
-export function continuityNotice(continuity: unknown): OpenNotice | null {
+export function continuityNotice(continuity: unknown, seeded?: unknown): OpenNotice | null {
 	if (!continuity || typeof continuity !== "object") return null;
 	const { mode, reason } = continuity as SessionContinuityPayload;
 	if (mode !== "resume" && mode !== "fresh") return null;
 	const why = typeof reason === "string" ? reason.trim() : "";
 	const tail = why ? ` — ${why}` : "";
-	return mode === "resume"
-		? { id: "inst-coding-continuity", tone: "quiet", text: `Picking up where you left off${tail}.` }
-		: // "conversation", never "session". #257 and #408 spent real effort removing "session" from
-			// the words a user has to know and #695 removed the last of it from this surface, so
-			// reintroducing it in the one line a user is most likely to read would undo all of it.
-			// The opener is the only wording this function owns; `reason` is opaque server text,
-			// concatenated as given and never inspected.
-			{ id: "inst-coding-continuity", tone: "warn", text: `Started a fresh conversation${tail}.` };
+	if (mode === "resume" && seeded !== true) return { id: "inst-coding-continuity", tone: "quiet", text: `Picking up where you left off${tail}.` };
+	// SEEDED (#693, ADR 0005) — a third outcome, and it is checked before `mode` because it is a
+	// fact about what the engine HAS while `mode` is what the server asked for. `seeded: true` on a
+	// `resume` means the machine could not honour the request and took the brief instead, which is
+	// the #694 case; the banner has to describe the engine in front of the user, not the intention.
+	//
+	// Still `warn`, not `quiet`. The tone rule this file already states is that a fresh start is the
+	// SURPRISE — the open where the next thing the user types has no antecedent — and a brief does
+	// not remove that, it softens it. Reading as reassurance would be the ADR's forbidden claim
+	// ("never… as if it never died") rendered as a colour.
+	//
+	// "was given" and "reconstructed", deliberately: the engine did not remember any of this, it was
+	// told. A user who believes the engine remembers will not re-state the thing it is missing.
+	if (seeded === true) {
+		return {
+			id: "inst-coding-continuity",
+			tone: "warn",
+			text: `Started a fresh conversation${tail}. It was given a brief of this repo's recent history, reconstructed from ProAgentStore's record — so it knows what was going on, but not the details.`,
+		};
+	}
+	// "conversation", never "session". #257 and #408 spent real effort removing "session" from
+	// the words a user has to know and #695 removed the last of it from this surface, so
+	// reintroducing it in the one line a user is most likely to read would undo all of it.
+	// The opener is the only wording this function owns; `reason` is opaque server text,
+	// concatenated as given and never inspected.
+	return { id: "inst-coding-continuity", tone: "warn", text: `Started a fresh conversation${tail}.` };
 }
 
 /** Everything worth saying about one open, in the order it should be read. */
-export function openNotices(open: { notice?: unknown; continuity?: unknown } | null | undefined): OpenNotice[] {
+export function openNotices(open: { notice?: unknown; continuity?: unknown; seeded?: unknown } | null | undefined): OpenNotice[] {
 	const out: OpenNotice[] = [];
 	// The engine first: which binary is running is a precondition for caring what it remembers.
 	const engine = typeof open?.notice === "string" ? open.notice.trim() : "";
 	if (engine) out.push({ id: "inst-coding-reused-engine", tone: "warn", text: engine });
-	const continuity = continuityNotice(open?.continuity);
+	// `seeded` is what the MACHINE confirmed, and it is a sibling of `continuity` on the response
+	// rather than a field inside it for exactly that reason — `continuity` is the decision, and a
+	// decision is not an outcome. An older API sends neither and `undefined` reads as "not briefed",
+	// which is the honest default: it is what every open did before #693.
+	const continuity = continuityNotice(open?.continuity, open?.seeded);
 	if (continuity) out.push(continuity);
 	return out;
 }

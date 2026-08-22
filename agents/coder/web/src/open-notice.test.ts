@@ -58,6 +58,42 @@ describe("continuityNotice", () => {
 		expect(continuityNotice({ reason: "the previous conversation was last touched 2 hours ago" })).toBeNull();
 	});
 
+	it("says the engine was BRIEFED rather than that it remembers (#693, ADR 0005)", () => {
+		// The one claim ADR 0005 forbids: "it must never be described to a user as 'as if it never
+		// died'." A brief is a reconstruction, and a user who reads it as memory stops re-stating the
+		// thing the engine is missing — which is the failure a summary introduces and a real resume
+		// does not.
+		const n = continuityNotice({ mode: "fresh", resumeFrom: null, reason: "the previous conversation on this repo was last touched 9 days ago" }, true);
+		expect(n?.text).toMatch(/^Started a fresh conversation — the previous conversation on this repo was last touched 9 days ago\./);
+		expect(n?.text).toMatch(/reconstructed/);
+		expect(n?.text).toMatch(/not the details/);
+		expect(n?.text).not.toMatch(/remember|as if|picking up/i);
+		// Still the warning tone. A brief softens the surprise; it does not remove it, and a
+		// reassuring colour would be the forbidden claim rendered as a style.
+		expect(n?.tone).toBe("warn");
+	});
+
+	it("describes the engine in front of the user, not the resume the server asked for", () => {
+		// `seeded: true` on a `resume` is the #694 case: the cloud asked to continue and the machine
+		// could not — the resume key is a file on the laptop the session left — so it took the brief
+		// instead. Rendering "Picking up where you left off" there would be a confident wrong answer
+		// to the only question the banner exists to answer.
+		const n = continuityNotice({ mode: "resume", resumeFrom: "csess_1", reason: "the previous conversation on this repo was last touched 3 hours ago" }, true);
+		expect(n?.text).not.toMatch(/Picking up/);
+		expect(n?.text).toMatch(/reconstructed/);
+	});
+
+	it("treats anything other than a confirmed true as not briefed", () => {
+		// `seeded` comes off the network and an older API does not send it. "Not said" must read as
+		// "no brief", never as a promise — the same rule `resumed` follows on the server.
+		for (const notConfirmed of [undefined, false, null, "true", 1]) {
+			expect(continuityNotice({ mode: "fresh", reason: "there was no earlier conversation on this repo to continue" }, notConfirmed)?.text).toBe(
+				"Started a fresh conversation — there was no earlier conversation on this repo to continue.",
+			);
+		}
+		expect(continuityNotice({ mode: "resume", reason: "the previous conversation on this repo was last touched 3 hours ago" })?.text).toMatch(/^Picking up/);
+	});
+
 	it("keeps the headline when the reason is missing, and drops the dangling dash", () => {
 		// The server contract forbids an empty reason; a client that trusted it would render
 		// "Started a fresh conversation — ." the first time something else did.
@@ -86,6 +122,15 @@ describe("openNotices", () => {
 		expect(openNotices(reuse)).toEqual([
 			{ id: "inst-coding-reused-engine", tone: "warn", text: REUSED },
 		]);
+	});
+
+	it("reads `seeded` from beside the continuity block, not from inside it", () => {
+		// The server returns the DECISION (`continuity`) and the OUTCOME (`seeded`) as siblings,
+		// because a decision is not an outcome — the machine is the only thing that knows whether the
+		// brief was taken. A client that looked inside `continuity` would render the intent.
+		const out = openNotices({ continuity: { mode: "fresh", reason: "the previous conversation on this repo ran a different engine" }, seeded: true });
+		expect(out).toHaveLength(1);
+		expect(out[0].text).toMatch(/reconstructed from ProAgentStore's record/);
 	});
 
 	it("carries the continuity notice alone on the create path", () => {
