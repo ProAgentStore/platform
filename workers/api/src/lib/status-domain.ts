@@ -147,9 +147,13 @@ export const STATUS_DOMAINS: Record<string, StatusDomain> = {
 				"instance must not be running cron work, and with an allowlist it silently already does " +
 				"not' (#649), and lib/subscription-standing.ts plus migration 0131 make the same " +
 				"conservative choice from the other side. So the safety is in place and the FEATURE is " +
-				"not: a writer, a console control, a resume path, and the admin instance filter (which " +
-				"already offers 'paused' and can only ever return zero rows). Shipping the writer alone " +
-				"is what makes a half-working control, which is the failure #664 named.",
+				"not: a writer, a console control, a resume path, and an admin instance filter. " +
+				"Shipping the writer alone is what makes a half-working control, which is the failure " +
+				"#664 named. The one piece that DID exist was the admin filter — `store/admin` offered " +
+				"'paused' and could only ever return zero rows — and it was deleted rather than kept " +
+				"as a placeholder: the owner's rule (#598) is that an unwritable value stays in a " +
+				"shipped migration and is recorded here, but a UI control for it always goes, because " +
+				"a control advertises a capability to a human that a schema comment does not.",
 		},
 	},
 	"subscriptions.status": {

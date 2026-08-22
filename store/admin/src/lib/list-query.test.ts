@@ -120,3 +120,48 @@ describe("both list pages build their predicate here", () => {
 		expect(src).not.toContain("new URLSearchParams()");
 	});
 });
+
+describe("the instance status filter offers only statuses a row can hold (#598)", () => {
+	/** `agent_instances.status` as the server declares it: value → who writes it (`"none"` = nobody). */
+	function instanceStatusWriters(): Record<string, string> {
+		const src = codeOf("../../../../workers/api/src/lib/status-domain.ts");
+		const block = /"agent_instances\.status":\s*\{\s*values:\s*\{([^}]*)\}/.exec(src);
+		expect(block, "parsed no agent_instances.status domain from workers/api/src/lib/status-domain.ts").toBeTruthy();
+		const out: Record<string, string> = {};
+		for (const [, value, writer] of (block?.[1] ?? "").matchAll(/(\w+)\s*:\s*"(\w+)"/g)) out[value] = writer;
+		expect(Object.keys(out).length).toBeGreaterThan(1);
+		return out;
+	}
+
+	/** The options the page puts in the dropdown. */
+	function offeredStatuses(): string[] {
+		const m = /const STATUSES = \[([^\]]+)\]/.exec(codeOf("../pages/Instances.tsx"));
+		expect(m, "parsed no STATUSES from pages/Instances.tsx").toBeTruthy();
+		return (m?.[1] ?? "").split(",").map((v) => v.trim().replace(/^"|"$/g, "")).filter(Boolean);
+	}
+
+	it("drops every value nothing writes, and keeps every value something does", () => {
+		// The defect this pins is not a typo, it is a category: `paused` sat in this dropdown for
+		// months, was selectable, and answered with an empty list. An operator reads that as "no
+		// instance is paused" — a fact about the fleet — when it is a fact about the product, which
+		// has no way to pause anything. A dead value in a shipped migration is invisible; a dead
+		// OPTION is a capability advertised to a human, and that is why the owner's rule (#598)
+		// deletes the second and records the first.
+		//
+		// Checked in BOTH directions on purpose. Dropping the unwritable values is the fix; keeping
+		// every writable one is what stops the fix from being "delete options until it passes" and
+		// catches the opposite drift — a new status that rows can hold and no operator can filter for.
+		const writers = instanceStatusWriters();
+		const writable = Object.entries(writers).filter(([, w]) => w !== "none").map(([v]) => v);
+		expect(offeredStatuses().sort()).toEqual(writable.sort());
+	});
+
+	it("still knows about a value nothing writes, rather than having quietly lost the record", () => {
+		// The value itself stays in the schema — `check-migrations --require-history` forbids editing
+		// the migration that declared it, deliberately. So this asserts the two halves of the rule
+		// hold together: the server still records `paused` as unwritten, and the UI still does not
+		// offer it. If pause ever acquires a writer, the test above starts demanding the option back.
+		expect(instanceStatusWriters().paused).toBe("none");
+		expect(offeredStatuses()).not.toContain("paused");
+	});
+});

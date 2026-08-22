@@ -23,7 +23,21 @@ interface Instance {
 }
 
 const PAGE = LIST_PAGE;
-const STATUSES = ["active", "paused", "canceled"];
+/**
+ * The statuses an operator may filter by — the ones a row can actually hold (#598).
+ *
+ * `paused` is declared on `agent_instances.status` and written by nothing: subscribing inserts
+ * `active` and cancelling writes `canceled`, and there is no pause writer, console control or
+ * resume path (the reasoning is recorded against the value itself in
+ * `workers/api/src/lib/status-domain.ts`). It was offered here anyway, so an operator could select
+ * it and get an empty list that reads as "nobody has paused an instance" rather than as "this
+ * product has no such thing".
+ *
+ * A dead enum in a migration is a word nobody sees; a dead option in a filter is a capability
+ * advertised to a human. That is why the value stays in the schema and this option does not —
+ * the owner's rule for this class of defect, recorded on #598.
+ */
+const STATUSES = ["active", "canceled"];
 const badge = (v: string) => <span className={v === "active" ? "text-success" : v === "canceled" ? "text-muted-soft" : "text-muted"}>{v}</span>;
 
 /**
