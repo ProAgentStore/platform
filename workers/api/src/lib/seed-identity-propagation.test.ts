@@ -102,6 +102,26 @@ const PROPAGATION: Record<string, string> = {
 	// (this lane cannot query production). #722's Step 2, a real per-call gate, is what would make
 	// the sentence true instead of merely stale.
 	"0138_inbox_chat_honest_safety_copy.sql": "owner-initiated PUT /v1/instances/:id/state — the catalog column carries the correction; the DO copy is the owner's",
+	// #515 step 2: 0140 gives `tmux-coder` the six read-only `repo-local` tools so that reading a
+	// file stops costing a `tmux_run_command` — write-scope arbitrary shell doing a read. That half
+	// is `$.capabilities.tools` plus `$.settingsSchema`, and it needs no entry here: both resolve
+	// through `capabilitiesForInstance`'s JOIN, so the one live instance
+	// (`25501ef7-306b-4a02-ae35-683424344423`) holds the six tools on its very next turn.
+	//
+	// The half that lands here is the personality section telling it to USE them instead of `cat`
+	// and `grep` in a pane. That is DO state, so no migration can reach the existing copy and
+	// claiming one would be claiming something impossible. #507 is why the sentence exists at all:
+	// with two routes to one outcome and nothing said, the shell route wins — measured, on this
+	// agent's own sibling, with `github_create_issue` already granted.
+	//
+	// The residue is deliberately accepted rather than waved away, and it is small in a way that is
+	// checkable rather than hoped: that instance has had no activity since the day it was created
+	// (2026-08-12), so what goes stale is one paragraph on an agent nobody has run yet, while the
+	// capability it steers arrives anyway. Trading every future subscriber's steering away to avoid
+	// it would be the worse deal. The route named is the only real one — and, exactly as on 0138,
+	// identity is what a subscriber may edit on their own copy, so resolving it live from the
+	// template would overwrite somebody's edit in order to fix wording.
+	"0140_tmux_coder_reads_without_the_shell.sql": "owner-initiated PUT /v1/instances/:id/state — the six tools reach the live instance through capabilitiesForInstance; only the sentence steering them does not",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {

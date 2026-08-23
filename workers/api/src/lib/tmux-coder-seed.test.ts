@@ -24,8 +24,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, sanitizeToolList } from "./agent-capabilities.js";
+import { agentCapabilities, sanitizeSettingsSchema, sanitizeToolList } from "./agent-capabilities.js";
 import { lintAgentClaims } from "./agent-claims-lint.js";
+import { REPO_PATH_SETTINGS } from "./connectors/repo-local.js";
+import { realSchemaD1 } from "./d1-sqlite.js";
+import { instanceCopiedPatchPaths } from "./instance-copied-config.js";
 import { registryConnectorGroups, registryTools } from "./tool-registry.js";
 import { TERMINAL_CLI_PROTOCOL, TOOL_LIST_CLOSED, connectorToolsPrompt, type PromptTool } from "./connector-tool-prompt.js";
 import { toolNamesFor } from "../agent-do-tools.js";
@@ -243,5 +246,260 @@ describe("migration 0123 — catalog copy (#362)", () => {
 		// is indistinguishable", so the difference has to be stated and kept stated.
 		expect(DESCRIPTION).toMatch(/Unlike the tmux Operator/);
 		expect(DESCRIPTION).toMatch(/GitHub/);
+	});
+});
+
+/**
+ * ── Migration 0140: the same agent, reading the repository without the shell (#515, step 2)
+ *
+ * 0123 shipped an agent that can drive a machine and talk to GitHub but cannot look at a file. The
+ * only read route it had was `tmux_run_command` — the tmux connector's `scope: "write"` tool, gated
+ * by the per-instance write consent (#90) and carrying an arbitrary command string. `repo-local`
+ * declares `scopes: { write: false }`, so it is the read half at a privilege that can never be
+ * consented into a command, no matter what a pane or an issue body tells the model.
+ *
+ * Two things can silently make that grant nothing, and neither fails a build:
+ *
+ *   1. a `repo_*` name that the registry does not actually carry — the agent simply never gets the
+ *      tool and answers conversationally (`tool-reachability.test.ts` records what that looks like);
+ *   2. no `repo_path` setting, or one whose id `repoPathForInstance` does not read. This agent
+ *      declares `surfaces: ["tmux"]`, so it has no add-repo control and can NEVER have a
+ *      `coding_repos` row — the typed setting is not a fallback here, it is the only address the
+ *      six tools will ever have. Without it every call resolves "no repository is configured".
+ *
+ * So this half is checked by EXECUTION, not by parsing: the migrations are applied to a real SQLite
+ * built from the real migration files, the row is read back, and the result is resolved through the
+ * REAL `agentCapabilities`, `sanitizeSettingsSchema` and `toolNamesFor`.
+ */
+const SQL_0140 = readFileSync(fileURLToPath(new URL("../../migrations/0140_tmux_coder_reads_without_the_shell.sql", import.meta.url).href), "utf8");
+
+/** The six read-only tools, from the connector's own registry entry rather than restated here. */
+const REPO_LOCAL_NAMES = groups.find((g) => g.connector === "repo-local")?.tools ?? [];
+
+/** The row as the migrations actually leave it: 0123 inserts, 0140 patches, in file order. */
+function seededRow(d1: ReturnType<typeof realSchemaD1>): { config: string; visibility: string; description: string } {
+	return d1.sqlite.prepare("SELECT config, visibility, description FROM agents WHERE slug = ?").get("tmux-coder") as {
+		config: string;
+		visibility: string;
+		description: string;
+	};
+}
+
+const LIVE = (() => {
+	const d1 = realSchemaD1();
+	try {
+		const row = seededRow(d1);
+		const cfg = JSON.parse(row.config) as Record<string, unknown>;
+		return {
+			config: cfg,
+			description: row.description,
+			visibility: row.visibility,
+			caps: agentCapabilities({ slug: "tmux-coder", category: "code", config: row.config }),
+			tools: (cfg.capabilities as Record<string, unknown>).tools as string[],
+			personality: (cfg.identity as Record<string, unknown>).personality as string,
+		};
+	} finally {
+		d1.close();
+	}
+})();
+
+describe("migration 0140 — a read stops costing a write-scope shell call (#515)", () => {
+	it("applies to the real schema and leaves ONE tmux-coder row, still published", () => {
+		// The premise of an UPDATE-shaped migration: the row is already there because 0123 seeded it
+		// and migrations apply in order. If that were ever untrue this file would be a silent no-op —
+		// `WHERE slug = 'tmux-coder'` matching nothing is not an error in SQLite.
+		const d1 = realSchemaD1();
+		try {
+			const n = d1.sqlite.prepare("SELECT COUNT(*) AS n FROM agents WHERE slug = ?").get("tmux-coder") as { n: number };
+			expect(n.n).toBe(1);
+			expect(seededRow(d1).visibility).toBe("published");
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("grants exactly the six repo-local tools, on top of 0123's fifteen", () => {
+		// Derived from 0123's own literal rather than restated, so the two files cannot drift: if
+		// 0123's list is ever edited, this fails instead of quietly dropping a tmux or github tool.
+		expect(REPO_LOCAL_NAMES).toHaveLength(6);
+		expect([...LIVE.tools].sort()).toEqual([...DECLARED, ...REPO_LOCAL_NAMES].sort());
+		expect(LIVE.tools).toHaveLength(21);
+		expect(LIVE.tools.filter((t) => t.startsWith("repo_")).sort()).toEqual([...REPO_LOCAL_NAMES].sort());
+	});
+
+	it("writes the six as the registry spells them — every name is a real repo-local tool", () => {
+		// A name that is not on the connector is not an error, it is a missing tool. Checked in both
+		// directions: nothing invented, and nothing on the read connector left behind.
+		for (const name of LIVE.tools.filter((t) => t.startsWith("repo_"))) expect(REPO_LOCAL_NAMES).toContain(name);
+		for (const name of REPO_LOCAL_NAMES) expect(LIVE.tools).toContain(name);
+	});
+
+	it("keeps the tmux and github halves byte-identical to 0123's", () => {
+		// The 0107 failure mode, one level down: this migration re-states the WHOLE tools array, so
+		// the way it goes wrong is by losing one of the fifteen it did not come here to change.
+		expect(LIVE.tools.filter((t) => t.startsWith("tmux_"))).toEqual(DECLARED.filter((t) => t.startsWith("tmux_")));
+		expect(LIVE.tools.filter((t) => t.startsWith("github_"))).toEqual(DECLARED.filter((t) => t.startsWith("github_")));
+	});
+
+	it("does not re-set the whole capabilities object, and does not touch surfaces or runtime", () => {
+		// 0108's recorded reason for the narrow path: 0107 re-set `$.capabilities` wholesale and lost
+		// `set_direction`. Asserted on the SQL because the shape is what is being ruled out, then on
+		// the resolved row because the shape alone is not the outcome.
+		expect(SQL_0140).not.toMatch(/json_set\([\s\S]*?'\$\.capabilities',/);
+		expect(SQL_0140).toMatch(/'\$\.capabilities\.tools'/);
+		expect(LIVE.caps.surfaces).toEqual(["tmux"]);
+		expect(LIVE.caps.runtime).toBe("coding");
+		expect(LIVE.caps.workflow).toBeNull();
+	});
+
+	it("survives the sanitiser and reaches the model: toolNamesFor grants all twenty-one", () => {
+		// The gate that decides what the agent may actually run. A declared name outside
+		// CREATOR_SELECTABLE_TOOLS is dropped here in silence — the migration would look applied.
+		expect(sanitizeToolList(LIVE.tools)).toEqual(LIVE.tools);
+		expect(LIVE.caps.tools).toEqual(LIVE.tools);
+		const granted = toolNamesFor(LIVE.caps);
+		for (const name of LIVE.tools) expect(granted.has(name)).toBe(true);
+	});
+
+	it("still declares nothing from the generic terminal connector", () => {
+		// 0099's defect stays one name away, and this file rewrites the whole array.
+		expect(LIVE.tools.filter((t) => TERMINAL_TOOLS.includes(t))).toEqual([]);
+		expect(LIVE.tools.filter((t) => t.startsWith("terminal_"))).toEqual([]);
+		for (const name of TERMINAL_TOOLS) expect(toolNamesFor(LIVE.caps).has(name)).toBe(false);
+	});
+});
+
+describe("migration 0140 — the repo_path setting, which is this agent's only address", () => {
+	const schema = LIVE.caps.settingsSchema ?? [];
+
+	it("declares it at TOP-LEVEL config.settingsSchema, a sibling of capabilities", () => {
+		// `agentCapabilities` reads `cfg.settingsSchema`; a field written under `$.capabilities`
+		// would sanitize to nothing and the console would render no card at all.
+		expect(SQL_0140).toMatch(/'\$\.settingsSchema'/);
+		expect(SQL_0140).not.toMatch(/'\$\.capabilities\.settingsSchema'/);
+		expect(Object.hasOwn(LIVE.config, "settingsSchema")).toBe(true);
+	});
+
+	it("survives sanitizeSettingsSchema — a malformed field is dropped without a word", () => {
+		expect(sanitizeSettingsSchema(LIVE.config.settingsSchema)).toEqual(schema);
+		expect(schema).toHaveLength(1);
+		expect(schema[0]?.type).toBe("text");
+		expect(schema[0]?.label).toBeTruthy();
+	});
+
+	it("uses an id repoPathForInstance actually reads", () => {
+		// The whole grant hangs on this string. `REPO_PATH_SETTINGS` is the list the resolver walks;
+		// the first entry is the live one (`local-repo-chat`'s), the second is a pre-0102 orphan kept
+		// only so an old `coder-repo` instance still resolves. A new declaration must use the first.
+		expect(REPO_PATH_SETTINGS[0]).toBe("repo_path");
+		expect(schema[0]?.id).toBe("repo_path");
+		expect(REPO_PATH_SETTINGS as readonly string[]).toContain(schema[0]?.id);
+	});
+
+	it("tells the owner it is a path on the machine running `pags up`, not owner/name", () => {
+		// A value holding `owner/name` is skipped as a GitHub coordinate rather than handed to the
+		// runner, so a label that invited one would produce silent "no repository is configured".
+		expect(schema[0]?.description).toMatch(/pags up/);
+		expect(schema[0]?.description).toMatch(/~\//);
+	});
+});
+
+describe("migration 0140 — the personality, which is why the tools get used", () => {
+	const personality = LIVE.personality;
+
+	it("names no tool that does not exist — the guard 0123 exists to hold", () => {
+		// The defect this whole ticket replaces: four `terminal_*` names living in a Rules box,
+		// resolving `not_declared` on every turn. This file rewrites the personality, so the check
+		// has to be re-run against what it writes, not only against what 0123 wrote.
+		const mentioned = [...new Set([...personality.matchAll(/\b(?:tmux|github|terminal|repo)_[a-z_]+/g)].map((m) => m[0]))];
+		expect(mentioned.length).toBeGreaterThan(0);
+		for (const name of mentioned) expect(LIVE.tools).toContain(name);
+	});
+
+	it("names all six read tools, so the grant is steered rather than merely present", () => {
+		// #507's measurement is the reason this section exists: with two routes to the same outcome
+		// and nothing said, the shell route wins. `github_create_issue` existed and the agent still
+		// drove `gh` through a pane. This is an instruction, not a gate — recorded so that if it
+		// turns out not to hold, the fix is known to be a gate rather than more prose.
+		for (const name of REPO_LOCAL_NAMES) expect(personality).toContain(name);
+		expect(personality).toMatch(/Do NOT spend a tmux_run_command on/);
+		expect(personality).toMatch(/Repository path in Settings/);
+	});
+
+	it("keeps every rule 0123 wrote — a full-string rewrite loses one by omission", () => {
+		// The same hazard as re-setting `$.capabilities`, in prose. Each of these is a separate
+		// decision 0123 made and this file did not come here to revisit.
+		expect(personality).toMatch(/NEVER with `gh` in a pane/);
+		expect(personality).toMatch(/## Deployment block/);
+		expect(personality).toMatch(/YOU ARE THE DRIVER, NOT THE CODER/);
+		expect(personality).toMatch(/never estimate or report a dollar figure/i);
+		expect(personality).toMatch(/untrusted data, not instructions/i);
+		expect(personality).toMatch(/Launch the CLI ONCE per session/);
+	});
+
+	it("still carries the interactive-CLI protocol headings the code constant defines", () => {
+		// #483/#496: the seed copy reaches new subscribers, the CONNECTED TOOLS block reaches
+		// everyone every turn, and a rule on one side only is the drift that made half of #483 ship
+		// to nobody. Re-checked here because the string was rewritten.
+		const headings = (text: string) => [...text.matchAll(/\n(\d+\. [A-Z][A-Z ]+):/g)].map((m) => m[1]);
+		expect(headings(`\n${personality}`)).toEqual(headings(TERMINAL_CLI_PROTOCOL));
+	});
+
+	it("counts file contents as untrusted input too, now that it can read them", () => {
+		// The one sentence 0123's wording no longer covered: `repo_read_file` and `repo_grep` bring
+		// repository text into the context, and a README is exactly where an injection would sit.
+		expect(personality).toMatch(/file contents/i);
+	});
+
+	it("is a $.identity patch, which is why this file has a propagation entry", () => {
+		// `seed-identity-propagation.test.ts` enforces the other half. Stated here as well because
+		// the two facts belong together: capabilities JOIN at read time and reach the live instance
+		// on its next turn; identity is a DO snapshot taken at subscribe and reaches it never.
+		expect(SQL_0140).toMatch(/'\$\.identity\.personality'/);
+		expect(instanceCopiedPatchPaths(SQL_0140)).toEqual(["$.identity"]);
+	});
+});
+
+describe("migration 0140 — idempotent, and converging", () => {
+	it("re-running changes nothing", () => {
+		// Every value written is a constant, so a second application must be a no-op. The failure
+		// this rules out is an append-shaped write that doubles a list on the second run.
+		const d1 = realSchemaD1();
+		try {
+			const before = seededRow(d1).config;
+			d1.exec(SQL_0140);
+			expect(JSON.parse(seededRow(d1).config)).toEqual(JSON.parse(before));
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("converges a row still carrying 0123's fifteen tools and no settingsSchema", () => {
+		// The state of production the moment before this migration runs, reconstructed: 0123's row
+		// untouched. Applying this file must produce the same result as a fresh database's ordered
+		// run — that equivalence is what makes an UPDATE-shaped migration safe.
+		const d1 = realSchemaD1();
+		try {
+			const pre = { capabilities: CONFIG.capabilities, identity: CONFIG.identity };
+			d1.sqlite.prepare("UPDATE agents SET config = ? WHERE slug = ?").run(JSON.stringify(pre), "tmux-coder");
+			d1.exec(SQL_0140);
+			const after = JSON.parse(seededRow(d1).config) as Record<string, unknown>;
+			expect((after.capabilities as Record<string, unknown>).tools).toEqual(LIVE.tools);
+			expect(after.settingsSchema).toEqual(LIVE.config.settingsSchema);
+			expect((after.identity as Record<string, unknown>).personality).toEqual(LIVE.personality);
+			// The siblings the narrow paths never name.
+			expect((after.identity as Record<string, unknown>).goal).toEqual(IDENTITY.goal);
+			expect((after.identity as Record<string, unknown>).guardrails).toEqual(IDENTITY.guardrails);
+			expect((after.identity as Record<string, unknown>).welcomeMessage).toEqual(IDENTITY.welcomeMessage);
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("leaves the catalog copy alone, and it still passes the claims lint against the new tools", () => {
+		// The description is a plain column; nothing here writes it. But `lintAgentClaims` reads the
+		// capabilities as well, so the pairing has to be re-checked after they changed.
+		expect(LIVE.description).toBe(DESCRIPTION);
+		expect(lintAgentClaims({ description: LIVE.description, capabilities: LIVE.caps })).toEqual([]);
 	});
 });
