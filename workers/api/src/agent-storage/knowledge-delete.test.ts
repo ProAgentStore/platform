@@ -76,7 +76,7 @@ function build(failDeletes = false) {
 	});
 	const v = vectorize(failDeletes);
 	// `ai` is only needed for embedding (writes); deletes never touch it.
-	const engine = new AgentStorageEngine(store, null, v.index, null, AGENT);
+	const engine = new AgentStorageEngine(store, null, v.index, null, AGENT, null);
 	return { engine, map, v };
 }
 
@@ -119,6 +119,7 @@ describe("deleteKnowledge — a failed vector delete must not be swallowed", () 
 			healthy.index,
 			null,
 			AGENT,
+			null,
 		);
 		expect(await retried.deleteKnowledge("d1")).not.toBeNull();
 		expect(map.has("kb:d1")).toBe(false);

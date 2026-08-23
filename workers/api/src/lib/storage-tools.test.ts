@@ -24,7 +24,7 @@ function mockDoStorage() {
 }
 
 function makeEngine() {
-	return new AgentStorageEngine(mockDoStorage(), null, null, null, "test-agent");
+	return new AgentStorageEngine(mockDoStorage(), null, null, null, "test-agent", null);
 }
 
 function mockRuntimeEnv(opts?: { profile?: Record<string, unknown> }) {

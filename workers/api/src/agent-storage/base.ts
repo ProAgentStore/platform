@@ -6,6 +6,7 @@
  * layer so later groups can call earlier groups' methods. The fields are
  * `protected` so mixins can reach them; the public surface is unchanged.
  */
+import type { Env } from "../types.js";
 
 /**
  * Optional metering hook (issue #44): when present, platform-paid Workers-AI calls
@@ -35,6 +36,16 @@ export const CHUNK_SIZE = 512; // characters per vector chunk
 // biome-ignore lint/suspicious/noExplicitAny: mixin constructor helper
 export type GConstructor<T = object> = new (...args: any[]) => T;
 
+/**
+ * The durable-log handle (#637). A `Pick<Env, "DB">` rather than the whole `Env`: the engine's one
+ * requirement is a D1 statement, and threading the full environment would hand every mixin bindings
+ * it has no business holding. `null` is for unit tests, which have no D1 and log nothing.
+ *
+ * It sits BEFORE `meter` because it is required and `meter` is not — TypeScript forbids a required
+ * parameter after an optional one — and because the two are unrelated concerns that happen to both
+ * want a database: `meter` is the OPTIONAL usage ledger, switched off precisely so the platform does
+ * not meter AI it did not spend, while this is the error channel and must always be present.
+ */
 export class AgentStorageBase {
 	constructor(
 		protected doStorage: DurableObjectStorage,
@@ -42,6 +53,7 @@ export class AgentStorageBase {
 		protected vectorize: VectorizeIndex | null,
 		protected ai: Ai | null,
 		protected agentId: string,
+		protected db: Pick<Env, "DB"> | null,
 		protected meter: EngineMeter | null = null,
 	) {}
 }

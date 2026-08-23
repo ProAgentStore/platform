@@ -12,6 +12,7 @@
  * and re-exports the engine + its metering hook so every existing
  * `import … from "./agent-storage.js"` keeps working unchanged.
  */
+import type { Env } from "./types.js";
 import { AgentStorageBase, type EngineMeter } from "./agent-storage/base.js";
 import { withActivity } from "./agent-storage/activity.js";
 import { withCollections } from "./agent-storage/collections.js";
@@ -36,8 +37,20 @@ export class AgentStorageEngine extends ComposedStorageEngine {
 		vectorize: VectorizeIndex | null,
 		ai: Ai | null,
 		agentId: string,
+		/**
+		 * D1, for the durable error log (#637) — REQUIRED, deliberately.
+		 *
+		 * The engine's only channel out of a background failure used to be `console.error`, which a
+		 * Worker does not persist: a file that uploaded but never reached the index appeared in no
+		 * `error_log`, no `list_errors` and no admin Errors tile. Making this a seventh OPTIONAL
+		 * argument would have recreated that silence for the next construction site that forgot it,
+		 * so it has no default and the compiler names every caller. Pass `null` only where there
+		 * genuinely is no database (unit tests), which is then a written decision rather than an
+		 * omission.
+		 */
+		db: Pick<Env, "DB"> | null,
 		meter: EngineMeter | null = null,
 	) {
-		super(doStorage, r2, vectorize, ai, agentId, meter);
+		super(doStorage, r2, vectorize, ai, agentId, db, meter);
 	}
 }

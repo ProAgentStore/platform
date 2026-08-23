@@ -165,7 +165,7 @@ export function sanitizeBuildId(raw: unknown): string | undefined {
  * Returns true when an existing row absorbed the occurrence.
  */
 async function collapseRepeat(
-	env: Env,
+	env: Pick<Env, "DB">,
 	e: ErrorLogInput,
 	level: ErrorLevel,
 	message: string,
@@ -199,8 +199,14 @@ async function collapseRepeat(
 /**
  * Persist a failure. NEVER throws — error logging must not break the request path
  * it is observing. Sizes are bounded so one huge upstream body can't bloat a row.
+ *
+ * Takes `Pick<Env, "DB">`, not `Env` — a widening, so every existing caller is unaffected. D1 is
+ * the whole requirement (this function and `logEvent` below it touch nothing else), and saying so
+ * in the type is what lets a component holding only a database handle report through here: the
+ * storage engine reaches the durable log this way rather than being handed every binding in the
+ * environment (#637). `lib/meter-ids.ts` already narrows the same way for the same reason.
  */
-export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
+export async function logError(env: Pick<Env, "DB">, e: ErrorLogInput): Promise<void> {
 	try {
 		const level: ErrorLevel = e.level === "warn" ? "warn" : "error";
 		const source = String(e.source).slice(0, 64);

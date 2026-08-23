@@ -27,7 +27,7 @@ describe("AgentStorageEngine", () => {
 	describe("collections", () => {
 		it("creates a collection with schema and inserts/queries records", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const schema = await engine.collectionCreate("candidates", [
 				{ name: "name", type: "string", required: true, indexed: true },
@@ -83,7 +83,7 @@ describe("AgentStorageEngine", () => {
 
 		it("rejects duplicate collection names", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			await engine.collectionCreate("items", [{ name: "title", type: "string" }]);
 			await expect(engine.collectionCreate("items", [])).rejects.toThrow("already exists");
@@ -91,7 +91,7 @@ describe("AgentStorageEngine", () => {
 
 		it("allows missing required fields (soft validation for AI tools)", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			await engine.collectionCreate("tasks", [
 				{ name: "title", type: "string", required: true },
@@ -105,7 +105,7 @@ describe("AgentStorageEngine", () => {
 
 		it("enforces unique constraints", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			await engine.collectionCreate("users", [
 				{ name: "email", type: "string", required: true, unique: true, indexed: true },
@@ -124,7 +124,7 @@ describe("AgentStorageEngine", () => {
 
 		it("enforces unique constraints on UPDATE too (not just insert)", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 			await engine.collectionCreate("users", [
 				{ name: "email", type: "string", required: true, unique: true, indexed: true },
 			]);
@@ -143,7 +143,7 @@ describe("AgentStorageEngine", () => {
 
 		it("maintains the index for unique-ONLY fields across update + delete (no orphan)", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 			// `sku` is unique but NOT indexed — the case whose index used to be orphaned.
 			await engine.collectionCreate("items", [
 				{ name: "sku", type: "string", required: true, unique: true },
@@ -163,7 +163,7 @@ describe("AgentStorageEngine", () => {
 
 		it("handles index values with colons correctly", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			await engine.collectionCreate("events", [
 				{ name: "timestamp", type: "string", indexed: true },
@@ -186,7 +186,7 @@ describe("AgentStorageEngine", () => {
 	describe("file storage (no R2)", () => {
 		it("returns error when R2 is not available", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			await expect(
 				engine.fileUpload({ name: "test.txt", mimeType: "text/plain", data: "hello" }),
@@ -197,7 +197,7 @@ describe("AgentStorageEngine", () => {
 	describe("activity log", () => {
 		it("logs and retrieves events", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			await engine.logEvent("chat.message", "user-1", { messageId: "msg-1" });
 			await engine.logEvent("tool.called", "user-1", { tool: "search_knowledge" });
@@ -216,7 +216,7 @@ describe("AgentStorageEngine", () => {
 	describe("user context", () => {
 		it("creates and updates user context", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const ctx = await engine.getUserContext("user-1");
 			expect(ctx.userId).toBe("user-1");
@@ -235,7 +235,7 @@ describe("AgentStorageEngine", () => {
 	describe("vector search (no Vectorize)", () => {
 		it("returns empty results when Vectorize is not available", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const results = await engine.vectorSearch("test query");
 			expect(results).toEqual([]);
@@ -243,7 +243,7 @@ describe("AgentStorageEngine", () => {
 
 		it("vectorizeStore returns empty when not available", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const ids = await engine.vectorizeStore("knowledge", "doc-1", "Hello world");
 			expect(ids).toEqual([]);
@@ -254,7 +254,7 @@ describe("AgentStorageEngine", () => {
 			const vectorize = { upsert: async () => ({}), query: async () => ({ matches: [] }) };
 			// AI configured, but returns no embedding vector → embed() yields null for every chunk.
 			const ai = { run: async () => ({ data: [] }) };
-			const engine = new AgentStorageEngine(storage, null, vectorize as never, ai as never, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, vectorize as never, ai as never, "agent-1", null);
 
 			const text = "This is a résumé summary with more than enough content to produce at least one chunk for embedding.";
 			await expect(engine.vectorizeStore("knowledge", "doc-1", text)).rejects.toThrow(/not fully searchable|incomplete/);
@@ -264,7 +264,7 @@ describe("AgentStorageEngine", () => {
 	describe("vectorStats", () => {
 		it("groups vec:* entries by source, resolves names, and sorts newest first", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const vec = (id: string, sourceType: string, sourceId: string, chunkIndex: number, text: string, createdAt: string) =>
 				storage.put(`vec:${id}`, { id, agentId: "agent-1", sourceType, sourceId, chunkIndex, text, createdAt });
@@ -289,7 +289,7 @@ describe("AgentStorageEngine", () => {
 
 		it("returns zeros for an empty store", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 			expect(await engine.vectorStats()).toEqual({ totalSources: 0, totalChunks: 0, totalChars: 0, sources: [] });
 		});
 	});
@@ -297,7 +297,7 @@ describe("AgentStorageEngine", () => {
 	describe("conversation summarization (no AI)", () => {
 		it("returns null when AI is not available", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const summary = await engine.maybeSummarize("@cf/meta/llama-3.2-3b-instruct");
 			expect(summary).toBeNull();
@@ -307,7 +307,7 @@ describe("AgentStorageEngine", () => {
 	describe("RAG context builder", () => {
 		it("returns empty string when no vectorize or summaries", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
 
 			const context = await engine.buildRAGContext("What is TypeScript?");
 			expect(context).toBe("");
@@ -334,7 +334,7 @@ describe("AgentStorageEngine", () => {
 
 		it("resumes strictly after the last summarized message — no message double-counted", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, mockAi(), "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, mockAi(), "agent-1", null);
 
 			const win1 = seedMessages(storage, 0, 20); // exactly the threshold
 			const s1 = await engine.maybeSummarize("@cf/x");
@@ -353,7 +353,7 @@ describe("AgentStorageEngine", () => {
 
 		it("falls back to the timestamp boundary for a legacy summary without boundaryKey", async () => {
 			const storage = mockDoStorage();
-			const engine = new AgentStorageEngine(storage, null, null, mockAi(), "agent-1");
+			const engine = new AgentStorageEngine(storage, null, null, mockAi(), "agent-1", null);
 			seedMessages(storage, 0, 5);
 			// Legacy summary row: has messageRange.to but no boundaryKey.
 			await storage.put("sum:legacy", {

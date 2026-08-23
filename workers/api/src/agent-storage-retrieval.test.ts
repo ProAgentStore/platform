@@ -38,7 +38,7 @@ const brokenAi = () => ({ run: vi.fn(async () => { throw new Error("AI provider 
 
 function engineWith(ai: unknown, vectorize: unknown, storage = mockDoStorage()) {
 	return {
-		engine: new AgentStorageEngine(storage as never, null, vectorize as never, ai as never, "agent-1"),
+		engine: new AgentStorageEngine(storage as never, null, vectorize as never, ai as never, "agent-1", null),
 		storage,
 	};
 }

@@ -166,7 +166,7 @@ export class AgentDO extends DurableObject<Env> {
 			this.env.STORAGE || null,
 			this.env.VECTORIZE || null,
 			platformAi,
-			agentId,
+			agentId, { DB: this.env.DB }, // #637: the durable error log, narrowed to the one binding the engine needs
 			meter,
 		);
 	}

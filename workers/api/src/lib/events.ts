@@ -49,7 +49,7 @@ export interface EventInput {
 }
 
 /** Persist a trace event. Best-effort; never throws. */
-export async function logEvent(env: Env, e: EventInput): Promise<void> {
+export async function logEvent(env: Pick<Env, "DB">, e: EventInput): Promise<void> {
 	try {
 		// `ON CONFLICT(id) DO NOTHING` is a no-op for every caller that lets the id default to a
 		// fresh uuid — a random 128-bit key never collides — and is what makes a supplied `id`

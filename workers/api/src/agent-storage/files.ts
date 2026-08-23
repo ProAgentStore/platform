@@ -4,6 +4,9 @@
  */
 import type { ActivityEvent, FileMeta, VectorMeta } from "../agent-storage-types.js";
 import { extractFileText } from "../agent-storage-utils.js";
+import { logError } from "../lib/error-log.js";
+import { resolveMeterIds } from "../lib/meter-ids.js";
+import type { Env } from "../types.js";
 import type { AgentStorageBaseCtor } from "./base.js";
 
 /** Sibling methods this group relies on (provided by earlier layers). */
@@ -37,6 +40,51 @@ const MAX_INDEXED_TEXT = 100_000;
 function boundedText(text: string): Pick<FileMeta, "extractedTextLength" | "indexedTextLength" | "textTruncated"> & { text: string } {
 	const kept = text.slice(0, MAX_INDEXED_TEXT);
 	return { text: kept, extractedTextLength: text.length, indexedTextLength: kept.length, textTruncated: kept.length < text.length };
+}
+
+/**
+ * Report a file whose bytes landed but whose text never reached the index (#637).
+ *
+ * `vectorized: false` on the metadata is durable and is what makes the state survivable — but a
+ * durable field nobody queries is not observability. The failure used to be announced only to the
+ * console, which a Worker does not persist, so "the file uploaded fine but is invisible to search"
+ * appeared in no `error_log`, no `list_errors`, no admin Errors tile and no alert. The only way to
+ * discover it was to already suspect the file and read its metadata.
+ *
+ * Best-effort in three directions, all of them deliberate:
+ *  - no `db` (unit tests) → nothing to write to, and nothing to fail;
+ *  - `logError` never throws by contract, and the `.catch` is belt-and-braces on top of that;
+ *  - the id lookup falls back to the DO's own name rather than to nothing.
+ *
+ * A failure to LOG a vectorization failure must never 500 an upload whose bytes are already
+ * committed to R2.
+ *
+ * The id resolution is not decoration. A DO's own name is an AGENT id for a template DO and an
+ * INSTANCE id for an instance DO, and the DO cannot tell which — `lib/meter-ids.ts` documents the
+ * ledger rows that got this wrong by guessing. One primary-key read, on a path that only runs when
+ * something already broke, is what lets the row name the thing an operator would actually look up.
+ */
+async function reportUnvectorized(
+	db: Pick<Env, "DB"> | null,
+	doName: string,
+	phase: "upload" | "register",
+	file: { id: string; name: string; userId?: string },
+	err: unknown,
+): Promise<void> {
+	if (!db) return;
+	const ids = await resolveMeterIds(db, doName).catch(() => ({ agentId: doName, instanceId: null }));
+	await logError(db, {
+		source: "storage",
+		userId: file.userId ?? null,
+		message: `file ${file.id} stored but not vectorized: ${err instanceof Error ? err.message : String(err)}`,
+		context: {
+			fileId: file.id,
+			name: file.name,
+			phase,
+			agentId: ids.agentId ?? doName,
+			instanceId: ids.instanceId ?? undefined,
+		},
+	}).catch(() => undefined);
 }
 
 export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<FileDeps>>(Base: TBase) {
@@ -112,15 +160,17 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				// vectorization failure must not 500 the upload (that would leave torn state).
 				// The file text is retained and can be re-indexed.
 				//
-				// `vectorized: false` is what makes that survivable. A console.error in a Worker is
-				// not persisted, so "uploaded fine, invisible to search" used to be a state with no
-				// record anywhere — the flag is the same admission #22 gave a knowledge doc.
+				// The failure is recorded twice, because the two answer different questions.
+				// `vectorized: false` says of THIS file that it is not searchable — the same
+				// admission #22 gave a knowledge doc, and what makes the torn state survivable.
+				// `reportUnvectorized` puts the same event somewhere an operator is already
+				// looking, which is what the flag alone could never do (#637).
 				try {
 					await this.vectorizeStore("file", id, bounded.text);
 					meta.vectorized = this.indexingEnabled;
 				} catch (err) {
 					meta.vectorized = false;
-					console.error(`[storage] file ${id} stored but not vectorized:`, err);
+					await reportUnvectorized(this.db, this.agentId, "upload", { id, name: opts.name, userId: opts.userId }, err);
 				}
 				await this.doStorage.put(`file:${id}`, meta);
 			}
@@ -220,8 +270,9 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 					await this.vectorizeStore("file", opts.id, bounded.text);
 					meta.vectorized = this.indexingEnabled;
 				} catch (err) {
+					// Same two records as the inline path above, for the same reasons (#637).
 					meta.vectorized = false;
-					console.error(`[storage] file ${opts.id} stored but not vectorized:`, err);
+					await reportUnvectorized(this.db, this.agentId, "register", { id: opts.id, name: opts.name, userId: opts.userId }, err);
 				}
 				await this.doStorage.put(`file:${opts.id}`, meta);
 			}

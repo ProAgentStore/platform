@@ -61,7 +61,7 @@ describe("AgentStorageEngine repo vectors", () => {
 	it("namespaces vectors by repo and labels every chunk with repo + path", async () => {
 		const storage = mockDoStorage();
 		const vectorize = mockVectorize();
-		const engine = new AgentStorageEngine(storage, null, vectorize, mockAi(), "inst-1");
+		const engine = new AgentStorageEngine(storage, null, vectorize, mockAi(), "inst-1", null);
 
 		const n = await engine.vectorizeRepoFile("octo/repoA", "src/index.ts", FILE_A);
 		expect(n).toBe(1);
@@ -74,7 +74,7 @@ describe("AgentStorageEngine repo vectors", () => {
 
 	it("keeps same-path files in different repos distinct", async () => {
 		const storage = mockDoStorage();
-		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1");
+		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1", null);
 
 		await engine.vectorizeRepoFile("octo/repoA", "README.md", FILE_A);
 		await engine.vectorizeRepoFile("octo/repoB", "README.md", FILE_B);
@@ -86,7 +86,7 @@ describe("AgentStorageEngine repo vectors", () => {
 	it("clearRepoVectors(key) removes only that repo; others remain", async () => {
 		const storage = mockDoStorage();
 		const vectorize = mockVectorize();
-		const engine = new AgentStorageEngine(storage, null, vectorize, mockAi(), "inst-1");
+		const engine = new AgentStorageEngine(storage, null, vectorize, mockAi(), "inst-1", null);
 
 		await engine.vectorizeRepoFile("octo/repoA", "a.ts", FILE_A);
 		await engine.vectorizeRepoFile("octo/repoB", "b.ts", FILE_B);
@@ -102,7 +102,7 @@ describe("AgentStorageEngine repo vectors", () => {
 
 	it("does not confuse a repo whose name is a prefix of another (a/b vs a/bc)", async () => {
 		const storage = mockDoStorage();
-		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1");
+		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1", null);
 
 		await engine.vectorizeRepoFile("a/b", "x.ts", FILE_A);
 		await engine.vectorizeRepoFile("a/bc", "y.ts", FILE_B);
@@ -115,7 +115,7 @@ describe("AgentStorageEngine repo vectors", () => {
 
 	it("clearRepoVectors() with no key wipes all repo vectors", async () => {
 		const storage = mockDoStorage();
-		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1");
+		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1", null);
 
 		await engine.vectorizeRepoFile("octo/repoA", "a.ts", FILE_A);
 		await engine.vectorizeRepoFile("octo/repoB", "b.ts", FILE_B);
@@ -126,7 +126,7 @@ describe("AgentStorageEngine repo vectors", () => {
 
 	it("chunks a large file into multiple labeled vectors", async () => {
 		const storage = mockDoStorage();
-		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1");
+		const engine = new AgentStorageEngine(storage, null, mockVectorize(), mockAi(), "inst-1", null);
 
 		const big = "const line = 'data value here';\n".repeat(120); // many full chunks
 		const n = await engine.vectorizeRepoFile("octo/repoA", "big.ts", big);
@@ -137,7 +137,7 @@ describe("AgentStorageEngine repo vectors", () => {
 
 	it("returns 0 and stores nothing when AI/Vectorize are unavailable", async () => {
 		const storage = mockDoStorage();
-		const engine = new AgentStorageEngine(storage, null, null, null, "inst-1");
+		const engine = new AgentStorageEngine(storage, null, null, null, "inst-1", null);
 		const n = await engine.vectorizeRepoFile("octo/repoA", "a.ts", FILE_A);
 		expect(n).toBe(0);
 		expect(repoVecMetas(storage)).toHaveLength(0);
