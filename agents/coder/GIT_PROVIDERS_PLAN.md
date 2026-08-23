@@ -1,9 +1,11 @@
 # Coder Git Providers Plan
 
-## Status (2026-08-08)
+## Status (2026-08-23)
 
-Phases 1 and 2 have landed, and Phase 3 is landed for **reads** — GitLab issues and pipelines.
-Phase 3's write half (creating a GitLab issue), Phase 4 (Bitbucket) and Phase 5 are still open.
+Phases 1 and 2 have landed. Phases 3 and 4 are landed for **reads** on all three hosted
+surfaces — issues, pipelines and merge/pull requests, on GitLab and Bitbucket. Phase 3's write
+half (creating an issue on either) is still open. **Phase 5 is deliberately deferred, not
+pending** — see below.
 
 **Shipped — identity and credential.** `workers/api/src/lib/git-providers.ts` is the provider
 registry — declared data (hosts, git username, credential model, capability flags), not a chain
@@ -29,27 +31,63 @@ when the only false claim was the third. `hostedReadRefusal` answers them separa
 the sentence that is actually true. The Co-pilot's `list_issues` / `read_issue` go through the
 same dispatcher, so the brain and the Issues panel cannot disagree about the same repo.
 
+**Shipped — merge requests and pull requests.** `lib/gitlab-mrs.ts` and `lib/bitbucket-prs.ts`
+sit beside `lib/github-prs.ts`, and `supports.pulls` is now `true` on all three hosted rows. The
+flag moved on its own, after the mappings existed, which is what three independent booleans are
+for: phases 3 and 4 shipped `{issues:true, builds:true, pulls:false}` and that was a true
+statement at the time, not an oversight.
+
+Neither client is parameterised over another, and `installationTokenForOwner(env, userId, owner)`
+is still untouched. The seam is the OUTPUT type (`PullSummary` / `PullDetail` / `PullChecks` /
+`ReviewState`); the input is not, because the three hosts disagree about too much — Bitbucket's
+`id` IS the number a human sees while GitLab's is an instance-wide counter beside a per-project
+`iid`, and GitHub's grant model is installation-scoped where both others are user- or
+workspace-scoped.
+
+Each provider's mapping was settled against the LIVE public API, and three of the findings
+changed the code rather than confirming it:
+
+- **A GitLab MR's checks cannot be correlated by sha.** `github-prs.ts` attaches every row's CI
+  from ONE workflow-runs page. On GitLab a fork's pipeline runs in the FORK's project, so asking
+  the target project for `pipelines?sha=…` answers 200 with an empty list — the cheap version
+  would have reported "no checks" on every community contribution. Checks therefore come from
+  `head_pipeline` on the detail endpoint, and exist only on enriched rows.
+- **GitLab's `state=closed` excludes merged MRs**, and `not[state]=opened` is silently ignored
+  (200, with `opened` rows). So "closed" is two requests, unioned and re-sorted.
+- **Omitting `state` on Bitbucket's pull-requests endpoint returns OPEN ONLY** — the exact
+  inverse of its issues endpoint, where omitting the `q` clause is how `all` is expressed. A repo
+  holding 139 pull requests answered `size: 0`. Every state is named explicitly.
+
+What the hosts do not carry is left absent rather than invented, following the `comments: 0 =
+unknown` precedent: Bitbucket answers no mergeability at all (so `mergeable` stays `null`, never
+`false`), neither provider carries per-PR line counts, and a GitLab MR list's `reviewers[].state`
+is the user ACCOUNT's state (`"active"`) and is never read as a review verdict.
+
 **Deliberately deferred, and failing cleanly rather than silently.**
 
-- **GitLab merge requests.** `supports.pulls:false`. `lib/github-prs.ts` is a substantial client
-  (checks, review state, mergeability, PR-to-run correlation) and GitLab's MR API differs enough
-  that claiming it from an untested mapping is the failure this flag exists to prevent. The three
-  `supports` flags move independently for exactly this reason.
-- **Writes on GitLab** (creating an issue). The read path is the honest half to ship without an
-  account to verify against; a write that silently no-ops is worse than one that isn't offered.
-  The registry connector's tools stay `github_*` — they are explicitly GitHub-named tools taking
-  an `owner/repo` argument, not repo-row surfaces, so they are not a half-migration of this seam.
-- **Bitbucket** — issues, pipelines, and the **credential**: an app password is a username +
-  secret and the vault holds one opaque value per provider, so wiring it would 401 on every
-  private clone while looking configured.
+- **Writes on GitLab and Bitbucket** (creating an issue). The read path is the honest half to
+  ship without an account to verify against; a write that silently no-ops is worse than one that
+  isn't offered. The registry connector's tools stay `github_*` — they are explicitly
+  GitHub-named tools taking an `owner/repo` argument, not repo-row surfaces, so they are not a
+  half-migration of this seam.
+- **Bitbucket app passwords.** A Repository / Project / Workspace Access Token is one opaque
+  string and fits the vault; an app password is a username AND a secret and would 401 on every
+  private request while reading as configured. Atlassian is retiring them regardless.
+- **Phase 5 — provider-branded catalog presets.** Deferred on purpose, not carried as pending
+  work. No external user has asked for one, and `GET /v1/admin/usage/external` reads
+  `externalUsers: 0` (#68) — so a preset would be new surface with no reader. It costs nothing to
+  start later: a preset is data over the same Coder implementation, which is what the Decision
+  below already commits to.
 - **Self-managed GitLab / Bitbucket Server** resolve as provider `other` — they clone fine, and
-  claim nothing. `gitlab-api.ts` therefore hardcodes `gitlab.com`, which is what keeps its URL a
-  constant: no request field on this path can move where an authenticated read is sent.
+  claim nothing. All four clients therefore hardcode their host, which is what keeps those URLs
+  constants: no request field on any of these paths can move where an authenticated read is sent.
 
-**Not verified against a live GitLab account.** Every mapping above is covered by unit tests
-against recorded response shapes, and the dispatch is pinned by a test asserting a nested GitLab
-slug never reaches `api.github.com`. Nobody on the team has GitLab credentials, so the first real
-project pointed at this should be treated as the acceptance test.
+**Not verified against a live GitLab or Bitbucket account.** Every mapping is covered by unit
+tests over shapes taken off the public API, and the dispatch is pinned by tests asserting that a
+nested GitLab slug never reaches `api.github.com` and that the Bitbucket slug `team/widget` —
+which IS a well-formed `owner/repo`, so no shape check would catch a leak — reaches
+`api.bitbucket.org` and nowhere else. Nobody on the team has credentials for either host, so the
+first real project pointed at this should still be treated as the acceptance test.
 
 **Two departures from the plan below.** A fifth provider value, `other`, exists: a clone URL on an
 unrecognised host is a real remote, and calling it `local` is the same class of lie this work is

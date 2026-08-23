@@ -1,6 +1,6 @@
 /**
- * "Ask this repo's HOST about it" — one dispatcher for issues and builds, over any provider
- * (#221, phase 3).
+ * "Ask this repo's HOST about it" — one dispatcher for issues, builds and pull requests, over
+ * any provider (#221, phases 3 and 4).
  *
  * ── The question this answers, and the one it refuses to
  *
@@ -17,11 +17,12 @@
  *
  * ── What is abstracted, and what deliberately is not
  *
- * The OUTPUT is: `IssueSummary` / `IssueDetail` / `BuildRun`, unchanged, so the console, the
- * build history in KV and the Co-pilot's issue tools read one shape whatever the host is. The
- * INPUT is not: `github-issues.ts` still takes `owner/repo` and still mints an installation
- * token bound to a verified installation; `gitlab-api.ts` takes a nested project path and reads
- * a user-scoped PAT. `git-providers.ts` sets out at length why generalising GitHub's
+ * The OUTPUT is: `IssueSummary` / `IssueDetail` / `BuildRun` / `PullSummary` / `PullDetail`,
+ * unchanged, so the console, the build history in KV and the Co-pilot's issue tools read one
+ * shape whatever the host is. The INPUT is not: `github-issues.ts` still takes `owner/repo` and
+ * still mints an installation token bound to a verified installation; `gitlab-api.ts` takes a
+ * nested project path and reads a user-scoped PAT. `git-providers.ts` sets out at length why
+ * generalising GitHub's
  * owner-scoped grant model into the interface would force every other provider to lie to it —
  * that argument applies here unchanged, which is why this module dispatches between two clients
  * rather than parameterising one.
@@ -38,8 +39,11 @@ import { githubAppConfigured } from "./github-app.js";
 import { resolveGithubRead } from "./github-cache.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { listIssues, readIssue, type IssueDetail, type IssueSummary, type ListIssuesOpts } from "./github-issues.js";
+import { listPulls, readPull, type ListPullsOpts, type PullDetail, type PullSummary } from "./github-prs.js";
 import { listGitlabIssues, listGitlabPipelines, readGitlabIssue } from "./gitlab-api.js";
+import { listGitlabPulls, readGitlabPull } from "./gitlab-mrs.js";
 import { listBitbucketIssues, listBitbucketPipelines, readBitbucketIssue } from "./bitbucket-api.js";
+import { listBitbucketPulls, readBitbucketPull } from "./bitbucket-prs.js";
 import { gitProviderFor, hostedFeatureUnavailable, supportsHostedFeature, type HostedFeature } from "./git-providers.js";
 import type { BuildRun } from "./build-history.js";
 import type { Env } from "../types.js";
@@ -129,6 +133,55 @@ export async function readHostedIssue(env: Env, userId: string, repo: HostedRepo
 			return readGitlabIssue(env, userId, slug, number);
 		case "bitbucket":
 			return readBitbucketIssue(env, userId, slug, number);
+		default:
+			return null;
+	}
+}
+
+/**
+ * List the repo's pull requests — GitLab calls them merge requests, and that is the only
+ * difference a caller sees. `[]` for anything unreadable; never throws.
+ *
+ * The three clients answer this question with different numbers of requests, which is a fact
+ * about the hosts rather than a shortfall in any of them: GitHub attaches every row's checks
+ * from ONE workflow-runs page, while a GitLab MR's pipeline can live in a fork (so it must be
+ * read per-MR) and Bitbucket has no cross-PR status listing at all. Both therefore report
+ * checks only on the rows they enrich, and an unenriched row says `checks: null` — "not looked
+ * up" — rather than "no checks".
+ */
+export async function listHostedPulls(env: Env, userId: string, repo: HostedRepoRef, opts: ListPullsOpts = {}): Promise<PullSummary[]> {
+	if (!canReadHosted(repo, "pulls")) return [];
+	const slug = hostedCoordinate(repo);
+	switch (providerOf(repo).id) {
+		case "github":
+			return listPulls(env, userId, slug, opts);
+		case "gitlab":
+			return listGitlabPulls(env, userId, slug, opts);
+		case "bitbucket":
+			return listBitbucketPulls(env, userId, slug, opts);
+		default:
+			return [];
+	}
+}
+
+/**
+ * Read one pull request by the number a human sees. `null` when absent.
+ *
+ * As with issues, "the number a human sees" is doing work and the three providers disagree:
+ * it is `iid` on GitLab (whose `id` is an instance-wide counter) and `id` on Bitbucket (which
+ * has no second identifier). That disagreement is one of the reasons each client owns its own
+ * mapping instead of one being parameterised over another.
+ */
+export async function readHostedPull(env: Env, userId: string, repo: HostedRepoRef, number: number): Promise<PullDetail | null> {
+	if (!canReadHosted(repo, "pulls")) return null;
+	const slug = hostedCoordinate(repo);
+	switch (providerOf(repo).id) {
+		case "github":
+			return readPull(env, userId, slug, number);
+		case "gitlab":
+			return readGitlabPull(env, userId, slug, number);
+		case "bitbucket":
+			return readBitbucketPull(env, userId, slug, number);
 		default:
 			return null;
 	}

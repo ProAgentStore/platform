@@ -546,12 +546,32 @@ describe("GET /coding/repos/:id/issues — dispatched by provider, refused hones
 		expect(urls).toEqual([]);
 	});
 
-	it("a BITBUCKET repo is still refused PULL REQUESTS — one flag moved, not three", async () => {
+	it("lists a BITBUCKET repo's PULL REQUESTS — and that slug never reaches GitHub or GitLab", async () => {
+		// This was a "still refused" test while `supports.pulls` was false. The flag moved on its
+		// own once `bitbucket-prs.ts` existed, and the assertion that replaces it is the sharper
+		// one: `team/widget` IS a well-formed `owner/repo`, so a dispatch mistake would build an
+		// authenticated GitHub request against a namespace nobody asked about and no shape check
+		// anywhere would notice.
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			const url = String(input);
+			const body = url.includes("/statuses")
+				? { values: [{ state: "SUCCESSFUL", name: "pipeline", url: "https://bitbucket.org/team/widget/pipelines/results/5" }] }
+				: url.match(/\/pullrequests\/\d+$/)
+					? { id: 42, title: "Fix the flake", state: "OPEN", participants: [{ state: "approved", approved: true }], reviewers: [{}] }
+					: { values: [{ id: 42, title: "Fix the flake", state: "OPEN", comment_count: 3, updated_on: "2026-08-08T00:00:00Z", source: { branch: { name: "fix" }, commit: { hash: "e45f5964a8c2" } }, destination: { branch: { name: "main" } }, links: { html: { href: "https://bitbucket.org/team/widget/pull-requests/42" } } }] };
+			return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+		}));
 		const { status, body } = await get("/pulls", { ...gitlabRepo, provider: "bitbucket", repo_slug: "team/widget" });
-		expect(status).toBe(400);
-		expect(body.error).toContain("Bitbucket");
-		expect(body.error).toMatch(/yet/);
-		expect(urls).toEqual([]);
+		expect(status).toBe(200);
+		expect(body.repo).toBe("team/widget");
+		const pulls = body.pulls as Array<Record<string, unknown>>;
+		expect(pulls[0]).toMatchObject({ number: 42, state: "open", comments: 3, review: "approved" });
+		// Bitbucket answers no mergeability at all, so the row says so instead of guessing.
+		expect(pulls[0].mergeable).toBeNull();
+		expect(urls.some((u) => u.startsWith("https://api.bitbucket.org/2.0/repositories/team/widget/pullrequests"))).toBe(true);
+		expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
+		expect(urls.some((u) => u.includes("gitlab.com"))).toBe(false);
 	});
 
 	it("reads GitLab BUILDS as pipelines, and never asks GitHub about them", async () => {
@@ -573,13 +593,28 @@ describe("GET /coding/repos/:id/issues — dispatched by provider, refused hones
 		expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
 	});
 
-	it("a GitLab repo is still refused PULL REQUESTS — the flags move independently", async () => {
-		// Merge requests have no client. `supports.pulls:false` is what keeps turning issues on
-		// from silently asserting a surface that would 404 or, worse, hit the wrong API.
+	it("lists a GitLab project's MERGE REQUESTS, addressed by its nested path", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			const url = String(input);
+			const body = url.includes("/reviewers")
+				? [{ user: { username: "someone" }, state: "requested_changes" }]
+				: url.match(/\/merge_requests\/\d+$/)
+					? { iid: 7, state: "opened", merge_status: "can_be_merged", detailed_merge_status: "requested_changes", head_pipeline: { status: "success", source: "merge_request_event", web_url: "https://gitlab.com/x/-/pipelines/9" } }
+					: [{ iid: 7, title: "Clear the entrypoint", state: "opened", sha: "40daaba2a468b5c18c91640b86bc7461f09a19a8", user_notes_count: 22, source_branch: "fix", target_branch: "main", merge_status: "can_be_merged", detailed_merge_status: "requested_changes", updated_at: "2026-08-08T00:00:00Z", web_url: "https://gitlab.com/g/s/p/-/merge_requests/7" }];
+			return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+		}));
 		const { status, body } = await get("/pulls", gitlabRepo);
-		expect(status).toBe(400);
-		expect(body.error).toContain("GitLab");
-		expect(urls).toEqual([]);
+		expect(status).toBe(200);
+		expect(body.repo).toBe("group/sub/project");
+		const pulls = body.pulls as Array<Record<string, unknown>>;
+		// `iid`, not the instance-wide `id`; and no conflicts AND not mergeable is GitHub's
+		// `mergeable:true, mergeable_state:"blocked"` — the two fields say different things.
+		expect(pulls[0]).toMatchObject({ number: 7, state: "open", mergeable: true, mergeableState: "blocked", review: "changes_requested" });
+		expect(pulls[0].checks).toMatchObject({ status: "completed", conclusion: "success" });
+		expect(urls.some((u) => u.startsWith("https://gitlab.com/api/v4/projects/group%2Fsub%2Fproject/merge_requests"))).toBe(true);
+		expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
+		expect(urls.some((u) => u.includes("bitbucket.org"))).toBe(false);
 	});
 });
 

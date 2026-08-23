@@ -69,14 +69,16 @@ export interface GitProvider {
 	 */
 	nestedNamespaces?: boolean;
 	/**
-	 * What the platform can actually DRIVE for this host today — not what the host offers.
-	 * Bitbucket has issues and pipelines; PAGS has no client for either, and a surface that
-	 * claims otherwise is worse than one that says "not yet".
+	 * What the platform can actually DRIVE for this host today — not what the host offers. A
+	 * surface that claims a capability it has no client for is worse than one that says "not
+	 * yet", because the owner goes looking for the setup mistake they did not make.
 	 *
-	 * The three flags move INDEPENDENTLY, which is the point of their being three. GitLab reads
-	 * issues and pipelines (`lib/gitlab-api.ts`) but not merge requests, so `pulls:false` is a
-	 * true statement about that provider rather than a leftover — a single `hosted: boolean`
-	 * would have forced the MR client into this change to avoid lying about it.
+	 * The three flags move INDEPENDENTLY, which is the point of their being three, and they have
+	 * now moved independently twice. GitLab and Bitbucket shipped `{issues:true, builds:true,
+	 * pulls:false}` in phases 3 and 4 — a true statement at the time, because neither had a
+	 * merge-request client — and `pulls` turned true separately once `lib/gitlab-mrs.ts` and
+	 * `lib/bitbucket-prs.ts` existed with their mappings pinned. A single `hosted: boolean`
+	 * would have forced all three to land together or none to land at all.
 	 */
 	supports: { issues: boolean; builds: boolean; pulls: boolean };
 }
@@ -116,12 +118,17 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		credential: "vault-token",
 		vaultProvider: "gitlab",
 		nestedNamespaces: true,
-		// Issues and pipelines are LIVE (#221 phase 3, `lib/gitlab-api.ts`) — read-only, over the
-		// same vault PAT the clone already uses, with public projects readable unauthenticated.
-		// Merge requests are not: `lib/github-prs.ts` is a substantial client (checks, review
-		// state, mergeability) and GitLab's MR API differs enough that claiming it from an
-		// untested mapping is the failure mode this flag exists to prevent.
-		supports: { issues: true, builds: true, pulls: false },
+		// All three are LIVE, read-only, over the same vault PAT the clone already uses, with
+		// public projects readable unauthenticated: issues and pipelines from `lib/gitlab-api.ts`
+		// (#221 phase 3), merge requests from `lib/gitlab-mrs.ts`.
+		//
+		// `pulls` stayed false until the mapping was real rather than assumed, and finding out
+		// what "real" meant took a live probe: an MR's checks CANNOT be correlated by sha the way
+		// `github-prs.ts` does it, because a fork's pipeline runs in the fork's project and the
+		// target project answers 200 with an empty list. `state=closed` also excludes merged MRs
+		// here, and `not[state]` is silently ignored. Each of those looks correct in review and
+		// is wrong in production, which is what the flag was protecting against.
+		supports: { issues: true, builds: true, pulls: true },
 	},
 	{
 		id: "bitbucket",
@@ -141,13 +148,17 @@ export const GIT_PROVIDERS: GitProvider[] = [
 		// removing them anyway.
 		credential: "vault-token",
 		vaultProvider: "bitbucket",
-		// Issues and pipelines are LIVE (#221 phase 4, `lib/bitbucket-api.ts`) — read-only, over
-		// the same vault token the clone uses, with public repos readable unauthenticated. Pull
-		// requests are not: `lib/github-prs.ts` is a substantial client (checks, review state,
-		// mergeability, run correlation) and Bitbucket's PR API differs enough that claiming it
-		// from an untested mapping is the failure mode these three independent flags exist to
-		// prevent.
-		supports: { issues: true, builds: true, pulls: false },
+		// All three are LIVE, read-only, over the same vault token the clone uses, with public
+		// repos readable unauthenticated: issues and pipelines from `lib/bitbucket-api.ts` (#221
+		// phase 4), pull requests from `lib/bitbucket-prs.ts`.
+		//
+		// `pulls` stayed false until the mapping was real, and the live probe that made it real
+		// found the trap: OMITTING `state` on the pull-requests endpoint returns OPEN ONLY — the
+		// exact inverse of the issues endpoint, where omitting it is how `all` is expressed. A
+		// repo holding 139 pull requests answered `size: 0`. Bitbucket also answers no
+		// mergeability at all, so `mergeable` stays null rather than borrowing GitHub's word for
+		// a question it was never asked.
+		supports: { issues: true, builds: true, pulls: true },
 	},
 	{
 		id: "other",

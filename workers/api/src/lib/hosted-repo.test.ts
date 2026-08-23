@@ -23,11 +23,18 @@ const bb = vi.hoisted(() => ({
 	readBitbucketIssue: vi.fn(async () => null),
 	listBitbucketPipelines: vi.fn(async () => [{ status: "completed", conclusion: "failure" }]),
 }));
+/** The three pull-request clients, one per host — the seam this change adds. */
+const ghp = vi.hoisted(() => ({ listPulls: vi.fn(async () => [{ number: 1, title: "gh-pr" }]), readPull: vi.fn(async () => ({ number: 1, title: "gh-pr" })) }));
+const glp = vi.hoisted(() => ({ listGitlabPulls: vi.fn(async () => [{ number: 3, title: "gl-mr" }]), readGitlabPull: vi.fn(async () => ({ number: 3, title: "gl-mr" })) }));
+const bbp = vi.hoisted(() => ({ listBitbucketPulls: vi.fn(async () => [{ number: 7, title: "bb-pr" }]), readBitbucketPull: vi.fn(async () => ({ number: 7, title: "bb-pr" })) }));
 vi.mock("./github-issues.js", () => gh);
 vi.mock("./gitlab-api.js", () => gl);
 vi.mock("./bitbucket-api.js", () => bb);
+vi.mock("./github-prs.js", () => ghp);
+vi.mock("./gitlab-mrs.js", () => glp);
+vi.mock("./bitbucket-prs.js", () => bbp);
 
-import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedBuilds, listHostedIssues } from "./hosted-repo.js";
+import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedBuilds, listHostedIssues, listHostedPulls, readHostedPull } from "./hosted-repo.js";
 import { readGithubCache } from "./github-cache.js";
 import type { Env } from "../types.js";
 
@@ -58,11 +65,17 @@ describe("hostedReadRefusal — three separate claims, not one", () => {
 		expect(hostedReadRefusal({}, "issues")).not.toBeNull();
 	});
 
-	it("a GitLab repo is allowed issues and builds, and refused pull requests", () => {
+	it("a GitLab repo with a project path is allowed all three surfaces", () => {
+		// It was allowed issues and builds and refused `pulls` while there was no merge-request
+		// client. There is one now (`gitlab-mrs.ts`), so the flag moved — independently, which is
+		// the whole reason `supports` is three booleans and not one.
 		const repo = { provider: "gitlab", repoSlug: "group/sub/project" };
-		expect(hostedReadRefusal(repo, "issues")).toBeNull();
-		expect(hostedReadRefusal(repo, "builds")).toBeNull();
-		expect(hostedReadRefusal(repo, "pulls")).toContain("GitLab");
+		for (const f of ["issues", "builds", "pulls"] as const) expect(hostedReadRefusal(repo, f), f).toBeNull();
+	});
+
+	it("a Bitbucket repo with a workspace/repo slug is allowed all three surfaces", () => {
+		const repo = { provider: "bitbucket", repoSlug: "team/widget" };
+		for (const f of ["issues", "builds", "pulls"] as const) expect(hostedReadRefusal(repo, f), f).toBeNull();
 	});
 
 	it("distinguishes 'we don't know the coordinate' from 'we can't drive this host'", () => {
@@ -73,7 +86,10 @@ describe("hostedReadRefusal — three separate claims, not one", () => {
 		expect(unknown).toMatch(/project path/);
 		expect(unknown).not.toMatch(/yet/);
 		// And the other direction: coordinate perfectly well known, surface we have no client for.
-		expect(hostedReadRefusal({ provider: "bitbucket", repoSlug: "team/thing" }, "pulls")).toMatch(/yet/);
+		// `other` is the only provider left in that position now that all three hosted rows read
+		// pull requests — which is the point: the sentence is chosen by the true reason, not by a
+		// provider name someone hardcoded.
+		expect(hostedReadRefusal({ provider: "bitbucket", repoSlug: "team/thing" }, "pulls")).toBeNull();
 		// …and a host we have no integration for at all, which is a third and different sentence.
 		expect(hostedReadRefusal({ provider: "other", repoSlug: "team/thing" }, "issues")).toMatch(/no integration/);
 	});
@@ -83,9 +99,14 @@ describe("hostedReadRefusal — three separate claims, not one", () => {
 	});
 
 	it("never says 'isn't connected to GitHub' to a repo on another host", () => {
+		// Driven with NO coordinate so every provider actually produces a sentence — otherwise
+		// this passes vacuously on the two whose surfaces are now all readable.
 		for (const provider of ["gitlab", "bitbucket", "other"]) {
-			const msg = hostedReadRefusal({ provider, repoSlug: "a/b" }, "pulls") ?? "";
-			expect(msg, provider).not.toMatch(/connected to GitHub/i);
+			for (const f of ["issues", "builds", "pulls"] as const) {
+				const msg = hostedReadRefusal({ provider, repoSlug: null }, f) ?? "";
+				expect(msg, `${provider}/${f}`).not.toBe("");
+				expect(msg, `${provider}/${f}`).not.toMatch(/connected to GitHub/i);
+			}
 		}
 	});
 });
@@ -137,6 +158,65 @@ describe("dispatch — the right client, and only the right client", () => {
 		// "Asked, and there are no builds yet" is a different and useful answer from "could not
 		// ask" — collapsing them shows a healthy project as permanently unavailable.
 		expect(await latestHostedBuild(env, "u1", { provider: "gitlab", repoSlug: "g/p" })).toEqual({ available: true, run: null });
+	});
+
+	/**
+	 * Pull requests, and the leak that has no shape check.
+	 *
+	 * A Bitbucket slug `team/widget` IS a well-formed `owner/repo`, so a dispatch mistake here
+	 * would build an AUTHENTICATED GitHub request against a namespace nobody asked about — and
+	 * nothing downstream would notice, because the request would be perfectly well-formed. Every
+	 * assertion below is therefore negative as well as positive.
+	 */
+	it("sends each host's pull requests to its OWN client, and to no other", async () => {
+		expect((await listHostedPulls(env, "u1", { provider: "github", githubRepo: "acme/widget" }))[0].title).toBe("gh-pr");
+		expect(ghp.listPulls).toHaveBeenCalledTimes(1);
+		expect(glp.listGitlabPulls).not.toHaveBeenCalled();
+		expect(bbp.listBitbucketPulls).not.toHaveBeenCalled();
+		vi.clearAllMocks();
+
+		// `group/sub/project` is not an `owner/repo` at all — a leak would be caught by shape.
+		expect((await listHostedPulls(env, "u1", { provider: "gitlab", repoSlug: "group/sub/project" }))[0].title).toBe("gl-mr");
+		expect(glp.listGitlabPulls).toHaveBeenCalledTimes(1);
+		expect(ghp.listPulls).not.toHaveBeenCalled();
+		expect(bbp.listBitbucketPulls).not.toHaveBeenCalled();
+		vi.clearAllMocks();
+
+		// `team/widget` IS one, and this is the assertion that matters most on this seam.
+		expect((await listHostedPulls(env, "u1", { provider: "bitbucket", repoSlug: "team/widget" }))[0].title).toBe("bb-pr");
+		expect(bbp.listBitbucketPulls).toHaveBeenCalledTimes(1);
+		expect(ghp.listPulls).not.toHaveBeenCalled();
+		expect(glp.listGitlabPulls).not.toHaveBeenCalled();
+	});
+
+	it("reads ONE pull request through the same three-way dispatch", async () => {
+		expect((await readHostedPull(env, "u1", { provider: "bitbucket", repoSlug: "team/widget" }, 7))?.title).toBe("bb-pr");
+		expect(bbp.readBitbucketPull).toHaveBeenCalledWith(env, "u1", "team/widget", 7);
+		expect(ghp.readPull).not.toHaveBeenCalled();
+		expect(glp.readGitlabPull).not.toHaveBeenCalled();
+		vi.clearAllMocks();
+		expect((await readHostedPull(env, "u1", { provider: "gitlab", repoSlug: "group/sub/project" }, 3))?.title).toBe("gl-mr");
+		expect(glp.readGitlabPull).toHaveBeenCalledWith(env, "u1", "group/sub/project", 3);
+		expect(ghp.readPull).not.toHaveBeenCalled();
+	});
+
+	it("passes the caller's list options through UNCHANGED to whichever client answers", async () => {
+		// `state`/`limit`/`enrich` are the panel's controls; a dispatcher that dropped them would
+		// silently serve open PRs to someone who asked for closed ones.
+		await listHostedPulls(env, "u1", { provider: "gitlab", repoSlug: "g/p" }, { state: "closed", enrich: false, limit: 5 });
+		expect(glp.listGitlabPulls).toHaveBeenCalledWith(env, "u1", "g/p", { state: "closed", enrich: false, limit: 5 });
+	});
+
+	it("calls NO pull client for a local checkout or an unintegrated host", async () => {
+		expect(await listHostedPulls(env, "u1", { provider: "local" })).toEqual([]);
+		expect(await listHostedPulls(env, "u1", { provider: "other", repoSlug: "x/y" })).toEqual([]);
+		// A hosted provider with no recorded coordinate must not be asked either — the bare-name
+		// guard the five original call sites had.
+		expect(await listHostedPulls(env, "u1", { provider: "gitlab", repoSlug: "project" })).toEqual([]);
+		expect(await readHostedPull(env, "u1", { provider: "other", repoSlug: "x/y" }, 1)).toBeNull();
+		expect(ghp.listPulls).not.toHaveBeenCalled();
+		expect(glp.listGitlabPulls).not.toHaveBeenCalled();
+		expect(bbp.listBitbucketPulls).not.toHaveBeenCalled();
 	});
 
 	it("canReadHosted agrees with hostedReadRefusal, so the panel and the routes cannot drift", () => {

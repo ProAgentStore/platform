@@ -20,8 +20,8 @@
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { getRepo } from "../lib/coding-store.js";
-import { hostedCoordinate, hostedReadRefusal } from "../lib/hosted-repo.js";
-import { listPulls, readPull, type PullSummary } from "../lib/github-prs.js";
+import { hostedCoordinate, hostedReadRefusal, listHostedPulls, readHostedPull } from "../lib/hosted-repo.js";
+import type { PullSummary } from "../lib/github-prs.js";
 import { pullActsFor, type PullAttribution } from "../lib/pull-attribution.js";
 import { requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
@@ -59,10 +59,10 @@ export function registerPullRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	 * Open pull requests for a repo. `?state=open|closed|all` (default open), `?enrich=0` to skip
 	 * the per-PR mergeable/review lookups.
 	 *
-	 * 400 for a repo whose host has no pull-request client, phrased by provider — GitHub is still
-	 * the only one (`supports.pulls`), and a GitLab repo is told merge requests are unsupported
-	 * rather than that it "isn't connected to GitHub". GitLab issues and pipelines DO work (#221);
-	 * these three flags move independently for exactly that reason.
+	 * 400 for a repo whose host has no pull-request client, phrased by provider — a local
+	 * checkout, or a host PAGS has no integration for, is told which of those it is rather than
+	 * that it "isn't connected to GitHub". GitHub, GitLab and Bitbucket all answer this now
+	 * (`supports.pulls`, #221), each through its own client behind `listHostedPulls`.
 	 */
 	codingRoutes.get("/:instanceId/coding/repos/:repoId/pulls", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
@@ -74,7 +74,12 @@ export function registerPullRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// `hostedCoordinate` rather than `githubRepo!` keeps one rule for what a repo is called.
 		const slug = hostedCoordinate(repo);
 		const state = c.req.query("state");
-		const pulls = await listPulls(c.env, uid, slug, {
+		// Through the DISPATCHER, never `github-prs.ts` directly. `hostedReadRefusal` above now
+		// says yes to three providers, and a Bitbucket slug like `team/widget` is a perfectly
+		// well-formed `owner/repo` — so calling the GitHub client here would build an
+		// authenticated request against a GitHub namespace nobody asked about, and no shape check
+		// anywhere would catch it.
+		const pulls = await listHostedPulls(c.env, uid, repo, {
 			state: state === "closed" || state === "all" ? state : "open",
 			enrich: c.req.query("enrich") !== "0",
 		});
@@ -95,7 +100,7 @@ export function registerPullRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		if (refusal) return c.json({ error: refusal }, 400);
 		const number = Number.parseInt(c.req.param("number"), 10);
 		if (!Number.isFinite(number)) return c.json({ error: "Invalid pull request number" }, 400);
-		const pull = await readPull(c.env, uid, hostedCoordinate(repo), number);
+		const pull = await readHostedPull(c.env, uid, repo, number);
 		if (!pull) throw new HttpError(404, "Pull request not found");
 		const acts = await pullActsFor(c.env, instanceId, uid);
 		return c.json({ pull: { ...pull, agentAct: acts.get(pull.number) ?? null } });

@@ -140,13 +140,14 @@ describe("the registry itself", () => {
 	});
 
 	it("declares what each host can actually be ASKED, one flag per surface", () => {
-		// The three flags move independently on purpose. GitLab and Bitbucket read issues and
-		// pipelines (`gitlab-api.ts`, `bitbucket-api.ts`) but neither has a merge/pull-request
-		// client, and a single `hosted:boolean` would have made turning the first two on assert
-		// the third — which is exactly what phase 4 would have been forced to do here.
-		expect(gitProviderFor("github").supports).toEqual({ issues: true, builds: true, pulls: true });
-		expect(gitProviderFor("gitlab").supports).toEqual({ issues: true, builds: true, pulls: false });
-		expect(gitProviderFor("bitbucket").supports).toEqual({ issues: true, builds: true, pulls: false });
+		// The three flags move independently on purpose, and they have now moved independently
+		// twice: GitLab and Bitbucket shipped issues+builds with `pulls:false` (phases 3 and 4,
+		// when neither had a merge/pull-request client), and `pulls` turned true on its own once
+		// `gitlab-mrs.ts` and `bitbucket-prs.ts` existed. A single `hosted:boolean` would have
+		// forced all three to land at once or none to land at all.
+		for (const id of ["github", "gitlab", "bitbucket"]) {
+			expect(gitProviderFor(id).supports, id).toEqual({ issues: true, builds: true, pulls: true });
+		}
 		for (const id of ["other", "local"]) {
 			expect(gitProviderFor(id).supports, id).toEqual({ issues: false, builds: false, pulls: false });
 		}
@@ -166,23 +167,27 @@ describe("the registry itself", () => {
 
 	it("supportsHostedFeature is the only read of the flags, and is not truthy-loose", () => {
 		expect(supportsHostedFeature(gitProviderFor("gitlab"), "issues")).toBe(true);
-		expect(supportsHostedFeature(gitProviderFor("gitlab"), "pulls")).toBe(false);
+		expect(supportsHostedFeature(gitProviderFor("gitlab"), "pulls")).toBe(true);
+		expect(supportsHostedFeature(gitProviderFor("other"), "pulls")).toBe(false);
 		expect(supportsHostedFeature(gitProviderFor("local"), "builds")).toBe(false);
 	});
 });
 
 describe("hostedFeatureUnavailable — an unavailable surface says WHY, honestly", () => {
 	it("names the provider and the gap for a surface it genuinely cannot drive", () => {
-		// Merge requests: GitLab HAS them, PAGS has no client. "yet" is the true word.
-		const msg = hostedFeatureUnavailable(gitProviderFor("gitlab"), "pulls");
-		expect(msg).toContain("GitLab");
-		expect(msg).toMatch(/yet/);
+		// The "not yet" sentence still has to exist and still has to be true — but the provider it
+		// is true OF has changed. GitLab's merge requests are live, so the surface that genuinely
+		// cannot be driven is now `other`: a real remote on a host PAGS has no client for.
+		const msg = hostedFeatureUnavailable(gitProviderFor("other"), "pulls");
+		expect(msg).toMatch(/Pull requests/);
 		// The old wording told a perfectly connected GitLab repo it "isn't connected to GitHub",
 		// which reads as a setup mistake the owner could fix. It cannot be fixed by the owner.
 		expect(msg).not.toMatch(/isn't connected to GitHub/);
-		// And it must not say GitHub is the only thing PAGS drives — since #221 phase 3 that is
-		// false, and this sentence is read by a GitLab user whose Issues panel works.
+		// And it must not say GitHub is the only thing PAGS drives — since #221 that is false on
+		// all three surfaces, and this sentence is read by owners whose panels work.
 		expect(msg).not.toMatch(/GitHub only/);
+		// A GitLab repo whose project path IS recorded is refused nothing at all now.
+		expect(supportsHostedFeature(gitProviderFor("gitlab"), "pulls")).toBe(true);
 	});
 
 	it("distinguishes a MISSING coordinate from an undrivable host, per provider", () => {
@@ -201,7 +206,12 @@ describe("hostedFeatureUnavailable — an unavailable surface says WHY, honestly
 		// `other` is the host we genuinely cannot drive — and it must not ask the owner to re-add a
 		// repo whose coordinate is already perfectly well recorded.
 		expect(hostedFeatureUnavailable(gitProviderFor("other"), "issues")).toMatch(/no integration/);
-		expect(hostedFeatureUnavailable(gitProviderFor("bitbucket"), "pulls")).toMatch(/yet/);
+		// Bitbucket reads pull requests since this change, so ITS pulls sentence is the
+		// missing-coordinate one too — the "not supported yet" wording now belongs to `other`
+		// alone, which is the only row left with a false flag beside `local`.
+		expect(hostedFeatureUnavailable(gitProviderFor("bitbucket"), "pulls")).toMatch(/owner\/name/);
+		expect(hostedFeatureUnavailable(gitProviderFor("bitbucket"), "pulls")).not.toMatch(/yet/);
+		expect(hostedFeatureUnavailable(gitProviderFor("other"), "pulls")).toMatch(/no integration/);
 	});
 
 	it("still tells a local checkout the actionable thing", () => {

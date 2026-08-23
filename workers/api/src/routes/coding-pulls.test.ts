@@ -14,8 +14,15 @@ import { pullsETag, registerPullRoutes, withAttribution } from "./coding-pulls.j
 import type { PullSummary } from "../lib/github-prs.js";
 import type { Env } from "../types.js";
 
+// The route goes through `hosted-repo.ts`'s dispatcher, so the REAL dispatch runs here and only
+// the three per-host clients are doubled. That is deliberate: mocking the dispatcher would leave
+// the one decision this route makes — which host to ask — untested at the route level.
 const { listPulls, readPull } = vi.hoisted(() => ({ listPulls: vi.fn(), readPull: vi.fn() }));
+const { listGitlabPulls, readGitlabPull } = vi.hoisted(() => ({ listGitlabPulls: vi.fn(), readGitlabPull: vi.fn() }));
+const { listBitbucketPulls, readBitbucketPull } = vi.hoisted(() => ({ listBitbucketPulls: vi.fn(), readBitbucketPull: vi.fn() }));
 vi.mock("../lib/github-prs.js", () => ({ listPulls, readPull }));
+vi.mock("../lib/gitlab-mrs.js", () => ({ listGitlabPulls, readGitlabPull }));
+vi.mock("../lib/bitbucket-prs.js", () => ({ listBitbucketPulls, readBitbucketPull }));
 
 const SECRET = "coding-pulls-test-secret";
 const UID = "user-1";
@@ -72,6 +79,8 @@ function buildApp(repo: Record<string, unknown> | null, acts: Array<Record<strin
 
 const GH_REPO = { id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "widget", github_repo: "acme/widget", provider: "github" };
 const LOCAL_REPO = { id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "widget", github_repo: null, provider: "local" };
+const GL_REPO = { id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "project", github_repo: null, provider: "gitlab", repo_slug: "group/sub/project" };
+const BB_REPO = { id: "repo-1", instance_id: INSTANCE, user_id: UID, name: "widget", github_repo: null, provider: "bitbucket", repo_slug: "team/widget" };
 
 async function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, headers: Record<string, string> = {}) {
 	const token = await signSession(UID, SECRET, { roles: ["user"] });
@@ -81,6 +90,10 @@ async function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, headers
 beforeEach(() => {
 	listPulls.mockReset();
 	readPull.mockReset();
+	listGitlabPulls.mockReset();
+	readGitlabPull.mockReset();
+	listBitbucketPulls.mockReset();
+	readBitbucketPull.mockReset();
 });
 
 describe("GET …/pulls", () => {
@@ -138,6 +151,28 @@ describe("GET …/pulls", () => {
 		listPulls.mockResolvedValue([{ ...PULL, review: "changes_requested" }]);
 		const again = await get(app, env, "/pulls", { "If-None-Match": etag });
 		expect(again.status).toBe(200);
+	});
+
+	it("asks the repo's OWN host — a Bitbucket slug never reaches api.github.com", async () => {
+		// The leak this route is the last line of defence against: `team/widget` is a perfectly
+		// well-formed `owner/repo`, so calling the GitHub client would build an AUTHENTICATED
+		// request against a GitHub namespace nobody asked about, and every shape check downstream
+		// would pass. Asserting the negative is the only thing that catches it.
+		listBitbucketPulls.mockResolvedValue([{ ...PULL, url: "https://bitbucket.org/team/widget/pull-requests/42" }]);
+		const bb = buildApp(BB_REPO);
+		const res = await get(bb.app, bb.env, "/pulls");
+		expect(res.status).toBe(200);
+		expect(((await res.json()) as { repo: string }).repo).toBe("team/widget");
+		expect(listBitbucketPulls).toHaveBeenCalledWith(expect.anything(), UID, "team/widget", { state: "open", enrich: true });
+		expect(listPulls).not.toHaveBeenCalled();
+		expect(listGitlabPulls).not.toHaveBeenCalled();
+
+		// And the nested GitLab path, which cannot be an `owner/repo` at all.
+		listGitlabPulls.mockResolvedValue([PULL]);
+		const gl = buildApp(GL_REPO);
+		expect((await get(gl.app, gl.env, "/pulls")).status).toBe(200);
+		expect(listGitlabPulls).toHaveBeenCalledWith(expect.anything(), UID, "group/sub/project", { state: "open", enrich: true });
+		expect(listPulls).not.toHaveBeenCalled();
 	});
 
 	it("refuses a repo with no GitHub coordinate by naming its provider, not a setup mistake", async () => {
