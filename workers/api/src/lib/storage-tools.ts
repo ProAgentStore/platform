@@ -5,6 +5,7 @@
 import { AgentStorageEngine } from "../agent-storage.js";
 import { confirmationLinkFound, confirmationLinkWithoutLinks } from "./confirmation-link-result.js";
 import { executePdfTool, PDF_STORAGE_TOOLS } from "./pdf-storage-tools.js";
+import { fileWindowResult, knowledgeDocResult, listKnowledgeResult, searchKnowledgeResult } from "./knowledge-result.js";
 import type { CollectionField } from "../agent-storage-types.js";
 import type { ToolCallResult, ToolDef } from "./tools.js";
 import { listRepos, listSessions } from "./coding-store.js";
@@ -274,16 +275,15 @@ export async function executeStorageTool(
 				const found = await searchKnowledgeFor(engine, { query, topK, sourceType }, ctx);
 				if (!found.ok) return fail(call.name, found.message);
 				if (found.results.length === 0) return ok(call.name, RETRIEVAL_EMPTY_MESSAGE);
-				return ok(
-					call.name,
-					`${JSON.stringify(found.results, null, 2)}\n\nTo read around a file match and quote it exactly: read_file with id=sourceId and offset ≈ (the number after "_" in the match id) × 512.`,
-				);
+				// Fenced: the chunks are the untrusted corpus, and the automatic RAG block over the
+				// same bytes has been fenced since #263. Our read_file hint stays outside (#747).
+				return ok(call.name, searchKnowledgeResult(found.results));
 			}
 
 			case "list_knowledge": {
 				const docs = await engine.listKnowledge();
 				if (docs.length === 0) return ok(call.name, "The knowledge base is empty.");
-				return ok(call.name, JSON.stringify(docs, null, 2));
+				return ok(call.name, listKnowledgeResult(docs));
 			}
 
 			case "read_knowledge": {
@@ -291,7 +291,7 @@ export async function executeStorageTool(
 				if (!id) return fail(call.name, "id required");
 				const doc = await engine.readKnowledge(id);
 				if (!doc) return fail(call.name, `No knowledge document with id ${id}. Use list_knowledge to get valid ids.`);
-				return ok(call.name, JSON.stringify({ id: doc.id, title: doc.title, content: doc.content }, null, 2));
+				return ok(call.name, knowledgeDocResult({ id: doc.id, title: doc.title, content: doc.content }));
 			}
 
 			case "update_knowledge": {
@@ -361,7 +361,7 @@ export async function executeStorageTool(
 					const slice = extracted.text.slice(offset, offset + WINDOW);
 					if (!slice) return fail(call.name, `offset ${offset} is past the end of the document (${total} chars)`);
 					const more = offset + WINDOW < total ? `\n...[${total - offset - WINDOW} more chars — call read_file again with offset=${offset + WINDOW}]` : "";
-					return ok(call.name, `File: ${extracted.meta.name} (chars ${offset}–${Math.min(offset + WINDOW, total)} of ${total})\n\n${slice}${more}`);
+					return ok(call.name, fileWindowResult(`File: ${extracted.meta.name} (chars ${offset}–${Math.min(offset + WINDOW, total)} of ${total})`, slice, more));
 				}
 				const file = await engine.fileGet(id);
 				if (!file) return fail(call.name, `File not found: ${id}`);
@@ -380,7 +380,7 @@ export async function executeStorageTool(
 				);
 				const slice = text.slice(offset, offset + WINDOW);
 				const more = offset + WINDOW < text.length ? `\n...[${text.length - offset - WINDOW} more chars — call read_file again with offset=${offset + WINDOW}]` : "";
-				return ok(call.name, `File: ${file.meta.name} (chars ${offset}–${Math.min(offset + WINDOW, text.length)} of ${text.length})\n\n${slice}${more}`);
+				return ok(call.name, fileWindowResult(`File: ${file.meta.name} (chars ${offset}–${Math.min(offset + WINDOW, text.length)} of ${text.length})`, slice, more));
 			}
 
 			case "delete_file": {
