@@ -200,4 +200,28 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.12 is published.
 	"0.1.13": "sha256:442ab86457e43cdf6e11ecf72d7280a68f402ebaf0439607b1cb10a11a815ee2",
+	// 0.1.14 (#743): a sentence added to `SERVER_INSTRUCTIONS`, which is the one non-tool input to
+	// this hash and the only reason this bump exists. No tool name, `inputSchema`, annotation or
+	// `outputSchema` moved.
+	//
+	// What it says is the routing rule this surface never carried: an instance's OWN connector
+	// tools are one level down, so `list_instance_tools` + `call_instance_tool` comes BEFORE
+	// `coding_session_message`. Measured 2026-08-23 — an external client asked to triage a repo's
+	// issues, told its user it had "no GitHub connector", drove the owner's CLI to run
+	// `gh issue list`, read a truncated pane, and advised configuring a connector that was already
+	// declared, consented and callable on that instance. `grep -c "call_instance_tool\|
+	// list_instance_tools"` over `platform-guide.ts` returned 0, and `SERVER_INSTRUCTIONS` named
+	// neither: the pattern was undiscoverable from the two documents whose job is to describe this
+	// platform to a model.
+	//
+	// A result SHAPE also changed, which this hash cannot see and which is therefore recorded here
+	// rather than left to be found: `coding_repos_list` answers `{repos: […]}` instead of a bare
+	// array, with an optional `hint` beside it. Same change `my_instances` made under a frozen
+	// version in #561 — the gap 0.1.5 and 0.1.6 also had to name — so the bump is justified twice
+	// over, as it was for those two.
+	//
+	// The description changes shipping with this (`coding_session_message` saying it is the
+	// fallback) are NOT what moved the hash; descriptions are excluded from the fingerprint on
+	// purpose, per DECISION 1 above. Appended, never edited in place: 0.1.13 is published.
+	"0.1.14": "sha256:586017fa55be526d398c55945cedee7cff0db4ce6d6cd083ccdd940dd59d526d",
 };

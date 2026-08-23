@@ -32,10 +32,59 @@ import { runStateSentence } from "./state-vocabulary.js";
 type TokenResolver = (provided?: string) => string | null;
 type SafetyResolver = (provided?: string) => SafetyContext;
 
-/** A repo row as the repos listing returns it — only the two fields this file names. */
+/** A repo row as the repos listing returns it — only the three fields this file names. */
 export interface CodingRepoRow {
 	id: string;
 	name?: string;
+	/** `owner/repo` when the repo is hosted on GitHub; absent for a local-only checkout (#743). */
+	githubRepo?: string;
+}
+
+/** The half of the routing hint that does not depend on which repo it is about. */
+const ROUTING_ADVICE =
+	"this agent may have its own GitHub tools — issues, pull requests, workflow runs — reachable directly: " +
+	"call list_instance_tools to see which it may run, then call_instance_tool to run one. " +
+	"Prefer that over typing a `gh` command into the CLI: it answers with structured data rather than a truncated pane.";
+
+/**
+ * The one sentence that says a terminal is not the only way to reach this repo's GitHub (#743).
+ *
+ * A RESULT, deliberately. The rule also went into `SERVER_INSTRUCTIONS` and `PLATFORM_GUIDE`, but
+ * both of those reach a client at `initialize` or out of a document, and the population that fails
+ * here is the one whose `tools/list` is months old — #670 is open on exactly that, and #717 was
+ * invisible for a day on the same mechanism. A result is computed fresh on every call, so this
+ * half cannot go stale and costs no surface bump. It is also the only half that can name THIS
+ * repo.
+ *
+ * "MAY have" is not hedging for its own sake. This worker knows the repo is on GitHub; it does not
+ * know whether the instance DECLARES `github_list_issues`, whether the owner switched it off, or
+ * whether write consent was granted — all three live in `/v1/instances/:id/tools`, which is what
+ * `list_instance_tools` reads. Asserting the capability here would need a second round trip on
+ * every open, and asserting it WITHOUT one would be the failure this issue is about with the sign
+ * flipped: telling a caller a tool exists when the agent cannot run it. So the hint names the
+ * question and the tool that answers it, and claims nothing else.
+ *
+ * Empty string for a local-only repo: there is no GitHub coordinate to route to, and a hint that
+ * fires on every repo is one a reader learns to skip.
+ */
+export function repoToolRoutingHint(repo: CodingRepoRow): string {
+	if (!repo.githubRepo) return "";
+	return ` This repo is ${repo.githubRepo} on GitHub, and ${ROUTING_ADVICE}`;
+}
+
+/**
+ * The same routing hint for a LISTING, which is the other place a caller first learns a repo has a
+ * GitHub coordinate (#743, and option 4 of the issue names both tools).
+ *
+ * Returned as a sibling field rather than appended to prose, because this tool answers with JSON.
+ * Empty when no repo in the list is on GitHub — see {@link repoToolRoutingHint} for why an
+ * always-on hint is a hint nobody reads.
+ */
+export function reposToolRoutingHint(repos: CodingRepoRow[]): string {
+	const hosted = repos.map((r) => r.githubRepo).filter((slug): slug is string => Boolean(slug));
+	if (!hosted.length) return "";
+	const subject = hosted.length === 1 ? `${hosted[0]} is on GitHub` : `${hosted.join(", ")} are on GitHub`;
+	return `${subject}, and ${ROUTING_ADVICE}`;
 }
 
 /** What `POST /coding/sessions` answers with. `continuity` is present only when this call
@@ -174,7 +223,10 @@ export function registerCodingSessionTools(
 			const d = await openConversation(instance_id, sessionToken, resolved.repo.id, engine_id);
 			if (d?.error) return text(`Error opening the conversation on ${repoLabel(resolved.repo)}: ${d.error}`);
 			await audit(safetyFor(token), { tool: "coding_session_open", action: "completed", input: { instance_id, repoId: resolved.repo.id }, result: { sessionId: d.session?.id, mode: d.continuity?.mode } });
-			return text(openConversationText(repoLabel(resolved.repo), d));
+			// The routing hint rides on the OPEN rather than on the message (#743): by the time a
+			// caller is sending an instruction it has already chosen the terminal, and this is the
+			// call where the repo's GitHub coordinate first becomes known to it.
+			return text(openConversationText(repoLabel(resolved.repo), d) + repoToolRoutingHint(resolved.repo));
 		},
 	);
 
@@ -240,7 +292,16 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_session_message",
-		"Say something to the coding CLI working on a repo. If nothing is running there it WAKES the repo first — opening its conversation where the last one left off — so a follow-up instruction after a break just works. With several idle repos it asks which one you mean instead of picking.",
+		// The FALLBACK sentence is first because that is the decision a caller makes before it reads
+		// anything else here (#743). An external client concluded it had "no GitHub connector" and
+		// asked the owner's CLI to run `gh issue list` while `github_list_issues` was declared,
+		// consented and callable on that instance — then advised configuring a connector that
+		// already worked. A description reaches a client through its CACHED tool list, so this is
+		// the slowest of the four channels this fix uses and not the load-bearing one; the same rule
+		// is in `SERVER_INSTRUCTIONS`, in `PLATFORM_GUIDE`, and in `coding_session_open`'s result.
+		// It costs no version bump: descriptions are excluded from the surface fingerprint
+		// (`conformance.test.ts`, `surface-lock.ts` DECISION 1).
+		"Say something to the coding CLI working on a repo — the FALLBACK for work an instance tool cannot do, not the first path. Before using it, check list_instance_tools: anything the agent's own tools already cover (GitHub issues and pull requests, HTTP calls, search, its knowledge and files) should go through call_instance_tool, which returns structured data instead of a terminal pane this tool can only show you a truncated tail of. Use this for driving the engine itself: writing code, running the repo's own commands, anything that needs the checkout on the owner's machine. If nothing is running there it WAKES the repo first — opening its conversation where the last one left off — so a follow-up instruction after a break just works. With several idle repos it asks which one you mean instead of picking.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session — and if none is running, wakes the repo."),
@@ -312,7 +373,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_repos_list",
-		"List all repos registered in a coding instance, with their status and active sessions.",
+		"List all repos registered in a coding instance, with their status and active sessions. Answers `{repos, hint}` — `hint` is present when a repo is hosted on GitHub, and names the tools that reach it directly (list_instance_tools, then call_instance_tool) instead of through the terminal.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
@@ -320,8 +381,15 @@ export function registerCodingSessionTools(
 		async ({ instance_id, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as { repos?: unknown[] };
-			return jsonText(r.repos || []);
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as { repos?: CodingRepoRow[] };
+			const repos = r.repos || [];
+			// `{repos: […]}` rather than the bare array this returned before #743, so the routing
+			// hint has somewhere to live. Same shape change `my_instances` made in #561 and for the
+			// same reason — a list with nothing beside it can only ever answer one question. The
+			// fingerprint cannot see a result shape (it hashes what a host is TOLD about a tool),
+			// which is precisely why it is called out in this version's `SURFACE_LOCK` note.
+			const hint = reposToolRoutingHint(repos);
+			return jsonText(hint ? { repos, hint } : { repos });
 		},
 	);
 

@@ -20,9 +20,23 @@ import type { McpScope } from "./safety.js";
  * as required tool sequences … Keep the most important details in the first 512 characters."
  * So the sequence comes first and the safety vocabulary second — a caller that reads no
  * further than the cut still learns the order it has to call things in.
+ *
+ * The second sentence is the OTHER required sequence (#743). This surface is the management
+ * layer; an instance's own connector tools are one level down, and nothing told a caller they
+ * existed. Measured 2026-08-23: an external client asked to triage a repo's issues, concluded it
+ * had "no GitHub connector", and drove the owner's CLI to shell out for `gh issue list` — while
+ * `github_list_issues` was declared, consented and callable on that instance through
+ * `call_instance_tool`. It then advised the owner to configure a connector that was already
+ * working. That is a routing failure, not a model error: no string on this surface named the
+ * pattern. `platform_guide` carries the same rule for the population whose `tools/list` is
+ * cached (#703); this is the copy every client reads at `initialize`.
+ *
+ * `index.test.ts` asserts `my_instances` still falls inside the first 512 characters, so an
+ * addition goes AFTER the id-first sentence, never before it.
  */
 export const SERVER_INSTRUCTIONS = [
 	"ProAgentStore hosts server-side AI agents. Almost every tool acts on ONE agent instance, so start by getting an id: my_instances lists the ones the connected user already runs; list_agents is the public catalogue and subscribe_agent creates an instance from it.",
+	"An instance's OWN tools are one level down from this surface and are usually the direct path: list_instance_tools names what one instance may actually run — its GitHub, HTTP and search connectors as well as its own memory, files and knowledge — and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: driving a terminal to shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path.",
 	"To debug what an agent did, call agent_trace first (chat turns, steps and errors on one timeline), then instance_messages or list_errors for detail. usage_summary reports spend.",
 	"Tool annotations are accurate: readOnlyHint true means the tool only reads. A tool that changes state takes dry_run — call it that way first to see what would happen. The most consequential tools also require an exact confirm string and a connection holding the destructive scope; those refusals are real and cannot be argued past.",
 ].join(" ");
