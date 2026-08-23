@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkPublicHttpsUrl, safeFetch, SsrfError } from "./ssrf.js";
+import { checkPublicHttpsUrl, SAFE_FETCH_TIMEOUT_MS, safeFetch, SsrfError } from "./ssrf.js";
 
 describe("checkPublicHttpsUrl", () => {
 	it("allows normal public https URLs", () => {
@@ -182,5 +182,112 @@ describe("safeFetch — credentials must not cross an origin boundary", () => {
 		await safeFetch("https://vendor.example/api", { headers: { "X-Vendor-Token": "SECRET", "X-Trace-Id": "keep" } });
 		expect(seen[1]["x-vendor-token"]).toBeUndefined();
 		expect(seen[1]["x-trace-id"]).toBe("keep");
+	});
+});
+
+describe("safeFetch — every outbound call carries a deadline (#438)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	/**
+	 * A fetch stub that records the `signal` each hop was called with and walks `hops`.
+	 * `null` ends the chain with a 200.
+	 */
+	function traceSignals(hops: Array<string | null>) {
+		const seen: Array<AbortSignal | null | undefined> = [];
+		let i = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				seen.push(init.signal);
+				const next = hops[i++];
+				return next ? new Response(null, { status: 302, headers: { location: next } }) : new Response("ok", { status: 200 });
+			}),
+		);
+		return seen;
+	}
+
+	/** Replace `AbortSignal.timeout` with a signal we can fire on demand — no wall-clock wait. */
+	function controllableTimeout() {
+		const ctrl = new AbortController();
+		const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(ctrl.signal);
+		return { ctrl, spy };
+	}
+
+	/** A fetch that never settles on its own — it only ever rejects when the signal aborts. */
+	function abortOnlyFetch() {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				(_url: string, init: RequestInit) =>
+					new Promise<Response>((_resolve, reject) => {
+						init.signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+					}),
+			),
+		);
+	}
+
+	it("attaches a default deadline when the caller supplied no signal", async () => {
+		// The measured starting point: ZERO uses of AbortSignal.timeout anywhere in workers/api/src,
+		// so every connector, fetch_url and ingest call could hang for as long as the host chose.
+		const { ctrl, spy } = controllableTimeout();
+		const seen = traceSignals([null]);
+		await safeFetch("https://vendor.example/api");
+		expect(spy).toHaveBeenCalledWith(SAFE_FETCH_TIMEOUT_MS);
+		expect(seen).toEqual([ctrl.signal]); // it reaches fetch, rather than merely being constructed
+	});
+
+	it("that deadline actually aborts the in-flight request", async () => {
+		// Constructing a signal proves nothing; this proves it is wired to the socket.
+		const { ctrl } = controllableTimeout();
+		abortOnlyFetch();
+		const pending = safeFetch("https://vendor.example/slow");
+		ctrl.abort();
+		await expect(pending).rejects.toThrow(/aborted/i);
+	});
+
+	it("ONE deadline spans the whole redirect chain, not one per hop", async () => {
+		// Per-hop, a host that answers 302 five times gets 6× the budget — which hands the effective
+		// deadline to the remote host, the party this guard exists to distrust. The last hop is
+		// cross-origin on purpose: stripCredentialHeaders rebuilds the init there and must carry
+		// the signal through.
+		const { ctrl, spy } = controllableTimeout();
+		const seen = traceSignals(["https://vendor.example/b", "https://other.example/c", null]);
+		await safeFetch("https://vendor.example/a");
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(seen).toEqual([ctrl.signal, ctrl.signal, ctrl.signal]);
+	});
+
+	it("does NOT clobber a caller-supplied signal — the caller's deadline wins", async () => {
+		// Composing with AbortSignal.any would take the EARLIER of the two, turning the floor into a
+		// ceiling and silently shortening probeReachable's documented 30s maximum. A caller that
+		// passed a signal has already decided, and this is how it asks for MORE time.
+		const spy = vi.spyOn(AbortSignal, "timeout");
+		const caller = new AbortController();
+		const seen = traceSignals(["https://other.example/b", null]);
+		await safeFetch("https://vendor.example/a", { signal: caller.signal });
+		expect(spy).not.toHaveBeenCalled();
+		expect(seen).toEqual([caller.signal, caller.signal]);
+	});
+
+	it("a caller-supplied signal still aborts the request", async () => {
+		const caller = new AbortController();
+		abortOnlyFetch();
+		const pending = safeFetch("https://vendor.example/slow", { signal: caller.signal });
+		caller.abort();
+		await expect(pending).rejects.toThrow(/aborted/i);
+	});
+
+	it("the deadline is at least every budget the repo already chose for one outbound call", () => {
+		// Sizing, pinned rather than argued in prose: probeReachable (lib/steps.ts) lets a caller ask
+		// for 30_000ms to decide a stranger's endpoint is dead, and AI_FIRST_TOKEN_TIMEOUT_MS
+		// (lib/ai-deadlines.ts) puts "the provider has gone away" at 25_000ms. A default below those
+		// would mean adding a safety net silently shortened a budget somebody measured.
+		expect(SAFE_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+		// And absorbable by the request containing it: three tool-loop rounds against dead hosts must
+		// stay inside the 180_000ms this codebase already permits ONE model call.
+		expect(SAFE_FETCH_TIMEOUT_MS * 3).toBeLessThanOrEqual(180_000);
 	});
 });

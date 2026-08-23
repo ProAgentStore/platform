@@ -87,17 +87,72 @@ export class SsrfError extends Error {
 }
 
 /**
+ * Deadline applied to a `safeFetch` call whose caller supplied no `signal` of its own (#438).
+ *
+ * ── Why there is a number here at all
+ *
+ * Measured on `main` before this: `AbortSignal.timeout` appeared **0 times** in `workers/api/src`,
+ * and of the ~148 `fetch(`-matching lines only three files built an `AbortController`
+ * (`lib/user-ai.ts`, `lib/steps.ts`, `lib/mcp-credentials.ts`). Everything else could hang for as
+ * long as a remote host chose to hold the socket open. `safeFetch` is the chokepoint that every
+ * connector (`http`, `mcp`, `web-search`, `dcr`, `discovery`, `client`), the `fetch_url` tool and
+ * the `/knowledge` ingest path already routes through, so one deadline here bounds all of them
+ * without editing a call site.
+ *
+ * ── What 30s is sized against — repo values, not a feeling
+ *
+ * FLOOR. It must not be tighter than a deadline this codebase has already chosen for the same kind
+ * of call: `probeReachable` (`lib/steps.ts`) lets its caller ask for up to **30_000ms** to decide a
+ * stranger's HTTPS endpoint is dead, and `AI_FIRST_TOKEN_TIMEOUT_MS` (`lib/ai-deadlines.ts`) puts
+ * "the provider has gone away" at **25_000ms**. A smaller default would mean adding a safety net
+ * silently shortened a budget someone measured.
+ *
+ * CEILING. It must be absorbable by the request that contains it. The worst realistic case is the
+ * chat tool loop, which runs up to 3 rounds and may call `fetch_url` in each: three dead hosts cost
+ * 90s of non-model time inside a turn already permitted `AI_TOTAL_TIMEOUT_MS` = 180_000ms *per
+ * model call*. So the floor cannot dominate a turn. At two minutes it would.
+ *
+ * This is a FLOOR, not a target: nothing that answers today gets slower. The only calls whose
+ * behaviour changes are the ones that would previously have hung.
+ *
+ * ── Known trade-off, stated rather than discovered later
+ *
+ * An MCP `tools/call` (`lib/connectors/mcp.ts`) can be a remote server doing real work — building a
+ * site, running a generation — and 30s may genuinely be short for it. Today that call has **no**
+ * deadline, so this is strictly an improvement; if it proves tight, that call site states its own
+ * budget the way `steps.ts` and `mcp-credentials.ts` already do (see the precedence rule below).
+ */
+export const SAFE_FETCH_TIMEOUT_MS = 30_000;
+
+/**
  * SSRF-safe fetch. `checkPublicHttpsUrl` only validates the URL we pass to `fetch`,
  * but the default `redirect: "follow"` lets a public host 3xx-redirect us straight to
  * `http://169.254.169.254/…` or `http://127.0.0.1/…` — re-opening the exact holes the
  * guard closes. So follow redirects MANUALLY and re-validate every hop (which also
  * re-enforces https-only, blocking an http downgrade). Throws {@link SsrfError} when a
  * hop is rejected or the redirect budget is exhausted.
+ *
+ * ── Deadline precedence: the caller wins, and the floor only fills a vacuum (#438)
+ *
+ * `init.signal` supplied ⇒ it is used VERBATIM and no default is added. Not composed with
+ * `AbortSignal.any`, deliberately: composing takes the *earlier* of the two, which makes the floor
+ * a ceiling and removes the only way a caller can ask for MORE time. Both callers that pass a
+ * signal today (`lib/steps.ts` probeReachable, `lib/mcp-credentials.ts` `ADVICE_BUDGET_MS`) back it
+ * with an explicit timer, i.e. they have already decided; overriding a decision with a constant is
+ * the same class of bug as clobbering it. The residual gap is honest and worth writing down: a
+ * caller passing a cancellation-only signal that never fires gets no deadline. That is a property
+ * of the call site, and the deadline ratchet in #438 is where it becomes visible.
+ *
+ * `init.signal` absent ⇒ {@link SAFE_FETCH_TIMEOUT_MS} applies, as ONE signal created before the
+ * redirect loop so it spans the WHOLE chain. Per-hop would let a 5-redirect chain take 6× the
+ * budget, which hands the effective deadline to the remote host — the party the guard exists to
+ * distrust. `stripCredentialHeaders` rebuilds the init on a cross-origin hop and must carry the
+ * signal through; `ssrf.test.ts` pins that.
  */
 export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
 	let current = raw;
 	let origin = originOf(raw);
-	let hopInit = init;
+	let hopInit: RequestInit = init.signal ? init : { ...init, signal: AbortSignal.timeout(SAFE_FETCH_TIMEOUT_MS) };
 	for (let hop = 0; hop <= maxRedirects; hop++) {
 		const check = checkPublicHttpsUrl(current);
 		if (!check.ok) throw new SsrfError(check.reason);
