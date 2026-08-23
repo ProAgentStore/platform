@@ -1606,6 +1606,79 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("No notifications")).toBeVisible();
 	});
 
+	/**
+	 * The Danger zone states the scope of the act it performs (#742).
+	 *
+	 * The owner read "Unsubscribe from this agent", concluded it would destroy every instance of
+	 * that agent, and asked twice. It cancels ONE instance and deletes nothing. Both branches are
+	 * pinned here as well as in `unsubscribeScope.test.ts`, because the unit test proves the
+	 * sentence and this proves the page is actually built from it — the defect was a label nothing
+	 * compared to its implementation, and a second uncompared label is the same defect.
+	 */
+	const CODER_PAIR = [
+		{
+			id: "inst-1",
+			agent_id: "agent-coder",
+			name: "Coder Lead",
+			agentName: "Coder",
+			slug: "coder",
+			category: "code",
+			capabilities: { surfaces: [] },
+		},
+		{
+			id: "inst-2",
+			agent_id: "agent-coder",
+			name: "Coder Spare",
+			agentName: "Coder",
+			slug: "coder",
+			category: "code",
+			capabilities: { surfaces: [] },
+		},
+	];
+
+	test("the Danger zone names the instance it cancels, and its siblings survive (#742)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: CODER_PAIR });
+		await page.goto("/console/instances/inst-1/settings");
+		const scope = page.locator("#inst-unsubscribe-scope");
+		await expect(scope).toContainText("Cancels Coder Lead only.");
+		await expect(scope).toContainText("Your 1 other instance of Coder keeps running.");
+		await expect(scope).toContainText("Nothing is deleted");
+		// The old label named the agent as the thing being acted on.
+		await expect(page.getByRole("button", { name: "Cancel this instance" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "Unsubscribe from this agent" })).toHaveCount(0);
+		// With a sibling, nothing beyond the instance changes — so the subscription is not named.
+		await expect(scope).not.toContainText("subscription");
+	});
+
+	test("the Danger zone says the subscription ends on the last instance (#742)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: [CODER_PAIR[0]] });
+		await page.goto("/console/instances/inst-1/settings");
+		const scope = page.locator("#inst-unsubscribe-scope");
+		// The one case where something beyond the instance changes, and it must READ differently
+		// from the case above — that difference is the whole point of the ticket.
+		await expect(scope).toContainText("This is your only instance of Coder");
+		await expect(scope).toContainText("ends your subscription to Coder too");
+		await expect(scope).not.toContainText("other instance");
+	});
+
+	test("the confirm dialog carries the same scope statement as the panel (#742)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: CODER_PAIR });
+		await page.goto("/console/instances/inst-1/settings");
+		// Wait for the roster to land first. Before it does the panel shows the no-count
+		// statement — true, and deliberately claiming nothing it cannot support — so reading it
+		// too early compares the dialog against the wrong branch.
+		const scope = page.locator("#inst-unsubscribe-scope");
+		await expect(scope).toContainText("Cancels Coder Lead only.");
+		const panel = (await scope.textContent())?.trim() ?? "";
+		expect(panel).not.toBe("");
+		let asked = "";
+		page.on("dialog", (d) => { asked = d.message(); void d.dismiss(); });
+		await page.getByRole("button", { name: "Cancel this instance" }).click();
+		await expect.poll(() => asked).toContain("Cancel Coder Lead?");
+		// Verbatim, not a shorter restatement — the old dialog repeated the scope error in brief.
+		expect(asked).toContain(panel);
+	});
+
 	test("instance settings show webhook and cron triggers", async ({ page }) => {
 		await mockSignedInConsole(page);
 

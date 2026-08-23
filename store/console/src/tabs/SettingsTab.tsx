@@ -14,6 +14,7 @@ import RunnerPanel from "../components/RunnerPanel";
 import ToolPermissions from "../components/ToolPermissions";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
+import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
 import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
@@ -115,14 +116,26 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 	 * of them they may not trust.
 	 */
 	const [loadFailures, setLoadFailures] = useState<string[]>([]);
+	/** Every non-canceled instance the user owns — null until read, and left null if the read
+	 *  fails, so the Danger zone states no sibling count it cannot support (#742). */
+	const [roster, setRoster] = useState<RosterInstance[] | null>(null);
+	/** What cancelling THIS instance does, in the words the control shows. Derived, never
+	 *  stored: the roster is the only input, so the panel and the confirm dialog cannot drift
+	 *  apart the way the old copy and its shorter dialog restatement had. */
+	const scope = unsubscribeScope(roster, instanceId);
 	const loadAll = useCallback(() => {
 		(async () => {
 			const failed: string[] = [];
 			try {
 				// Current display name — my/instances resolves displayName over the agent name.
-				const d = await api<{ instances?: Array<{ id: string; name: string }> }>("/v1/instances/my/instances");
+				// The whole roster is kept, not just this row: the Danger zone states how many
+				// SIBLING instances of the same agent survive a cancel, and this is the response
+				// that already knows (#742). It excludes canceled instances, which is exactly the
+				// set the server's retire predicate asks about — see lib/unsubscribeScope.ts.
+				const d = await api<{ instances?: RosterInstance[] }>("/v1/instances/my/instances");
 				const mine = (d.instances || []).find((i) => i.id === instanceId);
-				if (mine) setInstName(mine.name);
+				if (mine?.name) setInstName(mine.name);
+				setRoster(d.instances || []);
 			} catch { failed.push("your instance name"); }
 			try {
 				const d = await api<{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }>(`/v1/instances/${instanceId}/settings`);
@@ -364,7 +377,10 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 	};
 
 	const unsubscribe = async () => {
-		if (!confirm("Unsubscribe from this agent? Your data stays unless you clear it.")) return;
+		// The dialog carries the panel's sentence verbatim. It used to restate the same
+		// agent-wide scope error in shorter form, which answered the data question twice and the
+		// sibling question never (#742).
+		if (!confirm(scope.confirm)) return;
 		try {
 			await api(`/v1/instances/${instanceId}/cancel`, { method: "POST" });
 			onUnsubscribe();
@@ -702,13 +718,13 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				)}
 			</Card>
 
-			{/* Danger zone */}
+			{/* Danger zone — the control names the instance it cancels, not the agent (#742). */}
 			<Card>
 				<h3 className="text-base font-bold mb-1 text-danger">Danger zone</h3>
-				<p className="text-sm text-muted mb-3">
-					Stop using this agent. Your data stays unless you clear it above.
+				<p className="text-sm text-muted mb-3" id="inst-unsubscribe-scope">
+					{scope.statement}
 				</p>
-				<Button variant="danger" onClick={unsubscribe}>Unsubscribe from this agent</Button>
+				<Button variant="danger" onClick={unsubscribe}>{scope.button}</Button>
 			</Card>
 		</div>
 	);
