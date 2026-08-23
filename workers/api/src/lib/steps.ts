@@ -24,6 +24,7 @@ import { parseStepNumber, stepNumberError } from "./step-number.js";
 // #308: the three steps below read a tool result as DATA, not as model input, so they unwrap the
 // source-applied fence first — see `unfenceUntrusted` for why that cannot be used to escape one.
 import { unfenceUntrusted } from "./untrusted-fence.js";
+import { renderWithFencedValues } from "./prompt-interpolation.js"; // #750: re-fence bound values
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -1079,17 +1080,16 @@ export const STEP_TOOLS: ToolDef[] = [
 			const maxTokens = Number.isFinite(input.maxTokens) ? Number(input.maxTokens) : 500;
 			// Deferred import keeps steps.ts free of the user-ai import graph at module load.
 			const { runUserWorkersAi } = await import("./user-ai.js");
-			const render = (t: string, item: Record<string, unknown>): string =>
-				t.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => {
-					const v = getPath(item, k);
-					return v == null ? "" : String(v);
-				});
+			// Each substituted VALUE is fenced, the owner's template is not: the binder strips the
+			// connector's source fence so `$ref` can bind, and nothing put it back before the text
+			// reached a model (#750). lib/prompt-interpolation.ts has the why, `system` role included.
 			const out: Record<string, unknown>[] = [];
 			let generated = 0;
 			for (const item of items) {
+				const render = (t: string) => renderWithFencedValues(t, (k) => getPath(item, k));
 				const messages: Array<{ role: string; content: string }> = [];
-				if (system) messages.push({ role: "system", content: render(system, item) });
-				messages.push({ role: "user", content: render(template, item) });
+				if (system) messages.push({ role: "system", content: render(system) });
+				messages.push({ role: "user", content: render(template) });
 				try {
 					const r = (await runUserWorkersAi(ctx.env, ctx.userId, model, { messages, maxTokens }, { kind: "pipeline", instanceId: ctx.instanceId })) as { response?: string };
 					out.push({ ...item, [as]: r.response || "" });

@@ -5,6 +5,7 @@ const runUserWorkersAi = vi.fn();
 vi.mock("./user-ai.js", () => ({ runUserWorkersAi: (...a: unknown[]) => runUserWorkersAi(...a) }));
 
 import { STEP_TOOLS } from "./steps.js";
+import { FENCE_TAG } from "./untrusted-fence.js";
 import type { RegistryToolCtx } from "./tool-registry.js";
 
 // Non-null assertion is safe: the step is defined in this module.
@@ -23,7 +24,15 @@ describe("ai_generate step", () => {
 		});
 		expect(r.success).toBe(true);
 		const out = JSON.parse(r.content) as { items: Array<{ draft: string }>; generated: number };
-		expect(out.items[0].draft).toBe("drafted: Write outreach to Splash Coffee in Petersham");
+		// Each substituted VALUE is fenced (#750) — the record comes from a Google listing or a web
+		// search, and the binder stripped the connector's source fence two steps earlier. The
+		// owner's template words stay outside every block.
+		const prompt = out.items[0].draft;
+		expect(prompt.match(new RegExp(`<${FENCE_TAG} `, "g"))).toHaveLength(2);
+		expect(prompt.match(new RegExp(`</${FENCE_TAG}>`, "g"))).toHaveLength(2);
+		expect(prompt.split(`<${FENCE_TAG} `)[0]).toBe("drafted: Write outreach to ");
+		expect(prompt).toContain("Splash Coffee");
+		expect(prompt).toContain("Petersham");
 		expect(out.generated).toBe(1);
 		// BYOK: called with the owner's uid + default model.
 		expect(runUserWorkersAi).toHaveBeenCalledWith({}, "u1", "claude-sonnet-4-6", expect.anything(), expect.objectContaining({ kind: "pipeline", instanceId: "i1" }));

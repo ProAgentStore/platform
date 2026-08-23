@@ -547,7 +547,14 @@ export function resolveInputs(
  * the only place that covers chat, a pipeline step, the tools route and MCP at once. The binder is
  * not a model, and a fenced `web_search` result would make every downstream `$ref` resolve to
  * undefined — so the wrapper is removed before parsing. Non-JSON content is returned AS WRITTEN,
- * fence included: prose bound here can still end up in a prompt, and there it needs its fence.
+ * fence included.
+ *
+ * That last clause used to be stated as the SAFEGUARD for prose that ends up in a prompt. It is
+ * not one, and saying so cost #750: `http_request`, `web_search` and `mcp_call_tool` all return
+ * JSON, so every remote-text tool takes the branch that STRIPS the fence, and the clause protected
+ * a path nothing uses. Re-fencing therefore has to happen where the text meets a model, which is
+ * `ai_generate` — see `lib/prompt-interpolation.ts`. Anything else that renders a bound field into
+ * a prompt has the same obligation; the binder will not have kept the fence for it.
  */
 function parseOutput(content: string): unknown {
 	const t = unfenceUntrusted(content).trim();

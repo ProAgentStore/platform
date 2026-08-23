@@ -9,6 +9,8 @@
 // only new machinery is the generic outbound-MCP connector; the shape of the work —
 // look up → enrich → draft → build → gate on a human → record — is configuration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FENCE_TAG } from "../untrusted-fence.js";
+import { renderWithFencedValues } from "../prompt-interpolation.js";
 import siteBuilder from "./site-builder.json" with { type: "json" };
 import siteDeploy from "./site-deploy.json" with { type: "json" };
 
@@ -73,6 +75,10 @@ let upserted: Array<Record<string, unknown>> = [];
 let photoRequests: string[] = [];
 let searchQueries: string[] = [];
 let aiPrompts: string[] = [];
+/** What a MODEL reads: the fences are boundaries, not content. Strips the inline wrappers so the
+ *  grounding assertions below still read as prose, while the fence itself is asserted separately. */
+const readable = (t: string) =>
+	t.replace(new RegExp(`<${FENCE_TAG} [^>]*>\\n[^\\n]*\\n\\n([\\s\\S]*?)\\n</${FENCE_TAG}>`, "g"), "$1");
 let emits: Array<{ event: string; emitOn: string; payloads: Array<Record<string, unknown>> }> = [];
 
 const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<string, unknown>) => {
@@ -116,11 +122,12 @@ const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<s
 		const items = (Array.isArray(input.items) ? input.items : []) as Array<Record<string, unknown>>;
 		aiPrompts.push(String(input.prompt ?? ""));
 		const as = String(input.as ?? "text");
-		// Render the prompt the way ai_generate does, so the test sees what the model saw.
-		const rendered = String(input.prompt ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => {
-			const v = k.split(".").reduce<unknown>((acc, part) => (acc && typeof acc === "object" ? (acc as Record<string, unknown>)[part] : undefined), items[0]);
-			return v == null ? "" : String(v);
-		});
+		// Render the prompt the way ai_generate REALLY does — the shared helper, fences and all
+		// (#750). A private copy of the render would keep this test green while production drifted,
+		// which is the whole reason the unfenced interpolation survived as long as it did.
+		const rendered = renderWithFencedValues(String(input.prompt ?? ""), (k) =>
+			k.split(".").reduce<unknown>((acc, part) => (acc && typeof acc === "object" ? (acc as Record<string, unknown>)[part] : undefined), items[0]),
+		);
 		aiPrompts[aiPrompts.length - 1] = rendered;
 		return { name, content: JSON.stringify({ items: items.map((it) => ({ ...it, [as]: MODEL_REPLY })), count: items.length, generated: items.length }), success: true };
 	}
@@ -241,7 +248,7 @@ describe("site-builder — the run", () => {
 		expect(photoRequests).toHaveLength(4);
 		for (const p of photoRequests) expect(p).toMatch(/^places\/ChIJ_kiosk\/photos\//);
 		// The resolved public URLs reach the copy step (and the key stays server-side).
-		expect(aiPrompts[0]).toContain("https://lh3.example/AAA");
+		expect(readable(aiPrompts[0])).toContain("https://lh3.example/AAA");
 		expect(aiPrompts[0]).not.toMatch(/key=/);
 	});
 
@@ -256,7 +263,7 @@ describe("site-builder — the run", () => {
 
 	it("grounds the copy prompt in scraped facts only", async () => {
 		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
-		const prompt = aiPrompts[0];
+		const prompt = readable(aiPrompts[0]);
 		expect(prompt).toContain("Palm Tree Kiosk");
 		expect(prompt).toContain("12 Beach Rd, Bondi NSW 2026, Australia");
 		expect(prompt).toContain("Cafe");
