@@ -430,6 +430,67 @@ describe("runDeployWatch persists a watermark that only moves forward (#708)", (
 		vi.mocked(resolveGithubRead).mockResolvedValue({ token: "tok", authContext: null } as never);
 	});
 
+	/**
+	 * #745 — the whole-sweep SELECT was wrapped in a bare `catch` that returned with no log row, so
+	 * a schema skew or a real D1 failure made the watcher do nothing every minute and look exactly
+	 * like a healthy quiet period. An audit of #708 already paid for this: it read
+	 * `/v1/admin/errors?source=deploy-watch` → count 0 over 27 hours and could not tell "no stale
+	 * page arrived" from "the sweep never got past line 422".
+	 */
+	describe("a sweep that cannot read is reported, not silent (#745)", () => {
+		/** A D1 whose batch SELECT throws; everything else behaves. */
+		const brokenSelect = (message: string) =>
+			({
+				prepare: (sql: string) => ({
+					bind: () => ({
+						all: async () => {
+							if (sql.includes("SELECT")) throw new Error(message);
+							return { results: [] };
+						},
+						run: async () => ({ meta: { changes: 1 } }),
+						first: async () => null,
+					}),
+				}),
+			}) as unknown as Env["DB"];
+
+		it("writes exactly one error row when the batch SELECT fails, and still returns", async () => {
+			const env = { DB: brokenSelect("D1_ERROR: network") } as unknown as Env;
+			await expect(runDeployWatch(env)).resolves.toBeUndefined();
+			expect(logError).toHaveBeenCalledTimes(1);
+			const e = vi.mocked(logError).mock.calls[0][1];
+			expect(e.source).toBe("deploy-watch");
+			expect(e.level).toBe("error");
+			expect(e.message).toContain("NO repo was checked this tick");
+			expect(e.message).toContain("D1_ERROR: network");
+		});
+
+		it("still returns quietly-ish on a not-yet-migrated table, but says so at warn", async () => {
+			const env = { DB: brokenSelect("no such table: coding_repos") } as unknown as Env;
+			await expect(runDeployWatch(env)).resolves.toBeUndefined();
+			expect(logError).toHaveBeenCalledTimes(1);
+			const e = vi.mocked(logError).mock.calls[0][1];
+			expect(e.level).toBe("warn");
+			expect(e.message).toContain("not migrated yet");
+		});
+
+		it("keeps the PER-REPO catch as an isolation boundary — one bad repo, the rest still swept", async () => {
+			const { env, writes } = sweepEnv([{ ...REPO, id: "repo_bad" }, { ...REPO, id: "repo_ok", github_repo: "acme/other" }]);
+			vi.mocked(fetchWorkflowRuns)
+				.mockRejectedValueOnce(new Error("github 502"))
+				.mockResolvedValue({ runs: [raw({ head_sha: "newsha000000", updated_at: "2026-08-07T12:00:00Z" })], stale: false });
+
+			await runDeployWatch(env);
+
+			// The second repo was still checked and still wrote its watermark.
+			expect(writes().some((w) => w.args.includes("repo_ok"))).toBe(true);
+			// …and the failure is countable now instead of invisible.
+			expect(logError).toHaveBeenCalledTimes(1);
+			const e = vi.mocked(logError).mock.calls[0][1];
+			expect(e.message).toContain("github 502");
+			expect(e.level).toBe("warn");
+		});
+	});
+
 	it("declines a page the cache served because GitHub was unreachable, and writes no watermark", async () => {
 		const { env, writes } = sweepEnv();
 		vi.mocked(fetchWorkflowRuns).mockResolvedValue({

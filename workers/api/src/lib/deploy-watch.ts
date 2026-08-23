@@ -419,8 +419,30 @@ export async function runDeployWatch(env: Env): Promise<void> {
 			.bind(DEPLOY_WATCH_BATCH)
 			.all<RepoRow>();
 		repos = results ?? [];
-	} catch {
-		return; // table/columns not migrated yet — nothing to do
+	} catch (err) {
+		// This `catch` used to be bare, with a comment naming ONE cause ("table/columns not
+		// migrated yet") while taking EVERY cause: a D1 outage, a partial migration, a
+		// Worker/migration ordering skew. Any of them ended the sweep for ALL repos, silently, on
+		// every cron tick — so "no errors" and "dead every minute" were the same observation
+		// (#745). An audit of #708 hit exactly that ambiguity: `/v1/admin/errors?source=
+		// deploy-watch` returned count 0 over 27 hours and could not say whether the decline path
+		// had never been reached or the sweep had never got past this line.
+		//
+		// The reported LEVEL separates the two causes the comment used to conflate, because they
+		// need different reactions: a missing table on a fresh environment is expected and settles
+		// itself, a failing SELECT on a migrated one does not. Both write a row — the defect being
+		// fixed is the silence, not the severity.
+		const detail = err instanceof Error ? err.message : String(err);
+		const notMigrated = /no such (table|column)/i.test(detail);
+		await logError(env, {
+			source: "deploy-watch",
+			level: notMigrated ? "warn" : "error",
+			message: notMigrated
+				? `deploy-watch sweep skipped: coding_repos not migrated yet (${detail})`
+				: `deploy-watch sweep could not read coding_repos, so NO repo was checked this tick: ${detail}`,
+			context: { query: "SELECT coding_repos FOR deploy watch", batch: DEPLOY_WATCH_BATCH },
+		}).catch(() => undefined);
+		return;
 	}
 
 	for (const repo of repos) {
@@ -503,8 +525,18 @@ export async function runDeployWatch(env: Env): Promise<void> {
 			// watermark are written together (#708): an id without its instant is the watcher that
 			// could not tell forward from backward.
 			await writeWatermark(env, repo.id, decision.seenId, decision.seenAt);
-		} catch {
-			// One repo's failure must not end the sweep for the rest.
+		} catch (err) {
+			// One repo's failure must not end the sweep for the rest — but it must not be free
+			// either. Before #745 a repo that failed every tick was invisible: the isolation was
+			// right and the silence was the bug. `logError` collapses repeats into one row with a
+			// count, so a permanently-broken repo is a rising number rather than 1,440 rows a day.
+			await logError(env, {
+				source: "deploy-watch",
+				level: "warn",
+				message: `deploy-watch skipped ${repo.github_repo}: ${err instanceof Error ? err.message : String(err)}`,
+				userId: repo.user_id,
+				context: { repoId: repo.id, instanceId: repo.instance_id, githubRepo: repo.github_repo },
+			}).catch(() => undefined);
 		}
 	}
 }
