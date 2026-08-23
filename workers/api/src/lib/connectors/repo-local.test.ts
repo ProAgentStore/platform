@@ -14,16 +14,51 @@ vi.mock("../runner-client.js", () => ({
 
 import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoMissingMessage, repoPathForInstance } from "./repo-local.js";
 import { CONNECTORS } from "./registry.js";
-import { getRegistryTool, registryToolNameSet } from "../tool-registry.js";
+import { getRegistryTool, registryToolNameSet, renderToolContent } from "../tool-registry.js";
 // The budget both caps in this file are sized against (#534's AC 5) — asserted against the real
 // constant so raising one of them without re-reading the other fails here.
 import { TOOL_RESULT_MAX_CHARS, capToolResult } from "../tool-result-cap.js";
+import { FENCE_TAG, unfenceUntrusted } from "../untrusted-fence.js";
 import type { Env } from "../../types.js";
+
+/**
+ * The tool, with its handler wrapped the way `runRegistryTool` delivers it (#752).
+ *
+ * Every one of these tools declares `untrustedOutput: true` — a checkout is mostly code the owner
+ * did NOT write, and a pane is whatever any command printed (#751) — so the dispatcher fences the
+ * body and keeps the platform's notes ("showing 50 of 812", "this machine's runner ignored the
+ * `path` filter") outside it via head/tail. Asserting on the raw handler result would test one
+ * layer below where both properties now live.
+ */
+/**
+ * Split a dispatched result into the platform's framing and the fenced body.
+ *
+ * The two halves are asserted separately on purpose: which side of the fence a sentence lands on IS
+ * the invariant (ADR 0006 F2). A test that only searched the whole string would pass with the
+ * "showing 50 of 812" note inside the block, which is the case #748 shipped in the other direction.
+ */
+function parts(content: string): { head: string; body: string; tail: string } {
+	const open = content.indexOf(`<${FENCE_TAG}`);
+	if (open === -1) return { head: content.trim(), body: "", tail: "" };
+	const closeTag = `</${FENCE_TAG}>`;
+	const close = content.lastIndexOf(closeTag);
+	return {
+		head: content.slice(0, open).trim(),
+		body: unfenceUntrusted(content.slice(open, close + closeTag.length)).trim(),
+		tail: content.slice(close + closeTag.length).trim(),
+	};
+}
 
 const tool = (name: string) => {
 	const t = REPO_LOCAL_TOOLS.find((x) => x.name === name);
 	if (!t) throw new Error(`no repo-local tool ${name}`);
-	return t;
+	return {
+		...t,
+		handler: async (...args: Parameters<typeof t.handler>) => {
+			const r = await t.handler(...args);
+			return { ...r, content: renderToolContent(t, r) };
+		},
+	};
 };
 
 /**
@@ -216,7 +251,7 @@ describe("repo-local — tool behaviour", () => {
 			{ workDir: "~/work/my-repo", path: "src", maxDepth: 2 },
 			expect.anything(),
 		);
-		expect(r.content).toBe("src/\nsrc/index.ts");
+		expect(parts(r.content).body).toBe("src/\nsrc/index.ts");
 		expect(r.success).toBe(true);
 	});
 
@@ -299,7 +334,7 @@ describe("repo-local — tool behaviour", () => {
 			{ workDir: "~/work/my-repo", cmd: "log", path: "src", n: 5 },
 			expect.anything(),
 		);
-		expect(r.content).toBe("abc123 fix thing");
+		expect(parts(r.content).body).toBe("abc123 fix thing");
 	});
 
 	// AC 5, the sibling cap in the same shape as the one #534 is about: the handler used to
@@ -319,7 +354,7 @@ describe("repo-local — tool behaviour", () => {
 	it("repo_git stays byte-for-byte unchanged when nothing was cut", async () => {
 		callRunner.mockResolvedValue({ cmd: "git status", output: "## main\n M src/a.ts", pathApplied: false });
 		const r = await tool("repo_git").handler(ctx(), { cmd: "status" });
-		expect(r.content).toBe("## main\n M src/a.ts");
+		expect(parts(r.content).body).toBe("## main\n M src/a.ts");
 	});
 
 	// Same class again, and the one AC 5 calls "the better pattern". It bounded by match count at
@@ -351,7 +386,8 @@ describe("repo-local — tool behaviour", () => {
 		const matches = Array.from({ length: 50 }, (_, i) => ({ path: `${"deep/".repeat(60)}file${i}.ts`, line: i, text: "x".repeat(160) }));
 		callRunner.mockResolvedValue({ matches, shown: 50, total: 812, truncated: true });
 		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
-		const [head, ...body] = r.content.split("\n");
+		const { head, body: fenced } = parts(r.content);
+		const body = fenced.split("\n");
 		expect(body.length).toBeLessThan(50);
 		expect(head).toContain(`showing ${body.length} of 812`);
 		// Every delivered line is a COMPLETE match — the old slice ended one mid-path.

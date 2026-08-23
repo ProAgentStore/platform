@@ -94,6 +94,7 @@ export const META_MANIFEST: ConnectorManifest = {
 	tools: [
 		{
 			name: "whatsapp_send_message",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Send a WhatsApp message via the WhatsApp Business Cloud API. Use `text` only inside a 24h reply window; otherwise supply `template_name` (a pre-approved template) with `template_lang` and optional `template_params`. WRITE — the message is really sent.",
@@ -108,6 +109,7 @@ export const META_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "instagram_send_dm",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Send/reply to an Instagram Direct Message from a connected Instagram Business account (Instagram Messaging API). Messaging-window rules apply — you can reply to people who messaged you; no cold-DM. WRITE — the message is really sent.",

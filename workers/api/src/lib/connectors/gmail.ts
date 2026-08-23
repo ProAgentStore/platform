@@ -37,7 +37,6 @@
 import type { Connector, RegistryToolCtx, RegistryToolResult, ToolDef } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Env } from "../../types.js";
-import { fenceUntrusted } from "../untrusted-fence.js";
 
 /** Raw bytes we are willing to pull through the Worker for one attachment.
  *  Base64 inflates by ~4/3 and the DO round-trip holds another copy, so this is well under the
@@ -61,18 +60,25 @@ function ok(payload: unknown): RegistryToolResult {
  * have to rank for anything. Mail is the most cheaply attacker-authored text this platform
  * touches, and it was the one input reaching the model bare.
  *
- * Fenced in the CONNECTOR rather than at the chat surface, for the reason web-search gives: one
- * line then covers chat, a pipeline step, `POST /v1/instances/:id/tools/:name` and MCP at once.
- * The pipeline binder unwraps it (`unfenceUntrusted`), so a `$ref` off a message still resolves —
- * the fence is for the model, and the binder is not one.
+ * The WRAP is no longer applied here (#752). These two tools declare `untrustedOutput: true` in the
+ * manifest and `runRegistryTool` fences once, which covers chat, a pipeline step,
+ * `POST /v1/instances/:id/tools/:name` and MCP from the declaration rather than from this helper
+ * having been called. What survives is the `origin` — "an email from <sender>" is a fact only this
+ * module has, and it is the part of a fence a reader actually uses.
  *
- * Only the tools that return third-party prose use this. `gmail_archive`'s label list and
+ * That this helper had to exist at all is the argument for the move: it is a THIRD wording of the
+ * same idea (after `mcp.ts` and `web-search.ts`), each written by an author who could not tell from
+ * any declaration whether their connector needed one. The pipeline binder unwraps the fence
+ * (`unfenceUntrusted`), so a `$ref` off a message still resolves — the fence is for the model, and
+ * the binder is not one.
+ *
+ * Only the tools that return third-party prose declare it. `gmail_archive`'s label list and
  * `gmail_download_attachment`'s file id are OUR words about an outcome, and fencing those would
- * teach the model that a fence means nothing in particular.
+ * teach the model that a fence means nothing in particular (ADR 0006 F2).
  */
 function okUntrusted(payload: unknown, origin: string): RegistryToolResult {
 	const body = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
-	return { content: fenceUntrusted(body, origin), success: true };
+	return { content: body, success: true, origin };
 }
 
 /**
@@ -144,8 +150,11 @@ const searchHandler: ToolDef["handler"] = async (ctx, input) => {
 	});
 	try {
 		const hits = await listMessages(resolved.token, query, typeof input.max === "number" ? input.max : 10);
-		// "No matches" is OUR sentence about an empty result — nothing in it came from a stranger.
-		if (hits.length === 0) return ok(`No messages matched: ${query}`);
+		// "No matches" is OUR sentence about an empty result — nothing in it came from a stranger,
+		// so it goes in `head` with an empty body and the dispatcher fences nothing (#752). The
+		// declaration is per TOOL and fail-safe; this is the one branch where the per-RESULT fact
+		// differs, and F2 says a platform sentence must not end up inside a block.
+		if (hits.length === 0) return { head: `No messages matched: ${query}`, content: "", success: true };
 		// Every field here is written by whoever sent the mail: the sender name, the subject, the
 		// snippet, and the attachment filenames.
 		return okUntrusted({ query, count: hits.length, messages: hits }, "the owner's Gmail inbox");
@@ -515,6 +524,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 	tools: [
 		{
 			name: "gmail_search",
+			untrustedOutput: true,
 			scope: "read",
 			description:
 				"Search the owner's Gmail and list matching messages (newest first) with sender, subject, date, a snippet and the names of any attachments. Use `query` for full Gmail search syntax (e.g. 'from:kelly has:attachment newer_than:14d'), or the from/subject/within_days hints. Returns message ids for gmail_read_message.",
@@ -529,6 +539,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "gmail_read_message",
+			untrustedOutput: true,
 			scope: "read",
 			description:
 				"Read one Gmail message in full: body text, sender/recipients, and a manifest of its attachments with the ids gmail_download_attachment needs. Also returns the threading headers required to reply in-thread.",
@@ -539,6 +550,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "gmail_reply",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Reply to a Gmail message in its own thread, as the owner, optionally attaching files from this agent's file store by id. The recipient is taken from the message being replied to and cannot be overridden — use gmail_send to write to a different address. This really sends: there is no draft step and no undo.",
@@ -552,6 +564,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "gmail_send",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Send a NEW Gmail message as the owner, to an address you name explicitly, optionally with attachments from this agent's file store. This really sends: there is no draft step and no undo. To answer a message you received, prefer gmail_reply so it threads.",
@@ -566,6 +579,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "gmail_archive",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Archive a Gmail message — remove it from the inbox. It stays in All Mail and can still be found by search, so this is reversible. Needs the manage-mail permission on the connected account.",
@@ -576,6 +590,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "gmail_mark_read",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Mark a Gmail message as read. Needs the manage-mail permission on the connected account.",
@@ -586,6 +601,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "gmail_download_attachment",
+			untrustedOutput: false,
 			scope: "read",
 			description:
 				"Download one attachment from a Gmail message into this agent's file store and return its file_id. Does NOT return the file contents — use the file_id with the tools that read or fill files.",

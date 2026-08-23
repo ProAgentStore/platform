@@ -34,6 +34,7 @@ import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 // Moved to its own leaf module for #345, so `connectors/supervision.ts` can share it: importing
 // this file from there would close a cycle (this file imports the connector registry).
 import { accountTimeZone } from "./account-timezone.js";
+import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
 
 /**
@@ -153,6 +154,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "start_work",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Hand a GOAL to this agent's own executor and let it work autonomously — the same thing the Loop button does. Use this whenever the user asks you to DO something rather than explain it. Give an outcome in plain language ('fix issue #83 and merge it'), not a single command. It runs durably in the background and reports each step back into this conversation; say it has started, do not claim it has finished.",
 		tier: "base",
@@ -199,6 +201,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "check_work",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Look up work YOU started — with start_work, or by handing a goal to an agent you supervise: its status, how far it got, and how it ended. Call this whenever the user asks whether something actually happened, or challenges a report you gave — answer from this record, never from memory and never by apologising. With no runId it returns your most recent runs, including the ones you delegated.",
 		tier: "base",
@@ -250,6 +253,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "stop_work",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Stop work YOU started — call this the moment the user says stop, halt, cancel, abort, that's enough, or finish. With no runId it stops everything of yours that is currently running. Stopping is COOPERATIVE: the step in flight finishes first, so say you have ASKED it to stop, never that it has stopped. It is the user's decision to relay, not your own tidying up — never stop a run because you think it is stuck or taking too long.",
 		tier: "base",
@@ -302,6 +306,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "end_coding_session",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"End a coding session — the engine (Claude Code / Codex / …) running on the user's machine for one repository. Use it when the user says to finish, close or end the session. This is NOT how you stop a run in progress: stop_work does that, and it leaves the session open. If a run is driving the session, this asks that run to stop too and says so. Only ever do this because the user asked — a session left open costs nothing and keeps its conversation.",
 		tier: "runtime",
@@ -321,6 +326,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "get_behaviour",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Read how your subscriber has asked you to communicate — technicality, length, tone, formatting, and so on. Use this when they ask what your settings are, or before changing one, so you report what is actually stored rather than what you remember.",
 		tier: "base",
@@ -344,6 +350,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "set_behaviour",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Change how you communicate, when the subscriber asks you to (\"be less technical\", \"stop using emoji\", \"keep answers short\"). Pass only the fields that change; pass null to reset one to the platform default. This is the ONLY correct place for preferences about your manner — do not store them in memory, which is for knowledge about the subject you work on.",
 		tier: "base",
@@ -374,6 +381,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "get_stats",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Read the stats cards configured for this agent AND their current numbers — the same numbers the Stats tab shows. Call this before answering any question about how much/how many ('how many leads did I find this week?'); never estimate and never recompute from a record dump. IMPORTANT: in a daily trend, a day marked \"no run\" means NOTHING RAN that day. It is not zero — never report it as a day with no results.",
 		tier: "base",
@@ -399,6 +407,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "set_stats_card",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Add, edit or remove ONE stats card, when the subscriber asks you to track something ('chart my leads per suburb'). Pass `card: null` to remove it. `kind` decides how it reads: 'line' is a daily trend built from a nightly snapshot, so a NEW line card starts empty and shows its first point tomorrow — say so. 'number'/'bar'/'table' are current values and work immediately. You may only pick a `source` from the fixed list; you can never write a query or change whose data is shown.",
 		tier: "base",
@@ -453,6 +462,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "run_pipeline",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Run a declarative data pipeline that the owner has configured on this agent. Pass the pipeline `name` and any `params` (e.g. {city:\"Sydney\"}). The pipeline runs durably in the background (source → transform → sink); it does not return results inline — tell the user it's started.",
 		tier: "base",
@@ -479,6 +489,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "create_ticket",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Put a ticket on the board asking the owner to approve a piece of work. Give it a `title`, the `reasoning` (the WHY, shown on the card), and optionally the work itself — `action` (run_pipeline / insert_record / add_knowledge / create_task / run_browse) with its `config` and `params`. A ticket carrying an action sits in Needs-approval until the owner approves it, and approving RUNS exactly that action. Use this to pause for a human decision before doing something consequential; without an action it's an informational card.",
 		tier: "base",
@@ -526,6 +537,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "record_feedback",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Record that the USER said YOU got something wrong — a wrong answer, an action you claimed but did not take, a step that failed silently. Pass `body`: their complaint in THEIR words, not your interpretation of it. This is a report kept for the people who improve the platform. It is NOT a fact to remember (write_memory), NOT a change to how you communicate (set_behaviour), and NOT work for the board (create_ticket). Record it, say you have, and carry on with the task — do not promise to remember it.",
 		tier: "base",
@@ -605,6 +617,60 @@ export function registryConnectorGroups(): Array<{ connector: string; tools: str
 		byConnector.set(t.connector, arr);
 	}
 	return [...byConnector.entries()].map(([connector, tools]) => ({ connector, tools }));
+}
+
+/**
+ * The origin used when a handler names none — always true, merely less specific than what the
+ * handler could have said. A default that cannot be wrong is safe to have; a default that decides
+ * WHETHER to fence would be the thing this whole mechanism exists to remove.
+ */
+function defaultOrigin(tool: ToolDef): string {
+	const c = tool.connector ? getConnector(tool.connector) : undefined;
+	return c ? `${c.label}, via the ${tool.name} tool` : `the ${tool.name} tool`;
+}
+
+/**
+ * Apply the tool's `untrustedOutput` declaration — the ONE place the fence is put on a registry
+ * tool's result (ADR 0006 F3).
+ *
+ * One place, because one handler answers four surfaces: the chat runtime, a pipeline step, the
+ * generic `POST /v1/instances/:id/tools/:name` route and MCP. `lib/untrusted-fence.ts` records that
+ * fencing at the chat surface would leave three bare — and the answer that shipped instead, fencing
+ * per handler by hand, left `github.ts`, `repo-local.ts`, `tmux.ts`, `terminal.ts` and
+ * `mcp_call_tool` bare for as long as nobody happened to think of them (#746, #748, #751). Neither
+ * failure is available here: the declaration is required, so the compiler asks every tool, and this
+ * function is the only code that answers.
+ *
+ * `head`/`tail` stay OUTSIDE the block (F2). They are the platform's own sentences — "Resource
+ * <uri> from <endpoint>:", "showing 50 of 812", "this machine's runner ignored the path filter" —
+ * and the model must read them as ours. The reverse mistake was live too: `mcp_get_prompt` put up
+ * to 1000 characters of a remote server's `description` in that position, where it read as our
+ * framing.
+ *
+ * TWO per-RESULT facts narrow the per-TOOL declaration, and neither is an opt-out flag — a flag is
+ * a thing an author has to remember, which is the failure mode the declaration exists to remove.
+ *
+ *   1. **An empty body has nothing to wrap.** `untrustedOutput` answers "CAN this tool return
+ *      someone else's words", fail-safe, the way `mutates` answers "can this change something". One
+ *      call may genuinely return only ours: `gmail_search` finding nothing says "No messages
+ *      matched: <query>", and #725 has a test that it is NOT fenced, because a platform sentence
+ *      inside a block teaches the model that a block marks nothing in particular (F2). Such a
+ *      handler puts its sentence in `head` and leaves `content` empty.
+ *
+ *   2. **A FAILURE is the platform's own report, unless the handler names an origin.** Nearly every
+ *      `success: false` in a handler is a refusal or a diagnosis we wrote — "A `command` is
+ *      required", "Issue #12 not found", "Gmail is not connected" — and a refusal is exactly the
+ *      text the model MUST read as ours, since a fence tells it not to obey what is inside. Fencing
+ *      those would be F2 backwards and at scale. The exceptions are real and few: `http_request`
+ *      returns the remote `{status,data}` envelope on a 4xx, and `mcp_call_tool` returns the remote
+ *      server's payload when it reports `isError`. Both set `origin`, which is the handler saying
+ *      "these bytes came from THERE" — the one signal that is a statement of fact rather than a
+ *      switch, and the same field that is already load-bearing for provenance.
+ */
+export function renderToolContent(tool: ToolDef, r: RegistryToolResult): string {
+	const foreign = tool.untrustedOutput && r.content !== "" && (r.success || Boolean(r.origin));
+	const body = foreign ? fenceUntrusted(r.content, r.origin?.trim() || defaultOrigin(tool)) : r.content;
+	return withFraming(r.head, body, r.tail);
 }
 
 /**
@@ -762,7 +828,7 @@ export async function runRegistryTool(
 				context: { tool: name, scope: tool.scope, onBehalfOf: ctx.onBehalfOf, success: r.success },
 			}).catch(() => undefined);
 		}
-		return { name, content: r.content, success: r.success, ...(r.transfer ? { transfer: r.transfer } : {}) };
+		return { name, content: renderToolContent(tool, r), success: r.success, ...(r.transfer ? { transfer: r.transfer } : {}) };
 	} catch (err) {
 		return { name, content: `Error: ${err instanceof Error ? err.message : String(err)}`, success: false };
 	}

@@ -51,6 +51,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: true,
 		description:
 			"List controllable local terminal targets on the connected machine across tmux, kitty, and iTerm2. Returns targets like `tmux:main`, `kitty:3`, and `iterm2:1:1:1`; use those exact targets for capture/run/send/kill.",
 		jsonSchema: {
@@ -63,7 +64,8 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
 			const res = await callRunner<{ targets?: unknown[] }>(r.conn, "/terminal/list", { backend: input.backend || "all" }, { timeoutMs: READ_TIMEOUT_MS });
-			return { content: JSON.stringify(res.targets ?? [], null, 2), success: true };
+			// Target names and the command each one is running: strings the machine chose.
+			return { content: JSON.stringify(res.targets ?? [], null, 2), success: true, origin: "the terminals on your machine" };
 		},
 	},
 	{
@@ -72,6 +74,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: true,
 		description:
 			"Read the current output of a local terminal target. Use terminal_list_targets first, then pass a target like `tmux:main`, `kitty:3`, or `iterm2:1:1:1`.",
 		jsonSchema: {
@@ -87,7 +90,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
 			const res = await callRunner<{ pane?: string }>(r.conn, "/terminal/capture", { target: requireTarget(input), backend: backend(input), lines: input.lines }, { timeoutMs: READ_TIMEOUT_MS });
-			return { content: res.pane ?? "", success: true };
+			return { content: res.pane ?? "", success: true, origin: `the terminal ${requireTarget(input)} on your machine` };
 		},
 	},
 	{
@@ -96,6 +99,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Type a command line into a local terminal target and press Enter. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react).",
 		jsonSchema: {
@@ -115,7 +119,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			const target = requireTarget(input);
 			const res = await callRunner<{ pane?: string; activeCommand?: string | null }>(r.conn, "/terminal/run", { target, backend: backend(input), command });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
-			return { content: res.pane ?? "Command sent.", success: true };
+			return { content: res.pane ?? "Command sent.", success: true, origin: `the terminal ${target} on your machine` };
 		},
 	},
 	{
@@ -124,6 +128,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 currently supports text only. To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `terminal_send_message` instead.",
 		jsonSchema: {
@@ -146,8 +151,9 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			const target = requireTarget(input);
 			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/terminal/send", { target, backend: backend(input), text: input.text == null ? undefined : String(input.text), keys });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
-			const landed = res.changed === false ? " (pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
-			return { content: (res.pane ?? "Sent.") + landed, success: true };
+			// Our judgement ABOUT the pane, not the pane: outside the fence (`tail`).
+			const landed = res.changed === false ? "(pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
+			return { content: res.pane ?? "Sent.", success: true, tail: landed, origin: `the terminal ${target} on your machine` };
 		},
 	},
 	{
@@ -156,6 +162,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Send a message to an interactive CLI running in a local terminal target and submit it (types the text, presses Enter, waits for the pane to quiesce, and confirms the input landed). WRITE: runs on the user's machine. Use this — not `terminal_send_keys` — whenever you want to submit a message or command to a running CLI like Claude Code, Codex, or a REPL. Returns `changed: false` with an explicit warning when the pane did not react (CLI not yet at its input prompt — retry after a short wait).",
 		jsonSchema: {
@@ -183,11 +190,13 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target, activeCommand: res.activeCommand });
 			if (res.changed === false) {
 				return {
-					content: (res.pane ?? "") + " (pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					content: res.pane ?? "",
 					success: false,
+					tail: "(pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					origin: `the terminal ${target} on your machine`,
 				};
 			}
-			return { content: res.pane ?? "Message sent.", success: true };
+			return { content: res.pane ?? "Message sent.", success: true, origin: `the terminal ${target} on your machine` };
 		},
 	},
 	{
@@ -196,6 +205,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Create a new local terminal target. tmux creates a detached session; kitty opens an OS window via remote control; iTerm2 opens a new window. WRITE: runs on the user's machine.",
 		jsonSchema: {
@@ -227,6 +237,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		connector: "terminal",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Close or kill a local terminal target. tmux kills the session; kitty closes the window; iTerm2 closes the addressed session. WRITE: runs on the user's machine.",
 		jsonSchema: {

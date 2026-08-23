@@ -23,12 +23,14 @@ const SLACK: ConnectorManifest = {
 			name: "slack_post_message",
 			description: "Post a message.",
 			scope: "write",
+			untrustedOutput: false,
 			request: { method: "POST", path: "/chat.postMessage", body: { channel: "{{channel}}", text: "{{text}}" }, responseMap: "ts" },
 			params: { channel: { type: "string", required: true }, text: { type: "string", required: true, maxLength: 10 } },
 		},
 		{
 			name: "slack_list_channels",
 			description: "List channels.",
+			untrustedOutput: true,
 			request: { method: "GET", path: "/conversations.list" },
 		},
 	],
@@ -97,7 +99,7 @@ describe("compileConnector", () => {
 	});
 
 	it("prefers request.url over base+path when present", async () => {
-		const m: ConnectorManifest = { ...SLACK, tools: [{ name: "t_ping", description: "d", request: { url: "https://api.x/ping" } }] };
+		const m: ConnectorManifest = { ...SLACK, tools: [{ name: "t_ping", description: "d", untrustedOutput: true, request: { url: "https://api.x/ping" } }] };
 		await compileConnector(m).tools[0].handler(ctx(), {});
 		const [, reqInput] = executeHttpRequest.mock.calls[0];
 		expect(reqInput).toMatchObject({ url: "https://api.x/ping" });
@@ -110,7 +112,7 @@ describe("compileConnector — handler escape hatch (#146)", () => {
 		id: "custom",
 		label: "Custom",
 		auth: { type: "api-key", key: { in: "query", name: "key" } },
-		tools: [{ name: "custom_tool", description: "custom logic", scope: "read", handler: "doIt", params: { q: { type: "string", required: true } } }],
+		tools: [{ name: "custom_tool", description: "custom logic", scope: "read", untrustedOutput: true, handler: "doIt", params: { q: { type: "string", required: true } } }],
 	};
 
 	it("binds a named code handler instead of the request executor", async () => {

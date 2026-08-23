@@ -4,6 +4,7 @@ import type { RegistryToolCtx } from "../tool-registry.js";
 import type { ConnectorClient } from "./client.js";
 import { getPath, isReadShapedRequest, READ_SHAPED_POST } from "./http.js";
 import { FENCE_TAG, unfenceUntrusted } from "../untrusted-fence.js";
+import { renderToolContent } from "../tool-registry.js";
 
 // The http_request tool, resolved from the registry (proves it's registered → callable via
 // runtime, MCP proxy, and POST …/tools/http_request with no bespoke route).
@@ -51,7 +52,11 @@ function mockFetch(status: number, body: unknown) {
 afterEach(() => vi.restoreAllMocks());
 
 async function run(input: Record<string, unknown>, ctx: RegistryToolCtx = baseCtx) {
-	const r = await httpRequest.handler(ctx, input);
+	const raw = await httpRequest.handler(ctx, input);
+	// The fence is applied by `runRegistryTool` from `ToolDef.untrustedOutput` (#752), not by the
+	// handler. Reading `handler(...).content` directly would test one layer below where the
+	// invariant lives, and would pass whether or not the tool is fenced on any real surface.
+	const r = { ...raw, content: renderToolContent(httpRequest, raw) };
 	// Always attempt the parse: an upstream 4xx/5xx still returns the fenced {status,data}
 	// envelope, and a refusal (SSRF block, missing consent) is prose that safeParse rejects
 	// anyway — so the shape test is the parse itself rather than a guess at the first character.

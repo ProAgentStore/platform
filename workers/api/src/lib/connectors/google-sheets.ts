@@ -71,6 +71,7 @@ export const GOOGLE_SHEETS_MANIFEST: ConnectorManifest = {
 	tools: [
 		{
 			name: "sheets_read",
+			untrustedOutput: true,
 			scope: "read",
 			description: "Read a range of cells from a Google Sheet. Returns the rows as an array of arrays. Give the spreadsheet id (from its URL) and an A1 range like \"Sheet1!A1:D50\".",
 			handler: "sheets_read",
@@ -81,6 +82,7 @@ export const GOOGLE_SHEETS_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "sheets_append",
+			untrustedOutput: false,
 			scope: "write",
 			description: "Append rows to the end of a Google Sheet range (e.g. add newly-found leads). WRITE — the rows are really appended.",
 			handler: "sheets_append",

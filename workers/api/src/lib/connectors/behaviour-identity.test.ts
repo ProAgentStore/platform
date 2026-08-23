@@ -15,6 +15,7 @@ vi.mock("../github-app.js", () => ({
 
 import { runRegistryTool } from "../tool-registry.js";
 import { resolveGithubAccess } from "../github-app.js";
+import { unfenceUntrusted } from "../untrusted-fence.js";
 
 /** Env whose consent lookup returns write-consent for every (instance,connector). */
 function envWithConsent(extra: Partial<Env> = {}): Env {
@@ -45,7 +46,11 @@ describe("github tools stay behaviour-identical through connectorClient", () => 
 		expect(resolveGithubAccess).toHaveBeenCalledWith(expect.anything(), "u1", "acme", { diagnose: true });
 		// The GitHub REST calls use the classic `token <t>` header the tool already built.
 		expect(capturedAuth[0]).toBe("token gh-installation-token");
-		expect(JSON.parse(r.content)[0]).toMatchObject({ status: "completed", conclusion: "success", branch: "main" });
+		// #746: `github_workflow_runs` declares `untrustedOutput: true` — branch names and commit
+		// messages are written by whoever pushed — so the dispatcher fences the payload. Unwrapped
+		// here the way the pipeline binder unwraps it (`parseOutput` in pipeline.ts), which is the
+		// production read path for a non-model consumer, so the SHAPE this test is about is unchanged.
+		expect(JSON.parse(unfenceUntrusted(r.content))[0]).toMatchObject({ status: "completed", conclusion: "success", branch: "main" });
 	});
 
 	it("github_create_issue (write) still resolves the owner's token after the consent gate", async () => {

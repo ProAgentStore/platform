@@ -1,5 +1,6 @@
 import { callRunner, type RunnerConn } from "./runner-client.js";
 import { READ_FETCH_BYTES, renderRepoFileWindow } from "./repo-file-window.js";
+import { withFraming } from "./untrusted-fence.js";
 import { canReadHosted, hostedCoordinate, listHostedIssues, readHostedIssue, type HostedRepoRef } from "./hosted-repo.js";
 import type { Env } from "../types.js";
 
@@ -147,7 +148,13 @@ export async function executeInspectTool(target: InspectTarget, call: { name: st
 				// smaller budget: the fix here is the range and the honest header, not more tokens.
 				const r = await callRunner<{ content?: string; binary?: boolean; truncated?: boolean; size?: number }>(conn, "/coding/read-file", { ...base, path, maxBytes: READ_FETCH_BYTES });
 				if (r.binary) return `${path} is a binary file (not shown).`;
-				return renderRepoFileWindow({
+				// `renderRepoFileWindow` returns head/content/tail since #752, so that the REGISTRY
+				// reader (`repo_read_file`) can fence the file's lines and keep the platform's
+				// disclosure outside the block. This reader is not a registry tool — it is the
+				// Co-pilot's own dispatch — so it composes the same three parts back into one string
+				// and its untrusted-content fence is applied by its caller, `lib/coding-copilot.ts`,
+				// over the joined result of every inspect call.
+				const win = renderRepoFileWindow({
 					path,
 					content: r.content ?? "",
 					size: r.size,
@@ -155,7 +162,8 @@ export async function executeInspectTool(target: InspectTarget, call: { name: st
 					startLine: call.arguments?.startLine,
 					endLine: call.arguments?.endLine,
 					maxChars: CAPS.read_file,
-				}).content;
+				});
+				return withFraming(win.head, win.content, win.tail);
 			}
 			case "git_status": {
 				const r = await callRunner<{ output?: string }>(conn, "/coding/git", { ...base, cmd: "status" });

@@ -101,6 +101,42 @@ export interface RegistryToolResult {
 	 * lib/conversation-transfer.ts for why the response is the whole security argument.
 	 */
 	transfer?: ConversationTransfer;
+	/**
+	 * The platform's OWN framing for this result, rendered OUTSIDE the untrusted fence (ADR 0006 F2).
+	 *
+	 * A tool declaring `untrustedOutput: true` has its `content` wrapped by `runRegistryTool`. Some
+	 * results need a sentence that the model must read as OURS — "Resource <uri> from <endpoint>:",
+	 * "showing 50 of 812", "this machine's runner ignored the path filter". Putting that inside the
+	 * block teaches the model that a fence marks nothing in particular; leaving remote prose outside
+	 * one defeats the block it precedes (that was `mcp_get_prompt`, #748). So the seam is a FIELD:
+	 * the handler says which half is ours, and the dispatcher puts each half where it belongs.
+	 *
+	 * Note the consequence for the pipeline binder: `unfenceUntrusted`'s regex is anchored at both
+	 * ends, so a result carrying a head is NOT unwrappable and its `content` cannot be `$ref`-bound
+	 * as JSON. That is the correct trade for a prose result and the wrong one for an envelope — which
+	 * is why `http_request`, `web_search` and `mcp_call_tool` deliberately carry no head.
+	 */
+	head?: string;
+	/**
+	 * The same thing after the block. `head` and `tail` exist as a PAIR because several platform
+	 * notes are deliberately positioned relative to the body and moving them would undo a decision:
+	 * `lib/repo-file-window.ts` puts the "which lines you got, and the exact call for the next
+	 * window" disclosure ABOVE the body so `capToolResult` cannot cut it off, and repeats a short
+	 * reminder BELOW it; `repo_git` appends "this machine's runner ignored the path filter" after
+	 * the output it qualifies. Forcing all of them into a prefix would have been a fence deciding a
+	 * prompt's layout, which is not its business.
+	 */
+	tail?: string;
+	/**
+	 * Where this result's untrusted text came from, in the owner's terms — rendered into the fence
+	 * preamble ("The following came from …"). Read only when the tool declares `untrustedOutput`.
+	 *
+	 * Optional because only the HANDLER knows the fine-grained answer: `http_request` resolves a URL
+	 * at call time, `mcp_read_resource` knows the endpoint, `repo_read_file` knows the path. When it
+	 * is absent the dispatcher derives one from the tool and its connector, which is always true and
+	 * merely less specific — a default that cannot be wrong is safe to have.
+	 */
+	origin?: string;
 }
 
 /** A draft-07 JSON Schema for a tool's input — an object schema with typed properties.
@@ -199,6 +235,40 @@ export interface ToolDef {
 	 * filterable. A tool that reads someone's private repo mutates nothing.
 	 */
 	mutates: boolean;
+	/**
+	 * Does a result from this tool INTRODUCE text the platform did not author (ADR 0006)?
+	 *
+	 * REQUIRED, and that is the whole point. What this replaces was `FENCES_REMOTE_TEXT` in
+	 * `lib/security-invariants.test.ts` — four MODULE names, each asserted to call `fenceUntrusted`
+	 * *at least once*. It failed in both directions at once and both were live: a module absent from
+	 * the map was invisible (`github.ts` never appeared in it, #746), and `mcp.ts` satisfied it on
+	 * the strength of `mcp_read_resource` while `mcp_call_tool` returned a remote server's payload
+	 * bare thirty lines below in the same file (#748). An at-least-once assertion over a
+	 * hand-maintained list is false assurance, which is worse than no guard. A required field is
+	 * exhaustive by construction: a new tool that omits it does not typecheck, so somebody decides.
+	 *
+	 * `true` → `runRegistryTool` wraps the result in `fenceUntrusted` — ONCE, in ONE place, which is
+	 * what covers all four surfaces the same handler answers (chat, a pipeline step,
+	 * `POST /v1/instances/:id/tools/:name`, MCP). Handlers therefore must NOT fence themselves; a
+	 * second wrap would nest, and `unfenceUntrusted` strips exactly one layer, so the pipeline
+	 * binder's `$ref` would resolve to a fenced fragment that parses as neither JSON nor prose.
+	 * `security-invariants.test.ts` fails if a `lib/connectors/*` module calls `fenceUntrusted`.
+	 *
+	 * The question is INTRODUCE, not "could untrusted bytes ever pass through". A transform step
+	 * (`map`, `filter`, `slice`) re-emits data an ingress tool already produced and adds nothing of
+	 * its own, and the pipeline binder deliberately UNWRAPS a fence so `$ref` can bind JSON — so the
+	 * re-fence for those belongs where the value meets a model, which is `lib/prompt-interpolation.ts`
+	 * (#750), not here. Answering "introduces" keeps the field meaning one thing; answering "touches"
+	 * would make it true of nearly everything and therefore say nothing.
+	 *
+	 * Answer it "can", not "will", and fail-safe. `sheets_read` returns cells anyone shared on the
+	 * sheet can write; `terminal_capture` returns whatever any command printed. Over-declaring costs
+	 * ~40 tokens of preamble; under-declaring is prompt injection with a nicer name.
+	 *
+	 * Provenance detail and the platform's own framing are per-RESULT, not per-tool: see
+	 * {@link RegistryToolResult.origin} and {@link RegistryToolResult.head}.
+	 */
+	untrustedOutput: boolean;
 	handler: (ctx: RegistryToolCtx, input: Record<string, unknown>) => Promise<RegistryToolResult>;
 }
 

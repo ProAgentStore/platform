@@ -14,7 +14,7 @@ vi.mock("../runner-client.js", () => ({
 }));
 
 import { TMUX_TOOLS } from "./tmux.js";
-import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
+import { getRegistryTool, registryConnectorGroups, registryToolNameSet, renderToolContent, runRegistryTool } from "../tool-registry.js";
 import { CONNECTOR_CONSTRAINTS } from "../surface-options.js";
 import type { Env } from "../../types.js";
 
@@ -127,7 +127,11 @@ describe("tmux connector — dispatch to the runner", () => {
 
 	it("send_message returns success:false and a warning when the pane did not change (CLI not ready)", async () => {
 		callRunner.mockResolvedValue({ pane: "> idle", paneBefore: "> idle", changed: false });
-		const r = await tool("tmux_send_message").handler(ctx(), { session: "main", message: "hello" });
+		// The warning is OURS about the pane, so it rides in `tail` outside the fence (#752) —
+		// read at the dispatch seam, which is where the model sees it.
+		const t = tool("tmux_send_message");
+		const raw = await t.handler(ctx(), { session: "main", message: "hello" });
+		const r = { ...raw, content: renderToolContent(t, raw) };
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/pane did not change/);
 		expect(r.content).toMatch(/input prompt/);

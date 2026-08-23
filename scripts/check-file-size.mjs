@@ -644,7 +644,15 @@ const PINS = {
 	// apply", which is not "does this change anything" — six lines is the whole cost of the six
 	// MCP tools answering the second question too, and it belongs beside each declaration for the
 	// same reason `scope` does.
-	"workers/api/src/lib/connectors/mcp.ts": 1349,
+	// +46 at #752: six `untrustedOutput:` lines, plus the FENCING note in the header rewritten to
+	// record a reversal rather than a tidy-up. This file wrote the fencing rule down (#263) and then
+	// broke it twice in its own body — `mcp_call_tool` returned a remote payload bare thirty lines
+	// below a fenced sibling (#748), and the catalog tools were excused on a size argument that does
+	// not answer a content question. Both misses were invisible to the guard of the day, which asked
+	// only whether this MODULE ever called `fenceUntrusted`. The prose is what stops the next author
+	// re-deriving the excuse; splitting the file would move it away from the six declarations it
+	// explains, which is the same defect one file over.
+	"workers/api/src/lib/connectors/mcp.ts": 1395,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -820,7 +828,23 @@ const PINS = {
 	// belong beside its handler, and the parts that COULD move already did — the shortfall
 	// sentence and the partial-failure lift both live in lib/pipeline.ts, which is where the run
 	// reads them.
-	"workers/api/src/lib/steps.ts": 1105,
+	// +12 at #752: one `untrustedOutput:` line per step tool. The answer is `false` for the pure
+	// transforms and it is NOT a shrug — a transform re-emits data an ingress already produced, and
+	// the re-fence for that belongs where the value meets a model (`lib/prompt-interpolation.ts`,
+	// #750), not on a step whose output the binder unwraps. Twelve lines is the whole cost of every
+	// step having answered, which is what makes a NEW step unable to ship without answering.
+	"workers/api/src/lib/steps.ts": 1117,
+	// First entry at #752, crossing LIMIT from 800. The addition is `renderToolContent` — the ONE
+	// place a registry tool's result is fenced from its `untrustedOutput` declaration — and the
+	// paragraphs saying why it is one place, why `head`/`tail` sit outside the block, and why a
+	// bare failure is read as the platform's own refusal. Not split: this is the dispatcher, and
+	// the fence rule is a property OF the dispatch. Moving it to a `tool-result-render.ts` would
+	// put the rule one import away from `runRegistryTool` and one review away from being forgotten,
+	// which is the whole failure mode #752 exists to close. The parts that could genuinely leave
+	// already have — `withFraming` is in `untrusted-fence.ts` beside the anchoring rule that makes
+	// the head/tail split necessary, and `work-stop.ts`/`work-report.ts`/`terminal-label.ts` are
+	// earlier extractions from this same file.
+	"workers/api/src/lib/tool-registry.ts": 836,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1223,7 +1247,12 @@ const PINS = {
 	// `ok` is obtainable for consequential acts and not for an ordinary tool call — the runner
 	// computes `block.is_error` and drops it before it leaves the machine (#597) — and an unscoped
 	// promise is how a legend outlives its data, which is the defect #594 was filed about.
-	"workers/api/src/lib/connectors/supervision.ts": 892,
+	// +6 at #752: one `untrustedOutput:` line per supervision tool. Five are `false` — every field
+	// in those payloads is the platform's own record about the owner's own instances — and
+	// `check_delegation` is `true`, because its `acts` carry branch names, PR titles and commit
+	// subjects observed from a repo. That split is the argument for asking per TOOL rather than per
+	// module or per connector reach.
+	"workers/api/src/lib/connectors/supervision.ts": 898,
 	// First entry at #580/#583, crossing LIMIT from 799 — a file that had been sitting one line
 	// under it, which is not a coincidence: work kept being pushed out (`coding-pause.ts`,
 	// `coding-wait.ts`, `coding-run-report.ts` are all extractions from here) precisely because
@@ -1426,7 +1455,12 @@ const PINS = {
 	// worked, so what each entry has to record is which reading was wrong, not what changed.
 	// The ratchet applied to itself again: an entry costs its reasoning, and that is the price of
 	// the growth being a decision rather than a side effect.
-	"scripts/check-file-size.mjs": 1510,
+	// +29 at #752: four entries above — three raises (mcp.ts, steps.ts, supervision.ts) for the
+	// per-tool `untrustedOutput` declaration and one NEW entry for tool-registry.ts, which crossed
+	// 800 because the dispatcher gained the fence — plus this line. The ratchet applied to itself:
+	// those comments ARE the record of why each number moved, so trimming them to stay under a
+	// number would delete the only thing that makes a pin auditable rather than arbitrary.
+	"scripts/check-file-size.mjs": 1544,
 };
 
 /**

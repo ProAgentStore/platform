@@ -276,6 +276,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 	tools: [
 		{
 			name: "github_workflow_runs",
+			untrustedOutput: true,
 			scope: "read",
 			description: "List recent GitHub Actions workflow runs for a repo (status, conclusion, branch, url) — check CI / deploy status.",
 			handler: "github_workflow_runs",
@@ -286,6 +287,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_list_issues",
+			untrustedOutput: true,
 			scope: "read",
 			description: "List issues for a repo (excludes pull requests). Filter by state and labels.",
 			handler: "github_list_issues",
@@ -297,6 +299,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_read_issue",
+			untrustedOutput: true,
 			scope: "read",
 			description: "Read one issue (title, body, labels, state) by number.",
 			handler: "github_read_issue",
@@ -307,6 +310,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_list_pulls",
+			untrustedOutput: true,
 			scope: "read",
 			description: "List a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Read-only; there is deliberately no merge tool (the repo's merge policy governs that).",
 			handler: "github_list_pulls",
@@ -317,6 +321,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_read_pull",
+			untrustedOutput: true,
 			scope: "read",
 			description: "Read one pull request by number — body, diff size, mergeability, review state and whether its checks are green.",
 			handler: "github_read_pull",
@@ -327,6 +332,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_create_issue",
+			untrustedOutput: false,
 			scope: "write",
 			description: "Open a new GitHub issue in a repo. WRITE — the issue is really created.",
 			handler: "github_create_issue",
@@ -339,6 +345,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_comment_issue",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Add a comment to an existing GitHub issue. WRITE — the comment is really posted. Use this to record WHY something was done (why an issue was closed, what a run changed) instead of spending a coding session on `gh issue comment`.",
@@ -351,6 +358,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_update_issue",
+			untrustedOutput: false,
 			scope: "write",
 			description:
 				"Change an existing GitHub issue: close or reopen it, relabel it, assign it, or edit its title/body. WRITE — the change is really made. Supply only the fields you want to change. IMPORTANT: `labels` and `assignees` REPLACE what the issue currently has, they are not added to it — so to ADD a label, first read the issue (github_read_issue) and pass the existing labels along with the new one. There is no way to clear a field here: an empty value means 'leave it alone'.",

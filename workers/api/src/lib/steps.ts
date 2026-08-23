@@ -427,6 +427,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Reshape a record or array of records (pure, no I/O). `rename` copies fromPath→toKey, `extract` pulls nested values by dotted/`arr[]` path (e.g. addressComponents → {city,suburb,state,country}), `derive` sets constants, `keep` narrows to listed keys. toKey may be dotted to build nested output. Returns the reshaped array.",
 		jsonSchema: {
@@ -459,6 +460,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Keep or drop records by a simple predicate over fields (pure, no I/O). `where` is a list of {field,op,value} clauses (AND by default, OR when `any:true`); ops: eq ne exists missing truthy falsy in contains gt gte lt lte. `mode` keep (default) or drop. Proves the lead-finder's 'keep no-website OR unreachable'. Returns the surviving array.",
 		jsonSchema: {
@@ -487,6 +489,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Concatenate an array-of-arrays into a flat array (pure, no I/O). `depth` (default 1) is how many nesting levels to collapse. Optional `path`: when a `forEach` binds an array of RESULT ENVELOPES (e.g. one http_request `{status,data:[…]}` per grid cell), `path` pulls that sub-array (\"data\") from each element FIRST, so the grid fan-out (`fan_out` grid → `forEach` http_request → flatten) collapses to one flat list of records for `map`/`filter`/`dedupe_upsert`. Returns the flattened array.",
 		jsonSchema: {
@@ -525,6 +528,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		// this step unreachable. `mutates:true` is the statement about the world: it INSERTs and
 		// PUTs records, and it fires the agent-to-agent pump, which starts work on another instance.
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Insert-or-update records into an instance collection, deduped by a key field (e.g. place_id). For each item: look up an existing record where key matches; if found, either skip (mode 'skip') or update in place (mode 'update', default); if not, insert. Honors the collection's unique constraint on the key field. Returns {inserted, updated, skipped, failed} — `skipped` means DELIBERATELY not written (no key, or already seen under mode 'skip'), `failed` means the write did not land; the step fails outright when every attempted write failed.",
 		jsonSchema: {
@@ -681,6 +685,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		// itself. `grid` mode mutates nothing, but a per-mode answer is not something one boolean
 		// on the TOOL can carry, and the honest direction for the pair is the mutating one (#563).
 		mutates: true,
+		untrustedOutput: true,
 		// `pages` mode drives an http_request cursor from inside this handler (#396), so the
 		// pre-flight can see it. `grid` mode dispatches nothing — the declaration is per TOOL rather
 		// than per mode, because a predicate over inputs is not something the source-derived guard in
@@ -770,6 +775,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		// below) — which is the same as saying this step can mutate. It is refused unless the agent
 		// declared that tool, but "refused unless configured" is not "cannot" (#563).
 		mutates: true,
+		untrustedOutput: true,
 		// The tool to run per record arrives as an INPUT and is re-dispatched through the same
 		// registry path (#396). Naming the key here lets the pre-flight resolve it whenever the
 		// author wrote a literal — which every reference pipeline does — while a `$param`-supplied
@@ -836,6 +842,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Probe whether a URL is alive: GET it with a browser User-Agent, a ~12s timeout and one retry, via the SSRF-guarded safeFetch (#95). Returns {ok, code} — ok=true for any real HTTP response below 500 (a live server, even 403/404); ok=false on timeout, transport failure, blocked/private target, or 5xx. The lead-finder's 'is this site up' check on websiteUri.",
 		jsonSchema: {
@@ -865,6 +872,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		// fixed template — the caller supplies an address, never a verb or a URL — so unlike
 		// `fan_out`/`enrich` there is no path from this step to a mutation.
 		mutates: false,
+		untrustedOutput: true,
 		// Unconditionally an http_request underneath (#396) — it reuses the #95 tool for vault
 		// api-key injection rather than fetching itself. A `geocode`-only pipeline on an agent that
 		// declares nothing used to pass attach AND kick and die on its first step.
@@ -934,6 +942,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Extract socials + email from web_search results (pure, no I/O). Scans the [{title,link,snippet}] rows and pulls the first Instagram profile URL, Facebook page URL, and email address seen → {instagram, facebook, email} (missing fields are null). The companion to the web_search connector (#99): web_search a business name+suburb, then extract_contacts populates the instagram/facebook/email columns. Best-effort/heuristic — matches are candidates, not verified (precision noted in the output).",
 		jsonSchema: {
@@ -976,6 +985,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Take a bounded window of a list (pure, no I/O). `limit` keeps at most that many records, `offset` skips that many first. The 'top N' primitive — cap a list before a per-item connector call (enrich / forEach) so a long source can't turn into unbounded spend. Returns {items, count, dropped}.",
 		jsonSchema: {
@@ -1017,6 +1027,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		tier: "standard",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Parse a JSON string field on each record into real structured data (pure, no I/O). Reads `field` (default \"text\" — what ai_generate writes) and writes the parsed value to `as` (default: back onto `field`). Strips a ```json code fence and any prose around the JSON. A value that won't parse becomes null rather than failing the batch, and is counted in `failed`. The companion to ai_generate when you asked the model for JSON.",
 		jsonSchema: {
@@ -1055,6 +1066,7 @@ export const STEP_TOOLS: ToolDef[] = [
 		// DIFFERENT question — `/v1/usage` and `usage_summary` answer it — and folding it in here
 		// would make `mutates` mean "consequential", which is not a fact anyone can check (#563).
 		mutates: false,
+		untrustedOutput: false,
 		description:
 			"Generate text per record with the owner's BYOK model. For each item, render `prompt` ({{field}} / {{a.b}} interpolation from the item) and write the model's reply to the `as` field (default \"text\"). Optional `system` prompt, `model` (default claude-sonnet-4-6), `maxTokens` (default 500). The pipeline's LLM step — e.g. draft an outreach message per lead. Best-effort per item: a generation failure leaves `as` empty and never fails the batch.",
 		jsonSchema: {

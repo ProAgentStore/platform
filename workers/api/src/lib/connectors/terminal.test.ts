@@ -11,7 +11,7 @@ vi.mock("../runner-client.js", () => ({
 }));
 
 import { TERMINAL_TOOLS } from "./terminal.js";
-import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
+import { getRegistryTool, registryConnectorGroups, registryToolNameSet, renderToolContent, runRegistryTool } from "../tool-registry.js";
 import { CONNECTOR_CONSTRAINTS } from "../surface-options.js";
 import type { Env } from "../../types.js";
 
@@ -115,7 +115,11 @@ describe("terminal connector — runner dispatch", () => {
 
 	it("send_message returns success:false and a warning when changed=false (CLI not ready)", async () => {
 		callRunner.mockResolvedValue({ pane: "> waiting", paneBefore: "> waiting", changed: false });
-		const r = await tool("terminal_send_message").handler(ctx(), { target: "tmux:main", message: "hello" });
+		// The warning is OURS about the pane, so it rides in `tail` outside the fence (#752) —
+		// read at the dispatch seam, which is where the model sees it.
+		const t = tool("terminal_send_message");
+		const raw = await t.handler(ctx(), { target: "tmux:main", message: "hello" });
+		const r = { ...raw, content: renderToolContent(t, raw) };
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/pane did not change/);
 		expect(r.content).toMatch(/input prompt/);

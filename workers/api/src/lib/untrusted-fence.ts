@@ -91,3 +91,21 @@ export function unfenceUntrusted(text: string): string {
 	const m = FENCED_RE.exec(s);
 	return m ? m[1] : s;
 }
+
+/**
+ * Join the platform's own framing to a body, with the framing OUTSIDE it (ADR 0006 F2).
+ *
+ * It lives here, beside the fence, because the whole reason a result has three parts is that
+ * `unfenceUntrusted`'s regex is ANCHORED at both ends: a sentence of ours placed inside the block
+ * teaches the model that a block marks nothing in particular, and a sentence placed inside the
+ * STRING but outside the block would stop the binder unwrapping it. Where each half goes is a
+ * property of the fence, so the join is one function rather than a `${head}\n\n${body}` written
+ * again at every call site — which is how `mcp_get_prompt` came to put a remote server's
+ * `description` where the platform's framing goes (#748).
+ *
+ * Joined by PRESENCE: a head with no body renders as the head alone, so a tool whose result is
+ * entirely our own words — "(no files found at that path)" — stays byte-equal to itself.
+ */
+export function withFraming(head: string | undefined, body: string, tail?: string): string {
+	return [head?.trim(), body, tail?.trim()].filter((p) => p).join("\n\n");
+}

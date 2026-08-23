@@ -38,6 +38,7 @@
  * which is the only reason it recovered. That behaviour has to survive, and it is now stated in
  * numbers the model can act on rather than a byte count it cannot.
  */
+import type { RegistryToolResult } from "./connectors/types.js";
 
 /**
  * The window's character budget — counted on the RENDERED text (line numbers included), so the
@@ -109,7 +110,7 @@ const num = (n: number): string => n.toLocaleString("en-US");
  * Render one window of a file, with its disclosure above it. Pure — no runner, no env — so every
  * boundary below can be asserted directly, including what survives `capToolResult`.
  */
-export function renderRepoFileWindow(input: RepoFileWindowInput): { content: string; success: boolean } {
+export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolResult {
 	const { path } = input;
 	const maxChars = input.maxChars ?? READ_MAX_CHARS;
 	const maxLines = input.maxLines ?? READ_MAX_LINES;
@@ -118,7 +119,8 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): { content: str
 
 	// An empty file is an answer, not a failure — and saying so plainly stops a model reading the
 	// blank result as "the read failed" and trying three more spellings of the path.
-	if (raw === "") return { content: `--- ${path} — this file is empty (0 lines) ---`, success: true };
+	// Entirely our own sentence about an empty file — `head` with no body, so nothing is fenced.
+	if (raw === "") return { head: `--- ${path} — this file is empty (0 lines) ---`, content: "", success: true };
 
 	const lines = raw.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
 	if (raw.endsWith("\n")) {
@@ -194,6 +196,17 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): { content: str
 		);
 	}
 
-	const tail = shownTo < available ? `\n\n(continues — repo_read_file path="${path}" startLine=${num(shownTo + 1)})` : "";
-	return { content: `${head}${notes.length ? `\n${notes.join("\n")}` : ""}\n\n${body.join("\n")}${tail}`, success: true };
+	const tail = shownTo < available ? `(continues — repo_read_file path="${path}" startLine=${num(shownTo + 1)})` : "";
+	// The disclosure and the continuation reminder are the PLATFORM's, and the file's lines are not.
+	// Returned as `head`/`content`/`tail` so `runRegistryTool` can fence the middle and leave ours
+	// outside it (#752, ADR 0006 F2) — a "call again with startLine=…" instruction inside a block
+	// the model is told never to obey is worse than no instruction. The head keeps its position for
+	// the reason this module already gives: `capToolResult` keeps the HEAD, so a note explaining a
+	// cut must not be the first thing a second cut removes.
+	return {
+		head: `${head}${notes.length ? `\n${notes.join("\n")}` : ""}`,
+		content: body.join("\n"),
+		success: true,
+		...(tail ? { tail } : {}),
+	};
 }

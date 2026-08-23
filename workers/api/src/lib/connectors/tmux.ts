@@ -38,6 +38,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: true,
 		description:
 			"List every live tmux session on the connected machine (name, window count, whether it's attached, and the command running in its active pane). Use this first to discover which session to read or drive.",
 		jsonSchema: { type: "object", properties: {} },
@@ -45,7 +46,9 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
 			const res = await callRunner<{ sessions?: unknown[] }>(r.conn, "/tmux/list", {}, { timeoutMs: READ_TIMEOUT_MS });
-			return { content: JSON.stringify(res.sessions ?? [], null, 2), success: true };
+			// Session names and the active pane's command line: strings the machine chose, not ones
+			// the owner typed here.
+			return { content: JSON.stringify(res.sessions ?? [], null, 2), success: true, origin: "the tmux sessions on your machine" };
 		},
 	},
 	{
@@ -54,6 +57,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: true,
 		description:
 			"Read the current output of a tmux session's active pane (ANSI-stripped, with scrollback). Use this to see what a shell, build, server, or CLI is showing right now.",
 		jsonSchema: {
@@ -74,7 +78,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 				{ session, lines: input.lines },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
-			return { content: res.pane ?? "", success: true };
+			return { content: res.pane ?? "", success: true, origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -83,6 +87,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready).",
 		jsonSchema: {
@@ -101,8 +106,10 @@ export const TMUX_TOOLS: ToolDef[] = [
 			if (!command.trim()) return { content: "A `command` is required.", success: false };
 			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/run", { session, command });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
-			const landed = res.changed === false ? " (pane did not change — the command may not have landed; is the CLI ready?)" : "";
-			return { content: (res.pane ?? `Ran in ${session}.`) + landed, success: true };
+			// The landed note is the PLATFORM's judgement about the pane, not the pane — it rides in
+			// `tail`, outside the fence, or the model reads our diagnosis as terminal output.
+			const landed = res.changed === false ? "(pane did not change — the command may not have landed; is the CLI ready?)" : "";
+			return { content: res.pane ?? `Ran in ${session}.`, success: true, tail: landed, origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -111,6 +118,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Send literal text and/or named keys to a tmux session's active pane WITHOUT auto-pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be at its input prompt yet). Keys use tmux names like \"Enter\", \"Escape\", \"C-c\", \"Up\". To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `tmux_send_message` instead.",
 		jsonSchema: {
@@ -131,8 +139,8 @@ export const TMUX_TOOLS: ToolDef[] = [
 			if (text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
 			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/send", { session, text, keys });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
-			const landed = res.changed === false ? " (pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
-			return { content: (res.pane ?? `Sent to ${session}.`) + landed, success: true };
+			const landed = res.changed === false ? "(pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
+			return { content: res.pane ?? `Sent to ${session}.`, success: true, tail: landed, origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -141,6 +149,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Send a message to an interactive CLI running in a tmux session and submit it (types the text, presses Enter, waits for the pane to quiesce, and confirms the input landed). WRITE: runs on the user's machine. Use this — not `tmux_send_keys` — whenever you want to submit a message or command to a running CLI like Claude Code, Codex, or a REPL. Returns `changed: false` with an explicit warning when the pane did not react (CLI not yet at its input prompt — retry after a short wait).",
 		jsonSchema: {
@@ -167,11 +176,13 @@ export const TMUX_TOOLS: ToolDef[] = [
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
 			if (res.changed === false) {
 				return {
-					content: (res.pane ?? "") + " (pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					content: res.pane ?? "",
 					success: false,
+					tail: "(pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					origin: `the tmux session "${session}" on your machine`,
 				};
 			}
-			return { content: res.pane ?? "Message sent.", success: true };
+			return { content: res.pane ?? "Message sent.", success: true, origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -180,6 +191,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Create a new detached tmux session (optionally running a command in a working directory). WRITE: runs on the user's machine. No-op if a session with that name already exists.",
 		jsonSchema: {
@@ -213,6 +225,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		connector: "tmux",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: false,
 		description:
 			"Kill a tmux session by name. WRITE: runs on the user's machine. Destroys whatever is running in it — use with care.",
 		jsonSchema: {

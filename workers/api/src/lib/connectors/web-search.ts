@@ -13,7 +13,6 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
-import { fenceUntrusted } from "../untrusted-fence.js";
 
 const CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";
 const MAX_RESULTS = 10;
@@ -78,13 +77,19 @@ export const webSearchHandler: ToolDef["handler"] = async (ctx: RegistryToolCtx,
 
 	// #308: titles and snippets are written by whoever ranked for the query — the most cheaply
 	// attacker-authored text on the platform, since anyone can publish a page whose <title> is an
-	// instruction and wait for an agent to search for it. Fenced in the connector, not at the chat
-	// surface, so the pipeline step / tools route / MCP surfaces are covered by the same line.
+	// instruction and wait for an agent to search for it.
+	//
+	// The wrap moved to `runRegistryTool` (#752): this tool declares `untrustedOutput: true` in the
+	// manifest below and the dispatcher applies the fence, so the pipeline step / tools route / MCP
+	// surfaces are covered by the declaration rather than by this line having been written. The
+	// origin stays here because the QUERY is the specific fact, and only this function has it.
 	// The pipeline binder unwraps it (`unfenceUntrusted` in pipeline.ts), so `$ref: "hits.results"`
-	// still resolves — the fence is for the model, and the binder is not one.
+	// still resolves — the fence is for the model, and the binder is not one. No `head`, for the
+	// same reason: it would break that unwrap.
 	return {
-		content: fenceUntrusted(JSON.stringify({ query, count: results.length, results }, null, 2), `a web search for ${query}`),
+		content: JSON.stringify({ query, count: results.length, results }, null, 2),
 		success: true,
+		origin: `a web search for ${query}`,
 	};
 };
 
@@ -98,6 +103,7 @@ export const WEB_SEARCH_MANIFEST: ConnectorManifest = {
 	tools: [
 		{
 			name: "web_search",
+			untrustedOutput: true,
 			scope: "read",
 			description:
 				"Search the web (Google Custom Search) for a query and return the top results as [{title, link, snippet}]. Use it to look a business up by name+suburb before an extract step pulls its Instagram/Facebook/email. The API key is read from the vault (never passed in); supply the non-secret CSE id via `cx` (or the WEB_SEARCH_CX env default). `num` caps results (default 5, max 10). Results are best-effort. HTTPS-only, SSRF-guarded.",

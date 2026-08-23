@@ -56,6 +56,23 @@ export interface ManifestTool {
 	 * handler-escape tool whose code does more than its request template shows.
 	 */
 	mutates?: boolean;
+	/**
+	 * Does a result from this tool INTRODUCE text the platform did not author (`ToolDef.untrustedOutput`,
+	 * ADR 0006)? REQUIRED here, unlike `mutates`, and the difference is not an inconsistency.
+	 *
+	 * `mutates` is derivable from `scope` because a manifest's request is fixed configuration, so
+	 * the author already answered "does this change the target" when they wrote `scope`. Nothing in
+	 * a manifest answers "whose words come BACK". `scope:"read"` is exactly as true of
+	 * `github_read_issue` (a body any stranger can write on a public repo) as of a status endpoint
+	 * that returns two booleans, and #746 shipped for as long as it did precisely because those two
+	 * looked identical from every field a manifest carries. So this one is asked, per tool.
+	 *
+	 * The untrusted-JSON path (`sanitizeConnectorManifest`) has no author to ask and sets `true`
+	 * unconditionally — see the comment there. That is not a fail-safe default standing in for a
+	 * decision; it is the correct answer for the whole class, because a JSON manifest tool IS an
+	 * HTTP call to a third-party API.
+	 */
+	untrustedOutput: boolean;
 	/** Configuration-as-data request (the default). Omitted for a `handler` tool. */
 	request?: ManifestToolRequest;
 	/**
@@ -163,7 +180,7 @@ export function compileConnector(
 		if (t.handler) {
 			const fn = handlers[t.handler];
 			if (!fn) throw new Error(`Manifest ${m.id}: tool "${t.name}" references unknown handler "${t.handler}".`);
-			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, mutates, handler: fn };
+			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, mutates, untrustedOutput: t.untrustedOutput, handler: fn };
 		}
 		const req = t.request ?? {};
 		return {
@@ -174,6 +191,7 @@ export function compileConnector(
 			connector: m.id,
 			scope,
 			mutates,
+			untrustedOutput: t.untrustedOutput,
 			handler: (ctx, input) =>
 				executeHttpRequest(
 					ctx,
@@ -284,6 +302,14 @@ export function sanitizeConnectorManifest(raw: unknown): ConnectorManifest | nul
 			description,
 			scope: t.scope === "write" ? "write" : "read",
 			mutates: t.scope === "write" || !SAFE_METHODS.has(method),
+			// `true` for the whole class, not as a fail-safe stand-in for a decision (ADR 0006 F3).
+			// A tool on this path IS an HTTP call to a third-party API — that is the only shape
+			// `sanitizeConnectorManifest` can emit, since it never accepts a `handler` — so its
+			// response is by construction bytes chosen by somebody who is not this codebase and not
+			// the owner. There is no case here for which `false` would be the true answer, which is
+			// what makes hardcoding it honest; reading the field off the manifest would instead let
+			// the author of an untrusted manifest turn their own fence off.
+			untrustedOutput: true,
 			request,
 			params: sanitizeParams(t.params),
 		});

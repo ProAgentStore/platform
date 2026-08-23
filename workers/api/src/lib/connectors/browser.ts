@@ -47,6 +47,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		connector: "browser",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Open a URL in the agent's real browser on the connected machine. WRITE: acts as the signed-in user. Follow with browser_snapshot to see the page.",
 		jsonSchema: {
@@ -65,7 +66,14 @@ export const BROWSER_TOOLS: ToolDef[] = [
 				{ action: "navigate", url },
 				{ timeoutMs: ACT_TIMEOUT_MS },
 			);
-			return { content: `Navigated to ${res.url ?? url}${res.title ? ` — ${res.title}` : ""}.`, success: true };
+			// `res.url` is where the page ACTUALLY landed (redirects follow the site's choice) and
+			// `res.title` is written by the site. "Navigated to:" is ours and stays in the head.
+			return {
+				head: "Navigated to:",
+				content: `${res.url ?? url}${res.title ? ` — ${res.title}` : ""}`,
+				success: true,
+				origin: `the page at ${res.url ?? url}`,
+			};
 		},
 	},
 	{
@@ -74,6 +82,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		connector: "browser",
 		scope: "read",
 		mutates: false,
+		untrustedOutput: true,
 		description:
 			"Read the current page as an accessibility (ARIA) tree with stable element refs (e.g. [ref=e42]) — what the agent 'sees'. Use those refs with browser_act. Returns the url, title, and the snapshot; flags a captcha/login challenge when one is detected (which this bounded tool cannot solve).",
 		jsonSchema: { type: "object", properties: {} },
@@ -86,15 +95,21 @@ export const BROWSER_TOOLS: ToolDef[] = [
 				{},
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
+			// The challenge warning and the truncation note are OURS — head, outside the fence. The
+			// url/title/snapshot are the page's own bytes and go inside it.
 			if (res.challenge) {
 				return {
-					content: `⚠️ A "${res.challenge}" challenge is on the page. This bounded browser tool can't solve captchas/2FA — that needs the workflow path. URL: ${res.url}\n\n${res.snapshot}`,
+					head: `⚠️ A "${res.challenge}" challenge is on the page. This bounded browser tool can't solve captchas/2FA — that needs the workflow path.`,
+					content: `URL: ${res.url}\n\n${res.snapshot}`,
 					success: true,
+					origin: `the page at ${res.url}`,
 				};
 			}
 			return {
-				content: `URL: ${res.url}\nTitle: ${res.title}${res.truncated ? " (snapshot truncated)" : ""}\n\n${res.snapshot}`,
+				...(res.truncated ? { head: "(snapshot truncated)" } : {}),
+				content: `URL: ${res.url}\nTitle: ${res.title}\n\n${res.snapshot}`,
 				success: true,
+				origin: `the page at ${res.url}`,
 			};
 		},
 	},
@@ -104,6 +119,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		connector: "browser",
 		scope: "write",
 		mutates: true,
+		untrustedOutput: true,
 		description:
 			"Perform ONE action on the current page, targeting an element by its snapshot ref (preferred) or ARIA role + accessible name. WRITE: acts as the signed-in user. Take a browser_snapshot first to get refs, act, then snapshot again to see the result.",
 		jsonSchema: {
@@ -134,10 +150,17 @@ export const BROWSER_TOOLS: ToolDef[] = [
 				{ action, ref: input.ref, role: input.role, name: input.name, text: input.text, url: input.url, key: input.key, nth: input.nth, dy: input.dy },
 				{ timeoutMs: ACT_TIMEOUT_MS },
 			);
+			// `res.feedback` is composed on the machine from what the PAGE reported back (element
+			// names, error text), so it is not ours even though it reads like a status line. The
+			// challenge warning IS ours.
 			const parts = [res.feedback || `Did ${action}${input.name ? ` on "${input.name}"` : ""}.`];
 			if (res.url) parts.push(`Now at ${res.url}.`);
-			if (res.challenge) parts.push(`⚠️ challenge detected: ${res.challenge} — needs the workflow path to solve.`);
-			return { content: parts.join(" "), success: res.ok !== false };
+			return {
+				content: parts.join(" "),
+				success: res.ok !== false,
+				...(res.challenge ? { tail: `⚠️ challenge detected: ${res.challenge} — needs the workflow path to solve.` } : {}),
+				origin: res.url ? `the page at ${res.url}` : "the page in the browser on your machine",
+			};
 		},
 	},
 ];

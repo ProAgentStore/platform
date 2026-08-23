@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { GMAIL_CONNECTOR, GMAIL_MANIFEST } from "./gmail.js";
 import type { Env } from "../../types.js";
+import { renderToolContent } from "../tool-registry.js";
 import type { RegistryToolCtx } from "./types.js";
 
 /**
@@ -12,10 +13,25 @@ import type { RegistryToolCtx } from "./types.js";
  * gating — and a gate that has no test looks identical to one that does.
  */
 
-const tool = (name: string) => {
+const toolDef = (name: string) => {
 	const t = GMAIL_CONNECTOR.tools.find((x) => x.name === name);
 	if (!t?.handler) throw new Error(`no handler for ${name}`);
-	return t.handler;
+	return t;
+};
+
+const tool = (name: string) => toolDef(name).handler;
+
+/**
+ * Run a handler and render its result the way `runRegistryTool` does (#752).
+ *
+ * The fence is applied by the DISPATCHER from `ToolDef.untrustedOutput`, not by the handler, so a
+ * test that reads `handler(...).content` is looking one layer below where the invariant now lives
+ * and would pass whether or not the tool is fenced on any real surface. This helper is that layer.
+ */
+const dispatched = async (name: string, ...args: Parameters<ReturnType<typeof tool>>) => {
+	const t = toolDef(name);
+	const r = await t.handler(...args);
+	return { ...r, content: renderToolContent(t, r) };
 };
 
 /** An env whose instance DO reports the given `permissions.email`, or fails outright. */
@@ -117,9 +133,12 @@ describe("gmail_search", () => {
 
 	it("reports no match as a success with the query, not as an error", async () => {
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify({}), { status: 200 }));
-		const res = await tool("gmail_search")(ctxWith(envWithPermission(true)), { from: "nobody" });
+		const res = await dispatched("gmail_search", ctxWith(envWithPermission(true)), { from: "nobody" });
 		// A search that found nothing WORKED. Returning success:false here would make the model
 		// retry or apologise for a failure that never happened.
+		//
+		// Read through the dispatcher, because the sentence now travels in `head`: it is entirely
+		// OUR words, and an empty body is what keeps it outside the fence (#752).
 		expect(res.success).toBe(true);
 		expect(res.content).toMatch(/No messages matched/);
 	});
@@ -583,14 +602,14 @@ describe("untrusted-content fencing", () => {
 				? new Response(JSON.stringify(PARENT), { status: 200 })
 				: new Response(JSON.stringify({ messages: [{ id: "m1" }] }), { status: 200 }),
 		);
-		const res = await tool("gmail_search")(ctxWith(envWithPermission(true)), { query: "x" });
+		const res = await dispatched("gmail_search", ctxWith(envWithPermission(true)), { query: "x" });
 		expect(res.success).toBe(true);
 		expect(res.content).toMatch(FENCE);
 	});
 
 	it("fences a message body, naming the sender it came from", async () => {
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(PARENT), { status: 200 }));
-		const res = await tool("gmail_read_message")(ctxWith(envWithPermission(true)), { message_id: "m1" });
+		const res = await dispatched("gmail_read_message", ctxWith(envWithPermission(true)), { message_id: "m1" });
 		expect(res.content).toMatch(FENCE);
 		expect(res.content).toContain("kelly@example.test");
 	});
@@ -599,14 +618,14 @@ describe("untrusted-content fencing", () => {
 		// "No messages matched" contains nothing a stranger wrote. Fencing it would teach the
 		// model that a fence marks nothing in particular.
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify({}), { status: 200 }));
-		const res = await tool("gmail_search")(ctxWith(envWithPermission(true)), { query: "nobody" });
+		const res = await dispatched("gmail_search", ctxWith(envWithPermission(true)), { query: "nobody" });
 		expect(res.success).toBe(true);
 		expect(res.content).not.toMatch(FENCE);
 	});
 
 	it("does NOT fence an action outcome — those are our words, not the sender's", async () => {
 		stubModify();
-		const res = await tool("gmail_archive")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), { message_id: "m1" });
+		const res = await dispatched("gmail_archive", ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), { message_id: "m1" });
 		expect(res.success).toBe(true);
 		expect(res.content).not.toMatch(FENCE);
 	});
@@ -625,7 +644,7 @@ describe("untrusted-content fencing", () => {
 			},
 		};
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(hostile), { status: 200 }));
-		const res = await tool("gmail_read_message")(ctxWith(envWithPermission(true)), { message_id: "m1" });
+		const res = await dispatched("gmail_read_message", ctxWith(envWithPermission(true)), { message_id: "m1" });
 		// Exactly one closing marker: the real one, at the end. The smuggled copy is rewritten by
 		// `neutralizeFenceMarkers`, so it cannot terminate the block early and let the rest of the
 		// subject land outside it as instructions.

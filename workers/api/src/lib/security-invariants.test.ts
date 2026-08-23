@@ -388,33 +388,60 @@ describe("the untrusted-content fence is not re-implemented", () => {
 		).toEqual([]);
 	});
 
-	it("every tool that returns remote text fences it in the connector", () => {
-		// #308. The fence covered RAG and MCP resources; the three tools carrying the most
-		// obviously attacker-authored text of all — an arbitrary page, an arbitrary API response,
-		// third-party search titles — returned it bare. Each now wraps at the SOURCE rather than at
-		// the chat surface, for the reason #263 gives: these handlers also answer a pipeline step,
-		// `POST /v1/instances/:id/tools/:name` and MCP, so one surface's fence leaves three bare.
+	// ── What replaced FENCES_REMOTE_TEXT, and why the map had to GO (#752) ─────────────────
+	//
+	// The guard here used to be a four-entry map of MODULE names — `lib/tools.ts`,
+	// `lib/connectors/http.ts`, `lib/connectors/web-search.ts`, `lib/connectors/mcp.ts` — each
+	// asserted to call `fenceUntrusted` AT LEAST ONCE. It failed in both directions at once, and
+	// both failures were live when it was deleted:
+	//
+	//   • A module absent from the map was invisible, not failing. `github.ts` (#746),
+	//     `repo-local.ts`/`tmux.ts`/`terminal.ts` (#751) and `gmail.ts` (#725) had never been in it.
+	//     By 2026-08-23 four MORE modules fenced and none had been added — four names out of eight,
+	//     and the ratio was getting worse.
+	//   • At-least-once passed vacuously. `mcp.ts` satisfied the map on `mcp_read_resource` while
+	//     `mcp_call_tool`, thirty lines below in the same file, returned a remote server's payload
+	//     bare (#748). Green throughout.
+	//
+	// Extending it would have been the same defect with more entries. The replacement is
+	// `ToolDef.untrustedOutput`, required — so the COMPILER asks every tool — plus the two
+	// assertions below, which are exhaustive by construction over the real registry and the real
+	// connector directory rather than over a list somebody maintains.
+	it("the fence is applied by the dispatcher, so no connector module calls it itself", () => {
+		// The counterpart of the required declaration: `runRegistryTool` wraps a tool's result from
+		// `untrustedOutput`, so a handler that ALSO fences produces a nested block —
+		// `unfenceUntrusted` strips exactly one layer, and the pipeline binder's `$ref` then binds a
+		// fenced fragment that parses as neither JSON nor prose.
 		//
-		// Pinned per module, so deleting a fence fails here rather than being noticed by whoever
-		// eventually reads a transcript in which a web page gave the agent an instruction.
-		const FENCES_REMOTE_TEXT: Record<string, string> = {
-			"lib/tools.ts": "fetch_url — up to 4000 chars of an arbitrary page",
-			"lib/connectors/http.ts": "http_request — an arbitrary API response envelope",
-			"lib/connectors/web-search.ts": "web_search — third-party titles and snippets",
-			"lib/connectors/mcp.ts": "resources/read + prompts/get (#263)",
-		};
-		const offenders = Object.entries(FENCES_REMOTE_TEXT)
-			.filter(([rel]) => {
-				const f = ALL.find((s) => s.rel === rel);
-				return !f || findCalls(f.code, "fenceUntrusted").length === 0;
-			})
-			.map(([rel, why]) => `${rel} — ${why}`);
+		// Exhaustive over the directory, not over a list: a connector added tomorrow is covered
+		// because it lives here, which is the property the map it replaced never had.
+		const offenders = ALL.filter((f) => f.rel.startsWith("lib/connectors/") && findCalls(f.code, "fenceUntrusted").length > 0).map((f) => f.rel);
 		expect(
 			offenders,
-			`These modules return remote text on the model's instruction path and no longer call\n` +
-				`fenceUntrusted (lib/untrusted-fence.ts). Unfenced remote text is prompt injection with a\n` +
-				`nicer name. If a module moved, repoint the entry; do not delete it.\n` +
+			`A connector handler must NOT call fenceUntrusted. Declare \`untrustedOutput: true\` on the\n` +
+				`ToolDef instead and let runRegistryTool wrap it once — that is what covers chat, a pipeline\n` +
+				`step, POST /v1/instances/:id/tools/:name and MCP together, and what stops the answer\n` +
+				`depending on whether this handler's author happened to think of it (#752).\n` +
+				`For provenance use RegistryToolResult.origin; for framing that must stay outside the block,\n` +
+				`use head/tail.\n` +
 				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+
+	it("every registry tool declares untrustedOutput, including the ones compiled from a manifest", () => {
+		// The compiler already enforces this for every hand-written ToolDef literal. It cannot
+		// enforce it for a tool built from DATA — `compileConnector` reads `ManifestTool`, and
+		// `sanitizeConnectorManifest` builds one of those from untrusted JSON. This is that gap,
+		// asserted against the REAL registry rather than a fixture.
+		const undeclared = registryTools()
+			.filter((t) => typeof t.untrustedOutput !== "boolean")
+			.map((t) => `${t.name} (${t.connector ?? "first-party"})`);
+		expect(
+			undeclared,
+			`Every registry tool must answer "does a result from this tool introduce text the platform\n` +
+				`did not author?" (ADR 0006 F3). A manifest tool declares it in the manifest; the JSON path\n` +
+				`in sanitizeConnectorManifest hardcodes true, because that whole class IS a third-party API\n` +
+				`call.\nOffenders:\n${listing(undeclared)}`,
 		).toEqual([]);
 	});
 
