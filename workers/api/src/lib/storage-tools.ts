@@ -3,6 +3,7 @@
  * Extends the base AGENT_TOOLS with the new storage engine.
  */
 import { AgentStorageEngine } from "../agent-storage.js";
+import { confirmationLinkFound, confirmationLinkWithoutLinks } from "./confirmation-link-result.js";
 import { executePdfTool, PDF_STORAGE_TOOLS } from "./pdf-storage-tools.js";
 import type { CollectionField } from "../agent-storage-types.js";
 import type { ToolCallResult, ToolDef } from "./tools.js";
@@ -622,20 +623,17 @@ export async function executeStorageTool(
 						);
 					}
 					const ranked = rankConfirmationLinks(match.links, typeof call.input.from === "string" ? call.input.from : undefined);
+					// Both results are built in lib/confirmation-link-result.ts, which fences the
+					// sender's words and keeps ours outside the block (#725). Read its header before
+					// changing either string: the fence's placement is load-bearing, not cosmetic.
 					if (ranked.length === 0) {
-						return ok(
-							call.name,
-							`Found email "${match.subject}" from ${match.from} but it contained no links.`,
-						);
+						return ok(call.name, confirmationLinkWithoutLinks(match));
 					}
 					await engine.logEvent("email.confirmation_link_found", ctx.userId, {
 						subject: match.subject,
 						from: match.from,
 					});
-					return ok(
-						call.name,
-						`Found email "${match.subject}" from ${match.from} (${match.date}).\nMost likely confirmation link: ${ranked[0]}\nOther links: ${ranked.slice(1, 4).join(", ") || "none"}\nOpen the confirmation link with a browser.open runner task to complete verification.`,
-					);
+					return ok(call.name, confirmationLinkFound(match, ranked));
 				} catch (err) {
 					if (err instanceof GmailError) return fail(call.name, err.message);
 					throw err;
