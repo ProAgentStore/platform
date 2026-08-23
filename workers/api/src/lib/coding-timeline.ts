@@ -462,17 +462,35 @@ export async function clearChat(env: Env, sessionId: string, userId: string, ins
  */
 export async function loadRepoTimeline(
 	env: Env,
-	args: { instanceId: string; userId: string; repoId: string; limit?: number },
+	args: { instanceId: string; userId: string; repoId: string; limit?: number; since?: number },
 ): Promise<TimelineEntry[]> {
 	const limit = Math.max(1, Math.min(2000, args.limit ?? 500));
+	// OPTIONAL, and OFF by default (#737). The one caller that sets it is `seedBriefForRepo`, whose
+	// output an ENGINE reads as context: a repo-scoped read spans every session the repo ever had,
+	// so without a bound the brief could open with an instruction from six weeks ago introduced as
+	// "recent history" — while `resolveSessionContinuity`, one function away, had already refused to
+	// resume that same conversation for being four days stale. The window is that function's
+	// `RESUME_WINDOW_MS`, imported by the caller rather than restated here, so this module keeps no
+	// policy of its own.
+	//
+	// The DEFAULT must stay unbounded. `GET …/coding/repos/:repoId/timeline` is the human-facing
+	// history the console renders, and a person scrolling back through their own work is asking a
+	// different question from an engine being told what is still true.
+	//
+	// Compared as text, in the column's own format: `created_at` is `datetime('now')`, so
+	// `YYYY-MM-DD HH:MM:SS` in UTC, and that shape sorts lexicographically. Formatting the cutoff to
+	// match is what makes it comparable — `toISOString()` unedited would put a `T` where the column
+	// has a space, and `T` sorts ABOVE every digit, so the comparison would silently keep everything.
+	const since = typeof args.since === "number" && Number.isFinite(args.since) ? new Date(args.since).toISOString().slice(0, 19).replace("T", " ") : null;
 	const { results } = await env.DB.prepare(
 		`SELECT t.seq, t.type, t.content, t.created_at, t.audio_key, t.session_id
 		   FROM coding_timeline t
 		   JOIN coding_sessions s ON s.id = t.session_id
 		  WHERE t.instance_id = ?1 AND t.user_id = ?2 AND s.repo_id = ?3
+		    AND (?5 IS NULL OR t.created_at >= ?5)
 		  ORDER BY t.seq DESC LIMIT ?4`,
 	)
-		.bind(args.instanceId, args.userId, args.repoId, limit)
+		.bind(args.instanceId, args.userId, args.repoId, limit, since)
 		.all<Row>();
 	return (results ?? []).map(toEntry).reverse();
 }

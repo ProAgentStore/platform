@@ -35,10 +35,27 @@
 // is bounded twice: per entry, so one 100 000-character terminal snapshot cannot be the whole
 // brief, and in total.
 //
+// ── Bounded in TIME as well as in size (#737)
+//
+// The size budget below does not bound AGE, and measuring beat assuming: three of five production
+// repos fit their entire 60-row window inside 12 000 characters on 2026-08-23, and those were
+// exactly the ones whose briefs spanned 41 and 39 days. A quiet repo has a long, cheap history, so
+// the cheapest brief was the most misleading one — it opened with an instruction from June under
+// the word "Recent", the only temporal word the whole document contained.
+//
+// Two independent fixes, because they answer different questions. Every line now carries its own
+// age, so the brief STATES what it is instead of asserting recency; and the read is cut at
+// `RESUME_WINDOW_MS` — imported from `coding-session-continuity.ts`, never restated — so the
+// platform has one answer to "how old is too old for this repo" rather than two that disagree. The
+// second matters most on the branch that seeds *because* the transcript is stale: rebuilding the
+// context out of that same transcript reverses #408 without recording it.
+//
 // PURE. The D1 read is one function at the bottom and everything above it is testable without an
 // `Env`, for the same reason `resolveSessionContinuity` is pure: what the engine is told is a
-// product decision, and a product decision embedded in a query is one nobody re-reads.
+// product decision, and a product decision embedded in a query is one nobody re-reads. `now` is a
+// parameter for the same reason — an age is only a fact relative to a clock somebody named.
 
+import { describeAge, RESUME_WINDOW_MS } from "./coding-session-continuity.js";
 import { loadRepoTimeline, type TimelineEntry, type TimelineType } from "./coding-timeline.js";
 import type { Env } from "../types.js";
 
@@ -120,11 +137,38 @@ export const SEED_CLOSING = "END OF BRIEF. The instruction follows.";
  * `seedBriefForRepo` past the read's own `.catch` and fail the launch — turning a missing memory
  * into a missing session, which is the one trade this whole file is not allowed to make.
  */
-function renderEntry(e: TimelineEntry): string {
+function renderEntry(e: TimelineEntry, now: number): string {
 	const content = typeof e?.content === "string" ? e.content : "";
 	const body = (e.type === "terminal" ? content.slice(-TERMINAL_CHARS) : content.slice(0, NARRATIVE_CHARS)).trim();
 	if (!body) return "";
-	return `[${LABEL[e.type] ?? e.type}] ${body}`;
+	// The age on the LINE (#737), because that is the only place it can be read at the moment it
+	// matters. `createdAt` was on `TimelineEntry` from the day it was written and this function
+	// dropped it, so an engine reading "[the user said] finish the health endpoint" had no way to
+	// tell yesterday's instruction from June's — and neither did anyone auditing the brief.
+	// A row whose timestamp cannot be parsed gets no age rather than a wrong one.
+	const age = entryAgeMs(e?.createdAt, now);
+	const when = age === null ? "" : ` · ${describeAge(age)} ago`;
+	return `[${LABEL[e.type] ?? e.type}${when}] ${body}`;
+}
+
+/**
+ * How old one row is, or `null` when the record does not say.
+ *
+ * `coding_timeline.created_at` defaults to SQLite's `datetime('now')`, which is UTC written as
+ * `YYYY-MM-DD HH:MM:SS` — no `T`, no `Z`. `Date.parse` treats exactly that shape as LOCAL time in
+ * V8, so parsing it unedited would shift every age by the runtime's offset and quietly report a
+ * ten-hour-old instruction as an hour old. Workers run UTC today, which is precisely what would
+ * make the bug invisible here and real on any other host. Normalised rather than assumed.
+ *
+ * Clock skew is clamped at 0 for the reason `resolveSessionContinuity` clamps it: a row written a
+ * second in the future is "just now", not a negative age rendered as an enormous one.
+ */
+function entryAgeMs(createdAt: unknown, now: number): number | null {
+	if (typeof createdAt !== "string" || !createdAt) return null;
+	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(createdAt) ? `${createdAt.replace(" ", "T")}Z` : createdAt;
+	const at = Date.parse(normalized);
+	if (!Number.isFinite(at)) return null;
+	return Math.max(0, now - at);
 }
 
 /**
@@ -137,23 +181,57 @@ function renderEntry(e: TimelineEntry): string {
  * result is still rendered oldest-first: a reader that has to work out the direction of time is a
  * reader that will get it wrong.
  */
-export function composeSeedBrief(entries: TimelineEntry[], opts: { repoName?: string } = {}): string {
+export function composeSeedBrief(entries: TimelineEntry[], opts: { repoName?: string; now?: number } = {}): string {
 	if (!Array.isArray(entries)) return "";
+	const now = opts.now ?? Date.now();
 	const lines: string[] = [];
+	// The ages of the rows that ACTUALLY made it in, for the header. Taken here rather than from
+	// `entries` because the budget can drop the oldest ones, and a header describing rows the engine
+	// cannot see is the same class of untrue as the word it replaces.
+	const ages: number[] = [];
 	let budget = SEED_BRIEF_MAX_CHARS;
 	for (let i = entries.length - 1; i >= 0; i--) {
-		const line = renderEntry(entries[i]);
+		const line = renderEntry(entries[i], now);
 		if (!line) continue;
 		// Stop rather than skip-and-continue: a budget that keeps looking for a smaller line further
 		// back produces a brief with a hole in the middle of it, and nothing in the text says so.
 		if (line.length + 1 > budget) break;
 		budget -= line.length + 1;
 		lines.push(line);
+		const age = entryAgeMs(entries[i]?.createdAt, now);
+		if (age !== null) ages.push(age);
 	}
 	if (!lines.length) return "";
 	lines.reverse();
 	const where = opts.repoName ? `\n\nRepository: ${opts.repoName}` : "";
-	return `${SEED_PREAMBLE}${where}\n\nRecent history, oldest first:\n\n${lines.join("\n")}\n\n${SEED_CLOSING}`;
+	return `${SEED_PREAMBLE}${where}\n\n${historyHeading(ages)}\n\n${lines.join("\n")}\n\n${SEED_CLOSING}`;
+}
+
+/**
+ * The line that introduces the rows — and the word this issue is about (#737).
+ *
+ * It read "Recent history, oldest first:". "Recent" was the only temporal word in the entire brief,
+ * it was asserted rather than measured, and measured against live data it was false: two of five
+ * production repos produced briefs spanning 41 and 39 days, opening with an instruction from June.
+ *
+ * The span is stated ONCE, where a reader who skimmed the preamble still meets it. The preamble's
+ * defence — "the working tree may have moved on since" — is uncalibratable on its own; nobody can
+ * weigh "may have moved on" without knowing whether the last line is from yesterday or from seven
+ * weeks ago. This is what makes that hedge a quantity.
+ *
+ * `ages` may be empty when no row carried a parseable timestamp. It says so rather than picking a
+ * number: an undated record is the state the platform is in, and claiming a span it did not measure
+ * is the same mistake as claiming recency it did not measure.
+ */
+function historyHeading(ages: number[]): string {
+	if (!ages.length) return "History from the platform's record, oldest first (the record does not say when these happened):";
+	const oldest = describeAge(Math.max(...ages));
+	const newest = describeAge(Math.min(...ages));
+	// One phrasing when the span collapses. "the oldest entry here is 3 days old, the newest 3 days"
+	// is a range that is not a range, and a reader who has to notice the two numbers are equal is a
+	// reader who will read past it.
+	if (oldest === newest) return `History from the platform's record, oldest first — every entry here is about ${oldest} old:`;
+	return `History from the platform's record, oldest first — the oldest entry here is ${oldest} old, the newest ${newest} old:`;
 }
 
 /**
@@ -168,18 +246,39 @@ export async function seedBriefForRepo(
 	args: { instanceId: string; userId: string; repoId: string; repoName?: string },
 ): Promise<string> {
 	try {
+		const now = Date.now();
 		const entries = await loadRepoTimeline(env, {
 			instanceId: args.instanceId,
 			userId: args.userId,
 			repoId: args.repoId,
 			limit: SEED_BRIEF_ENTRIES,
+			// ONE answer to "how old is too old for this repo" (#737).
+			//
+			// `RESUME_WINDOW_MS` is imported, never restated. Eight of the branches that reach this
+			// function seed, and one of them exists *because* the previous conversation is past that
+			// window — `resolveSessionContinuity` refuses it in those words: "the old transcript is a
+			// liability rather than context". Building the replacement out of the same transcript
+			// reverses that decision without recording that it was reversed, and invisibly, because
+			// until this issue nothing in the brief said how old anything was.
+			//
+			// The char budget does NOT bound age and cannot be asked to: three of five repos measured
+			// on 2026-08-23 fit their entire 60-row window inside 12 000 characters, and those were
+			// exactly the ones spanning six weeks. A quiet repo has a long, cheap history.
+			//
+			// Nothing left inside the window means `composeSeedBrief` returns `""` and the session
+			// opens exactly as it does today for a repo with no record at all. That is the correct
+			// degradation, not a new state.
+			since: now - RESUME_WINDOW_MS,
 		});
 		// The RENDER is inside the try as well as the read. A `.catch` on the query alone was the
 		// first version of this function and it was not enough: a row whose `content` came back
 		// undefined threw inside `composeSeedBrief`, past the read's catch, and took down the session
 		// open that was waiting on it. The guarantee is about this function, not about one await
 		// inside it.
-		return composeSeedBrief(entries, { repoName: args.repoName });
+		// The SAME `now` the window was derived from, so the ages rendered on the lines cannot
+		// disagree with the bound that selected them (a row admitted at 3 days 23 hours must not
+		// render as "4 days" because the clock was read twice).
+		return composeSeedBrief(entries, { repoName: args.repoName, now });
 	} catch {
 		return "";
 	}

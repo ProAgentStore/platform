@@ -184,6 +184,34 @@ describe("loadRepoTimeline — history belongs to the REPO, not to a session (#2
 		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1", limit: 0 });
 		expect(reads[1].args[3]).toBe(1);
 	});
+
+	it("stays COMPLETE by default — the route that renders human history must not be cut (#737)", async () => {
+		// The acceptance criterion the date bound must not break. `GET …/coding/repos/:id/timeline`
+		// is a person scrolling back through their own work, which is a different question from an
+		// engine being told what is still true. A caller that names no window gets a NULL bound, and
+		// `(?5 IS NULL OR …)` is what makes that one query rather than two that can drift apart.
+		const { env, reads } = readEnv([{ seq: 1, type: "terminal", content: "from June", created_at: "2026-06-26 09:00:00", session_id: "s1" }]);
+		const out = await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1" });
+		expect(reads[0].args[4], "the default read must carry no date bound").toBeNull();
+		expect(out.map((e) => e.content)).toEqual(["from June"]);
+	});
+
+	it("formats an explicit window in the COLUMN's own format, not ISO", async () => {
+		// `created_at` is `datetime('now')` — `YYYY-MM-DD HH:MM:SS`, compared as text. A raw
+		// `toISOString()` puts a `T` where the column has a space, and `T` (0x54) sorts above every
+		// digit, so `t.created_at >= '2026-08-20T…'` would match nothing that looks older and the
+		// bound would silently do the opposite of its job.
+		const { env, reads } = readEnv();
+		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1", since: Date.parse("2026-08-20T10:00:00Z") });
+		expect(reads[0].sql).toContain("t.created_at >= ?5");
+		expect(reads[0].args[4]).toBe("2026-08-20 10:00:00");
+	});
+
+	it("ignores a window that is not a number, rather than binding NaN", async () => {
+		const { env, reads } = readEnv();
+		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1", since: Number.NaN });
+		expect(reads[0].args[4]).toBeNull();
+	});
 });
 
 describe("pruneTerminalSnapshots — keep newest N terminal rows, delete older ones (#466)", () => {

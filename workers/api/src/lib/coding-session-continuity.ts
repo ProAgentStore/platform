@@ -110,8 +110,15 @@ export interface PreviousSessionFacts {
 	lastActivityAt: number | null;
 }
 
-/** Round an age to the coarsest unit that still reads as a fact ("3 days", "5 hours"). */
-function describeAge(ms: number): string {
+/**
+ * Round an age to the coarsest unit that still reads as a fact ("3 days", "5 hours").
+ *
+ * Exported since #737 so the seed brief can date its own lines in the SAME register this file
+ * already uses. A second formatter would be a second answer to "how do we say how old something
+ * is", and the two surfaces are read minutes apart — the banner says the conversation was last
+ * touched 9 days ago, and the brief the engine gets is built from the same rows.
+ */
+export function describeAge(ms: number): string {
 	const hours = Math.max(1, Math.round(ms / 3_600_000));
 	if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
 	const days = Math.round(hours / 24);
