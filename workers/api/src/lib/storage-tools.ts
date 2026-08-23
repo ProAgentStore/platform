@@ -653,6 +653,17 @@ export async function executeStorageTool(
 				return ok(call.name, lines.join("\n"));
 			}
 
+			// A pane holds whatever any command printed — a `curl` response, an `npm install` banner,
+			// a `cat` of a file somebody else wrote, another agent's output (#751). It is text the
+			// platform did not author, and this tool is a BUILT-IN, so it does not pass through
+			// `runRegistryTool` and its `untrustedOutput` declaration cannot reach it. It fences at
+			// its own seam instead — ADR 0006 F4, the same shape `lib/knowledge-result.ts` uses.
+			//
+			// Every label below stays OUTSIDE the block (F2): "[live · idle — one-shot engine: the
+			// turn has FINISHED]", "[last snapshot — runner offline]" and `opening` are the
+			// platform's own verdicts about the pane, and the whole point of several of them is that
+			// the model must NOT read a stale snapshot as live. A fence tells it to disregard what is
+			// inside; a diagnosis inside one is a diagnosis withdrawn.
 			case "read_terminal": {
 				if (!ctx?.env || !ctx.agentId || !ctx.userId) return fail(call.name, "Not available");
 				const repoName = call.input.repo_name as string;
@@ -671,7 +682,7 @@ export async function executeStorageTool(
 					// truthful answer to "what was it doing" — labelled with the real diagnosis, never
 					// presented as live.
 					const stale = ensured.session ? await lastTerminal(ctx.env as Env, ensured.session.id).catch(() => null) : null;
-					if (stale) return ok(call.name, `[last snapshot — not live. ${ensured.message}]\n${stale.slice(-3000)}`);
+					if (stale) return ok(call.name, `[last snapshot — not live. ${ensured.message}]\n${fenceUntrusted(stale.slice(-3000), TERMINAL_ORIGIN)}`);
 					return fail(call.name, ensured.message);
 				}
 				const session = ensured.session;
@@ -703,12 +714,12 @@ export async function executeStorageTool(
 						oneShot && state === "idle"
 							? " — one-shot engine: the turn has FINISHED (it exits after each turn); this is not a hang"
 							: "";
-					return ok(call.name, `${opening}[live · ${state}${note}]\n${(snap.pane || "(empty)").slice(-3000)}`);
+					return ok(call.name, `${opening}[live · ${state}${note}]\n${fenceUntrusted((snap.pane || "(empty)").slice(-3000), TERMINAL_ORIGIN)}`);
 				}
 				// Runner offline / capture miss: fall back to the last saved snapshot, clearly labelled
 				// so the orchestrator never presents stale scrollback as live activity.
 				const tail = await lastTerminal(ctx.env as Env, session.id).catch(() => null);
-				if (tail) return ok(call.name, `${opening}[last snapshot — runner offline]\n${tail.slice(-3000)}`);
+				if (tail) return ok(call.name, `${opening}[last snapshot — runner offline]\n${fenceUntrusted(tail.slice(-3000), TERMINAL_ORIGIN)}`);
 				return fail(call.name, `${opening}Runner offline — no live terminal and no saved snapshot. Start it with \`pags up\`.`);
 			}
 
@@ -765,6 +776,10 @@ export async function executeStorageTool(
 
 // Import needed for type in get_activity
 import type { ActivityEvent } from "../agent-storage-types.js";
+import { fenceUntrusted } from "./untrusted-fence.js";
+
+/** Where a terminal pane came from, in the owner's terms — rendered into the fence preamble. */
+const TERMINAL_ORIGIN = "a terminal on your machine";
 
 function ok(name: string, content: string): ToolCallResult {
 	return { name, content, success: true };

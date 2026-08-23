@@ -131,7 +131,14 @@ const PINS = {
 	// instead of .first()-ing over (user_id, provider). Raised rather than split — it is one
 	// resolution at an existing call site, and the decision it makes is pure and already lives in
 	// lib/connector-accounts.ts with its own tests.
-	"workers/api/src/lib/storage-tools.ts": 826,
+	// +13 at #752/#751: `read_terminal` fences the pane it returns. This tool is a BUILT-IN, so it
+	// never reaches `runRegistryTool` and the per-tool `untrustedOutput` declaration cannot cover it
+	// — ADR 0006 F4 is exactly the case, and the comment saying so is most of the 13 lines. Not
+	// split: the fence has to sit beside the three return paths whose LABELS must stay outside it
+	// ("[live · idle]", "[last snapshot — runner offline]"), and separating a fence from the framing
+	// it is positioned against is how `mcp_get_prompt` came to put a remote server's description
+	// where the platform's own words go.
+	"workers/api/src/lib/storage-tools.ts": 839,
 	// New entry at #738 — 799 → 810, crossing LIMIT by ten. #305 left this file at 684 and deleted
 	// its entry, which is the outcome this guard wants; it has since drifted back to one line under
 	// the threshold, so #738's four ADDITIVE response fields could not be explained at all without
@@ -1455,12 +1462,14 @@ const PINS = {
 	// worked, so what each entry has to record is which reading was wrong, not what changed.
 	// The ratchet applied to itself again: an entry costs its reasoning, and that is the price of
 	// the growth being a decision rather than a side effect.
+	// +8 more at #752/#751: the storage-tools.ts raise above (`read_terminal` fences its pane —
+	// a built-in the registry declaration cannot reach) plus this line.
 	// +29 at #752: four entries above — three raises (mcp.ts, steps.ts, supervision.ts) for the
 	// per-tool `untrustedOutput` declaration and one NEW entry for tool-registry.ts, which crossed
 	// 800 because the dispatcher gained the fence — plus this line. The ratchet applied to itself:
 	// those comments ARE the record of why each number moved, so trimming them to stay under a
 	// number would delete the only thing that makes a pin auditable rather than arbitrary.
-	"scripts/check-file-size.mjs": 1544,
+	"scripts/check-file-size.mjs": 1554,
 };
 
 /**
