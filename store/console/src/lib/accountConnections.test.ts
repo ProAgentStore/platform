@@ -1,15 +1,21 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	accountConnections,
+	agentAccountChoices,
+	agentAccountNotice,
 	connectionSummary,
 	disconnectedMessage,
 	disconnectPromptFor,
 	accountRows,
 	needsPerAgentChoice,
 	needsReconnect,
+	NO_ACCOUNT_CHOSEN_LABEL,
 	scopeShortfallNote,
 	type ConnectorEntry,
+	type InstanceConnectorAccounts,
 } from "./accountConnections";
+import { maskComments } from "./jsx-tags.js";
 
 const SEND = "https://www.googleapis.com/auth/gmail.send";
 const MODIFY = "https://www.googleapis.com/auth/gmail.modify";
@@ -414,5 +420,166 @@ describe("the note branching reaches both surfaces that show it", () => {
 			"cannot archive or mark read — reconnect to allow managing mail",
 			null,
 		]);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #736 — the per-agent account picker the three refusal surfaces already promised.
+//
+// `needsPerAgentChoice` existed and was exported before this issue; it was called from exactly
+// ONE place, `AccountConnections.tsx`, i.e. from the surface whose text tells you to go and make
+// the choice somewhere else. The tests below cover the other end of that sentence.
+
+const instanceRow = (over: Partial<InstanceConnectorAccounts> = {}): InstanceConnectorAccounts => ({
+	connector: "gmail",
+	label: "Gmail",
+	accounts: [
+		{ accountId: "sivochkin@gmail.com", label: "sivochkin@gmail.com", connectedAt: null },
+		{ accountId: "serge.pro.job@gmail.com", label: "serge.pro.job@gmail.com", connectedAt: null },
+	],
+	pinned: null,
+	resolves: null,
+	blocked: { reason: "ambiguous", message: "You have 2 Gmail accounts connected and this agent is not set to use one of them." },
+	...over,
+});
+
+describe("agentAccountChoices — which connectors this agent must be told about", () => {
+	it("offers the choice once a connector holds two accounts", () => {
+		expect(agentAccountChoices([instanceRow()]).map((r) => r.connector)).toEqual(["gmail"]);
+	});
+
+	/**
+	 * AC3. The threshold is `needsPerAgentChoice`'s, not a second copy of it — with one account
+	 * every agent resolves to it and there is nothing to decide, so nobody who never adds a second
+	 * mailbox sees this panel appear.
+	 */
+	it("renders nothing for the ordinary one-account case", () => {
+		const single = instanceRow({
+			accounts: [{ accountId: "only@x.test", label: "only@x.test", connectedAt: null }],
+			resolves: "only@x.test",
+			blocked: null,
+		});
+		expect(agentAccountChoices([single])).toEqual([]);
+	});
+
+	it("keeps offering it after the choice is made, so a set pin stays readable and changeable", () => {
+		// Gating on `blocked` instead would hide the control the moment it stopped being urgent,
+		// leaving the owner unable to see or change which mailbox the agent reaches.
+		const pinned = instanceRow({ pinned: "sivochkin@gmail.com", resolves: "sivochkin@gmail.com", blocked: null });
+		expect(agentAccountChoices([pinned])).toHaveLength(1);
+	});
+});
+
+describe("agentAccountNotice — the panel states the consequence, in the server's words", () => {
+	/**
+	 * AC2, and the reason the picker is not just a dropdown. An owner arriving at this panel is
+	 * usually arriving because something refused; a bare select would read as an optional
+	 * preference and would not tell them the agent is inert right now.
+	 */
+	it("renders the server's blocked message verbatim when nothing resolves", () => {
+		const notice = agentAccountNotice(instanceRow());
+		expect(notice.blocked).toBe(true);
+		expect(notice.message).toBe("You have 2 Gmail accounts connected and this agent is not set to use one of them.");
+	});
+
+	it("does not paraphrase — the panel and the tool refusal quote one string", () => {
+		// Three surfaces already said the same thing in three hand-written variants and one of them
+		// was false. A console-authored fourth copy is how that happens again.
+		const row = instanceRow({ blocked: { reason: "ambiguous", message: "server words, exactly" } });
+		expect(agentAccountNotice(row).message).toBe("server words, exactly");
+	});
+
+	it("falls back to a blunt sentence rather than rendering a blocked state with no reason", () => {
+		const notice = agentAccountNotice(instanceRow({ blocked: null }));
+		expect(notice.blocked).toBe(true);
+		expect(notice.message).toContain("every Gmail call refuses");
+	});
+
+	it("names the account in use once one resolves", () => {
+		const row = instanceRow({ pinned: "serge.pro.job@gmail.com", resolves: "serge.pro.job@gmail.com", blocked: null });
+		expect(agentAccountNotice(row)).toEqual({ blocked: false, message: "This agent uses serge.pro.job@gmail.com." });
+	});
+
+	it("still names an account that has no captured label", () => {
+		const row = instanceRow({
+			accounts: [
+				{ accountId: "id-1", label: null, connectedAt: null },
+				{ accountId: "id-2", label: null, connectedAt: null },
+			],
+			pinned: "id-1",
+			resolves: "id-1",
+			blocked: null,
+		});
+		expect(agentAccountNotice(row).message).toBe("This agent uses id-1.");
+	});
+});
+
+describe("NO_ACCOUNT_CHOSEN_LABEL — clearing the pin is not a fallback to a default", () => {
+	/**
+	 * AC5. `PUT` with an empty `accountId` returns the instance to `blocked.reason: "ambiguous"`.
+	 * An option labelled "Automatic", or a blank one, would promise the opposite of what
+	 * `lib/connector-accounts.ts` does — and picking a mailbox for the owner is the exact bug
+	 * #715 exists to prevent.
+	 */
+	it("says what clearing it costs", () => {
+		expect(NO_ACCOUNT_CHOSEN_LABEL).toBe("Not chosen — every call refuses");
+		expect(NO_ACCOUNT_CHOSEN_LABEL.toLowerCase()).not.toContain("automatic");
+	});
+});
+
+describe("the picker chooses among credentials and can never establish one (#355)", () => {
+	const SRC = readFileSync(new URL("../components/AgentAccountChoice.tsx", import.meta.url), "utf-8");
+	// Comments MASKED, or this asserts the opposite of what it means: the docstring explains the
+	// #355 incident, so it names "disconnect" and "Gmail" on purpose. The claim is about what the
+	// component DOES, and the prose that records why is the last thing to strip from it.
+	const CODE = maskComments(SRC);
+
+	/**
+	 * ADR 0002 G1 — the denominator. Every assertion below is an ABSENCE, and an absence over an
+	 * unread or over-masked file is green and means nothing. This proves the file was read, that
+	 * masking left the code behind, and that it is the right file.
+	 */
+	it("read the panel, and the panel does write the pin", () => {
+		expect(CODE.length).toBeGreaterThan(500);
+		expect(CODE).toContain("/connector-accounts");
+		expect(CODE).toContain('method: "PUT"');
+		// Masking removed prose and only prose.
+		expect(SRC).toContain("#355");
+		expect(CODE).not.toContain("#355");
+	});
+
+	/**
+	 * The regression #736 explicitly guards against. Connecting is an ACCOUNT act — one credential
+	 * row shared by every instance — and a button that performs it under a heading carrying one
+	 * agent's name is what made disconnecting Gmail from the Coder's settings disconnect it for the
+	 * Job Application Assistant too, with nothing on screen saying so (#355).
+	 */
+	it("offers no connect or disconnect affordance", () => {
+		for (const forbidden of ["Disconnect", "disconnect", "/start", 'method: "DELETE"', "flow"]) {
+			expect(CODE, `AgentAccountChoice.tsx must not reach for "${forbidden}" — connect/disconnect is account scope (#355)`).not.toContain(forbidden);
+		}
+	});
+
+	/** No `if (connector === "gmail")`: Drive and WorkDrive reach this panel through the same path. */
+	it("holds no per-connector knowledge", () => {
+		expect(CODE.toLowerCase()).not.toContain("gmail");
+		expect(CODE.toLowerCase()).not.toContain("drive");
+	});
+});
+
+describe("AccountConnections' sentence is now true (#736 AC6)", () => {
+	/**
+	 * `AccountConnections.tsx` renders "Each agent must be told which of these to use, on its own
+	 * Settings tab" whenever a connector holds two accounts — and it has been rendering on the live
+	 * Preferences page while that tab held nothing. This is the pin: the sentence and the control
+	 * move together or this goes red.
+	 */
+	it("says it, and the Settings tab mounts the control it names", () => {
+		const prefs = readFileSync(new URL("../components/AccountConnections.tsx", import.meta.url), "utf-8");
+		expect(prefs).toContain("on its own Settings tab");
+
+		const settings = readFileSync(new URL("../tabs/SettingsTab.tsx", import.meta.url), "utf-8");
+		expect(settings).toContain('import AgentAccountChoice from "../components/AgentAccountChoice"');
+		expect(settings).toContain("<AgentAccountChoice instanceId={instanceId} />");
 	});
 });

@@ -54,12 +54,89 @@ export interface ConnectorAccountRow {
 }
 
 /**
+ * The part of a connector row the two account-shaped helpers below actually read.
+ *
+ * Widened from `ConnectorEntry` at #736 so the SAME two functions serve both surfaces that list
+ * accounts: the account page's catalog row (`GET /v1/connectors`) and one agent's own verdict
+ * (`GET /v1/instances/{id}/connector-accounts`), which returns the accounts and nothing else the
+ * catalog carries. Duplicating `accounts?.length > 1` for the instance shape is how the two
+ * surfaces would come to disagree about when a choice is owed — and disagreeing about that is
+ * precisely this issue: one surface said a choice was required and the other never offered one.
+ */
+export type HasAccounts = Pick<ConnectorEntry, "accounts" | "scopes">;
+
+/**
+ * One row of `GET /v1/instances/{id}/connector-accounts` — this AGENT's view of one connector.
+ *
+ * Distinct from {@link ConnectorEntry}, which is the ACCOUNT's view. The account page can say a
+ * connector is connected; only this route can say which mailbox *this* agent would reach, and
+ * whether it would reach one at all.
+ */
+export interface InstanceConnectorAccounts {
+	connector: string;
+	label: string;
+	accounts: ConnectorAccountRow[];
+	/** The account this agent is pinned to. `null` is "no choice made", not "resolve sensibly". */
+	pinned: string | null;
+	/** What a call would resolve to right now, computed without making one. `null` = it refuses. */
+	resolves: string | null;
+	/** Why it refuses, in the server's own words. `null` when it does not. */
+	blocked: { reason: string; message: string } | null;
+}
+
+/**
+ * The connectors THIS agent has to be told about — the ones holding more than one account.
+ *
+ * Gated on {@link needsPerAgentChoice} rather than on `blocked`, deliberately. A pinned agent is
+ * not blocked, and hiding the control once it is set would leave the choice unreadable and
+ * unchangeable the moment it stopped being urgent — which is the same "the control is elsewhere"
+ * dead end this issue is about, one step further along.
+ */
+export function agentAccountChoices(rows: InstanceConnectorAccounts[]): InstanceConnectorAccounts[] {
+	return rows.filter(needsPerAgentChoice);
+}
+
+/**
+ * What the picker says about the current state, and whether it is a problem.
+ *
+ * `blocked.message` is rendered VERBATIM when there is one (#736). The server already computes the
+ * exact sentence — how many accounts, which addresses, and that nothing is sent or read until a
+ * choice is made — and it is the sentence the tool refusal quotes. A second, console-authored
+ * paraphrase of it would be one more copy of a string that has already been wrong on three
+ * surfaces at once, and the owner would meet both.
+ *
+ * The fallback exists only for a `resolves: null` with no message, which the route does not
+ * currently produce: a blocked state that renders no reason is worse than a blunt one.
+ */
+export function agentAccountNotice(row: InstanceConnectorAccounts): { blocked: boolean; message: string } {
+	if (row.resolves === null) {
+		return {
+			blocked: true,
+			message: row.blocked?.message ?? `This agent is not set to use one of your ${row.label} accounts, so every ${row.label} call refuses.`,
+		};
+	}
+	const name = accountRows(row).find((a) => a.accountId === row.resolves)?.name ?? row.resolves;
+	return { blocked: false, message: `This agent uses ${name}.` };
+}
+
+/**
+ * The label of the "no account chosen" option.
+ *
+ * It states the CONSEQUENCE rather than reading as a neutral default (#736 AC5). Clearing the pin
+ * with several accounts connected does not fall back to one of them — every call refuses — and an
+ * option labelled "Automatic" or left blank would promise the opposite of what the resolver does.
+ * That promise is what `lib/connector-accounts.ts` refuses to make on purpose: picking for the
+ * owner silently answers from the wrong life.
+ */
+export const NO_ACCOUNT_CHOSEN_LABEL = "Not chosen — every call refuses";
+
+/**
  * The accounts to render under a connector, and how each reads.
  *
  * Kept here rather than in the component for the reason the rest of this module exists: the
  * sentence a permission surface shows is worth testing without a browser.
  */
-export function accountRows(entry: ConnectorEntry): Array<{ accountId: string; name: string; note: string | null }> {
+export function accountRows(entry: HasAccounts): Array<{ accountId: string; name: string; note: string | null }> {
 	return (entry.accounts ?? []).map((a) => ({
 		accountId: a.accountId,
 		// An account with no captured address still has to be nameable, or it cannot be disconnected.
@@ -74,7 +151,7 @@ export function accountRows(entry: ConnectorEntry): Array<{ accountId: string; n
  * The threshold is two, not one: with a single account every agent resolves to it and nothing
  * needs configuring, which is why nobody who never adds a second sees any change.
  */
-export function needsPerAgentChoice(entry: ConnectorEntry): boolean {
+export function needsPerAgentChoice(entry: HasAccounts): boolean {
 	return (entry.accounts?.length ?? 0) > 1;
 }
 

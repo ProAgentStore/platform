@@ -230,6 +230,11 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
+			"Which of the owner's accounts an instance uses, when a connector holds more than one: read the resolution and its blocked reason, and pin the agent to one. New to this list at #736 — the ROUTES have existed since #715, and the console only started calling them when the picker they were built for was finally rendered. A caller debugging over MCP meets the same dead end the console owner did until now: `list_instance_tools` reports a Gmail tool as allowed while every call to it refuses with `ambiguous`, and nothing over MCP can either read that state or resolve it. #736 assessed `get_instance_connector_account`/`set_instance_connector_account` and deliberately deferred them to their own issue rather than widening a console fix into the MCP surface.",
+		match: /^[A-Z]+ \/v1\/instances\/\{\}\/connector-accounts$/,
+	},
+	{
+		why:
 			"Assorted single routes with no group: the creator dashboard tallies, the stats source catalogue, the behaviour SCHEMA (`get_instance_behaviour` reads the values but not the field table the console renders), deleting one chat turn, posting a system message into a conversation, and the translation endpoint the gloss layer calls. #613.",
 		match:
 			/^[A-Z]+ \/v1\/(dashboard\/(creator|usage)|stats\/sources|instances\/behaviour-schema|instances\/\{\}\/(messages\/\{\}|system-message|translate))$/,

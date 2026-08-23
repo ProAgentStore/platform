@@ -32,6 +32,12 @@ interface OpsMockOptions {
 	/** `GET /v1/connectors` — see DEFAULT_CONNECTORS for why the default is not empty. */
 	connectors?: Array<Record<string, unknown>>;
 	/**
+	 * `GET /v1/instances/inst-1/connector-accounts` — which of the owner's accounts this agent
+	 * uses (#736). Default `[]`: the one-account world, in which the picker renders nothing.
+	 * Supply rows to reach the ambiguous state where every call to that connector refuses.
+	 */
+	connectorAccounts?: Array<Record<string, unknown>>;
+	/**
 	 * Force these API paths to fail with a 500 (#291).
 	 *
 	 * There was no way to express "this read failed" here, which is why the console could ship
@@ -232,6 +238,16 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	const builderExecutes: unknown[] = [];
 	const feedbackPosts: unknown[] = [];
 	const feedbackPatches: Array<{ id: string; body: unknown }> = [];
+	/** Every pin the console wrote (#736) — the evidence that a choice reached the server. */
+	const connectorAccountPins: Array<{ connector: string; accountId: string | null }> = [];
+	/**
+	 * The picker's rows, MUTATED by a PUT so the re-read after a save reflects it.
+	 *
+	 * A static fixture would let the panel pass while displaying a choice the server never took —
+	 * and the component deliberately re-reads rather than patching local state, precisely so the
+	 * screen shows the server's verdict. A mock that ignores the write would defeat that.
+	 */
+	let accountRowsState = (options.connectorAccounts ?? []).map((r) => ({ ...r }));
 
 	await page.route(`${API}/**`, async (route) => {
 		const url = new URL(route.request().url());
@@ -770,6 +786,36 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		}
 		if (path === "/v1/keys/status") return json({ providers: options.providers ?? [] });
 		if (path === "/v1/connectors") return json({ connectors: options.connectors ?? DEFAULT_CONNECTORS });
+		// Which of the owner's accounts THIS agent uses (#736). Every Settings tab reads it, so it
+		// belongs in the shared fixture rather than in the one block that cares: unmocked it fell
+		// through to the 500 fallback below, and the panel — correctly, per #291 — rendered a load
+		// failure inside the Permissions card on every Settings test in this file.
+		//
+		// The default is EMPTY, which is the one-account world almost every owner is in and the
+		// state in which this panel must render nothing at all. A block that wants the ambiguous
+		// case supplies it.
+		if (path === "/v1/instances/inst-1/connector-accounts") {
+			if (method === "PUT") {
+				const pin = route.request().postDataJSON() as { connector: string; accountId: string | null };
+				connectorAccountPins.push(pin);
+				// The resolver's own rule, in miniature: a pin resolves; clearing it with several
+				// accounts connected does NOT fall back to one, it refuses (`lib/connector-accounts.ts`).
+				accountRowsState = accountRowsState.map((row) =>
+					row.connector !== pin.connector
+						? row
+						: {
+								...row,
+								pinned: pin.accountId,
+								resolves: pin.accountId,
+								blocked: pin.accountId
+									? null
+									: { reason: "ambiguous", message: `You have 2 ${row.label} accounts connected and this agent is not set to use one of them.` },
+							},
+				);
+				return json({ success: true });
+			}
+			return json({ connectors: accountRowsState });
+		}
 		// Account preferences (#211) — voice/translation defaults shared by every agent.
 		if (path === "/v1/preferences") {
 			if (method === "PUT") { savedPreferences = JSON.parse(route.request().postData() || "{}"); return json({ preferences: savedPreferences }); }
@@ -821,6 +867,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	);
 
 	return {
+		get connectorAccountPins() {
+			return connectorAccountPins;
+		},
 		get verifyCalls() {
 			return verifyCalls;
 		},
@@ -6254,6 +6303,143 @@ test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () 
 
 			// The input and the Index button share a row; at 320px that row is the whole reason to
 			// measure this in WebKit rather than assume it from the Chromium pass.
+			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+		});
+	}
+});
+
+/**
+ * The per-agent account picker the three refusal surfaces already promised (#736).
+ *
+ * ── What was measured, live, before this existed
+ *
+ * `GET /v1/instances/51a3404e…/connector-accounts` → `blocked.reason: "ambiguous"`, so every Gmail
+ * tool on that instance refused, while `/v1/email/status` reported `connected: true` and the Gmail
+ * permission showed ticked. Three surfaces told the owner to fix it "in its Settings" — the runtime
+ * refusal, the stale-pin refusal, and `AccountConnections.tsx`'s own note under the account list —
+ * and `grep -rn "connector-accounts\|connectorAccounts" store/console/src` returned ZERO. #715
+ * closed promising to file the picker separately and never did. The only way out was a `curl`.
+ *
+ * ── The two rejections this block pins, because both are load-bearing
+ *
+ * It must not AUTO-PIN "the account that can do the job": that resolves today's case by accident
+ * and breaks the moment both mailboxes hold the scope, which is the shape #715 exists to prevent.
+ * And it must not CONNECT or DISCONNECT anything — that is account scope (#355), and a button doing
+ * it under a heading carrying one agent's name is what made disconnecting Gmail from the Coder's
+ * settings disconnect it for the Job Application Assistant too.
+ */
+test.describe("Settings — which account this agent uses (#736)", () => {
+	const AMBIGUOUS = [{
+		connector: "gmail",
+		label: "Gmail",
+		accounts: [
+			{ accountId: "sivochkin@gmail.com", label: "sivochkin@gmail.com", connectedAt: null },
+			{ accountId: "serge.pro.job@gmail.com", label: "serge.pro.job@gmail.com", connectedAt: null },
+		],
+		pinned: null,
+		resolves: null,
+		blocked: {
+			reason: "ambiguous",
+			message: "You have 2 Gmail accounts connected and this agent is not set to use one of them: sivochkin@gmail.com, serge.pro.job@gmail.com. Choose which account this agent should use in its Settings — nothing is sent or read until you do.",
+		},
+	}];
+
+	async function openSettings(page: Page, opts: { width?: number; rows?: Array<Record<string, unknown>> } = {}) {
+		await page.setViewportSize({ width: opts.width ?? 900, height: 1200 });
+		const mock = await mockSignedInConsole(page, { connectorAccounts: opts.rows ?? AMBIGUOUS });
+		await page.goto("/console/instances/inst-1/settings");
+		return mock;
+	}
+
+	const picker = (page: Page) => page.locator("[data-testid=agent-account-choice]");
+	const select = (page: Page) => picker(page).locator("select");
+
+	/** AC1 — the choice can be made without leaving the console. */
+	test("the owner picks the account here, and the pin reaches the server", async ({ page }) => {
+		const mock = await openSettings(page);
+		await expect(picker(page)).toBeVisible();
+		await expect(select(page)).toHaveCount(1);
+
+		await select(page).selectOption("serge.pro.job@gmail.com");
+
+		await expect.poll(() => mock.connectorAccountPins).toEqual([
+			{ connector: "gmail", accountId: "serge.pro.job@gmail.com" },
+		]);
+		// AC4 — the re-read shows the server's verdict, not a local guess at it.
+		await expect(picker(page)).toContainText("This agent uses serge.pro.job@gmail.com.");
+	});
+
+	/**
+	 * AC2 — the panel states the CONSEQUENCE, in the server's own words.
+	 *
+	 * Verbatim, not paraphrased: it is the same string the tool refusal quotes, and three
+	 * hand-written variants of this sentence already exist of which one was false. A bare dropdown
+	 * would read as an optional preference and would not say the agent is inert right now.
+	 */
+	test("an ambiguous connector says so, quoting the API", async ({ page }) => {
+		await openSettings(page);
+		await expect(picker(page)).toContainText("nothing is sent or read until you do");
+		await expect(picker(page)).toContainText("sivochkin@gmail.com, serge.pro.job@gmail.com");
+	});
+
+	/** AC3 — the one-account world, which is almost everyone, sees no change whatsoever. */
+	test("renders nothing at all with fewer than two accounts", async ({ page }) => {
+		await openSettings(page, { rows: [] });
+		await expect(page.getByRole("heading", { name: "Permissions & Connections" })).toBeVisible();
+		await expect(picker(page)).toHaveCount(0);
+	});
+
+	/**
+	 * AC5 — clearing the pin returns the agent to refusing, and the option SAYS so.
+	 *
+	 * The alternative — labelling it "Automatic", or leaving it blank — would promise a fallback
+	 * that `lib/connector-accounts.ts` deliberately does not perform. Picking a mailbox for the
+	 * owner silently answers from the wrong life.
+	 */
+	test("clearing the choice is honest about costing the agent its access", async ({ page }) => {
+		const mock = await openSettings(page);
+		await select(page).selectOption("sivochkin@gmail.com");
+		await expect(picker(page)).toContainText("This agent uses sivochkin@gmail.com.");
+
+		await expect(select(page).locator("option").first()).toHaveText("Not chosen — every call refuses");
+		await select(page).selectOption("");
+
+		await expect.poll(() => mock.connectorAccountPins.at(-1)).toEqual({ connector: "gmail", accountId: null });
+		await expect(picker(page)).toContainText("is not set to use one of them");
+	});
+
+	/**
+	 * The #355 line, asserted on the rendered page rather than only over the source.
+	 *
+	 * `accountConnections.test.ts` greps the component; this checks what an owner can actually
+	 * click. Both are worth having — the source test catches a helper that reaches for a disconnect
+	 * endpoint, this catches one rendered by something the panel composes.
+	 */
+	test("offers no way to connect or disconnect an account", async ({ page }) => {
+		await openSettings(page);
+		await expect(picker(page).getByRole("button")).toHaveCount(0);
+		await expect(picker(page).getByRole("link")).toHaveCount(0);
+		await expect(picker(page)).toContainText("Preferences → Connections");
+	});
+
+	/**
+	 * The same panel on a phone, in BOTH engines — `mobile — ` is what puts it in WebKit.
+	 *
+	 * A `<select>` full of email addresses is the shape most likely to overflow at 320px, and the
+	 * addresses in this fixture are the real ones from the live measurement rather than `a@x.test`:
+	 * a hollow fixture is how the Profile page passed this guard while overflowing in production
+	 * (#235).
+	 */
+	for (const width of [320, 390]) {
+		test(`mobile — the account picker fits at ${width}px`, async ({ page }) => {
+			await openSettings(page, { width });
+			await expect(picker(page)).toBeVisible();
+
 			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
 			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);

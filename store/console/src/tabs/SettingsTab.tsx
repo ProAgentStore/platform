@@ -12,6 +12,7 @@ import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
 import RunnerPanel from "../components/RunnerPanel";
 import ToolPermissions from "../components/ToolPermissions";
+import AgentAccountChoice from "../components/AgentAccountChoice";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
 import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
@@ -568,6 +569,14 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 				{/* The tool switches, the connector write-consent checkboxes and the outbound-MCP grants:
 				    three views of one allow-list, which is why they live together. */}
 				<ToolPermissions instanceId={instanceId} />
+
+				{/* WHICH account each connector reaches, for the ones holding more than one (#736). It sits
+				    directly under the allow-list because the two answer one question in sequence — the list
+				    says what this agent may do, this says whose mailbox it does it to — and because until
+				    this landed, three surfaces (the runtime refusal, the stale-pin refusal, and the account
+				    page's own note) sent the owner to this tab for a control that did not exist. Renders
+				    nothing on the one-account case, which is almost everyone. */}
+				<AgentAccountChoice instanceId={instanceId} />
 
 				{showsDrive && (
 					<FileConnectorPanel
