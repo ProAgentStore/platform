@@ -202,6 +202,18 @@ jobs:
       - name: Build docs
         run: pnpm docs:build
       - run: pnpm test
+      - name: E2E projects still select the tests they claim to (#740)
+        # `playwright.config.ts` scopes the WebKit project with `grep: /mobile — /` and
+        # nothing counted what that matched. Measured 2026-08-23: neuter the regex and
+        # `playwright test --list` reports `Total: 271 tests in 2 files`, exit 0, ZERO webkit
+        # entries, no warning — the whole engine every phone runs can go to no coverage while
+        # this job stays green. (Playwright DOES say "No tests found" when webkit runs alone;
+        # with chromium in the same run, which is the real run, it does not.)
+        #
+        # Runs BEFORE the browser download on purpose: a selector that has stopped selecting
+        # should not cost a `playwright install --with-deps` first. Listing launches no
+        # browser, so it needs the npm packages and nothing else.
+        run: node scripts/check-e2e-projects.mjs
       # WebKit is not a second opinion, it is the engine every phone runs. The mobile geometry
       # guards are scoped to it in playwright.config.ts (#384); without the binary here that
       # project fails to launch rather than skipping.

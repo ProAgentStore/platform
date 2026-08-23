@@ -87,6 +87,12 @@ export default defineConfig({
 		 *
 		 * `mobile — ` is the prefix every geometry block already uses. A new block that measures a
 		 * phone layout must carry it or it silently runs in one engine again.
+		 *
+		 * That sentence was an obligation with nothing behind it until #740: two blocks already did
+		 * not carry it, one of them titled "…in WebKit", and neutering this regex left the whole
+		 * project selecting zero tests at exit 0. `scripts/check-e2e-projects.mjs` now counts what
+		 * each project selects and fails on a prefix-less phone-geometry block, so both halves of
+		 * the convention — the grep and the titles — are measured rather than trusted.
 		 */
 		{
 			name: "webkit",

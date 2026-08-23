@@ -1164,7 +1164,10 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(mute).toHaveValue(/mute/);
 	});
 
-	test("the command rows fit a phone in WebKit, at 320px and at 390px (#443)", async ({ page }) => {
+	// The engine belongs in the PROJECT name, not in the title — this block was called
+	// "…in WebKit" for a fortnight and ran only in Chromium, because the webkit project
+	// selects on the `mobile — ` prefix and nothing counted what that matched (#740).
+	test("mobile — the command rows fit a phone at 320px and at 390px (#443)", async ({ page }) => {
 		await mockSignedInConsole(page);
 		await page.goto("/console/preferences");
 		await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
@@ -1566,11 +1569,24 @@ test.describe("ProAgentStore Console smoke", () => {
 		// A failed card says WHAT failed — never an empty chart, which would be a claim.
 		await expect(page.getByText("Couldn’t be read")).toBeVisible();
 		await expect(page.getByText("no such collection: leads")).toBeVisible();
+	});
+
+	/**
+	 * Split out of the block above under #740. It was the 390px half of a behavioural test,
+	 * so it ran in Chromium only — and a `scrollWidth − clientWidth` assertion at a phone
+	 * width is the exact measurement #384 proved differs between engines (59px on
+	 * /console/preferences in Safari, 0 in Chromium). The behavioural half stays where it
+	 * was, in one engine, where it costs nothing.
+	 */
+	test("mobile — the stats cards do not pan sideways at 390px (#311)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.setViewportSize({ width: 390, height: 780 });
+		await page.goto("/console/instances/inst-1/stats");
+		await expect(page.getByRole("heading", { name: "Stats", exact: true })).toBeVisible();
 
 		// Narrow screen: cards stack and the chart scales to the container. #235 (Profile scrolling
 		// sideways) and #227 (issues list crushed) are both this, and a fixed-width SVG is the
 		// easiest way to reintroduce it.
-		await page.setViewportSize({ width: 390, height: 780 });
 		await expect(page.getByText(/1 day has no recorded run/)).toBeVisible();
 		const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 		expect(overflow).toBeLessThanOrEqual(0);
