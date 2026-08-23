@@ -96,18 +96,30 @@ export function repoLabel(repo: CodingRepoRow): string {
 export function openConversationText(label: string, d: OpenConversationResult): string {
 	const sid = d.session?.id ?? "(unknown)";
 	const runner = d.runnerConnected === false ? "\nNo runner is connected — run `pags up` on the machine that holds this repo; nothing will run until it is." : "";
-	if (d.reused) return `Already talking to ${label} — a conversation is open there (session_id ${sid}).${d.notice ? ` ${d.notice}` : ""}${runner}`;
-	const reason = d.continuity?.reason;
 	// What the engine HAS, before what the server asked for: a confirmed brief is the answer to
 	// "does it know what we were doing", and on a `resume` it means the machine could not honour the
 	// request (an older `pags up`, or a session that moved machines) and fell back.
+	//
+	// Computed ABOVE the `reused` return since #738. It used to be appended only inside the two
+	// `continuity` branches, so the two answers a RE-ATTACHED session actually produces — "reused",
+	// and "no continuity decision" — were the two that dropped it. Those are precisely the answers
+	// a relocated session gives, which made this the third surface silent on the one path the brief
+	// exists for.
 	const brief = d.seeded === true ? " It was given a brief of this repo's recent history, reconstructed from the platform's record — it knows what was going on, not the details." : "";
+	// A reused session whose engine was relocated and briefed is NOT "already talking" in the sense
+	// the caller will read that as. Say what the engine holds; the ADR forbids letting a
+	// reconstruction pass for the conversation that was lost.
+	if (d.reused) return `Already talking to ${label} — a conversation is open there (session_id ${sid}).${d.notice ? ` ${d.notice}` : ""}${brief}${runner}`;
+	const reason = d.continuity?.reason;
 	if (d.continuity?.mode === "resume") {
 		if (d.resumed === true) return `Continuing this repo's previous conversation on ${label} — ${reason}. session_id ${sid}.${runner}`;
 		return `Asked the engine to continue this repo's previous conversation on ${label}, and the runner did not confirm it came up with it — ${reason}.${brief} session_id ${sid}.${runner}`;
 	}
 	if (d.continuity?.mode === "fresh") return `Started a fresh conversation on ${label} — ${reason}.${brief} session_id ${sid}.${runner}`;
-	return `Opened a conversation on ${label}, and the server reported no continuity decision — so whether it carries the previous one is not known. session_id ${sid}.${runner}`;
+	// No decision was reported — which since #738 is the honest shape of a re-attach rather than an
+	// older API, because a re-attach genuinely decides nothing. `seeded` still answers the question
+	// the caller is asking, so it is said here too.
+	return `Opened a conversation on ${label}, and the server reported no continuity decision — so whether it carries the previous one is not known.${brief} session_id ${sid}.${runner}`;
 }
 
 export function registerCodingSessionTools(

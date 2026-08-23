@@ -64,18 +64,29 @@ export interface SessionContinuityPayload {
  * A missing `reason` still gets its headline. The server's contract says the reason is never empty,
  * but "Picking up where you left off." is a true sentence without it, whereas
  * "Picking up where you left off — ." is the garbage that a trailing concatenation produces.
+ *
+ * `seeded` is honoured with or WITHOUT a `continuity` block (#738). A brief is a fact about the
+ * engine; a decision is a fact about the request, and the platform makes the first without making
+ * the second every time it relocates a session (`startSessionOnRunner`, ADR 0005). Requiring both
+ * is what made the relocation banner unreachable on the only path that relocates.
  */
 export function continuityNotice(continuity: unknown, seeded?: unknown): OpenNotice | null {
-	if (!continuity || typeof continuity !== "object") return null;
-	const { mode, reason } = continuity as SessionContinuityPayload;
-	if (mode !== "resume" && mode !== "fresh") return null;
-	const why = typeof reason === "string" ? reason.trim() : "";
+	const block = continuity && typeof continuity === "object" ? (continuity as SessionContinuityPayload) : null;
+	const mode = block?.mode === "resume" || block?.mode === "fresh" ? block.mode : null;
+	// The reason belongs to a DECISION, so it is only concatenated when there was a recognisable
+	// one. An unknown `mode` from a newer or malformed API carries a sentence this renderer cannot
+	// place, and appending it to the seeded banner would attach a stranger's clause to a fact.
+	const why = mode && typeof block?.reason === "string" ? block.reason.trim() : "";
 	const tail = why ? ` — ${why}` : "";
-	if (mode === "resume" && seeded !== true) return { id: "inst-coding-continuity", tone: "quiet", text: `Picking up where you left off${tail}.` };
-	// SEEDED (#693, ADR 0005) — a third outcome, and it is checked before `mode` because it is a
-	// fact about what the engine HAS while `mode` is what the server asked for. `seeded: true` on a
-	// `resume` means the machine could not honour the request and took the brief instead, which is
-	// the #694 case; the banner has to describe the engine in front of the user, not the intention.
+	// SEEDED (#693, ADR 0005) — a third outcome, and it is checked FIRST, above even the presence of
+	// a `continuity` block, because it is a fact about what the engine HAS while `mode` is what the
+	// server asked for. That ordering is the whole of #738: the case this branch was written for —
+	// a session relocated to another machine and briefed on arrival (#694) — has no `continuity`
+	// object at all, because a re-attach decides nothing. Keying the render off the decision made
+	// the one path that needs the banner the one path that could never reach it.
+	//
+	// `seeded: true` on a `resume` means the machine could not honour the request and took the brief
+	// instead; the banner has to describe the engine in front of the user, not the intention.
 	//
 	// Still `warn`, not `quiet`. The tone rule this file already states is that a fresh start is the
 	// SURPRISE — the open where the next thing the user types has no antecedent — and a brief does
@@ -91,6 +102,8 @@ export function continuityNotice(continuity: unknown, seeded?: unknown): OpenNot
 			text: `Started a fresh conversation${tail}. It was given a brief of this repo's recent history, reconstructed from ProAgentStore's record — so it knows what was going on, but not the details.`,
 		};
 	}
+	if (!mode) return null;
+	if (mode === "resume") return { id: "inst-coding-continuity", tone: "quiet", text: `Picking up where you left off${tail}.` };
 	// "conversation", never "session". #257 and #408 spent real effort removing "session" from
 	// the words a user has to know and #695 removed the last of it from this surface, so
 	// reintroducing it in the one line a user is most likely to read would undo all of it.

@@ -12,6 +12,7 @@ import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
+import { appendTimeline } from "./coding-timeline.js";
 import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { resolveSessionContinuity, type SessionContinuity } from "./coding-session-continuity.js";
@@ -121,6 +122,37 @@ async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo):
 }
 
 /**
+ * What a RELOCATION writes into the repo's own record (#738).
+ *
+ * Pure, and the sentence is the deliverable — same reason `sessionOpenedNotice` is pure. This row
+ * is the only DURABLE trace that a session changed machines: the console banner and the chat notice
+ * both require somebody to be looking at the moment it happens, and a relocation happens exactly
+ * when the owner has just moved to another machine and has neither surface open.
+ *
+ * It is also read twice more. `loadRepoTimeline` feeds the repo history the console renders, and it
+ * feeds the seed brief the NEXT cold engine is given — where this row arrives labelled "the platform
+ * noted". So the reconstruction can state its own discontinuity instead of reading as an unbroken
+ * transcript that silently spans two computers.
+ *
+ * Machines are NAMED, because "somewhere else" is not actionable: the owner needs to know which
+ * laptop holds the working tree the earlier output describes. A session with no stamped node says
+ * "an unnamed machine" rather than inventing one.
+ *
+ * The three outcomes are kept apart for the reason `sessionOpenedNotice` keeps them apart — a
+ * relocated engine that RESUMED (it cannot today; the resume store is a file on the machine it
+ * left) is a different fact from one that was briefed, and both differ from one that came up with
+ * nothing, which is the pre-ADR-0005 behaviour an old `pags up` still produces.
+ */
+export function relocationNote(input: { from: string | null; to: string | null; resumed: boolean; seeded: boolean }): string {
+	const name = (n: string | null) => n?.trim() || "an unnamed machine";
+	const where = `Moved to ${name(input.to)} — ${name(input.from)} was no longer connected.`;
+	if (input.resumed) return `${where} The engine there came up with this repo's previous conversation.`;
+	if (input.seeded)
+		return `${where} A new engine started there with no conversation of its own, and was given a brief of this repo's history reconstructed from ProAgentStore's record — it knows what was going on, not the details.`;
+	return `${where} A new engine started there and did not confirm it carried anything over, so treat it as having no memory of the work above.`;
+}
+
+/**
  * Ensure a session is live on the user's runner: clone the repo (idempotent on
  * the runner) and launch the CLI. Returns the connection it actually used (null if
  * no runner is connected). Used both when creating a session and when re-attaching
@@ -170,9 +202,14 @@ export async function startSessionOnRunner(
 	const sessionLive = session.runnerNode
 		? await relayConnected(env, instanceId, session.runnerNode).catch(() => false)
 		: await relayConnected(env, instanceId, null).catch(() => false);
+	// The machine this session LEFT, kept so the move can be recorded once the engine is up (#738).
+	// A separate flag rather than `movedFrom !== null`: a session stamped with NO node can relocate
+	// too, and inferring the move from the old value would make that one invisible.
+	let relocation: { from: string | null } | null = null;
 	if (!sessionLive) {
 		const fallback = await getBoundRunnerConn(env, instanceId, uid);
 		if (fallback && normalizeRunnerNode(fallback.runnerNode) !== normalizeRunnerNode(session.runnerNode)) {
+			relocation = { from: session.runnerNode ?? null };
 			await reassignSessionNode(env, instanceId, uid, session.id, fallback.runnerNode ?? null);
 			session.runnerNode = fallback.runnerNode ?? null;
 			conn = fallback;
@@ -228,7 +265,28 @@ export async function startSessionOnRunner(
 			env: engineEnv,
 		});
 		await recordStartVerdict(env, conn, repo);
-		return { conn, resumed: started?.resumed === true, seeded: started?.seeded === true };
+		const outcome = { conn, resumed: started?.resumed === true, seeded: started?.seeded === true };
+		// The DURABLE half of #738. Everything else this issue fixed is a sentence in a response:
+		// a banner is missed if the tab is not open, and a chat notice is missed if nobody is in
+		// chat — and a relocation happens PRECISELY when the owner has changed machines, which is
+		// the moment they are least likely to be watching either. The row also lands in the record
+		// the NEXT brief is built from, so the reconstruction can state its own discontinuity.
+		//
+		// After the launch, not at `reassignSessionNode`, because what is worth recording is not
+		// that a column changed — it is what the engine came up holding on the other side.
+		//
+		// `.catch`, like every other write on this path: a session that runs is worth more than a
+		// row that says it does.
+		if (relocation) {
+			await appendTimeline(env, {
+				sessionId: session.id,
+				instanceId,
+				userId: uid,
+				type: "system",
+				content: relocationNote({ from: relocation.from, to: session.runnerNode ?? null, resumed: outcome.resumed, seeded: outcome.seeded }),
+			}).catch(() => undefined);
+		}
+		return outcome;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
 		// A REPO'S STATE IS ONLY EVER WRITTEN BY SOMETHING THAT LOOKED AT THE REPO (#440).
@@ -552,15 +610,30 @@ export async function ensureSessionForChat(
 			message: noSessionMessage({ repoName: repo.name, connectivity, startError: ensured.startError }),
 		};
 	}
-	if (!ensured.opened) return { ok: true, session: ensured.session, opened: false, notice: null };
+	// SILENT on a warm re-attach, LOUD on a briefed one (#738).
+	//
+	// "Reusing a session answers 'what happened to the last one' by not raising the question" is
+	// true only while nothing changed. A re-attach that RELOCATED the session did change something:
+	// `startSessionOnRunner` moved it to the machine that is live now, the engine came up with no
+	// conversation of its own, and it was handed a brief built from `coding_timeline` (ADR 0005).
+	// That is not reuse — it is a new engine wearing an old session id, and the user is the only
+	// person who can tell the difference between "it remembers" and "it was told".
+	//
+	// `seeded` is what makes the narrowing safe rather than a banner on every poll: the runner sets
+	// `pendingSeed` only when `resumedConversation` is false, and reports `seeded:false` outright
+	// for a session it is already running. So a genuine warm re-attach cannot reach this.
+	if (!ensured.opened && ensured.seeded !== true) return { ok: true, session: ensured.session, opened: false, notice: null };
 
-	// Only on the open path: reusing a session answers "what happened to the last one" by not
-	// raising the question, and this is an extra query.
+	// One extra query, and only on the paths that have something to say.
 	const reaped = await lastIdleReapForRepo(env, instanceId, userId, repo.id).catch(() => null);
 	return {
 		ok: true,
 		session: ensured.session,
-		opened: true,
+		// `ensured.opened`, NOT `true` (#738). This is what decides who may CLOSE the session later
+		// (`shouldEndSessionAfterRun`), and a re-attach that speaks has still not opened anything —
+		// hardcoding it here would hand a background run the right to end a session a human owns,
+		// which is #271 from the other side.
+		opened: ensured.opened,
 		notice: sessionOpenedNotice({
 			repoName: repo.name,
 			sessionId: ensured.session.id,

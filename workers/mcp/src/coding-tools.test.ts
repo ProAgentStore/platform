@@ -75,6 +75,32 @@ describe("openConversationText — the decision, the outcome, and which is which
 		expect(t).toMatch(/^Already talking to r/);
 		expect(t).not.toMatch(/fresh conversation|Continuing/);
 	});
+
+	it("reports the brief on a REUSE, which is what a relocated session answers with (#738)", () => {
+		// The third of the three surfaces #694 claimed reported a briefed engine. `brief` used to be
+		// appended only inside the two `continuity` branches, so the two answers a re-attached
+		// session actually produces — "reused" and "no continuity decision" — were exactly the two
+		// that dropped it. A relocated session produces both, so the surface was silent on the one
+		// path the brief exists for.
+		//
+		// "Already talking to r" is true of the session id and false of the engine. The brief is
+		// what keeps the caller from reading the first as the second.
+		const t = openConversationText("r", { ...OPEN, reused: true, notice: "reusing the `claude` engine already running.", seeded: true });
+		expect(t).toMatch(/^Already talking to r/);
+		expect(t).toMatch(/reconstructed from the platform's record/);
+		expect(t).not.toMatch(/remember|as if it never/i);
+		// Unchanged for an ordinary reuse: no brief, nothing said.
+		expect(openConversationText("r", { ...OPEN, reused: true })).not.toMatch(/reconstructed/);
+	});
+
+	it("reports the brief when no decision was reported — the honest shape of a re-attach (#738)", () => {
+		// A re-attach decides nothing, so "no continuity decision" is the correct answer rather than
+		// a sign of an old API. `seeded` still answers the question the caller asked.
+		const t = openConversationText("r", { ...OPEN, seeded: true });
+		expect(t).toMatch(/no continuity decision/);
+		expect(t).toMatch(/reconstructed from the platform's record/);
+		expect(openConversationText("r", OPEN)).not.toMatch(/reconstructed/);
+	});
 });
 
 describe("resolveRepoForOpen — a question beats a guess (#696)", () => {

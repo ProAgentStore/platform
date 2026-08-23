@@ -41,7 +41,7 @@ vi.mock("./coding-session-sweeper.js", () => ({
 // The READ is mocked, the RENDERING is not. `composeSeedBrief` stays real here on purpose: what
 // this file is testing is that the brief reaches `/coding/start` on every path that can hand back a
 // cold engine, and a mocked composer would let that pass while the body carried an empty string.
-vi.mock("./coding-timeline.js", () => ({ loadRepoTimeline: vi.fn(async () => []) }));
+vi.mock("./coding-timeline.js", () => ({ loadRepoTimeline: vi.fn(async () => []), appendTimeline: vi.fn(async () => undefined) }));
 
 const store = await import("./coding-store.js");
 const runner = await import("./runner-client.js");
@@ -54,7 +54,7 @@ const timeline = await import("./coding-timeline.js");
 const RECORD = [{ seq: 1, type: "command" as const, content: "finish the health endpoint", createdAt: "2026-08-20T10:00:00Z" }];
 /** The `seed` field as it goes over the wire to `/coding/start`. */
 const seedSent = (call = 0) => (vi.mocked(runner.callRunner).mock.calls[call][2] as { seed?: string }).seed;
-const { ensureActiveSession, ensureSessionForChat, sessionOpenedNotice } = await import("./coding-session-open.js");
+const { ensureActiveSession, ensureSessionForChat, relocationNote, sessionOpenedNotice } = await import("./coding-session-open.js");
 
 const env = {} as Env;
 const repo: CodingRepo = {
@@ -510,6 +510,89 @@ describe("no open hands back a cold engine when the platform holds a record (ADR
 		expect(store.reassignSessionNode).toHaveBeenCalledWith(env, "inst", "u", "csess_moved", "laptop");
 		expect(seedSent(), "a relocated session was launched cold on the new machine").toContain("finish the health endpoint");
 		expect(res.ok && res.seeded).toBe(true);
+	});
+
+	it("REPORTS the brief on the relocation path, not only sends it (#738)", async () => {
+		// #694 was closed claiming "the console banner, the chat notice and the MCP reply all report
+		// a briefed engine". The engine half held; the reporting half did not, and relocation was
+		// the one path where all three failed at once. The test above proves the brief reaches the
+		// machine. This one proves the fact reaches the human — through the CHAT surface, which
+		// returned `notice: null` for every re-attach on the reasoning that reuse is not news.
+		//
+		// Reuse is not news. A new engine wearing an old session id, on a different computer, is.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_moved"));
+		vi.mocked(runner.relayConnected).mockResolvedValue(false);
+		vi.mocked(runner.getBoundRunnerConn).mockResolvedValue({ ...conn, runnerNode: "laptop" } as never);
+		vi.mocked(runner.callRunner).mockResolvedValue({ seeded: true } as never);
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res.ok).toBe(true);
+		expect(res.ok && res.notice, "a relocated, briefed engine was handed back in silence").toMatch(/written brief/);
+		expect(res.ok && res.notice).toMatch(/reconstruction, not the original/);
+		// `opened` stays FALSE. It decides who may CLOSE the session (`shouldEndSessionAfterRun`),
+		// and this call opened nothing — reporting true to buy a sentence would let a background run
+		// end a session a human owns, which is #271 from the other side.
+		expect(res.ok && res.opened, "speaking must not confer ownership").toBe(false);
+	});
+
+	it("stays silent on a warm re-attach that neither moved nor seeded", async () => {
+		// The regression the narrowing above can produce: `read_terminal` re-attaches on every call,
+		// so a notice keyed off anything less specific than the machine's own `seeded` confirmation
+		// would announce a restart on every poll. `seeded` cannot be true here — the runner sets
+		// `pendingSeed` only when it has no conversation, and reports false outright for a session
+		// it is already running.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
+		vi.mocked(runner.callRunner).mockResolvedValue({ resumed: true } as never);
+		const res = await ensureSessionForChat(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: true, opened: false });
+		expect(res.ok && res.notice).toBeNull();
+		expect(sweeper.lastIdleReapForRepo).not.toHaveBeenCalled();
+	});
+
+	it("writes the relocation into the repo's own record, because a banner needs a witness (#738)", async () => {
+		// The durable half. A relocation happens exactly when the owner has just moved machines and
+		// has neither the Coding tab nor chat open, so every in-response notice this issue added can
+		// be missed by the person it is for. This row cannot be: the console renders it as history,
+		// and `loadRepoTimeline` feeds it to the NEXT cold engine's brief — where the reconstruction
+		// gets to state its own discontinuity instead of reading as one unbroken transcript that
+		// silently spans two computers.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_moved"));
+		vi.mocked(runner.relayConnected).mockResolvedValue(false);
+		vi.mocked(runner.getBoundRunnerConn).mockResolvedValue({ ...conn, runnerNode: "laptop" } as never);
+		vi.mocked(runner.callRunner).mockResolvedValue({ seeded: true } as never);
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(timeline.appendTimeline).toHaveBeenCalledTimes(1);
+		const row = vi.mocked(timeline.appendTimeline).mock.calls[0][1];
+		expect(row).toMatchObject({ sessionId: "csess_moved", instanceId: "inst", userId: "u", type: "system" });
+		// Both machines NAMED — "moved somewhere else" does not tell the owner which laptop holds
+		// the working tree the output above describes.
+		expect(row.content).toContain("laptop");
+		expect(row.content).toContain("mac");
+		expect(row.content).toMatch(/brief/);
+	});
+
+	it("writes no relocation row when the session never moved", async () => {
+		// An ordinary re-attach on the same machine is not an event. A row per poll would bury the
+		// real ones and grow the seed brief with nothing.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(timeline.appendTimeline).not.toHaveBeenCalled();
+	});
+
+	it("says which of the three things the new machine came up with", () => {
+		// Pure, so the sentence is the deliverable. The three outcomes are kept apart for the same
+		// reason `sessionOpenedNotice` keeps them apart: a briefed engine and an empty one are not
+		// degrees of the same thing, and an old `pags up` still produces the third.
+		const seededRow = relocationNote({ from: "mac", to: "laptop", resumed: false, seeded: true });
+		expect(seededRow).toContain("Moved to laptop");
+		expect(seededRow).toContain("mac was no longer connected");
+		expect(seededRow).toMatch(/reconstructed/);
+		expect(seededRow).not.toMatch(/remember(ed|s)\b/);
+		// No confirmation from the machine is not a brief. Says so, in the words the next reader —
+		// possibly an engine — needs to act on.
+		expect(relocationNote({ from: "mac", to: "laptop", resumed: false, seeded: false })).toMatch(/no memory of the work above/);
+		expect(relocationNote({ from: "mac", to: "laptop", resumed: true, seeded: false })).toMatch(/came up with this repo's previous conversation/);
+		// A session with no stamped node is named as such rather than rendered as "Moved to  —  ".
+		expect(relocationNote({ from: null, to: null, resumed: false, seeded: true })).toContain("Moved to an unnamed machine — an unnamed machine");
 	});
 
 	it("sends NO brief when the user asked for a clean slate", async () => {

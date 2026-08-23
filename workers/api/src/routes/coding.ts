@@ -148,10 +148,14 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// directory and conflict (concurrent edits, git index races). Reuse the live one.
 	const existing = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 	if (existing) {
-		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, existing, repo)).conn != null;
+		// The launch's FULL answer, not just whether a machine answered (#738): a re-attach can
+		// relocate the session to whichever machine is live now, and the engine that comes up there
+		// is cold and briefed (ADR 0005). Dropping `seeded` here is why the banner never appeared
+		// on the one path #694 was written about. Reasoning: `lib/coding-session-open.ts`.
+		const started = await startSessionOnRunner(c.env, instanceId, uid, existing, repo);
 		// SAY it was reused, and which engine is running (#549 — reasoning in `reusedEngineNotice`).
 		const notice = await reusedEngineNotice(c.env, instanceId, uid, repo.name, existing, body.engineId ?? body.clientType);
-		return c.json({ session: existing, runnerConnected, reused: true, notice }, 200);
+		return c.json({ session: existing, runnerConnected: started.conn != null, reused: true, notice, resumed: started.resumed, seeded: started.seeded }, 200);
 	}
 
 	// The preset the caller named, else the INSTANCE default. `repo.defaultClient` used to end this
@@ -188,8 +192,9 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 		// whoever won instead of erroring.
 		const winner = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 		if (!winner) throw new HttpError(409, "Could not start a session — try again.");
-		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, winner, repo)).conn != null;
-		return c.json({ session: winner, runnerConnected, reused: true }, 200);
+		// Same as the reuse arm (#738): losing the race still ATTACHES, so it can still relocate.
+		const started = await startSessionOnRunner(c.env, instanceId, uid, winner, repo);
+		return c.json({ session: winner, runnerConnected: started.conn != null, reused: true, resumed: started.resumed, seeded: started.seeded }, 200);
 	}
 
 	// This route CREATES a session, so it decides continuity exactly like `ensureActiveSession`
@@ -218,8 +223,12 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/start", async (c) => 
 	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
 	if (!repo) throw new HttpError(404, "Repo not found");
 	await touchSessionActivity(c.env, instanceId, uid, session.id);
-	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)).conn != null;
-	return c.json({ ok: runnerConnected, runnerConnected });
+	// This route IS the re-attach, so it is the likeliest of the four to relocate — the console
+	// calls it whenever the terminal reconnects, which is what a user does after moving machine.
+	// It reported a bare boolean until #738.
+	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	const runnerConnected = started.conn != null;
+	return c.json({ ok: runnerConnected, runnerConnected, resumed: started.resumed, seeded: started.seeded });
 });
 
 /** The pane the console renders (polling fallback for the live terminal). */
@@ -792,7 +801,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 		const freshRepo = await getRepo(c.env, instanceId, uid, session.repoId);
 		return c.json({ ok: false, runnerConnected: true, error: freshRepo?.cloneError || "Failed to start session on runner" });
 	}
-	return c.json({ ok: true, runnerConnected: true });
+	// A restart always launches a NEW engine, so what it came up holding is never rhetorical (#738).
+	return c.json({ ok: true, runnerConnected: true, resumed: started.resumed, seeded: started.seeded });
 });
 
 // ── Diagnostics: close-sessions / browse / the reconcile-and-explain view ─

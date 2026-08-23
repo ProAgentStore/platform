@@ -512,7 +512,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// (#291) — see ./coding-write-failures.
 		let startErr = "";
 		try {
-			await api(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
+			// The RE-ATTACH, and since #738 it answers with what the engine came up HOLDING. This is
+			// the console's dominant path into a relocation — a session still `active` in D1 on a
+			// machine that has gone away short-circuits straight here, the server moves it to
+			// whichever machine is live now, and the engine that starts there is cold and briefed
+			// (ADR 0005). The response was discarded, so the banner had nothing to render.
+			const d = await api<{ resumed?: unknown; seeded?: unknown }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
+			// ADDITIVE, never clearing. `openRepoSession` sets the create-path notice BEFORE calling
+			// this, and a warm re-attach reports nothing — so assigning the result outright would
+			// blank the continuity banner the open had just earned, on every open that has one.
+			const notices = openNotices(d);
+			if (notices.length) setOpenNotice(notices);
 		} catch (e) {
 			startErr = sessionAttachFailureNotice(e);
 		}

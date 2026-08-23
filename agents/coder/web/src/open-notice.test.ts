@@ -94,6 +94,35 @@ describe("continuityNotice", () => {
 		expect(continuityNotice({ mode: "resume", reason: "the previous conversation on this repo was last touched 3 hours ago" })?.text).toMatch(/^Picking up/);
 	});
 
+	it("renders a brief with NO continuity block at all — the relocation case (#738, #694)", () => {
+		// The defect this replaced. `seeded` was read fifteen lines below `if (!continuity) return
+		// null`, so the one open that needs the banner most was the one open that could never show
+		// it: a session relocated to another machine is briefed by `startSessionOnRunner` and
+		// carries no `continuity`, because a re-attach decides nothing and the server refuses to
+		// synthesise a decision nobody made.
+		const n = continuityNotice(undefined, true);
+		expect(n?.id).toBe("inst-coding-continuity");
+		expect(n?.tone).toBe("warn");
+		// No reason, so no dangling dash — the same rule the decision paths follow.
+		expect(n?.text).toBe(
+			"Started a fresh conversation. It was given a brief of this repo's recent history, reconstructed from ProAgentStore's record — so it knows what was going on, but not the details.",
+		);
+		expect(n?.text).not.toMatch(/remember|as if|picking up/i);
+		// The other half of the pin: without the confirmation there is still nothing to say. If this
+		// ever passes a banner through, "briefed" has stopped meaning "the machine said so".
+		expect(continuityNotice(undefined, undefined)).toBeNull();
+		expect(continuityNotice(undefined, false)).toBeNull();
+	});
+
+	it("does not borrow a reason it cannot place onto the briefed banner", () => {
+		// `seeded` now renders above the mode check, so a block with an unrecognised `mode` reaches
+		// the briefed branch. Its `reason` belongs to a decision this renderer cannot phrase an
+		// opener for, and concatenating it would attach a stranger's clause to a fact.
+		const n = continuityNotice({ mode: "sideways", reason: "who knows" }, true);
+		expect(n?.text).toMatch(/^Started a fresh conversation\. It was given a brief/);
+		expect(n?.text).not.toMatch(/who knows/);
+	});
+
 	it("keeps the headline when the reason is missing, and drops the dangling dash", () => {
 		// The server contract forbids an empty reason; a client that trusted it would render
 		// "Started a fresh conversation — ." the first time something else did.
@@ -130,6 +159,16 @@ describe("openNotices", () => {
 		// brief was taken. A client that looked inside `continuity` would render the intent.
 		const out = openNotices({ continuity: { mode: "fresh", reason: "the previous conversation on this repo ran a different engine" }, seeded: true });
 		expect(out).toHaveLength(1);
+		expect(out[0].text).toMatch(/reconstructed from ProAgentStore's record/);
+	});
+
+	it("shows the briefed banner on a REUSE response, which carries no continuity block (#738)", () => {
+		// The live shape of the relocation, end to end: `POST /sessions` found a live session,
+		// re-attached it, the re-attach moved it to the machine that is connected now, and the new
+		// engine was briefed. `reused: true`, no `continuity`, `seeded: true` — and before #738 the
+		// route did not even send the last of those.
+		const out = openNotices({ reused: true, seeded: true } as { reused: boolean; seeded: unknown });
+		expect(out.map((n) => n.id)).toEqual(["inst-coding-continuity"]);
 		expect(out[0].text).toMatch(/reconstructed from ProAgentStore's record/);
 	});
 

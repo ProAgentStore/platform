@@ -273,3 +273,58 @@ describe("terminal persistence (#coding-transcript)", () => {
 		expect(lib).toContain("TERMINAL_SNAPSHOT_CHARS = 8000");
 	});
 });
+
+describe("every response that carries a session says what the engine came up with (#738)", () => {
+	// #694 was closed on the claim that "the console banner, the chat notice and the MCP reply all
+	// report a briefed engine". They can only report what the route sends, and six of the eight
+	// `startSessionOnRunner` call sites sent nothing — including all four that answer a caller
+	// holding a session id. The two that DID report were the two where relocation is impossible,
+	// because the session was created microseconds earlier.
+	//
+	// Scanned rather than driven: each of these routes needs a live D1, an owned instance, a repo
+	// row and a relay before it will reach the return statement, and what is being pinned is one
+	// field on one object literal. `coding.contract.test.ts` next door drives the same table for
+	// the properties that cannot be read off the source; this is the cheap complement, and the
+	// regression it catches — a future edit collapsing the call back to `(await …).conn != null`,
+	// which is the exact shape all four had — is a source-level shape.
+	const src = () => readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+	/** One route's body: from its path literal to the next route registration. */
+	const routeSrc = (marker: string, from = 0) => {
+		const s = src();
+		const i = s.indexOf(marker, from);
+		expect(i, `route not found: ${marker}`).toBeGreaterThan(-1);
+		const next = s.indexOf("codingRoutes.", i + 10);
+		return s.slice(i, next === -1 ? undefined : next);
+	};
+
+	it("POST /sessions reports it on the REUSE arm, which is a re-attach and can relocate", () => {
+		const body = routeSrc('codingRoutes.post("/:instanceId/coding/sessions"');
+		const reuse = body.slice(body.indexOf("if (existing)"), body.indexOf("const { command, clientType }"));
+		expect(reuse).toContain("seeded: started.seeded");
+		expect(reuse).toContain("resumed: started.resumed");
+		// The discarding shape, named so it cannot come back as a tidy-up.
+		expect(reuse).not.toMatch(/\(await startSessionOnRunner\([^)]*\)\)\.conn != null/);
+	});
+
+	it("POST /sessions reports it on the create-race arm too", () => {
+		const body = routeSrc('codingRoutes.post("/:instanceId/coding/sessions"');
+		const race = body.slice(body.indexOf("Lost a create race"));
+		expect(race).toContain("seeded: started.seeded");
+		expect(race).toContain("resumed: started.resumed");
+	});
+
+	it("POST /sessions/:id/start reports it — it IS the re-attach", () => {
+		// The console calls this when the terminal reconnects, which is what a user does after
+		// moving machine. It answered with a bare boolean.
+		const body = routeSrc('coding/sessions/:sessionId/start"');
+		expect(body).toContain("seeded: started.seeded");
+		expect(body).toContain("resumed: started.resumed");
+		expect(body).not.toMatch(/\(await startSessionOnRunner\([^)]*\)\)\.conn != null/);
+	});
+
+	it("POST /sessions/:id/restart reports it — a restart always launches a new engine", () => {
+		const body = routeSrc('coding/sessions/:sessionId/restart"');
+		expect(body).toContain("seeded: started.seeded");
+		expect(body).toContain("resumed: started.resumed");
+	});
+});

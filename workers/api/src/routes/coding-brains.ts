@@ -206,10 +206,15 @@ async function delegateToTarget(
 	// (#556) — the Pilot it just started will act against this engine repeatedly from inside the
 	// Workflow, and the day-coarse row covers all of it from here.
 	await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: taskId }, session);
-	// The notice is only set when THIS call opened the session (#407/#408), and it is news the
-	// user has to have: a child process just appeared on their machine, and whether it kept the
-	// previous conversation decides whether the objective above needed the context it carries.
-	const opened = ensured.opened && ensured.notice ? ` ${ensured.notice}` : "";
+	// The notice is set when there is something to say (#407/#408/#738), and it is news the user
+	// has to have: a child process just appeared on their machine, and whether it kept the previous
+	// conversation decides whether the objective above needed the context it carries.
+	//
+	// No longer gated on `ensured.opened`. It used to be, on the reading that a re-attach is not
+	// news — but since #738 a re-attach that RELOCATED the session sets a notice too, and that is
+	// the open where the engine is coldest and the user least likely to know. Gating on `opened`
+	// would have re-silenced, one layer up, the exact path this was fixed for.
+	const opened = ensured.notice ? ` ${ensured.notice}` : "";
 	return { ok: true, taskId, label: targetLabel, reply: `On it — delegated to ${repo.name}; track it on the board.${opened}` };
 }
 

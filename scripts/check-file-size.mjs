@@ -132,6 +132,26 @@ const PINS = {
 	// resolution at an existing call site, and the decision it makes is pure and already lives in
 	// lib/connector-accounts.ts with its own tests.
 	"workers/api/src/lib/storage-tools.ts": 826,
+	// New entry at #738 — 799 → 810, crossing LIMIT by ten. #305 left this file at 684 and deleted
+	// its entry, which is the outcome this guard wants; it has since drifted back to one line under
+	// the threshold, so #738's four ADDITIVE response fields could not be explained at all without
+	// tripping it. The code delta is genuinely zero net lines — three call sites stop discarding
+	// `startSessionOnRunner`'s result and four `c.json` literals gain `resumed` + `seeded`. Every
+	// line above 799 is the comment saying why, and the why is the whole issue: those four
+	// responses are the ones a RE-ATTACH answers with, a re-attach is the only thing that
+	// relocates a session to another machine, and a relocated engine is cold and briefed. Dropping
+	// the field there is what made #694's "the console banner reports a briefed engine" false on
+	// the one path #694 was about. A reader who sees `runnerConnected: started.conn != null` with
+	// no reason attached will collapse it back to the one-liner it was, and nothing else in the
+	// file would stop them.
+	//
+	// Raised rather than split, and the seam is named so the next raise does not have to rediscover
+	// it: what remains here is the session LIFECYCLE, and it divides at attach-and-observe
+	// (`/start`, `/capture`, `/restart`, `/signin`) versus drive-and-end (`/message`, `/run`,
+	// `/resume`, `/end`). That is a real split and it is not #738's — a four-field reporting fix is
+	// the wrong commit to move eight routes in, and doing both at once would make the behaviour
+	// change unreviewable against the move.
+	"workers/api/src/routes/coding.ts": 810,
 	"workers/api/src/routes/instances.ts": 998,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
@@ -583,7 +603,15 @@ const PINS = {
 	// the code — every reading behind that boolean was truthful, and the sentence it produced told
 	// an owner running `pags up` on the connected machine to run `pags up`. Still #305's
 	// landing/session split as the seam; a THIRD notice on this strip should take it.
-	"agents/coder/web/src/CodingTab.tsx": 1469,
+	// +9 at #738: `openTerminal` stops discarding the `/start` response. That call is the console's
+	// dominant path into a relocation — a repo whose session is still `active` in D1 on a machine
+	// that has gone away short-circuits straight to it — and the server now answers it with what
+	// the engine came up holding. Six of the nine lines say why the assignment is ADDITIVE rather
+	// than a plain `setOpenNotice(openNotices(d))`: `openRepoSession` sets the create-path banner
+	// immediately BEFORE calling this, and a warm re-attach reports nothing, so the obvious form
+	// blanks a correct banner on every open that has one. That is invisible in the diff and it is
+	// the exact tidy-up a later reader would make. Still #305's landing/session split as the seam.
+	"agents/coder/web/src/CodingTab.tsx": 1478,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1392,7 +1420,13 @@ const PINS = {
 	// +12 at #712, +6 at #715, +3 at #725: this file grows by the reasoning for each entry, and one new entry was added.
 	// +6 at #724: four lines of why for a one-line raise on agent-do.ts, plus these two. Recorded
 	// rather than absorbed into SLACK, for the reason the #702 note above gives.
-	"scripts/check-file-size.mjs": 1477,
+	// +29 at #738: one NEW entry (routes/coding.ts, which #305 had deleted and which has since
+	// drifted back to one line under LIMIT) plus a raise on CodingTab.tsx, and both reasons are
+	// longer than their diffs for the same cause — the reporting half of #694 shipped believing it
+	// worked, so what each entry has to record is which reading was wrong, not what changed.
+	// The ratchet applied to itself again: an entry costs its reasoning, and that is the price of
+	// the growth being a decision rather than a side effect.
+	"scripts/check-file-size.mjs": 1510,
 };
 
 /**
