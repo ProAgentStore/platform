@@ -46,14 +46,71 @@ export const REPO_PATH_SETTINGS = ["repo_path", "repo"] as const;
 export const REPO_PATH_SETTING = REPO_PATH_SETTINGS[0];
 
 /**
- * Per-call byte budgets, mirroring coding-inspect's CAPS so one tool call can't eat the context.
+ * Per-call budgets, in CHARACTERS — and each one sized against a number that is written down
+ * (#534's AC 5).
+ *
+ * ── Not bytes, whatever this said before
+ *
+ * This block called them "byte budgets" while both values have only ever been applied with
+ * `String.prototype.slice`, which counts UTF-16 code units. `repo_git`'s own truncation note has
+ * always told the model "the FIRST 12,288 characters", so the code and the disclosure agreed and
+ * only the description of the constant did not. Characters are also the RIGHT unit: what these
+ * protect is `TOOL_RESULT_MAX_CHARS = 24_000` (lib/tool-result-cap.ts), applied to every tool
+ * result in `agent-think.ts` at the seam where it re-enters the next round's prompt, and that
+ * ceiling is counted in characters too. A cap in bytes measured against a budget in characters is
+ * two units for one quantity.
+ *
+ * ── The authority used to be circular
+ *
+ * "Mirroring coding-inspect's CAPS" was the whole justification, and `coding-inspect.ts`'s table
+ * gave no reason at all — so 12,288 was sized against nothing. Each key below now says what it is
+ * sized against and what the number buys.
  *
  * `read_file` left this table in #534: a file read is bounded by a LINE WINDOW now, in characters,
  * with the numbers and the reason for each at `lib/repo-file-window.ts`. A byte cap on a file read
  * had no way to say which part of the file it kept, and no argument the model could pass to ask for
  * the rest.
  */
-const CAPS = { git: 12 * 1024, search: 12 * 1024 } as const;
+const CAPS = {
+	/**
+	 * `repo_git` — deliberately HALF the 24,000 ceiling, and deliberately NOT `repo_grep`'s
+	 * match-count bound.
+	 *
+	 * That bound does not transfer, and saying so is the honest half of AC 5. `repo_grep` can count
+	 * because the runner hands the cloud a LIST; `/coding/git` hands it one opaque string. A diff's
+	 * unit of meaning is the hunk, which only a parser could count, and the other four commands each
+	 * have a different unit again — `log`, the one with a natural count, already bounds by it (`n`,
+	 * default 20, max 200).
+	 *
+	 * So the only question is how large a prefix is worth buying, and the answer is "not a large
+	 * one". A cut `repo_git` result is NOT resumable: this tool has no `startLine` and no offset, so
+	 * a bigger slice buys a longer prefix of an answer the model still cannot continue from, while
+	 * spending budget on the round that the productive move needs — the move the truncation note
+	 * already names, `diff-stat` and then `diff` one file at a time. Half the ceiling leaves room
+	 * for that second call in the same round; the whole ceiling would not.
+	 *
+	 * Rejected: cutting at a line boundary so a diff never ends mid-line. Honest and cheap, but a
+	 * different change — the note ABOVE the output already says the output is a prefix, which is
+	 * the property #534 is about, and it is the property a second cut cannot remove.
+	 */
+	git: 12 * 1024,
+	/**
+	 * `repo_grep` / `repo_find` — a backstop on how long 50 paths can be, not the bound itself.
+	 *
+	 * The runner already bounds the answer by MATCH COUNT: `SEARCH_MAX_RESULTS = 50` matches, each
+	 * line trimmed to `SEARCH_MAX_LINE = 160` (packages/browser-runner/src/coding/inspect.ts). This
+	 * number only decides how many of those 50 survive a long-path repo, and whole matches are
+	 * dropped against it now, never characters.
+	 *
+	 * 20,000, raised from 12,288 here, sized the way `READ_MAX_CHARS` is: under 24,000 with room for
+	 * the header. 12,288 admitted all 50 matches only while paths stayed under 80 characters —
+	 * measured on a Flutter-shaped tree (`admin/lib/features/events/ui/pages/…`), 50 matches render
+	 * to 16,229 characters, so 12 of them were cut off the end while the note still said "showing 50
+	 * of 812". 20,000 admits 50 matches up to a 234-character path, which is every real repo, so a
+	 * cloud-side drop becomes the exception it should be — and it is stated when it happens.
+	 */
+	search: 20_000,
+} as const;
 
 /**
  * The deepest `repo_tree` will ever walk. Stated in the tool description because the tool used to
@@ -570,14 +627,32 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					return { content: `(no ${isFind ? "file whose path contains" : "match for"} "${pattern}"${input.path ? ` under ${String(input.path)}` : ""})`, success: true };
 				}
 				const lines = matches.map((m) => (isFind ? m.path : `${m.path}:${m.line ?? "?"}: ${m.text ?? ""}`));
-				// Counted, not byte-sliced: the model is told a list was cut and by how much, so it
-				// narrows instead of concluding it has seen everything (#503's lesson).
-				const more = res.truncated ? `\n(showing ${res.shown ?? lines.length} of ${res.total ?? "?"} — narrow with \`path\` or a more specific \`pattern\`)` : "";
-				// The byte cap applies to the MATCHES, never to the note (#534's AC 5). Slicing the
-				// joined string could cut "showing 50 of 812" off the end, which is the one part of
-				// this result the model must see; 50 matches × (path + 160) lands just under the
-				// budget, so on a repo with long paths it is close enough to matter.
-				return { content: lines.join("\n").slice(0, CAPS.search) + more, success: true };
+				// Bounded by MATCH COUNT at BOTH ends now (#534's AC 5). The runner drops whole
+				// matches and reports `shown`/`total`; the cloud used to finish the job with
+				// `.slice(0, CAPS.search)`, which drops CHARACTERS. So the tail of the list left
+				// mid-line, and — when the runner had NOT truncated — with nothing said at all,
+				// which is #503's failure exactly. When it HAD truncated it was worse than silent:
+				// the note read "showing 50 of 812" while 37 matches and a fragment arrived, so the
+				// one number the model was given was wrong. Measured on a Flutter-shaped tree, 50
+				// matches render to 16,229 characters against the old 12,288.
+				const kept: string[] = [];
+				let used = 0;
+				for (const line of lines) {
+					// Always keep the first, however long its path: one whole match beats a fragment.
+					if (kept.length > 0 && used + line.length + 1 > CAPS.search) break;
+					kept.push(line);
+					used += line.length + 1;
+				}
+				const total = res.total ?? kept.length;
+				// `truncated` is the runner's own signal — honour it even from a machine that reports
+				// no `total`, so "there is more" is never left unsaid.
+				const cut = kept.length < total || Boolean(res.truncated);
+				// A HEADER, for the reason repo_read_file's disclosure is one: `capToolResult` keeps
+				// the HEAD, so a count at the tail is the FIRST thing a second cut removes and a
+				// count at the head is the last. One number, covering both cuts, counted from what
+				// this result actually carries rather than from what some other layer had.
+				const note = cut ? `(showing ${kept.length.toLocaleString("en-US")} of ${res.total === undefined ? "?" : res.total.toLocaleString("en-US")} — narrow with \`path\` or a more specific \`pattern\`)\n` : "";
+				return { content: note + kept.join("\n"), success: true };
 			},
 		};
 	}),

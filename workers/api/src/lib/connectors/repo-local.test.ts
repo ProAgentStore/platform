@@ -15,6 +15,9 @@ vi.mock("../runner-client.js", () => ({
 import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoMissingMessage, repoPathForInstance } from "./repo-local.js";
 import { CONNECTORS } from "./registry.js";
 import { getRegistryTool, registryToolNameSet } from "../tool-registry.js";
+// The budget both caps in this file are sized against (#534's AC 5) — asserted against the real
+// constant so raising one of them without re-reading the other fails here.
+import { TOOL_RESULT_MAX_CHARS, capToolResult } from "../tool-result-cap.js";
 import type { Env } from "../../types.js";
 
 const tool = (name: string) => {
@@ -319,13 +322,55 @@ describe("repo-local — tool behaviour", () => {
 		expect(r.content).toBe("## main\n M src/a.ts");
 	});
 
-	// Same class again: the count note is the one part of a truncated search result the model must
-	// see, and appending it before the slice could cut it off the end.
-	it("repo_grep keeps its 'showing N of M' outside the byte cap", async () => {
+	// Same class again, and the one AC 5 calls "the better pattern". It bounded by match count at
+	// the RUNNER and by characters here, so a deep-path repo lost the tail of the list: this exact
+	// fixture renders to 16,229 characters and the old 12,288 slice delivered 37 matches and a
+	// fragment — while the note said "showing 50 of 812". 20,000 admits all 50.
+	it("repo_grep returns every match the runner sent when they fit, and counts them honestly", async () => {
 		const matches = Array.from({ length: 50 }, (_, i) => ({ path: `${"deep/".repeat(30)}file${i}.ts`, line: i, text: "x".repeat(160) }));
 		callRunner.mockResolvedValue({ matches, shown: 50, total: 812, truncated: true });
 		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
 		expect(r.content).toContain("showing 50 of 812");
+		expect(r.content.split("\n").filter((l) => l.includes("file")).length).toBe(50);
+	});
+
+	// The count is the one part of a truncated search result the model must act on, so it goes
+	// where `capToolResult` keeps it — the head. As a tail note it was the FIRST thing a second cut
+	// would remove, the same landmine repo_read_file's header was moved to defuse.
+	it("repo_grep puts the count in the HEADER, where capToolResult keeps it", async () => {
+		callRunner.mockResolvedValue({ matches: [{ path: "a.ts", line: 1, text: "x" }], shown: 1, total: 812, truncated: true });
+		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
+		expect(r.content.split("\n")[0]).toContain("showing 1 of 812");
+		expect(capToolResult(r.content, 60)).toContain("showing 1 of 812");
+	});
+
+	// AC 5's substance: whole matches are dropped, never characters, and the number the model is
+	// told is the number it received — not the runner's, which is about a different cut.
+	it("repo_grep drops whole matches when even 50 do not fit, and reports what it kept", async () => {
+		// 300-character paths: 50 of these render past the 20,000 budget, so the cloud cuts too.
+		const matches = Array.from({ length: 50 }, (_, i) => ({ path: `${"deep/".repeat(60)}file${i}.ts`, line: i, text: "x".repeat(160) }));
+		callRunner.mockResolvedValue({ matches, shown: 50, total: 812, truncated: true });
+		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
+		const [head, ...body] = r.content.split("\n");
+		expect(body.length).toBeLessThan(50);
+		expect(head).toContain(`showing ${body.length} of 812`);
+		// Every delivered line is a COMPLETE match — the old slice ended one mid-path.
+		for (const line of body) expect(line.endsWith("x".repeat(160))).toBe(true);
+		// And the whole result still clears the ceiling it is sized against, header included.
+		expect(r.content.length).toBeLessThan(TOOL_RESULT_MAX_CHARS);
+	});
+
+	// repo_git's half of AC 5 is a JUDGEMENT, not a change: 12,288 stays, sized at half of
+	// TOOL_RESULT_MAX_CHARS so a second `repo_git` fits in the same round, because a cut diff is not
+	// resumable (no startLine, no offset) and a longer prefix is not a better answer. What the test
+	// pins is the disclosure — the note is a header, so the outer cap can never take it.
+	it("repo_git's truncation note is a header that survives the tool-result cap", async () => {
+		callRunner.mockResolvedValue({ cmd: "git diff", output: "x".repeat(200_000), pathApplied: false });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "diff" });
+		expect(capToolResult(r.content).startsWith("(TRUNCATED:")).toBe(true);
+		expect(capToolResult(r.content)).toContain("diff-stat");
+		// Half the ceiling, on purpose: the note names the follow-up call, so leave room to make it.
+		expect(r.content.length).toBeLessThan(TOOL_RESULT_MAX_CHARS / 2 + 1_000);
 	});
 
 	it("repo_remote reports the origin, and says so plainly when there isn't one", async () => {
