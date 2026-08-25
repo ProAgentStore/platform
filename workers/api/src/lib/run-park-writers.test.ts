@@ -132,7 +132,7 @@ function livenessCallSites(): { file: string; line: number; text: string }[] {
  */
 const NO_KNOWN_END: Record<string, string> = {
 	platform_interrupt:
-		"our own deploy evicted the isolate; Cloudflare replays the journal when it replays it, and there is no instant to state (#583)",
+		"our own deploy evicted the isolate, or the provider's transport dropped (#758); Cloudflare replays the journal when it replays it, and there is no instant to state (#583)",
 };
 
 describe("every park field has a production writer", () => {

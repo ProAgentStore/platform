@@ -2,30 +2,60 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { needsHuman, statusFor, type LoopStopReason } from "./agent-loop.js";
-import { codingCrashReport, INTERRUPTED_CLASSES, outcomeWord, runOutcomeNote, withoutVendorAdvice } from "./coding-run-report.js";
+import { codingCrashReport, INTERRUPTED_CLASSES, interruptedBy, outcomeWord, resumeNotice, runOutcomeNote, withoutVendorAdvice } from "./coding-run-report.js";
+import { AI_STALL_TIMEOUT_MS, deadlineMessage } from "./ai-deadlines.js";
 import { CARD_DETAIL_MAX, cardDetail } from "./card-detail.js";
 import { classifyCodingFailure } from "./coding-failure.js";
 import { stopReasonFor } from "./coding-pause.js";
 import { RunnerGoneError } from "./runner-unreachable.js";
 
-describe("a platform interruption is not the objective failing (#546)", () => {
+describe("an interruption is not the objective failing (#546, #758)", () => {
 	// Verbatim from the eight production occurrences the ticket was measured on.
 	const INTERNAL = "WorkflowInternalError: Attempt failed due to internal workflows error";
 	const CEILING =
 		"Too many API requests by single Worker invocation. To configure this limit, refer to https://developers.cloudflare.com/workers/wrangler/configuration/#limits";
 	const RESET = "Durable Object reset because its code was updated";
+	/** The stall, composed by the function that raises it — a reword fails here rather than degrading. */
+	const STALL = deadlineMessage("stall", AI_STALL_TIMEOUT_MS);
 
-	it("covers exactly the three classes where the platform cut the invocation off", () => {
+	it("covers exactly the four classes where something other than the work cut the run off", () => {
 		// G1: the set is asserted, not assumed. Adding a class here without a reason — or losing
-		// one — changes what the owner is told about a whole population of dead runs.
-		expect([...INTERRUPTED_CLASSES].sort()).toEqual(["infra_transient", "platform_ceiling", "workflow_internal"]);
-		for (const message of [INTERNAL, CEILING, RESET]) {
+		// one — changes what the owner is told about a whole population of dead runs. `provider_stall`
+		// joined in #758, once the resumes are spent: a dropped socket is not the objective failing.
+		expect([...INTERRUPTED_CLASSES].sort()).toEqual(["infra_transient", "platform_ceiling", "provider_stall", "workflow_internal"]);
+		for (const message of [INTERNAL, CEILING, RESET, STALL]) {
 			expect(INTERRUPTED_CLASSES.has(classifyCodingFailure(new Error(message)).class), message).toBe(true);
 		}
 	});
 
+	it("names the RIGHT culprit — our platform, or the owner's own AI provider (#758)", () => {
+		// The half a shared sentence gets wrong. "Interrupted by the platform" pointed an owner at us
+		// for a failure in their own BYOK provider's transport; #546 and #523 are both tickets about a
+		// death reported as something it was not, and reusing their sentence here would repeat that.
+		expect(interruptedBy(classifyCodingFailure(new Error(STALL)).class)).toBe("cut off by the AI provider");
+		expect(interruptedBy(classifyCodingFailure(new Error(RESET)).class)).toBe("interrupted by the platform");
+		// A death that IS the objective failing has no subject at all — that is what `null` means, and
+		// it is what keeps `codingCrashReport` from rewording an ordinary crash.
+		expect(interruptedBy(classifyCodingFailure(new Error("Cannot read properties of undefined")).class)).toBeNull();
+		const stall = codingCrashReport(new Error(STALL));
+		expect(stall.detail.startsWith("Cut off by the AI provider, not by the objective")).toBe(true);
+		expect(stall.detail, "our own deploys must not be blamed for the provider's socket").not.toContain("platform");
+		expect(stall.stopReason, "the objective never reported either way — it is not `failed`").toBe("interrupted");
+	});
+
+	it("says the same thing on the chat bubble the driver posts while it replays (#758)", () => {
+		// One table, three surfaces. The bubble used to be a template literal inside the workflow that
+		// hardcoded "Interrupted by a platform update", which the resume policy made false the moment
+		// it widened — the exact shape of #546's "two durable accounts of one event, disagreeing".
+		const notice = resumeNotice(classifyCodingFailure(new Error(STALL)).class, "the journal replays every completed step", 2, 3);
+		expect(notice).toContain("**Cut off by the AI provider**");
+		expect(notice).toContain("interruption 2 of 3");
+		expect(notice).toContain("nothing is needed from you");
+		expect(resumeNotice(classifyCodingFailure(new Error(RESET)).class, "why", 1, 3)).toContain("**Interrupted by the platform**");
+	});
+
 	it("drops the `run error:` prefix, which reads as a crash, and says the work is intact", () => {
-		for (const message of [INTERNAL, CEILING, RESET]) {
+		for (const message of [INTERNAL, CEILING, RESET, STALL]) {
 			const r = codingCrashReport(new Error(message));
 			expect(r.detail, message).not.toContain("run error:");
 			// What the platform said still reaches the owner — minus only the advice addressed to

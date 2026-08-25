@@ -1,10 +1,18 @@
 /**
- * The `retryable` verdict has a consumer, and every class has a stated decision (#583).
+ * The `retryable` verdict has a consumer, and every class has a stated decision (#583, #758).
  *
  * The defect was not a missing retry. It was a verdict computed on every death, recorded in every
  * error row, and read by nobody — `coding-failure.ts:364` said so in a comment and treated it as an
  * observation. A test that only proved "infra_transient resumes" would leave the shape of that
  * defect intact for the next class; the denominator assertion is what does not.
+ *
+ * ── The next class arrived (#758), and the denominator is why this file changed rather than grew
+ *
+ * `provider_stall` sat at `resume: false` on a reason that was wrong about the MECHANISM — that a
+ * resume would "re-drive the engine from where it stood", which describes re-dispatching a run and
+ * not replaying a journal. Nine days and at least three killed runs later it was still false. The
+ * arms below therefore assert the resuming set as a LIST and assert what the widening must NOT
+ * imply, because "one more class resumes" is the shape that quietly becomes "everything resumes".
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -18,6 +26,7 @@ import {
 	type CodingFailureClass,
 } from "./coding-failure.js";
 import { autoResumableRoundOf, isRetryableFailure } from "./resumable-round.js";
+import { AI_STALL_TIMEOUT_MS, AI_TOTAL_TIMEOUT_MS, deadlineMessage } from "./ai-deadlines.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
@@ -65,25 +74,32 @@ describe("every failure class has a stated resume decision — the denominator (
 		}
 	});
 
-	it("exactly one class resumes, and it is the one we cause ourselves", () => {
+	it("exactly two classes resume, and both replay a journal rather than re-dispatch a run", () => {
+		// The denominator, restated as a LIST rather than a count: a class flipped to `resume: true`
+		// without a decision recorded here is the thing this arm exists to catch. `provider_stall`
+		// joined `infra_transient` in #758 — see the table's entry for the mechanism, and the arm
+		// below for the claim it is NOT allowed to imply.
 		const resuming = ALL.filter((c) => DRIVER_RESUME_POLICY[c].resume);
-		expect(resuming).toEqual(["infra_transient"]);
+		expect(resuming.sort()).toEqual(["infra_transient", "provider_stall"]);
 	});
 
 	it("retryable does NOT imply resumable — the two claims the table keeps apart", () => {
 		// `workflow_internal` is classified `retryable: true` and must never re-dispatch the run:
 		// Cloudflare has already retried the attempt, and a fresh run has no journal, so acts that
 		// were already committed — two of the five recorded occurrences had pushed to `origin main` —
-		// would repeat.
+		// would repeat. It is the arm that keeps "#758 made stalls resumable" from being read as
+		// "retryable now means resumable".
 		expect(classifyCodingFailure(new Error("Attempt failed due to internal workflows error")).retryable).toBe(true);
 		expect(DRIVER_RESUME_POLICY.workflow_internal.resume).toBe(false);
-		// Same shape for a stall: retryable, and every attempt spends the owner's credit (#518).
-		expect(classifyCodingFailure(new Error("Anthropic stopped sending mid-reply after 20s")).retryable).toBe(true);
-		expect(DRIVER_RESUME_POLICY.provider_stall.resume).toBe(false);
+		// …and the other direction is real too: `provider_rate_limit` and `provider_overrun` are
+		// provider failures that are NOT retryable, and widening the stall must not have widened them.
+		for (const cls of ["provider_overrun", "provider_credentials", "provider_rate_limit", "provider_error"] as const) {
+			expect(DRIVER_RESUME_POLICY[cls].resume, `${cls} must stay terminal`).toBe(false);
+		}
 	});
 });
 
-describe("driverResumePlan — a coding run killed by our own deploy is resumed", () => {
+describe("driverResumePlan — a run cut off by something other than its objective is resumed", () => {
 	it("resumes the measured production failure", async () => {
 		const { env, close } = envWithRun();
 		try {
@@ -132,12 +148,53 @@ describe("driverResumePlan — a coding run killed by our own deploy is resumed"
 		}
 	});
 
-	it("does not resume a provider stall — the cost falls on the owner (#518)", async () => {
+	it("resumes the mid-reply transport drop that killed run 16d3defd at iteration 1 (#758)", async () => {
+		// The production sentence, composed by the function that raises it rather than retyped — so a
+		// reworded deadline fails this test instead of silently making the fix unreachable. This is the
+		// message #758 quotes: the platform TELLS the owner to send it again and then did not.
 		const { env, close } = envWithRun();
 		try {
-			const plan = await driverResumePlan(env, classifyCodingFailure(new Error("Anthropic stopped sending mid-reply after 20s")), "run-1");
-			expect(plan.resume).toBe(false);
-			expect(plan.why).toContain("credit");
+			const stall = new Error(deadlineMessage("stall", AI_STALL_TIMEOUT_MS));
+			const f = classifyCodingFailure(stall);
+			expect(f.class).toBe("provider_stall");
+			expect(f.retryable, "the site that knows says a retry could work").toBe(true);
+			const plan = await driverResumePlan(env, f, "run-1");
+			expect(plan.resume, "a dropped socket must not be the end of a run that was working").toBe(true);
+			expect(plan.attempts).toBe(1);
+			// The reason names the MECHANISM, because the entry it replaces was wrong about exactly
+			// that: it said a retry would re-drive the engine, which describes re-dispatching a run.
+			expect(plan.why).toContain("journal");
+		} finally {
+			close();
+		}
+	});
+
+	it("bounds a stall on the SAME durable counter a deploy uses — three replays total, not three each", async () => {
+		// One counter for both classes, deliberately (see MAX_PLATFORM_RESUMES). Per-class budgets
+		// would let three deploys plus three drops replay one run six times.
+		const { env, close } = envWithRun();
+		try {
+			const deploy = classifyCodingFailure(new Error(DO_RESET));
+			const stall = classifyCodingFailure(new Error(deadlineMessage("stall", AI_STALL_TIMEOUT_MS)));
+			expect((await driverResumePlan(env, deploy, "run-1")).attempts).toBe(1);
+			expect((await driverResumePlan(env, stall, "run-1")).attempts).toBe(2);
+			expect((await driverResumePlan(env, stall, "run-1")).resume).toBe(true);
+			const past = await driverResumePlan(env, stall, "run-1");
+			expect(past.resume, `past ${MAX_PLATFORM_RESUMES} interruptions this is a defect, not weather`).toBe(false);
+			expect(past.why).toContain("defect");
+		} finally {
+			close();
+		}
+	});
+
+	it("does not resume the deadline that is DETERMINISTIC — an overrun repeats identically", async () => {
+		// The boundary the widening must not cross. Both are `ai-deadlines.ts` sentences and both are
+		// provider failures; only one of them can be fixed by trying again, and its own message says so.
+		const { env, close } = envWithRun();
+		try {
+			const overrun = classifyCodingFailure(new Error(deadlineMessage("total", AI_TOTAL_TIMEOUT_MS)));
+			expect(overrun.class).toBe("provider_overrun");
+			expect((await driverResumePlan(env, overrun, "run-1")).resume).toBe(false);
 		} finally {
 			close();
 		}

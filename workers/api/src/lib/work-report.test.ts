@@ -313,7 +313,10 @@ describe("describeLoopRun", () => {
 				waitingUntil: null,
 			});
 			expect(runHealth(resuming, NOW)).toBe("waiting");
-			expect(describeLoopRun(resuming, NOW)).toContain("platform update");
+			// The clause is cause-NEUTRAL since #758: the same park now also carries a provider
+			// transport drop, and "a platform update interrupted it" would be a false accusation
+			// against our own deploys. Which cause it was lives on the `error_log` row's class.
+			expect(describeLoopRun(resuming, NOW)).toContain("interrupted by something other than the work");
 		});
 
 		it("a human handoff is a park too, and says so in the second person", () => {

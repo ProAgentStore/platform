@@ -15,7 +15,7 @@ Migration `0127` split what used to be one column, because a single "is it still
 | `lastAliveAt` | The orchestrator's **heartbeat**. Written by every tick and by every real advance. | Not evidence that anything is being accomplished — a parked run keeps ticking on purpose. |
 | `lastProgressAt` | The last time the run **advanced an instruction**. | Not a liveness signal. It stands still through one long, healthy engine turn. |
 | `waitingUntil` / `waitingReason` | The run is **deliberately parked**, named and dated. | Not a stall. Nothing is advancing and that is correct. |
-| `interruptions` | How many times a platform event (our own deploy evicting a Durable Object) interrupted this run and it was resumed. | Not a failure count. A resumed run is a working run. |
+| `interruptions` | How many times something other than the work cut this run off and it was resumed — our own deploy evicting a Durable Object, or the AI provider's connection dropping mid-reply. | Not a failure count. A resumed run is a working run. |
 
 The reason this matters is that the two signals disagree constantly in normal operation, and each disagreement has an innocent explanation:
 
@@ -67,7 +67,7 @@ What running out *means* is entailed by the reason, and the two kinds demand opp
 | --- | --- | --- |
 | `engine_limit` | the coding CLI's own usage limit has to reset | **resumes** — the run continues by itself, and the owner does nothing |
 | `human` | it is waiting for YOU to answer a handoff | **gives up** — the run stops waiting, and the owner has until then to act |
-| `platform_interrupt` | a platform update interrupted it and it is being resumed | **resumes** — the run continues by itself, and the owner does nothing |
+| `platform_interrupt` | it was interrupted by something other than the work and is being resumed | **resumes** — the run continues by itself, and the owner does nothing |
 
 <!-- /generated:run-wait-reasons -->
 
@@ -78,7 +78,7 @@ Two consequences of the clock being one field with one meaning:
 - **A park with no knowable instant still parks.** `platform_interrupt` often has no time attached, because journal replay finishes when it finishes. The run is parked; there is simply no deadline to state.
 - **A deadline in the past renders as nothing.** "Gives up in −3m" is not a sentence, and the next tick either clears the park or closes the run.
 
-A park also outranks the heartbeat test. A run parked on a platform interruption is mid-resume and has nothing ticking *by design*, so reading its silence as death would report a recovery in progress as a failure.
+A park also outranks the heartbeat test. A run parked on an interruption is mid-resume and has nothing ticking *by design*, so reading its silence as death would report a recovery in progress as a failure.
 
 ## Where You See This
 

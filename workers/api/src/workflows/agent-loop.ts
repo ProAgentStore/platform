@@ -16,6 +16,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { nextStep, instructionKey, needsHuman, readAgentReply, replyErrorClass, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness } from "../lib/agent-loop-store.js";
 import { classifyCodingFailure, driverResumePlan, MAX_PLATFORM_RESUMES } from "../lib/coding-failure.js";
+import { interruptedBy } from "../lib/coding-run-report.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
@@ -226,14 +227,22 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 			 * The replay is cheap for the reason it is cheap for the Pilot: `act`, `decide`, `reserve`
 			 * and `settle` are all `step.do`, so a replay returns each journalled result without
 			 * re-executing it and without re-charging the pool. Only the step that died runs again.
+			 *
+			 * The classification is HELD rather than re-derived (#758), because it now decides what the
+			 * event SAYS: this driver's sentence hardcoded "a platform update", a specific and checkable
+			 * claim about our own deploys, which is false for the provider transport drop the policy
+			 * also resumes as of #758. The clause comes from `coding-run-report.ts`, the same table the
+			 * Pilot's chat bubble and terminal sentence read, so one death cannot be blamed on three
+			 * different culprits depending on which surface the owner opens.
 			 */
-			const plan = await driverResumePlan(this.env, classifyCodingFailure(e), runId).catch(() => null);
+			const failure = classifyCodingFailure(e);
+			const plan = await driverResumePlan(this.env, failure, runId).catch(() => null);
 			if (plan?.resume) {
 				resuming = true;
 				await logEvent(this.env, {
 					source: "loop",
 					event: "loop.interrupted",
-					message: `Loop interrupted by a platform update, resuming (${plan.attempts} of ${MAX_PLATFORM_RESUMES}): ${plan.why}`.slice(0, 500),
+					message: `Loop ${interruptedBy(failure.class) ?? "interrupted"}, resuming (${plan.attempts} of ${MAX_PLATFORM_RESUMES}): ${plan.why}`.slice(0, 500),
 					userId,
 					instanceId,
 					traceId: runId,
