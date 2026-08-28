@@ -14,6 +14,29 @@
  */
 
 import { localStamp } from "./agent-clock.js";
+import { fenceUntrusted } from "./untrusted-fence.js";
+
+/** Where a pane's bytes came from, in the owner's terms — rendered into the fence preamble.
+ *  Deliberately the same wording `read_terminal` uses in `lib/storage-tools.ts`: it is the
+ *  same bytes off the same runner, and two names for one origin only have to disagree once. */
+const TERMINAL_ORIGIN = "a terminal on your machine";
+
+/**
+ * Our label, then the pane as fenced DATA (#751, ADR 0006 F2/F4).
+ *
+ * The label goes OUTSIDE the block and that is load-bearing, not stylistic. Every label here
+ * exists to stop the model reading stale scrollback as live activity — "may be OLD output",
+ * "do NOT infer the session is idle or finished". A fence tells the model to disregard what is
+ * inside it, so a verdict placed inside one is a verdict withdrawn.
+ *
+ * An empty body is not fenced (ADR 0006's first per-result narrowing): "(none captured)" is our
+ * own sentence about the absence, not text somebody else authored, and wrapping it would say the
+ * platform's own report is untrusted.
+ */
+function labelled(label: string, body: string): string {
+	const text = (body || "").trim();
+	return text ? `${label}\n${fenceUntrusted(text, TERMINAL_ORIGIN)}` : `${label} (none captured)`;
+}
 
 export type TerminalKind =
 	| "runner-offline" // runner not connected — nothing is running
@@ -71,24 +94,43 @@ export function describeTerminal(i: TerminalInputs): TerminalView {
 /** Render one session's terminal line for the chat system prompt. Wording is the
  *  guardrail: an idle pane is explicitly "may be OLD output", a failed capture is
  *  explicitly "do NOT infer idle/done" — so the model can't launder stale text into
- *  a claim about current state. */
+ *  a claim about current state.
+ *
+ *  The pane itself is FENCED (#751). This is the one place `TerminalView.text` reaches a
+ *  model — `engineClause` in `work-report.ts`, the only other consumer of a view, renders
+ *  `kind` and never the text — and it reaches it as AUTOMATIC context in the platform's own
+ *  voice, on every turn of a coding-capable instance, without the model asking for it. That
+ *  is worse than the tool-result case `read_terminal` fences: a tool result at least arrives
+ *  labelled as a tool result, whereas a crafted line interpolated into the label below reads
+ *  as something the platform is telling the model. It is a NON-REGISTRY ingress, so the
+ *  per-tool `untrustedOutput` declaration that covers `tmux_capture_pane` cannot reach it and
+ *  it fences at its own seam — ADR 0006 F4, the same shape `lib/knowledge-result.ts` uses.
+ *
+ *  The only sanitisation applied upstream is `.replace(/\s+/g, " ")` in `agent-think.ts`, a
+ *  whitespace collapse — which strips the newlines that would make injected text visible, so
+ *  it makes a crafted pane harder to spot rather than safer. */
 export function renderTerminalLine(view: TerminalView, zone?: string): string {
-	const t = view.text || "(none captured)";
 	// `asOf` is a raw D1 timestamp (`2026-08-07 22:33:34`) and it goes straight into the prompt, so
 	// a model asked "when did it last run" reads that back verbatim — the #345 pattern. `localStamp`
 	// renders it in the owner's zone, or as an explicitly-labelled UTC clock when there isn't one.
 	const asOf = localStamp(view.asOf, zone) ?? "unknown";
 	switch (view.kind) {
 		case "live-active":
-			return `  CURRENT terminal (runner online, engine actively running — this is live): ${view.text}`;
+			return labelled(`  CURRENT terminal (runner online, engine actively running — this is live):`, view.text);
 		case "live-idle":
-			return `  CURRENT terminal contents (runner online, session IDLE — this is the existing on-screen scrollback, which may be OLD output, NOT proof anything just happened): ${view.text}`;
+			return labelled(
+				`  CURRENT terminal contents (runner online, session IDLE — this is the existing on-screen scrollback, which may be OLD output, NOT proof anything just happened):`,
+				view.text,
+			);
 		case "empty-pane":
-			return `  Terminal is EMPTY on screen right now (runner online, nothing displayed). Last saved output was: ${t}`;
+			return labelled(`  Terminal is EMPTY on screen right now (runner online, nothing displayed). Last saved output was:`, view.text);
 		case "capture-failed":
-			return `  Terminal UNAVAILABLE this turn (runner online but the capture request failed — do NOT infer the session is idle or finished). Last saved snapshot (as of ${asOf}): ${t}`;
+			return labelled(
+				`  Terminal UNAVAILABLE this turn (runner online but the capture request failed — do NOT infer the session is idle or finished). Last saved snapshot (as of ${asOf}):`,
+				view.text,
+			);
 		case "runner-offline":
-			return `  Runner OFFLINE — no live terminal. Last saved snapshot (as of ${asOf}): ${t}`;
+			return labelled(`  Runner OFFLINE — no live terminal. Last saved snapshot (as of ${asOf}):`, view.text);
 		default:
 			return "";
 	}

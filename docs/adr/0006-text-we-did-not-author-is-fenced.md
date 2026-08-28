@@ -101,12 +101,23 @@ thing an author has to remember, which is the failure mode this whole mechanism 
 
 **F4 — A non-registry ingress fences at its own seam, and says so where it is.**
 `lib/knowledge-result.ts` (#747), `lib/prompt-interpolation.ts` for `ai_generate` (#750), the
-apply/browse decide-loops (#749) and `lib/confirmation-link-result.ts` do not pass through
+apply/browse decide-loops (#749), `lib/confirmation-link-result.ts`, `read_terminal` in
+`lib/storage-tools.ts` (#751) and `lib/terminal-label.ts` (#751) do not pass through
 `runRegistryTool`. Each fences locally and carries a comment naming this ADR, so the next reader of
-that file finds the question already posed. Two of those are not tool results at all — one is a
-loop's own per-turn observation and one is a value the binder deliberately unfenced — which is
-exactly why the registry declaration is one enforcement point for the property and not the whole of
-it.
+that file finds the question already posed. Three of those are not tool results at all — one is a
+loop's own per-turn observation, one is a value the binder deliberately unfenced, and one is the
+SYSTEM PROMPT itself — which is exactly why the registry declaration is one enforcement point for
+the property and not the whole of it.
+
+`lib/terminal-label.ts` is the sharpest of them and the reason this clause is not a footnote.
+`agent-think.ts` appends up to 1200 characters of terminal pane to the system prompt on **every**
+turn of a coding-capable instance, with no tool call involved, and the next sentence of that prompt
+tells the model to trust each terminal line's label literally. So a pane line wearing the label's
+own vocabulary was interpolated *into* the label — text we did not author, arriving in the
+platform's own voice, which is a strictly worse position than a tool result that at least announces
+itself as one. It is the same defect #749 found on the browser loops' `CURRENT PAGE` line. The
+labels stay outside the block for F2's reason, and here that reason is load-bearing rather than
+tidy: those labels exist to stop stale scrollback being read as live.
 
 **F5 — There is ONE fence, and it is `fenceUntrusted`.** No hand-written wrapper, no second wording,
 no "REFERENCE (untrusted …):" prefix. A copy will not carry `neutralizeFenceMarkers`, which is the
@@ -173,3 +184,8 @@ It is F1 text and it is not a tool result, so no per-tool declaration reaches it
 domain that is complete over the wrong space: `assignedBy` has two values, owner and agent, and no
 way to say "a stranger". Recorded here rather than left implicit, because a rule whose gaps are
 unnamed reads as a rule with none.
+
+With `lib/terminal-label.ts` fenced under F4, **#754 is the only known system-prompt ingress still
+outside this ADR's enforcement**. That is an enumeration, not a proof: this ADR's whole history is
+that the fence was never in doubt and its coverage always was, so the claim is worth exactly as
+much as the next sweep that tries to break it.
