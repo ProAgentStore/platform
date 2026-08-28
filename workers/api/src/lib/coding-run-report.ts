@@ -16,32 +16,62 @@
  * same cost #523 records for the subrequest ceiling.
  *
  * So an INTERRUPTION is reported as itself, exactly as #341 already reports a waited-out runner as
- * itself. The three interrupting classes are the ones where the run was cut off by the platform
- * rather than by anything it was asked to do — see {@link INTERRUPTED_CLASSES}.
+ * itself. The interrupting classes are the ones where the run was cut off by something other than
+ * the work it was asked to do — see {@link INTERRUPTED_CLASSES}.
  */
 import { classifyCodingFailure, type CodingFailureClass } from "./coding-failure.js";
 import { isRunnerGone } from "./runner-unreachable.js";
 import type { LoopStopReason } from "./agent-loop.js";
 
 /**
- * Deaths that are NOT the objective failing.
+ * Deaths that are NOT the objective failing — and the SUBJECT each one is reported with.
  *
- * Each is the platform cutting the invocation off, with the run's committed work intact:
+ * Every member was cut off by something other than the work, with the run's committed acts intact:
  *
  *   `workflow_internal`  Cloudflare Workflows failed its own attempt (#546).
  *   `platform_ceiling`   a per-invocation subrequest/CPU/memory limit (#523).
  *   `infra_transient`    an isolate or Durable Object reset, usually a deploy landing mid-run.
+ *   `provider_stall`     the model's transport died mid-reply, after the resumes were spent (#758).
  *
  * `runner_gone` is deliberately NOT here even though it is also not the objective failing. #341
  * already gives it its own sentence, and it differs in the one way that matters to the owner: the
  * machine is not coming back on its own, so it is an ACTION rather than an interruption. Widening
  * this set to include it would replace a message that was written for that case with a generic one.
+ *
+ * ── Why a subject per class, rather than one sentence (#758)
+ *
+ * The sentence was *"Interrupted by the platform"*, which is true of the first three and false of
+ * the fourth: the model provider is the owner's own BYOK account, not this platform, and telling
+ * them our platform interrupted their run sends them to look at the wrong system. #546 and #523 are
+ * both tickets about a death being reported as something it was not; naming the fourth class with
+ * the third's sentence would be the same defect, one class over. The TAIL is shared, because what
+ * the owner has to DO is identical — the committed work is intact and the repository is the thing
+ * to check before starting again.
  */
-export const INTERRUPTED_CLASSES: ReadonlySet<CodingFailureClass> = new Set<CodingFailureClass>([
-	"workflow_internal",
-	"platform_ceiling",
-	"infra_transient",
-]);
+const INTERRUPTED_BY: Partial<Record<CodingFailureClass, string>> = {
+	workflow_internal: "interrupted by the platform",
+	platform_ceiling: "interrupted by the platform",
+	infra_transient: "interrupted by the platform",
+	provider_stall: "cut off by the AI provider",
+};
+
+export const INTERRUPTED_CLASSES: ReadonlySet<CodingFailureClass> = new Set(Object.keys(INTERRUPTED_BY) as CodingFailureClass[]);
+
+/**
+ * What cut this run off, as a clause — or null when the objective itself is what failed.
+ *
+ * Lower-case and clause-shaped on purpose: its three readers place it differently (a chat headline,
+ * a sentence opener, mid-sentence in a `loop.interrupted` event), and a subject stored already
+ * capitalised is a subject that can only lead. {@link openWith} is the one place that capitalises.
+ */
+export function interruptedBy(cls: CodingFailureClass): string | null {
+	return INTERRUPTED_BY[cls] ?? null;
+}
+
+/** Sentence-case a clause. Only the first character — the rest may legitimately be `AI`, `Cloudflare`. */
+function openWith(clause: string): string {
+	return clause.charAt(0).toUpperCase() + clause.slice(1);
+}
 
 export interface CodingCrashReport {
 	/** What the owner is told. Feeds `CodingResult.detail`, the chat line and the loop-run row. */
@@ -67,7 +97,8 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 	// A waited-out runner is reported as ITSELF, without the "run error:" prefix — that prefix
 	// reads as a crash, and "the runner did not come back" is a finding, not one (#341).
 	if (isRunnerGone(err)) return { detail: message, stopReason: null };
-	if (!INTERRUPTED_CLASSES.has(classifyCodingFailure(err).class)) {
+	const subject = INTERRUPTED_BY[classifyCodingFailure(err).class];
+	if (!subject) {
 		return { detail: `run error: ${message}`, stopReason: null };
 	}
 	return {
@@ -82,10 +113,31 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 		// `recordCodingFailure` is handed the error itself — so nothing is lost by not repeating it
 		// here.
 		detail:
-			"Interrupted by the platform, not by the objective — whatever this run had already committed " +
+			`${openWith(subject)}, not by the objective — whatever this run had already committed ` +
 			`or pushed is unaffected; check the repository before starting it again. ${withoutVendorAdvice(message)}`,
 		stopReason: "interrupted",
 	};
+}
+
+/**
+ * The ⏸ line a driver posts while a run is being REPLAYED, rather than ended (#758).
+ *
+ * Extracted from `workflows/coding-session.ts`, where it was a template literal that hardcoded
+ * *"Interrupted by a platform update"*. That was written when `infra_transient` was the only class
+ * `DRIVER_RESUME_POLICY` resumed and it was exactly true. It is now reachable for a provider
+ * transport drop, where it would tell an owner that we deployed over their run — a specific, checkable,
+ * false claim, on the surface they read first.
+ *
+ * Pure, and shared by both resuming drivers, so the chat bubble, the loop event and the terminal
+ * sentence cannot end up naming three different culprits for one death. `agent-loop.ts` carried its
+ * own copy of the same wrong sentence.
+ */
+export function resumeNotice(cls: CodingFailureClass, why: string, attempt: number, max: number): string {
+	// Falls back to the neutral subject rather than asserting a cause: a class that resumes without
+	// an entry above is a gap in the table, and inventing "a platform update" for it is how the
+	// sentence this function replaces became wrong in the first place.
+	const subject = INTERRUPTED_BY[cls] ?? "interrupted";
+	return `⏸ **${openWith(subject)}** — ${why}. Resuming from where it stopped (interruption ${attempt} of ${max}); nothing is needed from you.`;
 }
 
 /**

@@ -51,8 +51,15 @@ export interface LoopRunRow {
  *                        time (#541). Its deadline is a RESUME.
  *   human              — a takeover or a needs-input handoff. Somebody has to answer before the run
  *                        moves. Its deadline is a GIVE-UP (`coding-pause.ts`'s 15 minutes).
- *   platform_interrupt — our own deploy evicted the isolate and Cloudflare is replaying the
- *                        journal (#583). No knowable instant; when one exists it is a RESUME.
+ *   platform_interrupt — the run was cut off by something that was not the objective and Cloudflare
+ *                        is replaying the journal (#583). Our own deploy evicting the isolate, or —
+ *                        since #758 — the model provider's transport dropping mid-reply. The NAME is
+ *                        kept rather than split per cause: what a reader of this column needs is the
+ *                        park's shape (nothing is ticking, a replay is in flight, no instant to
+ *                        state), which is identical for both, and rows already carry the string.
+ *                        Which of the two it was lives where causes live — the `error_log` row's
+ *                        `failureClass` and the sentence `coding-run-report.ts` composes from it.
+ *                        No knowable instant; when one exists it is a RESUME.
  *
  * ── Why this is an array and not only a union (#596)
  *

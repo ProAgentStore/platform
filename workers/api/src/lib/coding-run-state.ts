@@ -110,7 +110,7 @@ const PARK_GLOSS: Record<string, { what: string; fix: string; severity: "warn" |
 		severity: "warn",
 	},
 	platform_interrupt: {
-		what: "the run was interrupted by a platform deploy and is being resumed",
+		what: "the run was interrupted — a platform deploy, or the AI provider dropping the connection — and is being resumed",
 		fix: "Nothing to do — it resumes itself",
 		severity: "info",
 	},

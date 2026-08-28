@@ -252,7 +252,7 @@ interface Park {
 const PARKS: Record<RunWaitReason, Park> = {
 	engine_limit: { why: "the coding CLI's own usage limit has to reset", deadline: "resume" },
 	human: { why: "it is waiting for YOU to answer a handoff", deadline: "give_up" },
-	platform_interrupt: { why: "a platform update interrupted it and it is being resumed", deadline: "resume" },
+	platform_interrupt: { why: "it was interrupted by something other than the work and is being resumed", deadline: "resume" },
 };
 
 /**

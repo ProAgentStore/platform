@@ -145,7 +145,12 @@ describe("every driver consumes the retryable verdict", () => {
 		// union without a rule fails to compile; this catches the other direction.
 		const classes = Object.keys(DRIVER_RESUME_POLICY);
 		expect(classes.length, `${classes.length} failure classes, each with a stated resume rule`).toBeGreaterThanOrEqual(11);
-		expect(classes.filter((c) => DRIVER_RESUME_POLICY[c as keyof typeof DRIVER_RESUME_POLICY].resume)).toEqual(["infra_transient"]);
+		// Two since #758. Asserted as the exact set rather than a count, so a class flipped to
+		// `resume: true` somewhere else fails here as well as in `coding-resume.test.ts`.
+		expect(classes.filter((c) => DRIVER_RESUME_POLICY[c as keyof typeof DRIVER_RESUME_POLICY].resume).sort()).toEqual([
+			"infra_transient",
+			"provider_stall",
+		]);
 	});
 });
 

@@ -264,7 +264,7 @@ export function codingFailureLevel(cls: CodingFailureClass): "error" | "warn" {
 // ── Who consumes the `retryable` verdict, and at what cost (#583) ────────────
 
 /**
- * How many PLATFORM interruptions one run may be resumed through.
+ * How many interruptions one run may be resumed through, whatever caused them.
  *
  * Bounded for #518's reason and sized against a different cost. #518 allows a chat turn exactly two
  * attempts because *"a turn that retries until it succeeds spends someone else's credit deciding
@@ -277,6 +277,15 @@ export function codingFailureLevel(cls: CodingFailureClass): "error" | "warn" {
  * is not a deploy, it is a defect, and three is where "the platform is being deployed around this
  * run" stops being a plausible explanation. The measured storm — seven API deploys in 48 minutes,
  * one run killed 56 seconds after `4c0826b` landed — is covered several times over.
+ *
+ * ── It is no longer only PLATFORM interruptions that it bounds (#758)
+ *
+ * The name is kept — the counter is `agent_loop_runs.interruptions` and rows already carry it — but
+ * `provider_stall` now resumes too, and one counter covers both classes deliberately. A run that has
+ * already been replayed three times, for ANY mix of reasons, is a run something is wrong with, and
+ * per-class budgets would let three deploys plus three drops equal six replays of the same work.
+ * The reasoning above transfers exactly: the cost of one more resume is one re-executed step, and
+ * the reason to stop is a loop rather than a bill.
  */
 export const MAX_PLATFORM_RESUMES = 3;
 
@@ -319,7 +328,7 @@ export interface ResumeRule {
  * amount of naming can establish.
  */
 export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
-	// THE ONE. Our own deploy evicted a Durable Object out from under a run that was working, and
+	// THE FIRST ONE. Our own deploy evicted a Durable Object out from under a run that was working, and
 	// the owner experienced it as the agent dying for no reason. Terminating is not a viable policy
 	// at the measured deploy cadence: a platform that ships seven API deploys in 48 minutes cannot
 	// also treat a code update as a run-ending event and keep an hours-long agent usable. The
@@ -332,11 +341,25 @@ export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
 	// run has no journal, so every act repeats, and two of the five recorded occurrences had already
 	// pushed to `origin main`.
 	workflow_internal: { resume: false, why: "Cloudflare already retried this attempt; re-dispatching the run would repeat acts it has already committed" },
-	// #518's rule, unchanged and for its stated reason: every attempt costs the owner's credit. The
-	// chat path can retry cheaply because it carries a stored round of completed tool results; the
-	// Pilot has no such round (`resumableRound` is recorded false on every one of these), so a
-	// "retry" here would re-drive the engine from where it stood, not resume from what it had.
-	provider_stall: { resume: false, why: "each attempt spends the owner's credit and the Pilot carries no stored round to resume from (#518)" },
+	// THE OTHER ONE (#758). This said `resume: false` because *"the Pilot carries no stored round to
+	// resume from, so a retry here would re-drive the engine from where it stood"* — and that
+	// sentence describes re-DISPATCHING the run, which is not what a resume does. Rethrowing replays
+	// the JOURNAL, exactly as {@link MAX_PLATFORM_RESUMES} states two paragraphs up: every `act`,
+	// every `waitIdle` and every earlier `decide` returns its recorded result, the Engine is not
+	// driven again, and what re-executes is the one model call whose socket died. A stored round is
+	// the CHAT path's mechanism for the same property; the Pilot gets it from the journal instead,
+	// which is why not having one was never the obstacle.
+	//
+	// That the replay works is measured, not argued: run `b9d9c051` filed `infra_transient` at
+	// 00:25:19 and `provider_stall` at 00:28:27 under ONE `runId` (#546 counted that pair). It was
+	// resumed past the first and killed by the second — so the only thing standing between this
+	// class and the recovery already running in production was this table entry.
+	//
+	// The cost objection is real and is answered by the bound rather than by refusing: at most
+	// MAX_PLATFORM_RESUMES re-executed decides, counted durably, and stated to the owner each time.
+	// Refusing instead cost a whole run's work — #758 measured iteration 1 of 6 dying with nothing
+	// written, against an identical objective that ran fine minutes later.
+	provider_stall: { resume: true, why: "the model's transport dropped mid-reply; the journal replays every completed step, so only the dropped call is paid for again" },
 	provider_overrun: { resume: false, why: "deterministic — the reply was too long, so an identical attempt ends identically" },
 	provider_credentials: { resume: false, why: "no key, a rejected key or an empty balance; only the owner can clear it" },
 	provider_rate_limit: { resume: false, why: "the provider is throttling this key and wants a backoff, not an immediate replay" },
