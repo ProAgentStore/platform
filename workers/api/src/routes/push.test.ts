@@ -190,6 +190,32 @@ describe("notifyUser", () => {
 		expect(fetchSpy).toHaveBeenCalled();
 	});
 
+	// #656: the "New subscribers" toggle was wired to `notifyUser` in NOTIFICATION_TYPES but the
+	// subscribe path called `createNotification` directly, bypassing the preference check entirely.
+	// Regressions here mean muting the toggle has no effect and Slack fires unconditionally.
+	it("honours the subscribe mute toggle (#656)", async () => {
+		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["subscribe"] } } });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(env, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.");
+		// Row stays (the bell list is a log) — but it must not buzz.
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].pushedAt).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled(); // Slack is gated the same way as push
+	});
+
+	it("delivers subscribe notification when the toggle is on", async () => {
+		const sub = await realSub("phone");
+		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: [] } }, subs: [sub] });
+		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(envWithVapid, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.");
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].pushedAt).toBeTypeOf("string"); // the window starts (phone buzzed)
+		expect(fetchSpy).toHaveBeenCalled();
+	});
+
 	// A notification must not be LOST because the floor could not be evaluated.
 	it("falls open when the preference read throws", async () => {
 		const subs = [await realSub("phone")];

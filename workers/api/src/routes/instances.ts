@@ -5,7 +5,7 @@ import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-setti
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
-import { createNotification } from "./notifications.js";
+import { notifyUser } from "./push.js";
 import { agentLink } from "../lib/console-links.js";
 import { listEvents } from "../lib/events.js";
 import { validatePipeline } from "../lib/pipeline.js";
@@ -264,11 +264,10 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		const subscriber = await c.env.DB.prepare(
 			"SELECT github_login FROM users WHERE id = ?1",
 		).bind(session.uid).first<{ github_login: string }>();
-		await createNotification(
-			c.env.DB, creator.owner_id, "subscribe",
+		await notifyUser(
+			c.env, creator.owner_id, "subscribe",
 			`New subscriber: ${subscriber?.github_login || "someone"}`,
 			`${subscriber?.github_login || "A user"} subscribed to ${agent.name}.`,
-			agent.id,
 			agentLink(agent.id),
 		);
 	}
