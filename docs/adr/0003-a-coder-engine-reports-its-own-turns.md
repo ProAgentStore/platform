@@ -33,7 +33,7 @@ record:
    tmux is a screen buffer whose only exit is `capture-pane`, i.e. post-render text. The original
    proposal coupled two things that are separable, and only one of them costs anything.
 3. The restore is **smaller-looking than it is**. `coding/tmux.ts` is still maintained for the terminal
-   connector, `CodingRuntime` is an interface, and `runtime.ts:185` is a single call site — so
+   connector, `CodingRuntime` is an interface, and `packages/browser-runner/src/runner.ts:103` (`new CodingRuntime`) is a single call site — so
    "restore one class" reads as a contained change. It is not: the deleted class injected credentials
    by typing `export KEY="value"` into the pane it later captured and shipped to D1 and into the
    Pilot's prompt.

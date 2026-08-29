@@ -146,6 +146,21 @@ jobs:
         # Keeps real-browser / real-socket tests inside the `integration` project, which
         # is where they get a budget sized for real I/O instead of vitest's 5s default.
         run: node scripts/check-test-isolation.mjs
+      - name: Doc citation path-resolution (#707)
+        # #707 measured that roughly one issue in three carried a `file:line` coordinate
+        # that had drifted — about half of those pointed at unrelated live code rather than
+        # the defect's actual location. CI cannot read issue bodies, but docs/ and
+        # platform-docs/ are in the tree and have the same problem class.
+        #
+        # Every backtick-quoted `path:N` in those directories must resolve to EXACTLY ONE
+        # file in the repo tree (either an exact path from root, or a unique suffix match).
+        # Ambiguous paths (e.g. `manifest.ts` when three packages contain that name) fail
+        # with a hint to use a longer prefix. Zero-match paths fail as "not found".
+        #
+        # Line-number drift (the file exists but the line has moved) is out of scope for
+        # this gate — the CONTRIBUTING.md convention asks authors to quote the text alongside
+        # the coordinate so a reader can grep for it rather than trusting the number alone.
+        run: node scripts/check-doc-citations.mjs
       - run: pnpm install --frozen-lockfile
       - name: Typecheck every workspace project (#740)
         # The sweep the repo already had in `package.json` and CI never ran. It covers ten of

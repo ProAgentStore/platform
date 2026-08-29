@@ -12,7 +12,7 @@
 >   **This is a superseded proposal, not a gap to build, and the narrowing was the point** — see
 >   "Why `secretRef` did not survive" below.
 > - **The `auth.type` list is the *creator-facing* set, and correctly so.** `sanitizeConnectorManifest`
->   accepts exactly `none | app | api-key | oauth2` (`manifest.ts:216`). The full union has a fifth
+>   accepts exactly `none | app | api-key | oauth2` (`lib/connectors/manifest.ts:239`, `AUTH_TYPES`). The full union has a fifth
 >   member, `platform-token`, which is built-in-only and which the sanitizer deliberately never emits.
 >
 > "COMPLETE" is scoped to epic #143 — the substrate. It is not a claim that a creator can supply a
@@ -179,7 +179,7 @@ The difference is not cosmetic, which is why this is recorded rather than rename
 any secret" field is exactly the escalation the sanitizer exists to prevent: on a creator-supplied
 manifest it would let an untrusted author point at *any* Worker secret and have the platform resolve
 it. So `sanitizeConnectorManifest` strips `clientIdEnv`/`secretEnv` and never emits `platform-token`
-at all — those are built-in-only (`manifest.ts:78-83`, `:216`).
+at all — those are built-in-only (`lib/connectors/manifest.ts:89-101`, `ManifestAuth`).
 
 So the proposal's **security invariant** was kept — a manifest names a secret, never contains one —
 and its **mechanism** was deliberately narrowed to reach it. Recorded as superseded because the
