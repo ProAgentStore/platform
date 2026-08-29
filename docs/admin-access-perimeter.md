@@ -61,8 +61,10 @@ Deliberate properties:
 - **Fails closed on enforce, open on audit**, including when the JWKS fetch fails and when the
   error log itself throws. Both are covered by tests.
 
-Read the evidence with `GET /v1/admin/errors?source=cf-access`, or MCP `list_errors`. Repeats
-collapse hourly (migration 0103), so even a rollout that fails on every request costs ~1 row/hour.
+Read the evidence with `GET /v1/errors?scope=all&source=cf-access`, or MCP `list_errors`. **Not**
+`/v1/admin/errors` — that endpoint is inside the perimeter being measured; if Access blocks at the
+edge it is blocked too. Repeats collapse hourly (migration 0103), so even a rollout that fails on
+every request costs ~1 row/hour.
 
 ## 3. The blocker — the admin UI and the admin API are different origins
 
@@ -110,6 +112,47 @@ every time the Access session expires.
 separable from the gate, and which one is needed depends on the edge behaviour that §4's audit step
 is designed to reveal. File the follow-up once there is evidence rather than guessing now.
 
+## 3a. The two ways to close the origin split — decided
+
+§3 establishes that the admin UI and the admin API are different origins and that the SPA cannot
+present an Access session. There are exactly two remedies. This section records both and which one
+was chosen, so the decision is not re-derived at the moment someone is about to set the secrets.
+
+**Chosen: A — a same-origin `/admin/api/*` proxy on the host worker.**
+
+| | A — same-origin proxy | B — `credentials: "include"` |
+|---|---|---|
+| Access application on | `proagentstore.online`, path `admin` | `api.proagentstore.online`, path `v1/admin` |
+| Code | ~30 lines: a proxy route on the host worker, the SPA's base to `/admin/api`, a dev-proxy entry | 1 line: `credentials: "include"` |
+| CORS | none — same origin | every request preflighted, and a preflight is uncredentialed by definition |
+| Session expiry | a top-level navigation redirects to the IdP and returns | an XHR gets a 302 it cannot complete; fails opaquely |
+| Worst misconfiguration | whole apex behind a login (storefront + console) | whole API host behind a login (console + every runner + widget) |
+| Audit signal | an edge block is a visible login page | an edge block is an opaque XHR failure with a silent log |
+
+**Why A.** It removes the CORS question rather than configuring around it, expiry stops being a
+failure mode, and an edge block becomes visible instead of silent. The parts already exist: the host
+worker has an `API` service binding, the admin SPA is inlined into that same worker at build time,
+and `store/admin/vite.config.ts` already proxies `/v1` in dev.
+
+**Three implementation notes that are easy to miss:**
+
+1. `workers/host/src/index.ts` returns `405` for every non-GET. The admin SPA POSTs and DELETEs.
+   Relax it for `/admin/api/*` only — not for `/admin/*`, which is the SPA shell.
+2. `/admin/api/v1/admin/me` contains no `.`, so the existing `path.startsWith("/admin/")` branch
+   would answer it with the SPA shell. Register the proxy before it.
+3. Forward an allowlist, not `/v1/*`. The SPA needs `/v1/admin/*`, `/v1/auth/me`, `/v1/auth/config`
+   and `/v1/errors/client`. A blanket forward makes the apex a permanent second front door to the
+   whole API — the proxy sends no `Origin`, so the API's CORS allowlist never applies to anything
+   routed through it.
+
+**If B is used as a stopgap**, note that it is a stopgap: the Access application needs its own CORS
+settings (allowed origins, methods, headers, allow-credentials) for the preflight, and no setting
+fixes expiry. The cookie itself is not the problem — `proagentstore.online` and
+`api.proagentstore.online` are the same *site*, so `SameSite=Lax` still sends it cross-origin.
+
+Note: §4 step 2 below still describes Option B's application placement for now, because Option A's
+proxy code has not been written yet. Update it when that work lands.
+
 ## 4. Runbook — ordered, with a verification per step
 
 Steps 1–3 are dashboard; I cannot perform or verify them. Where the Cloudflare UI's exact wording
@@ -144,7 +187,11 @@ wrangler secret put CF_ACCESS_AUD           # the AUD tag from step 2
 ```
 
 *Verify, and this is the step that decides everything:* use the admin portal normally for a while,
-then read `GET /v1/admin/errors?source=cf-access`.
+then read `GET /v1/errors?scope=all&source=cf-access` (or MCP `list_errors`). **Not**
+`/v1/admin/errors` — that endpoint is inside the perimeter being measured, so in the one failure
+case where you need it most (silent log, broken portal) it is blocked along with everything else.
+Repeats collapse into an existing row within the hour and bump `repeat_count` / `last_seen_at`
+(migration 0103), so "nothing new" means "no bump", not "no row" — note both before you look.
 
 | What you see | Meaning | Do |
 |---|---|---|
