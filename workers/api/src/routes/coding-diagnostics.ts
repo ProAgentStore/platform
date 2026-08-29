@@ -15,7 +15,7 @@
  * registration ORDER, which `coding.contract.test.ts` pins.
  */
 import type { Context, Hono } from "hono";
-import { callRunner, getRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured } from "../lib/github-app.js";
 import { engineAuthFor, engineAuthReport, readEngines, type EngineAuthResolved } from "../lib/coding-engines.js";
 import { type TrackedGhGuard, writeEnforcementReport } from "../lib/coding-write-enforcement.js";
@@ -23,6 +23,7 @@ import { codingRunsForSessions, type CodingRunFact } from "../lib/board-runs.js"
 import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
+import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
@@ -92,7 +93,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		const { uid, instanceId } = await requireOwned(c);
 		const env = c.env;
 
-		// 1. Runner connection (D1 row)
+		// 1. Runner connection (D1 row — the shared default row, kept for registration metadata)
 		const runtimeRow = await env.DB.prepare(
 			"SELECT endpoint_url, capabilities, runner_version, runner_node, status, last_seen_at, placement, created_at, updated_at FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
 		).bind(instanceId, uid).first<{
@@ -101,33 +102,54 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			placement: string | null; created_at: string | null; updated_at: string | null;
 		}>();
 
+		// 2. Live runner probe
+		//
+		// `getBoundRunnerConn` (#691): the old code passed `runtimeRow?.runner_node` directly to
+		// `getRunnerConn`, which caused diagnostics to probe the STALE node from the shared
+		// `instance_runtimes` row instead of the instance's current pin.  After a `set_runner_node`
+		// repin, that row still holds the OLD hostname, so the diagnostics tool reported the old
+		// node as "not reachable" while `instance_runtime_status` (which uses the same
+		// `getBoundRunnerConn` path) correctly showed the new node as online.
+		//
+		// `getBoundRunnerConn` is the one resolver that honours the instance's `config.runnerNode`
+		// pin, walks machine-id aliases when the pinned hostname has changed, and live-checks the
+		// RelayDO — so its answer is the live node, not the stale DB row.  We then pull the live
+		// node's runtime row (for accurate version / last_seen_at), falling back to the shared row
+		// for registration metadata when nothing is connected.
+		const conn = await getBoundRunnerConn(env, instanceId, uid).catch(() => null);
+		// The live node the connection was resolved to — null when offline.
+		const liveNode = conn?.runnerNode ?? null;
+		// Relay-connected is TRUE iff getBoundRunnerConn returned a connection (it already
+		// live-checked the RelayDO internally — no second probe needed).
+		const relayIsConnected = !!conn;
+		// Use the live node's relay name when we have one; fall back to the stale row's for when
+		// there is no live connection (it is the thing the user goes to look at when there is none).
+		const relayName = relayNameForInstance(instanceId, liveNode ?? runtimeRow?.runner_node ?? null);
+
+		// Fetch the live node's own row so we report its runner_version / last_seen_at, not the
+		// stale shared row's.  `getLiveRuntime` returns the per-node row when the conn resolved to
+		// a named node; falls back to the shared row otherwise (single-machine + old-client path).
+		const liveRuntimeRow = conn ? await getLiveRuntime(env, instanceId, uid).catch(() => null) : null;
+		// What we report in the `runner` section: prefer the live node's row over the stale default.
+		const reportedRow = liveRuntimeRow ?? runtimeRow;
+
 		const runner: Record<string, unknown> = {
 			registered: !!runtimeRow,
-			status: runtimeRow?.status ?? "unregistered",
-			endpointUrl: runtimeRow?.endpoint_url ?? null,
-			placement: runtimeRow?.placement ?? null,
-			capabilities: parseJsonOr(runtimeRow?.capabilities, [] as unknown),
-			runnerVersion: runtimeRow?.runner_version ?? null,
-			runnerNode: runtimeRow?.runner_node ?? null,
-			lastSeenAt: runtimeRow?.last_seen_at ?? null,
+			status: reportedRow?.status ?? "unregistered",
+			endpointUrl: reportedRow?.endpoint_url ?? null,
+			placement: reportedRow?.placement ?? null,
+			capabilities: parseJsonOr(reportedRow?.capabilities, [] as unknown),
+			runnerVersion: reportedRow?.runner_version ?? null,
+			// Use the live-resolved node name, not the stale row's.
+			runnerNode: liveNode ?? reportedRow?.runner_node ?? null,
+			lastSeenAt: reportedRow?.last_seen_at ?? null,
 			registeredAt: runtimeRow?.created_at ?? null,
 		};
 
-		// 2. Live runner probe
-		//
-		// Live-checked since #532: this used to resolve off the registration row alone, so the
-		// transparency view — the screen a user opens BECAUSE something is wrong — described a
-		// machine that had been off for days as a connection, then reported the two failed commands
-		// as if the machine had answered badly. `reachable` is still what the commands actually did;
-		// what changed is that a dead machine no longer gets asked.
-		const conn = await getRunnerConn(env, instanceId, uid, runtimeRow?.runner_node ?? null);
 		let runnerHealth: unknown = null;
 		let runnerDiag: unknown = null;
 		let runnerGitIdentity: GitIdentityResult | null = null;
 		let runnerReachable = false;
-		// Named from the ROW, not the connection: the relay name is the thing you go and look at
-		// when there is no connection, so it must survive the case that has none.
-		const relayName = runtimeRow ? relayNameForInstance(instanceId, runtimeRow.runner_node ?? null) : null;
 		if (conn) {
 			try {
 				runnerHealth = await callRunner<unknown>(conn, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS });
@@ -152,7 +174,6 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				// Older runner without the endpoint, or network hiccup — treat as unverified.
 			}
 		}
-		const relayIsConnected = await relayConnected(env, instanceId, runtimeRow?.runner_node ?? null);
 		const effectivelyReachable = runnerReachable;
 
 		(runner as Record<string, unknown>).reachable = effectivelyReachable;
@@ -407,7 +428,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				issueCount: issues.filter((i) => i.severity === "error" || i.severity === "warn").length,
 			},
 			runner,
-			relay: { connected: relayIsConnected, relayName, runnerNode: runtimeRow?.runner_node ?? null },
+			relay: { connected: relayIsConnected, relayName, runnerNode: liveNode ?? runtimeRow?.runner_node ?? null },
 			// `tmux: {...}` is gone (#247). Every figure in it described something that cannot exist
 			// for a coding session: pagsTmuxTotal was structurally 0, and tmuxTotal counted the
 			// user's own unrelated tmux sessions. `engine.trackedSessions` is the honest version —
