@@ -807,7 +807,7 @@ const PINS = {
 	// with the exact type `addRepo` accepts rather than widening it at the seam. Signed rather than
 	// dodged — `Parameters<typeof addRepo>[2]["auth"]` would have bought the number by making the
 	// line harder to read, which is the opposite of what this ratchet is for.
-	"workers/api/src/agent-do.ts": 1246,
+	"workers/api/src/agent-do.ts": 1253,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -1472,7 +1472,8 @@ const PINS = {
 	// 800 because the dispatcher gained the fence — plus this line. The ratchet applied to itself:
 	// those comments ARE the record of why each number moved, so trimming them to stay under a
 	// number would delete the only thing that makes a pin auditable rather than arbitrary.
-	"scripts/check-file-size.mjs": 1556,
+	// +7 at #618: handleGetMemory annotates each entry with injected:boolean via selectMemoryForPrompt (1 import + 5 impl + 1 note).
+	"scripts/check-file-size.mjs": 1557,
 };
 
 /**

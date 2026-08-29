@@ -78,6 +78,7 @@ import {
 	type InflightTurn,
 } from "./lib/chat-inflight.js";
 import { MAX_TASKS, taskListPayload } from "./lib/agent-tasks.js";
+import { selectMemoryForPrompt } from "./lib/memory-prompt.js";
 import { turnSpanFor } from "./lib/chat-turns.js";
 import { ChatTurnGate } from "./lib/chat-turn-gate.js";
 import { json } from "./lib/do-json.js";
@@ -958,8 +959,14 @@ export class AgentDO extends DurableObject<Env> {
 		return [...all.values()];
 	}
 
+	/** Owner-facing read (#618) — `injected` is derived HERE from selectMemoryForPrompt, the same
+	 *  function the prompt uses, so the badge and what the agent actually sees cannot disagree. */
 	private async handleGetMemory(): Promise<Response> {
-		return json({ memory: await this.getAllMemory() });
+		const all = await this.getAllMemory();
+		const { shown } = selectMemoryForPrompt(all, Date.now());
+		const injectedKeys = new Set(shown.map((m) => m.key));
+		const memory = all.map((m) => ({ ...m, injected: injectedKeys.has(m.key) }));
+		return json({ memory });
 	}
 
 	private async handleSetMemory(request: Request): Promise<Response> {

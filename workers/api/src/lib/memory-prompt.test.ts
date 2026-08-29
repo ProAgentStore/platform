@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { MemoryEntry } from "../agent-types.js";
-import { STALE_MEMORY_RULE, memoryPrompt } from "./memory-prompt.js";
+import { STALE_MEMORY_RULE, memoryPrompt, selectMemoryForPrompt } from "./memory-prompt.js";
 
 const NOW = Date.parse("2026-08-11T00:00:00Z");
 
@@ -270,5 +270,69 @@ describe("#495 step 3 — the inferred half of the block is bounded", () => {
 		memoryPrompt(entries, { now: NOW });
 		expect(JSON.stringify(entries)).toBe(before);
 		expect(entries).toHaveLength(2);
+	});
+});
+
+/**
+ * #618 — the console Memory tab must distinguish entries the prompt is using from ones it has
+ * stopped repeating. The route annotates each entry with `injected: boolean` derived from
+ * selectMemoryForPrompt — the same function the prompt uses — so the two cannot disagree.
+ *
+ * These tests validate the selectMemoryForPrompt contract that the DO's handleGetMemory relies on,
+ * so a future copy-paste of the rule would be caught here the moment its behaviour diverges.
+ */
+describe("#618 — injected annotation mirrors selectMemoryForPrompt exactly", () => {
+	const summary = (n: number, daysAgo: number): MemoryEntry => ({
+		key: `fact:subject ${n}:predicate`,
+		type: "knowledge",
+		content: `subject ${n} predicate object`,
+		updatedAt: new Date(NOW - daysAgo * 86_400_000).toISOString(),
+		source: "summary",
+	});
+
+	/** Simulate what handleGetMemory does: annotate every entry with injected:boolean. */
+	function annotate(memory: MemoryEntry[], now: number) {
+		const { shown } = selectMemoryForPrompt(memory, now);
+		const injectedKeys = new Set(shown.map((m) => m.key));
+		return memory.map((m) => ({ ...m, injected: injectedKeys.has(m.key) }));
+	}
+
+	it("a fresh summary entry is injected:true", () => {
+		const annotated = annotate([summary(1, 1)], NOW);
+		expect(annotated[0].injected).toBe(true);
+	});
+
+	it("an aged-out summary entry is injected:false", () => {
+		// 30 days > SUMMARY_MEMORY_TTL_DAYS (7)
+		const annotated = annotate([summary(1, 30)], NOW);
+		expect(annotated[0].injected).toBe(false);
+	});
+
+	it("user-set and agent-written entries are always injected:true regardless of age", () => {
+		const old = { ...USER_SET, updatedAt: "2025-01-01T00:00:00Z" };
+		const agent = { ...AGENT_SET, updatedAt: "2025-01-01T00:00:00Z" };
+		const annotated = annotate([old, agent], NOW);
+		expect(annotated.every((m) => m.injected)).toBe(true);
+	});
+
+	it("entries beyond the cap are injected:false, newest ones stay injected:true", () => {
+		// 40 fresh entries; only the 30 newest (SUMMARY_MEMORY_CAP) are injected
+		const many = Array.from({ length: 40 }, (_, i) => summary(i, i / 24));
+		const annotated = annotate(many, NOW);
+		const trueCount = annotated.filter((m) => m.injected).length;
+		const falseCount = annotated.filter((m) => !m.injected).length;
+		expect(trueCount).toBe(30);
+		expect(falseCount).toBe(10);
+		// The newest entry (0 hours old) is injected
+		expect(annotated.find((m) => m.key === "fact:subject 0:predicate")?.injected).toBe(true);
+		// The oldest entry (39 hours old) is not
+		expect(annotated.find((m) => m.key === "fact:subject 39:predicate")?.injected).toBe(false);
+	});
+
+	it("mixed fresh/stale/user: stale summary is false, fresh summary and user-set are true", () => {
+		const annotated = annotate([summary(1, 1), summary(2, 30), USER_SET], NOW);
+		expect(annotated.find((m) => m.key === "fact:subject 1:predicate")?.injected).toBe(true);
+		expect(annotated.find((m) => m.key === "fact:subject 2:predicate")?.injected).toBe(false);
+		expect(annotated.find((m) => m.key === USER_SET.key)?.injected).toBe(true);
 	});
 });

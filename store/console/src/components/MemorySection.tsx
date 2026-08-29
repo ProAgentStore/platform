@@ -115,6 +115,14 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 									<span className="font-semibold text-sm break-all">{m.key}</span>
 									<span className="text-xs text-purple-400 ml-2">{m.type}</span>
 									{m.source && <span className="text-xs text-muted-soft ml-2">{m.source}</span>}
+									{m.injected === false && (
+										<span
+											className="text-xs text-warning ml-2"
+											title="Not currently repeated to the agent — too old or displaced by newer entries. Edit to promote to user-set (permanent)."
+										>
+											not repeated to agent
+										</span>
+									)}
 								</div>
 								<div className="flex gap-1.5 shrink-0">
 									<Button onClick={() => { setEditMemKey(m.key); setEditMemContent(m.content); }}>Edit</Button>

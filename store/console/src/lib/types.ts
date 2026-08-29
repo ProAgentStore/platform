@@ -280,6 +280,8 @@ export interface MemoryEntry {
 	content: string;
 	updatedAt?: string;
 	source?: string;
+	/** Server-computed: false when aged out or capped out of the prompt (#618). */
+	injected?: boolean;
 }
 
 /**

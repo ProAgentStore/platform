@@ -52,6 +52,13 @@ export interface MemoryEntry {
 	/** Who wrote this entry. Absent on legacy entries (treated as agent-written). */
 	source?: "agent" | "user" | "summary";
 	/**
+	 * Server-computed on GET /memory: true when this entry is currently being injected into the
+	 * prompt, false when it has aged out or been displaced by the SUMMARY_MEMORY_CAP (#618).
+	 * Non-summary entries (user-set, agent-written) are always true.
+	 * Absent on stored rows — only present in the API response shape.
+	 */
+	injected?: boolean;
+	/**
 	 * When this belief was FIRST recorded, as distinct from when it was last restated (#495).
 	 *
 	 * `updatedAt` is rewritten on every re-extraction, so a stale belief the agent keeps repeating in
