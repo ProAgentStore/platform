@@ -18,6 +18,7 @@ import { replaceMcpToolCatalog } from "../lib/mcp-tool-catalog.js";
 import { describeAnswer, inputClosedNotice, mergeElicitedArgs, validateElicitationAnswer } from "../lib/mcp-elicitation.js";
 import { claimMcpInputRequest, listMcpInputRequests, purgeExpiredMcpInputRequests, readMcpInputRequest } from "../lib/mcp-input-requests.js";
 import { logEvent } from "../lib/events.js";
+import { redactSecrets } from "../lib/redact.js";
 import {
 	adoptLegacyMcpCredential,
 	deleteMcpCredential,
@@ -214,6 +215,35 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	const invalid = validateAgainstSchema(tool.jsonSchema, input);
 	if (invalid) throw new HttpError(400, invalid);
 	const result = await runRegistryTool(name, { env: c.env, userId: session.uid, instanceId }, input);
+	// Every dispatcher into runRegistryTool writes a row except this one — see the table in #726.
+	// NOT every call: the console Terminal tab polls `*_list_*`/`*_capture_*` through here every
+	// 4s on the active tier (TmuxTab.tsx). Those are reads of the owner's own screen, on the
+	// owner's own machine, at the owner's own request; the calls worth a row are the ones that
+	// change something (`mutates`) or leave the platform (`reach === "internet"`).
+	// The union of the two is the smallest predicate that catches a mailbox read (`gmail_search`:
+	// reach=internet, mutates=false) and misses the Terminal poll (`tmux_capture_pane`:
+	// reach=machine, mutates=false). Both fields are already maintained and exhaustiveness-tested.
+	if (entry.mutates || entry.reach === "internet") {
+		await logEvent(c.env, {
+			source: "tool",
+			event: "tool.invoked",
+			level: result.success ? "info" : "warn",
+			message: `${name} ${result.success ? "ok" : "failed"} (direct)`,
+			userId: session.uid,
+			instanceId,
+			context: redactSecrets({
+				tool: name,
+				success: result.success,
+				reach: entry.reach,
+				mutates: entry.mutates,
+				// KEY NAMES AND A BYTE COUNT. Never the values — ADR 0004 and the same posture
+				// `lib/connectors/mcp.ts:534-546` uses for outbound MCP calls. No result content
+				// and no resultBytes for a success: the result is untrusted text (#308).
+				argKeys: Object.keys(input),
+				argBytes: new TextEncoder().encode(JSON.stringify(input)).length,
+			}) as Record<string, unknown>,
+		}).catch(() => undefined);
+	}
 	return c.json(result);
 });
 

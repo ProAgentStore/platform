@@ -467,6 +467,155 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 	});
 });
 
+// ── Trace logging for direct tool invocations (#726) ─────────────────────────────────────
+//
+// Every dispatcher into runRegistryTool writes an agent_events row EXCEPT the direct
+// `POST /v1/instances/:id/tools/:name` route. The predicate is `mutates || reach==="internet"`:
+// that catches a mailbox read (gmail_search: internet, mutates=false) and misses the Terminal
+// poll (tmux_capture_pane: machine, mutates=false). The tests below pin both the logged case
+// and the not-logged case explicitly — the "not-logged" assertion names TmuxTab's 4s poll as
+// the reason, so the next person to "fix the gap properly" reads why before widening the predicate.
+describe("POST /v1/instances/:id/tools/:name — agent_events trace (#726)", () => {
+	function traceApp(agentConfig: string) {
+		const inserts: string[] = [];
+		const app = new Hono();
+		app.route("/v1/instances", toolRoutes);
+		app.onError((err, c) => {
+			if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+			throw err;
+		});
+		const env = {
+			SESSION_SIGNING_KEY: SECRET,
+			DB: {
+				prepare(sql: string) {
+					return {
+						run: async () => ({ meta: { changes: 0 } }),
+						bind(...binds: unknown[]) {
+							// Capture agent_events inserts (identified by the literal prefix that events.ts
+							// uses — do NOT match on the table name, the 1% prune DELETE also names it and
+							// flakes the count on 1% of runs; #446).
+							if (sql.startsWith("INSERT INTO agent_events")) inserts.push(String(binds[5] ?? ""));
+							return {
+								first: async () => {
+									if (sql.includes("FROM agent_instances") && !sql.includes("JOIN agents")) {
+										return { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}", created_at: "", updated_at: "" };
+									}
+									if (sql.includes("instance_connector_consent")) return null;
+									if (sql.includes("FROM agent_instances") && sql.includes("JOIN agents")) {
+										return { slug: "fixture", category: "general", config: agentConfig, instance_config: "{}" };
+									}
+									return null;
+								},
+								run: async () => ({ meta: { changes: 1 } }),
+								all: async () => ({ results: [] }),
+							};
+						},
+					};
+				},
+			},
+		};
+		return { app, env: env as unknown as Record<string, unknown>, inserts };
+	}
+
+	// github_create_issue: reach=internet, mutates=true → logged.
+	it("writes one agent_events row for an internet-reach mutating call (github_create_issue)", async () => {
+		const agentCfg = JSON.stringify({ capabilities: { tools: ["github_create_issue"] } });
+		const { app, env, inserts } = traceApp(agentCfg);
+		const res = await req(app, fake(env), "/v1/instances/i1/tools/github_create_issue", {
+			method: "POST",
+			body: JSON.stringify({ repo: "owner/name", title: "test issue" }),
+		}, await tok("u1"));
+		expect(res.status).toBe(200);
+		// Source "tool" means the trace row came from this route (#726), not from the chat path.
+		expect(inserts).toContain("tool");
+	});
+
+	// github_list_issues: reach=internet, mutates=false → ALSO logged because reach=internet.
+	// (gmail_search has the same shape; github_list_issues is exercisable without a network mock.)
+	it("writes one agent_events row for a read that leaves the platform (github_list_issues, reach=internet)", async () => {
+		const agentCfg = JSON.stringify({ capabilities: { tools: ["github_list_issues"] } });
+		const { app, env, inserts } = traceApp(agentCfg);
+		const res = await req(app, fake(env), "/v1/instances/i1/tools/github_list_issues", {
+			method: "POST",
+			body: JSON.stringify({ repo: "owner/name" }),
+		}, await tok("u1"));
+		expect(res.status).toBe(200);
+		expect(inserts).toContain("tool");
+	});
+
+	// tmux_capture_pane: reach=machine, mutates=false → NOT logged.
+	// This is the pair the console Terminal tab polls every 4s on the active tier
+	// (TmuxTab.tsx). Logging it would write 30 rows/min into agent_events, which has
+	// no cron and only a 1%-of-writes 14-day prune (#726 "regression risk").
+	it("writes NO agent_events row for a machine read that does not mutate (tmux_capture_pane, reach=machine, mutates=false)", async () => {
+		const agentCfg = JSON.stringify({ capabilities: { tools: ["tmux_capture_pane"] } });
+		const { app, env, inserts } = traceApp(agentCfg);
+		const res = await req(app, fake(env), "/v1/instances/i1/tools/tmux_capture_pane", {
+			method: "POST",
+			body: JSON.stringify({ session: "test" }),
+		}, await tok("u1"));
+		// The call may fail (no runner connected) — what matters is no trace row was written.
+		expect(res.status).toBe(200);
+		// No "tool" source row — the INSERT may have fired for something else (e.g. a
+		// delegation check), but not from this route's new logEvent call.
+		expect(inserts.filter((s) => s === "tool")).toHaveLength(0);
+	});
+
+	// A failure is logged at warn, not info.
+	it("logs a failed call at warn level", async () => {
+		const agentCfg = JSON.stringify({ capabilities: { tools: ["github_list_issues"] } });
+		const levels: string[] = [];
+		const app = new Hono();
+		app.route("/v1/instances", toolRoutes);
+		app.onError((err, c) => {
+			if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+			throw err;
+		});
+		const env = {
+			SESSION_SIGNING_KEY: SECRET,
+			DB: {
+				prepare(sql: string) {
+					return {
+						run: async () => ({ meta: { changes: 0 } }),
+						bind(...binds: unknown[]) {
+							if (sql.startsWith("INSERT INTO agent_events")) {
+								// level is bind #7 (index 6, 0-based) in the INSERT
+								levels.push(String(binds[6] ?? ""));
+							}
+							return {
+								first: async () => {
+									if (sql.includes("FROM agent_instances") && !sql.includes("JOIN agents")) {
+										return { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}", created_at: "", updated_at: "" };
+									}
+									if (sql.includes("instance_connector_consent")) return null;
+									if (sql.includes("FROM agent_instances") && sql.includes("JOIN agents")) {
+										return { slug: "fixture", category: "general", config: agentCfg, instance_config: "{}" };
+									}
+									return null;
+								},
+								run: async () => ({ meta: { changes: 1 } }),
+								all: async () => ({ results: [] }),
+							};
+						},
+					};
+				},
+			} as unknown,
+		};
+		const res = await req(app, fake(env), "/v1/instances/i1/tools/github_list_issues", {
+			method: "POST",
+			body: JSON.stringify({ repo: "owner/name" }),
+		}, await tok("u1"));
+		expect(res.status).toBe(200);
+		// github_list_issues with no GitHub App configured → success:false → warn level.
+		const toolRows = levels.filter((l) => l === "warn" || l === "info");
+		// At least one row was written, and the first one from this route is warn (not info)
+		// because GitHub is not configured and the call returns success:false.
+		expect(toolRows.length).toBeGreaterThan(0);
+		// The route logs at warn for a failure.
+		expect(levels).toContain("warn");
+	});
+});
+
 describe("GET /v1/instances/:id/pipelines (issue #97)", () => {
 	it("lists pipelines declared in the instance config", async () => {
 		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE) });

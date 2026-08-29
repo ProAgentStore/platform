@@ -1182,7 +1182,10 @@ const PINS = {
 	// already lives in lib/connector-accounts.ts, which is where the resolver and its tests are.
 	// +15 at #632: the PUT pipeline route now rejects a new definition that declares a `sink`
 	// (the only path that can emit is dedupe_upsert). The check is a single if-block with comment.
-	"workers/api/src/routes/tools.ts": 1191,
+	// +30 at #726: the POST /:id/tools/:name invoker now writes one agent_events row when
+	// entry.mutates || entry.reach==="internet". The predicate comment + the logEvent call +
+	// the redactSecrets import total ~30 lines.
+	"workers/api/src/routes/tools.ts": 1221,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1486,7 +1489,8 @@ const PINS = {
 	// the others carry the field through the stack. Plus this note.
 	// +2 at #632: raises for tools.ts (sink rejection) and this self-referential entry.
 	// +5 at #674: the coding-session.ts raise above (4-line note + pin bump) and this note.
-	"scripts/check-file-size.mjs": 1570,
+	// +6 at #726: the routes/tools.ts raise above (3-line reason + pin bump) and this note.
+	"scripts/check-file-size.mjs": 1576,
 };
 
 /**

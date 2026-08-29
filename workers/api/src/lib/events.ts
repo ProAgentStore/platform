@@ -132,10 +132,10 @@ export async function logEvent(env: Pick<Env, "DB">, e: EventInput): Promise<voi
  */
 export async function logToolFailure(
 	env: Env,
-	e: { tool: string; content: string; round?: number; userId?: string | null; instanceId?: string | null; traceId?: string | null },
+	e: { tool: string; content: string; round?: number; userId?: string | null; instanceId?: string | null; traceId?: string | null; source?: string },
 ): Promise<void> {
 	await logEvent(env, {
-		source: "chat",
+		source: e.source ?? "chat",
 		// The SAME event name the summary row uses, deliberately: a caller filtering `event=tool.call`
 		// must not have to learn a second name to see the failures. The level and `context.success`
 		// are what distinguish them.

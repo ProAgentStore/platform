@@ -444,6 +444,11 @@ just read should not be one prompt injection away from emptying an inbox.
 email permission and is never creator-selectable, so a creator cannot grant a read of the owner's
 mailbox by declaration.
 
+Every direct invocation of a Gmail tool through `POST /v1/instances/:id/tools/:name` (including via
+MCP `call_instance_tool`) writes one `agent_events` row visible in `GET /v1/instances/:id/trace`
+and the MCP `agent_trace` tool — carrying the tool name, success/failure, argument key names and a
+byte count, but never argument values or result content (#726).
+
 ### Three gates on a send
 
 Sending mail is the most irreversible thing an agent here can do — it leaves under the owner's own
