@@ -263,18 +263,21 @@ export function registerStorageTools(
 
 	server.tool(
 		"upload_agent_file",
-		"Upload a text file to an agent's storage.",
+		"Upload a file to an agent's storage. Supply text in content OR binary bytes base64-encoded in content_base64 (not both). Max 12 MB for base64 uploads.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			name: z.string().describe("Filename with extension"),
-			content: z.string().describe("File content (text)"),
+			content: z.string().optional().describe("File content (text). Provide this OR content_base64, not both."),
+			content_base64: z.string().optional().describe("File bytes as standard base64 (for binary files such as .docx, .pdf, .png). Provide this OR content, not both. Max 12 MB decoded."),
 			mime_type: z.string().optional(),
 			tags: z.string().optional().describe("Comma-separated tags"),
 		},
-		async ({ token, agent_id, name, content, mime_type, tags }) => {
+		async ({ token, agent_id, name, content, content_base64, mime_type, tags }) => {
 			const t = tokenFor(token);
 			if (!t) return authRequired();
+			if (content && content_base64) return { content: [{ type: "text" as const, text: "provide content or content_base64, not both" }] };
+			if (!content && !content_base64) return { content: [{ type: "text" as const, text: "provide content (text) or content_base64 (binary, base64-encoded)" }] };
 			const denied = await requirePermission(safetyFor(token), "write", "upload_agent_file", { agent_id, name });
 			if (denied) return denied;
 			const result = await authedCall(`/v1/agents/${agent_id}/files`, t, {
@@ -282,8 +285,8 @@ export function registerStorageTools(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					name,
-					content,
-					mime_type: mime_type || "text/plain",
+					...(content_base64 ? { contentBase64: content_base64 } : { content }),
+					mime_type: mime_type || undefined,
 					tags: tags?.split(",").map((s) => s.trim()).filter(Boolean),
 				}),
 			}, env);

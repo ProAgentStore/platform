@@ -230,4 +230,13 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// IS in the fingerprint. No tool name, annotation or `outputSchema` moved.
 	// Appended, never edited in place: 0.1.14 is published.
 	"0.1.15": "sha256:f2a8fae67c5502cceaca8459699f5c90f92277d1b3bb1f797f5531319b107e1d",
+	// 0.1.16 (#762): `upload_agent_file` gained `content_base64` — an optional standard-base64
+	// argument that lets any tool or connector put binary bytes (a Word form, an image, a PDF)
+	// directly into the agent file store. `content` is now optional (one of the two must be
+	// provided); an argument added or made optional lands in `inputSchema`, which IS in the
+	// fingerprint. No tool name, annotation, or outputSchema moved. The symmetric change to the
+	// agent-DO `upload_file` tool declaration is handler-only: its `ToolDef` is consumed inside
+	// the DO and not exposed through the MCP surface.
+	// Appended, never edited in place: 0.1.15 is published.
+	"0.1.16": "sha256:a68aca8589a0e2dae8d8bc88281afc74bd2d1426d1b53e621d3d56a8ee34677a",
 };

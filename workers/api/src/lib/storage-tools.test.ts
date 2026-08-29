@@ -194,6 +194,38 @@ describe("storage tools", () => {
 		expect(result.content).toContain("R2");
 	});
 
+	it("upload_file rejects when neither content nor content_base64 is provided", async () => {
+		const engine = makeEngine();
+		const result = await executeStorageTool(
+			{ name: "upload_file", input: { name: "test.txt" } },
+			engine,
+		);
+		expect(result.success).toBe(false);
+		expect(result.content).toContain("content");
+	});
+
+	it("upload_file rejects when both content and content_base64 are provided", async () => {
+		const engine = makeEngine();
+		const result = await executeStorageTool(
+			{ name: "upload_file", input: { name: "test.txt", content: "hello", content_base64: "aGVsbG8=" } },
+			engine,
+		);
+		expect(result.success).toBe(false);
+		expect(result.content).toContain("not both");
+	});
+
+	it("upload_file rejects over-cap base64 before decoding", async () => {
+		const engine = makeEngine();
+		// ~13MB of base64 (well over 12MB cap)
+		const bigBase64 = "A".repeat(18 * 1024 * 1024);
+		const result = await executeStorageTool(
+			{ name: "upload_file", input: { name: "big.bin", content_base64: bigBase64 } },
+			engine,
+		);
+		expect(result.success).toBe(false);
+		expect(result.content).toContain("12MB");
+	});
+
 	it("search_knowledge returns empty without vectorize", async () => {
 		const engine = makeEngine();
 		const result = await executeStorageTool(

@@ -3,6 +3,7 @@
  * Extends the base AGENT_TOOLS with the new storage engine.
  */
 import { AgentStorageEngine } from "../agent-storage.js";
+import { bytesFromBase64 } from "../agent-storage-utils.js";
 import { confirmationLinkFound, confirmationLinkWithoutLinks } from "./confirmation-link-result.js";
 import { executePdfTool, PDF_STORAGE_TOOLS } from "./pdf-storage-tools.js";
 import { fileWindowResult, knowledgeDocResult, listKnowledgeResult, searchKnowledgeResult } from "./knowledge-result.js";
@@ -80,11 +81,12 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	{
 		name: "upload_file",
 		description:
-			"Store a file (text content) in your persistent file storage. For documents, notes, resumes, reports.",
+			"Store a file in your persistent file storage. Supply text in content OR binary bytes base64-encoded in content_base64 (not both). For documents, notes, resumes, reports, images, and any binary produced by a tool.",
 		parameters: {
 			name: { type: "string", description: "File name with extension", required: true },
-			content: { type: "string", description: "File content (text)", required: true },
-			mime_type: { type: "string", description: "MIME type (default: text/plain)" },
+			content: { type: "string", description: "File content (text). Provide this OR content_base64, not both." },
+			content_base64: { type: "string", description: "File bytes as standard base64 (for binary files such as .docx, .pdf, .png). Provide this OR content, not both. Max 12 MB decoded." },
+			mime_type: { type: "string", description: "MIME type (default: inferred from filename, or text/plain)" },
 			path: { type: "string", description: "Virtual folder path (e.g. /resumes/)" },
 			tags: { type: "string", description: "Comma-separated tags for organization" },
 		},
@@ -324,13 +326,29 @@ export async function executeStorageTool(
 
 			case "upload_file": {
 				const name = call.input.name as string;
-				const content = call.input.content as string;
-				if (!name || !content) return fail(call.name, "name and content required");
+				const content = call.input.content as string | undefined;
+				const contentBase64 = call.input.content_base64 as string | undefined;
+				if (!name) return fail(call.name, "name required");
+				if (content && contentBase64) return fail(call.name, "provide content or content_base64, not both");
+				if (!content && !contentBase64) return fail(call.name, "provide content (text) or content_base64 (binary, base64-encoded)");
+				const MAX_BASE64_BYTES = 12 * 1024 * 1024;
+				let fileData: string | ArrayBuffer;
+				let mimeType = (call.input.mime_type as string) || guessMimeType(name);
+				if (contentBase64) {
+					const clean = contentBase64.replace(/^data:[^,]+,/, "").replace(/\s/g, "");
+					const decodedLen = Math.floor(clean.length * 0.75);
+					if (decodedLen > MAX_BASE64_BYTES)
+						return fail(call.name, `content_base64 decodes to ~${Math.round(decodedLen / 1024 / 1024)}MB, over the 12MB limit`);
+					fileData = bytesFromBase64(contentBase64).buffer as ArrayBuffer;
+				} else {
+					fileData = content as string;
+					if (!call.input.mime_type) mimeType = guessMimeType(name) === "application/octet-stream" ? "text/plain" : guessMimeType(name);
+				}
 				const meta = await engine.fileUpload({
 					name,
 					path: (call.input.path as string) || `/${name}`,
-					mimeType: (call.input.mime_type as string) || guessMimeType(name),
-					data: content,
+					mimeType,
+					data: fileData,
 					tags: (call.input.tags as string)?.split(",").map((t) => t.trim()).filter(Boolean) || [],
 				});
 				return ok(call.name, `File stored: ${meta.name} (${meta.id}, ${meta.size} bytes)`);

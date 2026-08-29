@@ -138,7 +138,7 @@ const PINS = {
 	// ("[live · idle]", "[last snapshot — runner offline]"), and separating a fence from the framing
 	// it is positioned against is how `mcp_get_prompt` came to put a remote server's description
 	// where the platform's own words go.
-	"workers/api/src/lib/storage-tools.ts": 839,
+	"workers/api/src/lib/storage-tools.ts": 857, // +18 (#762): upload_file handler gains content_base64 branch — size cap check, bytesFromBase64 call, text-path mime-type guard; tool declaration gains two optional params and an import.
 	// New entry at #738 — 799 → 810, crossing LIMIT by ten. #305 left this file at 684 and deleted
 	// its entry, which is the outcome this guard wants; it has since drifted back to one line under
 	// the threshold, so #738's four ADDITIVE response fields could not be explained at all without

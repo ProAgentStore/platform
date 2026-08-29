@@ -140,3 +140,60 @@ describe("instance-scoped collection tools", () => {
 		expect(calls).toHaveLength(0);
 	});
 });
+
+describe("upload_agent_file base64 support", () => {
+	beforeEach(() => {
+		calls.length = 0;
+		gate.deny = false;
+		vi.mocked(requirePermission).mockClear();
+	});
+
+	it("upload_agent_file passes contentBase64 through to the API route", async () => {
+		const tools = collectTools();
+		await tools.get("upload_agent_file")!.handler({
+			agent_id: "agent-1",
+			name: "form.docx",
+			content_base64: "aGVsbG8=",
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0].path).toBe("/v1/agents/agent-1/files");
+		const body = JSON.parse(calls[0].opts?.body as string);
+		expect(body.contentBase64).toBe("aGVsbG8=");
+		expect(body.content).toBeUndefined();
+	});
+
+	it("upload_agent_file passes content through to the API route (text path unchanged)", async () => {
+		const tools = collectTools();
+		await tools.get("upload_agent_file")!.handler({
+			agent_id: "agent-1",
+			name: "notes.txt",
+			content: "hello world",
+		});
+		expect(calls).toHaveLength(1);
+		const body = JSON.parse(calls[0].opts?.body as string);
+		expect(body.content).toBe("hello world");
+		expect(body.contentBase64).toBeUndefined();
+	});
+
+	it("upload_agent_file rejects when both content and content_base64 are provided", async () => {
+		const tools = collectTools();
+		const res = await tools.get("upload_agent_file")!.handler({
+			agent_id: "agent-1",
+			name: "test.txt",
+			content: "hello",
+			content_base64: "aGVsbG8=",
+		});
+		expect(res.content[0].text).toContain("not both");
+		expect(calls).toHaveLength(0);
+	});
+
+	it("upload_agent_file rejects when neither content nor content_base64 is provided", async () => {
+		const tools = collectTools();
+		const res = await tools.get("upload_agent_file")!.handler({
+			agent_id: "agent-1",
+			name: "test.txt",
+		});
+		expect(res.content[0].text).toContain("content");
+		expect(calls).toHaveLength(0);
+	});
+});

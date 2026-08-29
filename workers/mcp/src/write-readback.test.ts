@@ -149,6 +149,7 @@ const READBACK: Record<string, string | null> = {
 	"add_knowledge.content": "search_agent_knowledge",
 	"upload_agent_file.name": "list_agent_files",
 	"upload_agent_file.content": "read_agent_file",
+	"upload_agent_file.content_base64": null, // raw bytes — no MCP reader returns them; extracted text is readable via read_agent_file
 	"upload_agent_file.mime_type": "list_agent_files",
 	"upload_agent_file.tags": "list_agent_files",
 	"create_collection.name": "list_collections",
