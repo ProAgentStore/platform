@@ -132,6 +132,26 @@ describe("collection sources (Durable Object, not D1)", () => {
 		return readDaily(ctx(env), card({ source: "collection.count", kind: "line", params: { collection: "gone" } }), "2026-08-06").then((v) => expect(v).toBe(0));
 	});
 
+	it("throws (not returns 0) when the DO request fails, so the rollup can propagate and skip all writes for the instance (#658)", () => {
+		// Defect 1 from #658: a non-OK DO response used to fall through to the `? 0` branch and
+		// write a false 0 as a completed-day fact. A frozen 0 is unrecoverable because the row is
+		// immutable — the rollup's NOT EXISTS guard prevents any correction on future ticks.
+		// The fix: throw on DO failure so the rollup's per-instance catch fires, leaving zero rows
+		// for the day. With no rows the NOT EXISTS guard retries the instance on the next tick.
+		//
+		// Use a standalone env so we can control the DO status code directly without mutating fakeEnv.
+		const failingEnv = {
+			DB: { prepare: () => ({ bind: () => ({ first: async () => null, all: async () => ({ results: [] }), run: async () => ({ meta: { changes: 0 } }) }) }) },
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({ fetch: async () => new Response("Service Unavailable", { status: 503 }) }),
+			},
+		} as unknown as Env;
+		return expect(
+			readDaily(ctx(failingEnv), card({ source: "collection.count", kind: "line", params: { collection: "leads" } }), "2026-08-06"),
+		).rejects.toThrow("DO unavailable");
+	});
+
 	it("groups by a field and marks the answer PARTIAL when the scan cap bit", () => {
 		// A 500-record sample of a 5000-record collection presented as the whole breakdown is the
 		// confident-wrong-number failure. `partial` is how the surface knows to say so.

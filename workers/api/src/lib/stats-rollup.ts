@@ -216,13 +216,27 @@ export async function runStatsRollup(env: Env, now = new Date()): Promise<{ inst
 			try {
 				const cards = trendCards(await instanceCards(env, instanceId, userId));
 				const ctx: StatsCtx = { env, instanceId, userId };
+				// Phase 1: collect all values before writing any (#658).
+				//
+				// `null` from `readDaily` means the source cannot produce a daily scalar for this card
+				// (e.g. the source has no `daily` executor, or the backing DO reported it has no such
+				// collection). Those cards are skipped — not written as 0.
+				//
+				// A THROW from `readDaily` means a transient failure. We let it propagate to the
+				// per-instance catch so that NO card is written for this instance. With zero writes the
+				// `NOT EXISTS` candidate guard finds nothing for the day and the whole instance is
+				// retried next tick — correct behaviour. If we caught here and wrote the cards that
+				// succeeded, the partial-write would satisfy NOT EXISTS and the failed card would never
+				// be revisited.
+				const toWrite: Array<{ cardId: string; value: number }> = [];
 				for (const card of cards) {
-					// A card whose source cannot produce a daily scalar yields null and is SKIPPED, not
-					// written as 0 — the same rule the series read obeys. `validateStatsCard` already
-					// prevents the combination, so this is the belt to that braces.
-					const value = await readDaily(ctx, card, day).catch(() => null);
+					const value = await readDaily(ctx, card, day);
 					if (value === null) continue;
-					if (await insertDailyOnce(env, { instanceId, userId, cardId: card.id, day, value })) written++;
+					toWrite.push({ cardId: card.id, value });
+				}
+				// Phase 2: write — only reached when every readDaily call resolved (or returned null).
+				for (const { cardId, value } of toWrite) {
+					if (await insertDailyOnce(env, { instanceId, userId, cardId, day, value })) written++;
 				}
 			} catch (err) {
 				// One instance's bad config or unreachable DO must not stop the rest of the batch.

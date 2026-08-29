@@ -7,6 +7,7 @@ import {
 	completedDay,
 	enumerateDays,
 	insertDailyOnce,
+	runStatsRollup,
 	trendCards,
 } from "./stats-rollup.js";
 import type { StatsCard } from "./stats-schema.js";
@@ -248,6 +249,114 @@ describe("insertDailyOnce", () => {
 			insertDailyOnce(env, { ...row, day: "2026-08-05" }),
 			insertDailyOnce(env, { ...row, instanceId: "inst-2" }),
 		]).then(() => expect(rows.size).toBe(4));
+	});
+});
+
+/**
+ * Regression: a transient failure in one card must prevent ALL cards from being written for that
+ * instance (#658 defect 2). The previous implementation caught readDaily errors per-card, which
+ * could leave partial writes that satisfied the `NOT EXISTS` guard and permanently excluded the
+ * failed card from future retries.
+ */
+describe("runStatsRollup — all-or-nothing write per instance (#658)", () => {
+	const NOW = new Date("2026-08-08T01:00:00Z"); // day = "2026-08-07"
+	const DAY = "2026-08-07";
+	const INSTANCE = "inst-658";
+	const USER = "user-658";
+
+	/**
+	 * Builds a minimal env where:
+	 * - One instance is active (visible in ai_usage)
+	 * - That instance has two line cards: `runs.count` (returns `count`) and `collection.count` (DO)
+	 * - The DO responds with `doStatus` (200 = success, 503 = failure)
+	 */
+	function makeEnv(count: number, doStatus: number) {
+		const written = new Map<string, number>();
+		// Two-card statsSchema: one D1-backed line, one DO-backed line.
+		const agentConfig = JSON.stringify({
+			statsSchema: [
+				{ id: "runs", title: "Runs", kind: "line", source: "runs.count", params: {} },
+				{ id: "leads", title: "Leads", kind: "line", source: "collection.count", params: { collection: "leads" } },
+			],
+		});
+		const instanceConfig = JSON.stringify({ stats: null });
+
+		const env = {
+			DB: {
+				prepare: (sql: string) => ({
+					bind: (...binds: unknown[]) => ({
+						all: async () => {
+							// Activity source queries — return the one test instance from ai_usage only.
+							if (sql.includes("FROM ai_usage") && sql.includes("NOT EXISTS")) {
+								return { results: [{ instance_id: INSTANCE, user_id: USER }] };
+							}
+							// Other activity sources (agent_events, etc.) return empty.
+							if (sql.includes("NOT EXISTS")) return { results: [] };
+							return { results: [] };
+						},
+						first: async () => {
+							// Instance config join (readInstanceConfigPair).
+							if (sql.includes("FROM agent_instances")) {
+								return { config: instanceConfig, agent_config: agentConfig, owner_preferences: null };
+							}
+							// runs.count daily read.
+							if (sql.includes("FROM agent_loop_runs")) {
+								return { v: count };
+							}
+							return null;
+						},
+						run: async () => {
+							// insertDailyOnce — track writes.
+							if (sql.includes("INSERT INTO agent_stats_daily")) {
+								const [instanceId, , cardId, day, valueJson] = binds as string[];
+								const key = `${instanceId}|${cardId}|${day}`;
+								if (written.has(key)) return { meta: { changes: 0 } };
+								written.set(key, JSON.parse(valueJson) as number);
+								return { meta: { changes: 1 } };
+							}
+							// sweepStatsRetention DELETE — no-op.
+							return { meta: { changes: 0 } };
+						},
+					}),
+				}),
+			},
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({
+					fetch: async () =>
+						doStatus === 200
+							? new Response(JSON.stringify({ collections: [{ name: "leads", recordCount: 42 }] }), {
+									status: 200,
+									headers: { "content-type": "application/json" },
+								})
+							: new Response("Service Unavailable", { status: doStatus }),
+				}),
+			},
+		} as unknown as Env;
+
+		return { env, written };
+	}
+
+	it("writes both cards when both sources succeed", async () => {
+		const { env, written } = makeEnv(7, 200);
+		const result = await runStatsRollup(env, NOW);
+		expect(result.instances).toBe(1);
+		expect(result.written).toBe(2);
+		expect(written.get(`${INSTANCE}|runs|${DAY}`)).toBe(7);
+		expect(written.get(`${INSTANCE}|leads|${DAY}`)).toBe(42);
+	});
+
+	it("writes NO cards when the DO card throws — the instance is left with zero rows so the next tick retries it (#658)", async () => {
+		// This is the regression. The old implementation caught per-card errors with `.catch(() =>
+		// null)`, so `runs` would be written while `leads` was silently skipped. With `runs` written,
+		// `NOT EXISTS` would exclude the instance on subsequent ticks and `leads` would never be
+		// retried. The new collect-then-write approach propagates the throw to the per-instance catch,
+		// leaving zero rows — the NOT EXISTS finds nothing and the next tick retries both cards.
+		const { env, written } = makeEnv(7, 503);
+		const result = await runStatsRollup(env, NOW);
+		expect(result.instances).toBe(1);
+		expect(result.written).toBe(0); // no partial writes
+		expect(written.size).toBe(0); // the NOT EXISTS guard will retry the whole instance next tick
 	});
 });
 

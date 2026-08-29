@@ -103,9 +103,12 @@ interface Executor {
 	/**
 	 * One scalar for one COMPLETED UTC day — the unit the rollup stores (#313).
 	 *
-	 * Absent means the source cannot back a `line` card. `validateStatsCard` already refuses that
-	 * combination via the source's `kinds`, and `stats-sources.test.ts` asserts the two agree, so a
-	 * source can never declare a trend it has no way to compute.
+	 * A transient failure (e.g. the DO is unavailable) must THROW rather than return a sentinel.
+	 * The rollup collects all values before writing any (#658), so a throw here propagates to the
+	 * per-instance catch which leaves zero rows for the day — the NOT EXISTS guard then retries
+	 * the whole instance next tick. Returning 0 would freeze a false zero in the immutable
+	 * completed-day row. Absent (no `daily` method at all) means the source structurally cannot
+	 * back a `line` card — `validateStatsCard` already refuses that combination.
 	 */
 	daily?(ctx: StatsCtx, params: Params, period: StatsPeriod): Promise<number>;
 }
@@ -158,7 +161,14 @@ async function collectionCount(ctx: StatsCtx, name: string): Promise<number> {
 	// `collectionList` reads only the schema keys (which carry a maintained `recordCount`), so this
 	// is a handful of DO reads rather than a scan of every record.
 	const body = await doFetch<{ collections?: CollectionSchema[] }>(ctx, "/collections");
-	const schema = body?.collections?.find((c) => c.name === name);
+	// A null body means the DO request failed (non-OK response). Throw so the rollup treats this as
+	// a transient failure: no cards are written for the instance, the NOT EXISTS guard finds nothing,
+	// and the next tick retries cleanly (#658). Returning 0 would freeze a false zero in the
+	// immutable completed-day row and the chart would say "you lost all records on Tuesday".
+	if (body === null) throw new Error("DO unavailable for collection.count read");
+	const schema = body.collections?.find((c) => c.name === name);
+	// A missing schema means the collection was renamed or deleted — that is a real 0 (0 records),
+	// not a transient failure, so we return 0 rather than throwing.
 	return schema ? Number(schema.recordCount ?? 0) : 0;
 }
 
