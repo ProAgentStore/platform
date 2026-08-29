@@ -642,3 +642,57 @@ describe("the modules the ratchet reads", () => {
 		expect(of('import { p } from "hono";\nsystemPrompt += p(x);')).toEqual([]);
 	});
 });
+
+// ── 7. The #459 failure-honesty block (#620) ─────────────────────────────────────────────────
+
+/**
+ * The failure-honesty sentences added by 8f5afaa sit in `agent-think.ts` (which cannot be called
+ * from a unit test), not in a pure module. They are the one link in the not-stalled chain that
+ * had no assertion behind it: `RUN_HEALTH_LEGEND` is pinned in `work-report.test.ts:256`, the
+ * "NOT stalled" wording is pinned at `work-report.test.ts:92-93`, but the prompt that tells the
+ * model to QUOTE the verdict and not to form its own view was readable only by a live turn.
+ *
+ * This section reads the source file directly (per ADR 0002 G1: assert the size, so a parse
+ * failure reports "stopped measuring" rather than passing silently) and asserts the load-bearing
+ * clauses. It pins the meaning — what the three sub-rules SAY — not the exact wording, so a
+ * rewording that preserves intent does not fail.
+ */
+describe("#459 — failure-honesty prompt block is present in agent-think.ts (#620)", () => {
+	const src = readFileSync(join(SRC, "agent-think.ts"), "utf8");
+	const text = promptTextOf(src);
+
+	it("read a plausible source file — G1 guard so a parse failure is not a silent pass", () => {
+		// The real file is over 1 000 lines. 700 is comfortably below honest churn and far above
+		// what an empty parse or an empty file would produce.
+		expect(
+			src.split("\n").length,
+			"agent-think.ts has fewer than 700 lines — the file moved, was replaced, or the path is wrong;\n" +
+				"the clauses below are measuring nothing. Investigate before trusting a green run.",
+		).toBeGreaterThanOrEqual(700);
+	});
+
+	it("forbids asserting stalled / blocked / stuck / dead without a tool result", () => {
+		// The prohibition introduced by #459. The exact wording is "never assert a run is stalled,
+		// blocked, stuck or dead unless a tool result says so". Asserting the key terms rather than
+		// the whole sentence so a rewording that keeps the rule intact does not fail.
+		expect(text).toMatch(/stalled.*blocked.*stuck/);
+		expect(text).toContain("tool result");
+	});
+
+	it("tells the model to quote the report's verdict rather than form its own view", () => {
+		// The core of the fix: the platform computes NOT_STALLED correctly; the *prompt* must tell
+		// the model to cite it. The defect in #459 was the model filling a silence — it was not
+		// told to quote, so it reasoned from the counter instead.
+		expect(text).toMatch(/quote it|states that verdict explicitly/);
+	});
+
+	it("explains that one instruction is a whole engine turn, so long = not stalled", () => {
+		// Why the counter alone cannot diagnose a stall: each iteration is one instruction to the
+		// engine, which may legitimately run for many minutes. Without this the model re-derives
+		// "slow = stuck" the moment its memory of the rule fades.
+		//
+		// The phrase spans a `+` join in the source, so `promptTextOf` inserts a space at the
+		// boundary; the regex allows one or two spaces between "whole" and "engine".
+		expect(text).toMatch(/one instruction is a whole\s+engine turn/);
+	});
+});
