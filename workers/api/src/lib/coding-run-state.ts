@@ -139,11 +139,14 @@ export function refusingEngineIssue(input: {
 }): CodingIssue | null {
 	const run = input.run;
 	if (!run) return null;
-	const parked = run.waitingReason ? PARK_GLOSS[run.waitingReason] : undefined;
-	// A park with a reason nothing recognises is still a park, and is still not work.
-	const isParked = !!run.waitingReason || run.status === "needs_human";
-	if (!isParked) return null;
-	const what = parked?.what ?? (run.waitingReason ? `the run is parked (${run.waitingReason})` : "the run is parked waiting for a person");
+	// A FINISHED run makes no liveness claim (#459, #654) — `finishLoopRun` does not clear the
+	// park columns, so a run that ended while parked still carries `waiting_reason`. Reading them
+	// on a closed row would announce a wait that is over. `work-report.ts:waitClause` carries the
+	// same guard with the same comment.
+	if (run.status !== "running" || !run.waitingReason) return null;
+	const parked = PARK_GLOSS[run.waitingReason];
+	// `waitingReason` is guaranteed non-empty by the guard above.
+	const what = parked?.what ?? `the run is parked (${run.waitingReason})`;
 	const where = input.alive ? "the engine is up but not working" : "the engine is not running";
 	const why = run.detail.trim() ? ` — ${run.detail.trim()}` : "";
 	return {

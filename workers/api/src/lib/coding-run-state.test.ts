@@ -59,17 +59,18 @@ describe("resolveRunState — three worlds that used to be one answer (#593)", (
 });
 
 describe("refusingEngineIssue — an engine that is up but refusing is an issue (#593)", () => {
+	/** A LIVE (status:"running") engine_limit park — what #593 was written to detect. */
 	const live = {
 		sessionLabel: "c306e923 (platform)",
 		alive: true,
 		run: {
-			status: "needs_human",
+			status: "running",
 			waitingReason: "engine_limit",
 			detail: "the limit does not reset until 2026-08-17 16:00 +10:00, which is beyond the 6 hours a run may wait",
 		},
 	};
 
-	it("reports the live bd43f4de case, which scored issueCount: 0", () => {
+	it("reports a live engine_limit park (the #593 case, issueCount was 0)", () => {
 		// Measured: `healthySessions: 1, issueCount: 0, issues: [], live.alive: true,
 		// runState: "idle"` — while the pane's last two lines were "You've hit your weekly limit ·
 		// resets Aug 17 at 4pm" and "[error]". Every rule in the route fires on a runner or relay
@@ -97,8 +98,24 @@ describe("refusingEngineIssue — an engine that is up but refusing is an issue 
 		expect(refusingEngineIssue({ sessionLabel: "s", alive: true, run: undefined })).toBeNull();
 	});
 
+	it("says nothing for a CLOSED run, even if it carries stale park columns (#654)", () => {
+		// `finishLoopRun` does not clear waiting_reason / waiting_until, so a run that parked and
+		// then timed out closes with waiting_reason intact. Reading those columns on a closed row
+		// announces a wait that is over. Two routes into the false positive:
+		//   1. status === "needs_human" (terminal) — isParked was true on the status alone
+		//   2. status === "cancelled"/"completed"/"failed" + non-empty waiting_reason (stale column)
+		// Both now return null; the guard mirrors work-report.ts:288.
+		expect(refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "needs_human", waitingReason: "engine_limit", detail: "" } })).toBeNull();
+		expect(refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "needs_human", waitingReason: "human", detail: "" } })).toBeNull();
+		expect(refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "cancelled", waitingReason: "human", detail: "" } })).toBeNull();
+		expect(refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "completed", waitingReason: "platform_interrupt", detail: "" } })).toBeNull();
+		// alive:false + closed is also null — a dead engine with a closed run has nothing live to say
+		expect(refusingEngineIssue({ sessionLabel: "s", alive: false, run: { status: "needs_human", waitingReason: "engine_limit", detail: "" } })).toBeNull();
+	});
+
 	it("reports a human handoff as a warning, and a platform interrupt as info", () => {
-		const human = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "needs_human", waitingReason: "human", detail: "takeover requested" } });
+		// These use status:"running" — the run is live and actually parked.
+		const human = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "running", waitingReason: "human", detail: "takeover requested" } });
 		expect(human?.severity).toBe("warn");
 		expect(human?.message).toContain("waiting for a person");
 		const interrupt = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "running", waitingReason: "platform_interrupt", detail: "" } });
@@ -111,10 +128,5 @@ describe("refusingEngineIssue — an engine that is up but refusing is an issue 
 		const issue = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "running", waitingReason: "some_new_reason", detail: "" } });
 		expect(issue).not.toBeNull();
 		expect(issue?.message).toContain("some_new_reason");
-	});
-
-	it("a parked run whose engine is NOT alive is still reported, worded honestly", () => {
-		const issue = refusingEngineIssue({ sessionLabel: "s", alive: false, run: { status: "needs_human", waitingReason: "engine_limit", detail: "" } });
-		expect(issue?.message).toContain("the engine is not running");
 	});
 });
