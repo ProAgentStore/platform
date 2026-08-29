@@ -147,6 +147,24 @@ export async function extractFileText(input: {
 			const text = await extractPdfText(bytes);
 			return text ? { text, status: "extracted" } : { text: "", status: "unsupported" };
 		}
+		if (
+			mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+			name.endsWith(".docx")
+		) {
+			const text = await extractDocxText(bytes);
+			return text ? { text, status: "extracted" } : { text: "", status: "none" };
+		}
+		if (
+			mimeType === "application/msword" ||
+			mimeType === "application/vnd.ms-word" ||
+			name.endsWith(".doc")
+		) {
+			return {
+				text: "",
+				status: "unsupported",
+				error: "This is a legacy Word (.doc) document. The .doc format is not supported — upload a .docx file instead.",
+			};
+		}
 		return { text: "", status: "unsupported" };
 	} catch (error) {
 		return {
@@ -205,6 +223,147 @@ async function inflatePdfStream(bytes: Uint8Array): Promise<Uint8Array | null> {
 	} catch {
 		return null;
 	}
+}
+
+// ── .docx extraction ─────────────────────────────────────────────────────────
+//
+// A .docx is a ZIP archive. Text lives in `word/document.xml` as `<w:t>` runs
+// separated by paragraph (`<w:p>`) boundaries.
+//
+// We walk the ZIP local-file-header chain (same sequential approach as readTar
+// in repo-ingest.ts — no central-directory seek required). Method 0 = stored,
+// method 8 = deflate-raw. Both are represented; real Word output always uses
+// deflate for document.xml.
+//
+// Size caps match the repo-ingest discipline: the decompressed document.xml is
+// capped at DOCX_MAX_XML_BYTES before parsing. The whole input is already
+// bounded upstream by the 12 MB fileUpload limit.
+
+const DOCX_MAX_XML_BYTES = 4 * 1024 * 1024; // 4 MB decompressed
+const DOCX_MAX_MEMBERS = 512; // ZIP member iteration guard
+
+function u16le(b: Uint8Array, o: number): number {
+	return b[o] | (b[o + 1] << 8);
+}
+function u32le(b: Uint8Array, o: number): number {
+	return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+}
+
+async function extractDocxText(bytes: Uint8Array): Promise<string> {
+	// Validate ZIP signature.
+	if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+		throw new Error("Not a valid .docx file (missing ZIP signature)");
+	}
+
+	const dec = new TextDecoder();
+	let offset = 0;
+	let members = 0;
+
+	while (offset + 30 <= bytes.length) {
+		const sig = u32le(bytes, offset);
+		// 0x04034b50 = local file header
+		// 0x02014b50 = central directory header (end of local entries)
+		// 0x06054b50 = end of central directory
+		if (sig === 0x02014b50 || sig === 0x06054b50) break;
+		if (sig !== 0x04034b50) {
+			// Unknown signature — skip one byte and try again (handles alignment issues).
+			offset++;
+			continue;
+		}
+		if (++members > DOCX_MAX_MEMBERS) break;
+
+		const method = u16le(bytes, offset + 8);
+		const compressedSize = u32le(bytes, offset + 18);
+		const fileNameLen = u16le(bytes, offset + 26);
+		const extraLen = u16le(bytes, offset + 28);
+
+		const nameStart = offset + 30;
+		const nameEnd = nameStart + fileNameLen;
+		if (nameEnd > bytes.length) break;
+
+		const entryName = dec.decode(bytes.subarray(nameStart, nameEnd));
+		const dataStart = nameEnd + extraLen;
+		const dataEnd = dataStart + compressedSize;
+		if (dataEnd > bytes.length) break;
+		offset = dataEnd;
+
+		if (entryName !== "word/document.xml") continue;
+
+		const compressed = bytes.subarray(dataStart, dataEnd);
+		let xml: Uint8Array;
+		if (method === 0) {
+			// Stored — no compression.
+			xml = compressed;
+		} else if (method === 8) {
+			// Deflate-raw — same primitive used by inflatePdfStream.
+			const ds = new DecompressionStream("deflate-raw");
+			const writer = ds.writable.getWriter();
+			await writer.write(compressed);
+			await writer.close();
+			const chunks: Uint8Array[] = [];
+			let total = 0;
+			const reader = ds.readable.getReader();
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				if (!value) continue;
+				total += value.byteLength;
+				if (total > DOCX_MAX_XML_BYTES) {
+					await reader.cancel().catch(() => undefined);
+					throw new Error("word/document.xml exceeds the extraction size limit");
+				}
+				chunks.push(value);
+			}
+			const out = new Uint8Array(total);
+			let off = 0;
+			for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+			xml = out;
+		} else {
+			// Unsupported compression method — return empty, not an error.
+			return "";
+		}
+
+		return extractDocxXmlText(dec.decode(xml));
+	}
+
+	// word/document.xml not found — truncated or not a Word file.
+	throw new Error("word/document.xml not found in .docx archive");
+}
+
+/**
+ * Extract readable text from a OOXML word/document.xml string.
+ * - `<w:p>` elements become paragraph breaks.
+ * - `<w:t>` runs contribute their text content.
+ * - All other markup is ignored.
+ */
+function extractDocxXmlText(xml: string): string {
+	// Split on paragraph boundaries first.
+	const paraRe = /<w:p[ >][\s\S]*?<\/w:p>|<w:p\/>/g;
+	const paragraphs: string[] = [];
+	let hasParagraphs = false;
+
+	for (const pMatch of xml.matchAll(paraRe)) {
+		hasParagraphs = true;
+		const paraXml = pMatch[0];
+		const runs: string[] = [];
+		for (const tMatch of paraXml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)) {
+			const t = tMatch[1];
+			if (t) runs.push(t);
+		}
+		const line = runs.join("").trimEnd();
+		if (line) paragraphs.push(line);
+	}
+
+	if (hasParagraphs) {
+		return paragraphs.join("\n").trim();
+	}
+
+	// Fallback: no <w:p> structure — just collect all <w:t> content.
+	const runs: string[] = [];
+	for (const tMatch of xml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)) {
+		if (tMatch[1]) runs.push(tMatch[1]);
+	}
+	return runs.join(" ").trim();
 }
 
 function pdfTextStrings(value: string): string[] {
