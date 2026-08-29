@@ -470,7 +470,8 @@ export async function getOverviewStats(env: Env): Promise<AdminOverviewStats> {
 		scalar("SELECT COUNT(*) AS n FROM agents"),
 		scalar("SELECT COUNT(*) AS n FROM agents WHERE visibility = 'published'"),
 		scalar("SELECT COUNT(*) AS n FROM agent_instances WHERE status = 'active'"),
-		scalar("SELECT COUNT(*) AS n FROM error_log WHERE created_at >= ?", d1),
+		// Sum OCCURRENCES (repeat_count), not rows — see admin-ops.ts for the full rationale (#648).
+		scalar("SELECT COALESCE(SUM(COALESCE(repeat_count, 1)), 0) AS n FROM error_log WHERE COALESCE(last_seen_at, created_at) >= ?", d1),
 		scalar("SELECT COUNT(*) AS n FROM ai_usage WHERE created_at >= ?", d1),
 		scalar("SELECT COALESCE(SUM(cost_micros),0) AS value_micros FROM ai_usage WHERE created_at >= ?", d30),
 		// Platform-paid, on the payer axis rather than the vendor one. `recordPlatformUsage` writes

@@ -1,6 +1,30 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { listAgents, listInstances } from "./admin.js";
 import type { Env } from "../types.js";
+
+const adminSource = readFileSync(new URL("./admin.ts", import.meta.url).pathname, "utf8");
+/** Strip comments so assertions don't match in doc-comment quotations. */
+const adminCode = adminSource
+	.replace(/\/\*[\s\S]*?\*\//g, "")
+	.split("\n")
+	.map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1"))
+	.join("\n");
+
+describe("getOverviewStats error-log 24h count (#648)", () => {
+	// error_log collapses identical signatures into ONE row; `repeat_count` tracks how many times
+	// the error fired. COUNT(*) undercounts by the collapse factor. Filter must be on
+	// COALESCE(last_seen_at, created_at) so an ongoing outage is never excluded.
+	it("sums occurrences (repeat_count), not rows", () => {
+		expect(adminCode).toContain("SUM(COALESCE(repeat_count, 1))");
+		expect(adminCode).not.toMatch(/SELECT COUNT\(\*\) AS n FROM error_log/);
+	});
+
+	it("filters on last_seen_at so a live outage is never excluded", () => {
+		// A bucket opened >24h ago is still live if last_seen_at is recent.
+		expect(adminCode).toContain("COALESCE(last_seen_at, created_at)");
+	});
+});
 
 interface Query {
 	sql: string;

@@ -66,6 +66,28 @@ describe("the stuck-session filter", () => {
 	});
 });
 
+describe("the error-log 24h count (#648)", () => {
+	// error_log collapses identical signatures into ONE row whose `repeat_count` tracks how many
+	// times the error fired. COUNT(*) therefore undercounts by the collapse factor — a 1780-event
+	// flood becomes ~24 rows and the "Errors (24h)" tile reads as a small number.
+	// Separately, filtering on `created_at` misses a bucket opened 25h ago that is still absorbing
+	// errors this minute; `COALESCE(last_seen_at, created_at)` is the recency expression the rest
+	// of the error-log already uses (see lib/error-log.ts `ERROR_RECENCY`).
+	it("sums occurrences, not rows", () => {
+		// SUM(COALESCE(repeat_count, 1)) — the COALESCE covers rows written before migration 0103
+		// that have no repeat_count yet; they count as one occurrence.
+		expect(code).toContain("SUM(COALESCE(repeat_count, 1))");
+		expect(code).not.toMatch(/SELECT COUNT\(\*\) AS n FROM error_log/);
+	});
+
+	it("filters on last_seen_at so a live outage is never excluded", () => {
+		// A bucket opened 25h ago and still absorbing failures has a recent `last_seen_at`
+		// but an old `created_at` — it would be excluded by `created_at >=` and the tile
+		// would read zero during an ongoing outage.
+		expect(code).toContain("COALESCE(last_seen_at, created_at)");
+	});
+});
+
 describe("a capped list says it is capped", () => {
 	it("publishes the cap it truncated at", () => {
 		expect(CAP).toBe(50);

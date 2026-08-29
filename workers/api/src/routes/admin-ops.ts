@@ -125,8 +125,13 @@ adminOpsRoutes.get("/ops", async (c) => {
 	).bind(CAP).all<NoKeyUser>()).results ?? [];
 
 	// Error-log volume in the last 24h (the spike signal).
+	// Sum OCCURRENCES (repeat_count), not rows: the collapse that landed with #424 can absorb a
+	// 1780-row flood into ~24 rows, so COUNT(*) understates by the collapse factor. Filter on
+	// COALESCE(last_seen_at, created_at) — a bucket opened 25h ago that is still absorbing
+	// failures this minute has a fresh `last_seen_at` and must be counted; `created_at` alone
+	// would exclude it and the tile could read zero during a live outage (#648).
 	const errRow = await c.env.DB.prepare(
-		`SELECT COUNT(*) AS n FROM error_log WHERE created_at >= datetime('now', '-24 hours')`,
+		`SELECT COALESCE(SUM(COALESCE(repeat_count, 1)), 0) AS n FROM error_log WHERE COALESCE(last_seen_at, created_at) >= datetime('now', '-24 hours')`,
 	).first<{ n: number }>();
 	const errors24h = Number(errRow?.n ?? 0);
 
