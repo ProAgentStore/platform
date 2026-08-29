@@ -89,6 +89,20 @@ jobs:
         # #671 closed three of them (list nodes, read and set an instance's runner-node pin):
         # 83 reachable, 68 recorded. The ratchet only ever moves this way — a new gap fails.
         run: node scripts/check-mcp-parity.mjs
+      - name: Console type guard — anonymous shapes are counted or named (#616)
+        # The console calls `api<{ field: type }>` in 129 places. Those inline object
+        # literals cannot be compared to Worker declarations by the compiler — they need
+        # a name first. `check-console-types.mjs` ratchets every anonymous shape in
+        # KNOWN_ANONYMOUS; a new one that is not listed fails, and an entry whose shape
+        # no longer exists in the source also fails (dead config). The denominator
+        # (total / anonymous / named) prints every run so "zero gaps" is distinguishable
+        # from "not measured". #617 fixed the 17 confirmed divergences (#616 AC1); this
+        # guard holds the floor — unlisted divergence fails from here on.
+        #
+        # Count when #616 closed: 108 unique anonymous shapes across 129 call sites.
+        # The only legal direction is down: name a shape, assert it in types.test.ts,
+        # delete its entry.
+        run: node scripts/check-console-types.mjs
       - name: Design tokens — no dead colour utility (#367)
         # Tailwind v4 has no error state. A utility naming a token `@theme` does not declare
         # generates NO rule, so the element silently keeps the colour it inherited — and a
