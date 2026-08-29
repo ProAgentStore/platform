@@ -191,12 +191,27 @@ export async function insertFeedback(env: Env, row: NewFeedbackRow): Promise<voi
 		.run();
 }
 
-/** One owner's feedback, newest first. Always user-scoped — there is no `scope=all`. */
+export interface FeedbackPage {
+	rows: FeedbackRow[];
+	/** Real total matching the filters — NOT the page length. Always accurate. */
+	total: number;
+	/** True when there are rows beyond the current page. */
+	hasMore: boolean;
+}
+
+/**
+ * One owner's feedback, newest first. Always user-scoped — there is no `scope=all`.
+ *
+ * Pagination: `limit` rows per page (default 50, max 500), `offset` skips rows.
+ * A `limit + 1` probe answers `hasMore` without a second query; the extra row is dropped.
+ * A separate `COUNT(*)` returns the real total so callers can show it honestly.
+ */
 export async function listFeedback(
 	env: Env,
-	opts: { userId: string; instanceId?: string; status?: FeedbackStatus; limit?: number },
-): Promise<FeedbackRow[]> {
-	const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
+	opts: { userId: string; instanceId?: string; status?: FeedbackStatus; limit?: number; offset?: number },
+): Promise<FeedbackPage> {
+	const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+	const offset = Math.max(0, opts.offset ?? 0);
 	const binds: unknown[] = [opts.userId];
 	const where = ["user_id = ?1"];
 	if (opts.instanceId) {
@@ -207,12 +222,21 @@ export async function listFeedback(
 		binds.push(opts.status);
 		where.push(`status = ?${binds.length}`);
 	}
-	const res = await env.DB.prepare(
-		`SELECT ${COLUMNS} FROM agent_feedback WHERE ${where.join(" AND ")} ORDER BY ts DESC LIMIT ${limit}`,
-	)
-		.bind(...binds)
-		.all<FeedbackRow>();
-	return res.results ?? [];
+	const whereClause = where.join(" AND ");
+	// Probe one extra row to answer hasMore without a second query.
+	const [pageRes, countRes] = await Promise.all([
+		env.DB.prepare(
+			`SELECT ${COLUMNS} FROM agent_feedback WHERE ${whereClause} ORDER BY ts DESC LIMIT ${limit + 1} OFFSET ${offset}`,
+		)
+			.bind(...binds)
+			.all<FeedbackRow>(),
+		env.DB.prepare(`SELECT COUNT(*) AS n FROM agent_feedback WHERE ${whereClause}`)
+			.bind(...binds)
+			.first<{ n: number }>(),
+	]);
+	const all = pageRes.results ?? [];
+	const hasMore = all.length > limit;
+	return { rows: hasMore ? all.slice(0, limit) : all, total: countRes?.n ?? 0, hasMore };
 }
 
 /**

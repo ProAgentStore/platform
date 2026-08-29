@@ -214,7 +214,7 @@ const KNOWN_ANONYMOUS = {
 	"00877499": "{ repo: string | null; available: boolean; run: BuildRun | null }",
 
 	// ── FeedbackList ──────────────────────────────────────────────────────────
-	"7ddfcdb8": "{ feedback?: FeedbackRow[] }",
+	"7177df3b": "{ count?: number; has_more?: boolean; feedback?: FeedbackRow[] }",
 	"54a34e33": "{ events?: TraceEvent[] }",
 	"1d8c5b35": "{ events: TraceEvent[] }",
 

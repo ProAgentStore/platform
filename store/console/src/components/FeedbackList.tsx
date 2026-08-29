@@ -34,17 +34,22 @@ const STATUSES = ["open", "triaged", "filed", "dismissed"] as const;
 
 export default function FeedbackList({ instanceId, agentNames }: { instanceId?: string; agentNames?: Record<string, string> }) {
 	const [rows, setRows] = useState<FeedbackRow[]>([]);
+	const [total, setTotal] = useState<number | null>(null);
+	const [hasMore, setHasMore] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [filter, setFilter] = useState<string>("");
 	const [open, setOpen] = useState<string | null>(null);
+	const [loadingMore, setLoadingMore] = useState(false);
 
 	const load = useCallback(async () => {
 		try {
 			const q = new URLSearchParams();
 			if (instanceId) q.set("instance_id", instanceId);
 			if (filter) q.set("status", filter);
-			const data = await api<{ feedback?: FeedbackRow[] }>(`/v1/feedback?${q}`);
+			const data = await api<{ count?: number; has_more?: boolean; feedback?: FeedbackRow[] }>(`/v1/feedback?${q}`);
 			setRows(data.feedback || []);
+			setTotal(data.count ?? data.feedback?.length ?? 0);
+			setHasMore(data.has_more ?? false);
 			setError(null);
 		} catch (e) {
 			// Reported, not swallowed (#291): an empty list and a failed read look identical, and
@@ -56,6 +61,24 @@ export default function FeedbackList({ instanceId, agentNames }: { instanceId?: 
 	useEffect(() => {
 		void load();
 	}, [load]);
+
+	const loadMore = useCallback(async () => {
+		setLoadingMore(true);
+		try {
+			const q = new URLSearchParams();
+			if (instanceId) q.set("instance_id", instanceId);
+			if (filter) q.set("status", filter);
+			q.set("offset", String(rows.length));
+			const data = await api<{ count?: number; has_more?: boolean; feedback?: FeedbackRow[] }>(`/v1/feedback?${q}`);
+			setRows((prev) => [...prev, ...(data.feedback || [])]);
+			setTotal(data.count ?? null);
+			setHasMore(data.has_more ?? false);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Couldn't load more feedback");
+		} finally {
+			setLoadingMore(false);
+		}
+	}, [instanceId, filter, rows.length]);
 
 	const patch = async (id: string, body: Record<string, unknown>) => {
 		await api(`/v1/feedback/${id}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -78,7 +101,7 @@ export default function FeedbackList({ instanceId, agentNames }: { instanceId?: 
 						<Flag size={15} /> Feedback
 					</h3>
 					<div className="text-xs text-muted">
-						{rows.length} item{rows.length === 1 ? "" : "s"} · what you said went wrong, kept with the turn it is about
+						{total !== null ? total : rows.length} item{(total ?? rows.length) === 1 ? "" : "s"} · what you said went wrong, kept with the turn it is about
 					</div>
 				</div>
 				<label className="text-xs text-muted flex items-center gap-1.5">
@@ -118,6 +141,11 @@ export default function FeedbackList({ instanceId, agentNames }: { instanceId?: 
 							onDelete={() => void remove(r.id)}
 						/>
 					))}
+					{hasMore && (
+						<Button onClick={() => void loadMore()} disabled={loadingMore} className="self-start text-xs">
+							{loadingMore ? "Loading…" : `Load more (${rows.length} of ${total ?? "?"})`}
+						</Button>
+					)}
 				</div>
 			)}
 		</div>

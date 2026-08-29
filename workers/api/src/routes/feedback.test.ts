@@ -56,6 +56,15 @@ function buildApp(owns: string[] = ["i1::u1"], seed: Row[] = []) {
 								const [id, uid] = args as [string, string];
 								return owns.includes(`${id}::${uid}`) ? { id, agent_id: "a1", user_id: uid, status: "active", config: "{}" } : null;
 							}
+							// COUNT(*) for pagination total
+							if (s.includes("COUNT(*) AS n") && s.includes("FROM agent_feedback")) {
+								const uid = args[0] as string;
+								let out = rows.filter((r) => r.user_id === uid);
+								let i = 1;
+								if (s.includes("instance_id = ?")) out = out.filter((r) => r.instance_id === args[i++]);
+								if (s.includes("status = ?")) out = out.filter((r) => r.status === args[i++]);
+								return { n: out.length };
+							}
 							return null;
 						},
 						async all() {
@@ -66,7 +75,13 @@ function buildApp(owns: string[] = ["i1::u1"], seed: Row[] = []) {
 							let i = 1;
 							if (s.includes("instance_id = ?")) out = out.filter((r) => r.instance_id === args[i++]);
 							if (s.includes("status = ?")) out = out.filter((r) => r.status === args[i++]);
-							return { results: [...out].sort((a, b) => b.ts - a.ts) };
+							// Apply OFFSET and LIMIT from the SQL (limit+1 probe)
+							const limitMatch = /LIMIT (\d+)/.exec(s);
+							const offsetMatch = /OFFSET (\d+)/.exec(s);
+							const sqlLimit = limitMatch ? Number(limitMatch[1]) : undefined;
+							const sqlOffset = offsetMatch ? Number(offsetMatch[1]) : 0;
+							const sorted = [...out].sort((a, b) => b.ts - a.ts).slice(sqlOffset, sqlLimit !== undefined ? sqlOffset + sqlLimit : undefined);
+							return { results: sorted };
 						},
 						async run() {
 							if (s.startsWith("INSERT INTO agent_feedback")) {
@@ -190,27 +205,58 @@ describe("GET /v1/feedback", () => {
 		{ id: "f3", ts: 1, user_id: "u2", instance_id: "i9", author: "user", surface: "chat", sentiment: null, body: "not yours", trace_id: null, message_id: null, session_id: null, timeline_seq: null, target_role: null, target_text: null, target_at: null, prompt_text: null, context: null, status: "open", issue_url: null },
 	];
 
-	it("returns only the caller's rows, newest first", async () => {
+	it("returns only the caller's rows, newest first, with the real total", async () => {
 		const { app, env } = buildApp(["i1::u1"], seed);
 		const res = await send(app, env, "GET", "/v1/feedback", await tokenFor("u1"));
-		const out = (await res.json()) as { count: number; feedback: Row[] };
+		const out = (await res.json()) as { count: number; has_more: boolean; feedback: Row[] };
+		// count = real total, not the truncated page length
 		expect(out.count).toBe(2);
+		expect(out.has_more).toBe(false);
 		expect(out.feedback.map((r) => r.id)).toEqual(["f1", "f2"]);
 	});
 
 	it("narrows to one agent with instance_id, and to one column with status", async () => {
 		const { app, env } = buildApp(["i1::u1"], seed);
 		const tok = await tokenFor("u1");
-		const one = (await (await send(app, env, "GET", "/v1/feedback?instance_id=i1", tok)).json()) as { feedback: Row[] };
+		const one = (await (await send(app, env, "GET", "/v1/feedback?instance_id=i1", tok)).json()) as { count: number; feedback: Row[] };
 		expect(one.feedback.map((r) => r.id)).toEqual(["f1"]);
-		const open = (await (await send(app, env, "GET", "/v1/feedback?status=open", tok)).json()) as { feedback: Row[] };
+		expect(one.count).toBe(1);
+		const open = (await (await send(app, env, "GET", "/v1/feedback?status=open", tok)).json()) as { count: number; feedback: Row[] };
 		expect(open.feedback.map((r) => r.id)).toEqual(["f1"]);
+		expect(open.count).toBe(1);
 	});
 
 	it("gives another user none of it", async () => {
 		const { app, env } = buildApp(["i1::u1"], seed);
 		const out = (await (await send(app, env, "GET", "/v1/feedback", await tokenFor("u2"))).json()) as { feedback: Row[] };
 		expect(out.feedback.map((r) => r.id)).toEqual(["f3"]);
+	});
+
+	it("reports the real total even when the page is smaller, and has_more when a next page exists", async () => {
+		// 3 rows for u1 to force a page boundary at limit=2
+		const bigSeed: Row[] = [
+			{ id: "g1", ts: 5, user_id: "u1", instance_id: "i1", author: "user", surface: "chat", sentiment: null, body: "a", trace_id: null, message_id: null, session_id: null, timeline_seq: null, target_role: null, target_text: null, target_at: null, prompt_text: null, context: null, status: "open", issue_url: null },
+			{ id: "g2", ts: 4, user_id: "u1", instance_id: "i1", author: "user", surface: "chat", sentiment: null, body: "b", trace_id: null, message_id: null, session_id: null, timeline_seq: null, target_role: null, target_text: null, target_at: null, prompt_text: null, context: null, status: "open", issue_url: null },
+			{ id: "g3", ts: 3, user_id: "u1", instance_id: "i1", author: "user", surface: "chat", sentiment: null, body: "c", trace_id: null, message_id: null, session_id: null, timeline_seq: null, target_role: null, target_text: null, target_at: null, prompt_text: null, context: null, status: "open", issue_url: null },
+		];
+		const { app, env } = buildApp(["i1::u1"], bigSeed);
+		const tok = await tokenFor("u1");
+
+		// First page: limit=2, expect has_more=true and count=3 (real total)
+		const page1 = (await (await send(app, env, "GET", "/v1/feedback?limit=2", tok)).json()) as {
+			count: number; has_more: boolean; feedback: Row[];
+		};
+		expect(page1.count).toBe(3);
+		expect(page1.has_more).toBe(true);
+		expect(page1.feedback.map((r) => r.id)).toEqual(["g1", "g2"]);
+
+		// Second page: offset=2, expect has_more=false and same total
+		const page2 = (await (await send(app, env, "GET", "/v1/feedback?limit=2&offset=2", tok)).json()) as {
+			count: number; has_more: boolean; feedback: Row[];
+		};
+		expect(page2.count).toBe(3);
+		expect(page2.has_more).toBe(false);
+		expect(page2.feedback.map((r) => r.id)).toEqual(["g3"]);
 	});
 });
 

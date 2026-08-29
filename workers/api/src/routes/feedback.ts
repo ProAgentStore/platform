@@ -64,16 +64,17 @@ feedbackRoutes.post("/", async (c) => {
 	return c.json({ ok: true, feedback: built.row }, 201);
 });
 
-/** My feedback, newest first. `?instance_id=` for one agent, `?status=` for triage. */
+/** My feedback, newest first. `?instance_id=` for one agent, `?status=` for triage, `?offset=` for paging. */
 feedbackRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
-	const rows = await listFeedback(c.env, {
+	const page = await listFeedback(c.env, {
 		userId: session.uid,
 		instanceId: c.req.query("instance_id") || undefined,
 		status: asStatus(c.req.query("status")),
-		limit: Number(c.req.query("limit")) || 100,
+		limit: Number(c.req.query("limit")) || 50,
+		offset: Number(c.req.query("offset")) || 0,
 	});
-	return c.json({ count: rows.length, feedback: rows });
+	return c.json({ count: page.total, has_more: page.hasMore, feedback: page.rows });
 });
 
 /** Triage: move the status, record the issue it became. The body is never editable — see lib. */
