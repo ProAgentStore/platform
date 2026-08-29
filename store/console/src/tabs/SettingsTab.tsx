@@ -58,6 +58,9 @@ interface WorkdriveStatus {
 
 export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, settingsSchema, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
+	// Owner-initiated personality resync (#496 AC2) — brings the DO's stored personality up to
+	// the agent's current seed without touching guardrails/goal/welcomeMessage.
+	const [resyncMsg, setResyncMsg] = useState("");
 	// Agent-declared settings: the schema prop is the fast path; the GET also returns
 	// `fields` so the form never depends on a stale instance-list cache.
 	const [agentFields, setAgentFields] = useState<SettingsField[]>(settingsSchema ?? []);
@@ -387,6 +390,18 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 			onUnsubscribe();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const resyncIdentity = async () => {
+		setResyncMsg("Syncing…");
+		try {
+			type ResyncResult = { personality?: string; changed?: boolean };
+			const d = await api<ResyncResult>(`/v1/instances/${instanceId}/resync-identity`, { method: "POST" });
+			setResyncMsg(d.changed ? "Updated — the agent's personality is now in sync with its template." : "Already in sync — nothing changed.");
+			setTimeout(() => setResyncMsg(""), 4000);
+		} catch (e) {
+			setResyncMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -725,6 +740,17 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, set
 						languages={trLanguages}
 					/>
 				)}
+			</Card>
+
+			{/* Personality resync (#496): brings the stored DO personality up to the agent's
+			    current seed. Safe: only personality is written — guardrails, goal, welcomeMessage
+			    and model are untouched. The button is useful when the creator has updated the
+			    agent's personality since this instance was subscribed. */}
+			<Card className="mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Maintenance</h3>
+				<p className="text-sm text-muted mb-2">Bring this instance's personality up to the agent's current template, without touching its guardrails, goal, or welcome message.</p>
+				<Button onClick={resyncIdentity}>Resync personality</Button>
+				{resyncMsg && <p className="text-xs text-muted mt-2">{resyncMsg}</p>}
 			</Card>
 
 			{/* Danger zone — the control names the instance it cancels, not the agent (#742). */}

@@ -18,6 +18,7 @@ import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
+import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
@@ -929,6 +930,8 @@ registerConnectorBindingRoutes(instanceRoutes);
 // Deployment / build status for any instance — the Operator counterpart to the Coder Build Status
 // panel (#488). Mounted from its own module to keep this file at its size pin.
 registerDeployStatusRoutes(instanceRoutes);
+// Owner-initiated seed-personality resync (#496 AC2). Mounted from its own module.
+registerIdentityResyncRoutes(instanceRoutes);
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {

@@ -159,7 +159,10 @@ const PINS = {
 	// the wrong commit to move eight routes in, and doing both at once would make the behaviour
 	// change unreviewable against the move.
 	"workers/api/src/routes/coding.ts": 810,
-	"workers/api/src/routes/instances.ts": 998,
+	// +2 for #496 AC2: the owner-initiated resync-identity route is mounted from a new sub-module
+	// (instances-identity.ts) to keep this file's size honest; the two new lines are the import
+	// and the register call. Raised rather than split: the whole change is a mount and an import.
+	"workers/api/src/routes/instances.ts": 1001,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -1469,7 +1472,7 @@ const PINS = {
 	// 800 because the dispatcher gained the fence — plus this line. The ratchet applied to itself:
 	// those comments ARE the record of why each number moved, so trimming them to stay under a
 	// number would delete the only thing that makes a pin auditable rather than arbitrary.
-	"scripts/check-file-size.mjs": 1554,
+	"scripts/check-file-size.mjs": 1556,
 };
 
 /**

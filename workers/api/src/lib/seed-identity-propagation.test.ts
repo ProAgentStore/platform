@@ -74,8 +74,11 @@ const PROPAGATION: Record<string, string> = {
 	// the CONNECTED TOOLS block. Only the second half reaches the two live tmux Operators, and it
 	// reaches them because the tool list resolves from the `agents` row every turn. The test below
 	// proves that rather than trusting it. There is no migration answer here and there cannot be:
-	// identity is DO state.
-	"0118_operator_interactive_cli_protocol.sql": "connector-tool-prompt.ts TERMINAL_CLI_PROTOCOL",
+	// identity is DO state. #496 AC2 adds a second route — `POST /resync-identity` — an
+	// owner-initiated call that reads the current seed personality and writes it to the instance DO.
+	// The automatic route (connector-tool-prompt.ts) is the one an owner need not think about; the
+	// resync route is what they reach for when they want the DO personality itself updated.
+	"0118_operator_interactive_cli_protocol.sql": "connector-tool-prompt.ts TERMINAL_CLI_PROTOCOL + POST /resync-identity (instances-identity.ts, #496)",
 	// #706: the Lead Outreach agent's `draft_outreach` definition existed ONLY as instance data, so
 	// the seed and its route ship in one file and the route is that file — the second statement
 	// writes `agent_instances`. It differs from 0130 in one deliberate way: it FILLS an instance

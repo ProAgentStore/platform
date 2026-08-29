@@ -6352,6 +6352,55 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ── Seed identity resync ─────────────────────────────────────────────────
+
+  /v1/instances/{instanceId}/resync-identity:
+    post:
+      summary: Resync this instance's personality from its agent template
+      description: |
+        Reads the seed personality from the agent template (the template DO when initialised
+        by a creator, otherwise `agents.config.identity.personality`) and writes it to this
+        instance's Durable Object — the same path the PUT `/state` takes, but with the source
+        value looked up from the template so the caller does not need to know what it says.
+
+        Only `personality` is written. The subscriber's `guardrails`, `goal`, `welcomeMessage`
+        and `model` are left unchanged. Safe to call even when already in sync; `changed: false`
+        means nothing was written.
+
+        `dry_run: true` returns what *would* be written without writing it. Use this to preview
+        the seed value before committing (#496).
+      operationId: resyncInstanceIdentity
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run:
+                  type: boolean
+                  description: When true, returns the seed personality without writing it.
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [personality, previous, changed]
+                properties:
+                  personality: { type: string, description: The seed personality (what was or would be written) }
+                  previous: { type: string, description: The personality the instance held before this call }
+                  changed: { type: boolean, description: Whether the personalities differed (and, unless dry_run, were updated) }
+                  dryRun: { type: boolean, description: Present and true when dry_run was requested }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Instance not found, or this agent has no seed personality
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ── Repo Chat ingestion ───────────────────────────────────────────────────
 
   /v1/instances/{instanceId}/ingest-repo:

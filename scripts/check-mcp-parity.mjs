@@ -239,6 +239,11 @@ const KNOWN_GAPS = [
 		match:
 			/^[A-Z]+ \/v1\/(dashboard\/(creator|usage)|stats\/sources|instances\/behaviour-schema|instances\/\{\}\/(messages\/\{\}|system-message|translate))$/,
 	},
+	{
+		why:
+			"Owner-initiated seed-personality resync (#496 AC2): `POST /resync-identity` reads the current seed personality from the agent template and writes it to the instance DO, without touching guardrails/goal/welcomeMessage. Console affordance: Settings → Maintenance. The raw route is callable over the API without an MCP tool; no named tool yet. #496.",
+		match: /^POST \/v1\/instances\/\{\}\/resync-identity$/,
+	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

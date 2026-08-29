@@ -65,6 +65,7 @@ import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
 import { CONNECTOR_CONSTRAINTS } from "../lib/surface-options.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
+import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { instanceRoutes } from "./instances.js";
 
 const SECRET = "instances-contract-secret";
@@ -259,6 +260,7 @@ const ROUTES = [
 	"GET /:instanceId/deploy-status",
 	"GET /:instanceId/deploy-history",
 	"PUT /:instanceId/deploy-status",
+	"POST /:instanceId/resync-identity",
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
@@ -331,6 +333,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
+	"instances-identity.ts": registerIdentityResyncRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
 };
@@ -407,6 +410,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/deploy-history",
 		"PUT /:instanceId/deploy-status",
 	],
+	"instances-identity.ts": ["POST /:instanceId/resync-identity"],
 	"instances-terminal.ts": [
 		"GET /:instanceId/terminal-target",
 		"PUT /:instanceId/terminal-target",
@@ -554,6 +558,9 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/deploy-status": [401, 404],
 	"GET /:instanceId/deploy-history": [401, 404],
 	"PUT /:instanceId/deploy-status": [401, 404],
+	// Owner-initiated seed-personality resync (#496 AC2). Owner-only: only the instance owner
+	// may pull an updated personality from the agent template into their instance DO.
+	"POST /:instanceId/resync-identity": [401, 404],
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],
