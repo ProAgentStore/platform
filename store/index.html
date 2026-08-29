@@ -241,6 +241,8 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
   <script>
     const API = 'https://api.proagentstore.online';
     let allAgents = [];
+    let catalogTotal = 0;   // real total from the server (#661)
+    let catalogHasMore = false;
     let currentType = 'all';
     let currentCategory = 'all';
     let searchQuery = '';
@@ -257,11 +259,27 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
       loadAgents();
     }
 
-    async function loadAgents() {
+    /**
+     * Load agents from the server.
+     *
+     * We request up to 500 per page (#661) — enough to serve the full catalogue in one
+     * shot for the foreseeable future while keeping the page coherent. `total` from the
+     * response is used for honest counts; `has_more` drives a "Load more" button so that
+     * the UI degrades gracefully if the catalogue ever grows past 500.
+     */
+    async function loadAgents(append = false) {
       try {
-        const res = await fetch(`${API}/v1/agents?sort=${currentSort}`);
+        const offset = append ? allAgents.length : 0;
+        const res = await fetch(`${API}/v1/agents?sort=${currentSort}&limit=500&offset=${offset}`);
         const data = await res.json();
-        allAgents = data.agents || [];
+        const page = data.agents || [];
+        if (append) {
+          allAgents = allAgents.concat(page);
+        } else {
+          allAgents = page;
+        }
+        catalogTotal = typeof data.total === 'number' ? data.total : allAgents.length;
+        catalogHasMore = !!data.has_more;
         renderFilters();
         renderAgents();
       } catch (e) {
@@ -332,6 +350,7 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
 
     function renderAgents() {
       let filtered = allAgents;
+      const hasActiveFilter = searchQuery || currentType !== 'all' || currentCategory !== 'all';
       if (searchQuery) filtered = filtered.filter(a =>
         (a.name || '').toLowerCase().includes(searchQuery) ||
         (a.description || '').toLowerCase().includes(searchQuery) ||
@@ -345,23 +364,28 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
       const count = document.getElementById('agent-count');
 
       grid.innerHTML = '';
-      count.textContent = `${filtered.length} agent${filtered.length !== 1 ? 's' : ''}`;
+      // When no filter is active, show the real server total so we never show a truncated
+      // count (e.g. “50 agents” when there are 300). When a filter IS active the count is
+      // the client-side match count, which is correct because we hold the full catalogue.
+      const displayCount = hasActiveFilter ? filtered.length : catalogTotal || allAgents.length;
+      count.textContent = `${displayCount} agent${displayCount !== 1 ? 's' : ''}`;
 
       const noMatch = document.getElementById('no-match-state');
       if (filtered.length === 0) {
         // Nothing published at all is a genuinely empty store. Nothing matching a filter
-        // is not — saying "be the first to publish" over a 14-agent catalog is the store
+        // is not — saying “be the first to publish” over a 14-agent catalog is the store
         // telling a first visitor it is empty.
-        const storeIsEmpty = allAgents.length === 0;
+        const storeIsEmpty = catalogTotal === 0 && allAgents.length === 0;
         empty.style.display = storeIsEmpty ? '' : 'none';
         noMatch.style.display = storeIsEmpty ? 'none' : '';
         if (!storeIsEmpty) {
           const bits = [];
-          if (searchQuery) bits.push(`“${searchQuery}”`);
+          if (searchQuery) bits.push(`”${searchQuery}”`);
           if (currentCategory !== 'all') bits.push(labelFor(currentCategory));
           if (currentType !== 'all') bits.push(labelFor(currentType));
+          const total = catalogTotal || allAgents.length;
           document.getElementById('no-match-detail').textContent =
-            `No agents match ${bits.join(' + ') || 'your current filters'}. The store has ${allAgents.length} published agent${allAgents.length !== 1 ? 's' : ''}.`;
+            `No agents match ${bits.join(' + ') || 'your current filters'}. The store has ${total} published agent${total !== 1 ? 's' : ''}.`;
         }
         return;
       }
@@ -377,19 +401,32 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
         const creatorLabel = displayName(a.creator_name || a.creator_login);
         const creatorHref = a.creator_login && !isEmail(a.creator_login) ? `/developers/${encodeURIComponent(a.creator_login)}/` : '';
         card.innerHTML = `
-          <div class="agent-icon" style="background:${esc(iconBg)}">${icon}</div>
-          <div class="agent-body">
-            <div class="agent-name">${esc(a.name)}</div>
-            <div class="agent-desc">${esc(a.description || 'No description')}</div>
-            <div class="agent-meta">
-              <span class="tag">${esc(a.store_type || 'agent')}</span>
-              <span class="tag">${esc(a.category)}</span>
-              ${a.subscriber_count > 0 ? `<span style="font-size:0.68rem;color:var(--muted-soft)">${a.subscriber_count} sub${a.subscriber_count !== 1 ? 's' : ''}</span>` : ''}
+          <div class=”agent-icon” style=”background:${esc(iconBg)}”>${icon}</div>
+          <div class=”agent-body”>
+            <div class=”agent-name”>${esc(a.name)}</div>
+            <div class=”agent-desc”>${esc(a.description || 'No description')}</div>
+            <div class=”agent-meta”>
+              <span class=”tag”>${esc(a.store_type || 'agent')}</span>
+              <span class=”tag”>${esc(a.category)}</span>
+              ${a.subscriber_count > 0 ? `<span style=”font-size:0.68rem;color:var(--muted-soft)”>${a.subscriber_count} sub${a.subscriber_count !== 1 ? 's' : ''}</span>` : ''}
               ${creatorLabel ? creatorByline(creatorLabel, creatorHref) : ''}
             </div>
           </div>
-          <span class="agent-cta">Get Agent</span>`;
+          <span class=”agent-cta”>Get Agent</span>`;
         grid.appendChild(card);
+      }
+
+      // Load-more: only visible when the full catalogue exceeds one page (500 agents).
+      // Filters/search already operate on the full in-memory set so no load-more is needed
+      // while a filter is active — the missing agents just wouldn't match anyway.
+      const loadMoreId = 'load-more-btn';
+      const existing = document.getElementById(loadMoreId);
+      if (existing) existing.remove();
+      if (catalogHasMore && !hasActiveFilter) {
+        const btn = document.createElement('div');
+        btn.style.cssText = 'text-align:center;margin-top:2rem';
+        btn.innerHTML = `<button id=”${loadMoreId}” type=”button” onclick=”loadAgents(true)” style=”background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;padding:0.6rem 2rem;color:var(--muted);font-size:0.85rem;cursor:pointer”>Load more (${catalogTotal - allAgents.length} remaining)</button>`;
+        grid.after(btn);
       }
     }
 

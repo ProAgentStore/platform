@@ -381,3 +381,93 @@ describe("PUT /v1/agents/:id/capabilities — the other door onto the same misma
 		expect((data.warnings ?? []).join(" ")).toContain("no runtime/workflow");
 	});
 });
+
+// ── #661: GET /v1/agents — pagination shape and honest totals ──────────────────
+
+/**
+ * Build a minimal Hono app wired to a catalogue stub.
+ *
+ * `totalInDb` — how many published agents exist in total.
+ * `pageRows` — the rows the page query would return (the caller sets `limit+1` probing).
+ */
+function catalogueApp(totalInDb: number, pageRows: Record<string, unknown>[]) {
+	const app = new Hono();
+	app.route("/v1/agents", agentRoutes);
+
+	const env = {
+		SESSION_SIGNING_KEY: TEST_SECRET,
+		DB: {
+			prepare(sql: string) {
+				// The route issues two queries in Promise.all: a SELECT … LIMIT page query and
+				// a SELECT COUNT(*) total query. We distinguish them by the presence of "COUNT".
+				if (sql.includes("COUNT(*)") && !sql.includes("agent_instances")) {
+					// COUNT query — returns the real total.
+					return { bind: () => ({ first: async () => ({ n: totalInDb }), all: async () => ({ results: [] }) }) };
+				}
+				// Page query — returns the probe rows.
+				return { bind: () => ({ all: async () => ({ results: pageRows }), first: async () => null }) };
+			},
+		},
+	};
+	return { app, env };
+}
+
+describe("GET /v1/agents — pagination (#661)", () => {
+	it("returns total and has_more:false when all agents fit in one page", async () => {
+		const rows = [{ id: "a1", slug: "alpha", name: "Alpha", description: "", category: "general", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "Creator", creator_avatar: null, subscriber_count: 0 }];
+		const { app, env } = catalogueApp(1, rows);
+		const res = await app.request("/v1/agents", {}, env);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ agents: unknown[]; total: number; has_more: boolean }>();
+		expect(data.agents).toHaveLength(1);
+		expect(data.total).toBe(1);
+		expect(data.has_more).toBe(false);
+	});
+
+	it("returns has_more:true and drops the probe row when there is a next page", async () => {
+		// Simulate limit=2 (default 50 → we send a request with limit=2) and 3 rows in DB.
+		// The route probes limit+1 rows (3) and detects has_more.
+		const rows = [
+			{ id: "a1", slug: "a1", name: "A1", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
+			{ id: "a2", slug: "a2", name: "A2", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
+			{ id: "a3", slug: "a3", name: "A3", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
+		];
+		const { app, env } = catalogueApp(3, rows); // probe returns 3 rows for limit=2
+		const res = await app.request("/v1/agents?limit=2", {}, env);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ agents: unknown[]; total: number; has_more: boolean }>();
+		// The probe row is dropped; only `limit` rows are returned.
+		expect(data.agents).toHaveLength(2);
+		expect(data.total).toBe(3);
+		expect(data.has_more).toBe(true);
+	});
+
+	it("clamps limit to 500 (hard ceiling)", async () => {
+		// A request for limit=9999 should behave like limit=500.
+		// We can only check that it doesn't crash and returns the standard shape.
+		const { app, env } = catalogueApp(2, [
+			{ id: "a1", slug: "a1", name: "A1", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
+		]);
+		const res = await app.request("/v1/agents?limit=9999", {}, env);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ agents: unknown[]; total: number; has_more: boolean }>();
+		// The one stub row was returned and the shape is complete.
+		expect(typeof data.total).toBe("number");
+		expect(typeof data.has_more).toBe("boolean");
+	});
+
+	it("total reflects the real DB count, not the page length", async () => {
+		// Simulate 300 total with only 50 returned (first page at default limit).
+		const rows = Array.from({ length: 51 }, (_, i) => ({
+			id: `a${i}`, slug: `a${i}`, name: `A${i}`, description: "", category: "g", store_type: "agent",
+			icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C",
+			creator_avatar: null, subscriber_count: 0,
+		}));
+		const { app, env } = catalogueApp(300, rows);
+		const res = await app.request("/v1/agents", {}, env); // default limit=50
+		const data = await res.json<{ agents: unknown[]; total: number; has_more: boolean }>();
+		expect(data.agents).toHaveLength(50); // probe row dropped
+		expect(data.total).toBe(300);         // from the COUNT query
+		expect(data.has_more).toBe(true);
+	});
+});

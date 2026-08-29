@@ -225,41 +225,54 @@ agentRoutes.post("/:id/deploy", async (c) => {
 	});
 });
 
-/** List all published agents (public). */
+/**
+ * List all published agents (public).
+ *
+ * Pagination: `?limit` (default 50, max 500) + `?offset` (default 0).
+ * Response always includes the real `total` across all pages and `has_more` so callers
+ * can show honest counts and render a "load more" control without a second request (#661).
+ *
+ * `limit+1` probe answers `has_more` in one query; the extra row is dropped.
+ * A parallel `COUNT(*)` returns the real total regardless of the current page.
+ */
 agentRoutes.get("/", async (c) => {
 	const category = c.req.query("category");
 	const sort = c.req.query("sort") || "newest"; // newest, popular, name
-	const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+	const limit = Math.max(1, Math.min(Number(c.req.query("limit")) || 50, 500));
+	const offset = Math.max(0, Number(c.req.query("offset")) || 0);
 
 	// `a.status` is deliberately NOT selected (#590). Nine seed migrations write `'active'` and no
 	// application code writes it at all, so the public catalogue was handing every caller a field
 	// whose only real content was "first-party or not": `status:"active"` for the nine seeded
 	// agents beside `status:"inactive"` for every agent a third-party creator could ever build.
 	// The store never rendered it; it was a structural distinction leaking through a SELECT list.
-	let sql = `SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model,
+	const baseWhere = category ? `a.visibility = 'published' AND a.category = ?1` : `a.visibility = 'published'`;
+	const baseParams: unknown[] = category ? [category] : [];
+
+	const orderBy =
+		sort === "popular" ? "ORDER BY subscriber_count DESC, a.created_at DESC" :
+		sort === "name" ? "ORDER BY a.name ASC" :
+		"ORDER BY a.created_at DESC";
+
+	// Probe one extra row to answer has_more without a second query.
+	const [pageRes, countRes] = await Promise.all([
+		c.env.DB.prepare(
+			`SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model,
                     CASE WHEN instr(COALESCE(u.github_login, ''), '@') = 0 THEN u.github_login ELSE NULL END as creator_login,
                     COALESCE(NULLIF(u.display_name, ''), NULLIF(u.github_name, ''), CASE WHEN instr(COALESCE(u.github_login, ''), '@') = 0 THEN u.github_login ELSE 'Creator' END) as creator_name,
                     u.avatar_url as creator_avatar,
                     (SELECT COUNT(*) FROM agent_instances WHERE agent_id = a.id AND status = 'active') as subscriber_count
              FROM agents a LEFT JOIN users u ON u.id = a.owner_id
-             WHERE a.visibility = 'published'`;
-	const params: unknown[] = [];
+             WHERE ${baseWhere} ${orderBy} LIMIT ${limit + 1} OFFSET ${offset}`,
+		).bind(...baseParams).all<AgentRow>(),
+		c.env.DB.prepare(
+			`SELECT COUNT(*) AS n FROM agents WHERE ${baseWhere}`,
+		).bind(...baseParams).first<{ n: number }>(),
+	]);
 
-	if (category) {
-		sql += ` AND a.category = ?${params.length + 1}`;
-		params.push(category);
-	}
-
-	if (sort === "popular") sql += " ORDER BY subscriber_count DESC, a.created_at DESC";
-	else if (sort === "name") sql += " ORDER BY a.name ASC";
-	else sql += " ORDER BY a.created_at DESC";
-
-	sql += ` LIMIT ?${params.length + 1}`;
-	params.push(limit);
-
-	const stmt = c.env.DB.prepare(sql);
-	const { results } = await stmt.bind(...params).all<AgentRow>();
-	return c.json({ agents: results });
+	const all = pageRes.results ?? [];
+	const hasMore = all.length > limit;
+	return c.json({ agents: hasMore ? all.slice(0, limit) : all, total: countRes?.n ?? 0, has_more: hasMore });
 });
 
 /** Get single agent. Public if published; owners can see their own drafts. */
