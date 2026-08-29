@@ -421,6 +421,8 @@ export class AgentDO extends DurableObject<Env> {
 			agentName?: string;
 			audioKey?: string;
 			dictation?: string;
+			/** The recognizer substituted or truncated what was heard live (#626). */
+			suspect?: boolean;
 			/** Set when a supervisor's durable loop is driving this turn (#183/#184/#185). */
 			budgetId?: string | null;
 			onBehalfOf?: string | null;
@@ -476,6 +478,9 @@ export class AgentDO extends DurableObject<Env> {
 			// cleared chat cannot leave a dictation behind. Capped like any client-supplied
 			// string; it is NEVER read back into the model's context, only shown to the user.
 			...(typeof body.dictation === "string" && body.dictation.trim() ? { dictation: body.dictation.slice(0, 4000) } : {}),
+			// The recognizer substituted or truncated what was heard live (#626). Stored so
+			// the message history endpoint can return it alongside the transcript.
+			...(body.suspect === true ? { suspect: true } : {}),
 			// The turn id the caller minted (#514), so this message can be joined to the
 			// `chat.in`/`tool.call`/`chat.out`/`chat.truncated` events that describe the same turn.
 			...(delegation?.traceId ? { traceId: delegation.traceId } : {}),

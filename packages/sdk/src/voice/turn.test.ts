@@ -275,6 +275,54 @@ describe("planSend", () => {
 	it("changes nothing when no vocabulary is configured", () => {
 		expect(planSend("run the tests", base)).toMatchObject({ text: "run the tests", corrections: [] });
 	});
+
+	// #626 — a phantom transcript with heard ≠ final must be marked suspect, not dropped.
+	describe("suspect marking", () => {
+		it("marks a turn suspect when the final transcript diverged in volume (dictationDiverged)", () => {
+			// "Pepega" vs "Kodex bless" — a short utterance where no word overlaps.
+			const plan = planSend("Pepega", { ...base, heard: "Kodex bless" });
+			expect(plan).toMatchObject({ action: "send", suspect: true });
+		});
+
+		it("marks a turn suspect when the final lost a tail of four or more words (lostTail >= LOST_TAIL_WORDS)", () => {
+			// The final has the opening clause; heard had four more words at the end.
+			const plan = planSend("run the tests", {
+				...base,
+				heard: "run the tests and then file issues about them",
+			});
+			expect(plan).toMatchObject({ action: "send", suspect: true });
+		});
+
+		it("does NOT mark a turn suspect when the two readings agree", () => {
+			const plan = planSend("run the tests", { ...base, heard: "run the tests" });
+			expect(plan).toMatchObject({ action: "send" });
+			expect(plan.action === "send" && plan.suspect).toBeFalsy();
+		});
+
+		it("does NOT mark a turn suspect when there was no live capture", () => {
+			// Browser dictation on iOS: no gate, no heard string.
+			const plan = planSend("run the tests", { ...base, heard: "" });
+			expect(plan.action === "send" && plan.suspect).toBeFalsy();
+		});
+
+		it("does NOT mark a turn suspect for minor disagreements below the thresholds", () => {
+			// "colour" vs "color" — a spelling variant, not a replacement.
+			const plan = planSend("change the colour", { ...base, heard: "change the color" });
+			expect(plan.action === "send" && plan.suspect).toBeFalsy();
+		});
+
+		it("still sends the turn even when suspect — never drops it (#512)", () => {
+			const plan = planSend("Pepega", { ...base, heard: "Kodex bless" });
+			expect(plan.action).toBe("send");
+		});
+
+		it("does not set suspect on a dropped turn (noise)", () => {
+			// A noise turn is dropped before the divergence check — no suspect on a drop.
+			const plan = planSend("Thank you.", { ...base, heard: "Thank you" });
+			expect(plan.action).toBe("drop");
+			// `suspect` only exists on the `send` action shape, so checking for "drop" is sufficient.
+		});
+	});
 });
 
 describe("planNoiseRejection", () => {

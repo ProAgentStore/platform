@@ -210,7 +210,7 @@ function InstancePage() {
 	const instanceNameRef = useRef("");
 
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
-	const doSendRef = useRef<(text: string, meta?: { audioKey?: string; dictation?: string }) => void>(() => {});
+	const doSendRef = useRef<(text: string, meta?: { audioKey?: string; dictation?: string; suspect?: boolean }) => void>(() => {});
 	/** "scrap that" (#342). Same indirection as `voiceRef` below and for the same reason: the
 	 *  handler needs the thread and the delete callback, both defined further down. */
 	const scrapRef = useRef<() => void>(() => {});
@@ -612,10 +612,10 @@ function InstancePage() {
 		}
 	}, [id, emitSystemChat]);
 
-	const doSend = useCallback(async (msg: string, meta?: { audioKey?: string; dictation?: string }) => {
+	const doSend = useCallback(async (msg: string, meta?: { audioKey?: string; dictation?: string; suspect?: boolean }) => {
 		if (!msg.trim() || !id) return;
-		const { audioKey, dictation } = meta ?? {};
-		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString(), audioKey, dictation }]);
+		const { audioKey, dictation, suspect } = meta ?? {};
+		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString(), audioKey, dictation, suspect }]);
 		setThinking(true);
 		// #279: the destination an agent resolved when the user asked to be handed over. It rides
 		// on THIS response and nowhere else — no poll reads it, no socket carries it — which is
@@ -625,7 +625,7 @@ function InstancePage() {
 		try {
 			const data = await api<{ message?: Message; toolMessage?: Message; transfer?: unknown }>(
 				`/v1/instances/${id}/chat`,
-				{ method: "POST", body: JSON.stringify({ message: msg, audioKey, dictation }) },
+				{ method: "POST", body: JSON.stringify({ message: msg, audioKey, dictation, ...(suspect ? { suspect: true } : {}) }) },
 			);
 			transfer = parseChatTransfer(data);
 			if (data.toolMessage) {
@@ -1155,6 +1155,12 @@ function InstancePage() {
 										{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span data-msg-stamp title={stampTitle(m.createdAt, timeZone)} className="font-normal opacity-80 text-right">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span data-msg-stamp title={stampTitle(m.createdAt, timeZone)} className="font-normal text-muted text-right">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.fabricated && <FabricatedNotice />}
+										{m.suspect && m.role === "user" && (
+											<div className="text-2xs text-warning font-bold mb-1 flex items-start gap-1">
+												<span aria-hidden="true">⚠</span>
+												<span>Transcript may differ from what was said — the live recogniser replaced words before sending.</span>
+											</div>
+										)}
 										{m.role === "assistant" ? (
 											<GlossedMessage
 												message={m}

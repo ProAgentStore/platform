@@ -15,6 +15,11 @@ export interface AgentMessage {
 	 *  the message is also what gives it the transcript's retention for free: clearing the chat
 	 *  deletes the record, and the dictation with it. Absent for typed turns. */
 	dictation?: string;
+	/** The platform observed the live recognizer replacing or truncating what was heard before
+	 *  the final transcript was delivered (#626). The message is still sent — nothing dropped —
+	 *  but the agent is told the transcript may not match what was said so it can ask rather than
+	 *  act on a substitution the user never made. Absent on non-suspect turns (the common case). */
+	suspect?: boolean;
 	/** The turn this message belongs to, matching `agent_events.trace_id` for the same turn (#514).
 	 *  Stamped on the user message and the assistant reply by the caller that minted the id — the
 	 *  console chat route and the Loop both do. Before this the ONLY join between a transcript and

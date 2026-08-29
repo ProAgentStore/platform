@@ -47,7 +47,7 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			.first<InstanceRow>();
 		if (!instance) throw new HttpError(404, "Instance not found");
 
-		const { message, audioKey, dictation, origin } = await c.req.json<{ message: string; audioKey?: string; dictation?: string; origin?: string }>();
+		const { message, audioKey, dictation, suspect, origin } = await c.req.json<{ message: string; audioKey?: string; dictation?: string; suspect?: boolean; origin?: string }>();
 		if (!message) throw new HttpError(400, "message required");
 
 		// Where the turn came FROM, recorded on the trace so an MCP-driven turn is
@@ -88,6 +88,7 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 					message, channel: "chat", userId: session.uid,
 					agentId: instanceId, agentName: agentMeta?.name || "Agent",
 					audioKey, dictation, traceId: turnId,
+					...(suspect === true ? { suspect: true } : {}),
 				}),
 			}),
 		);

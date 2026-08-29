@@ -160,6 +160,9 @@ export interface Message {
 	/** What the live recognizer heard at end-of-turn, when it differs from `content` (#319).
 	 *  Present only on voice turns where there is a second reading worth comparing. */
 	dictation?: string;
+	/** The platform observed the recognizer replacing or truncating what was heard live (#626).
+	 *  The message is still delivered, but the agent is told the transcript may be suspect. */
+	suspect?: boolean;
 	/** The turn this message belongs to, matching `agent_events.trace_id` (#514). Absent on
 	 *  messages written before it existed and on the WebSocket chat path, which mints no turn id —
 	 *  feedback captured on one of those keeps its snapshot and simply offers no trace link. */

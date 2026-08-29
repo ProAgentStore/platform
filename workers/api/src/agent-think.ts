@@ -764,6 +764,18 @@ export async function runAgentThink(opts: {
 		}
 	}
 
+	// Mark suspect voice turns (#626): the platform observed the recognizer replacing or
+	// truncating what was heard live. The transcript is still sent (nothing dropped, #512's
+	// reasoning intact), but the agent is told so it can ask rather than act on a substitution
+	// the user never made. Request-only — never stored, same as the translation note above.
+	const currentTurn = messages[messages.length - 1];
+	if (currentTurn?.suspect && aiMessages.length > 1) {
+		const last = aiMessages[aiMessages.length - 1];
+		if (last.role === "user" && typeof last.content === "string") {
+			last.content += "\n\n[Platform note: this transcript was flagged as potentially inaccurate — the voice recognizer substituted or truncated words before delivering it. If the intent is unclear, ask the user to confirm or rephrase rather than acting on an assumption.]";
+		}
+	}
+
 	/**
 	 * EVERY chat completion in this function goes through here (#397).
 	 *

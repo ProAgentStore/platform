@@ -305,7 +305,7 @@ const PINS = {
 	// reason this is not a one-liner, and it has nowhere else to live: `speak` already carried the
 	// guard, `speakAndResume` did not need one until something could interrupt it, and a mic opened
 	// during playback is the self-transcription loop every pause in this file exists to prevent.
-	"packages/sdk/src/voice/use-voice.ts": 2046,
+	"packages/sdk/src/voice/use-voice.ts": 2049,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -495,7 +495,7 @@ const PINS = {
 	// resume behind it is gated on byte equality with that exact string. The prose has to say why it
 	// only fills an EMPTY box and why re-speaking is not a substitute, or the next reader deletes it
 	// as a stray restore.
-	"store/console/src/pages/InstanceDetail.tsx": 1490,
+	"store/console/src/pages/InstanceDetail.tsx": 1495,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -807,7 +807,7 @@ const PINS = {
 	// with the exact type `addRepo` accepts rather than widening it at the seam. Signed rather than
 	// dodged — `Parameters<typeof addRepo>[2]["auth"]` would have bought the number by making the
 	// line harder to read, which is the opposite of what this ratchet is for.
-	"workers/api/src/agent-do.ts": 1253,
+	"workers/api/src/agent-do.ts": 1258,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -1009,7 +1009,7 @@ const PINS = {
 	// lib/events.ts's `logToolFailure` and NOT here: why one row per FAILURE rather than per tool
 	// (this table has no retention cron), why `warn` rather than `error`, and why its message keeps
 	// the 600 characters #517 preserved instead of the 200 the summary row cuts to.
-	"workers/api/src/agent-think.ts": 1195,
+	"workers/api/src/agent-think.ts": 1207,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -1473,7 +1473,11 @@ const PINS = {
 	// those comments ARE the record of why each number moved, so trimming them to stay under a
 	// number would delete the only thing that makes a pin auditable rather than arbitrary.
 	// +7 at #618: handleGetMemory annotates each entry with injected:boolean via selectMemoryForPrompt (1 import + 5 impl + 1 note).
-	"scripts/check-file-size.mjs": 1557,
+	// +25 at #626: four raises (use-voice, InstanceDetail, agent-do, agent-think) for the suspect-transcript
+	// marking — the signal the durable log already records now becomes data on the message so the agent can ask
+	// rather than act. The agent-think raise is the largest (+12) because it injects a per-turn platform note;
+	// the others carry the field through the stack. Plus this note.
+	"scripts/check-file-size.mjs": 1562,
 };
 
 /**

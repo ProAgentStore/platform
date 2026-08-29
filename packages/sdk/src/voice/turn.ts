@@ -20,7 +20,7 @@
 
 import { isNoiseTranscript, isRepetitionLoop } from "./audio.js";
 import { commandStateFor, matchVoiceCommand, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
-import { gateEvidence, type GateEvidence, speechVerdict, storedDictation } from "./machine.js";
+import { dictationDiverged, gateEvidence, lostTail, LOST_TAIL_WORDS, type GateEvidence, speechVerdict, storedDictation } from "./machine.js";
 import { applyVocabulary, type VocabularyCorrection } from "./vocabulary.js";
 
 /**
@@ -251,6 +251,14 @@ export type SendPlan =
 			/** Words the vocabulary pass rewrote (#373), so the caller can show them. Empty when
 			 *  nothing was touched, which is the overwhelmingly common case. */
 			corrections: VocabularyCorrection[];
+			/**
+			 * The platform observed the recognizer replacing or truncating what was heard live (#626).
+			 * The transcript is delivered — nothing is dropped, #512's reasoning still holds — but the
+			 * agent is told the transcript may not match what was said, so it can ask rather than act on
+			 * a substitution that was never the user's intent. Derived from the same `heard ≠ final`
+			 * signal the durable log already records.
+			 */
+			suspect?: boolean;
 	  };
 
 /**
@@ -301,12 +309,20 @@ export function planSend(
 	if (isRepetitionLoop(text)) return { action: "drop", reason: "repetition" };
 	if (cfg.confirmLanguage && transcriptLanguageMismatch(text, cfg.lang)) return { action: "drop", reason: "language" };
 	const fixed = applyVocabulary(text, cfg.vocabulary || []);
+	// The platform already logs when heard ≠ final with a lost tail or a diverged volume (#512).
+	// Here the same signal becomes data on the message itself (#626): the transcript is still
+	// delivered (nothing dropped, #512's reasoning intact) but marked so the agent can ask rather
+	// than act on a substitution the user never made. `suspect` is deliberately absent when false —
+	// the overwhelmingly common case — so it carries no overhead on ordinary turns.
+	const tail = cfg.heard ? lostTail(cfg.heard, text) : 0;
+	const suspect = cfg.heard ? (tail >= LOST_TAIL_WORDS || dictationDiverged(cfg.heard, text)) : false;
 	return {
 		action: "send",
 		text: fixed.text,
 		dictation: storedDictation(cfg.heard, fixed.text) ?? undefined,
 		attachAudio: cfg.audioBytes > 0 && !!cfg.instanceId,
 		corrections: fixed.corrections,
+		...(suspect ? { suspect: true } : {}),
 	};
 }
 

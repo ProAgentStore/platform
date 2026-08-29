@@ -96,8 +96,10 @@ export type { VoiceMode };
 export function useVoice(instanceId: string | undefined, opts: {
 	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved;
 	 *  `meta.dictation` is what the live recognizer heard, when that differs from the
-	 *  transcript (#319) — persist it beside the message so the two can be compared. */
-	onSend: (text: string, meta?: { audioKey?: string; dictation?: string }) => void;
+	 *  transcript (#319) — persist it beside the message so the two can be compared.
+	 *  `meta.suspect` is set when the platform observed the recognizer replacing or truncating
+	 *  what was heard live (#626) — the agent is told the transcript may not match what was said. */
+	onSend: (text: string, meta?: { audioKey?: string; dictation?: string; suspect?: boolean }) => void;
 	/**
 	 * A turn the user really spoke, transcribed too late to send (#175) — the agent replied (or
 	 * the mode changed) while they were still talking. Hand it back instead of dropping it: put
@@ -596,13 +598,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 		}
 		if (plan.attachAudio && blob && instanceId) {
 			const turnId = crypto.randomUUID();
-			onSendRef.current(plan.text, { audioKey: turnId, dictation: plan.dictation });
+			onSendRef.current(plan.text, { audioKey: turnId, dictation: plan.dictation, ...(plan.suspect ? { suspect: true } : {}) });
 			void uploadVoiceAudio(instanceId, turnId, blob);
 		} else {
 			// No saved audio (browser dictation, an empty clip, or no instance) — send the raw text.
 			// NOTE: must be onSendRef, NOT emitSendRef — the latter is THIS function and
 			// would recurse forever (stack overflow) on every dictation send.
-			onSendRef.current(plan.text, plan.dictation ? { dictation: plan.dictation } : undefined);
+			const meta = plan.dictation || plan.suspect ? { dictation: plan.dictation, ...(plan.suspect ? { suspect: true } : {}) } : undefined;
+			onSendRef.current(plan.text, meta);
 		}
 		return { sent: true };
 	};
