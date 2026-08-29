@@ -278,6 +278,21 @@ describe("unmeteredUsageSummary", () => {
 		expect(s.aiCliDrives).toBe(2);
 	});
 
+	it("counts terminal-days, not invocations — a pane driven all day is one drive (#659)", async () => {
+		// `drives` is a COUNT(*) over the `agent_events` table where each row's id is
+		// `unmeteredRowId(instanceId, day, target, aiCli)` — coarse by design, deduplicated via
+		// INSERT … ON CONFLICT DO NOTHING. The Usage page MUST label this "terminal-days" and
+		// explain the dedup, not call it a count of drives, which understates the gap.
+		//
+		// The DB stub here returns 1 regardless of how many `terminal_send_keys` calls happened,
+		// which is the same result the real DB gives after dedup: one pane driven for a full day
+		// produces exactly one row. The label "drives" without this qualification is the bug #659 fixes.
+		const { env } = fakeDb({ drives: 1, instances: 1, last_at: Date.now(), ai_drives: 1 });
+		const s = await unmeteredUsageSummary(env, "u1", { rangeDays: 1 });
+		expect(s.drives).toBe(1); // one terminal-day, regardless of how many sends occurred
+		expect(s.aiCliDrives).toBe(1);
+	});
+
 	it("keeps a shorter requested range", async () => {
 		const { env } = fakeDb({ drives: 0, instances: 0, last_at: null, ai_drives: 0 });
 		expect((await unmeteredUsageSummary(env, "u1", { rangeDays: 7 })).windowDays).toBe(7);

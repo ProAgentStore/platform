@@ -528,10 +528,10 @@ function Scope({ unmetered }: { unmetered?: UnmeteredUsageSummary }) {
 							<>
 								{" "}
 								<b className="text-ink">
-									{drives.toLocaleString()} such {drives === 1 ? "drive" : "drives"}
+									{drives.toLocaleString()} such {drives === 1 ? "terminal-day" : "terminal-days"}
 								</b>{" "}
 								{drives === 1 ? "was" : "were"} recorded in the last {unmetered?.windowDays ?? 14} days
-								{(unmetered?.aiCliDrives ?? 0) > 0 && <> — {unmetered?.aiCliDrives} with an AI coding CLI running in the pane</>}.
+								(each counted once per terminal per day, so a pane driven all day is one){(unmetered?.aiCliDrives ?? 0) > 0 && <> — {unmetered?.aiCliDrives} with an AI coding CLI running in the pane</>}.
 							</>
 						)}
 					</li>
@@ -571,9 +571,10 @@ function UnmeteredNotice({ unmetered }: { unmetered?: UnmeteredUsageSummary }) {
 			<AlertTriangle size={15} className="text-accent shrink-0 mt-0.5" />
 			<div>
 				<b>This total is incomplete.</b>{" "}
-				{drives.toLocaleString()} {drives === 1 ? "drive" : "drives"} through a terminal
+				{drives.toLocaleString()} {drives === 1 ? "terminal-day" : "terminal-days"} through a terminal
 				{aiCliDrives > 0 && <> ({aiCliDrives} with an AI coding CLI running)</>} in the last {windowDays} days
 				could not be measured — a pane returns rendered text, not the CLI’s usage record.
+				Each terminal-day is one terminal on one day; a pane driven continuously all day counts as one.
 				<div className="text-xs text-muted-soft mt-0.5">
 					Their real cost is unknown, not zero. No estimate is shown because there is nothing honest to estimate from.
 				</div>
