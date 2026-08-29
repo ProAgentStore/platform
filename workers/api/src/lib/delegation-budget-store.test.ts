@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS } from "./delegation-budget.js";
 import {
-	closeBudget,
 	DAILY_CEILING_MICROS,
 	DAILY_TOKEN_CEILING,
 	openBudget,
@@ -126,20 +125,17 @@ describe("reserve — the atomic draw", () => {
 		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).reason).toBe("not_found");
 	});
 
-	it("refuses to draw against a closed pool", async () => {
-		const { env } = buildEnv({ changes: 0, row: openRow({ status: "closed", cost_micros_spent: 0 }) });
-		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).reason).toBe("closed");
-	});
-
 	/**
 	 * #594 — the refusal named a state the system cannot enter.
 	 *
-	 * `closeBudget` is the only writer of `'closed'` and has no production caller, so EVERY user
-	 * who has ever seen "This run's budget is already closed" had an EXHAUSTED budget. Two
-	 * different facts with two different remedies, reported as one, and the one reported is the
-	 * one that cannot happen.
+	 * `closeBudget` was the only writer of `'closed'` and had no production caller. It is now
+	 * deleted (#594 AC4). An EXHAUSTED pool is the only non-open state a real row can reach.
+	 *
+	 * These tests cover the exhausted-pool path; the old `status: "closed"` tests are removed
+	 * because `toView` now maps unknown status values to `"open"` and `BudgetView.status` no
+	 * longer includes `"closed"` — the dead-vocabulary decision is recorded in `status-domain.ts`.
 	 */
-	describe("an exhausted pool is not told it was closed (#594)", () => {
+	describe("an exhausted pool is refused with the right message (#594)", () => {
 		const refuse = (over: Record<string, unknown>) =>
 			reserve(buildEnv({ changes: 0, row: openRow({ status: "exhausted", cost_micros_spent: 0, ...over }) }).env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
 
@@ -170,11 +166,6 @@ describe("reserve — the atomic draw", () => {
 			// not call markExhausted", which is right for an exhausted pool too. The message is for
 			// the human; the reason is control flow, and splitting it would change their branches.
 			expect((await refuse({ exhausted_reason: "cost_exhausted", exhausted_at_depth: 1 })).reason).toBe("closed");
-		});
-
-		it("still says CLOSED for a genuinely closed pool", async () => {
-			const { env } = buildEnv({ changes: 0, row: openRow({ status: "closed", cost_micros_spent: 0 }) });
-			expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).message).toMatch(/closed/);
 		});
 	});
 
@@ -236,25 +227,14 @@ describe("raiseBudget — the one place a budget goes UP", () => {
 		expect(sql).toContain("exhausted_reason = NULL");
 	});
 
-	it("will not resurrect a closed tree", async () => {
-		const { env, writes } = buildEnv({ changes: 1 });
-		await raiseBudget(env, "u1", "b1", 1);
-		expect(writes[0].sql).toContain("status != 'closed'");
-	});
-
 	it("reports false when nothing was raised", async () => {
 		const { env } = buildEnv({ changes: 0 });
 		expect(await raiseBudget(env, "u1", "b1", 1)).toBe(false);
 	});
 });
 
-describe("closeBudget", () => {
-	it("stops late work drawing against a finished tree", async () => {
-		const { env, writes } = buildEnv();
-		await closeBudget(env, "u1", "b1");
-		expect(writes[0].sql).toContain("status = 'closed'");
-	});
-});
+// `closeBudget` has been deleted (#594 AC4): it was dead vocabulary with no production caller.
+// Its test is deleted with it. The decision is recorded in `status-domain.ts`.
 
 /** Env with an ai_usage history, for the derived-default path. */
 function envWithHistory(costs: number[]) {

@@ -237,7 +237,24 @@ export const STATUS_DOMAINS: Record<string, StatusDomain> = {
 		values: { received: "app", running: "app", succeeded: "app", failed: "app" },
 	},
 	"delegation_budgets.status": {
-		values: { open: "app", exhausted: "app", closed: "app" },
+		values: { open: "app", exhausted: "app", closed: "none" },
+		note:
+			"'closed' was always dead vocabulary (#594 AC4). `closeBudget` was the only writer and had " +
+			"no production caller from the day it was written (2026-07), so no row has ever held this " +
+			"value. The migration 0061 schema comment names it (shipped history, not editable), which " +
+			"is why this entry keeps `closed` rather than removing it — the scanner would otherwise " +
+			"report a schema-declared value absent from STATUS_DOMAINS. The function is deleted; " +
+			"`BudgetView.status` and `raiseBudget`'s WHERE clause no longer reference it.",
+		decisions: {
+			closed:
+				"DEAD VOCABULARY, deleted (#594 AC4). `closeBudget` was the only writer and had no " +
+				"production caller; the status-domain scanner found it as a literal in that function's " +
+				"SQL, which is why `closed` was marked `app` instead of `none` — the literal existed, " +
+				"but the function that held it was never called. Deleting the function removes the " +
+				"literal and makes the marking accurate. A `closeBudget` will be re-added when a " +
+				"delegation-tree lifecycle hook exists (nothing today knows when a tree is finished). " +
+				"Until then, `'closed'` is a schema comment word with no meaning in the application.",
+		},
 	},
 };
 

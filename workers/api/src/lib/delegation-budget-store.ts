@@ -42,7 +42,10 @@ interface BudgetRow {
 export interface BudgetView extends BudgetState {
 	id: string;
 	rootInstanceId: string;
-	status: "open" | "exhausted" | "closed";
+	// `'closed'` is omitted: `closeBudget` was the only writer and it has no production caller,
+	// so no row has ever held this value. The schema comment in migration 0061 still names it
+	// (shipped history, not editable) and `status-domain.ts` records it as dead vocabulary (#594).
+	status: "open" | "exhausted";
 	exhaustedReason: AdmissionRefusal | null;
 	exhaustedAtDepth: number | null;
 	createdAt: string;
@@ -59,7 +62,7 @@ function toView(row: BudgetRow): BudgetView {
 		delegationsLimit: row.delegations_limit,
 		delegationsUsed: row.delegations_used,
 		maxDepth: row.max_depth,
-		status: (row.status === "exhausted" || row.status === "closed" ? row.status : "open"),
+		status: (row.status === "exhausted" ? "exhausted" : "open"),
 		exhaustedReason: (row.exhausted_reason as AdmissionRefusal | null) ?? null,
 		exhaustedAtDepth: row.exhausted_at_depth,
 		createdAt: row.created_at,
@@ -356,26 +359,20 @@ export async function reserve(
 	// The message names the state the pool is ACTUALLY in; the reason code deliberately does not
 	// (#594).
 	//
-	// This line said "This run's budget is already closed" for both states, and it is only ever
-	// reached in ONE of them: `closed` has no production writer at all (see `closeBudget`), so
-	// every user who has ever seen that sentence had an EXHAUSTED budget. The two are different
-	// facts with different remedies — exhausted means a limit was reached and the work is intact,
-	// closed means the tree is over — and telling someone their pool is "closed" when it is
-	// exhausted sends them looking for the thing that closed it.
+	// Before #594 AC3 this line said "This run's budget is already closed" for all non-open states,
+	// and the only non-open state a real pool can reach is `exhausted` — `closed` has no production
+	// writer (see the deleted `closeBudget` below and `status-domain.ts`). So every user who ever
+	// saw that sentence had an EXHAUSTED budget.
 	//
-	// The REASON stays `closed` for both, and that is not laziness: `workflows/agent-loop.ts:113`
-	// and `coding-decide-budget.ts:38` both read it as "do not call markExhausted", which is
-	// correct for either state — one is already exhausted, the other is finished. The reason code
-	// is control flow for two callers; the message is what a human reads. Splitting the reason to
-	// improve a sentence would change a branch in two workflows to say something neither of them
-	// asks.
+	// The REASON stays `closed`, and that is not laziness: `workflows/agent-loop.ts:113` and
+	// `coding-decide-budget.ts:38` both read it as "do not call markExhausted", which is correct
+	// for an exhausted pool too. The reason code is control flow for two callers; the message is
+	// what a human reads.
 	if (current.status !== "open") {
-		const why =
-			current.status === "exhausted"
-				? `This run's delegation budget is EXHAUSTED — it reached its ${current.exhaustedReason === "delegations_exhausted" ? "limit on the number of delegations" : current.exhaustedReason === "too_deep" ? "maximum delegation depth" : "spend limit"}${
-						current.exhaustedAtDepth === null ? "" : ` at depth ${current.exhaustedAtDepth}`
-					}. Work already done is intact; nothing new can draw on this pool. There is no self-service way to raise it — ask your platform operator.`
-				: "This run's delegation budget has been closed, so no further work can draw on it.";
+		// `status` is now `"open" | "exhausted"` — this branch is reached only when exhausted.
+		const why = `This run's delegation budget is EXHAUSTED — it reached its ${current.exhaustedReason === "delegations_exhausted" ? "limit on the number of delegations" : current.exhaustedReason === "too_deep" ? "maximum delegation depth" : "spend limit"}${
+			current.exhaustedAtDepth === null ? "" : ` at depth ${current.exhaustedAtDepth}`
+		}. Work already done is intact; nothing new can draw on this pool. There is no self-service way to raise it — ask your platform operator.`;
 		return { ok: false, reason: "closed", message: why };
 	}
 	const verdict = canAdmit(current, opts);
@@ -461,6 +458,11 @@ export async function markExhausted(
  * implementation of an action nobody can take. Kept rather than deleted because the *rule* is the
  * valuable part and re-deriving it later is how an agent ends up raising its own ceiling — but
  * `markExhausted` no longer promises it, and `reserve`'s refusal no longer implies it.
+ *
+ * The WHERE clause no longer guards `status != 'closed'` because `closed` is dead vocabulary: the
+ * only writer (`closeBudget`) has been removed, so the guard could never matter. The meaningful
+ * constraint is that only an OPEN or EXHAUSTED budget can be raised; a truly finished tree would
+ * need a lifecycle hook that does not exist yet (#594 AC4).
  */
 export async function raiseBudget(
 	env: Env,
@@ -475,30 +477,22 @@ export async function raiseBudget(
 		        delegations_limit = delegations_limit + ?4,
 		        status = 'open', exhausted_reason = NULL, exhausted_at_depth = NULL,
 		        updated_at = datetime('now')
-		  WHERE id = ?1 AND user_id = ?2 AND status != 'closed'`,
+		  WHERE id = ?1 AND user_id = ?2`,
 	)
 		.bind(budgetId, userId, Math.max(0, Math.floor(extraCostMicros)), Math.max(0, Math.floor(extraDelegations)))
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }
 
-/**
- * Close a finished tree so late work cannot draw against it.
- *
- * NO PRODUCTION CALLER TODAY, which makes `'closed'` a state the system cannot enter (#594) —
- * every budget stays `open` or ends `exhausted`. That is why `reserve`'s refusal above branches on
- * the status rather than naming one: the only sentence a user has ever seen from that branch
- * described the state this function writes, and this function has never run.
- *
- * The gap is a lifecycle hook, not a line: nothing today knows when a delegation TREE is finished
- * — a root run ending does not mean a sibling delegation is not still drawing — so closing on the
- * first terminal run would refuse legitimate work. Left unwired deliberately, and said out loud
- * here so the next reader does not take `'closed'` for a state they can observe.
- */
-export async function closeBudget(env: Env, userId: string, budgetId: string): Promise<void> {
-	await env.DB.prepare(
-		"UPDATE delegation_budgets SET status = 'closed', updated_at = datetime('now') WHERE id = ?1 AND user_id = ?2",
-	)
-		.bind(budgetId, userId)
-		.run();
-}
+// `closeBudget` was the only writer of `delegation_budgets.status = 'closed'`, and it had no
+// production caller, so `'closed'` was dead vocabulary (#594 AC4). The function is deleted:
+//   • `status-domain.ts` records `closed` as `"none"` (dead vocabulary) with a decision.
+//   • `BudgetView.status` no longer includes `"closed"`.
+//   • `raiseBudget`'s WHERE no longer guards `status != 'closed'`.
+//   • The schema comment in migration 0061 still names `closed` (shipped history), which is why
+//     the status-domain entry retains the value rather than deleting it.
+//
+// A `closeBudget` WILL be re-added when a delegation-tree lifecycle hook exists — nothing today
+// knows when a tree is finished because a root run ending does not mean a sibling delegation is not
+// still drawing, so closing on the first terminal run would refuse legitimate work. That is a
+// design decision, not a missing line (#594 AC2 + AC4 reasoning).
