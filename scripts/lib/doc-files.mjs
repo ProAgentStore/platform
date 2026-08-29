@@ -20,6 +20,16 @@
  * introduced it: there was never an instant at which it agreed with the code, so a sweep would
  * have caught it on its first day.
  *
+ * ── What `skills/` and `plugins/` being absent costs (#741)
+ *
+ * The operator skill (`skills/proagentstore-mcp-operator/SKILL.md`) is the canonical artefact
+ * installed into MCP clients (Codex, Claude Code). It was last touched 2026-08-06 while the MCP
+ * server published seven versions since — listing 33 of 145 tools and never mentioning the
+ * `confirm` gate that six of those tools require. Nothing read it. Adding it here puts it under
+ * checks 5, 6, 6b, 6c and 7 — the tool-table parity check, the "N tools" claims, and the
+ * confirm-gate check. Its own floor is separate from the totals so the skill cannot vanish while
+ * the aggregate stays plausible.
+ *
  * ── ADR 0002 (a guard states what it measured)
  *
  * G1 is the whole point of this module: every collector here asserts its own size, and
@@ -94,6 +104,39 @@ export function docFiles(p) {
 			}
 		}
 	}
+	// `skills/` and `plugins/` — the operator skill installed into MCP clients. Read by NO
+	// gate until #741: the skill listed 33 of 145 tools and never mentioned the `confirm` gate
+	// that six of those tools require, and nothing caught it.
+	//
+	// The skill lives in THREE copies that must stay identical: `skills/<slug>/SKILL.md` is the
+	// canonical source; `plugins/codex/…/SKILL.md` and `plugins/claude/…/SKILL.md` are the
+	// client-specific copies. All three are added here so checks 5–7 sweep them; a separate
+	// copy-equality check in docs-drift.mjs ensures they match.
+	const beforeSkills = files.length;
+	const skillsBase = p("skills");
+	if (existsSync(skillsBase)) {
+		for (const slug of readdirSync(skillsBase)) {
+			add(join(skillsBase, slug, "SKILL.md"));
+		}
+	}
+	const pluginsBase = p("plugins");
+	if (existsSync(pluginsBase)) {
+		const walkPlugins = (dir) => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const full = join(dir, entry.name);
+				if (entry.isDirectory()) walkPlugins(full);
+				else if (entry.name === "SKILL.md") files.push(full);
+			}
+		};
+		walkPlugins(pluginsBase);
+	}
+	requireInputs(
+		"docFiles() — skills/ + plugins/",
+		files.length - beforeSkills,
+		3,
+		"skills/ has one SKILL.md and plugins/ has two client-specific copies. A walk finding\n" +
+			"  fewer than 3 has lost a directory or a copy was deleted without updating the other two.",
+	);
 	requireInputs(
 		"docFiles()",
 		files.length,

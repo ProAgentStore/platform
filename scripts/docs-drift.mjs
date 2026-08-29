@@ -580,11 +580,13 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 
 /**
  * `requireConfirmation(…, "tool", confirm, "expected", …)` is the only thing that makes a
- * tool confirm-gated. Three surfaces restate that list by hand and nothing compared any of
+ * tool confirm-gated. Four surfaces now restate that list by hand and nothing compared any of
  * them to the call sites, so `store/llms.txt` and `store/llms-full.txt` both said "Twelve
  * tools … eleven use their own name" while the code gated THIRTEEN — `delete_supervision`
  * missing from both (#555). The two llms files are the LLM-facing ones, i.e. the reader
- * that cannot ask.
+ * that cannot ask. The operator skill (#741) is the fourth: it is installed into MCP clients
+ * and is the document a model reads when it first opens a session; a wrong model of the gate
+ * teaches it to treat refusals as bugs.
  *
  * Each parser reports its own denominator, because "documents nothing" and "documents
  * everything correctly" are otherwise the same result.
@@ -616,7 +618,7 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 		const { tools, tables } = parseConfirmTable(read(p(f)));
 		surfaces.push({ name: f, tools, found: tables, how: "the Confirm column of its tool tables" });
 	}
-	for (const f of ["store/llms.txt", "store/llms-full.txt"]) {
+	for (const f of ["store/llms.txt", "store/llms-full.txt", "skills/proagentstore-mcp-operator/SKILL.md"]) {
 		const { tools, stated, lines } = parseConfirmProse(read(p(f)), known);
 		const ownName = [...sites].filter(([t, v]) => v.expected === t).length;
 		surfaces.push({ name: f, tools, found: lines, how: "its confirm sentence" });
@@ -673,6 +675,49 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 			`confirm gates: ${sites.size} requireConfirmation site(s) == every list in ` +
 				`${surfaces.length} file(s) (${MCP_SOURCES.length} MCP sources read)`,
 		);
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7a. skill copy equality — the three SKILL.md copies must be identical (#741)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `skills/proagentstore-mcp-operator/SKILL.md` is the canonical source. The two plugin
+ * copies (`plugins/codex/…/SKILL.md` and `plugins/claude/…/SKILL.md`) are distributed to
+ * MCP client marketplaces. `platform-docs/skill-publishing.md` says to "update all copies
+ * together until an automated packaging script owns that step" — this check is that step.
+ *
+ * An md5 equality check is cheaper than a generation script and catches the same drift.
+ * It is a separate check (not folded into check 7) because the subject is different: check 7
+ * asks "does the skill document the gate correctly?"; this asks "are the copies consistent?".
+ * Both must pass. A copy that diverges from the canonical could silently carry the old wrong
+ * model of the gate while the canonical is fixed, and a subscriber whose client loaded the
+ * plugin copy would still be taught wrong.
+ */
+{
+	const canonical = p("skills/proagentstore-mcp-operator/SKILL.md");
+	const copies = [
+		"plugins/codex/proagentstore/skills/proagentstore-mcp-operator/SKILL.md",
+		"plugins/claude/proagentstore/skills/proagentstore-mcp-operator/SKILL.md",
+	];
+	if (!existsSync(canonical)) {
+		fail("skill-copies", `${rel(canonical)} does not exist — the canonical skill source is missing.`);
+	} else {
+		const src = read(canonical);
+		const diverged = copies.filter((c) => !existsSync(p(c)) || read(p(c)) !== src);
+		if (diverged.length) {
+			fail(
+				"skill-copies",
+				`${diverged.length} plugin copy/copies diverge from the canonical skill:\n` +
+					diverged.map((c) => `    ${c}`).join("\n") +
+					"\n  The canonical source is skills/proagentstore-mcp-operator/SKILL.md.\n" +
+					"  Copy it to all plugin paths and commit — or update the canonical first,\n" +
+					"  then copy. See platform-docs/skill-publishing.md.",
+			);
+		} else {
+			ok(`skill copies: ${copies.length} plugin copy/copies == canonical skills/proagentstore-mcp-operator/SKILL.md`);
+		}
 	}
 }
 

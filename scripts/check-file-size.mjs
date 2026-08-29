@@ -1490,7 +1490,10 @@ const PINS = {
 	// +2 at #632: raises for tools.ts (sink rejection) and this self-referential entry.
 	// +5 at #674: the coding-session.ts raise above (4-line note + pin bump) and this note.
 	// +6 at #726: the routes/tools.ts raise above (3-line reason + pin bump) and this note.
-	"scripts/check-file-size.mjs": 1576,
+	// +5 at #741: one NEW entry (scripts/docs-drift.mjs, which crossed 800 adding the skill-copies
+	// check and wiring the operator skill into confirm-gate check 7) and this note.
+	"scripts/docs-drift.mjs": 829,
+	"scripts/check-file-size.mjs": 1581,
 };
 
 /**

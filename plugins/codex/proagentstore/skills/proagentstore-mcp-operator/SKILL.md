@@ -81,52 +81,17 @@ Add your Cloudflare Workers AI account ID and API token before running this agen
 
 the private runtime is working. The instance is correctly refusing to spend platform-owned AI credentials.
 
-## Tool Groups
+## Tool Surface
 
-Creator tools:
+The server registers 145 tools; call `tools/list` for the current set. The tool table in
+`workers/mcp/README.md` (or the published `platform-docs/mcp.md`) lists every tool with its
+scope, dry-run support, and confirmation value. The always-on `platform_guide` tool returns a
+plain-text map of the most commonly used ones — call it at the start of a session to orient
+yourself without a round-trip through the full list.
 
-- `create_agent`
-- `scaffold_agent`
-- `update_agent`
-- `my_agents`
-- `list_agent_files`
-- `read_agent_file`
-- `write_agent_file`
-- `batch_write_agent_files`
-- `trigger_agent_deploy`
-- `agent_deploy_status`
-- `add_knowledge`
-- `list_knowledge`
-- `agent_analytics`
-
-User runtime tools:
-
-- `subscribe_agent`
-- `my_instances`
-- `chat_with_instance`
-- `instance_messages`
-- `add_instance_knowledge`
-- `list_instance_knowledge`
-- `delete_instance_knowledge`
-- `cancel_instance`
-
-Browser/runtime tools:
-
-- `register_instance_runtime`
-- `instance_runtime_status`
-- `unregister_instance_runtime`
-- `run_instance_task`
-- `approve_instance_task`
-- `cancel_instance_task`
-- `instance_task_events`
-
-Discovery/reference tools:
-
-- `list_agents`
-- `agent_info`
-- `chat_with_agent`
-- `platform_guide`
-- `sdk_reference`
+Tools span four groups: catalog/reference (no auth required), creator agent tools (write
+scope), user runtime and instance tools (runtime and destructive scopes), and observability
+and coding tools (gated to the console surfaces the subscribed agent exposes).
 
 ## Operating Style
 
@@ -134,6 +99,8 @@ When operating through MCP:
 
 1. State which MCP action you are taking.
 2. Prefer private instance tools over public trial tools for durable work.
-3. Ask the user before destructive actions like deleting knowledge or canceling an instance.
-4. Report the MCP result in plain language with IDs, slugs, URLs, and next steps.
-5. If OAuth or credentials block progress, explain the exact approval or credential step needed.
+3. For mutating tools, pass `dry_run: true` first to preview what the call would do before committing it. The result says `dryRun: true` and describes the change without applying it.
+4. Thirteen tools require an exact `confirm` value (compared with `===`, never fuzzy-matched). Twelve use the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `delete_supervision`, `clear_instance_messages`. The exception is `remove_repo`, which requires `confirm: "remove_all_repos"` and only when removing every repo. A refusal from a confirm-gated tool is mechanical — the gate cannot be argued past; supply the exact value.
+5. The `destructive` scope is never granted by default. A client connected with standard browser sign-in cannot run delete- or overwrite-style tools unless the authorization flow explicitly requests the `destructive` scope.
+6. Report the MCP result in plain language with IDs, slugs, URLs, and next steps.
+7. If OAuth or credentials block progress, explain the exact approval or credential step needed.
