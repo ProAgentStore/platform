@@ -68,14 +68,23 @@ describe("#634 — instance_runtime_tasks.updated_at is one ordering, not two", 
 			id: "escalation",
 			task: { id: "escalation", type: "escalation", status: "needs_human" },
 		});
+		// Pin the escalation's updated_at to noon on SQLite's own date rather than leaving it at the
+		// datetime('now') the INSERT used. A clock rollover between the sqliteToday() call above and
+		// the INSERT would put the two rows on different dates, making the byte comparison below
+		// measure the date prefix instead of the time-of-day. Pinning makes both dates identical by
+		// construction — the precondition below is now redundant rather than a loud-fail guard.
+		// This mirrors 8eeaf631 (line 155), which applied the same pin to the single-flight cutoff arm.
+		d1.sqlite
+			.prepare("UPDATE instance_runtime_tasks SET updated_at = ?1 WHERE id = 'escalation'")
+			.run(sqlTime(Date.parse(`${today}T12:00:00.000Z`)));
 
 		const stored = d1.sqlite.prepare("SELECT id, updated_at FROM instance_runtime_tasks ORDER BY id").all() as {
 			id: string;
 			updated_at: string;
 		}[];
-		// The precondition that makes this test meaningful: both rows carry TODAY's date. If the
-		// clock rolled over mid-test the byte comparison is decided by the date instead and the
-		// assertion below would pass for the wrong reason, so fail loudly rather than silently.
+		// Both rows now carry today's date by construction: the runner task from the ISO input above,
+		// the escalation from the pin just applied. The assertion documents the invariant the test
+		// depends on and is guaranteed to hold regardless of when the test runs.
 		expect(stored.map((r) => r.updated_at.slice(0, 10))).toEqual([today, today]);
 
 		const newest = await mirroredRuntimeTasks(env, "i1", "u1", 1);
