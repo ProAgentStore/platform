@@ -273,6 +273,116 @@ describe("listConnections — an already-invalid row is surfaced, not removed (#
 	});
 });
 
+// ── #632: source-side emit warning ───────────────────────────────────────────────────────
+
+/** A source agent that owns the given pipelines. */
+function sourceAgent(pipelines: Record<string, unknown>) {
+	return { agentName: "Lead Finder", config: { pipelines } };
+}
+
+/** A minimal `dedupe_upsert` step with a literal emit. */
+const emitStep = (eventType: string) => ({ tool: "dedupe_upsert", inputs: { collection: "leads", key: "id", emit: eventType } });
+
+describe("createConnection — source must be able to statically emit the wired eventType (#632)", () => {
+	const input = {
+		sourceInstanceId: "finder",
+		targetInstanceId: "outreach",
+		eventType: "lead.created",
+		action: "run_pipeline" as const,
+		config: { pipeline: "site-builder" },
+	};
+	const owns: Array<[string, string]> = [
+		["finder", "u1"],
+		["outreach", "u1"],
+	];
+
+	it("warns when the source has NO pipeline that emits the wired eventType (sink-only producer)", async () => {
+		const { env } = buildEnv({
+			owns,
+			connections: [conn({ action: "run_pipeline" })],
+			instances: {
+				// Source: has a pipeline but it ends in a sink (no dedupe_upsert with emit).
+				finder: sourceAgent({ finder: { name: "finder", steps: [{ tool: "geocode" }], sink: { collection: "leads" } } }),
+				outreach: builder({ "site-builder": GOOD }),
+			},
+		});
+		const res = await createConnection(env, "u1", input);
+		expect(res.ok).toBe(true);
+		const warnings = res.ok ? res.warnings : [];
+		expect(warnings.join(" ")).toContain("dedupe_upsert");
+		expect(warnings.join(" ")).toContain('"lead.created"');
+	});
+
+	it("does NOT warn when the source has a dedupe_upsert step emitting the eventType", async () => {
+		const { env } = buildEnv({
+			owns,
+			connections: [conn({ action: "run_pipeline" })],
+			instances: {
+				finder: sourceAgent({ finder: { name: "finder", steps: [emitStep("lead.created")] } }),
+				outreach: builder({ "site-builder": GOOD }),
+			},
+		});
+		const res = await createConnection(env, "u1", input);
+		expect(res.ok).toBe(true);
+		const warnings = res.ok ? res.warnings : [];
+		// No source-side warning — the source CAN emit.
+		expect(warnings.some((w) => w.includes("dedupe_upsert"))).toBe(false);
+	});
+
+	it("does NOT warn when the source config cannot be read — a failed read is not evidence", async () => {
+		// `instances` does not include `finder` → targetFactsFor returns nothing for it → stay silent.
+		const { env } = buildEnv({
+			owns,
+			connections: [conn({ action: "run_pipeline" })],
+			instances: { outreach: builder({ "site-builder": GOOD }) },
+		});
+		const res = await createConnection(env, "u1", input);
+		expect(res.ok).toBe(true);
+		const warnings = res.ok ? res.warnings : [];
+		expect(warnings.some((w) => w.includes("dedupe_upsert"))).toBe(false);
+	});
+
+	it("does not warn for non-pipeline actions — only run_pipeline can start a chain", async () => {
+		const { env } = buildEnv({
+			owns,
+			connections: [conn()],
+			instances: { finder: sourceAgent({}) }, // source has no pipelines at all
+		});
+		// insert_record action — source emit capability is irrelevant.
+		const res = await createConnection(env, "u1", { ...input, action: "insert_record", config: { collection: "leads" } });
+		expect(res.ok).toBe(true);
+		const warnings = res.ok ? res.warnings : [];
+		expect(warnings.some((w) => w.includes("dedupe_upsert"))).toBe(false);
+	});
+});
+
+describe("listConnections — source-side emit warning on already-stored rows (#632)", () => {
+	it("annotates a stored edge when the source has no pipeline emitting the eventType", async () => {
+		const { env } = buildEnv({
+			connections: [conn({ action: "run_pipeline", config: JSON.stringify({ pipeline: "site-builder" }) })],
+			instances: {
+				finder: sourceAgent({ finder: { name: "finder", steps: [{ tool: "geocode" }], sink: { collection: "leads" } } }),
+				outreach: builder({ "site-builder": GOOD }),
+			},
+		});
+		const [row] = await listConnections(env, "u1", { sourceInstanceId: "finder" });
+		expect(row.warnings.join(" ")).toContain("dedupe_upsert");
+		expect(row.warnings.join(" ")).toContain('"lead.created"');
+	});
+
+	it("leaves a healthy edge unannotated when the source CAN emit", async () => {
+		const { env } = buildEnv({
+			connections: [conn({ action: "run_pipeline", config: JSON.stringify({ pipeline: "site-builder" }) })],
+			instances: {
+				finder: sourceAgent({ finder: { name: "finder", steps: [emitStep("lead.created")] } }),
+				outreach: builder({ "site-builder": GOOD }),
+			},
+		});
+		const [row] = await listConnections(env, "u1", { sourceInstanceId: "finder" });
+		expect(row.warnings).toEqual([]);
+	});
+});
+
 describe("listConnections / deleteConnection", () => {
 	it("maps rows to views + deletes", async () => {
 		const { env, writes } = buildEnv({ connections: [conn()] });

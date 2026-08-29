@@ -1180,7 +1180,9 @@ const PINS = {
 	// choice). Raised rather than split — both are ordinary instance-scoped handlers that belong
 	// beside the tool-policy routes they are read with, and the decision they encode is pure and
 	// already lives in lib/connector-accounts.ts, which is where the resolver and its tests are.
-	"workers/api/src/routes/tools.ts": 1176,
+	// +15 at #632: the PUT pipeline route now rejects a new definition that declares a `sink`
+	// (the only path that can emit is dedupe_upsert). The check is a single if-block with comment.
+	"workers/api/src/routes/tools.ts": 1191,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1477,7 +1479,8 @@ const PINS = {
 	// marking — the signal the durable log already records now becomes data on the message so the agent can ask
 	// rather than act. The agent-think raise is the largest (+12) because it injects a per-turn platform note;
 	// the others carry the field through the stack. Plus this note.
-	"scripts/check-file-size.mjs": 1562,
+	// +2 at #632: raises for tools.ts (sink rejection) and this self-referential entry.
+	"scripts/check-file-size.mjs": 1564,
 };
 
 /**

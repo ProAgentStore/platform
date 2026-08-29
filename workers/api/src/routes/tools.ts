@@ -302,6 +302,21 @@ toolRoutes.put("/:id/pipelines/:name", async (c) => {
 	const def = await c.req.json().catch(() => null);
 	const err = validatePipeline(def);
 	if (err !== null) throw new HttpError(400, `Invalid pipeline: ${typeof err === "string" ? err : JSON.stringify(err)}`);
+	// #632: the `sink` field is a plain INSERT per record with no dedupe and no emit — so a
+	// pipeline that persists through its declared sink can never start a chain, and one with a
+	// `keyField` deduped nothing. New definitions should end in a `dedupe_upsert` step instead,
+	// which IS the upsert-by-key primitive and the only path that can emit. Rejected here (at
+	// authoring time, while the creator is present) rather than at run time, for the same reason
+	// `create_connection` validates its filter on create. Existing stored definitions that already
+	// carry a `sink` still load — `validatePipeline` is unchanged — but no new one is accepted.
+	if (def && typeof def === "object" && !Array.isArray(def) && "sink" in (def as Record<string, unknown>)) {
+		throw new HttpError(
+			400,
+			`Pipeline definitions may not declare a "sink". Use a \`dedupe_upsert\` step instead — ` +
+				`it is the only path that deduplicates by key AND can emit events to start a chain. ` +
+				`The \`sink\` field is kept for existing definitions but rejected on new ones (#632).`,
+		);
+	}
 	// The declared-tools gate at AUTHORING time (#381). `validatePipeline` is pure and knows only
 	// the registry, so it cannot ask whose agent this is; that answer needs the capability join,
 	// which only a route has. Refused here rather than only at run time for the reason

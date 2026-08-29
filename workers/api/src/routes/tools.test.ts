@@ -554,7 +554,11 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 });
 
 describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missing write path)", () => {
-	const DEF = STORED_PIPELINE.pipelines.sweep;
+	// #632: new definitions may no longer declare a `sink` — use a sink-free variant for PUT tests.
+	// STORED_PIPELINE still carries a sink (existing stored definitions continue to load), so keep it
+	// as-is and derive a sink-free copy for the attach path.
+	const { sink: _sink, ...DEF_NO_SINK } = STORED_PIPELINE.pipelines.sweep;
+	const DEF = DEF_NO_SINK;
 
 	it("owner-gated: 404s when the instance isn't owned", async () => {
 		const { app, env } = testApp({ owned: false });
@@ -606,6 +610,14 @@ describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missi
 		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(DEF) }, await tok("u1"));
 		expect(res.status).toBe(400);
 		expect((await jsonBody(res)).error).toMatch(/github_workflow_runs/);
+	});
+
+	it("400s a new definition that declares a sink (#632 — use dedupe_upsert instead)", async () => {
+		const defWithSink = { name: "sweep", steps: [{ tool: "geocode", inputs: { address: "Sydney" } }], sink: { collection: "leads" } };
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(defWithSink) }, await tok("u1"));
+		expect(res.status).toBe(400);
+		expect((await jsonBody(res)).error).toMatch(/dedupe_upsert/);
 	});
 
 	it("400s a geocode-only definition, naming the step that needs http_request (#396)", async () => {

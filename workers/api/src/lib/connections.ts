@@ -31,7 +31,7 @@ import { classifyDeliveryFailure, connectorsUsedByPipeline, pipelineWiringWarnin
 import { getConnector } from "./connectors/registry.js";
 import { getRegistryTool } from "./tool-registry.js";
 import { loadPipeline, pipelineInventory, type PipelineInventory } from "./pipeline.js";
-import { connectionPipelineWarning } from "./connection-pipeline.js";
+import { connectionPipelineWarning, connectionSourceEmitWarning } from "./connection-pipeline.js";
 import { isActiveInstanceStatus } from "./trigger-eligibility.js";
 import { HttpError } from "./auth.js";
 
@@ -109,11 +109,15 @@ async function ownsInstance(env: Env, instanceId: string, userId: string): Promi
 	return !!row;
 }
 
-/** What a target instance is CALLED and what pipelines it has — the two facts a `run_pipeline`
- *  edge is judged against. `null` inventory means the read failed; see `pipelineNamesFor`. */
+/** What an instance is CALLED and what pipelines it has — used for both the target (#363) and the
+ *  source (#632) end of a `run_pipeline` edge.
+ *  `null` inventory means the read failed; see `pipelineNamesFor`.
+ *  `rawPipelines` is the parsed `config.pipelines` map used for the source-side emit check (#632). */
 interface TargetFacts {
 	label: string;
 	inventory: PipelineInventory | null;
+	/** Raw `config.pipelines` for the source-side static-emit check (#632). `undefined` on a failed read. */
+	rawPipelines?: unknown;
 }
 
 /** Read the pipeline facts for a set of target instances in ONE query, so annotating a listing
@@ -142,18 +146,31 @@ async function targetFactsFor(env: Env, userId: string, instanceIds: readonly st
 		out.set(row.id, {
 			label: `"${named ?? row.agent_name ?? row.id}"`,
 			inventory: readable ? pipelineInventory(cfg.pipelines) : null,
+			// `null` = config could not be parsed (failed read); `undefined` = config parsed but has
+			// no `pipelines` key (legible absence — the source declared no pipelines). The distinction
+			// matters for `sourceCanEmitEventType`, which treats `null`/`undefined` as "stay silent"
+			// but treats a missing pipelines block ({} / no key) as "legible, no emit → warn".
+			rawPipelines: readable ? (cfg.pipelines ?? {}) : null,
 		});
 	}
 	return out;
 }
 
-/** The warnings a stored edge deserves right now. Today that is the target's pipeline (#363);
- *  the connector-wiring warnings (#181) stay on the create path, where they cost one read. */
-function storedWarnings(row: ConnectionRow, facts: TargetFacts | undefined): string[] {
+/**
+ * The warnings a stored edge deserves right now.
+ *   • target's pipeline (#363) — the named pipeline must exist on the target.
+ *   • source's emit capability (#632) — the source must have a pipeline that can statically emit
+ *     the wired eventType. The connector-wiring warnings (#181) stay on the create path only.
+ */
+function storedWarnings(row: ConnectionRow, targetFacts: TargetFacts | undefined, sourceFacts: TargetFacts | undefined): string[] {
 	if (row.action !== "run_pipeline") return [];
 	const config = parseConfigJson(row.config);
-	const warning = connectionPipelineWarning(typeof config.pipeline === "string" ? config.pipeline : null, facts?.label ?? "", facts?.inventory ?? null);
-	return warning ? [warning] : [];
+	const out: string[] = [];
+	const targetWarning = connectionPipelineWarning(typeof config.pipeline === "string" ? config.pipeline : null, targetFacts?.label ?? "", targetFacts?.inventory ?? null);
+	if (targetWarning) out.push(targetWarning);
+	const sourceWarning = connectionSourceEmitWarning(row.event_type, sourceFacts?.label ?? "", sourceFacts?.rawPipelines);
+	if (sourceWarning) out.push(sourceWarning);
+	return out;
 }
 
 /**
@@ -173,11 +190,16 @@ export async function listConnections(env: Env, userId: string, opts: { sourceIn
 	const rows = results ?? [];
 	// Only `run_pipeline` names something whose existence can be checked; the other actions
 	// dispatch into the target's own DO, which every instance has.
-	const targets = rows.filter((r) => r.action === "run_pipeline").map((r) => r.target_instance_id);
+	const pipelineRows = rows.filter((r) => r.action === "run_pipeline");
+	const targets = pipelineRows.map((r) => r.target_instance_id);
+	const sources = pipelineRows.map((r) => r.source_instance_id);
 	// An annotation must never take the listing down with it: a failed read leaves every row
 	// unannotated, which is exactly what the listing did before this existed.
-	const facts = await targetFactsFor(env, userId, targets).catch(() => new Map<string, TargetFacts>());
-	return rows.map((row) => toView(row, storedWarnings(row, facts.get(row.target_instance_id))));
+	const [targetFacts, sourceFacts] = await Promise.all([
+		targetFactsFor(env, userId, targets).catch(() => new Map<string, TargetFacts>()),
+		targetFactsFor(env, userId, sources).catch(() => new Map<string, TargetFacts>()),
+	]);
+	return rows.map((row) => toView(row, storedWarnings(row, targetFacts.get(row.target_instance_id), sourceFacts.get(row.source_instance_id))));
 }
 
 /** Ops the routing predicate accepts — the `filter` step's vocabulary, kept identical. */
@@ -251,7 +273,11 @@ export async function createConnection(
 		.bind(id, userId, input.sourceInstanceId, eventType, input.targetInstanceId, input.action, JSON.stringify(input.config ?? {}))
 		.run();
 	const row = await env.DB.prepare("SELECT * FROM agent_connections WHERE id = ?1").bind(id).first<ConnectionRow>();
-	const warnings = await unattendedWarningsFor(env, userId, input.targetInstanceId, input.action, input.config);
+	const [targetWarnings, sourceWarning] = await Promise.all([
+		unattendedWarningsFor(env, userId, input.targetInstanceId, input.action, input.config),
+		sourceEmitWarningFor(env, userId, input.sourceInstanceId, input.action, eventType),
+	]);
+	const warnings = sourceWarning ? [...targetWarnings, sourceWarning] : targetWarnings;
 	// The same list on the view and beside it: the create response and the later listing then say
 	// the same thing about the same edge, which is the drift #358 spent its design on avoiding.
 	return { ok: true, connection: toView(row as ConnectionRow, warnings), warnings };
@@ -309,6 +335,39 @@ async function unattendedWarningsFor(
 }
 
 /**
+ * Source-side advisory at CREATE time: does the source instance have any pipeline that can
+ * statically emit the wired `eventType`? (#632)
+ *
+ * The mirror of `unattendedWarningsFor` for the other end of the edge. Only `run_pipeline`
+ * connections can participate in chains; other actions receive from any event source.
+ *
+ * Stays silent (returns null) when:
+ *   • the action is not `run_pipeline`;
+ *   • the source's config cannot be read (a failed read is not evidence of absence);
+ *   • at least one pipeline CAN statically emit (the connection is healthy on this end).
+ *
+ * A `$ref`/`$param` emit value in a step is not statically readable, so a pipeline using one
+ * is treated as potentially-capable and produces no warning — a false "this will never work"
+ * on a working chain is worse than the silence this replaces.
+ */
+async function sourceEmitWarningFor(
+	env: Env,
+	userId: string,
+	sourceInstanceId: string,
+	action: TriggerAction,
+	eventType: string,
+): Promise<string | null> {
+	if (action !== "run_pipeline") return null;
+	try {
+		const facts = (await targetFactsFor(env, userId, [sourceInstanceId])).get(sourceInstanceId);
+		if (!facts) return null; // failed read — stay silent
+		return connectionSourceEmitWarning(eventType, facts.label, facts.rawPipelines);
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Enable or disable one of the caller's connections (#644). Returns the updated view, or null when
  * no row matched (wrong id, or not the caller's).
  *
@@ -333,8 +392,11 @@ export async function setConnectionEnabled(env: Env, userId: string, id: string,
 	if (!row) return null;
 	// A disabled edge keeps its warnings: it is still wired, and the reason it is broken does not
 	// stop being true because it is paused.
-	const facts = await targetFactsFor(env, userId, [row.target_instance_id]).catch(() => new Map<string, TargetFacts>());
-	return toView(row, storedWarnings(row, facts.get(row.target_instance_id)));
+	const [targetFacts, sourceFacts] = await Promise.all([
+		targetFactsFor(env, userId, [row.target_instance_id]).catch(() => new Map<string, TargetFacts>()),
+		targetFactsFor(env, userId, [row.source_instance_id]).catch(() => new Map<string, TargetFacts>()),
+	]);
+	return toView(row, storedWarnings(row, targetFacts.get(row.target_instance_id), sourceFacts.get(row.source_instance_id)));
 }
 
 /** Delete one of the caller's connections. Returns whether a row was removed. */
