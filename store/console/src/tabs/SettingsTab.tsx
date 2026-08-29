@@ -28,8 +28,6 @@ interface Props {
 	isCoding?: boolean;
 	/** True when the agent declares the `repo` surface — adds a repo pointer to "Where things live". */
 	isRepo?: boolean;
-	/** The agent's declared subscriber settings (from capabilities). */
-	settingsSchema?: SettingsField[];
 	onUnsubscribe: () => void;
 }
 
@@ -56,14 +54,13 @@ interface WorkdriveStatus {
 	reach?: ConnectorReach;
 }
 
-export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, settingsSchema, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	// Owner-initiated personality resync (#496 AC2) — brings the DO's stored personality up to
 	// the agent's current seed without touching guardrails/goal/welcomeMessage.
 	const [resyncMsg, setResyncMsg] = useState("");
-	// Agent-declared settings: the schema prop is the fast path; the GET also returns
-	// `fields` so the form never depends on a stale instance-list cache.
-	const [agentFields, setAgentFields] = useState<SettingsField[]>(settingsSchema ?? []);
+	// Agent-declared settings: filled by the GET /settings fetch (fields always come from the server).
+	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
 	const [agentSettings, setAgentSettings] = useState<Record<string, string | number | boolean>>({});
 	const [settingsMsg, setSettingsMsg] = useState("");
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);

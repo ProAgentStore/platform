@@ -12,7 +12,7 @@ import SettingsTab from "../tabs/SettingsTab";
 import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
 import { deepLinkedBuildsRepo } from "./deepLink";
-import type { BoardColumn, RunnerPresence, SettingsField } from "./types";
+import type { RunnerPresence } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Surface registry — the console "shell" loads agent UIs from here.
@@ -52,10 +52,6 @@ export interface SurfaceContext {
 	/** True when the agent declares the `repo` surface — used by Settings to point users at the Repo tab. */
 	isRepo?: boolean;
 	sessionId?: string;
-	/** The agent's declared board columns (server resolves a per-surface default). */
-	boardColumns?: BoardColumn[];
-	/** The agent's declared subscriber settings (rendered on the Settings tab). */
-	settingsSchema?: SettingsField[];
 	/** Per-surface options (capabilities.surfaceOptions). `repos:"single"` hides the
 	 *  multi-repo affordances for an agent that owns exactly one repo. */
 	surfaceOptions?: Record<string, { repos?: string; drive?: boolean; copilot?: boolean }>;
@@ -181,7 +177,7 @@ export const SURFACES: SurfaceDef[] = [
 		// attempts drill-down). The old applications-records detail page was retired.
 		show: ({ surfaces }) => surfaces.includes("apply"),
 		scroll: true,
-		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} apply />,
+		render: ({ instanceId }) => <BoardTab instanceId={instanceId} apply />,
 	},
 	{
 		id: "board",
@@ -197,7 +193,7 @@ export const SURFACES: SurfaceDef[] = [
 		// subordinate_status, which reads exactly these rows.
 		show: ({ surfaces: s }) => !s.includes("apply") && !s.includes("repo"),
 		scroll: true,
-		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} />,
+		render: ({ instanceId }) => <BoardTab instanceId={instanceId} />,
 	},
 	{
 		id: "repo",
@@ -335,8 +331,8 @@ export const SURFACES: SurfaceDef[] = [
 		icon: "⚙",
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, isApply, isCoding, isRepo, settingsSchema, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} isApply={isApply} isCoding={isCoding} isRepo={isRepo} settingsSchema={settingsSchema} onUnsubscribe={onUnsubscribe} />
+		render: ({ instanceId, isApply, isCoding, isRepo, onUnsubscribe }) => (
+			<SettingsTab instanceId={instanceId} isApply={isApply} isCoding={isCoding} isRepo={isRepo} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 ];

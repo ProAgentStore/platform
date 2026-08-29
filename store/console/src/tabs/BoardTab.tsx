@@ -46,7 +46,7 @@ interface BoardItem {
 	threadTurns?: number;
 }
 
-export default function BoardTab({ instanceId, columns, apply }: { instanceId: string; columns?: BoardColumn[]; apply?: boolean }) {
+export default function BoardTab({ instanceId, apply }: { instanceId: string; apply?: boolean }) {
 	const navigate = useNavigate();
 	const [items, setItems] = useState<BoardItem[]>([]);
 	const [serverCols, setServerCols] = useState<BoardColumn[] | null>(null);
@@ -65,7 +65,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	const [running, setRunning] = useState(false);
 	const [runMsg, setRunMsg] = useState("");
 
-	const cols = serverCols?.length ? serverCols : (columns?.length ? columns : GENERIC_COLUMNS);
+	const cols = serverCols?.length ? serverCols : GENERIC_COLUMNS;
 
 	const loadBoard = useCallback(async () => {
 		try {

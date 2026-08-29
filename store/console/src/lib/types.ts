@@ -81,19 +81,13 @@ export interface Instance {
 		/** Phase 3: agent-published UIs, loaded dynamically from a bundle URL. */
 		customSurfaces?: CustomSurface[];
 		/**
-		 * `boardColumns` and `settingsSchema` are DELIBERATELY not here (#617).
+		 * `boardColumns` and `settingsSchema` are not here (#617, #623).
 		 *
-		 * This interface describes exactly one response — `GET /v1/instances/my/instances`, the only
-		 * endpoint any consumer of `Instance` calls — and that route strips both before replying:
-		 * `const { boardColumns: _bc, settingsSchema: _ss, ...lightCaps } = fullCaps;`
-		 * (`workers/api/src/routes/instances.ts:315`), because the full set measured ~83 KB for 28
-		 * instances. That is a considered server decision, not a bug, so the fix is on this side.
-		 *
-		 * Declaring them anyway bought two dead "fast paths": `InstanceDetail` passed
-		 * `capabilities.boardColumns` into `BoardTab` and `capabilities.settingsSchema` into
-		 * `SettingsTab`, both permanently `undefined`, so each tab silently fell back to its second
-		 * fetch. `SettingsTab`'s own comment called the prop "the fast path" — an optimisation that
-		 * had never once fired. Both tabs still read the real values from `/board` and `/settings`.
+		 * `GET /v1/instances/my/instances` strips both before replying (they measured ~83 KB for 28
+		 * instances), and it is the only endpoint any `Instance` consumer calls. Passing them through
+		 * `SurfaceContext` created permanently-`undefined` props — the "fast path" that never fired.
+		 * Both fields were removed from `SurfaceContext` in #623; `BoardTab` and `SettingsTab` each
+		 * read the real values from their own fetch (`/board` and `/settings` respectively).
 		 */
 		/** Per-surface options; see workers/api/src/lib/surface-options.ts. */
 		surfaceOptions?: Record<string, { repos?: string; drive?: boolean; copilot?: boolean }>;
