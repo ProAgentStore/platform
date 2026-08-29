@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openConversationText, repoLabel, resolveRepoForOpen } from "./coding-tools.js";
+import { filterReposByInstance, openConversationText, repoLabel, resolveRepoForOpen } from "./coding-tools.js";
 
 // What an MCP caller is TOLD when it opens a repo's conversation (#696, and #693's fourth outcome).
 //
@@ -128,5 +128,46 @@ describe("resolveRepoForOpen — a question beats a guess (#696)", () => {
 	it("labels a repo by name, falling back to its id rather than to nothing", () => {
 		expect(repoLabel({ id: "r1", name: "chess" })).toBe("chess");
 		expect(repoLabel({ id: "r1" })).toBe("r1");
+	});
+});
+
+describe("filterReposByInstance — cross-instance contamination guard (#692)", () => {
+	// The normal path: all repos carry the correct instanceId → all pass through.
+	it("passes through repos whose instanceId matches the requested instance", () => {
+		const repos = [
+			{ id: "r1", instanceId: "inst-A" },
+			{ id: "r2", instanceId: "inst-A" },
+		];
+		expect(filterReposByInstance(repos, "inst-A")).toEqual(repos);
+	});
+
+	// The transport mis-routing case: response for inst-B delivered to inst-A caller.
+	// The filter catches this and returns empty rather than wrong repos.
+	it("filters out repos whose instanceId belongs to a different instance", () => {
+		const repos = [
+			{ id: "r1", instanceId: "inst-B" },
+			{ id: "r2", instanceId: "inst-B" },
+		];
+		expect(filterReposByInstance(repos, "inst-A")).toEqual([]);
+	});
+
+	// Mixed response (edge case: partial mis-routing).
+	it("keeps only the repos that match, drops the rest", () => {
+		const repos = [
+			{ id: "r1", instanceId: "inst-A" },
+			{ id: "r2", instanceId: "inst-B" },
+		];
+		expect(filterReposByInstance(repos, "inst-A")).toEqual([{ id: "r1", instanceId: "inst-A" }]);
+	});
+
+	// Defensive pass-through: older API versions or test fixtures without an instanceId field.
+	it("passes through repos that have no instanceId field", () => {
+		const repos = [{ id: "r1" }, { id: "r2" }];
+		expect(filterReposByInstance(repos, "inst-A")).toEqual(repos);
+	});
+
+	// Empty input stays empty.
+	it("returns empty for an empty repos array", () => {
+		expect(filterReposByInstance([], "inst-A")).toEqual([]);
 	});
 });

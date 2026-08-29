@@ -35,9 +35,29 @@ type SafetyResolver = (provided?: string) => SafetyContext;
 /** A repo row as the repos listing returns it — only the three fields this file names. */
 export interface CodingRepoRow {
 	id: string;
+	/** The instance this repo belongs to, as stored in the API. Used to verify correct attribution
+	 *  in concurrent calls — see `filterReposByInstance`. */
+	instanceId?: string;
 	name?: string;
 	/** `owner/repo` when the repo is hosted on GitHub; absent for a local-only checkout (#743). */
 	githubRepo?: string;
+}
+
+/**
+ * Guard against cross-instance contamination when concurrent `coding_repos_list` calls have
+ * their responses mis-routed by the MCP transport layer (#692).
+ *
+ * The API correctly scopes every query by `instanceId` AND `userId`, so in the normal path
+ * every returned repo already carries the requested `instanceId`. This filter is the defence
+ * for the concurrent case: when the transport delivers response B to caller A, caller A's
+ * `instanceId` variable is A's UUID but the repos carry B's UUID — the filter catches that
+ * and returns empty rather than wrong repos.
+ *
+ * Repos without an `instanceId` field (from older API versions, or test fixtures that predate
+ * the field) are passed through unchanged — unknown is safer than dropped.
+ */
+export function filterReposByInstance(repos: CodingRepoRow[], instanceId: string): CodingRepoRow[] {
+	return repos.filter((r) => !r.instanceId || r.instanceId === instanceId);
 }
 
 /** The half of the routing hint that does not depend on which repo it is about. */
@@ -381,13 +401,21 @@ export function registerCodingSessionTools(
 		async ({ instance_id, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as { repos?: CodingRepoRow[] };
-			const repos = r.repos || [];
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as { repos?: CodingRepoRow[]; error?: string };
+			// Surface API errors rather than silently returning empty repos — an error here is
+			// usually a 404 (wrong/stale instance id) and hiding it as `{repos:[]}` is harder to
+			// debug than the actual message.
+			if (r.error) return jsonText(r);
 			// `{repos: […]}` rather than the bare array this returned before #743, so the routing
 			// hint has somewhere to live. Same shape change `my_instances` made in #561 and for the
 			// same reason — a list with nothing beside it can only ever answer one question. The
 			// fingerprint cannot see a result shape (it hashes what a host is TOLD about a tool),
 			// which is precisely why it is called out in this version's `SURFACE_LOCK` note.
+			//
+			// Filter by `instanceId` to guard against cross-instance contamination under concurrent
+			// calls (#692). See `filterReposByInstance` for why this is needed and what it does not
+			// affect in the normal (non-concurrent) path.
+			const repos = filterReposByInstance(r.repos || [], instance_id);
 			const hint = reposToolRoutingHint(repos);
 			return jsonText(hint ? { repos, hint } : { repos });
 		},
