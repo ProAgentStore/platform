@@ -147,6 +147,38 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		expect((start?.[2] as { ghScope?: string[] }).ghScope).toBeUndefined();
 	});
 
+	it("refuses a GitHub repo stuck with no coordinates and no local path — fail-closed (#760)", async () => {
+		// THE DEFECT this test pins: a repo record that is (a) a GitHub provider, (b) has no
+		// `workdir` (it's supposed to be a managed remote clone), and (c) has no resolved
+		// `githubRepo` (the clone never completed or the record is stuck) can produce a session where
+		// `ghScope` is omitted. The runner treats absent scope as "older cloud / not said" and
+		// installs NO guard — the Engine then runs with unrestricted `gh` write access.
+		//
+		// This is the concrete case from the incident: a duplicate `ProAgentStore/platform` record
+		// stuck in `cloning` (no GitHub coordinates resolved), a session attached to it, and
+		// `coding_diagnostics` reporting "1 of 2 tracked sessions guarded" — the unguarded one was
+		// running on this broken record.
+		//
+		// Absence of scope must not read as absence of restriction (#760 ask #1). A GitHub remote
+		// record without coordinates must be refused, not allowed to run unguarded. The owner gets a
+		// clear error that names the fix (add the correct owner/repo or a local path).
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_stuck"));
+		const res = await ensureActiveSession(env, "inst", "u", {
+			...repo,
+			workdir: undefined,
+			githubRepo: undefined,
+			provider: "github",
+			cloneStatus: "cloning",
+		});
+		expect(res.ok).toBe(false);
+		// The error must be reached without calling the runner at all — the session is refused
+		// before `callRunner`, so no session row is dirtied and no runner command fires.
+		const started = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start");
+		expect(started).toBeUndefined();
+		expect(!res.ok && res.startError).toMatch(/no GitHub coordinates/);
+		expect(!res.ok && res.startError).toMatch(/unguarded/);
+	});
+
 	it("reports opened:true only for a session it created and started", async () => {
 		// The other direction: a session the run opened IS the run's to clean up, and if this
 		// reported false nothing would ever close it — the leak #275 is about.

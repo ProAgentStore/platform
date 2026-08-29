@@ -216,6 +216,38 @@ export async function startSessionOnRunner(
 		}
 	}
 	if (!conn) return { conn: null, resumed: false, seeded: false };
+	// ── Fail-closed guard (#760) ──────────────────────────────────────────────────────────────────
+	//
+	// A remote repo (no `workdir`) that carries no GitHub coordinates (`githubRepo` absent) cannot
+	// produce a repository scope: the line below would send `ghScope: undefined`, which the runner
+	// reads as "older cloud / not said" and responds to by installing NO guard — the session then
+	// runs unguarded.
+	//
+	// Absence of scope must not read as absence of restriction. A managed clone record without
+	// GitHub coordinates is in an inconsistent state (stuck in `cloning`, or created through a code
+	// path that left coordinates unresolved) and must not silently grant write authority to every
+	// repository the Engine can see from the machine. Refusing here is the conservative direction:
+	// the owner sees a clear error, and fixing the record (adding the correct `github_repo` or
+	// `workdir`) restores the session.
+	//
+	// Local-path repos (have `workdir`, may have no `github_repo`) are EXEMPT — a repo that only
+	// lives on one machine and was never given GitHub coordinates does not use `gh` writes to GitHub
+	// and has no scope to compare against. That case already has a documented gap; this is not it.
+	//
+	// Non-GitHub remote repos (GitLab, Bitbucket — `provider !== "github"`) are also exempt: they
+	// carry no `githubRepo` by design, `gh` writes to GitHub are not in scope for them, and their
+	// own authentication is handled through a separate credential path.
+	if (!repo.workdir && !repo.githubRepo && repo.provider === "github") {
+		return {
+			conn: null,
+			resumed: false,
+			seeded: false,
+			startError:
+				"This repository record has no GitHub coordinates (github_repo is absent) and no local checkout. " +
+				"The session cannot run — opening it unguarded would allow unrestricted `gh` writes to any repository the Engine can reach from this machine. " +
+				"Fix the record by adding the correct repository (owner/repo) or a local path, then try again.",
+		};
+	}
 	// Provider-dispatched (#221): GitHub still resolves through the App installation token, and a
 	// non-GitHub repo gets its own provider's credential — or none, which means "clone it
 	// publicly / with whatever this machine already has", the same thing a public GitHub repo
