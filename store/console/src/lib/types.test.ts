@@ -119,12 +119,13 @@ describe("console response types match the Worker declarations they copy (#617)"
 		// compile time, until someone names the column it comes from.
 		const declared: Record<keyof Notification, true> = {
 			id: true, type: true, title: true, body: true, read: true,
-			created_at: true, createdAt: true, kind: true, url: true,
+			created_at: true, createdAt: true, kind: true, url: true, agent_id: true,
 		};
 		// 0006 create + 0026 url + 0093 dedupe_key/pushed_at/kind. Note `agent_id`, NOT `instance_id`:
 		// the console declared `instanceId`, so `pages/Notifications.tsx` carried a navigation branch
 		// that could never be taken — and matching the producer's NAME would have been wrong too,
-		// because the value is an agent id and the branch routed to /instances/.
+		// because the value is an agent id and the branch routed to /instances/. `agent_id` is now
+		// declared (#622) as the fallback navigation target when `url` is absent.
 		const columns = ["id", "user_id", "type", "title", "body", "agent_id", "read", "created_at", "url", "dedupe_key", "pushed_at", "kind"];
 		const camelToSnake = (s: string) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 		for (const field of Object.keys(declared)) {

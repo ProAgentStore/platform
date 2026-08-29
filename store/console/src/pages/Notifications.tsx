@@ -95,6 +95,11 @@ export default function Notifications() {
 								// chain claiming a fallback it never had.
 								// A pre-#338 row points at GitHub Actions: open it where it lives.
 								else if (n.url?.startsWith("https://")) window.open(n.url, "_blank", "noopener");
+								// Pre-#338 rows have no `url` but do carry `agent_id` — route to the agent
+								// detail page as the best available destination (#622). New rows written by
+								// the "new subscriber" call site also get a `/console/agents/:id` url, so
+								// they take the first branch; this only fires for historical rows.
+								else if (n.agent_id) navigate(`/agents/${n.agent_id}`);
 								else load();
 							}}
 						>

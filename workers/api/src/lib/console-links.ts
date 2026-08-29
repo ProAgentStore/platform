@@ -95,3 +95,17 @@ export function codingSessionLink(instanceId: string, sessionId?: string): strin
 export function codingBuildsLink(instanceId: string, repoId: string): string {
 	return `${instanceLink(instanceId)}/coding?builds=${encodeURIComponent(repoId)}`;
 }
+
+/**
+ * An agent's detail page — Knowledge, Settings, Analytics, and the creator's subscriber list.
+ *
+ * Used as the url on notifications delivered to an agent's creator: a "new subscriber" row
+ * carries `agent_id` but no instance id (the subscriber's instance belongs to the subscriber,
+ * not the creator), so the right destination is the agent itself (#622).
+ *
+ * Satisfies the #338 rule: the `agents` row exists long before any subscription and outlives
+ * every subscriber's instance.
+ */
+export function agentLink(agentId: string): string {
+	return `${BASE}/agents/${encodeURIComponent(agentId)}`;
+}

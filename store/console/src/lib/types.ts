@@ -325,9 +325,16 @@ export interface Notification {
 	 *
 	 * This is the one row in this sweep where renaming the consumer to match the producer would
 	 * have been WRONG: `navigate(`/instances/${agent_id}`)` is a broken route, not a fixed one.
-	 * Modern rows carry `url` and route correctly through it (#338); a pre-#338 row with neither
-	 * stays unclickable, which is a real gap and is filed separately rather than guessed at here.
+	 * Modern rows carry `url` and route correctly through it (#338); a pre-#338 row with no `url`
+	 * falls back to `/agents/:agent_id` (#622).
 	 */
+	/**
+	 * The agent this notification concerns. Returned by `SELECT *` since the column has always been
+	 * there (migration 0006). Used as a fallback navigation target when `url` is absent (#622):
+	 * clicking a pre-#338 "new subscriber" row routes to the agent's detail page rather than doing
+	 * nothing. New rows also carry `url = /console/agents/:id` so both paths converge correctly.
+	 */
+	agent_id?: string;
 	/**
 	 * `/v1/notifications` returns rows straight from D1, so the wire shape is snake_case — see
 	 * `NotificationLike` in lib/nextAgent.ts, which had it right. The camelCase fields below are
