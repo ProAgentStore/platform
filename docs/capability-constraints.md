@@ -11,7 +11,7 @@ deciding which tools exist.**
 | Declaration | Effect | Enforced by |
 |---|---|---|
 | `capabilities.tools: [...]` | the allowlist | `toolNamesFor` — an undeclared tool is not offered and is refused if called |
-| `surfaceOptions.coding.drive: false` | chat cannot drive the engine | `agent-do-tools.ts:200` — `send_to_cli`/`read_terminal` are removed from the set |
+| `surfaceOptions.coding.drive: false` | chat cannot drive the engine | `toolNamesFor` (`agent-do-tools.ts`) — `send_to_cli`/`read_terminal` are withheld from the set |
 | `surfaceOptions.coding.repos: "single"` | owns one repo | the console hides add-repo; `agent-self-description` says so |
 | write consent (#90) | mutating calls need the owner's say-so | `runRegistryTool` refuses at dispatch |
 

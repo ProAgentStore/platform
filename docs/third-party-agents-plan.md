@@ -41,7 +41,7 @@ runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
    > entirely unchanged (#160, open).
 2. **No isolated code execution** — no Dynamic Workers; creator custom logic can't run safely.
 3. **No creator authoring UI** — creation is API/MCP only.
-4. **Metering/payouts incomplete** — in flight on `feat/admin-platform-metering` (#28–#46).
+4. **Metering/payouts incomplete** — platform metering landed (#28–#46); creator payouts pending (#57).
 
 ## Workstreams
 
