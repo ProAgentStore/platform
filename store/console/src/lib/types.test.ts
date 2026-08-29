@@ -60,7 +60,8 @@ type CloudAdded = { reasoning?: string };
 
 // Four invented fields lived here before #617. `handoff_field` was the expensive one — it headed a
 // `||` chain in `pages/RunDetail.tsx` whose first operand could never win, so the prompt a user is
-// asked to answer has always been scraped out of prose.
+// asked to answer has always been scraped out of prose. #621 fixed it: the structured field now
+// comes from the `agent.needs_input` event's `data.field` (`RuntimeEvent.data`).
 const _runtimeTaskHasNoInventedFields: Extra<RuntimeTask, RunnerTask & CloudAdded> extends never
 	? true
 	: never = true;

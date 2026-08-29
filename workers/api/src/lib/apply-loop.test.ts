@@ -341,6 +341,21 @@ describe("runApplyLoop", () => {
 		expect(result.fieldNeeded).toBe("salary expectation");
 	});
 
+	it("emits structured data on agent.needs_input so the console reads field directly (#621)", async () => {
+		const emitted: Array<{ type: string; data?: unknown }> = [];
+		const deps: ApplyDeps = {
+			snapshot: async () => page("- textbox \"Salary\""),
+			act: async () => ({ url: "x", challenge: null }),
+			decide: async () => ({ needsInput: { field: "salary expectation", why: "required on this form" } }),
+			onEvent: (type, _msg, data) => { emitted.push({ type, data }); },
+		};
+		await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		const ev = emitted.find((e) => e.type === "agent.needs_input");
+		expect(ev).toBeTruthy();
+		expect((ev?.data as Record<string, unknown>)?.field).toBe("salary expectation");
+		expect((ev?.data as Record<string, unknown>)?.why).toBe("required on this form");
+	});
+
 	it("reports an event for every decision", async () => {
 		const events: string[] = [];
 		const { deps } = scriptedDeps([page("x"), page("done")], [{ action: { action: "click", name: "Apply" } }, { finish: { status: "submitted", detail: "ok" } }]);

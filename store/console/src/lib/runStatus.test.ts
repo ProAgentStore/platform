@@ -73,3 +73,27 @@ describe("RunDetail derives the answer instead of writing a fifth literal", () =
 		expect(page).not.toContain('"expired"');
 	});
 });
+
+describe("RunDetail reads the structured field from agent.needs_input event data (#621)", () => {
+	it("prefers data.field over the message regex", () => {
+		// The structured field is: emit("agent.needs_input", <prose>, { field, why }).
+		// The console must read data.field first; the message scrape is a fallback.
+		const page = codeOf("../pages/RunDetail.tsx");
+		// The fix: `needsInputData?.field` appears before the regex fallback on the same line.
+		expect(page).toContain("needsInputData?.field");
+		// The structured why appears before the paren-scrape.
+		expect(page).toContain("needsInputData?.why");
+	});
+
+	it("keeps the message-scrape as a fallback (not removed)", () => {
+		// Older runners that predate #621 emit no `data`; the regex is still needed.
+		const page = codeOf("../pages/RunDetail.tsx");
+		expect(page).toContain("Needs your input");
+	});
+
+	it("no longer contains the old comment that called the scrape the implementation", () => {
+		// The comment that documented the broken state was updated; the old wording is gone.
+		const page = codeOf("../pages/RunDetail.tsx");
+		expect(page).not.toContain("the line below is the");
+	});
+});

@@ -409,12 +409,14 @@ export default function RunDetail() {
 		reason === "needs_input" || needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "") ? "value"
 		: reason === "challenge" || /captcha|verify you|human check/i.test(`${handoffEv?.message ?? ""}`) ? "captcha" : "stuck";
 	const detail = needsInputEv?.message ?? handoffEv?.message ?? "";
-	// This opened with `task?.handoff_field ||`, which could never win: nothing in the platform or
-	// the runner has ever emitted that field (#617). So what the user is asked for has always come
-	// from scraping the handoff MESSAGE, and saying so is the point — the line below is the
-	// implementation, not a fallback, until a structured field actually exists to prefer.
-	const field = detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
-	const paren = detail.match(/\(([^)]*)\)/)?.[1] ?? "";
+	// Prefer the structured data the loop emits onto the event (#621): `agent.needs_input` carries
+	// `data: { field, why }` from `request_user_info` — the field name is exactly what the brain
+	// already knew it needed. Fall back to scraping the message only for events from an older runner
+	// that predates the structured payload.
+	const needsInputData = needsInputEv?.data as { field?: string; why?: string } | undefined;
+	const field = needsInputData?.field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
+	const why = needsInputData?.why ?? "";
+	const paren = why || (detail.match(/\(([^)]*)\)/)?.[1] ?? "");
 	const fromIdx = paren.toLowerCase().indexOf("from:");
 	const options = fromIdx >= 0 ? paren.slice(fromIdx + 5).split(",").map((s) => s.trim()).filter((s) => s && s.length < 70).slice(0, 16) : [];
 

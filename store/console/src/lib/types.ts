@@ -208,8 +208,9 @@ export interface RuntimeTask {
 	 * · `handoff_field` — the costly one. `RunDetail.tsx` opened its "what does it need from you"
 	 *   label with `task?.handoff_field || <regex over the message> || "your answer"`. The left
 	 *   operand can never win, so the prompt a user is asked to answer has ALWAYS been scraped out
-	 *   of prose or defaulted to the words "your answer". Restoring it needs the runner to emit a
-	 *   structured field; until then the fallback is the real implementation, not a fallback.
+	 *   of prose or defaulted to the words "your answer". The structured answer is now on the
+	 *   `agent.needs_input` event's `data.field` (`RuntimeEvent.data`) — `RunDetail` reads that
+	 *   first (#621), with the regex scrape as a fallback for events from older runners.
 	 */
 }
 
