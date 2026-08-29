@@ -25,6 +25,8 @@ function fakeStatsDb() {
 	const env = {
 		DB: {
 			prepare: (sql: string) => ({
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+				run: async () => ({ meta: { changes: 0 } }),
 				bind: (...b: unknown[]) => ({
 					run: async () => {
 						if (!sql.includes("INSERT INTO agent_stats_daily")) return { meta: { changes: 0 } };
@@ -57,6 +59,8 @@ function fakeActivityDb(byTable: Record<string, Array<{ instance_id: string; use
 	const env = {
 		DB: {
 			prepare: (sql: string) => ({
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+				run: async () => ({ meta: { changes: 0 } }),
 				bind: (...binds: unknown[]) => ({
 					all: async () => {
 						asked.push({ sql, binds });
@@ -284,6 +288,8 @@ describe("runStatsRollup — all-or-nothing write per instance (#658)", () => {
 		const env = {
 			DB: {
 				prepare: (sql: string) => ({
+					// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+					run: async () => ({ meta: { changes: 0 } }),
 					bind: (...binds: unknown[]) => ({
 						all: async () => {
 							// Activity source queries — return the one test instance from ai_usage only.

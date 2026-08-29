@@ -232,25 +232,34 @@ describe("recordCodingFailure — the durable record itself", () => {
 	});
 
 	it("never throws — it runs on a path that is already failing", async () => {
-		const env = {
-			DB: {
-				prepare() {
-					throw new Error("db down");
+		// Spy so the `[error-log] failed to persist: …` line is captured as a positive assertion
+		// rather than printed as noise — the same technique on-error.test.ts uses.
+		const errors: unknown[][] = [];
+		const spy = vi.spyOn(console, "error").mockImplementation((...a) => { errors.push(a); });
+		try {
+			const env = {
+				DB: {
+					prepare() {
+						throw new Error("db down");
+					},
 				},
-			},
-		} as unknown as Env;
-		await expect(
-			recordCodingFailure(env, {
-				err: new Error("boom"),
-				userId: "u1",
-				instanceId: "i1",
-				sessionId: "s1",
-				disposition: "ended",
-				steps: 0,
-				probe: new CodingRunProbe(),
-				startedAt: Date.now(),
-			}),
-		).resolves.toMatchObject({ class: "unknown" });
+			} as unknown as Env;
+			await expect(
+				recordCodingFailure(env, {
+					err: new Error("boom"),
+					userId: "u1",
+					instanceId: "i1",
+					sessionId: "s1",
+					disposition: "ended",
+					steps: 0,
+					probe: new CodingRunProbe(),
+					startedAt: Date.now(),
+				}),
+			).resolves.toMatchObject({ class: "unknown" });
+			expect(errors.some((a) => String(a[0]).includes("failed to persist"))).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 

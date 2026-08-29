@@ -74,9 +74,11 @@ function spyEngine(opts: {
 	return { engine, stored, deleted, events };
 }
 
-/** logError/logEvent write to D1; a no-op DB keeps the failure paths quiet in tests. */
+/** logError/logEvent write to D1; a no-op DB keeps the failure paths quiet in tests.
+ *  Both the bound (.bind().run()) and the unbound (.run()) path must exist — the latter
+ *  is reached by logEvent's opportunistic retention DELETE (#680). */
 const env = {
-	DB: { prepare: () => ({ bind: () => ({ run: async () => ({}) }) }) },
+	DB: { prepare: () => ({ run: async () => ({ meta: { changes: 0 } }), bind: () => ({ run: async () => ({}) }) }) },
 } as unknown as Env;
 
 function ctxFor(

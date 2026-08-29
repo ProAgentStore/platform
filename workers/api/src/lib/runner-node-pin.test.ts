@@ -13,6 +13,8 @@ function stubEnv(storedConfig: Record<string, unknown> = {}, changes = 1) {
 	const env = {
 		DB: {
 			prepare: (sql: string) => ({
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+				run: async () => ({ meta: { changes: 0 } }),
 				bind: (...args: unknown[]) => ({
 					first: async () => (sql.includes("SELECT config") ? { config: JSON.stringify(storedConfig) } : null),
 					run: async () => {

@@ -45,8 +45,12 @@ function envWithConfig(config: unknown, create?: (arg: unknown) => Promise<{ id:
 	return {
 		DB: {
 			prepare: (sql: string) => ({
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+				run: async () => ({ meta: { changes: 0 } }),
 				bind: () => ({
 					first: async () => (sql.includes("JOIN agents") ? { slug: "fixture", category: "general", config: JSON.stringify(agentConfig ?? {}) } : row),
+					// .run() — reached by logEvent INSERT and openRun's INSERT OR IGNORE (#680).
+					run: async () => ({ meta: { changes: 1 } }),
 				}),
 			}),
 		},

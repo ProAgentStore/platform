@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	classifyEngineMetering,
 	describeUnmetered,
@@ -20,6 +20,10 @@ function fakeDb(first: Record<string, unknown> | null = null) {
 	const DB = {
 		prepare(sql: string) {
 			return {
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE
+				// (`Math.random() < 0.01`). Without this the catch block in logEvent emits
+				// `[events] failed to persist: … .run is not a function` (#680).
+				async run() { return { success: true }; },
 				bind(...args: unknown[]) {
 					return {
 						async run() {
@@ -200,14 +204,23 @@ describe("noteUnmeteredDrive", () => {
 	});
 
 	it("never throws when the ledger write blows up", async () => {
-		const env = {
-			DB: {
-				prepare() {
-					throw new Error("d1 down");
+		// Spy so the `[events] failed to persist: …` line is captured as a positive assertion
+		// rather than printed as noise — the same technique on-error.test.ts uses.
+		const errors: unknown[][] = [];
+		const spy = vi.spyOn(console, "error").mockImplementation((...a) => { errors.push(a); });
+		try {
+			const env = {
+				DB: {
+					prepare() {
+						throw new Error("d1 down");
+					},
 				},
-			},
-		} as unknown as Env;
-		await expect(noteUnmeteredDrive(env, { userId: "u1", instanceId: "i1" }, { driver: "terminal", target: "t" })).resolves.toBeUndefined();
+			} as unknown as Env;
+			await expect(noteUnmeteredDrive(env, { userId: "u1", instanceId: "i1" }, { driver: "terminal", target: "t" })).resolves.toBeUndefined();
+			expect(errors.some((a) => String(a[0]).includes("[events] failed to persist"))).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 

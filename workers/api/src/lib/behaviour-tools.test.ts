@@ -14,6 +14,8 @@ function stubEnv(initialConfig: Record<string, unknown> = {}, agentConfig: Recor
 		DB: {
 			prepare(sql: string) {
 				return {
+					// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+					async run() { return { meta: { changes: 0 } }; },
 					bind(...args: unknown[]) {
 						return {
 							async first() {

@@ -80,6 +80,8 @@ function testApp(
 		DB: {
 			prepare(sql: string) {
 				return {
+					// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+					run: async () => ({ meta: { changes: 0 } }),
 					bind(...binds: unknown[]) {
 						return {
 							first: async () => {

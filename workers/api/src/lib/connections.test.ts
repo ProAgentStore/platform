@@ -27,6 +27,9 @@ function buildEnv(
 	const DB = {
 		prepare(sql: string) {
 			return {
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE
+				// (`Math.random() < 0.01`). Without this the catch block emits noise (#680).
+				async run() { return { meta: { changes: 0 } }; },
 				bind(...args: unknown[]) {
 					return {
 						async first() {

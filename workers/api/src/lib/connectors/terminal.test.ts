@@ -20,8 +20,18 @@ const tool = (name: string) => {
 	if (!t) throw new Error(`no terminal tool ${name}`);
 	return t;
 };
+/** Minimal DB stub: handles bind-less .run() (logEvent retention DELETE) and bound .run()
+ *  (logEvent INSERT via noteUnmeteredDrive). Without it logEvent emits noise (#680). */
+const stubDb = (): Env["DB"] =>
+	({
+		prepare: () => ({
+			run: async () => ({ meta: { changes: 0 } }),
+			bind: () => ({ run: async () => ({ meta: { changes: 1 } }) }),
+		}),
+	}) as unknown as Env["DB"];
+
 const ctx = (over: Record<string, unknown> = {}) =>
-	({ env: {} as Env, userId: "u1", instanceId: "i1", agentId: "i1", ...over }) as never;
+	({ env: { DB: stubDb() } as unknown as Env, userId: "u1", instanceId: "i1", agentId: "i1", ...over }) as never;
 const FAKE_CONN = { kind: "relay" } as never;
 
 beforeEach(() => {

@@ -83,8 +83,18 @@ describe("logEvent", () => {
 	});
 
 	it("never throws even if the DB blows up", async () => {
-		const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
-		await expect(logEvent(env, { source: "x", event: "y" })).resolves.toBeUndefined();
+		// Spy so the `[events] failed to persist: …` line is captured as a positive assertion
+		// rather than printed as noise — the same technique on-error.test.ts uses. The behaviour
+		// under test is unchanged: logEvent must not throw; it must report via console.error.
+		const errors: unknown[][] = [];
+		const spy = vi.spyOn(console, "error").mockImplementation((...a) => { errors.push(a); });
+		try {
+			const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
+			await expect(logEvent(env, { source: "x", event: "y" })).resolves.toBeUndefined();
+			expect(errors.some((a) => String(a[0]).includes("[events] failed to persist"))).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it("opportunistically prunes old rows (retention)", async () => {

@@ -14,6 +14,8 @@ function mockEnv(kek: string | null = KEK): Env {
 	let seq = 0;
 	const cols = ["id", "instance_id", "user_id", "domain", "login_url", "username", "secrets_ciphertext", "secrets_dek", "secrets_iv", "comments", "recovery_history"];
 	const prepare = (sql: string) => ({
+		// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+		run: async () => ({ meta: { changes: 0 } }),
 		bind: (...a: unknown[]) => ({
 			all: async () => {
 				if (/WHERE instance_id = \?1 AND user_id = \?2/.test(sql)) {

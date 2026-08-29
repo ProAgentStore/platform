@@ -32,8 +32,11 @@ const env = {
 	DB: {
 		prepare(sql: string) {
 			return {
+				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+				async run() { return { meta: { changes: 0 } }; },
 				bind() {
 					return {
+						async run() { return { meta: { changes: 1 } }; },
 						async all() {
 							if (sql.includes("agent_supervision")) {
 								return { results: [{ supervisor_instance_id: "sup", subordinate_instance_id: "sub" }] };

@@ -250,9 +250,15 @@ function envConsentOnlyFor(instanceId: string): { env: Env; asked: string[] } {
 		DB: {
 			prepare(_sql: string) {
 				return {
+					// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
+					async run() { return { meta: { changes: 0 } }; },
 					bind(...args: unknown[]) {
 						asked.push(String(args[0]));
-						return { first: async () => (args[0] === instanceId ? { ok: 1 } : null) };
+						return {
+							first: async () => (args[0] === instanceId ? { ok: 1 } : null),
+							// .run() — reached by logEvent's INSERT when delegated tool calls are audited.
+							run: async () => ({ meta: { changes: 1 } }),
+						};
 					},
 				};
 			},

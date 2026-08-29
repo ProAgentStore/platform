@@ -58,8 +58,17 @@ describe("logError", () => {
 	});
 
 	it("never throws even if the DB blows up", async () => {
-		const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
-		await expect(logError(env, { source: "x", message: "y" })).resolves.toBeUndefined();
+		// Spy so the `[error-log] failed to persist: …` line is captured as a positive assertion
+		// rather than printed as noise — the same technique on-error.test.ts uses.
+		const errors: unknown[][] = [];
+		const spy = vi.spyOn(console, "error").mockImplementation((...a) => { errors.push(a); });
+		try {
+			const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
+			await expect(logError(env, { source: "x", message: "y" })).resolves.toBeUndefined();
+			expect(errors.some((a) => String(a[0]).includes("[error-log] failed to persist"))).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it("bounds oversized message and context", async () => {
