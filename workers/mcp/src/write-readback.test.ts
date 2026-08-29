@@ -251,6 +251,12 @@ const READBACK: Record<string, string | null> = {
 	"coding_session_fresh.engine_id": "coding_sessions_list",
 	"coding_session_open.engine_id": "coding_sessions_list",
 
+	// ── subscribe ──
+	// The idempotency key is stored on the instance row as a dedup guard (#716). It is not
+	// a piece of content the subscriber manages; no reader surfaces it, and that is correct —
+	// the same rule keeps the credentials vault and the relay token off MCP.
+	"subscribe_agent.idempotency_key": null,
+
 	// ── apply ──
 	"apply_to_job.url": "instance_board",
 	"apply_to_job.submit": "instance_board",

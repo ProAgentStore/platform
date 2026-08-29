@@ -42,6 +42,8 @@ interface Opts {
 	storageGet?: unknown;
 	/** users.preferences blob — the owner's account-level voice/translation defaults (#211). */
 	accountPreferences?: string;
+	/** Simulates an existing instance row for idempotency-key lookups (#716). */
+	idempotencyMatch?: { id: string; agent_id: string; status: string };
 }
 
 function buildApp(opts: Opts = {}) {
@@ -65,6 +67,10 @@ function buildApp(opts: Opts = {}) {
 							if (sql.includes("FROM agents") && sql.includes("visibility = 'published'")) {
 								const key = args[0] as string;
 								return (opts.agents ?? []).find((a) => a.id === key || a.slug === key) ?? null;
+							}
+							// subscribe: idempotency key lookup (#716)
+							if (sql.includes("FROM agent_instances") && sql.includes("idempotency_key = ?2")) {
+								return opts.idempotencyMatch ?? null;
 							}
 							// subscribe: numbering + cap counts
 							if (sql.includes("COUNT(*) AS n") && sql.includes("agent_id = ?1 AND user_id = ?2")) {
@@ -268,6 +274,58 @@ describe("POST /v1/instances/:agentId/subscribe (integration)", () => {
 		// config arg carries the numbered display name.
 		const cfg = JSON.parse(insert.args[3] as string);
 		expect(cfg.displayName).toBe("Site Monitor 2");
+	});
+
+	// ─── idempotency key (#716) ──────────────────────────────────────────────────
+
+	it("stores the idempotency key on the instance row when one is supplied", async () => {
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }],
+		});
+		const res = await post(app, env, "/v1/instances/a1/subscribe", { idempotencyKey: "key-abc-123" }, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO agent_instances"))!;
+		// idempotency_key is the 5th bound argument (?5).
+		expect(insert.args[4]).toBe("key-abc-123");
+	});
+
+	it("returns the existing instance on a retry with the same idempotency key — no second INSERT", async () => {
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }],
+			idempotencyMatch: { id: "inst-original", agent_id: "a1", status: "active" },
+		});
+		const res = await post(app, env, "/v1/instances/a1/subscribe", { idempotencyKey: "key-abc-123" }, await tokenFor("u1"));
+		// 200 (not 201) signals an idempotent replay.
+		expect(res.status).toBe(200);
+		const body = await res.json() as { instanceId: string; agentId: string; status: string; idempotent: boolean };
+		expect(body.instanceId).toBe("inst-original");
+		expect(body.agentId).toBe("a1");
+		expect(body.status).toBe("active");
+		expect(body.idempotent).toBe(true);
+		// No second INSERT was written.
+		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_instances"))).toBe(false);
+	});
+
+	it("truncates an idempotency key that exceeds 128 chars", async () => {
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }],
+		});
+		const longKey = "x".repeat(200);
+		const res = await post(app, env, "/v1/instances/a1/subscribe", { idempotencyKey: longKey }, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO agent_instances"))!;
+		expect((insert.args[4] as string).length).toBe(128);
+	});
+
+	it("does not bind an idempotency key when the body does not supply one", async () => {
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a1", slug: "sitemon", name: "Site Monitor", visibility: "published" }],
+		});
+		const res = await post(app, env, "/v1/instances/a1/subscribe", {}, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO agent_instances"))!;
+		// ?5 is null when no key was supplied.
+		expect(insert.args[4]).toBeNull();
 	});
 });
 

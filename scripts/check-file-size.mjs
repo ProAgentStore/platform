@@ -162,7 +162,7 @@ const PINS = {
 	// +2 for #496 AC2: the owner-initiated resync-identity route is mounted from a new sub-module
 	// (instances-identity.ts) to keep this file's size honest; the two new lines are the import
 	// and the register call. Raised rather than split: the whole change is a mount and an import.
-	"workers/api/src/routes/instances.ts": 1003, // +2: import agentLink + pass url to subscribe notification (#622)
+	"workers/api/src/routes/instances.ts": 1027, // +24: idempotency key guard + INSERT column + Opts.idempotencyMatch (#716)
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that

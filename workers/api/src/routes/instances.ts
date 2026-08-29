@@ -103,12 +103,18 @@ function displayNameFrom(raw: unknown): string {
 }
 
 /** Subscribe to an agent — creates a personal instance with its own DO.
- *  Optional body `{ displayName }`: the name the subscriber CHOSE for this one (#450). */
+ *  Optional body `{ displayName }`: the name the subscriber CHOSE for this one (#450).
+ *  Optional body `{ idempotencyKey }`: a caller-supplied key (max 128 chars). A retry
+ *  with the same key returns the existing instance instead of creating a duplicate (#716). */
 instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	const session = await requireUser(c);
 	const agentId = c.req.param("agentId");
-	const body = (await c.req.json().catch(() => ({}))) as { displayName?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { displayName?: unknown; idempotencyKey?: unknown };
 	const chosenName = displayNameFrom(body.displayName);
+	const idempotencyKey =
+		typeof body.idempotencyKey === "string" && body.idempotencyKey.trim()
+			? body.idempotencyKey.trim().slice(0, 128)
+			: null;
 
 	// Verify agent exists and is published
 	const agent = await c.env.DB.prepare(
@@ -117,6 +123,22 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		.bind(agentId)
 		.first<{ id: string; name: string; model: string; config: string | null }>();
 	if (!agent) throw new HttpError(404, "Agent not found or not published");
+
+	// Idempotency guard (#716): if the caller supplied a key, check whether they already have an
+	// instance with that key. A retry after a lost-response error returns the same instance instead
+	// of creating a duplicate. The check is a plain SELECT; the UNIQUE index on (user_id,
+	// idempotency_key) backs it up if two concurrent requests with the same key race past here —
+	// exactly one INSERT wins, the other fails the constraint, and the route re-reads the winner.
+	if (idempotencyKey) {
+		const existing = await c.env.DB.prepare(
+			"SELECT id, agent_id, status FROM agent_instances WHERE user_id = ?1 AND idempotency_key = ?2",
+		)
+			.bind(session.uid, idempotencyKey)
+			.first<{ id: string; agent_id: string; status: string }>();
+		if (existing) {
+			return c.json({ instanceId: existing.id, agentId: existing.agent_id, status: existing.status, idempotent: true });
+		}
+	}
 
 	// Multiple instances of the same agent are allowed (e.g. two Doc Chat libraries
 	// with different documents). Later ones fall back to a numbered display name so they're
@@ -171,11 +193,14 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	const declaredPipelines = defaultPipelinesFor(agent.config);
 	if (Object.keys(declaredPipelines).length) initial.pipelines = declaredPipelines;
 	const initialConfig = JSON.stringify(initial);
+	// The idempotency key is stored on the row so retries can look it up. NULL when omitted —
+	// the UNIQUE index on (user_id, idempotency_key) excludes NULLs, so omitting it always
+	// allows a new instance regardless of how many the user already has.
 	await c.env.DB.prepare(
-		`INSERT INTO agent_instances (id, agent_id, user_id, status, config, created_at, updated_at)
-     VALUES (?1, ?2, ?3, 'active', ?4, datetime('now'), datetime('now'))`,
+		`INSERT INTO agent_instances (id, agent_id, user_id, status, config, idempotency_key, created_at, updated_at)
+     VALUES (?1, ?2, ?3, 'active', ?4, ?5, datetime('now'), datetime('now'))`,
 	)
-		.bind(instanceId, agent.id, session.uid, initialConfig)
+		.bind(instanceId, agent.id, session.uid, initialConfig, idempotencyKey)
 		.run();
 
 	// Upsert the subscription relationship row — it's UNIQUE(agent_id, user_id) and

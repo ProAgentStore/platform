@@ -224,4 +224,10 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// fallback) are NOT what moved the hash; descriptions are excluded from the fingerprint on
 	// purpose, per DECISION 1 above. Appended, never edited in place: 0.1.13 is published.
 	"0.1.14": "sha256:586017fa55be526d398c55945cedee7cff0db4ce6d6cd083ccdd940dd59d526d",
+	// 0.1.15 (#716): `subscribe_agent` gained an `idempotency_key` argument — a caller-supplied
+	// dedup guard that lets a retry after a lost-response error return the existing instance
+	// instead of creating a duplicate. An argument added to a tool lands in `inputSchema`, which
+	// IS in the fingerprint. No tool name, annotation or `outputSchema` moved.
+	// Appended, never edited in place: 0.1.14 is published.
+	"0.1.15": "sha256:f2a8fae67c5502cceaca8459699f5c90f92277d1b3bb1f797f5531319b107e1d",
 };

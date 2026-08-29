@@ -284,13 +284,19 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"subscribe_agent",
-		"Subscribe to a published agent and create your own private runnable instance. Use this before chat_with_instance for real user runs.",
+		"Subscribe to a published agent and create your own private runnable instance. Use this before chat_with_instance for real user runs. Pass idempotency_key to make retries safe: a retry with the same key returns the existing instance instead of creating a duplicate (#716).",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Published agent ID or slug"),
+			idempotency_key: z
+				.string()
+				.optional()
+				.describe(
+					"Caller-supplied idempotency key (max 128 chars). If the same key is sent again the existing instance is returned unchanged — safe to retry after a lost-response error without creating a duplicate.",
+				),
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, agent_id, dry_run }) => {
+		async ({ token, agent_id, idempotency_key, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const input = { agent_id };
@@ -302,16 +308,19 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 					method: "POST",
 				});
 			}
+			const body: Record<string, string> = {};
+			if (idempotency_key) body.idempotencyKey = idempotency_key;
 			const data = (await authedCall(
 				`/v1/instances/${agent_id}/subscribe`,
 				sessionToken,
-				{ method: "POST" },
+				{ method: "POST", body: JSON.stringify(body) },
 				env,
-			)) as { instanceId?: string; agentId?: string; status?: string; error?: string };
+			)) as { instanceId?: string; agentId?: string; status?: string; idempotent?: boolean; error?: string };
 			if (data.instanceId) {
 				await audit(safetyFor(token), { tool: "subscribe_agent", action: "completed", input, result: data });
+				const verb = data.idempotent ? "Already subscribed (idempotent retry)" : "Subscribed";
 				return text(
-					`Subscribed.\nInstance: ${data.instanceId}\nAgent: ${data.agentId}\nStatus: ${data.status}`,
+					`${verb}.\nInstance: ${data.instanceId}\nAgent: ${data.agentId}\nStatus: ${data.status}`,
 				);
 			}
 			if (data.error?.includes("Already subscribed")) {

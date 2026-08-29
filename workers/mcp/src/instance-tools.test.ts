@@ -568,6 +568,39 @@ describe("subscribe_agent", () => {
 		expect(res.content[0].text).toContain("Already subscribed");
 		expect(res.content[0].text).toContain("inst-existing");
 	});
+
+	it("passes idempotency_key to the API in the POST body (#716)", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/subscribe") && m === "POST", {
+			body: { instanceId: "inst-7", agentId: "a1", status: "active" },
+		});
+		await h.tools.get("subscribe_agent")!.handler({ agent_id: "a1", idempotency_key: "my-key-xyz" });
+		const call = h.fetchStub.calls.find((c) => c.url.endsWith("/subscribe"));
+		expect(call).toBeTruthy();
+		const sent = JSON.parse(call!.body!);
+		expect(sent.idempotencyKey).toBe("my-key-xyz");
+	});
+
+	it("reports an idempotent replay with the appropriate label (#716)", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/subscribe") && m === "POST", {
+			body: { instanceId: "inst-original", agentId: "a1", status: "active", idempotent: true },
+		});
+		const res = await h.tools.get("subscribe_agent")!.handler({ agent_id: "a1", idempotency_key: "my-key-xyz" });
+		expect(res.content[0].text).toContain("Already subscribed (idempotent retry)");
+		expect(res.content[0].text).toContain("inst-original");
+	});
+
+	it("omits idempotencyKey from the body when the tool arg is absent", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/subscribe") && m === "POST", {
+			body: { instanceId: "inst-8", agentId: "a1", status: "active" },
+		});
+		await h.tools.get("subscribe_agent")!.handler({ agent_id: "a1" });
+		const call = h.fetchStub.calls.find((c) => c.url.endsWith("/subscribe"));
+		const sent = JSON.parse(call!.body!);
+		expect(sent.idempotencyKey).toBeUndefined();
+	});
 });
 
 // ── chat_with_instance: runtime scope + response extraction ───────────────────

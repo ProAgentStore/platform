@@ -337,7 +337,7 @@ const TABLE: Record<string, Row> = {
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
-	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,token"],
+	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],
 	system_status: ["coding", "none", null, null, "instance_id,token"],
 	ticket_thread: ["board", "none", null, null, "instance_id,task_id,token"],
 	unregister_instance_runtime: ["runtime", "destructive", "unregister_instance_runtime", "envelope", "confirm,dry_run,instance_id,token"],
