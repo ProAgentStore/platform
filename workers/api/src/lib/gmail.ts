@@ -345,8 +345,12 @@ function toGmailMessage(msg: RawGmailMessage, maxChars: number): GmailMessage {
 		messageId: header("message-id"),
 		references: header("references"),
 		snippet: msg.snippet ?? "",
-		text: collectText(msg.payload).slice(0, maxChars),
+		// attachments comes BEFORE text: capToolResult keeps the head, and the attachment manifest
+		// (small, structural, must-survive) must not be truncated when a long body fills the cap.
+		// text is the large, lossy field — it already has its own maxChars cut above — so it belongs
+		// at the tail where a second cut is announced rather than silent. (#755)
 		attachments: collectAttachments(msg.payload),
+		text: collectText(msg.payload).slice(0, maxChars),
 	};
 }
 

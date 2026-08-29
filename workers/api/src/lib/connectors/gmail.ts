@@ -193,8 +193,8 @@ const readHandler: ToolDef["handler"] = async (ctx, input) => {
  */
 const downloadHandler: ToolDef["handler"] = async (ctx, input) => {
 	const messageId = typeof input.message_id === "string" ? input.message_id.trim() : "";
-	const attachmentId = typeof input.attachment_id === "string" ? input.attachment_id.trim() : "";
-	if (!messageId || !attachmentId) {
+	const attachmentRef = typeof input.attachment_id === "string" ? input.attachment_id.trim() : "";
+	if (!messageId || !attachmentRef) {
 		return fail("message_id and attachment_id are both required — gmail_read_message lists them.");
 	}
 	if (!ctx.instanceId) return fail("Downloading an attachment requires an agent instance to store it in.");
@@ -206,11 +206,31 @@ const downloadHandler: ToolDef["handler"] = async (ctx, input) => {
 	try {
 		// Re-read the message for the attachment's declared name/type/size. The alternative is
 		// trusting three more model-supplied strings, and the filename becomes an R2 key.
+		//
+		// Resolve the attachment by EITHER the opaque attachmentId OR the filename (#755). The id the
+		// model holds may have been garbled, truncated by capToolResult, or rotated by Gmail between
+		// two calls — any of which makes an exact-id match impossible. A filename is short, human-
+		// readable, and cannot be cut by the cap. The att we find here is authoritative: we use
+		// att.attachmentId (from Gmail's own response) for the download call, never the model-supplied
+		// token. That preserves the property the re-fetch exists to protect (filename → R2 key comes
+		// from Gmail, not from the model) while removing the fragile round-trip of a long opaque token.
 		const msg = await getMessage(resolved.token, messageId, 1);
-		const att = msg.attachments.find((a) => a.attachmentId === attachmentId);
+		// Prefer exact attachmentId match; fall back to filename match.
+		let att = msg.attachments.find((a) => a.attachmentId === attachmentRef);
 		if (!att) {
-			const names = msg.attachments.map((a) => `${a.filename} (${a.attachmentId || "inline, no id"})`).join(", ");
-			return fail(`That message has no attachment with id ${attachmentId}.${names ? ` It has: ${names}` : " It has no attachments."}`);
+			const byName = msg.attachments.filter((a) => a.filename === attachmentRef);
+			if (byName.length === 1) {
+				att = byName[0];
+			} else if (byName.length > 1) {
+				const refs = byName.map((a, i) => `att${i + 1}: "${a.filename}"`).join(", ");
+				return fail(`"${attachmentRef}" matches more than one attachment in this message (${refs}). Use the attachment_id from gmail_read_message to disambiguate.`);
+			}
+		}
+		if (!att) {
+			// Refusal text lists filename + ordinal refs — NOT the raw opaque attachmentId tokens,
+			// which are long blobs the model cannot reliably copy. (#755)
+			const refs = msg.attachments.map((a, i) => `att${i + 1}: "${a.filename}"`).join(", ");
+			return fail(`That message has no attachment matching "${attachmentRef}".${refs ? ` It has: ${refs}` : " It has no attachments."}`);
 		}
 		if (!att.attachmentId) {
 			return fail(`"${att.filename}" is stored inline in the message rather than as a fetchable attachment, so it cannot be downloaded by id.`);
@@ -219,7 +239,8 @@ const downloadHandler: ToolDef["handler"] = async (ctx, input) => {
 			return fail(`"${att.filename}" is ${Math.round(att.size / 1024 / 1024)}MB, over the ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB limit for agent downloads.`);
 		}
 
-		const { base64url, size } = await downloadAttachment(resolved.token, messageId, attachmentId);
+		// Use att.attachmentId (from Gmail's fresh response), not the model-supplied attachmentRef.
+		const { base64url, size } = await downloadAttachment(resolved.token, messageId, att.attachmentId);
 		const stub = env.AGENT.get(env.AGENT.idFromName(ctx.instanceId));
 		const doRes = await stub.fetch(
 			new Request("https://agent/files", {

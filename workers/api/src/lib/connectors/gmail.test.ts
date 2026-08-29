@@ -161,14 +161,73 @@ describe("gmail_download_attachment", () => {
 		expect(res.content).toMatch(/both required/);
 	});
 
-	it("refuses an attachment id the message does not have, and lists what it does have", async () => {
+	it("refuses an unrecognised ref and lists what is there by filename — no raw attachment id tokens (#755)", async () => {
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(MESSAGE), { status: 200 }));
 		const res = await tool("gmail_download_attachment")(ctxWith(envWithPermission(true)), {
 			message_id: "m1",
 			attachment_id: "wrong-id",
 		});
 		expect(res.success).toBe(false);
+		// Lists the filename so the model knows what to ask for next.
 		expect(res.content).toContain("Form.pdf");
+		// Must NOT list the raw opaque token — that is exactly the string that is hard to copy. (#755)
+		expect(res.content).not.toContain("att-1");
+	});
+
+	it("accepts a filename in place of the opaque attachment id (#755)", async () => {
+		const posted: Array<Record<string, unknown>> = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			if (String(url).includes("/attachments/")) {
+				return new Response(JSON.stringify({ data: btoa("%PDF-1.4 fake").replace(/\+/g, "-").replace(/\//g, "_"), size: 12 }), { status: 200 });
+			}
+			return new Response(JSON.stringify(MESSAGE), { status: 200 });
+		});
+		const env = {
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({
+					fetch: async (req: Request) => {
+						if (new URL(req.url).pathname === "/state") {
+							return new Response(JSON.stringify({ permissions: { email: true } }), { status: 200 });
+						}
+						posted.push((await req.json()) as Record<string, unknown>);
+						return new Response(JSON.stringify({ id: "file-88", name: "Form.pdf", size: 12 }), { status: 201 });
+					},
+				}),
+			},
+		} as unknown as Env;
+
+		// Pass the filename, not the opaque id — this is what the model has when the id was truncated.
+		const res = await tool("gmail_download_attachment")(ctxWith(env), { message_id: "m1", attachment_id: "Form.pdf" });
+		expect(res.success).toBe(true);
+		expect(res.content).toContain("file-88");
+		// The name stored must come from Gmail's own response, not the model-supplied string.
+		// (Both happen to be "Form.pdf" here, but the assertion is on the stored name, not the input.)
+		expect(posted[0]).toMatchObject({ name: "Form.pdf", mime_type: "application/pdf" });
+	});
+
+	it("refuses when the filename matches more than one attachment, naming both (#755)", async () => {
+		const dupe = {
+			...MESSAGE,
+			payload: {
+				...MESSAGE.payload,
+				parts: [
+					{ mimeType: "application/pdf", filename: "Form.pdf", body: { attachmentId: "att-1", size: 1024 } },
+					{ mimeType: "application/pdf", filename: "Form.pdf", body: { attachmentId: "att-2", size: 2048 } },
+				],
+			},
+		};
+		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(dupe), { status: 200 }));
+		const res = await tool("gmail_download_attachment")(ctxWith(envWithPermission(true)), {
+			message_id: "m1",
+			attachment_id: "Form.pdf",
+		});
+		expect(res.success).toBe(false);
+		// Must mention both so the caller can pick by ordinal.
+		expect(res.content).toContain("att1");
+		expect(res.content).toContain("att2");
+		// Must not guess — this is the determinism property.
+		expect(res.content).not.toContain("file-");
 	});
 
 	it("refuses an attachment over the size cap before fetching its bytes", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildQuery, extractCode, extractLinks, rankConfirmationLinks } from "./gmail.js";
+import { capToolResult } from "./tool-result-cap.js";
 
 /**
  * Fixture tokens here are deliberately LOW-ENTROPY and say so in the value itself (#295).
@@ -365,6 +366,56 @@ describe("buildMimeMessage", () => {
 		const [headers, ...rest] = mime.split("\r\n\r\n");
 		expect(rest.join("\r\n\r\n").split("\r\n").filter((l) => l.length > 76)).toEqual([]);
 		expect(headers.split("\r\n").filter((l) => l.length > 78)).toEqual([]);
+	});
+});
+
+// ── #755: attachments survive capToolResult ───────────────────────────────────
+
+describe("getMessage serialises attachments before text (#755)", () => {
+	it("a read result with a 39 000-char body still carries a complete attachments array after capToolResult", async () => {
+		const longBody = "x".repeat(39_000);
+		const b64urlBody = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+		const msg = {
+			id: "msg-1",
+			threadId: "thread-1",
+			snippet: "Attached",
+			payload: {
+				mimeType: "multipart/mixed",
+				filename: "",
+				headers: [
+					{ name: "From", value: "kelly@example.test" },
+					{ name: "To", value: "parent@example.test" },
+					{ name: "Subject", value: "Forms" },
+					{ name: "Date", value: "Mon, 1 Jan 2026 10:00:00 +1000" },
+					{ name: "Message-ID", value: "<abc@example.test>" },
+					{ name: "References", value: "" },
+				],
+				parts: [
+					{ mimeType: "text/plain", filename: "", body: { data: b64urlBody(longBody) } },
+					{ mimeType: "application/pdf", filename: "SummerComp.pdf", body: { attachmentId: "att-1", size: 84210 } },
+					{ mimeType: "application/pdf", filename: "JuniorChamps.pdf", body: { attachmentId: "att-2", size: 51200 } },
+				],
+			},
+		};
+
+		globalThis.fetch = (async () => new Response(JSON.stringify(msg), { status: 200 })) as unknown as typeof fetch;
+		const { getMessage } = await import("./gmail.js");
+		const result = await getMessage("tok", "msg-1");
+
+		// Serialise the way the connector does (gmail_read_message okUntrusted), then apply the cap.
+		const serialised = JSON.stringify(result, null, 2);
+		const capped = capToolResult(serialised);
+
+		// The cap must have fired (the body is enormous).
+		expect(capped.length).toBeLessThan(serialised.length);
+		expect(capped).toContain("[truncated:");
+
+		// Both attachment ids must survive in the capped string.
+		// Before #755 they were AFTER the long text field and got cut; now they are BEFORE it.
+		expect(capped).toContain('"att-1"');
+		expect(capped).toContain('"att-2"');
+		expect(capped).toContain('"SummerComp.pdf"');
+		expect(capped).toContain('"JuniorChamps.pdf"');
 	});
 });
 
