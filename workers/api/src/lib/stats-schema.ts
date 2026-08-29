@@ -210,7 +210,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		label: "Trigger fires",
 		kinds: ["number", "line", "bar", "table"],
 		describes: "Webhook and cron trigger events, grouped by status for bar/table.",
-		caveat: "Counts trigger EVENTS, which includes retries and failures — it is not a count of successful work.",
+		caveat: "Counts completed dispatch attempts (succeeded + failed). Includes retries and failures — it is not a count of successful work.",
 		unit: "count",
 		params: [LIMIT_PARAM],
 	},

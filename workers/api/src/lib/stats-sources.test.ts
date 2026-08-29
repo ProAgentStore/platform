@@ -210,3 +210,31 @@ describe("readDaily", () => {
 		return readDaily(ctx(env), card({ source: "runs.outcome", kind: "bar" }), "2026-08-06").then((v) => expect(v).toBeNull());
 	});
 });
+
+describe("triggers.fires (#663 — intermediate rows must not inflate the count)", () => {
+	// dispatchTrigger always writes a 'running' row before the terminal 'succeeded'/'failed' row.
+	// The inbound webhook route also writes a 'received' row before calling dispatchTrigger.
+	// Counting all rows inflates cron fires 2× and webhook fires 3×. The fix is to exclude
+	// 'running' and 'received' from every counting query (scalar, daily, and grouped bar/table).
+
+	it("scalar (number kind) excludes running and received in the SQL query", async () => {
+		const { env, calls } = fakeEnv({ scalar: 3 });
+		await readPointInTime(ctx(env), card({ source: "triggers.fires", kind: "number", params: {} }), statsPeriod("2026-08-06", 7));
+		expect(calls).toHaveLength(1);
+		expect(calls[0].sql).toContain("NOT IN ('running', 'received')");
+	});
+
+	it("daily rollup excludes running and received in the SQL query", async () => {
+		const { env, calls } = fakeEnv({ scalar: 1 });
+		await readDaily(ctx(env), card({ source: "triggers.fires", kind: "line", params: {} }), "2026-08-06");
+		expect(calls).toHaveLength(1);
+		expect(calls[0].sql).toContain("NOT IN ('running', 'received')");
+	});
+
+	it("bar/table kind excludes running and received in the SQL query", async () => {
+		const { env, calls } = fakeEnv({ rows: [{ label: "succeeded", v: 2 }] });
+		await readPointInTime(ctx(env), card({ source: "triggers.fires", kind: "bar", params: { limit: 5 } }), statsPeriod("2026-08-06", 7));
+		expect(calls).toHaveLength(1);
+		expect(calls[0].sql).toContain("NOT IN ('running', 'received')");
+	});
+});

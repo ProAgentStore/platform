@@ -263,6 +263,7 @@ export const STATS_EXECUTORS: Record<string, Executor> = {
 				ctx,
 				`SELECT status AS label, COUNT(*) AS v FROM agent_trigger_events
 				  WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3 AND created_at < ?4
+				    AND status NOT IN ('running', 'received')
 				  GROUP BY status ORDER BY v DESC LIMIT ?5`,
 				limitOf(params),
 				[period.startText, period.endText],
@@ -370,10 +371,14 @@ async function pipelineRuns(ctx: StatsCtx, period: StatsPeriod): Promise<number>
 }
 
 async function triggerFires(ctx: StatsCtx, period: StatsPeriod): Promise<number> {
+	// Only count terminal rows (succeeded | failed). Every dispatch also writes a 'running'
+	// intermediate row, and every inbound webhook writes a 'received' row before dispatching.
+	// Counting all rows inflates cron fires 2× and webhook fires 3× (#663).
 	return scalar(
 		ctx,
 		`SELECT COUNT(*) AS v FROM agent_trigger_events
-		  WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3 AND created_at < ?4`,
+		  WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3 AND created_at < ?4
+		    AND status NOT IN ('running', 'received')`,
 		period.startText,
 		period.endText,
 	);
