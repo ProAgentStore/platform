@@ -7,6 +7,7 @@ import { paramsWithDefaults, resolveSettingsValues, type SettingsValue } from ".
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { logEvent } from "./events.js";
 import { openRun } from "./pipeline-runs.js";
+import { createLoopRun } from "./agent-loop-store.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { declaredToolsFor, pipelineDeclarationError } from "./pipeline-tool-policy.js";
 import { pipelineOpensDelegations } from "./pipeline-budget.js";
@@ -98,6 +99,29 @@ export async function startPipelineRun(
 	// + closes it. Opening here (not in the workflow) means a run that fails to start still
 	// leaves a row, and the row exists before the first step runs.
 	await openRun(env, { runId, userId, instanceId, pipeline: name, trigger, params: effectiveParams });
-	const wf = await env.PIPELINE_RUN.create({ params: { instanceId, userId, pipeline, params: effectiveParams, runId, trigger, budgetId, declaredTools } satisfies PipelineRunParams });
+	// The `agent_loop_runs` row that makes `stop_work` reach this pipeline (#619). The objective
+	// is the pipeline name — the same phrase the user names it by and the board shows.
+	//
+	// `maxIterations` is the step count: each step IS one iteration as far as the cancel check
+	// is concerned (it is read at the step boundary), so progress and cap are measured in steps.
+	//
+	// Unlike `startJobApply`, a failed createLoopRun does NOT abort the pipeline — a pipeline
+	// without a loop row degrades to the old (uncancellable) behaviour, which is acceptable for
+	// a step-bounded run. The row is best-effort; the log records a row that won't be reachable.
+	const loopRunId = crypto.randomUUID();
+	try {
+		await createLoopRun(env, {
+			runId: loopRunId,
+			userId,
+			instanceId,
+			objective: `Run pipeline "${name}"`,
+			maxIterations: pipeline.steps.length || 1,
+			budgetId,
+			startedAt: Date.now(),
+		});
+	} catch (e) {
+		await logEvent(env, { source: "pipeline", event: "pipeline.warn", message: `Could not open loop run row: ${e instanceof Error ? e.message : String(e)}`, userId, instanceId, traceId: runId }).catch(() => undefined);
+	}
+	const wf = await env.PIPELINE_RUN.create({ params: { instanceId, userId, pipeline, params: effectiveParams, runId, trigger, budgetId, declaredTools, loopRunId } satisfies PipelineRunParams });
 	return { ok: true, runId, workflowId: wf.id };
 }

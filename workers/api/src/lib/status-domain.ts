@@ -215,12 +215,12 @@ export const STATUS_DOMAINS: Record<string, StatusDomain> = {
 		values: { running: "app", completed: "app", failed: "app", interrupted: "app" },
 	},
 	"agent_loop_runs.status": {
-		values: { running: "app", completed: "app?", failed: "app", needs_human: "app?", cancelled: "app?" },
+		values: { running: "app", completed: "app?", failed: "app", needs_human: "app?", cancelled: "app" },
 		note:
 			"`finishLoopRun` (lib/agent-loop-store.ts:341) is the only terminal write and binds its " +
 			"`reason` argument; the three terminal values are decided by the workflows that call it " +
-			"(workflows/agent-loop.ts:280, workflows/coding-session.ts:227). 'running' is the INSERT " +
-			"literal at :156.",
+			"(workflows/agent-loop.ts:280, workflows/coding-session.ts:227, workflows/pipeline-run.ts — #619). " +
+			"'running' is the INSERT literal at :156.",
 	},
 	"mcp_input_requests.status": {
 		values: { pending: "app", answered: "app", cancelled: "app", expired: "app" },

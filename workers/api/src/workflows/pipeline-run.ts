@@ -3,6 +3,7 @@ import { attachAudit, auditStepEntry, capStepOutput, coverageShortfall, executeP
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { closeRun } from "../lib/pipeline-runs.js";
+import { finishLoopRun, isCancelRequested, recordLiveness } from "../lib/agent-loop-store.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import type { Env } from "../types.js";
 
@@ -25,6 +26,15 @@ export interface PipelineRunParams {
 	 *  params — so the gate costs no read per step, and a capability change mid-run cannot make
 	 *  the walk non-deterministic on resume. */
 	declaredTools?: string[];
+	/**
+	 * The `agent_loop_runs` row this pipeline is recorded as (#619) — what makes it stoppable.
+	 *
+	 * `stop_work` resolves through `agent_loop_runs`, so this id is the whole of the reach.
+	 *
+	 * Optional so a pipeline queued before this shipped still runs — the cancel check no-ops on
+	 * null and degrades to the old behaviour (uncancellable, but not broken).
+	 */
+	loopRunId?: string | null;
 }
 
 export interface PipelineRunResult {
@@ -74,7 +84,7 @@ function persistSummary(tool: string | undefined, out: unknown): PersistCounts |
 
 export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunParams> {
 	async run(event: WorkflowEvent<PipelineRunParams>, step: WorkflowStep): Promise<PipelineRunResult> {
-		const { instanceId, userId, pipeline, params = {}, runId, trigger = "api", budgetId, declaredTools } = event.payload;
+		const { instanceId, userId, pipeline, params = {}, runId, trigger = "api", budgetId, declaredTools, loopRunId } = event.payload;
 		const env = this.env;
 		// Run counts (issue #98) — captured as the runner walks, closed onto the run record.
 		let seen = 0;
@@ -106,6 +116,23 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			const partials: string[] = [];
 
 			for (let i = 0; i < pipeline.steps.length; i++) {
+				// Cooperative cancellation (#619): read the flag at the step boundary — the same place
+				// the chat loop reads it (`workflows/agent-loop.ts:94`). The in-flight step has already
+				// completed and settled its spend; the NEXT step has not started. Best-effort: a D1 blip
+				// must not be read as a cancel (same rule as browser-run.ts, same fail-closed comment).
+				if (loopRunId) {
+					await recordLiveness(env, loopRunId, Date.now()).catch(() => undefined);
+					const cancelled = await isCancelRequested(env, loopRunId).catch(() => false);
+					if (cancelled) {
+						const detail = `cancelled at step ${i} boundary`;
+						await step.do("run-close-cancelled", async () => {
+							await closeRun(env, runId, "failed", { seen, added, skipped, errors }, detail);
+							return null;
+						});
+						await finishLoopRun(env, loopRunId, "cancelled", detail, Date.now()).catch(() => undefined);
+						return { outcome: "failed", steps: i, detail };
+					}
+				}
 				const s = pipeline.steps[i];
 				const bind = stepBind(s, i);
 				// Each step is a durable unit. On failure the runner records it and stops (a
@@ -184,6 +211,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 						await closeRun(env, runId, "failed", { seen, added, skipped, errors }, detail);
 						return null;
 					});
+					if (loopRunId) await finishLoopRun(env, loopRunId, "failed", detail, Date.now()).catch(() => undefined);
 					return { outcome: "failed", steps: i + 1, detail };
 				}
 			}
@@ -272,6 +300,11 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${persistNote}${capNote}${partialNote}`);
 				return null;
 			});
+			if (loopRunId) {
+				const capNote = shortfalls.length ? `; ${shortfalls.join("; ")}` : "";
+				const partialNote = partials.length ? `; ${partials.join("; ")}` : "";
+				await finishLoopRun(env, loopRunId, "done", `${pipeline.steps.length} step(s)${persistNote}${capNote}${partialNote}`, Date.now()).catch(() => undefined);
+			}
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -297,6 +330,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 					context: { instanceId, runId, pipeline: pipeline.name },
 				}).catch(() => undefined),
 			);
+			if (loopRunId) await finishLoopRun(env, loopRunId, "failed", msg.slice(0, 200), Date.now()).catch(() => undefined);
 			return { outcome: "failed", steps: 0, detail: msg };
 		}
 	}

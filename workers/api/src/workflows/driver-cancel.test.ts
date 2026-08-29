@@ -101,28 +101,19 @@ const CANCEL_PATHS: Record<string, CancelPath> = {
 		mintedBy: "routes/instances-browse.ts startBrowserTask (#560)",
 		latency: "one browser step, or one 5s handoff poll while waiting on a human (#560)",
 	},
+	"pipeline-run.ts": {
+		reads: "isCancelRequested",
+		mintedBy: "lib/pipeline-run-start.ts startPipelineRun (#619)",
+		latency: "one pipeline step — the flag is read at each step boundary before the next step starts",
+	},
 };
 
 /**
  * Drivers that CANNOT be stopped, each with the reason and the ticket — the honest denominator.
  *
- * This guard was written for #560, which names apply and browser-task. Asking the question as a SET
- * rather than as a list immediately turned up a third: `PIPELINE_RUN` mints no `agent_loop_runs` row
- * (`grep createLoopRun` → `loop-drivers.ts` ×2 and the two routes fixed by #560, and nowhere else)
- * and reads no cancellation of any kind (`grep -c "cancel" workflows/pipeline-run.ts` → 0). So
- * `stop_work` reaches four of the five drivers, not five.
- *
- * It is NOT fixed here, deliberately. A pipeline run's record lives in its own `pipeline_runs`
- * table, which has no cancel column, so making it stoppable is a migration plus a decision about
- * whether a pipeline gets a loop-run row or its own flag — separable work with a different shape
- * from the two browser drivers, and not what #560 asks for.
- *
- * Recorded rather than omitted, because an omission is what this whole guard exists to prevent: a
- * gap nobody wrote down is indistinguishable from a gap nobody noticed.
+ * Empty: all five drivers are now stoppable (#619 fixed the last one).
  */
-const NO_CANCEL_PATH: Record<string, string> = {
-	"pipeline-run.ts": "no agent_loop_runs row and no cancel column on pipeline_runs — needs a migration; tracked separately, see #560's follow-up",
-};
+const NO_CANCEL_PATH: Record<string, string> = {};
 
 const files = readdirSync(DIR)
 	.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
@@ -131,9 +122,9 @@ const drivers = files.filter((f) => !NOT_A_DRIVER[f]);
 
 describe("every durable driver can be stopped", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
-		// The denominator. Seven files today, five of them drivers — and the guard fails if it
-		// finds fewer, so a split that halves the set reports itself instead of halving the
-		// measurement.
+		// The denominator. Seven files today, five of them drivers, all five stoppable (#619) — and
+		// the guard fails if it finds fewer, so a split that halves the set reports itself instead
+		// of halving the measurement.
 		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);
 		expect(drivers.length, `of which ${drivers.length} are durable drivers`).toBeGreaterThanOrEqual(5);
 		for (const f of Object.keys(NOT_A_DRIVER)) expect(files, `exemption for a missing file: ${f}`).toContain(f);
@@ -147,10 +138,10 @@ describe("every durable driver can be stopped", () => {
 	});
 
 	it("says how many drivers can actually be stopped", () => {
-		// G2: the number in the passing output. Four of five today — and if that ratio silently
-		// became three of six, this line is where it would be visible.
+		// G2: the number in the passing output. Five of five today (#619) — and if that ratio silently
+		// became four of six, this line is where it would be visible.
 		const stoppable = Object.keys(CANCEL_PATHS).length;
-		expect(`${stoppable} of ${drivers.length} drivers are stoppable`).toBe(`4 of 5 drivers are stoppable`);
+		expect(`${stoppable} of ${drivers.length} drivers are stoppable`).toBe(`5 of 5 drivers are stoppable`);
 	});
 
 	it.each(Object.keys(CANCEL_PATHS))("%s CALLS the cancellation the registry credits it with", (file) => {
@@ -186,6 +177,21 @@ describe("the two browser drivers are reachable at all", () => {
 		expect(src, `${rel} no longer mints an agent_loop_runs row`).toMatch(/createLoopRun\(/);
 		const call = src.slice(src.indexOf(create));
 		expect(call.slice(0, 400), `${rel} does not pass loopRunId to ${create}`).toMatch(/loopRunId/);
+	});
+});
+
+describe("the pipeline driver is reachable at all (#619)", () => {
+	// The same half `driver-cancel`'s source grep cannot see: `pipeline-run.ts` reads the flag,
+	// but the flag only exists when the KICK path minted the row and passed `loopRunId` in.
+	it("lib/pipeline-run-start.ts mints an agent_loop_runs row", () => {
+		const src = readFileSync(join(SRC, "lib/pipeline-run-start.ts"), "utf8");
+		expect(src, "pipeline-run-start.ts no longer calls createLoopRun").toMatch(/createLoopRun\(/);
+	});
+
+	it("lib/pipeline-run-start.ts passes loopRunId to PIPELINE_RUN.create", () => {
+		const src = readFileSync(join(SRC, "lib/pipeline-run-start.ts"), "utf8");
+		const call = src.slice(src.indexOf("PIPELINE_RUN.create"));
+		expect(call.slice(0, 400), "pipeline-run-start.ts does not pass loopRunId to PIPELINE_RUN.create").toMatch(/loopRunId/);
 	});
 });
 
