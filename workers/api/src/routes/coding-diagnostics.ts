@@ -26,6 +26,21 @@ import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
+/**
+ * The shape returned by the runner's `/coding/git-identity` endpoint (#684).
+ *
+ * `checked: true` is the version marker — an older runner 404s and this field stays null, which
+ * means unverified, NOT "no problem". All fields except `checked` and `host` may be absent on an
+ * older runner, so every read must guard.
+ */
+interface GitIdentityResult {
+	checked?: boolean;
+	host?: string;
+	identity?: string | null;
+	isDeployKey?: boolean | null;
+	raw?: string;
+}
+
 /** Parse a stored JSON column, falling back on corrupt/missing data instead of throwing —
  *  a malformed row must never 500 a whole route (esp. the diagnostics page users open to
  *  self-diagnose a broken runner). */
@@ -108,6 +123,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		const conn = await getRunnerConn(env, instanceId, uid, runtimeRow?.runner_node ?? null);
 		let runnerHealth: unknown = null;
 		let runnerDiag: unknown = null;
+		let runnerGitIdentity: GitIdentityResult | null = null;
 		let runnerReachable = false;
 		// Named from the ROW, not the connection: the relay name is the thing you go and look at
 		// when there is no connection, so it must survive the case that has none.
@@ -123,6 +139,17 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				runnerDiag = await callRunner<unknown>(conn, "/coding/diagnostics", undefined, { timeoutMs: READ_TIMEOUT_MS });
 			} catch (e) {
 				runnerDiag = { error: e instanceof Error ? e.message : String(e) };
+			}
+			// SSH identity probe (#684): run only when the runner is reachable, because a machine
+			// without a connected runner cannot tell us what its SSH key resolves to. Capped at a short
+			// timeout — the probe opens a real SSH connection to github.com, and a firewall that drops
+			// packets must not stall the whole diagnostics response. An older runner 404s and the result
+			// stays null, which is treated as unverified, not as "no problem".
+			try {
+				const raw = await callRunner<unknown>(conn, "/coding/git-identity", undefined, { timeoutMs: 15_000 });
+				runnerGitIdentity = raw as GitIdentityResult;
+			} catch {
+				// Older runner without the endpoint, or network hiccup — treat as unverified.
 			}
 		}
 		const relayIsConnected = await relayConnected(env, instanceId, runtimeRow?.runner_node ?? null);
@@ -312,6 +339,52 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				});
 		}
 
+		// 6b. SSH identity issues (#684).
+		//
+		// A deploy key authenticates to exactly ONE repository. Any SSH clone for a DIFFERENT private
+		// repo will silently fail with "Repository not found" — GitHub's generic message for "wrong
+		// identity", which looks like the repo is missing when it is actually an auth problem. The
+		// runner's `/coding/git-identity` probe makes the identity visible before a clone is attempted.
+		//
+		// Three distinct cases, treated differently:
+		//   1. Deploy key detected + SSH repos → `warn` (the clone works for the keyed repo but fails
+		//      for everything else; the owner needs to decide whether SSH is intentional).
+		//   2. SSH repos + runner reachable + probe succeeded with a user account → `info` (everything
+		//      fine; SSH is working and the identity is a real account).
+		//   3. SSH repos + runner reachable + probe could not authenticate → `warn` (the SSH key may
+		//      not be known to GitHub at all, which will break every private clone).
+		//
+		// Nothing is emitted when there are no SSH repos: a runner with a deploy key but no SSH clone
+		// URLs is not broken for the repos registered here.
+		const sshRepos = dbRepos.filter((r) => {
+			const u = r.cloneUrl ?? "";
+			return /^git@/i.test(u) || /^ssh:\/\//i.test(u);
+		});
+		if (sshRepos.length > 0 && runnerGitIdentity?.checked === true) {
+			const { identity, isDeployKey } = runnerGitIdentity;
+			if (isDeployKey) {
+				// A deploy key is scoped to one repository. The clone URL in D1 may be for that exact
+				// repo, in which case it works — but the owner cannot see that without this report, and
+				// a second repo on the same machine will silently fail.
+				const affectedNames = sshRepos.map((r) => `"${r.name}"`).join(", ");
+				issues.push({
+					severity: "warn",
+					message: `SSH identity on this machine is a deploy key (${identity}) — not a user account. Repos cloning over SSH: ${affectedNames}. A deploy key authenticates to exactly one repository; private repos outside that one will fail with "Repository not found".`,
+					fix: `Re-add the repo using an HTTPS URL (e.g. https://github.com/${identity}.git) so the platform can inject a token, or update ~/.ssh/config on this machine so github.com resolves to a user key rather than a deploy key.`,
+				});
+			} else if (identity === null) {
+				// The probe could not authenticate at all. Could be a missing key, a firewall, or no
+				// network — but if it is a key problem, every SSH private repo clone will break the
+				// same way and the error will look like "Repository not found".
+				issues.push({
+					severity: "warn",
+					message: `SSH handshake to github.com did not authenticate on this machine (probe returned no identity). Repos using SSH clone URLs: ${sshRepos.map((r) => `"${r.name}"`).join(", ")}. Private repo clones will fail until SSH is working.`,
+					fix: "Confirm that a GitHub-authorised SSH key is registered on this machine (ssh -T git@github.com), or re-add these repos using HTTPS URLs.",
+				});
+			}
+			// identity is non-null and isDeployKey is false → user account, SSH is fine, no issue.
+		}
+
 		const activeSessions = sessions.filter((s) => s.status === "active");
 		// "Healthy" has to mean able to work, not merely running (#593). A session whose run is
 		// parked on the engine's own usage limit was counted here, so the summary read
@@ -343,6 +416,9 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			sessions,
 			repos,
 			githubApp,
+			// SSH identity transparency (#684). `null` when the runner is offline or predates the
+			// `/coding/git-identity` endpoint — treat as unverified, not as "no problem".
+			gitIdentity: runnerGitIdentity,
 			issues,
 		});
 	});

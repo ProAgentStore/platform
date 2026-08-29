@@ -1,5 +1,6 @@
 /**
  * `checkWorkdir` — the question nobody was asking about a local repo (#405).
+ * `parseSshIdentity` — the deploy-key vs user-account discriminator (#684).
  *
  * Run against the REAL filesystem, deliberately: the whole value of this function is that it
  * reports what is actually on the machine, and a mocked `fs` would only pin that the mock agrees
@@ -11,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { checkWorkdir } from "./repo.js";
+import { checkWorkdir, parseSshIdentity } from "./repo.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "pags-workdir-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -66,5 +67,53 @@ describe("checkWorkdir", () => {
 
 	it("resolves nothing and throws nothing — every failure is a false", () => {
 		expect(() => checkWorkdir("/proc/definitely/not/here")).not.toThrow();
+	});
+});
+
+/**
+ * `parseSshIdentity` is pure, so it can be exercised without a network or a git binary.
+ *
+ * The deploy-key vs user-account distinction (#684) is structural: GitHub encodes deploy keys
+ * as `<org>/<repo>` in the welcome banner, while user accounts are bare login names. A slash
+ * is the load-bearing discriminator and the only one this function uses — it must not change
+ * without a test failing.
+ */
+describe("parseSshIdentity", () => {
+	it("extracts a user-account login from the GitHub welcome banner", () => {
+		expect(parseSshIdentity("Hi serge-ivo! You've successfully authenticated, but GitHub does not provide shell access."))
+			.toBe("serge-ivo");
+	});
+
+	it("extracts a deploy-key identity (org/repo) from the GitHub welcome banner", () => {
+		// Deploy keys arrive as `<org>/<repo>` — the slash is what makes them deploy keys.
+		expect(parseSshIdentity("Hi jobsearch-works/shared! You've successfully authenticated, but GitHub does not provide shell access."))
+			.toBe("jobsearch-works/shared");
+	});
+
+	it("handles ANSI escape sequences some SSH versions prepend", () => {
+		expect(parseSshIdentity("\x1b[32mHi serge-ivo! You've successfully authenticated, but GitHub does not provide shell access.\x1b[0m"))
+			.toBe("serge-ivo");
+	});
+
+	it("returns null when authentication failed (wrong key, no key)", () => {
+		// GitHub answers with a permission-denied error, no `Hi` banner.
+		expect(parseSshIdentity("git@github.com: Permission denied (publickey).")).toBeNull();
+		expect(parseSshIdentity("")).toBeNull();
+	});
+
+	it("returns null for unrecognised output", () => {
+		expect(parseSshIdentity("Connection refused")).toBeNull();
+		expect(parseSshIdentity("ssh: connect to host github.com port 22: Network is unreachable")).toBeNull();
+	});
+
+	it("correctly identifies deploy keys by the presence of a slash", () => {
+		// Deploy key → isDeployKey should be derivable as identity.includes("/")
+		const deployKey = parseSshIdentity("Hi myorg/my-deploy-repo! You've successfully authenticated, but GitHub does not provide shell access.");
+		expect(deployKey).not.toBeNull();
+		expect(deployKey?.includes("/")).toBe(true);
+
+		const userAccount = parseSshIdentity("Hi octocat! You've successfully authenticated, but GitHub does not provide shell access.");
+		expect(userAccount).not.toBeNull();
+		expect(userAccount?.includes("/")).toBe(false);
 	});
 });

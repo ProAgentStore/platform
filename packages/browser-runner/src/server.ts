@@ -9,6 +9,7 @@ import { LocalRunner, RunnerInputError } from "./runner.js";
 import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
+import { probeGitSshIdentity } from "./coding/repo.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -201,6 +202,14 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		// wrong, and it pointed them at a false cause. The terminal-operator agents, which do
 		// use tmux, have their own /tmux/* endpoints and are unaffected.
 		return json(res, 200, { tracked: runner.coding.diagnostics() });
+	}
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/git-identity") {
+		// Report the SSH identity this machine presents to github.com (#684). Called by
+		// `coding_diagnostics` to surface deploy-key vs user-account mismatches without a
+		// failed clone. Never throws on the runner side — a network hiccup returns identity:null.
+		const b = req.method === "POST" ? await readJson<{ host?: string }>(req).catch(() => ({})) : {};
+		const host = String((b as { host?: string }).host || "github.com");
+		return json(res, 200, probeGitSshIdentity(host));
 	}
 	if (req.method === "POST" && path === "/coding/browse") {
 		const { readdirSync, statSync } = await import("node:fs");
