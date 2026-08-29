@@ -120,6 +120,9 @@ const INTERNET = new Set<string>([
 	"gmail_download_attachment",
 	"gmail_reply", // sends mail as the owner, to a third party
 	"gmail_send",
+	// #765: drafts are saved to Google's servers, same reach as the send tools.
+	"gmail_draft_reply",
+	"gmail_draft_send",
 	"gmail_archive", // changes labels in the owner's mailbox — Google's servers
 	"gmail_mark_read",
 ]);

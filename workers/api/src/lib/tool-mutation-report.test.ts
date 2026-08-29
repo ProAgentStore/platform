@@ -94,6 +94,10 @@ const MUTATING = new Set<string>([
 	// mutation on the platform, and the reason both sit behind the write-consent gate.
 	"gmail_reply",
 	"gmail_send",
+	// #765. Drafts are saved into the owner's Drafts folder — that changes the mailbox state,
+	// so both are mutations. A draft that is never sent is still a draft that was written.
+	"gmail_draft_reply",
+	"gmail_draft_send",
 	// #716. Reversible — an archived message is still in All Mail — but it changes what the
 	// owner sees in their inbox, which is a mutation by any reading.
 	"gmail_archive",

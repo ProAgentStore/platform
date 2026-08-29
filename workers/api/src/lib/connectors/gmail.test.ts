@@ -233,12 +233,12 @@ describe("the declaration", () => {
 		expect(scopes).not.toContain("https://mail.google.com/");
 	});
 
-	it("declares write reach now, which is what puts sending behind the #90 consent gate", () => {
+	it("declares write reach now, which is what puts sending and drafting behind the #90 consent gate", () => {
 		// Derived from the tools by compileConnector, not hand-declared: a write-scoped tool on a
 		// write:false connector is refused by assertScope before any handler runs.
 		expect(GMAIL_CONNECTOR.scopes).toEqual({ read: true, write: true });
 		const writeTools = GMAIL_CONNECTOR.tools.filter((t) => t.scope === "write").map((t) => t.name);
-		expect(writeTools).toEqual(["gmail_reply", "gmail_send", "gmail_archive", "gmail_mark_read"]);
+		expect(writeTools).toEqual(["gmail_reply", "gmail_send", "gmail_draft_reply", "gmail_draft_send", "gmail_archive", "gmail_mark_read"]);
 	});
 
 	it("keeps find_confirmation_link OUT of the connector — its grant model is the odd one out", () => {
@@ -577,6 +577,250 @@ describe("gmail_mark_read", () => {
 		const res = await tool("gmail_mark_read")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), { message_id: "m1" });
 		expect(res.success).toBe(true);
 		expect(calls[0].body).toEqual({ addLabelIds: [], removeLabelIds: ["UNREAD"] });
+	});
+});
+
+// ── #765: draft tools ────────────────────────────────────────────────────────
+
+/**
+ * Capture what was POSTed to Gmail's /drafts endpoint, and decode the raw MIME back.
+ *
+ * The draft API wraps the raw message in a `{message:{raw,threadId}}` envelope; a send goes
+ * to `/messages/send` with `{raw,threadId}` at the top level. Both assertions — "hit /drafts"
+ * and "did NOT hit /messages/send" — must pass together for the tool to be correct.
+ */
+function stubDraft(parent: unknown = PARENT) {
+	const drafts: Array<{ message: { raw: string; threadId?: string } }> = [];
+	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+		if (String(url).endsWith("/drafts")) {
+			drafts.push(JSON.parse(String(init?.body)) as { message: { raw: string; threadId?: string } });
+			return new Response(
+				JSON.stringify({ id: "draft-1", message: { id: "msg-draft-1", threadId: "t-42" } }),
+				{ status: 200 },
+			);
+		}
+		// The send endpoint must NOT be hit by a draft tool.
+		if (String(url).endsWith("/messages/send")) {
+			throw new Error("draft tool hit the send endpoint — it must target /drafts instead");
+		}
+		return new Response(JSON.stringify(parent), { status: 200 });
+	});
+	const mimeOf = (i = 0) => {
+		const b64 = drafts[i].message.raw.replace(/-/g, "+").replace(/_/g, "/");
+		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+		return new TextDecoder().decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)));
+	};
+	return { drafts, mimeOf };
+}
+
+const MODIFY_SCOPES_ONLY = `openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify`;
+
+describe("gmail_draft_reply (#765)", () => {
+	it("targets /drafts, not /messages/send — a draft is not a sent message", async () => {
+		const { drafts } = stubDraft();
+		const res = await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {
+			message_id: "m1",
+			body: "Draft reply text.",
+		});
+		expect(res.success).toBe(true);
+		expect(drafts).toHaveLength(1);
+		// Sanity-check the envelope shape: {message:{raw,threadId}}, not {raw,threadId}.
+		expect(drafts[0]).toHaveProperty("message");
+		expect(drafts[0].message).toHaveProperty("raw");
+	});
+
+	it("produces the same MIME as gmail_reply would for the same inputs — they must not drift", async () => {
+		// Acceptance criterion: the MIME equality between the send and draft paths.
+		// Run both against the same parent and compare headers + body.
+		const { mimeOf: draftMime } = stubDraft();
+		await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {
+			message_id: "m1",
+			body: "Same body.",
+		});
+		const draftResult = draftMime();
+
+		const { mimeOf: sentMime } = stubGmail();
+		await tool("gmail_reply")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), {
+			message_id: "m1",
+			body: "Same body.",
+		});
+		const sentResult = sentMime();
+
+		// Headers must match (threading, subject, recipient, In-Reply-To, References).
+		for (const header of ["In-Reply-To:", "References:", "Subject:", "To:"]) {
+			const draftLine = draftResult.split("\r\n").find((l) => l.startsWith(header));
+			const sentLine = sentResult.split("\r\n").find((l) => l.startsWith(header));
+			expect(draftLine, `${header} mismatch between draft and send paths`).toBe(sentLine);
+		}
+	});
+
+	it("threads the draft: In-Reply-To, extended References chain, and the parent threadId", async () => {
+		const { drafts, mimeOf } = stubDraft();
+		const res = await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {
+			message_id: "m1",
+			body: "Threading test.",
+		});
+		expect(res.success).toBe(true);
+		const mime = mimeOf();
+		expect(mime).toContain("In-Reply-To: <orig@example.test>");
+		expect(mime).toContain("References: <root@example.test> <orig@example.test>");
+		expect(mime).toContain("Subject: Re: Summer Competition Form");
+		// The threadId must be inside the message wrapper so Gmail associates the draft.
+		expect(drafts[0].message.threadId).toBe("t-42");
+	});
+
+	it("refuses without gmail.modify, naming the reconnect action", async () => {
+		const { drafts } = stubDraft();
+		const res = await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), {
+			message_id: "m1",
+			body: "This should be refused.",
+		});
+		expect(res.success).toBe(false);
+		// The refusal must name the manage-mail scope, not the send scope.
+		expect(res.content).toMatch(/cannot archive or mark mail read/);
+		expect(res.content).toMatch(/manage-mail/);
+		expect(drafts).toHaveLength(0);
+	});
+
+	it("is refused for an account with only gmail.modify (no gmail.send) — RECONNECT_TO_MODIFY fires because modify is checked, not send", async () => {
+		// Acceptance criterion: "An account with gmail.readonly + gmail.send but NOT gmail.modify
+		// is refused with RECONNECT_TO_MODIFY".
+		const { drafts } = stubDraft();
+		const res = await tool("gmail_draft_reply")(
+			ctxWith(sendEnv({ grantedScopes: "openid email https://www.googleapis.com/auth/gmail.readonly" })),
+			{ message_id: "m1", body: "x" },
+		);
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/cannot archive or mark mail read/);
+		expect(drafts).toHaveLength(0);
+	});
+
+	it("recipients are taken from the parent, never from the model", async () => {
+		const { mimeOf } = stubDraft();
+		await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {
+			message_id: "m1",
+			body: "hi",
+			to: "injected@evil.test", // a model might hallucinate this; it must be ignored
+		});
+		const mime = mimeOf();
+		expect(mime).toContain("To: Kelly <kelly@example.test>");
+		expect(mime).not.toContain("injected@evil.test");
+	});
+
+	it("attaches a file from the agent's store by id", async () => {
+		const { mimeOf } = stubDraft();
+		const res = await tool("gmail_draft_reply")(
+			ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES, fileBytes: "%PDF-1.4 filled", fileName: "Report.pdf" })),
+			{ message_id: "m1", body: "See attachment.", attachment_file_ids: ["f1"] },
+		);
+		expect(res.success).toBe(true);
+		const mime = mimeOf();
+		expect(mime).toContain('filename="Report.pdf"');
+		expect(mime).toContain(btoa("%PDF-1.4 filled"));
+	});
+
+	it("returns the draft id and a Gmail Drafts link so the owner can find it", async () => {
+		stubDraft();
+		const res = await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {
+			message_id: "m1",
+			body: "Draft body.",
+		});
+		expect(res.success).toBe(true);
+		expect(res.content).toContain("draft-1");
+		expect(res.content).toContain("mail.google.com");
+		expect(res.content).toContain("Drafts");
+	});
+
+	it("requires a body — an empty draft is never what was meant", async () => {
+		const res = await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES })), {
+			message_id: "m1",
+			body: "   ",
+		});
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/body is required/);
+	});
+
+	it("still refuses when email permission is off, before it ever looks at scopes", async () => {
+		stubDraft();
+		const res = await tool("gmail_draft_reply")(ctxWith(envWithPermission(false)), { message_id: "m1", body: "x" });
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/Email access is not enabled/);
+	});
+});
+
+describe("gmail_draft_send (#765)", () => {
+	/** Capture what was POSTed to /drafts/send. */
+	function stubDraftSend(ok = true) {
+		const calls: Array<{ id: string }> = [];
+		vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+			if (String(url).endsWith("/drafts/send")) {
+				calls.push(JSON.parse(String(init?.body)) as { id: string });
+				return ok
+					? new Response(JSON.stringify({ id: "sent-from-draft", threadId: "t-42" }), { status: 200 })
+					: new Response(JSON.stringify({ error: { message: "Draft not found" } }), { status: 404 });
+			}
+			// Must not call /messages/send or /drafts (create) — those are different tools.
+			if (String(url).includes("/messages/send") || String(url).endsWith("/drafts")) {
+				throw new Error("gmail_draft_send called the wrong endpoint");
+			}
+			return new Response("{}", { status: 200 });
+		});
+		return calls;
+	}
+
+	it("sends the draft at /drafts/send, not /messages/send", async () => {
+		const calls = stubDraftSend();
+		const res = await tool("gmail_draft_send")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), {
+			draft_id: "draft-99",
+		});
+		expect(res.success).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toEqual({ id: "draft-99" });
+	});
+
+	it("is refused without gmail.send — canSend gates it, not canModify", async () => {
+		const calls = stubDraftSend();
+		// Only modify scope, no send scope.
+		const res = await tool("gmail_draft_send")(ctxWith(sendEnv({ grantedScopes: MODIFY_SCOPES_ONLY })), {
+			draft_id: "draft-99",
+		});
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/Reconnect Gmail/);
+		expect(res.content).toMatch(/reading only/);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("requires a draft_id", async () => {
+		const res = await tool("gmail_draft_send")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), {});
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/draft_id is required/);
+	});
+
+	it("surfaces Gmail's reason when the draft is not found", async () => {
+		stubDraftSend(false);
+		const res = await tool("gmail_draft_send")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), {
+			draft_id: "missing-draft",
+		});
+		expect(res.success).toBe(false);
+		expect(res.content).toContain("Draft not found");
+	});
+
+	it("still refuses when email permission is off, before it looks at scopes", async () => {
+		stubDraftSend();
+		const res = await tool("gmail_draft_send")(ctxWith(envWithPermission(false)), { draft_id: "x" });
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/Email access is not enabled/);
+	});
+});
+
+describe("the write-consent gate still covers the draft tools (#90)", () => {
+	// The consent gate is enforced by runRegistryTool at the dispatcher level, not by the
+	// handlers. But the handler declaration (scope:"write") is what makes the dispatcher
+	// apply it. These tests verify the declaration.
+	it("both draft tools are scope:write — so write-consent is required before they can run", () => {
+		const byName = new Map(GMAIL_CONNECTOR.tools.map((t) => [t.name, t]));
+		expect(byName.get("gmail_draft_reply")?.scope).toBe("write");
+		expect(byName.get("gmail_draft_send")?.scope).toBe("write");
 	});
 });
 

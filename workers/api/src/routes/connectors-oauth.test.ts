@@ -214,10 +214,10 @@ describe("GET /v1/connectors — the catalog, resolved for the caller", () => {
 	// Gmail was in the list above until #711. The catalog is where an owner reads what a
 	// connector can do, so the moment it gained tools this assertion had to say so out loud
 	// rather than be dropped for being inconvenient.
-	it("reports Gmail's declared tools in the catalog (#711 read, #713 send)", async () => {
+	it("reports Gmail's declared tools in the catalog (#711 read, #713 send, #765 draft)", async () => {
 		const by = await list(envWithKeys([]));
 		expect(by.get("gmail")).toMatchObject({
-			tools: ["gmail_search", "gmail_read_message", "gmail_reply", "gmail_send", "gmail_archive", "gmail_mark_read", "gmail_download_attachment"],
+			tools: ["gmail_search", "gmail_read_message", "gmail_reply", "gmail_send", "gmail_draft_reply", "gmail_draft_send", "gmail_archive", "gmail_mark_read", "gmail_download_attachment"],
 		});
 	});
 

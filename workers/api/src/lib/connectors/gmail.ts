@@ -444,6 +444,99 @@ const sendHandler: ToolDef["handler"] = async (ctx, input) => {
 };
 
 /**
+ * Save a reply as a Gmail DRAFT — the message goes to Drafts, not to the wire.
+ *
+ * Everything up to and including the MIME is identical to `replyHandler` — the same recipient
+ * derivation (from the parent, never from the model), the same threading headers, the same
+ * attachment resolution. The only difference is the API call: `createDraft` instead of
+ * `sendMessage`, which POSTs `{message:{raw,threadId}}` to `/drafts` rather than `{raw,threadId}`
+ * to `/messages/send`. That single fork is what keeps the message out of the recipient's inbox.
+ *
+ * Gated by `canModify` (gmail.modify) because `drafts.create` needs it. The #90 write-consent
+ * gate still applies because the tool declares `scope: "write"`.
+ *
+ * Recipients are taken from the PARENT message, never from the model — same reasoning as
+ * `replyHandler`. A draft tool that accepted a model-supplied `to` would still be an
+ * exfiltration channel: the owner reviews the draft and sends it, including to wherever the
+ * model put it.
+ */
+const draftReplyHandler: ToolDef["handler"] = async (ctx, input) => {
+	const messageId = typeof input.message_id === "string" ? input.message_id.trim() : "";
+	const body = typeof input.body === "string" ? input.body : "";
+	if (!messageId) return fail("message_id is required — the message to reply to.");
+	if (!body.trim()) return fail("body is required — the text of the draft reply.");
+	if (!ctx.instanceId) return fail("Drafting requires an agent instance.");
+
+	const resolved = await gmailToken(ctx);
+	if ("refusal" in resolved) return resolved.refusal;
+	const env = ctx.env;
+	if (!(await canModify(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_MODIFY);
+
+	const { getMessage, replyHeaders, replySubject, buildMimeMessage, createDraft, GmailError } = await import("../gmail.js");
+	try {
+		const parent = await getMessage(resolved.token, messageId, 1);
+		const gathered = await collectOutgoingAttachments(env, ctx.instanceId, input);
+		if ("refusal" in gathered) return gathered.refusal;
+
+		const to = parent.from;
+		const cc = input.reply_all === true ? [parent.to, parent.cc].filter(Boolean).join(", ") : undefined;
+
+		const mime = buildMimeMessage({
+			to,
+			...(cc ? { cc } : {}),
+			subject: replySubject(parent.subject),
+			body,
+			...replyHeaders(parent),
+			attachments: gathered.attachments,
+		});
+		const draft = await createDraft(resolved.token, mime, parent.threadId);
+		return ok({
+			drafted: true,
+			to,
+			...(cc ? { cc } : {}),
+			subject: replySubject(parent.subject),
+			attachments: gathered.attachments.map((a) => a.filename),
+			draft_id: draft.draftId,
+			gmail_url: draft.gmailUrl,
+			note: "Saved to Gmail Drafts. Open the link to review and send.",
+		});
+	} catch (e) {
+		return fail(e instanceof GmailError ? e.message : `Draft reply failed: ${e instanceof Error ? e.message : String(e)}`);
+	}
+};
+
+/**
+ * Send an existing Gmail draft that the owner has approved, by its draft id.
+ *
+ * Gated by `canSend` (gmail.send) — the same gate as `sendHandler`. The draft is moved out of
+ * Drafts and delivered; after a successful call the draft id is no longer valid.
+ *
+ * The canonical flow is: `gmail_draft_reply` → owner reviews in Gmail → `gmail_draft_send`.
+ */
+const draftSendHandler: ToolDef["handler"] = async (ctx, input) => {
+	const draftId = typeof input.draft_id === "string" ? input.draft_id.trim() : "";
+	if (!draftId) return fail("draft_id is required — get it from gmail_draft_reply.");
+
+	const resolved = await gmailToken(ctx);
+	if ("refusal" in resolved) return resolved.refusal;
+	const env = ctx.env;
+	if (!(await canSend(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_SEND);
+
+	const { sendDraft, GmailError } = await import("../gmail.js");
+	try {
+		const sent = await sendDraft(resolved.token, draftId);
+		return ok({
+			sent: true,
+			message_id: sent.id,
+			thread_id: sent.threadId,
+			note: "Draft sent. It no longer exists in Drafts.",
+		});
+	} catch (e) {
+		return fail(e instanceof GmailError ? e.message : `Draft send failed: ${e instanceof Error ? e.message : String(e)}`);
+	}
+};
+
+/**
  * Archive, or mark read — both are `messages.modify` with a label removed.
  *
  * Archiving is REVERSIBLE and that is why it is here while trashing is not: an archived message
@@ -495,7 +588,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 	// connector PERMITS, and an owner deciding is entitled to the whole answer. There is no delete
 	// or trash tool, deliberately (#716), so nothing here says one.
 	writeMeaning:
-		"Send and reply to mail from your own mailbox, as you, to anyone the agent addresses. Sent mail cannot be recalled. It can also archive messages and mark them read; it cannot delete anything.",
+		"Send and reply to mail from your own mailbox, as you, to anyone the agent addresses. Sent mail cannot be recalled. It can also save draft replies for you to review before sending, archive messages and mark them read; it cannot delete anything.",
 	auth: {
 		type: "oauth2",
 		authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
@@ -558,7 +651,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Reply to a Gmail message in its own thread, as the owner, optionally attaching files from this agent's file store by id. The recipient is taken from the message being replied to and cannot be overridden — use gmail_send to write to a different address. This really sends: there is no draft step and no undo.",
+				"Reply to a Gmail message in its own thread, as the owner, optionally attaching files from this agent's file store by id. The recipient is taken from the message being replied to and cannot be overridden — use gmail_send to write to a different address. This really sends: there is no draft step and no undo. To save the reply for the owner to review first, use gmail_draft_reply instead.",
 			handler: "gmail_reply",
 			params: {
 				message_id: { type: "string", required: true, description: "The message to reply to, from gmail_search.", maxLength: 100 },
@@ -572,7 +665,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Send a NEW Gmail message as the owner, to an address you name explicitly, optionally with attachments from this agent's file store. This really sends: there is no draft step and no undo. To answer a message you received, prefer gmail_reply so it threads.",
+				"Send a NEW Gmail message as the owner, to an address you name explicitly, optionally with attachments from this agent's file store. This really sends: there is no draft step and no undo. To save the message for the owner to review first, use gmail_draft_new instead. To answer a message you received, prefer gmail_reply so it threads.",
 			handler: "gmail_send",
 			params: {
 				to: { type: "string", required: true, description: "Recipient address.", maxLength: 500 },
@@ -580,6 +673,31 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 				subject: { type: "string", required: true, description: "Subject line.", maxLength: 500 },
 				body: { type: "string", required: true, description: "Message text.", maxLength: 20000 },
 				attachment_file_ids: { type: "array", description: "File ids from this agent's file store to attach." },
+			},
+		},
+		{
+			name: "gmail_draft_reply",
+			untrustedOutput: false,
+			scope: "write",
+			description:
+				"Save a reply to a Gmail message as a DRAFT — nothing is sent until the owner opens Gmail and clicks Send. Returns a link to the draft. The recipient is taken from the message being replied to and cannot be overridden. Needs the manage-mail permission (gmail.modify scope) on the connected account. To send immediately without a draft step, use gmail_reply instead.",
+			handler: "gmail_draft_reply",
+			params: {
+				message_id: { type: "string", required: true, description: "The message to reply to, from gmail_search.", maxLength: 100 },
+				body: { type: "string", required: true, description: "The reply text. Plain text; write it as you want it read.", maxLength: 20000 },
+				attachment_file_ids: { type: "array", description: "File ids from this agent's file store to attach." },
+				reply_all: { type: "boolean", description: "Also copy the original To and Cc recipients. Default false — reply to the sender only." },
+			},
+		},
+		{
+			name: "gmail_draft_send",
+			untrustedOutput: false,
+			scope: "write",
+			description:
+				"Send an existing Gmail draft that the owner has reviewed and approved, by its draft id. The draft is moved out of Drafts and delivered. Needs the send permission (gmail.send scope) on the connected account. Get the draft_id from gmail_draft_reply.",
+			handler: "gmail_draft_send",
+			params: {
+				draft_id: { type: "string", required: true, description: "The draft id returned by gmail_draft_reply.", maxLength: 200 },
 			},
 		},
 		{
@@ -628,6 +746,8 @@ export const GMAIL_CONNECTOR: Connector = compileConnector(GMAIL_MANIFEST, {
 	gmail_download_attachment: downloadHandler,
 	gmail_reply: replyHandler,
 	gmail_send: sendHandler,
+	gmail_draft_reply: draftReplyHandler,
+	gmail_draft_send: draftSendHandler,
 	gmail_archive: labelChangeHandler("archive"),
 	gmail_mark_read: labelChangeHandler("mark_read"),
 }).connector;

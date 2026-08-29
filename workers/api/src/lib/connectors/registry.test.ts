@@ -31,24 +31,26 @@ describe("connector registry", () => {
 		// Gmail LEFT this group in #711. The assertion is kept, inverted, rather than deleted:
 		// "gmail declares no tools" was a deliberate decision, so the file should record that it
 		// was deliberately reversed rather than quietly lose the line.
-		it("Gmail declares tools of its own (#711 read, #713 send)", () => {
+		it("Gmail declares tools of its own (#711 read, #713 send, #765 draft)", () => {
 			expect(getConnector("gmail")?.tools.map((t) => t.name)).toEqual([
 				"gmail_search",
 				"gmail_read_message",
 				"gmail_reply",
 				"gmail_send",
+				"gmail_draft_reply",
+				"gmail_draft_send",
 				"gmail_archive",
 				"gmail_mark_read",
 				"gmail_download_attachment",
 			]);
-			// Reading the mailbox mutates nothing; sending mutates the world and says so, which is
-			// what the #90 consent gate keys on.
+			// Reading the mailbox mutates nothing; sending and drafting mutate state and say so, which
+			// is what the #90 consent gate keys on.
 			const byName = new Map((getConnector("gmail")?.tools ?? []).map((t) => [t.name, t]));
 			for (const name of ["gmail_search", "gmail_read_message", "gmail_download_attachment"]) {
 				expect(byName.get(name)?.scope, name).toBe("read");
 				expect(byName.get(name)?.mutates, name).toBe(false);
 			}
-			for (const name of ["gmail_reply", "gmail_send", "gmail_archive", "gmail_mark_read"]) {
+			for (const name of ["gmail_reply", "gmail_send", "gmail_draft_reply", "gmail_draft_send", "gmail_archive", "gmail_mark_read"]) {
 				expect(byName.get(name)?.scope, name).toBe("write");
 				expect(byName.get(name)?.mutates, name).toBe(true);
 			}

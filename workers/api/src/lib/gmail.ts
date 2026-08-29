@@ -630,6 +630,63 @@ export async function sendMessage(
 }
 
 /**
+ * Create a Gmail draft — the message is saved to Drafts, NOT sent.
+ *
+ * The API shape mirrors `sendMessage` but targets `/drafts` instead of `/messages/send`.
+ * `threadId` goes inside the `message` wrapper so the draft is associated with the right
+ * conversation in Gmail's UI; unlike the send endpoint, the wrapper itself IS the draft object.
+ *
+ * Returns the draft id and a Gmail deep-link so the owner can find and review it without
+ * knowing where Drafts lives.
+ */
+export async function createDraft(
+	accessToken: string,
+	mime: string,
+	threadId?: string,
+): Promise<{ draftId: string; messageId: string; threadId: string; gmailUrl: string }> {
+	const utf8 = new TextEncoder().encode(mime);
+	let binary = "";
+	for (const byte of utf8) binary += String.fromCharCode(byte);
+	const res = await fetch(`${GMAIL_API}/drafts`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify({ message: { raw: base64ToBase64Url(btoa(binary)), ...(threadId ? { threadId } : {}) } }),
+	});
+	if (!res.ok) {
+		throw new GmailError(`Gmail draft creation failed (${res.status}): ${await gmailErrorReason(res)}`);
+	}
+	const draft = (await res.json()) as { id?: string; message?: { id?: string; threadId?: string } };
+	const draftId = draft.id ?? "";
+	const messageId = draft.message?.id ?? "";
+	const resolvedThreadId = draft.message?.threadId ?? threadId ?? "";
+	// `#drafts/<draftId>` opens the compose window for the draft in Gmail web.
+	const gmailUrl = `https://mail.google.com/mail/u/0/#drafts/${encodeURIComponent(draftId)}`;
+	return { draftId, messageId, threadId: resolvedThreadId, gmailUrl };
+}
+
+/**
+ * Send an existing Gmail draft by its draft id.
+ *
+ * The draft is moved out of Drafts and delivered. After a successful send, the draft no
+ * longer exists under the given id — Gmail replaces it with a sent-mail thread entry.
+ */
+export async function sendDraft(
+	accessToken: string,
+	draftId: string,
+): Promise<{ id: string; threadId: string }> {
+	const res = await fetch(`${GMAIL_API}/drafts/send`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify({ id: draftId }),
+	});
+	if (!res.ok) {
+		throw new GmailError(`Gmail draft send failed (${res.status}): ${await gmailErrorReason(res)}`);
+	}
+	const sent = (await res.json()) as { id?: string; threadId?: string };
+	return { id: sent.id ?? "", threadId: sent.threadId ?? "" };
+}
+
+/**
  * Does a recorded scope string cover sending?
  *
  * Answers the question BEFORE a send is attempted, from what was recorded at connect time
