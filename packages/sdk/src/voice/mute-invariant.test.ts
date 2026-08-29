@@ -519,8 +519,12 @@ describe("the known hole — a browser with no Web Speech API (ADR 0001, Consequ
 	});
 
 	it("still exists: the control listener has no fallback, so only the on-screen mute satisfies M1 there", () => {
+		// After #744 the gate's SpeechRecognition serves as the control listener in Whisper mode,
+		// but `ensureControlStt` still guards the fallback path (browser-dictation mode) and is
+		// still the name the ADR refers to. The feature check now delegates to `speechGateAvailable`
+		// from gate.ts rather than repeating the browser-API pattern inline.
 		const body = callbackBody("ensureControlStt", "const handleResult = useCallback(");
-		expect(body, "the Web Speech gate moved — re-check whether the hole is closed or merely hidden").toMatch(/webkitSpeechRecognition\)\) return null/);
+		expect(body, "the Web Speech gate moved — re-check whether the hole is closed or merely hidden").toMatch(/speechGateAvailable\(\)/);
 		expect(body, "the control listener is browser-Web-Speech only; a second engine here would close the hole").toMatch(/new VoiceStt\("browser"/);
 		// If a fallback ever lands, THIS test is what has to change — deliberately, in the same
 		// commit that updates the ADR's Consequences section. That is the point of writing the gap
@@ -556,7 +560,10 @@ describe("the known hole — a browser with no Web Speech API (ADR 0001, Consequ
 	 * worked, and the product had no way to find out either.
 	 */
 	it("says when it has lost the voice channel, instead of failing into silence", () => {
-		const body = callbackBody("ensureControlStt", "const handleResult = useCallback(");
+		// After #744 the error-handling logic lives in `controlCallbacks` (shared between the
+		// gate-based Whisper path and the VoiceStt browser-dictation fallback). The slice moves
+		// there; the invariants — log, notice, narrowness, sticky denial — are unchanged.
+		const body = callbackBody("controlCallbacks", "const ensureControlStt = useCallback(");
 		const onError = body.slice(body.indexOf("onError:"), body.indexOf("onEnd:"));
 		expect(onError.trim().length, "the onError slice is empty — fix it before trusting the assertions").toBeGreaterThan(0);
 		expect(onError, "a denied control listener writes nothing to the durable log, so ADR 0001 M1 can be violated and nobody learns (#425)").toMatch(/reportClientError\(/);

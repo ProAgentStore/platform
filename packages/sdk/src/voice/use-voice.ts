@@ -50,7 +50,7 @@ import { isConnectivityError, reportClientError } from "../client.js";
 import { VOICE_DECISION, VOICE_FAILURE } from "./report-source.js";
 import { captureDiagnostics, clipGateReport, initVad, shouldAutoDetectEndOfTurn, vadStep, VOICE_FLOOR } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
-import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
+import { createSpeechGate, speechGateAvailable, type ControlOpts, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, isEchoing, lostTail, LOST_TAIL_WORDS, planMuteTeardown, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { shouldAnnounceMicContention } from "./mic-retry.js";
 import { classifyVoiceError, commandStateFor, decideRestart, isMicPermissionDenied, isReportableMicError, isRetryableVoiceError, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceCommand, type VoiceCommandWords, type VoiceMode } from "./convo.js";
@@ -760,8 +760,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// two recognizers never capture at once (#153). ctrlWantRef=false first, so its onEnd
 		// doesn't auto-restart it into the main capture; the reconcile effect re-arms it when the
 		// main mic later idles.
+		// In Whisper mode the gate's recognizer serves as the control listener (#744): exit that
+		// mode rather than stopping a separate VoiceStt. In browser-dictation mode the gate is null
+		// so the old VoiceStt path is used unchanged.
 		ctrlWantRef.current = false;
-		if (ctrlSttRef.current?.listening) { try { ctrlSttRef.current.stop(); } catch { /* already stopped */ } }
+		if (gateRef.current) {
+			gateRef.current.stopControl();
+		} else if (ctrlSttRef.current?.listening) {
+			try { ctrlSttRef.current.stop(); } catch { /* already stopped */ }
+		}
 		try {
 			await sttRef.current.start();
 			lastListenStartRef.current = Date.now();
@@ -1069,49 +1076,72 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const handleControlResultRef = useRef(handleControlResult);
 	handleControlResultRef.current = handleControlResult;
 
-	/** Lazily build the dedicated control-word recognizer (browser Web Speech only — it must
-	 *  run alongside a Whisper main pipeline without a getUserMedia conflict, and yields to the
-	 *  main recognizer when the main path is browser dictation). Returns null when unsupported. */
+	/**
+	 * Build the CONTROL-LISTENER callbacks that either the gate (Whisper mode) or a dedicated
+	 * VoiceStt (browser-dictation mode) will use (#744).
+	 *
+	 * In Whisper mode the gate's SpeechRecognition is repurposed as the control listener via
+	 * `gate.startAsControl(controlCallbacks())` — no second recognizer is created. In
+	 * browser-dictation mode the gate is null, so a dedicated VoiceStt is still used (the old
+	 * path, unchanged). This function produces the shared callbacks for both.
+	 */
+	const controlCallbacks = useCallback((): ControlOpts => ({
+		onResult: (text, isFinal) => handleControlResultRef.current(text, isFinal),
+		onError: (code, detail) => {
+			if (!isReportableMicError(code)) return; // no-speech / aborted: ordinary churn
+			reportClientError("voice-control", `control listener refused the microphone: ${code}`, { code, ...detail });
+			if (isMicPermissionDenied(code)) {
+				// Once, not once per restart: with no control listener the on-screen mute is the whole invariant.
+				ctrlWantRef.current = false;
+				ctrlDeniedRef.current = true;
+				setNotice("⚠ Voice commands are off — the microphone is blocked for this site.");
+			} else if (shouldAnnounceMicContention(detail?.fails ?? 0)) {
+				// NOT latched: the listener is still retrying under the backoff, so this names the outage without removing it.
+				setNotice("⚠ Voice commands can't reach the microphone right now — still retrying.");
+			}
+		},
+		// onEnd is called only when the gate's control mode ends terminally (denied/not-allowed).
+		// For the VoiceStt fallback path it signals the same: the caller re-arms if still wanted.
+		onEnd: () => {
+			if (gateRef.current) {
+				// Gate's control mode ended — it stopped its own re-arm, so only a denied device
+				// arrives here. Match the old VoiceStt onError+denial path: latch off.
+				ctrlWantRef.current = false;
+				ctrlDeniedRef.current = true;
+				setNotice("⚠ Voice commands are off — the microphone is blocked for this site.");
+			} else if (ctrlWantRef.current) {
+				// Browser-dictation fallback: VoiceStt ended but we still want control.
+				try { ctrlSttRef.current?.start(); } catch { /* SR busy */ }
+			}
+		},
+	}), []);
+
+	/** Lazily build the dedicated control-word recognizer — used ONLY in browser-dictation mode
+	 *  when the gate is null. In Whisper mode the gate's recognizer serves this role (#744). */
 	const ensureControlStt = useCallback((): VoiceStt | null => {
-		if (typeof window === "undefined") return null;
-		if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) return null;
+		// In Whisper mode the gate handles control: no second VoiceStt needed.
+		if (gateRef.current) return null;
+		// Web Speech unavailable (iOS Safari) — the known hole (ADR 0001 Consequences, #388).
+		if (!speechGateAvailable()) return null;
 		if (!ctrlSttRef.current) {
 			ctrlSttRef.current = new VoiceStt("browser", {
 				language: voiceLangRef.current,
-				// Interim AND final both reach the handler; which one this is now MATTERS (#386), so it
-				// is passed through rather than discarded at the boundary.
+				// Interim AND final both reach the handler; which one this is now MATTERS (#386).
 				onResult: (text, isFinal) => handleControlResultRef.current(text, isFinal),
 				/**
-				 * This handler used to be empty, with a comment naming "mic denied" as an expected case
-				 * (#425). It carries ADR 0001 M1 in every phase where the mic is closed, so a denial
-				 * here DELETES mute-by-voice — and did so with no row, notice or state change: an ADR
-				 * 0001 violation, unobservable in production by construction.
 				 * THREE verdicts, load-bearing differences, reasoning in `mic-retry.ts`. REPORT covers
 				 * a missing device, which is diagnostic. STOP RE-ARMING covers only the two codes a
 				 * browser produces by refusing: latching on `audio-capture` — two recognizers over one
 				 * device — would delete mute for the session, the failure this ticket exists to expose.
 				 */
-				onError: (err, detail) => {
-					const code = String(err ?? "");
-					if (!isReportableMicError(code)) return; // no-speech / aborted: ordinary churn
-					reportClientError("voice-control", `control listener refused the microphone: ${code}`, { code, ...detail });
-					if (isMicPermissionDenied(code)) {
-						// Once, not once per restart: with no control listener the on-screen mute is the whole invariant.
-						ctrlWantRef.current = false;
-						ctrlDeniedRef.current = true;
-						setNotice("⚠ Voice commands are off — the microphone is blocked for this site.");
-					} else if (shouldAnnounceMicContention(detail?.fails ?? 0)) {
-						// NOT latched: the listener is still retrying under the backoff, so this names the outage without removing it.
-						setNotice("⚠ Voice commands can't reach the microphone right now — still retrying.");
-					}
-				},
-				onEnd: () => { if (ctrlWantRef.current) { try { ctrlSttRef.current?.start(); } catch { /* SR busy */ } } },
+				onError: (err, detail) => controlCallbacks().onError(String(err ?? ""), detail ?? { fails: 0, burstMs: 0 }),
+				onEnd: () => controlCallbacks().onEnd(),
 			});
 		} else {
 			ctrlSttRef.current.language = voiceLangRef.current;
 		}
 		return ctrlSttRef.current;
-	}, []);
+	}, [controlCallbacks]);
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		// Stop-speech keyword: checked FIRST, BEFORE the echo/paused guard below — because while
@@ -1884,28 +1914,42 @@ export function useVoice(instanceId: string | undefined, opts: {
 		const want = !ctrlDeniedRef.current && shouldRunControlListener({ engaged: convoOn || speakOn, mainRecording: micOn });
 		ctrlWantRef.current = want;
 		if (want) {
-			const stt = ensureControlStt();
-			// ADR 0001's KNOWN HOLE, decided (#388). Where the browser has no `SpeechRecognition`
-			// constructor — iOS Safari, most notably — `ensureControlStt` returns null, no control
-			// listener ever runs, and mute-by-voice during TTS/thinking does not exist. There the
-			// on-screen control is not one of two channels: it is the whole invariant.
-			//
-			// The decision recorded in the ADR's Consequences is to SAY SO rather than to build a
-			// fallback. A non-Web-Speech control channel means continuously uploading the room's
-			// audio to OpenAI, on the user's own key, so that a mute button can be spoken to — a
-			// privacy and cost trade far larger than the gap it closes. Silence was the worst of
-			// the three: a user whose configured words did nothing had no way to tell that from
-			// the app ignoring them. Once per session, and the same shape as the DENIED message,
-			// because from the user's side those two are the same event.
-			if (!stt && !noWebSpeechToldRef.current) {
-				noWebSpeechToldRef.current = true;
-				setNotice("⚠ Voice commands aren't available in this browser — use the Mute button.");
+			if (gateRef.current) {
+				// WHISPER MODE (#744): the gate's SpeechRecognition serves as the control listener
+				// between turns. No second recognizer is needed — `startAsControl` is idempotent so a
+				// language update just refreshes the callbacks without restarting the recognizer.
+				gateRef.current.startAsControl(controlCallbacks());
+			} else {
+				// BROWSER-DICTATION MODE (or Whisper without Web Speech): fall back to a dedicated
+				// VoiceStt. `ensureControlStt` returns null when Web Speech is unavailable — the known
+				// hole (ADR 0001 Consequences, #388). iOS Safari lands here.
+				const stt = ensureControlStt();
+				// ADR 0001's KNOWN HOLE, decided (#388). Where the browser has no `SpeechRecognition`
+				// constructor — iOS Safari, most notably — `ensureControlStt` returns null, no control
+				// listener ever runs, and mute-by-voice during TTS/thinking does not exist. There the
+				// on-screen control is not one of two channels: it is the whole invariant.
+				//
+				// The decision recorded in the ADR's Consequences is to SAY SO rather than to build a
+				// fallback. A non-Web-Speech control channel means continuously uploading the room's
+				// audio to OpenAI, on the user's own key, so that a mute button can be spoken to — a
+				// privacy and cost trade far larger than the gap it closes. Silence was the worst of
+				// the three: a user whose configured words did nothing had no way to tell that from
+				// the app ignoring them. Once per session, and the same shape as the DENIED message,
+				// because from the user's side those two are the same event.
+				if (!stt && !noWebSpeechToldRef.current) {
+					noWebSpeechToldRef.current = true;
+					setNotice("⚠ Voice commands aren't available in this browser — use the Mute button.");
+				}
+				if (stt && !stt.listening) { try { stt.start(); } catch { /* SR busy — onEnd re-arms */ } }
 			}
-			if (stt && !stt.listening) { try { stt.start(); } catch { /* SR busy — onEnd re-arms */ } }
 		} else {
-			if (ctrlSttRef.current?.listening) { try { ctrlSttRef.current.stop(); } catch { /* already stopped */ } }
+			if (gateRef.current) {
+				gateRef.current.stopControl();
+			} else if (ctrlSttRef.current?.listening) {
+				try { ctrlSttRef.current.stop(); } catch { /* already stopped */ }
+			}
 		}
-	}, [convoOn, speakOn, micOn, ensureControlStt]);
+	}, [convoOn, speakOn, micOn, ensureControlStt, controlCallbacks]);
 
 	// Tear everything down on unmount — otherwise leaving the page mid-conversation
 	// keeps the recognizer listening, the TTS speaking, and the mic stream + rAF loop alive.
@@ -1918,7 +1962,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		sttRef.current?.stop();
 		gateRef.current?.stop();
 		ctrlWantRef.current = false;
-		ctrlSttRef.current?.stop(); // stop the background control listener too
+		gateRef.current?.stopControl(); // stop gate control mode if active (Whisper, #744)
+		ctrlSttRef.current?.stop(); // stop the VoiceStt control listener (browser-dictation mode)
 		ttsRef.current?.dispose(); // close the TTS AudioContext, not just cancel — else it leaks
 		stopAudioMonitor();
 		releaseWakeLock();

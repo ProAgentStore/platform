@@ -305,7 +305,13 @@ const PINS = {
 	// reason this is not a one-liner, and it has nowhere else to live: `speak` already carried the
 	// guard, `speakAndResume` did not need one until something could interrupt it, and a mic opened
 	// during playback is the self-transcription loop every pause in this file exists to prevent.
-	"packages/sdk/src/voice/use-voice.ts": 2049,
+	// +45 for #744: the dictation gate and the always-on control listener merged into one device
+	// owner. `controlCallbacks()` is the shared error/result/end handler used by both the gate's
+	// `startAsControl` path (Whisper mode) and the VoiceStt fallback (browser-dictation mode).
+	// `ensureControlStt` shrank by losing its inline error handler but `startListening` and the
+	// reconcile effect gained the gate-vs-ctrlStt branches. The merge removes one of the three
+	// `SpeechRecognition` construction sites and one re-arm cycle at every turn boundary.
+	"packages/sdk/src/voice/use-voice.ts": 2094,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -1502,7 +1508,8 @@ const PINS = {
 	// check and wiring the operator skill into confirm-gate check 7) and this note.
 	"scripts/docs-drift.mjs": 829,
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
-	"scripts/check-file-size.mjs": 1586,
+	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
+	"scripts/check-file-size.mjs": 1593,
 };
 
 /**

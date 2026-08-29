@@ -58,6 +58,25 @@ interface WindowWithSpeech {
 	webkitSpeechRecognition?: SpeechRecognitionCtor;
 }
 
+/**
+ * Callbacks for the gate's CONTROL-LISTENER mode (#744).
+ *
+ * When the main Whisper recorder is idle the gate's recognizer has nothing to do, so it is
+ * repurposed as the always-on control listener rather than sitting stopped while a SECOND
+ * `SpeechRecognition` object handles that role. The gate and the control listener are already
+ * mutually exclusive by design (`shouldRunControlListener`), so this is purely a dispatch
+ * change: one device owner, two consumers served in turns.
+ */
+export interface ControlOpts {
+	/** A result arrived — same contract as VoiceStt's `onResult`. */
+	onResult: (text: string, isFinal: boolean) => void;
+	/** The recognizer could not have the microphone. Same reportability rules as the gate's own
+	 *  `onMicError`: only codes that are worth a durable row (#425). */
+	onError: (code: string, detail: MicErrorDetail) => void;
+	/** The recognizer ended (terminal or denied). The caller re-arms if it still wants to. */
+	onEnd: () => void;
+}
+
 export interface SpeechGate {
 	/** Begin listening (idempotent). */
 	start(): void;
@@ -90,6 +109,25 @@ export interface SpeechGate {
 	/** Clear the PER-TURN facts — heard, hearing, saw-words and any buffered interim (call at the
 	 *  start of each turn). `isAlive` is session-lifetime and deliberately survives. */
 	reset(): void;
+	/**
+	 * Run the gate's recognizer as the always-on CONTROL LISTENER (#744).
+	 *
+	 * The gate and the control listener are mutually exclusive by design
+	 * (`shouldRunControlListener` in `convo.ts`): the gate runs during a Whisper turn, the control
+	 * listener runs when the main mic is idle. This method repurposes the SAME `SpeechRecognition`
+	 * object for both roles, removing the second start/stop/re-arm cycle that produces the
+	 * `audio-capture` rows at turn boundaries.
+	 *
+	 * Results are dispatched to `opts.onResult` instead of the dictation handlers. The
+	 * recognizer re-arms on `onend` exactly as the old `VoiceStt("browser")` control listener
+	 * did, and delegates error decisions to `opts.onError` / `opts.onEnd`.
+	 *
+	 * Idempotent: calling again with different opts while already in control mode updates the
+	 * callbacks (the language may have changed) without restarting the recognizer.
+	 */
+	startAsControl(opts: ControlOpts): void;
+	/** Exit control mode and stop the recognizer (idempotent). */
+	stopControl(): void;
 }
 
 export interface SpeechGateOptions {
@@ -162,6 +200,11 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 
 	let rec: SpeechRecognitionLike | null = null;
 	let active = false;
+	/** True while the recognizer runs as the always-on control listener (#744). Mutually exclusive
+	 *  with `active`: the gate and the control listener never overlap by design. */
+	let controlActive = false;
+	/** The current control-mode callbacks, set by `startAsControl`. */
+	let controlOpts: ControlOpts | null = null;
 	let heard = false;
 	/** The utterance so far — accumulated across phrases AND across the gate's own restarts (#458). */
 	let utterance: HeardState = EMPTY_HEARD;
@@ -212,6 +255,23 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			hearing = true;
 			// Audio arrived → the failure run is over (the only proof of recovery on offer).
 			micRun = NO_MIC_FAILURES;
+
+			// CONTROL MODE (#744): dispatch raw delta text to the control handler and return. The
+			// utterance accumulator, the noise filter, and the `heard` flag are all dictation concerns
+			// and irrelevant here — the control listener needs only "what changed, and is it final?"
+			if (controlActive) {
+				let deltaText = "";
+				let isFinal = false;
+				for (let i = e.resultIndex; i < e.results.length; i++) {
+					const t = e.results[i][0].transcript;
+					if (e.results[i].isFinal) { deltaText += t; isFinal = true; }
+					else deltaText += t;
+				}
+				if (deltaText.trim()) controlOpts?.onResult(deltaText.trim(), isFinal);
+				return;
+			}
+
+			// DICTATION MODE: the full accumulation + noise-filter path.
 			// The WHOLE session (from 0) and the DELTA (from resultIndex) in one pass. The session
 			// halves are what {@link reduceHeard} folds — recomputed, never accumulated, so a phrase
 			// re-delivered as final after arriving as interim cannot be counted twice. The delta is
@@ -270,8 +330,16 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 				hearing = false;
 				micRun = noteMicFailure(micRun, Date.now());
 			}
-			if (planMicRestart({ code, consecutiveFailures: micRun.fails }).terminal) denied = true;
-			if (isReportableMicError(code)) opts.onMicError?.(code, micErrorDetail(micRun, Date.now()));
+			const plan = planMicRestart({ code, consecutiveFailures: micRun.fails });
+			if (plan.terminal) denied = true;
+			if (controlActive) {
+				// In control mode, errors are reported to the control callbacks. The same narrowness
+				// applies: `audio-capture` is contention (transient, retried under backoff); permission
+				// verdicts disable the control channel and call onEnd so the caller can notice.
+				if (isReportableMicError(code)) controlOpts?.onError(code, micErrorDetail(micRun, Date.now()));
+			} else {
+				if (isReportableMicError(code)) opts.onMicError?.(code, micErrorDetail(micRun, Date.now()));
+			}
 		};
 		r.onend = () => {
 			// The device is genuinely free NOW — not when `stop()` was called, which is the whole of
@@ -287,6 +355,30 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			// session ended at all — which is why the accumulator has to live in the gate and not
 			// at the `onInterim` call site.
 			utterance = reduceHeard(utterance, { type: "sessionEnd" });
+
+			if (controlActive) {
+				// CONTROL MODE re-arm (#744). The control listener re-arms on every end, exactly as the
+				// old VoiceStt("browser") did. `denied` stops the loop just as for dictation mode.
+				if (denied) { controlActive = false; controlOpts?.onEnd(); return; }
+				const plan = planMicRestart({ code: lastCode, consecutiveFailures: micRun.fails });
+				lastCode = null;
+				if (!plan.restart) { controlActive = false; controlOpts?.onEnd(); return; }
+				const goControl = () => {
+					if (!controlActive || denied) return;
+					micHandoff.whenFree(owner, () => {
+						if (!controlActive || denied) return;
+						try { r.start(); sessionOpen = true; restartFails = 0; } catch {
+							restartFails++;
+							if (restartFails <= 3) setTimeout(() => { if (controlActive) { try { r.start(); sessionOpen = true; } catch { /* give up quietly */ } } }, 250);
+						}
+					});
+				};
+				if (plan.delayMs <= 0) return goControl();
+				if (retryTimer) clearTimeout(retryTimer);
+				retryTimer = setTimeout(() => { retryTimer = null; goControl(); }, plan.delayMs);
+				return;
+			}
+
 			// `denied` is checked with `active` because a restart here cannot succeed and each
 			// attempt costs the user another prompt.
 			if (!active || denied) return;
@@ -318,9 +410,28 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		return r;
 	};
 
+	/** Shared stop-the-recognizer logic used by both `stop()` and `stopControl()`. */
+	const stopRecognizer = () => {
+		micHandoff.cancel(owner);
+		if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+		if (sessionOpen) micHandoff.releasing(owner);
+		if (rec) {
+			try {
+				rec.stop();
+			} catch {
+				// A swallowed stop leaves the mic open — `abort()` ends capture immediately.
+				try { rec.abort?.(); } catch { /* nothing left to try */ }
+			}
+		}
+	};
+
 	return {
 		start() {
 			if (active || denied) return;
+			// Exit control mode first: the caller always calls stopControl() before start(), but a
+			// defensive clear here prevents a stuck controlActive flag from blocking dictation.
+			controlActive = false;
+			controlOpts = null;
 			active = true;
 			if (!rec) rec = build();
 			// The turn-start half of the handoff: `startAudioMonitor` runs one tick after
@@ -342,26 +453,33 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 			active = false;
 			// A queued start belongs to the turn that has just ended. Running it would reopen a
 			// microphone the caller has closed — the #291 class of leak, via the new door.
-			micHandoff.cancel(owner);
-			// A pending backoff retry must not reopen the mic after the turn it belonged to ended.
-			if (retryTimer) {
-				clearTimeout(retryTimer);
-				retryTimer = null;
-			}
-			// Claim the device as CLOSING before asking it to close, so the control listener the
-			// reconcile effect is about to start waits for `onend` instead of racing it.
-			if (sessionOpen) micHandoff.releasing(owner);
-			if (rec) {
+			stopRecognizer();
+		},
+		startAsControl(newOpts: ControlOpts) {
+			if (denied) return;
+			controlOpts = newOpts;
+			// Idempotent update: if the recognizer is already running in control mode (e.g. a
+			// language change refreshed the opts), update the callbacks and return — no restart.
+			if (controlActive) return;
+			controlActive = true;
+			active = false; // mutually exclusive
+			if (!rec) rec = build();
+			micHandoff.whenFree(owner, () => {
+				if (!controlActive || denied || !rec) return;
 				try {
-					rec.stop();
+					rec.start();
+					sessionOpen = true;
 				} catch {
-					// The gate is a SECOND live recognizer running beside the Whisper recorder, so a
-					// swallowed stop leaves the mic open exactly the way #291 did — and here nothing
-					// downstream would notice, because `active = false` only suppresses the restart
-					// that a failed stop never triggers. `abort()` ends capture immediately.
-					try { rec.abort?.(); } catch { /* nothing left to try */ }
+					rec = build();
+					try { rec.start(); sessionOpen = true; } catch { /* unavailable right now; onend won't fire */ }
 				}
-			}
+			});
+		},
+		stopControl() {
+			if (!controlActive) return;
+			controlActive = false;
+			controlOpts = null;
+			stopRecognizer();
 		},
 		heardSpeech() {
 			return heard;

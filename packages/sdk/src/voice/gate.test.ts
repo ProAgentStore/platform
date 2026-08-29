@@ -598,3 +598,158 @@ describe("the gate accumulates the utterance (#458)", () => {
 		restore();
 	});
 });
+
+/**
+ * #744 — merge the dictation gate and the always-on control listener into ONE device owner.
+ *
+ * The gate and the control listener are mutually exclusive by design (`shouldRunControlListener`
+ * in `convo.ts`): the gate runs during a Whisper turn, the control listener runs when the main
+ * mic is idle. Repurposing the gate's SpeechRecognition for both roles removes one of the three
+ * start/stop/re-arm cycles and the `audio-capture` contention rows they produce at turn
+ * boundaries — without changing the sequencing invariant that `mic-handoff.ts` enforces.
+ */
+describe("gate control mode — one device owner, two consumers (#744)", () => {
+	it("dispatches results to the control handler, not the dictation handler, while in control mode", () => {
+		const { instances, restore } = withFakeSR();
+		const interims: string[] = [];
+		const controlResults: Array<{ text: string; isFinal: boolean }> = [];
+		const gate = createSpeechGate({ onInterim: (t) => interims.push(t) })!;
+
+		gate.startAsControl({
+			onResult: (text, isFinal) => controlResults.push({ text, isFinal }),
+			onError: () => {},
+			onEnd: () => {},
+		});
+		const sr = instances[0];
+		sr.openMic();
+		sr.emit("mute", false);
+
+		// The control handler received the text; the dictation interim did NOT.
+		expect(controlResults).toEqual([{ text: "mute", isFinal: false }]);
+		expect(interims).toHaveLength(0);
+		restore();
+	});
+
+	it("dispatches final results correctly in control mode", () => {
+		const { instances, restore } = withFakeSR();
+		const controlResults: Array<{ text: string; isFinal: boolean }> = [];
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+
+		gate.startAsControl({
+			onResult: (text, isFinal) => controlResults.push({ text, isFinal }),
+			onError: () => {},
+			onEnd: () => {},
+		});
+		instances[0].emit("mute mute", true);
+
+		expect(controlResults).toEqual([{ text: "mute mute", isFinal: true }]);
+		restore();
+	});
+
+	it("uses ONE SpeechRecognition instance for both dictation and control modes", () => {
+		// The whole point of #744: one start/stop cycle per boundary, not two.
+		// The count of instances proves the gate never builds a second recognizer.
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+
+		gate.start();
+		instances[0].onend?.(); // end the dictation session
+		gate.stop();
+
+		gate.startAsControl({ onResult: () => {}, onError: () => {}, onEnd: () => {} });
+		instances[0].onend?.(); // end the control session
+
+		gate.stopControl();
+		gate.start();
+		instances[0].onend?.();
+		gate.stop();
+
+		// One recognizer built once — all three sessions (dictation / control / dictation) reused it.
+		expect(instances.length).toBe(1);
+		restore();
+	});
+
+	it("no second recognizer is started while the main mic is recording (the property shouldRunControlListener encodes)", () => {
+		// In production use-voice.ts calls startListening() which calls stopControl() BEFORE
+		// startAudioMonitor() calls gate.start(). This test verifies that at the device level
+		// there is exactly one SpeechRecognition active at a time across the gate's two modes.
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+
+		// Phase 1: control listener running (main mic idle)
+		gate.startAsControl({ onResult: () => {}, onError: () => {}, onEnd: () => {} });
+		expect(instances[0].started, "control mode did not start the recognizer").toBe(1);
+
+		// Phase 2: turn starts — stop control, start dictation
+		gate.stopControl();          // stops the recognizer
+		instances[0].onend?.();      // the close completes (onend fires)
+		gate.start();                // dictation starts
+		micHandoff.released("recorder"); // simulate recorder finishing its open
+
+		// Still one instance — no second SpeechRecognition was ever created.
+		expect(instances.length, "a second SpeechRecognition was constructed — two device owners, not one").toBe(1);
+		restore();
+	});
+
+	it("stops re-arming when the control recognizer is denied", () => {
+		vi.useFakeTimers();
+		const { instances, restore } = withFakeSR();
+		const ended: number[] = [];
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+
+		gate.startAsControl({
+			onResult: () => {},
+			onError: () => {},
+			onEnd: () => ended.push(1),
+		});
+		const sr = instances[0];
+		const startsBefore = sr.started;
+
+		sr.onerror?.({ error: "not-allowed" });
+		for (let i = 0; i < 5; i++) sr.onend?.();
+		vi.advanceTimersByTime(5_000);
+
+		expect(sr.started, "a denied control recognizer kept re-arming, causing repeated permission prompts").toBe(startsBefore);
+		expect(ended.length, "onEnd was not called on denial").toBe(1);
+		vi.useRealTimers();
+		restore();
+	});
+
+	it("transitions from control mode back to dictation mode cleanly", () => {
+		const { instances, restore } = withFakeSR();
+		const interims: string[] = [];
+		const controlResults: string[] = [];
+		const gate = createSpeechGate({ onInterim: (t) => interims.push(t) })!;
+
+		// Phase 1: control mode
+		gate.startAsControl({ onResult: (t) => controlResults.push(t), onError: () => {}, onEnd: () => {} });
+		instances[0].emit("mute", false);
+		expect(controlResults).toHaveLength(1);
+		expect(interims).toHaveLength(0);
+
+		// Phase 2: switch to dictation
+		gate.stopControl();
+		instances[0].onend?.(); // close completes
+		gate.start();
+		instances[0].emit("hello world", false);
+
+		// Now the dictation handler fires, not the control one.
+		expect(interims).toHaveLength(1);
+		expect(interims[0]).toBe("hello world");
+		expect(controlResults).toHaveLength(1); // unchanged from phase 1
+		restore();
+	});
+
+	it("is idempotent — calling startAsControl twice updates callbacks without restarting the recognizer", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+
+		gate.startAsControl({ onResult: () => {}, onError: () => {}, onEnd: () => {} });
+		const startsBefore = instances[0].started;
+
+		// Language changed — caller passes fresh callbacks. Should update without restart.
+		gate.startAsControl({ onResult: () => {}, onError: () => {}, onEnd: () => {} });
+		expect(instances[0].started, "a second startAsControl restarted the recognizer unnecessarily").toBe(startsBefore);
+		restore();
+	});
+});
