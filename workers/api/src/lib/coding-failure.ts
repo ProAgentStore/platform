@@ -545,6 +545,12 @@ export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Pro
 	// reference is stripped only after the class has been read off the message it is embedded in.
 	const { message, reference } = splitCfReference(raw);
 	const resumed = r.disposition === "resumed";
+	// A per-run token in the collapse key so two attempts of the SAME run collapse into one row
+	// while deaths from DIFFERENT runs stay distinct (#612). The token is the first 8 characters
+	// of the run id (or session id for chat-initiated runs with no loop-run row) — stable across
+	// every CF workflow retry of the same run, and unique enough to separate concurrent runs from
+	// the same user at the same phase from collapsing together into one miscount.
+	const runToken = (r.runId ?? r.sessionId).slice(0, 8);
 	await logError(env, {
 		source: "coding:session",
 		userId: r.userId,
@@ -556,7 +562,7 @@ export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Pro
 		// The VERB is the fix. Before it, the row said the run failed while the same catch block's
 		// next act posted "⏸ Interrupted by a platform update … nothing is needed from you" into the
 		// owner's chat — two durable accounts of one event, disagreeing, with the log the wrong one.
-		message: `coding run ${resumed ? "interrupted" : "failed"} (${f.class}) at ${r.probe.phase} after ${r.steps} steps${resumed ? ", resumed" : ""}: ${message}`,
+		message: `coding run ${runToken} ${resumed ? "interrupted" : "failed"} (${f.class}) at ${r.probe.phase} after ${r.steps} steps${resumed ? ", resumed" : ""}: ${message}`,
 		context: {
 			// What the platform did about it, so a reader counting DEATHS gets one per run even when
 			// the run filed several rows on its way there (#546).

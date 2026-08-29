@@ -167,7 +167,8 @@ describe("recordCodingFailure — the durable record itself", () => {
 		// under `coding` beside the acts of the same run.
 		expect(source).toBe("coding:session");
 		expect(level).toBe("error");
-		expect(message).toContain("coding run failed (provider_stall) at s7-decide after 4 steps");
+		// The run token (first 8 chars of runId) appears between "coding run" and the verb (#612).
+		expect(message).toContain("run_9 failed (provider_stall) at s7-decide after 4 steps");
 		const ctx = JSON.parse(context as string);
 		expect(ctx.failureClass).toBe("provider_stall");
 		expect(ctx.retryable).toBe(true);
@@ -503,8 +504,9 @@ describe("a resumed interruption is not filed as a death (#546)", () => {
 		// update … nothing is needed from you" into the chat three lines after writing this row;
 		// before this the row said the run failed, so the two durable surfaces of one event
 		// contradicted each other and the owner's `list_errors` view was the one that was wrong.
-		expect(message).toContain("coding run interrupted (infra_transient)");
-		expect(message, "an interruption must not read as a death").not.toContain("coding run failed");
+		// The run token sits between "coding run" and the verb (#612 — keeps rows per-run distinct).
+		expect(message).toContain("b9d9c051 interrupted (infra_transient)");
+		expect(message, "an interruption must not read as a death").not.toContain(" failed ");
 		// …and it says what happened NEXT, which is the fact that makes the row countable.
 		expect(message).toContain("resumed");
 		expect(ctx.disposition).toBe("resumed");
@@ -512,7 +514,7 @@ describe("a resumed interruption is not filed as a death (#546)", () => {
 
 	it("keeps the death row exactly as it was, so the class that ends a run is unchanged", async () => {
 		const { message, ctx } = await record("ended", new Error(deadlineMessage("stall", 20_000)));
-		expect(message).toContain("coding run failed (provider_stall) at start after 6 steps");
+		expect(message).toContain("b9d9c051 failed (provider_stall) at start after 6 steps");
 		expect(ctx.disposition).toBe("ended");
 	});
 
@@ -523,7 +525,7 @@ describe("a resumed interruption is not filed as a death (#546)", () => {
 		// of them claims the run ended.
 		const rows = [await record("resumed"), await record("ended", new Error(deadlineMessage("stall", 20_000)))];
 		expect(rows.filter((r) => r.ctx.disposition === "ended")).toHaveLength(1);
-		expect(rows.filter((r) => r.message.includes("coding run failed"))).toHaveLength(1);
+		expect(rows.filter((r) => r.message.includes(" failed "))).toHaveLength(1);
 	});
 
 	it("never files a row the platform is actively recovering from as an `error`", async () => {
@@ -534,6 +536,74 @@ describe("a resumed interruption is not filed as a death (#546)", () => {
 		const { level } = await record("resumed", new Error("something nobody has classified"));
 		expect(classifyCodingFailure(new Error("something nobody has classified")).class).toBe("unknown");
 		expect(level, "a resumed interruption is explained by the resume itself").toBe("warn");
+	});
+});
+
+/**
+ * One run-death → one row, even when CF retries the Workflow attempt (#612).
+ *
+ * The double-file shape: run `82739cb6` filed two `error_log` rows for the SAME death, 8 minutes
+ * apart, because `recordCodingFailure` lives outside `step.do` and Cloudflare replayed the
+ * Workflow instance, executing the catch block on every attempt.
+ *
+ * The fix: the collapse-key message now includes a per-run token (first 8 chars of `runId ??
+ * sessionId`). Two attempts of the SAME run produce identical tokens → identical messages → the
+ * second row is absorbed by `collapseRepeat` into `repeat_count: 2`. Deaths from DIFFERENT runs
+ * produce different tokens → different messages → they stay distinct rows and never cross-collapse.
+ */
+describe("per-run token keeps retried deaths as one row and distinct runs as separate rows (#612)", () => {
+	const base = {
+		err: new Error("internal error; reference = ta78s8dpekde3apmplf351m0"),
+		userId: "u1",
+		instanceId: "a1d3522f",
+		sessionId: "csess_2dd3124c",
+		disposition: "ended" as const,
+		steps: 1,
+		probe: new CodingRunProbe(),
+		startedAt: Date.now(),
+	};
+
+	it("two retries of the SAME run produce identical collapse-key messages", async () => {
+		// The property `collapseRepeat` depends on: both CF attempts of run `82739cb6` carry the same
+		// runId → same 8-char token → same message → `collapseRepeat` absorbs the second into the first.
+		const { env: env1, inserts: ins1 } = mockDb();
+		const { env: env2, inserts: ins2 } = mockDb();
+		const runId = "82739cb6-4404-418d-992e-3dd6014c3cce";
+		// Simulate attempt A: a different CF reference but the same run.
+		await recordCodingFailure(env1, { ...base, runId, err: new Error("internal error; reference = ta78s8dpekde3apmplf351m0") });
+		// Simulate attempt B: same run, different CF reference (CF generates a new one per retry).
+		await recordCodingFailure(env2, { ...base, runId, err: new Error("internal error; reference = hknsjlipbemc1fi7lsn13vak") });
+		const msgA = ins1.find((i) => i.sql.includes("error_log"))!.args[4] as string;
+		const msgB = ins2.find((i) => i.sql.includes("error_log"))!.args[4] as string;
+		// CF reference is stripped from both; run token is identical → messages must match.
+		expect(msgA).toBe(msgB);
+		// And the token prefix is visible — not a bare "coding run failed" that would cross-run collapse.
+		expect(msgA).toContain("82739cb6");
+	});
+
+	it("two deaths from DIFFERENT runs produce distinct collapse-key messages", async () => {
+		// The cross-run miscount: before the run token, two runs dying at the same phase produced
+		// identical messages and collapsed into one row, making `context.runId ≠ last_context.runId`.
+		const { env: env1, inserts: ins1 } = mockDb();
+		const { env: env2, inserts: ins2 } = mockDb();
+		await recordCodingFailure(env1, { ...base, runId: "run_aaaa_11111" });
+		await recordCodingFailure(env2, { ...base, runId: "run_bbbb_22222" });
+		const msgA = ins1.find((i) => i.sql.includes("error_log"))!.args[4] as string;
+		const msgB = ins2.find((i) => i.sql.includes("error_log"))!.args[4] as string;
+		// Different runIds → different 8-char tokens → different messages → they do NOT collapse.
+		expect(msgA).not.toBe(msgB);
+		expect(msgA).toContain("run_aaaa");
+		expect(msgB).toContain("run_bbbb");
+	});
+
+	it("falls back to sessionId when no runId — chat-initiated runs stay distinct", async () => {
+		// A chat-triggered `start_work` has no loopRunId, so runId is null. The sessionId is stable
+		// for that run and unique across runs, so it is the right fallback discriminator.
+		const { env, inserts } = mockDb();
+		await recordCodingFailure(env, { ...base, sessionId: "csess_chat_abc123", runId: undefined });
+		const msg = inserts.find((i) => i.sql.includes("error_log"))!.args[4] as string;
+		// The token is the first 8 chars of sessionId.
+		expect(msg).toContain("csess_ch");
 	});
 });
 
