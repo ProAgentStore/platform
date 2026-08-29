@@ -266,7 +266,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			objective: z.string().describe("The outcome you want, in plain language."),
-			max_iterations: z.number().optional().describe("Cap on steps (default 10, max 50)."),
+			max_iterations: z.coerce.number().optional().describe("Cap on steps (default 10, max 50)."),
 			dry_run: z.boolean().optional().describe("Report the objective and the step cap that would be committed, without starting the run."),
 		},
 		async ({ token, instance_id, objective, max_iterations, dry_run }) => {

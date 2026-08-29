@@ -191,8 +191,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			"List agents owned by the authenticated ProAgentStore creator. `total` and `roster` name EVERY owned agent and are never shortened, so answer \"how many agents do I have\" and \"which ones\" from those. `agents` is a PAGE carrying each agent's full record — including `config`, which is 61% of this response's bytes and is not readable through any other tool (agent_info reads the PUBLIC record, which omits config and does not exist for a draft). Read `page.hasMore` and call again with `offset: page.nextOffset` for the rest.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-				offset: z.number().int().min(0).optional().describe("Skip this many agents' full records. Pass `page.nextOffset` from the previous reply; omit for the first page. The roster is complete on every page regardless."),
-				limit: z.number().int().min(1).optional().describe("Cap the full records returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
+				offset: z.coerce.number().int().min(0).optional().describe("Skip this many agents' full records. Pass `page.nextOffset` from the previous reply; omit for the first page. The roster is complete on every page regardless."),
+				limit: z.coerce.number().int().min(1).optional().describe("Cap the full records returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
 			},
 			async ({ token, offset, limit }) => {
 				const sessionToken = this.token(token);
@@ -218,7 +218,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			"Read recent MCP write, runtime, dry-run, denied, and destructive tool audit events for the authenticated account.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-				limit: z.number().int().min(1).max(200).optional(),
+				limit: z.coerce.number().int().min(1).max(200).optional(),
 			},
 			async ({ token, limit }) => {
 				const sessionToken = this.token(token);

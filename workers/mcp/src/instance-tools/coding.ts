@@ -82,9 +82,9 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
 				session_id: z.string().optional().describe("A specific coding session. Omit for the newest active one, else the most recently updated."),
-				since_seq: z.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it, oldest-first. Pass the previous reply's `nextSeq` to poll a live run. Cannot be combined with `before`."),
-				before: z.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK — returns the page of events OLDER than it. Pass the previous reply's `oldestSeq`. Cannot be combined with `since_seq`."),
-				limit: z.number().int().min(1).max(200).optional().describe("Events per page (default 40). Not the payload bound: a page also stops at a byte budget, and `hasMore` says so — raising this cannot make one call return more bytes."),
+				since_seq: z.coerce.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it, oldest-first. Pass the previous reply's `nextSeq` to poll a live run. Cannot be combined with `before`."),
+				before: z.coerce.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK — returns the page of events OLDER than it. Pass the previous reply's `oldestSeq`. Cannot be combined with `since_seq`."),
+				limit: z.coerce.number().int().min(1).max(200).optional().describe("Events per page (default 40). Not the payload bound: a page also stops at a byte budget, and `hasMore` says so — raising this cannot make one call return more bytes."),
 			},
 			async ({ token, instance_id, session_id, since_seq, before, limit }) => {
 				const sessionToken = tokenFor(token);
@@ -143,8 +143,8 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
 				session_id: z.string().optional().describe("A specific coding session. Omit for the newest active one, else the most recently updated — the same rule coding_timeline uses."),
-				before: z.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK through the stored snapshots. Pass the previous reply's `oldestSeq`."),
-				limit: z.number().int().min(1).max(4).optional().describe("Snapshots per call (default 1). A snapshot is up to 8,000 characters and is never truncated, so this is the payload bound — 4 is the ceiling that still fits a calling host's 64 KiB limit."),
+				before: z.coerce.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK through the stored snapshots. Pass the previous reply's `oldestSeq`."),
+				limit: z.coerce.number().int().min(1).max(4).optional().describe("Snapshots per call (default 1). A snapshot is up to 8,000 characters and is never truncated, so this is the payload bound — 4 is the ceiling that still fits a calling host's 64 KiB limit."),
 			},
 			async ({ token, instance_id, session_id, before, limit }) => {
 				const sessionToken = tokenFor(token);
@@ -191,7 +191,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
 			objective: z.string().describe("What the agent should accomplish"),
-			max_iterations: z.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10). The server clamps this to your account's loop ceiling."),
+			max_iterations: z.coerce.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10). The server clamps this to your account's loop ceiling."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
 		async ({ token, instance_id, objective, max_iterations, dry_run }) => {

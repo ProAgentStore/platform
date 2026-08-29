@@ -163,12 +163,12 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Patch your per-account AI-spend limits — the two daily circuit breakers and the four per-tree run knobs. Only the fields you pass are changed; anything you omit keeps its stored value. Pass null for a field to clear that override so it inherits from the platform default. Values are clamped server-side to the platform maximum ($10 000 / 100B tokens per 24h). Returns the re-resolved effective limits after the write — same shape as get_budget_limits. Read get_budget_limits first to see the current state.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			token_ceiling: z.number().nullable().optional().describe("Daily token ceiling. null clears the override (inherit); omit to leave unchanged."),
-			charged_micros_ceiling: z.number().nullable().optional().describe("Daily charged-cost ceiling in micros (1 000 000 = $1). null clears the override; omit to leave unchanged."),
-			per_tree_cost_micros: z.number().nullable().optional().describe("Spend budget for one autonomous run tree, in micros. null clears the override; omit to leave unchanged."),
-			per_tree_delegations: z.number().nullable().optional().describe("Max delegations in one run tree. null clears the override; omit to leave unchanged."),
-			per_tree_max_depth: z.number().nullable().optional().describe("Max delegation depth in one run tree. null clears the override; omit to leave unchanged."),
-			loop_max_iterations: z.number().nullable().optional().describe("Cap on Loop iterations. null clears the override; omit to leave unchanged."),
+			token_ceiling: z.coerce.number().nullable().optional().describe("Daily token ceiling. null clears the override (inherit); omit to leave unchanged."),
+			charged_micros_ceiling: z.coerce.number().nullable().optional().describe("Daily charged-cost ceiling in micros (1 000 000 = $1). null clears the override; omit to leave unchanged."),
+			per_tree_cost_micros: z.coerce.number().nullable().optional().describe("Spend budget for one autonomous run tree, in micros. null clears the override; omit to leave unchanged."),
+			per_tree_delegations: z.coerce.number().nullable().optional().describe("Max delegations in one run tree. null clears the override; omit to leave unchanged."),
+			per_tree_max_depth: z.coerce.number().nullable().optional().describe("Max delegation depth in one run tree. null clears the override; omit to leave unchanged."),
+			loop_max_iterations: z.coerce.number().nullable().optional().describe("Cap on Loop iterations. null clears the override; omit to leave unchanged."),
 			dry_run: z.boolean().optional(),
 		},
 		async (args) => {

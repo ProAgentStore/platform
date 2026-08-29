@@ -64,7 +64,8 @@
  * it will never have. Full reasoning and measurements: #562.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
@@ -954,5 +955,89 @@ describe("result serialisation — every tool, on the wire (#586)", () => {
 			// indented on a real 104-row instance, i.e. ~22% on a payload made mostly of prose.
 		);
 		expect(sweep.called).toBe(MCP_TOOL_COUNT);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 5 — NUMERIC COERCION: every numeric parameter accepts string-encoded numbers (#670)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A host with a cached tool list sends numeric arguments as STRINGS — because the cache
+ * predates the parameter and there is no type to cast against. #614 verified this in
+ * production: a paged tool shipped, page 1 arrived clean, and every subsequent page hard-errored
+ * with -32602 because the calling host sent `"63"` and `z.number()` refused it.
+ *
+ * The fix is `z.coerce.number()`, which the MCP SDK and Zod both publish as a byte-identical
+ * `inputSchema` — so no surface-lock bump is required (#614 verified this too, at 0.1.6).
+ *
+ * This guard makes the fix structural: it reads the MCP source tree and asserts that no
+ * bare `z.number()` is used as a parameter schema. The denominator — files scanned, occurrences
+ * measured — is stated per ADR 0002 so a future green run over an empty tree does not pass silently.
+ *
+ * **Red demonstration (AC4):** restore any single `z.number()` in a parameter shape and this
+ * test fails, naming the file and line. The guard does not run against comments — a comment
+ * that says `z.number()` is not a schema — but a schema that parses bare numbers is.
+ */
+describe("numeric parameter coercion (#670)", () => {
+	it("every numeric MCP parameter coerces, so a stale-cache host cannot get -32602", () => {
+		const srcDir = fileURLToPath(new URL(".", import.meta.url).href);
+
+		// Walk the MCP source tree — same set the CI checks sweep, excluding test files and
+		// generated output. Test files are excluded because a test that DEMONSTRATES a bad schema
+		// may name `z.number()` in the assertion or the fixture, and that is not a published param.
+		function sources(dir: string, acc: string[] = []): string[] {
+			for (const entry of readdirSync(dir)) {
+				const p = join(dir, entry);
+				if (statSync(p).isDirectory()) sources(p, acc);
+				else if (
+					p.endsWith(".ts") &&
+					!p.endsWith(".test.ts") &&
+					!p.endsWith(".d.ts") &&
+					!p.includes("node_modules")
+				) acc.push(p);
+			}
+			return acc;
+		}
+		const files = sources(srcDir);
+
+		// ADR 0002 G1: if the walk found no files the gate is measuring nothing.
+		expect(files.length, "source walk found no .ts files — gate is vacuous").toBeGreaterThan(0);
+
+		// A bare `z.number()` that is NOT inside a comment and NOT preceded by `.coerce`.
+		// The regex matches `z.number()` that is NOT immediately preceded by `.coerce` — i.e.
+		// `z.coerce.number()` is allowed, `z.number()` is not.
+		// We check line-by-line so we can exclude comment lines.
+		const offenders: string[] = [];
+		let totalLines = 0;
+		for (const file of files) {
+			const lines = readFileSync(file, "utf-8").split("\n");
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				totalLines++;
+				// Skip comment-only lines (trimmed starts with // or *)
+				const trimmed = line.trimStart();
+				if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+				// Find `z.number()` not immediately preceded by `.coerce`
+				// Use a regex that matches `z.number()` where the preceding char sequence is NOT `.coerce`
+				const matches = [...line.matchAll(/z\.number\(\)/g)];
+				for (const match of matches) {
+					const before = line.slice(0, match.index);
+					if (!before.endsWith(".coerce")) {
+						// Shorten the path for readability in failure output
+						const rel = file.includes("workers/mcp/src/") ? file.split("workers/mcp/src/")[1] : file;
+						offenders.push(`workers/mcp/src/${rel}:${i + 1}: ${line.trim()}`);
+					}
+				}
+			}
+		}
+
+		// G2: denominator in the passing output so a shrunk tree is visible.
+		console.log(
+			`✓ numeric coercion (#670): 0 bare z.number() in ${files.length} source files ` +
+				`(${totalLines} lines scanned). All numeric params coerce; a stale-cache host cannot get -32602.`,
+		);
+
+		expect(offenders, "bare z.number() found — use z.coerce.number() for all MCP numeric params").toEqual([]);
 	});
 });

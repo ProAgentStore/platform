@@ -71,7 +71,7 @@ export function registerStorageTools(
 			collection: z.string().describe("Collection name"),
 			where: z.string().optional().describe('JSON filter: {"status":"submitted"}'),
 			order_by: z.string().optional(),
-			limit: z.number().optional(),
+			limit: z.coerce.number().optional(),
 		},
 		async ({ token, agent_id, collection, where, order_by, limit }) => {
 			const t = tokenFor(token);
@@ -170,7 +170,7 @@ export function registerStorageTools(
 			collection: z.string().describe("Collection name"),
 			where: z.string().optional().describe('JSON filter: {"status":"submitted"}'),
 			order_by: z.string().optional(),
-			limit: z.number().optional(),
+			limit: z.coerce.number().optional(),
 		},
 		async ({ token, instance_id, collection, where, order_by, limit }) => {
 			const t = tokenFor(token);
@@ -301,7 +301,7 @@ export function registerStorageTools(
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
 			query: z.string().describe("Natural language search query"),
-			top_k: z.number().optional().describe("Number of results (default 5)"),
+			top_k: z.coerce.number().optional().describe("Number of results (default 5)"),
 		},
 		async ({ token, agent_id, query, top_k }) => {
 			const t = tokenFor(token);
@@ -323,7 +323,7 @@ export function registerStorageTools(
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
-			limit: z.number().optional().describe("Number of events (default 20)"),
+			limit: z.coerce.number().optional().describe("Number of events (default 20)"),
 		},
 		async ({ token, agent_id, limit }) => {
 			const t = tokenFor(token);

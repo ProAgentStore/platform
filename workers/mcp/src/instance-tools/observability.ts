@@ -33,7 +33,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			// as model context instead, where a 2000-message page is the payload problem #569 is
 			// separately shrinking. With `before` in place the ceiling is no longer what limits reach
 			// — paging is — so the smaller one costs nothing and bounds what one call can cost.
-			limit: z.number().int().min(1).max(100).optional().describe("Messages per page (default 50, max 100). Page with `before` for older ones; the HTTP route allows 2000 for whole-conversation export, MCP stays smaller because the page is spent as model context."),
+			limit: z.coerce.number().int().min(1).max(100).optional().describe("Messages per page (default 50, max 100). Page with `before` for older ones; the HTTP route allows 2000 for whole-conversation export, MCP stays smaller because the page is spent as model context."),
 		},
 		async ({ token, instance_id, limit, before }) => {
 			const sessionToken = tokenFor(token);
@@ -107,7 +107,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			scope: z.enum(["me", "all"]).optional().describe('"all" = every user\'s errors (admin only); default your own.'),
 			source: z.string().optional().describe("Filter by source, e.g. keys-proxy | auth | job-apply | coding."),
-			limit: z.number().int().min(1).max(500).optional(),
+			limit: z.coerce.number().int().min(1).max(500).optional(),
 		},
 		async ({ token, scope, source, limit }) => {
 			const sessionToken = tokenFor(token);
@@ -137,7 +137,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			// within it. Two knobs, deliberately, because they answer different questions — "how far
 			// back do I want to look" is not "how much fits in one reply", and collapsing them would
 			// silently change what `limit` has always meant (most-recent N events).
-			limit: z.number().int().min(1).max(1000).optional().describe("How many of the most-recent events to READ BACK (default 200), shown oldest→newest. This selects the window of history, not the size of the reply: the window is then delivered in budgeted pages via `offset`, so raising it does not make one reply bigger."),
+			limit: z.coerce.number().int().min(1).max(1000).optional().describe("How many of the most-recent events to READ BACK (default 200), shown oldest→newest. This selects the window of history, not the size of the reply: the window is then delivered in budgeted pages via `offset`, so raising it does not make one reply bigger."),
 			// `z.coerce`, and it is load-bearing rather than defensive. Verified in production the
 			// hour this shipped: a host whose cached tool list predates the argument has no type to
 			// cast to, so it sends `offset: "63"` as a STRING, and a bare `z.number()` answers
@@ -178,7 +178,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().optional().describe("Narrow to one agent; omit for everything you have flagged."),
 			status: z.enum(["open", "triaged", "filed", "dismissed"]).optional().describe('Triage state; "open" is the unfiled backlog.'),
-			limit: z.number().int().min(1).max(500).optional().describe("Most-recent rows to return (default 100)."),
+			limit: z.coerce.number().int().min(1).max(500).optional().describe("Most-recent rows to return (default 100)."),
 		},
 		async ({ token, instance_id, status, limit }) => {
 			const sessionToken = tokenFor(token);
@@ -234,7 +234,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The instance (agent) whose pipeline runs to list."),
 			pipeline: z.string().optional().describe("Narrow to one pipeline's run history."),
-			limit: z.number().int().min(1).max(500).optional().describe("Most-recent runs to return (default 50)."),
+			limit: z.coerce.number().int().min(1).max(500).optional().describe("Most-recent runs to return (default 50)."),
 		},
 		async ({ token, instance_id, pipeline, limit }) => {
 			const sessionToken = tokenFor(token);

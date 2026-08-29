@@ -337,7 +337,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			limit: z.number().int().min(1).max(500).optional(),
+			limit: z.coerce.number().int().min(1).max(500).optional(),
 		},
 		async ({ token, instance_id, limit }) => {
 			const sessionToken = tokenFor(token);

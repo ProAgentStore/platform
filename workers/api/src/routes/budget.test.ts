@@ -464,8 +464,10 @@ describe("account_budget_limits field coverage", () => {
 		const exposed = [...(table?.[1] ?? "").matchAll(/\["([a-z_]+)", "([A-Za-z]+)"\]/g)].map((m) => m[2]);
 		expect([...exposed].sort()).toEqual([...BUDGET_LIMIT_FIELDS.map((f) => f.field)].sort());
 		// And each one is a real argument on the tool, not just a line in the table.
+		// `z.coerce` is required for all numeric MCP params (#670): a host with a cached tool
+		// list sends string-encoded numbers, and a bare `z.number()` answers -32602.
 		for (const m of (table?.[1] ?? "").matchAll(/\["([a-z_]+)", "[A-Za-z]+"\]/g)) {
-			expect(src).toContain(`${m[1]}: z.number().nullable().optional()`);
+			expect(src).toContain(`${m[1]}: z.coerce.number().nullable().optional()`);
 		}
 	});
 });

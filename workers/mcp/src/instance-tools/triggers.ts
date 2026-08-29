@@ -120,7 +120,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			trigger_id: z.string(),
-			limit: z.number().int().min(1).max(200).optional(),
+			limit: z.coerce.number().int().min(1).max(200).optional(),
 		},
 		async ({ token, trigger_id, limit }) => {
 			const sessionToken = tokenFor(token);

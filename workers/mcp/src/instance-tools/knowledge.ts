@@ -88,7 +88,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			query: z.string().describe("Natural-language search query."),
-			top_k: z.number().int().min(1).max(20).optional().describe("Number of results (default 5)."),
+			top_k: z.coerce.number().int().min(1).max(20).optional().describe("Number of results (default 5)."),
 		},
 		async ({ token, instance_id, query, top_k }) => {
 			const sessionToken = tokenFor(token);
@@ -199,8 +199,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			offset: z.number().int().min(0).optional().describe("Skip this many sources. Pass `page.nextOffset` from the previous reply; omit for the first page."),
-			limit: z.number().int().min(1).optional().describe("Cap the sources returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many sources. Pass `page.nextOffset` from the previous reply; omit for the first page."),
+			limit: z.coerce.number().int().min(1).optional().describe("Cap the sources returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
 		},
 		async ({ token, instance_id, offset, limit }) => {
 			const sessionToken = tokenFor(token);
