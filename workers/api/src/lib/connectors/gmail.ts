@@ -72,9 +72,14 @@ function ok(payload: unknown): RegistryToolResult {
  * (`unfenceUntrusted`), so a `$ref` off a message still resolves — the fence is for the model, and
  * the binder is not one.
  *
- * Only the tools that return third-party prose declare it. `gmail_archive`'s label list and
- * `gmail_download_attachment`'s file id are OUR words about an outcome, and fencing those would
- * teach the model that a fence means nothing in particular (ADR 0006 F2).
+ * Only the tools that return third-party prose declare it. `gmail_archive`'s label list is OUR
+ * words about an outcome. `gmail_download_attachment` is mostly ours too — `stored`, `file_id`,
+ * `mime_type`, `size` and the `note` are platform sentences — but `name: meta.name ?? att.filename`
+ * is the sender's, and the three refusal strings above it also interpolate `att.filename`. The
+ * payload is left unfenced (ADR 0006 F2) because a filename is a short string with little room for
+ * prose injection, and wrapping a mostly-ours result teaches the model that a fence means nothing
+ * in particular — which is the exact defect F2 exists to prevent. The declaration is explicit
+ * (`untrustedOutput: false` in the manifest, now required) so the choice is on record (#725 AC4).
  */
 function okUntrusted(payload: unknown, origin: string): RegistryToolResult {
 	const body = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
