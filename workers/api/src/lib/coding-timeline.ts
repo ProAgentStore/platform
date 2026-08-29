@@ -1,4 +1,5 @@
 import { capToolCalls, type EngineToolCall, toolCallsForSnapshot } from "./engine-tool-calls.js";
+import type { EngineUsageReport } from "./engine-usage.js";
 import type { Env } from "../types.js";
 
 /**
@@ -18,7 +19,16 @@ export type TimelineType =
 	| "command"
 	| "brain"
 	| "outcome"
-	| "system";
+	| "system"
+	/**
+	 * One engine turn's measured spend (#674).
+	 *
+	 * Written at each capture drain alongside the `ai_usage` ledger row. `content` is a compact
+	 * JSON string `{"turns":[{…}]}` carrying the same fields `EngineUsageReport` holds. Absent
+	 * rather than present with `turns:[]` when the drain produced no records — which is every poll
+	 * where no turn completed.
+	 */
+	| "usage";
 
 export interface TimelineEntry {
 	seq: number;
@@ -58,6 +68,43 @@ export async function appendTimeline(
 	)
 		.bind(args.sessionId, args.instanceId, args.userId, args.type, args.content.slice(0, 100_000), audioKey)
 		.run();
+}
+
+/**
+ * Append a `usage` entry recording the spend for one or more engine turns (#674).
+ *
+ * Called alongside `recordEngineUsage` at every capture drain — the capture poll (every 3 s),
+ * the session-end drain, and the Pilot Workflow drain. Each call receives the same validated
+ * records `sanitizeEngineUsage` returned; it stores them compact-JSON so the feed reader can
+ * expose them as structured `EngineUsageTurn[]` without re-validating.
+ *
+ * No-ops when `records` is empty (no turn completed on this drain) rather than writing a row
+ * carrying an empty array — an empty-turns entry would read as "the engine was free this turn",
+ * which is the same confident-but-unfounded claim this codebase has declined each time.
+ *
+ * Best-effort: instrumentation must never break the drain it observes.
+ */
+export async function appendEngineUsageTimeline(
+	env: Env,
+	args: { sessionId: string; instanceId: string; userId: string },
+	records: EngineUsageReport[],
+): Promise<void> {
+	if (!records.length) return;
+	const turns = records.map((r) => ({
+		model: r.model,
+		in: r.inputTokens,
+		out: r.outputTokens,
+		cacheRead: r.cacheReadTokens,
+		cacheWrite: r.cacheWriteTokens,
+		costUsd: r.costUsd,
+	}));
+	await appendTimeline(env, {
+		sessionId: args.sessionId,
+		instanceId: args.instanceId,
+		userId: args.userId,
+		type: "usage",
+		content: JSON.stringify({ turns }),
+	}).catch(() => undefined);
 }
 
 /** The full timeline for a session, oldest→newest (capped). */
@@ -232,6 +279,27 @@ export const FEED_BYTE_BUDGET = 40_000;
  */
 export const FEED_TOOLCALL_BYTES = 24_000;
 
+/**
+ * One engine turn's token/cost record as it appears in a feed event (#674).
+ *
+ * Field names are compact because this appears inside every `FeedEvent` on a `usage` row and the
+ * page is already byte-budgeted — verbose names multiply across every turn. Mirrors the validated
+ * fields from `EngineUsageReport` without re-validating them on read.
+ */
+export interface EngineUsageTurn {
+	model: string;
+	/** Prompt / input tokens. */
+	in: number;
+	/** Completion / output tokens. */
+	out: number;
+	/** Prompt cache read tokens (Anthropic extended thinking / prompt caching). */
+	cacheRead: number;
+	/** Prompt cache write tokens. */
+	cacheWrite: number;
+	/** Notional cost in USD (tokens × list price, as reported by the CLI). */
+	costUsd: number;
+}
+
 /** One timeline row, cut to fit. */
 export interface FeedEvent {
 	seq: number;
@@ -252,6 +320,13 @@ export interface FeedEvent {
 	toolCallsOmitted?: number;
 	/** Continuity with the previous snapshot was lost — see `SnapshotToolCalls.gap`. */
 	toolCallGap?: true;
+	/**
+	 * Per-turn token and cost accounting for a `usage` row (#674).
+	 *
+	 * `usage` rows only. Each element is one engine turn that completed since the previous drain.
+	 * Absent on all other row types.
+	 */
+	usage?: EngineUsageTurn[];
 }
 
 export interface TimelineFeed {
@@ -368,6 +443,15 @@ export async function loadTimelineFeed(
 				ev.toolCalls = capped.calls;
 				if (capped.omitted) ev.toolCallsOmitted = capped.omitted;
 				if (found.gap) ev.toolCallGap = true;
+			}
+		} else if (entry.type === "usage") {
+			// Parse the compact JSON `appendEngineUsageTimeline` wrote; silently skip any row
+			// that cannot be decoded rather than surfacing a parse error to the caller (#674).
+			try {
+				const parsed = JSON.parse(entry.content) as { turns?: EngineUsageTurn[] };
+				if (Array.isArray(parsed.turns) && parsed.turns.length) ev.usage = parsed.turns;
+			} catch {
+				/* best-effort: a malformed row is omitted, not a 500 */
 			}
 		}
 		built.push(ev);
@@ -686,6 +770,7 @@ export async function contextForCopilot(env: Env, sessionId: string, limit = 40)
 		brain: "Agent action",
 		outcome: "Outcome",
 		system: "System",
+		usage: "Engine spend",
 	};
 	return entries
 		.map((e) => {

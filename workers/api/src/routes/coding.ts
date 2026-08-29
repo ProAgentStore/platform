@@ -15,7 +15,7 @@ import {
 	type EngineAuth,
 	type EngineAuthResolved,
 } from "../lib/coding-engines.js";
-import { appendTimeline, clearChat, lastTerminalRow, loadChat, loadRepoTimeline, loadTerminalSnapshots, loadTimeline } from "../lib/coding-timeline.js";
+import { appendEngineUsageTimeline, appendTimeline, clearChat, lastTerminalRow, loadChat, loadRepoTimeline, loadTerminalSnapshots, loadTimeline } from "../lib/coding-timeline.js";
 import { shouldPersistSnapshot, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { logError } from "../lib/error-log.js";
 import {
@@ -279,11 +279,9 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// pays, which is what let a money ceiling fire on a subscription (#343). Persist it here,
 	// where the value and the observation are in hand together.
 	const resolvedAuth = ((snap as { authResolved?: unknown }).authResolved ?? null) as EngineAuthResolved | null;
-	await recordEngineUsage(
-		c.env,
-		{ userId: uid, sessionId, instanceId, authResolved: resolvedAuth },
-		sanitizeEngineUsage((snap as { usage?: unknown }).usage),
-	);
+	const usageRecords = sanitizeEngineUsage((snap as { usage?: unknown }).usage);
+	await recordEngineUsage(c.env, { userId: uid, sessionId, instanceId, authResolved: resolvedAuth }, usageRecords);
+	await appendEngineUsageTimeline(c.env, { sessionId, instanceId, userId: uid }, usageRecords);
 	// What the Engine actually DID (#294). The same drain carries it, so this poll records a merge
 	// or a force-push whether or not a Pilot is driving — a human-driven session is exactly as
 	// capable of merging to `main`, and leaving it out would make the record depend on who started

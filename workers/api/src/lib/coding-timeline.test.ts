@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline, loadTerminalSnapshots, pruneTerminalSnapshots, sweepTerminalSnapshots, TERMINAL_KEEP_PER_SESSION } from "./coding-timeline.js";
+import { describe, expect, it, beforeEach } from "vitest";
+import { appendTimeline, appendEngineUsageTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline, loadTerminalSnapshots, pruneTerminalSnapshots, sweepTerminalSnapshots, TERMINAL_KEEP_PER_SESSION, loadTimelineFeed } from "./coding-timeline.js";
+import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
 interface Write { sql: string; args: unknown[] }
@@ -475,5 +476,134 @@ describe("loadTerminalSnapshots — `after` is the cursor that makes a reload a 
 			expect(page.tail).toBe(false);
 			expect(page.entries).toHaveLength(3);
 		}
+	});
+});
+
+// ── appendEngineUsageTimeline + loadTimelineFeed usage parsing (#674) ─────────────
+
+const SESSION_U = "csess_usage";
+
+describe("appendEngineUsageTimeline", () => {
+	it("writes a `usage` type row with compact JSON turns", async () => {
+		const db = realSchemaD1();
+		seedTenant(db, { userId: "u1", instanceIds: ["i1"] });
+		db.exec("INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'demo')");
+		db.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, tmux_session) VALUES ('${SESSION_U}', 'i1', 'r1', 'u1', 'active', 'claude:${SESSION_U}')`);
+		const env = { DB: db.DB } as unknown as Env;
+
+		await appendEngineUsageTimeline(env, { sessionId: SESSION_U, instanceId: "i1", userId: "u1" }, [
+			{ id: "turn-1", model: "claude-sonnet-4-6", inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 50, costUsd: 0.015 },
+		]);
+
+		// Use the underlying sqlite connection for direct row reads (db.DB is the FakeD1 async shim).
+		const rows = db.sqlite.prepare("SELECT type, content FROM coding_timeline WHERE session_id = ?").all(SESSION_U) as Array<{ type: string; content: string }>;
+		expect(rows).toHaveLength(1);
+		expect(rows[0].type).toBe("usage");
+		const parsed = JSON.parse(rows[0].content) as { turns: unknown[] };
+		expect(parsed.turns).toHaveLength(1);
+		expect((parsed.turns[0] as Record<string, unknown>).model).toBe("claude-sonnet-4-6");
+		expect((parsed.turns[0] as Record<string, unknown>).in).toBe(1000);
+		expect((parsed.turns[0] as Record<string, unknown>).out).toBe(500);
+		expect((parsed.turns[0] as Record<string, unknown>).cacheRead).toBe(200);
+		expect((parsed.turns[0] as Record<string, unknown>).cacheWrite).toBe(50);
+		expect((parsed.turns[0] as Record<string, unknown>).costUsd).toBeCloseTo(0.015);
+	});
+
+	it("no-ops when records is empty — no row written", async () => {
+		const db = realSchemaD1();
+		seedTenant(db, { userId: "u1", instanceIds: ["i1"] });
+		db.exec("INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'demo')");
+		db.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, tmux_session) VALUES ('${SESSION_U}2', 'i1', 'r1', 'u1', 'active', 'claude:${SESSION_U}2')`);
+		const env = { DB: db.DB } as unknown as Env;
+
+		await appendEngineUsageTimeline(env, { sessionId: `${SESSION_U}2`, instanceId: "i1", userId: "u1" }, []);
+		const rows = db.sqlite.prepare("SELECT seq FROM coding_timeline WHERE session_id = ?").all(`${SESSION_U}2`) as unknown[];
+		expect(rows).toHaveLength(0);
+	});
+});
+
+describe("loadTimelineFeed — usage rows carry structured EngineUsageTurn[] (#674)", () => {
+	let db: RealSchemaD1;
+	let env: Env;
+	const SID = "csess_usage_feed";
+
+	beforeEach(() => {
+		db = realSchemaD1();
+		seedTenant(db, { userId: "u1", instanceIds: ["i1"] });
+		db.exec("INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'demo')");
+		db.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, tmux_session) VALUES ('${SID}', 'i1', 'r1', 'u1', 'active', 'claude:${SID}')`);
+		env = { DB: db.DB } as unknown as Env;
+	});
+
+	const add = (type: "brain" | "command" | "outcome" | "usage", content: string) =>
+		appendTimeline(env, { sessionId: SID, instanceId: "i1", userId: "u1", type, content });
+
+	it("a `usage` event in the feed carries `usage` array with the turns", async () => {
+		await add("brain", "objective");
+		await add("command", "implement it");
+		await appendEngineUsageTimeline(env, { sessionId: SID, instanceId: "i1", userId: "u1" }, [
+			{ id: "t1", model: "claude-sonnet-4-6", inputTokens: 800, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 },
+		]);
+		await add("outcome", "done");
+
+		const feed = await loadTimelineFeed(env, { sessionId: SID });
+		const usageEvents = feed.events.filter((e) => e.type === "usage");
+		expect(usageEvents).toHaveLength(1);
+		expect(usageEvents[0].usage).toBeDefined();
+		expect(usageEvents[0].usage).toHaveLength(1);
+		const turn = usageEvents[0].usage![0];
+		expect(turn.model).toBe("claude-sonnet-4-6");
+		expect(turn.in).toBe(800);
+		expect(turn.out).toBe(300);
+		expect(turn.cacheRead).toBe(0);
+		expect(turn.cacheWrite).toBe(0);
+		expect(turn.costUsd).toBeCloseTo(0.01);
+	});
+
+	it("a `usage` event with multiple turns carries all of them", async () => {
+		await appendEngineUsageTimeline(env, { sessionId: SID, instanceId: "i1", userId: "u1" }, [
+			{ id: "t1", model: "claude-sonnet-4-6", inputTokens: 500, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.005 },
+			{ id: "t2", model: "claude-sonnet-4-6", inputTokens: 600, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0, costUsd: 0.008 },
+		]);
+
+		const feed = await loadTimelineFeed(env, { sessionId: SID });
+		const usageEvents = feed.events.filter((e) => e.type === "usage");
+		expect(usageEvents[0].usage).toHaveLength(2);
+		expect(usageEvents[0].usage![1].cacheRead).toBe(50);
+	});
+
+	it("non-usage events do not carry a `usage` field", async () => {
+		await add("brain", "objective");
+		await add("command", "implement it");
+		await add("outcome", "done");
+		await appendEngineUsageTimeline(env, { sessionId: SID, instanceId: "i1", userId: "u1" }, [
+			{ id: "t1", model: "claude-sonnet-4-6", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.001 },
+		]);
+
+		const feed = await loadTimelineFeed(env, { sessionId: SID });
+		for (const ev of feed.events.filter((e) => e.type !== "usage")) {
+			expect(ev.usage).toBeUndefined();
+		}
+	});
+
+	it("a `usage` row with malformed JSON silently omits the `usage` field rather than throwing", async () => {
+		// Manually insert a broken usage row
+		db.exec(`INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES ('${SID}', 'i1', 'u1', 'usage', 'NOT JSON AT ALL')`);
+
+		const feed = await loadTimelineFeed(env, { sessionId: SID });
+		const usageEvents = feed.events.filter((e) => e.type === "usage");
+		expect(usageEvents).toHaveLength(1);
+		// Malformed JSON → `usage` field is absent, not an error
+		expect(usageEvents[0].usage).toBeUndefined();
+	});
+
+	it("the `content` field of a `usage` event is the raw JSON string (accessible if needed)", async () => {
+		await appendEngineUsageTimeline(env, { sessionId: SID, instanceId: "i1", userId: "u1" }, [
+			{ id: "t1", model: "m", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 },
+		]);
+		const feed = await loadTimelineFeed(env, { sessionId: SID });
+		const usageEvent = feed.events.find((e) => e.type === "usage");
+		expect(usageEvent?.content).toBeTruthy();
+		expect(() => JSON.parse(usageEvent!.content)).not.toThrow();
 	});
 });

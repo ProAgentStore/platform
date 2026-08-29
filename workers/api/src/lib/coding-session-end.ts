@@ -26,6 +26,7 @@ import { getRunnerConn, callRunner } from "./runner-client.js";
 import { endSession, getSession } from "./coding-store.js";
 import { recordEngineActs, sanitizeEngineActs } from "./engine-acts.js";
 import { sanitizeEngineUsage } from "./engine-usage.js";
+import { appendEngineUsageTimeline } from "./coding-timeline.js";
 import { recordEngineUsage } from "./usage.js";
 import { logError } from "./error-log.js";
 import type { EngineAuthResolved } from "./coding-engines.js";
@@ -73,11 +74,9 @@ export async function endCodingSession(
 			context: { instanceId, sessionId, runnerNode: session?.runnerNode ?? null },
 		});
 	}
-	await recordEngineUsage(
-		env,
-		{ userId, sessionId, instanceId, authResolved: (ended?.authResolved ?? null) as EngineAuthResolved | null },
-		sanitizeEngineUsage(ended?.usage),
-	);
+	const usageRecords = sanitizeEngineUsage(ended?.usage);
+	await recordEngineUsage(env, { userId, sessionId, instanceId, authResolved: (ended?.authResolved ?? null) as EngineAuthResolved | null }, usageRecords);
+	await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, usageRecords);
 	await recordEngineActs(env, { userId, sessionId, instanceId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
 	const ok = await endSession(env, instanceId, userId, sessionId);
 	return {

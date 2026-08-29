@@ -95,6 +95,7 @@ const LABEL: Record<TimelineType, string> = {
 	brain: "the Pilot decided",
 	outcome: "outcome",
 	system: "the platform noted",
+	usage: "engine spend",
 };
 
 /**

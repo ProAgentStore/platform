@@ -1301,7 +1301,12 @@ const PINS = {
 	// write. Splitting the file was considered and rejected here: the two gates read the same
 	// drained acts in the same step, and separating them would put the halt further from the
 	// thing it halts.
-	"workers/api/src/workflows/coding-session.ts": 911,
+	// +4 at #674: two appendEngineUsageTimeline calls alongside the two existing recordEngineUsage
+	// drains in the Pilot loop — one per capture tick, one at the closing drain. Each is one new
+	// local variable (pilotUsageRecords / closingUsageRecords) plus the call, both to avoid calling
+	// sanitizeEngineUsage twice. The growth goes beside the code it observes, not in a helper file,
+	// for the same reason the authority gates in #676 stayed here.
+	"workers/api/src/workflows/coding-session.ts": 915,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1480,7 +1485,8 @@ const PINS = {
 	// rather than act. The agent-think raise is the largest (+12) because it injects a per-turn platform note;
 	// the others carry the field through the stack. Plus this note.
 	// +2 at #632: raises for tools.ts (sink rejection) and this self-referential entry.
-	"scripts/check-file-size.mjs": 1564,
+	// +5 at #674: the coding-session.ts raise above (4-line note + pin bump) and this note.
+	"scripts/check-file-size.mjs": 1570,
 };
 
 /**
