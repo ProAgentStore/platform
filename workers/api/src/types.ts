@@ -5,6 +5,14 @@ export interface Env {
 	AI: Ai;
 	VECTORIZE: VectorizeIndex;
 	/**
+	 * The deployed git SHA for this Worker build (#735), injected by CI at deploy time
+	 * (`wrangler deploy --var API_BUILD:<sha>`). Used to stamp server-side `error_log` rows
+	 * so an investigator can tell whether a row predates a fix without cross-referencing
+	 * `git log`. `"dev"` when running locally (the wrangler.toml default). Read once per
+	 * isolate by `setServerBuild(env.API_BUILD)` in `index.ts`.
+	 */
+	API_BUILD?: string;
+	/**
 	 * Master switch for platform-paid internal AI (knowledge embeddings + conversation
 	 * summary, billed to the platform's Workers AI). "true" = allowed for all users;
 	 * anything else (default) = BYOK-only, the platform never spends tokens.

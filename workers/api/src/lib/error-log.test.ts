@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1 } from "./d1-sqlite.js";
-import { deriveClientLevel, listErrors, logError, OBSERVATION_SOURCES, sanitizeBuildId, type ErrorRow } from "./error-log.js";
+import { deriveClientLevel, listErrors, logError, OBSERVATION_SOURCES, resetServerBuildForTests, sanitizeBuildId, setServerBuild, type ErrorRow } from "./error-log.js";
 import type { Env } from "../types.js";
 
 /**
@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	vi.restoreAllMocks();
+	resetServerBuildForTests();
 });
 
 function mockDb(rows: unknown[] = []) {
@@ -545,5 +546,90 @@ describe("sanitizeBuildId", () => {
 		expect(sanitizeBuildId("   ")).toBeUndefined();
 		expect(sanitizeBuildId("' OR 1=1 --")).toBe("OR11--");
 		expect(sanitizeBuildId("x".repeat(200))).toHaveLength(64);
+	});
+});
+
+/**
+ * #735 — server-side `logError` rows were always `build: null` because no call site passes
+ * `e.build` and the Worker had no build id to stamp. `setServerBuild` / `_serverBuild` is
+ * the fix: the isolate's build is set once from `env.API_BUILD` in `index.ts` and is used as
+ * the fallback whenever `e.build` is absent.
+ *
+ * ## These go RED on the old code
+ *
+ * `logError` used to compute `const build = sanitizeBuildId(e.build) ?? null;`. The tests
+ * below call `setServerBuild` and then expect the row's build column to be non-null even when
+ * no `e.build` is supplied. The old code returns `null` in that case.
+ */
+describe("logError — server rows carry the isolate build when no e.build is supplied (#735)", () => {
+	it("a server-side call without e.build gets the module-level build stamped on the row", async () => {
+		// The acceptance criterion from the issue: server rows should never be `build: null` after
+		// this fix. `setServerBuild` simulates what `index.ts` does on the first request.
+		const d1 = realSchemaD1();
+		try {
+			setServerBuild("abc123def456");
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { source: "coding:session", message: "run failed" });
+			const rows = d1.sqlite.prepare("SELECT build FROM error_log").all() as { build: string | null }[];
+			expect(rows).toHaveLength(1);
+			expect(rows[0].build).toBe("abc123def456");
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("an explicit e.build takes precedence over the module-level build", async () => {
+		// Client rows supply their own bundle SHA; the module-level build must not override it.
+		const d1 = realSchemaD1();
+		try {
+			setServerBuild("server-build");
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { source: "client:app", message: "error", build: "client-build" });
+			const rows = d1.sqlite.prepare("SELECT build FROM error_log").all() as { build: string | null }[];
+			expect(rows[0].build).toBe("client-build");
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("when no build is set at all the row is null, preserving pre-#735 semantics for tests", async () => {
+		// `resetServerBuildForTests` (called in afterEach) clears the module-level build, so a test
+		// that never calls `setServerBuild` sees `null` — the same state as before #735 landed.
+		// This keeps the pre-existing #539 tests (which write without a build) deterministic.
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			await logError(env, { source: "server-source", message: "no build set" });
+			const rows = d1.sqlite.prepare("SELECT build FROM error_log").all() as { build: string | null }[];
+			expect(rows[0].build).toBeNull();
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("the module-level build is part of the collapse identity, so two builds do not share a server row", async () => {
+		// The same guarantee #539 gave client rows: a post-fix server occurrence does not fold
+		// into a pre-fix bucket. This test exercises both builds against the real schema.
+		const d1 = realSchemaD1();
+		try {
+			const env = { DB: d1.DB } as unknown as Env;
+			const failure = { source: "unhandled", message: "D1_ERROR: compound SELECT" };
+			setServerBuild("build-before-fix");
+			await logError(env, failure);
+			await logError(env, failure);
+			setServerBuild("build-after-fix");
+			await logError(env, failure);
+			const rows = d1.sqlite
+				.prepare("SELECT build, repeat_count FROM error_log ORDER BY build")
+				.all() as { build: string; repeat_count: number }[];
+			// Two distinct builds → two rows. The pre-fix row has the count; the post-fix row
+			// proves the fix is still happening (or not), separately.
+			expect(rows.map((r) => [r.build, r.repeat_count])).toEqual([
+				["build-after-fix", 1],
+				["build-before-fix", 2],
+			]);
+		} finally {
+			d1.close();
+		}
 	});
 });

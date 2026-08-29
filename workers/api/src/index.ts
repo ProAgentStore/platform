@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
+import { setServerBuild } from "./lib/error-log.js";
 import { isTransientInfraError, logUnhandled } from "./lib/on-error.js";
 import { verifySession } from "./lib/session.js";
 import { rateLimitAdmin, rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
@@ -229,8 +230,14 @@ async function uidFromRequest(c: { req: { header: (n: string) => string | undefi
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
+let _buildStamped = false;
+
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		// Stamp the server build once per isolate (#735). `env.API_BUILD` is the deployed git SHA
+		// injected by CI; "dev" in local runs. Called on the first fetch rather than at module
+		// evaluation because `env` is not available until a request arrives.
+		if (!_buildStamped) { setServerBuild(env.API_BUILD ?? "dev"); _buildStamped = true; }
 		return app.fetch(request, env, ctx);
 	},
 	async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {

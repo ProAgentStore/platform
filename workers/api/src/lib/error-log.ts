@@ -115,6 +115,31 @@ export interface ErrorLogInput {
 }
 
 /**
+ * The API Worker's own build identifier, set once per isolate lifetime from `env.API_BUILD` (#735).
+ *
+ * A module-level var rather than threading `env.API_BUILD` through every `logError` call: the build
+ * is a CONSTANT for the entire worker lifetime, and widening `logError`'s env type from
+ * `Pick<Env, "DB">` to also require `API_BUILD` would force every one of the 46+ call sites to
+ * supply a wider env — the "Env plumbing explosion" the narrow type was designed to avoid (#637).
+ *
+ * Set from `env.API_BUILD` once on the first request (index.ts). Defaults to `undefined` in test
+ * code that never calls `setServerBuild`. `resetServerBuildForTests` restores that default.
+ */
+let _serverBuild: string | undefined;
+
+/** Stamp this isolate's build id onto every subsequent `logError` server write. Called once per
+ *  isolate from `index.ts` when `env.API_BUILD` is available. Idempotent — a second call with
+ *  the same value is harmless. */
+export function setServerBuild(build: string): void {
+	_serverBuild = sanitizeBuildId(build);
+}
+
+/** Reset the per-isolate build stamp. Tests only — an isolate never wants this. */
+export function resetServerBuildForTests(): void {
+	_serverBuild = undefined;
+}
+
+/**
  * The build id as it is allowed into the log — or undefined (#539).
  *
  * This value reaches a WHERE clause and a UI, and it arrives from an unauthenticated POST body, so
@@ -215,7 +240,12 @@ export async function logError(env: Pick<Env, "DB">, e: ErrorLogInput): Promise<
 		// occurrence) or to the UPDATE's `last_context` (an absorbed one's latest). Two
 		// stringify calls would be two chances for the two columns to mean different things.
 		const context = e.context ? JSON.stringify(e.context).slice(0, 4000) : null;
-		const build = sanitizeBuildId(e.build) ?? null;
+		// For client rows the caller supplies `e.build` (from the browser bundle's stamp, #539).
+		// For server rows `e.build` is always absent, so fall back to the isolate-level build id
+		// that `index.ts` sets from `env.API_BUILD` on the first request (#735). This is what stamps
+		// server-side rows with the deployed git SHA, making "is this row pre-fix or post-fix?"
+		// answerable without a cross-reference to `git log`.
+		const build = sanitizeBuildId(e.build) ?? _serverBuild ?? null;
 		// A repeat is absorbed by the row already recording it AND does not mirror into the trace:
 		// #423 flooded `agent_events` with 1811 error events for the same reason it flooded this
 		// table, so collapsing only one of the two would leave the other unreadable.

@@ -34,6 +34,10 @@ zone_name = "proagentstore.online"
 custom_domain = true
 
 [vars]
+# Deployed git SHA (#735). The CI deploy step overrides this with the real short SHA via
+# `wrangler deploy --var API_BUILD:<sha>` so server-side error_log rows carry the build that
+# wrote them. "dev" is the local default — distinguishable from a real build and from NULL.
+API_BUILD = "dev"
 GITHUB_CLIENT_ID = "Ov23lihFW7hnEXYHNmvK"  # ProAgentStore OAuth app (own — no FAS dependency)
 GITHUB_ORG = "ProAgentStore"
 # Master switch for platform-paid internal AI (knowledge embeddings + conversation

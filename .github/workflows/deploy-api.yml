@@ -57,12 +57,16 @@ jobs:
           command: d1 migrations apply pags --remote
 
       - name: Deploy API worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: workers/api
-          command: deploy
+        # --var API_BUILD overrides the wrangler.toml "dev" default with the real 12-char git SHA
+        # (#735) so every server-side error_log row carries the build that wrote it. 12 chars
+        # matches the client-side convention from #539 and is collision-free in practice (the
+        # birthday bound is ~2^48, orders of magnitude beyond any realistic repo history).
+        run: |
+          SHORT_SHA=$(git rev-parse --short=12 HEAD)
+          cd workers/api && pnpm exec wrangler deploy --var "API_BUILD:${SHORT_SHA}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Smoke test
         run: |
