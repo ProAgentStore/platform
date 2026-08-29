@@ -188,6 +188,64 @@ describe("recordCodingFailure — the durable record itself", () => {
 		expect(ctx.resumableRound).toBe(false);
 	});
 
+	it("writes events and lastEvent when the error carries stream state (#734)", async () => {
+		// AC 5: a stall that carries eventsSeen + lastEventType (set by readAnthropicStream) must
+		// write events + lastEvent into context so a reader can tell whether the silence began before
+		// or after real content had arrived.
+		const { env, inserts } = mockDb();
+		const err = Object.assign(new Error(deadlineMessage("stall", 20_000)), {
+			retryable: true,
+			eventsSeen: 3,
+			lastEventType: "content_block_delta",
+		});
+		await recordCodingFailure(env, {
+			err,
+			userId: "u2",
+			instanceId: "inst-1",
+			sessionId: "csess_3",
+			disposition: "ended",
+			repo: null,
+			node: null,
+			runId: null,
+			taskId: null,
+			steps: 0,
+			probe: probe(),
+			startedAt: Date.now() - 1_000,
+		});
+		const row = inserts.find((i) => i.sql.includes("error_log"));
+		expect(row, "no error_log row").toBeDefined();
+		const [, , , , , context] = row!.args;
+		const ctx = JSON.parse(context as string);
+		expect(ctx.events).toBe(3);
+		expect(ctx.lastEvent).toBe("content_block_delta");
+	});
+
+	it("omits events and lastEvent for non-deadline failures (#734)", async () => {
+		// A runner-gone error carries no stream state — the context must not have those keys at all
+		// so they don't pollute unrelated rows with always-null fields.
+		const { env, inserts } = mockDb();
+		await recordCodingFailure(env, {
+			err: new (await import("./runner-unreachable.js").then((m) => m.RunnerGoneError))("gone"),
+			userId: "u3",
+			instanceId: "inst-2",
+			sessionId: "csess_4",
+			disposition: "ended",
+			repo: null,
+			node: null,
+			runId: null,
+			taskId: null,
+			steps: 0,
+			probe: probe(),
+			startedAt: Date.now(),
+		});
+		const row = inserts.find((i) => i.sql.includes("error_log"));
+		expect(row, "no error_log row").toBeDefined();
+		const [, , , , , context] = row!.args;
+		const ctx = JSON.parse(context as string);
+		expect(ctx.events).toBeUndefined();
+		expect(ctx.lastEvent).toBeUndefined();
+	});
+
 	it("falls back to the session id as the trace key when no loop run started it", async () => {
 		const { env, inserts } = mockDb();
 		// A chat-initiated `start_work` carries no loopRunId and no board card. It still has to be

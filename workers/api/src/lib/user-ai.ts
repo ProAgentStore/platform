@@ -29,6 +29,17 @@ export class UserAiCredentialsError extends Error {
 }
 
 export class UserAiProviderError extends Error {
+	/**
+	 * How many SSE events the assembler accepted before the stall deadline fired.
+	 *
+	 * Set only on a stall or first-token deadline, where the stream had opened. Absent on every
+	 * other kind of failure. Recorded by `recordCodingFailure` into `error_log.context` so a reader
+	 * can tell whether the silence began before or after the first content byte (#734).
+	 */
+	eventsSeen?: number;
+	/** The `type` of the last SSE event accepted before silence — companion to `eventsSeen`. */
+	lastEventType?: string;
+
 	constructor(
 		message: string,
 		public readonly status = 502,
@@ -305,6 +316,11 @@ async function runAnthropic(
 
 /** One deadline ran out. Carries WHICH, because the three mean different things to the user. */
 class DeadlineExceeded extends Error {
+	/** How many SSE events the assembler accepted before silence — annotated by readAnthropicStream. */
+	eventsSeen?: number;
+	/** The `type` of the last accepted event — annotated by readAnthropicStream. */
+	lastEventType?: string;
+
 	constructor(
 		readonly kind: AiDeadlineKind,
 		readonly budgetMs: number,
@@ -342,7 +358,12 @@ function asProviderError(err: unknown): UserAiProviderError | null {
 	if (err instanceof DeadlineExceeded) {
 		// Retryability comes from the SAME table the sentence does (#518), so what the platform does
 		// automatically is what the platform told the user to do.
-		return new UserAiProviderError(deadlineMessage(err.kind, err.budgetMs), 504, undefined, undefined, isRetryableDeadline(err.kind));
+		const provErr = new UserAiProviderError(deadlineMessage(err.kind, err.budgetMs), 504, undefined, undefined, isRetryableDeadline(err.kind));
+		// Thread the stream state so `recordCodingFailure` can write what the assembler had seen
+		// before the silence — the fact that settles whether a stall is pre- or post-content (#734).
+		if (err.eventsSeen !== undefined) provErr.eventsSeen = err.eventsSeen;
+		if (err.lastEventType !== undefined) provErr.lastEventType = err.lastEventType;
+		return provErr;
 	}
 	// A malformed or truncated stream is a transport fact — a lost frame, a mid-stream
 	// `overloaded_error`, tool arguments that arrived half-written. A fresh generation is a fresh
@@ -382,12 +403,23 @@ async function readAnthropicStream(
 				deadlines.totalDeadline < silenceDeadline ? "total" : first ? "first-token" : "stall";
 			const budgetMs =
 				kind === "total" ? AI_TOTAL_TIMEOUT_MS : kind === "first-token" ? deadlines.firstTokenMs : AI_STALL_TIMEOUT_MS;
-			const chunk = await withDeadline(
-				reader.read(),
-				Math.min(silenceDeadline, deadlines.totalDeadline) - now,
-				kind,
-				budgetMs,
-			);
+			let chunk: ReadableStreamReadResult<Uint8Array>;
+			try {
+				chunk = await withDeadline(
+					reader.read(),
+					Math.min(silenceDeadline, deadlines.totalDeadline) - now,
+					kind,
+					budgetMs,
+				);
+			} catch (e) {
+				// Annotate a stall/first-token deadline with the stream state at the moment of silence
+				// so the caller can record what the assembler had accepted and what it last saw.
+				if (e instanceof DeadlineExceeded) {
+					e.eventsSeen = assembler.eventsSeen;
+					e.lastEventType = assembler.lastEventType;
+				}
+				throw e;
+			}
 			first = false;
 			if (chunk.done) break;
 			buffer += decoder.decode(chunk.value, { stream: true });

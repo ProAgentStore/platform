@@ -123,13 +123,31 @@ export class AnthropicStreamAssembler {
 	private stopReason: string | undefined;
 	/** `message_stop` seen — the ONLY evidence that the reply is whole. */
 	private complete = false;
+	/** How many SSE events `push()` has accepted — the caller reads this on a stall to record it. */
+	private eventsAccepted = 0;
+	/** The `type` field of the most recent accepted event — the caller records this on a stall. */
+	private lastType: string | undefined;
 
 	get done(): boolean {
 		return this.complete;
 	}
 
+	/** How many SSE events have been accepted so far. */
+	get eventsSeen(): number {
+		return this.eventsAccepted;
+	}
+
+	/** The `type` value of the last accepted event, or `undefined` if none. */
+	get lastEventType(): string | undefined {
+		return this.lastType;
+	}
+
 	push(event: Record<string, unknown>): void {
 		const type = typeof event.type === "string" ? event.type : "";
+		// Track BEFORE the switch so a `case "error"` throw is still counted — the caller reads
+		// these on a stall to record what the stream was doing when it went silent.
+		this.eventsAccepted += 1;
+		if (type) this.lastType = type;
 		switch (type) {
 			case "error": {
 				const err = event.error as { message?: string; type?: string } | undefined;

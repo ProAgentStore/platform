@@ -39,8 +39,15 @@
 export const AI_FIRST_TOKEN_TIMEOUT_MS = 25_000;
 
 /**
- * Longest COMPLETE silence tolerated once the reply has begun. Anthropic emits `ping` frames during
- * a long generation, so this is not "the model is thinking" — it is a socket that has stopped.
+ * Longest COMPLETE silence tolerated once the reply has begun — no bytes of any kind received for
+ * this long, after the first frame arrived.
+ *
+ * 20s is the platform's own estimate of the pre-generation latency it is willing to pay AFTER the
+ * stream has opened (`PROMPT_PROCESSING_ALLOWANCE_MS` in this file covers the time before it). A
+ * model that genuinely started writing and then fell silent for longer than that is one we are not
+ * getting more output from this call, and retrying is cheaper than waiting. Whether the cause is a
+ * dropped socket or the model having not produced a first content byte yet is the distinction this
+ * threshold CANNOT make — no keep-alive is captured — and nothing here should assert it.
  */
 export const AI_STALL_TIMEOUT_MS = 20_000;
 
@@ -99,7 +106,7 @@ export function deadlineMessage(kind: AiDeadlineKind, budgetMs: number): string 
 	}
 	if (kind === "stall") {
 		return (
-			`The AI provider stopped sending mid-reply — ${s}s of silence, so the connection is gone rather than slow.` +
+			`The AI provider stopped sending mid-reply — ${s}s with no bytes received after the reply had begun.` +
 			" The half-written answer was discarded instead of being shown as if it were complete. Send the message again."
 		);
 	}

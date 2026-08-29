@@ -146,6 +146,75 @@ describe("a stream that goes quiet, and one that never ends (#427)", () => {
 		).rejects.toMatchObject({ status: 504, retryable: true, message: expect.stringMatching(/stopped sending mid-reply/) });
 	});
 
+	it("records the assembler state at the point of silence — message_start then nothing (#734)", async () => {
+		// AC 4, case 1: message_start arrives, then the stream goes silent.
+		// The error must carry events: 1, lastEvent: "message_start" so the caller can log what the
+		// model was doing (or not doing) when the stall budget ran out.
+		const env = await envWithAnthropicKey();
+		let sent = false;
+		const MSG_START = 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9}}}\n\n';
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				let cancelled = false;
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						cancel() {
+							cancelled = true;
+						},
+						pull(controller) {
+							if (sent) return new Promise<void>(() => undefined);
+							sent = true;
+							if (!cancelled) controller.enqueue(new TextEncoder().encode(MSG_START));
+						},
+					}),
+				);
+			}),
+		);
+		await expect(
+			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
+		).rejects.toMatchObject({ eventsSeen: 1, lastEventType: "message_start" });
+	});
+
+	it("records the assembler state at the point of silence — content_block_delta then nothing (#734)", async () => {
+		// AC 4, case 2: the model has started writing and then falls silent after two partial text
+		// frames. events: 4 (message_start + content_block_start + 2×content_block_delta),
+		// lastEvent: "content_block_delta".
+		// A content_block_start is required before content_block_delta — without it the assembler
+		// throws (not a stall). The event count is 4, not 3, because the assembler counts every
+		// parsed event; the intent of the AC is preserved: the last event is "content_block_delta"
+		// and the platform records that the silence began after real content had started flowing.
+		const env = await envWithAnthropicKey();
+		let sent = false;
+		const FRAMES = [
+			'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9}}}\n\n',
+			'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+			'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n',
+			'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}\n\n',
+		].join("");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				let cancelled = false;
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						cancel() {
+							cancelled = true;
+						},
+						pull(controller) {
+							if (sent) return new Promise<void>(() => undefined);
+							sent = true;
+							if (!cancelled) controller.enqueue(new TextEncoder().encode(FRAMES));
+						},
+					}),
+				);
+			}),
+		);
+		await expect(
+			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
+		).rejects.toMatchObject({ eventsSeen: 4, lastEventType: "content_block_delta" });
+	});
+
 	it("stops a reply still arriving at the total ceiling, and tells the user a retry will not help", async () => {
 		// Alive but endless: a ping inside every stall window resets the stall deadline forever, so the
 		// total ceiling is the only thing that can end it. Before #427 nothing needed to — the single

@@ -583,6 +583,17 @@ export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Pro
 			// The Pilot has no `thinkWithAutoResume` (#518) — this is expected to be false, and
 			// recording it is what makes that an observation rather than an assumption.
 			resumableRound: resumableRoundOf(r.err) !== null,
+			// How many SSE events the assembler had accepted before the stall, and which type was
+			// last — the observation that settles whether the silence began pre- or post-content
+			// (#734). Present only on a stall/first-token deadline from the Anthropic reader; omitted
+			// on every other failure class so a key-always-present-but-null pattern does not pollute
+			// the context of unrelated rows.
+			...(r.err instanceof Error && typeof (r.err as unknown as { eventsSeen?: number }).eventsSeen === "number"
+				? {
+						events: (r.err as unknown as { eventsSeen: number }).eventsSeen,
+						lastEvent: (r.err as unknown as { lastEventType?: string }).lastEventType ?? null,
+					}
+				: {}),
 			stack: r.err instanceof Error ? String(r.err.stack || "").slice(0, 1500) : undefined,
 		},
 	});

@@ -79,6 +79,17 @@ describe("what the user is told (#427 item 4)", () => {
 		expect(deadlineMessage("stall", AI_STALL_TIMEOUT_MS)).toMatch(/discarded/i);
 	});
 
+	it("does not assert why the stall happened — only what was measured (#734)", () => {
+		// The platform observed N seconds of silence. It did NOT observe that the socket was
+		// dropped rather than slow — it has no keep-alive to tell them apart. The message must
+		// state the observation and stop there.
+		const msg = deadlineMessage("stall", AI_STALL_TIMEOUT_MS);
+		expect(msg).not.toMatch(/connection.*gone/i);
+		expect(msg).not.toMatch(/gone rather than slow/i);
+		// It DOES say something observable: that nothing arrived for N seconds.
+		expect(msg).toMatch(/\d+s/);
+	});
+
 	it("never quotes a raw millisecond count at a human", () => {
 		for (const kind of ["first-token", "stall", "total"] as const) {
 			expect(deadlineMessage(kind, 25_000)).not.toContain("25000");
