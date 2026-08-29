@@ -49,8 +49,8 @@ describe("AgentDO types", () => {
 	});
 
 	it("AgentTask supports all assignedBy values", () => {
-		const values: AgentTask["assignedBy"][] = ["user", "self", "system"];
-		expect(values).toHaveLength(3);
+		const values: AgentTask["assignedBy"][] = ["user", "self", "system", "trigger"];
+		expect(values).toHaveLength(4);
 	});
 
 	it("MemoryEntry has valid types", () => {

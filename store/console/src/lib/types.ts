@@ -264,8 +264,8 @@ export interface AgentTaskEntry {
 	title: string;
 	description?: string;
 	status: string;
-	/** Provenance: "user" is owner-written and marked (user-set) in the prompt. */
-	assignedBy?: "user" | "self" | "system";
+	/** Provenance: "user" is owner-written and marked (user-set) in the prompt; "trigger" is third-party (#754). */
+	assignedBy?: "user" | "self" | "system" | "trigger";
 	createdAt?: string;
 	updatedAt?: string;
 	/** Server-computed: too old to still be injected, but not deleted. */

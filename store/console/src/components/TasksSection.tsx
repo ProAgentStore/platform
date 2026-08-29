@@ -151,7 +151,7 @@ export default function TasksSection({ instanceId, active }: { instanceId: strin
 										<span className="text-xs text-purple-400 ml-2">{t.status}</span>
 										{/* Provenance, shown exactly where the prompt shows it. */}
 										<span className="text-xs text-muted-soft ml-2">
-											{t.assignedBy === "user" ? "user-set" : t.assignedBy === "system" ? "system" : "agent-written"}
+											{t.assignedBy === "user" ? "user-set" : t.assignedBy === "trigger" ? "trigger-posted" : t.assignedBy === "system" ? "system" : "agent-written"}
 										</span>
 										{/* Stale is computed server-side from the same rule the prompt uses, so
 										    this badge and the prompt cannot disagree. */}

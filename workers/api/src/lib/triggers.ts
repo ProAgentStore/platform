@@ -190,12 +190,15 @@ export async function executeTriggerAction(
 	const mapped = applyMapping(payload, config.mapping, target.action);
 	if (target.action === "create_task") {
 		const body = payloadRecord(payload);
-		const title = mapped.title || stringValue(body.title) || config.title || `${target.name} trigger`;
-		const description = mapped.description || stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload);
+		// #754: cap at ingest, the same way /system-message does (agent-do.ts:293), so an uncapped
+		// webhook payload cannot write an unbounded system prompt.
+		const title = (mapped.title || stringValue(body.title) || config.title || `${target.name} trigger`).slice(0, 200);
+		const description = (mapped.description || stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload)).slice(0, 2000);
 		const res = await stub.fetch(new Request("https://agent/tasks", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ title, description }),
+			// #754: mark as trigger-sourced so the prompt fences and does NOT label it (user-set).
+			body: JSON.stringify({ title, description, assignedBy: "trigger" }),
 		}));
 		if (!res.ok) throw new Error(`task dispatch failed (${res.status})`);
 	} else if (target.action === "add_knowledge") {

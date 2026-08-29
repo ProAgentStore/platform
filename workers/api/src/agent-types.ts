@@ -83,7 +83,7 @@ export interface AgentTask {
 	title: string;
 	description: string;
 	status: "pending" | "in_progress" | "blocked" | "complete";
-	assignedBy: "user" | "self" | "system";
+	assignedBy: "user" | "self" | "system" | "trigger";
 	createdAt: string;
 	updatedAt: string;
 }

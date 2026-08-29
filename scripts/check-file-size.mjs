@@ -807,7 +807,9 @@ const PINS = {
 	// with the exact type `addRepo` accepts rather than widening it at the seam. Signed rather than
 	// dodged — `Parameters<typeof addRepo>[2]["auth"]` would have bought the number by making the
 	// line harder to read, which is the opposite of what this ratchet is for.
-	"workers/api/src/agent-do.ts": 1258,
+	// +5 for #754: accept assignedBy:"trigger" from the request body (1 line), cap title (1) and
+	// description (1) at ingest, the updated comment (1), and the AgentTask type annotation (1).
+	"workers/api/src/agent-do.ts": 1263,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -1060,6 +1062,12 @@ const PINS = {
 	// ratchet doing its job: #412 needed one more scheduling function, the file had one line of
 	// headroom, and "raise the pin" would have meant defending time arithmetic living in a
 	// dispatch module. It could not be defended, so it moved.
+	// +30 at #754: cap title (1) + description (1) at ingest in create_task, pass assignedBy:"trigger"
+	// (1), and 27 lines of why — the security rationale for the cap and the assignedBy provenance
+	// that stops a stranger's text being stamped as the owner's standing instruction.
+	// Raised rather than split — the growth is a comment and two small string operations, and
+	// splitting the dispatch module to absorb them would hide the rationale from the mechanism.
+	"workers/api/src/lib/triggers.ts": 801,
 	// +55 at #391 (a constant, a config field, a timer, and the paragraphs saying why): one-shot
 	// turn boundaries moved from three inferred timers to the process's own exit, and the
 	// 15-minute backstop had to become an ENFORCED ceiling — a timer that ends the turn — rather
@@ -1493,7 +1501,8 @@ const PINS = {
 	// +5 at #741: one NEW entry (scripts/docs-drift.mjs, which crossed 800 adding the skill-copies
 	// check and wiring the operator skill into confirm-gate check 7) and this note.
 	"scripts/docs-drift.mjs": 829,
-	"scripts/check-file-size.mjs": 1581,
+	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
+	"scripts/check-file-size.mjs": 1586,
 };
 
 /**

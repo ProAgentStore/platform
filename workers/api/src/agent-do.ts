@@ -1006,22 +1006,27 @@ export class AgentDO extends DurableObject<Env> {
 	}
 
 	private async handleCreateTask(request: Request): Promise<Response> {
-		const { title, description } = await request.json<{
+		const { title, description, assignedBy: rawAssignedBy } = await request.json<{
 			title: string;
 			description?: string;
+			assignedBy?: string;
 		}>();
 		if (!title) return json({ error: "title required" }, 400);
 		const existing = await this.getAllTasks();
 		if (existing.length >= MAX_TASKS)
 			return json({ error: `Task limit reached (${MAX_TASKS}). Delete or complete some first.` }, 409);
+		// #754: `dispatchTrigger` reaches this handler over stub.fetch on behalf of an unauthenticated
+		// webhook request and passes assignedBy:"trigger". The owner-authenticated route (and the
+		// console) sends no assignedBy, which correctly defaults to "user". Only "trigger" is accepted
+		// from the body; anything else is treated as an owner write. Cap title/description at ingest
+		// to bound the system-prompt size (same limit /system-message uses at agent-do.ts:293).
+		const assignedBy: AgentTask["assignedBy"] = rawAssignedBy === "trigger" ? "trigger" : "user";
 		const task: AgentTask = {
 			id: crypto.randomUUID(),
-			title,
-			description: description || "",
+			title: String(title).slice(0, 200),
+			description: String(description || "").slice(0, 2000),
 			status: "pending",
-			// Only an owner-authenticated route reaches this handler — the agent's own
-			// `create_task` writes DO storage directly and never speaks HTTP (#337).
-			assignedBy: "user",
+			assignedBy,
 			createdAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 		};

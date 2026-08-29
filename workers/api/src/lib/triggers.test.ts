@@ -345,6 +345,42 @@ describe("trigger actions: run_pipeline + insert_record (#92)", () => {
 	});
 });
 
+describe("trigger actions: create_task (#754 — provenance + fencing)", () => {
+	function baseEnv() {
+		const agentRequests: Request[] = [];
+		const DB = {
+			prepare() {
+				const stmt = { bind: () => stmt, first: async () => null, all: async () => ({ results: [] }), run: async () => ({}) };
+				return stmt;
+			},
+		};
+		const AGENT = {
+			idFromName: (name: string) => ({ name }),
+			get: () => ({ fetch: async (req: Request) => { agentRequests.push(req); return Response.json({ id: "t-1" }, { status: 201 }); } }),
+		};
+		return { env: { DB, AGENT } as unknown as Env, agentRequests };
+	}
+
+	const taskTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "create_task", type: "webhook" });
+
+	it("sends assignedBy:trigger so the DO does not stamp the payload as the owner's work", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(env, taskTrigger({}), "webhook", { title: "Do this now", description: "webhook body" });
+		const body = await agentRequests[0].clone().json() as Record<string, unknown>;
+		expect(body.assignedBy).toBe("trigger");
+	});
+
+	it("caps title at 200 chars and description at 2000 chars at the trigger dispatch layer", async () => {
+		const { env, agentRequests } = baseEnv();
+		const longTitle = "x".repeat(300);
+		const longDescription = "y".repeat(3000);
+		await dispatchTrigger(env, taskTrigger({}), "webhook", { title: longTitle, description: longDescription });
+		const body = await agentRequests[0].clone().json() as { title: string; description: string };
+		expect(body.title.length).toBeLessThanOrEqual(200);
+		expect(body.description.length).toBeLessThanOrEqual(2000);
+	});
+});
+
 describe("trigger payload mapping (#16)", () => {
 	function baseEnv() {
 		const agentRequests: Request[] = [];
@@ -372,8 +408,8 @@ describe("trigger payload mapping (#16)", () => {
 			"webhook",
 			{ lead: { name: "Acme Pty Ltd", note: "wants a quote" } },
 		);
-		const body = await agentRequests[0].clone().json() as { title: string; description: string };
-		expect(body).toEqual({ title: "Acme Pty Ltd", description: "wants a quote" });
+		const body = await agentRequests[0].clone().json() as { title: string; description: string; assignedBy: string };
+		expect(body).toMatchObject({ title: "Acme Pty Ltd", description: "wants a quote", assignedBy: "trigger" });
 	});
 
 	it("falls back to the existing conventions when the mapped path is absent", async () => {
@@ -385,11 +421,11 @@ describe("trigger payload mapping (#16)", () => {
 		expect(body.title).toBe("Flat title");
 	});
 
-	it("leaves an unmapped trigger behaving exactly as before", async () => {
+	it("leaves an unmapped trigger behaving exactly as before (now also sends assignedBy:trigger)", async () => {
 		const { env, agentRequests } = baseEnv();
 		await dispatchTrigger(env, taskTrigger({}), "webhook", { title: "Flat title", content: "body" });
-		const body = await agentRequests[0].clone().json() as { title: string; description: string };
-		expect(body).toEqual({ title: "Flat title", description: "body" });
+		const body = await agentRequests[0].clone().json() as { title: string; description: string; assignedBy: string };
+		expect(body).toMatchObject({ title: "Flat title", description: "body", assignedBy: "trigger" });
 	});
 
 	it("maps knowledge content and source URL", async () => {
