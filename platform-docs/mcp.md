@@ -122,19 +122,25 @@ Alongside `serverInfo`, the server returns an `instructions` string. MCP sends i
 is where guidance that applies **across** tools belongs, rather than being repeated into 135
 descriptions.
 
-ProAgentStore's says three things, in this order, because the first 512 characters are the
+ProAgentStore's says four things, in this order, because the first 512 characters are the
 part a host is most likely to keep:
 
 1. **Get an id first.** Almost every tool acts on one agent instance. `my_instances` lists
    the ones you already run; `list_agents` is the public catalogue and `subscribe_agent`
    creates an instance from it.
-2. **Debug with `agent_trace` first**, then `instance_messages` or `list_errors` for detail;
+2. **Check instance tools before driving the terminal.** An instance's own connector tools
+   are one level down: `list_instance_tools` names them (GitHub, HTTP, search connectors,
+   memory, files, knowledge) and `call_instance_tool` invokes one. Check there before
+   reaching for `coding_session_message`.
+3. **Debug with `agent_trace` first**, then `instance_messages` or `list_errors` for detail;
    `usage_summary` reports spend.
-3. **The annotations are accurate**, a state-changing tool takes `dry_run`, and the
+4. **The annotations are accurate**, a state-changing tool takes `dry_run`, and the
    `confirm` + `destructive`-scope refusals below are real and cannot be argued past.
 
-The string itself is `SERVER_INSTRUCTIONS` in `workers/mcp/src/tool-metadata.ts`. A client
-that ignores it loses nothing but the ordering; nothing here is enforcement.
+The string itself is `SERVER_INSTRUCTIONS` in `workers/mcp/src/tool-metadata.ts`, and it is
+served verbatim — alongside `PLATFORM_GUIDE` — at `GET https://mcp.proagentstore.online/surface`
+(no auth; also readable from `/console/tools`). A client that ignores it loses nothing but
+the ordering; nothing here is enforcement.
 
 ## Auth
 

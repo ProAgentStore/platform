@@ -3,6 +3,9 @@ import { apiBase, type McpEnv } from "./http.js";
 import { parseScopes } from "./safety.js";
 import { verifyMcpSession } from "./session.js";
 import { MCP_TOOL_COUNT } from "./tool-count.js";
+import { PLATFORM_GUIDE } from "./platform-guide.js";
+import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { MCP_SERVER_VERSION } from "./server-version.js";
 
 type AuthProvider = "github" | "google";
 
@@ -52,6 +55,33 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 			// to the real registration count.
 			return new Response(
 				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: MCP_TOOL_COUNT }),
+				{
+					headers: {
+						"Content-Type": "application/json",
+						"Access-Control-Allow-Origin": "https://proagentstore.online",
+					},
+				},
+			);
+		}
+		if (path === "/surface") {
+			// The two strings a connecting MCP client is told: the server `instructions`
+			// delivered at `initialize`, and what `platform_guide` returns. Neither is a secret
+			// (both are handed to any client that connects), and both were previously readable
+			// only from inside a checkout — an owner debugging a misbehaving client had no URL
+			// to fetch (#753). This route makes them inspectable from the console and from a
+			// plain curl. No auth: requiring a session would put the audit behind the same
+			// connection the owner is trying to audit.
+			//
+			// Placed BEFORE the `path !== "/"` 404 arm below — a route added after that check
+			// is dead. Does NOT fall through to ROOT_TEXT, avoiding the request-loop risk
+			// described on that arm.
+			return new Response(
+				JSON.stringify({
+					version: MCP_SERVER_VERSION,
+					toolCount: MCP_TOOL_COUNT,
+					instructions: SERVER_INSTRUCTIONS,
+					guide: PLATFORM_GUIDE,
+				}),
 				{
 					headers: {
 						"Content-Type": "application/json",

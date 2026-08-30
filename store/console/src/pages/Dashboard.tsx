@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Button from "../components/Button";
 import Page from "../components/Page";
 import LoadFailed from "../components/LoadFailed";
@@ -8,6 +8,13 @@ import type { Agent, Instance } from "../lib/types";
 import { capabilityBadges, identityFor } from "../lib/identity";
 import { platformToolGroups } from "../lib/platformTools";
 
+type SurfaceDoc = {
+	version: string;
+	toolCount: number;
+	instructions: string;
+	guide: string;
+};
+
 export default function Dashboard() {
 	const location = useLocation();
 	const tab = location.pathname.includes("/instances") ? "instances" : location.pathname.includes("/tools") ? "tools" : location.pathname.includes("/dashboard") ? "dashboard" : "agents";
@@ -15,6 +22,11 @@ export default function Dashboard() {
 	const [instances, setInstances] = useState<Instance[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [stats, setStats] = useState<Record<string, unknown> | null>(null);
+	const [surfaceDoc, setSurfaceDoc] = useState<SurfaceDoc | null>(null);
+	const [surfaceErr, setSurfaceErr] = useState("");
+	const [surfaceOpen, setSurfaceOpen] = useState(false);
+	const [copied, setCopied] = useState<"instructions" | "guide" | null>(null);
+	const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const navigate = useNavigate();
 
 	const loadAgents = useCallback(async () => {
@@ -65,6 +77,30 @@ export default function Dashboard() {
 	useEffect(() => {
 		if (tab === "dashboard") loadDashboard();
 	}, [tab, loadDashboard]);
+
+	const loadSurface = useCallback(async () => {
+		try {
+			const res = await fetch("https://mcp.proagentstore.online/surface");
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const data = await res.json() as SurfaceDoc;
+			setSurfaceDoc(data);
+			setSurfaceErr("");
+		} catch (e) {
+			setSurfaceErr(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	useEffect(() => {
+		if (tab === "tools" && !surfaceDoc && !surfaceErr) loadSurface();
+	}, [tab, surfaceDoc, surfaceErr, loadSurface]);
+
+	function copyText(field: "instructions" | "guide", text: string) {
+		void navigator.clipboard.writeText(text).then(() => {
+			setCopied(field);
+			if (copyTimer.current) clearTimeout(copyTimer.current);
+			copyTimer.current = setTimeout(() => setCopied(null), 2000);
+		});
+	}
 
 	return (
 		<Page>
@@ -211,6 +247,59 @@ export default function Dashboard() {
 							</section>
 						))}
 					</div>
+
+					{/* What your MCP clients are told — the two global runtime constants (#753) */}
+					<div className="mt-6 border border-line rounded-lg overflow-hidden">
+						<button
+							type="button"
+							onClick={() => setSurfaceOpen((o) => !o)}
+							className="w-full flex items-center justify-between px-4 py-3 bg-panel hover:bg-line/30 transition-colors text-left"
+						>
+							<div>
+								<span className="text-sm font-semibold">What your MCP clients are told</span>
+								{surfaceDoc && (
+									<span className="ml-2 text-2xs text-muted">
+										v{surfaceDoc.version} · {surfaceDoc.toolCount} tools
+									</span>
+								)}
+							</div>
+							<span className="text-muted text-xs">{surfaceOpen ? "▲" : "▼"}</span>
+						</button>
+						{surfaceOpen && (
+							<div className="px-4 pb-4 pt-2 bg-panel border-t border-line space-y-4">
+								<p className="text-xs text-muted leading-relaxed">
+									These two strings are delivered to every MCP client that connects.{" "}
+									<code className="text-2xs bg-line/60 px-1 rounded">instructions</code> is sent
+									once at <code className="text-2xs bg-line/60 px-1 rounded">initialize</code>;{" "}
+									<code className="text-2xs bg-line/60 px-1 rounded">guide</code> is what
+									the <code className="text-2xs bg-line/60 px-1 rounded">platform_guide</code> tool
+									returns. Both are read-only — they come directly from the deployed MCP server.
+								</p>
+								{surfaceErr ? (
+									<LoadFailed what="the MCP surface" detail={surfaceErr} onRetry={loadSurface} testId="surface-load-failed" />
+								) : !surfaceDoc ? (
+									<p className="text-xs text-muted py-2">Loading...</p>
+								) : (
+									<>
+										<SurfaceBlock
+											label="Server instructions"
+											field="instructions"
+											text={surfaceDoc.instructions}
+											copied={copied}
+											onCopy={copyText}
+										/>
+										<SurfaceBlock
+											label="Platform guide (platform_guide tool return)"
+											field="guide"
+											text={surfaceDoc.guide}
+											copied={copied}
+											onCopy={copyText}
+										/>
+									</>
+								)}
+							</div>
+						)}
+					</div>
 				</div>
 			)}
 		</Page>
@@ -225,4 +314,36 @@ function tagClass(value: string): string {
 		case "error": return "bg-danger-soft text-danger";
 		default: return "bg-muted/15 text-muted";
 	}
+}
+
+function SurfaceBlock({
+	label,
+	field,
+	text,
+	copied,
+	onCopy,
+}: {
+	label: string;
+	field: "instructions" | "guide";
+	text: string;
+	copied: "instructions" | "guide" | null;
+	onCopy: (field: "instructions" | "guide", text: string) => void;
+}) {
+	return (
+		<div>
+			<div className="flex items-center justify-between mb-1">
+				<span className="text-xs font-medium text-muted">{label}</span>
+				<button
+					type="button"
+					onClick={() => onCopy(field, text)}
+					className="text-2xs text-accent hover:text-accent/80 transition-colors"
+				>
+					{copied === field ? "Copied" : "Copy"}
+				</button>
+			</div>
+			<pre className="text-xs bg-line/30 rounded p-3 overflow-x-auto whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
+				{text}
+			</pre>
+		</div>
+	);
 }

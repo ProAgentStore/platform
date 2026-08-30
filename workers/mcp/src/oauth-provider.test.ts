@@ -7,6 +7,9 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { type LoginEnv, loginHandler } from "./oauth-provider.js";
 import { MCP_TOOL_COUNT } from "./tool-count.js";
+import { PLATFORM_GUIDE } from "./platform-guide.js";
+import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { MCP_SERVER_VERSION } from "./server-version.js";
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
 	const data = new Map(Object.entries(seed));
@@ -105,6 +108,27 @@ describe("loginHandler health + root", () => {
 	// opened" and then drops it, and the client's correct response to a dropped
 	// stream is to reconnect — ~1/sec, forever, with every response a healthy
 	// 200. These four cases are the loop; keep them 405/404.
+	it("serves the surface document at /surface", async () => {
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/surface");
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Content-Type")).toContain("application/json");
+		// CORS must allow the console origin so a browser fetch from /console/tools succeeds.
+		expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://proagentstore.online");
+		const body = await res.json<{
+			version: string;
+			toolCount: number;
+			instructions: string;
+			guide: string;
+		}>();
+		// AC1: instructions is byte-identical to the constant (imported, not a string copy).
+		expect(body.instructions).toBe(SERVER_INSTRUCTIONS);
+		// AC1: guide is byte-identical to the constant.
+		expect(body.guide).toBe(PLATFORM_GUIDE);
+		// AC3: version and toolCount are imported, not typed.
+		expect(body.version).toBe(MCP_SERVER_VERSION);
+		expect(body.toolCount).toBe(MCP_TOOL_COUNT);
+	});
+
 	it("404s unknown paths instead of serving the landing text", async () => {
 		for (const path of ["/sse", "/events", "/mcp/stream", "/favicon.ico"]) {
 			const res = await run(makeEnv(), `https://mcp.proagentstore.online${path}`);

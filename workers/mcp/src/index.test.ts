@@ -1060,7 +1060,14 @@ describe("tool annotations", () => {
 	it("is advisory: nothing that gates or handles a call reads the annotation", async () => {
 		// AC#5. The annotation is a claim ABOUT the gate, and the moment something consults
 		// it instead of `safety.ts`, a wrong table entry stops being a mislabelled tool and
-		// becomes an open door. Only the registration seam may import this module.
+		// becomes an open door. Only the registration seam and the /surface informational
+		// route may import this module.
+		//
+		// `oauth-provider.ts` is the one exception: its /surface route serves SERVER_INSTRUCTIONS
+		// verbatim so an owner can read what their MCP clients are told (#753). It reads no
+		// annotation (TOOL_RISK, annotationsFor) — only the instructions string. That is a
+		// read-only data serve, not a gate, and the test below could be tightened to check
+		// TOOL_RISK / annotationsFor specifically if the module grows further non-advisory exports.
 		const dir = new URL(".", import.meta.url).pathname;
 		const files: string[] = [];
 		const walk = (path: string) => {
@@ -1073,6 +1080,6 @@ describe("tool annotations", () => {
 		const importers = files
 			.filter((f) => readFileSync(f, "utf8").includes('from "./tool-metadata.js"'))
 			.map((f) => f.slice(dir.length));
-		expect(importers.sort()).toEqual(["index.ts", "registration.ts"]);
+		expect(importers.sort()).toEqual(["index.ts", "oauth-provider.ts", "registration.ts"]);
 	});
 });
