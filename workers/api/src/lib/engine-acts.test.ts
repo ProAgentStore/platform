@@ -40,7 +40,7 @@ const act = (over: Record<string, unknown> = {}) => ({
 describe("sanitizeEngineActs — the payload crosses a relay from a machine we do not control", () => {
 	it("passes a well-formed act through", () => {
 		expect(sanitizeEngineActs([act()])).toEqual([
-			{ id: "toolu_1:0", kind: "pr.merge", command: "gh pr merge 42 --squash", target: "#42", irreversible: true, ok: true, at: "2026-08-06T01:00:00.000Z" },
+			{ id: "toolu_1:0", kind: "pr.merge", command: "gh pr merge 42 --squash", target: "#42", irreversible: true, ok: true, at: "2026-08-06T01:00:00.000Z", atReliable: true },
 		]);
 	});
 
@@ -452,5 +452,56 @@ describe("recordEngineActs — the sink is the EXISTING trace, not a fifth recor
 		const { calls, env } = fakeDb();
 		await recordEngineActs(env, { userId: "u1", instanceId: "i1", sessionId: "s1" }, sanitizeEngineActs([act()]));
 		expect(calls[0].binds[4]).toBe("s1");
+	});
+
+	/**
+	 * #766 — an act with no reliable `at` must NOT be placed inside a later run's time window.
+	 *
+	 * `actsInWindow(env, userId, instanceId, runStartedAt, now)` queries `ts >= runStartedAt AND
+	 * ts <= now`. An act drained during a later run (a drain-time `Date.now()` stamp) therefore
+	 * lands inside that window and is misattributed to the wrong run. The fix: store `ts = 0`
+	 * for acts whose `at` field the runner did not supply, so the row is permanently outside
+	 * every `[runStartedAt, now]` bracket.
+	 */
+	describe("timestamps (#766 — a missing `at` must not be placed in a later run's window)", () => {
+		it("sanitizeEngineActs: marks atReliable true when the runner supplies a valid `at`", () => {
+			const [a] = sanitizeEngineActs([act()]);
+			// act() has at: "2026-08-06T01:00:00.000Z" — a parseable ISO string from the runner.
+			expect(a.atReliable).toBe(true);
+		});
+
+		it("sanitizeEngineActs: marks atReliable false when `at` is absent", () => {
+			const [a] = sanitizeEngineActs([act({ at: undefined })]);
+			expect(a.atReliable).toBe(false);
+		});
+
+		it("sanitizeEngineActs: marks atReliable false when `at` is an empty string", () => {
+			const [a] = sanitizeEngineActs([act({ at: "" })]);
+			expect(a.atReliable).toBe(false);
+		});
+
+		it("sanitizeEngineActs: marks atReliable false when `at` is unparseable", () => {
+			const [a] = sanitizeEngineActs([act({ at: "not-a-date" })]);
+			expect(a.atReliable).toBe(false);
+		});
+
+		it("recordEngineActs: uses the runner's timestamp when atReliable is true", async () => {
+			// A properly-timestamped act must still land at its real occurrence time so that
+			// `actsInWindow` can correctly attribute it to the run that actually did it.
+			const { calls, env } = fakeDb();
+			await recordEngineActs(env, { userId: "u1", instanceId: "i1", sessionId: "s1" }, sanitizeEngineActs([act()]));
+			// act() uses at: "2026-08-06T01:00:00.000Z" = 1754438400000
+			expect(calls[0].binds[1]).toBe(Date.parse("2026-08-06T01:00:00.000Z")); // ts
+		});
+
+		it("recordEngineActs: stores ts = 0 when atReliable is false — outside every run window", async () => {
+			// The defect: `ts: Date.parse(act.at) || Date.now()` — when `at` was missing, the drain
+			// time (Date.now()) was stored, placing the act inside whatever run happened to drain it.
+			// `ts = 0` is guaranteed outside `[runStartedAt, now]` since runs start in real time
+			// (epoch values many orders of magnitude above zero), so `actsInWindow` cannot include it.
+			const { calls, env } = fakeDb();
+			await recordEngineActs(env, { userId: "u1", instanceId: "i1", sessionId: "s1" }, sanitizeEngineActs([act({ at: undefined })]));
+			expect(calls[0].binds[1]).toBe(0); // ts
+		});
 	});
 });

@@ -64,6 +64,16 @@ export interface EngineActReport {
 	irreversible: boolean;
 	ok: boolean | null;
 	at: string;
+	/**
+	 * Did the runner supply a parseable `at`?
+	 *
+	 * `false` means the timestamp was synthesised at drain time rather than read from the act
+	 * record — the runner either omitted `at` or sent an unparseable value. A drain-time stamp is
+	 * not the act's real occurrence time; recording it as `ts` would place the act inside whatever
+	 * run happens to drain it, so `recordEngineActs` stores `ts: 0` for these rows instead,
+	 * guaranteeing they can never land in `actsInWindow`'s `[runStartedAt, now]` bracket.
+	 */
+	atReliable: boolean;
 }
 
 /** Cap per drain — a compromised or buggy runner must not be able to bulk-insert into D1. */
@@ -494,6 +504,12 @@ export function sanitizeEngineActs(raw: unknown): EngineActReport[] {
 		const command = typeof r.command === "string" ? r.command.trim().slice(0, MAX_COMMAND) : "";
 		if (!command) continue;
 		seen.add(id);
+		// `at` is the runner's own timestamp for the act. An absent or unparseable value means we
+		// have no reliable occurrence time; the field is kept for the trace display (a drain-time ISO
+		// string is still a useful "approximately when" for a human reader) but the act is marked
+		// `atReliable: false` so `recordEngineActs` can avoid placing it in a windowed query slot.
+		const atRaw = typeof r.at === "string" ? r.at.trim().slice(0, 40) : "";
+		const atReliable = atRaw !== "" && !Number.isNaN(Date.parse(atRaw));
 		out.push({
 			id,
 			kind,
@@ -503,7 +519,8 @@ export function sanitizeEngineActs(raw: unknown): EngineActReport[] {
 			// Anything that is not literally true/false is UNKNOWN. Coercing a missing value to
 			// `true` would be the platform inventing a successful merge.
 			ok: r.ok === true ? true : r.ok === false ? false : null,
-			at: typeof r.at === "string" && r.at.trim() ? r.at.trim().slice(0, 40) : new Date().toISOString(),
+			at: atReliable ? atRaw : new Date().toISOString(),
+			atReliable,
 		});
 	}
 	return out;
@@ -597,7 +614,13 @@ export async function recordEngineActs(
 				ok: act.ok,
 				sessionId: ctx.sessionId,
 			},
-			ts: Date.parse(act.at) || Date.now(),
+			// When the runner supplied a parseable `at`, use it. When it did not, store ts = 0
+			// rather than the drain time. A drain-time stamp is not the act's real occurrence time;
+			// storing it would place this act inside whatever run happens to drain it next, causing
+			// `actsInWindow` to misattribute it — the exact bug #766 was filed on. ts = 0 is
+			// guaranteed outside every `[runStartedAt, now]` window since real runs start at epoch
+			// times many orders of magnitude above zero.
+			ts: act.atReliable ? Date.parse(act.at) : 0,
 		});
 	}
 }
