@@ -47,7 +47,7 @@ function mockEnv(rows: Record<string, unknown> = {}): { env: Env; writes: { sql:
 }
 
 function act(kind: string, over: Partial<EngineActReport> = {}): EngineActReport {
-	return { id: `t1:0`, kind, command: `gh pr merge 150 --squash`, target: "#150", irreversible: true, ok: true, at: "2026-08-07T00:00:00Z", ...over };
+	return { id: `t1:0`, kind, command: `gh pr merge 150 --squash`, target: "#150", irreversible: true, ok: true, at: "2026-08-07T00:00:00Z", atReliable: true, ...over };
 }
 
 describe("the default is today's behaviour", () => {

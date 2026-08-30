@@ -43,6 +43,7 @@ function act(over: Partial<EngineActReport> = {}): EngineActReport {
 		irreversible: false,
 		ok: true,
 		at: "2026-08-16T01:55:44Z",
+		atReliable: true,
 		...over,
 	};
 }
