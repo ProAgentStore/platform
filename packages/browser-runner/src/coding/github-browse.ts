@@ -169,8 +169,12 @@ function toEntry(raw: unknown): GithubRepoEntry | null {
 	if (slash < 1) return null;
 	const owner = fullName.slice(0, slash);
 	const name = fullName.slice(slash + 1);
-	const vis = String(r.visibility ?? r.isPrivate === true ? "private" : "public");
-	const visibility: GithubRepoEntry["visibility"] = vis === "private" ? "private" : vis === "internal" ? "internal" : "public";
+	// Operator-precedence guard: parenthesise the fallback so `??` doesn't bind into
+	// the ternary. Without parens `r.visibility ?? r.isPrivate === true ? … : …` parses
+	// as `(r.visibility ?? r.isPrivate === true) ? "private" : "public"`, which makes
+	// EVERY truthy visibility string map to "private".
+	const rawVis = r.visibility != null ? String(r.visibility) : (r.isPrivate === true ? "private" : "public");
+	const visibility: GithubRepoEntry["visibility"] = rawVis === "private" ? "private" : rawVis === "internal" ? "internal" : "public";
 	return {
 		owner,
 		name,
