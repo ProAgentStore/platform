@@ -4269,6 +4269,101 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/board/items/{jobKey}/github-issue:
+    put:
+      summary: Link or unlink a board card to a GitHub issue
+      description: |
+        Optionally back a board card with a GitHub issue (#682). Stores the issue number as
+        a stable key and fetches a cached projection (title, state, labels, url) for display.
+        Pass `{ repo, issueNumber }` to link; omit `issueNumber` (or pass null) to unlink.
+        Read-only with respect to GitHub: moving a card never mutates the upstream issue,
+        and labels on the card come from GitHub only.
+      operationId: linkBoardItemGithubIssue
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: jobKey
+          in: path
+          required: true
+          schema: { type: string }
+          description: The card's jobKey (from GET /board).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repo:
+                  type: string
+                  description: "GitHub repo in owner/repo form (required when linking)."
+                issueNumber:
+                  type: integer
+                  nullable: true
+                  description: "Issue number to link. Omit or null to unlink."
+      responses:
+        "200":
+          description: Link result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  issue:
+                    type: object
+                    nullable: true
+                    properties:
+                      number: { type: integer }
+                      title: { type: string }
+                      state: { type: string }
+                      labels: { type: array, items: { type: string } }
+                      url: { type: string }
+                  error: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Issue could not be fetched from GitHub (number stored, cache empty)
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean }, error: { type: string } } }
+
+  /v1/instances/{instanceId}/board/github-issues/refresh:
+    post:
+      summary: Refresh cached GitHub issue projections
+      description: |
+        Re-fetches the title/state/labels/url for every card on this board that is linked
+        to a GitHub issue and updates the stored cache. Uses the instance's configured
+        `boardGithubRepo` setting, or the `repo` field in the request body as an override.
+        Silently skips cards whose issue cannot be fetched so one unreachable issue cannot
+        block the others. Returns refreshed + skipped counts (#682).
+      operationId: refreshBoardGithubIssues
+      tags: [Board]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repo:
+                  type: string
+                  description: "Override the instance's configured boardGithubRepo for this refresh."
+      responses:
+        "200":
+          description: Refresh result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  refreshed: { type: integer }
+                  skipped: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Instances: tickets beyond the runner ──────────────────────────────────
 
   /v1/instances/{instanceId}/tasks/direct:

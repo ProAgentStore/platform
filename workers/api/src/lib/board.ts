@@ -9,6 +9,7 @@ import {
 	reconcileCodingCard,
 } from "./board-runs.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
+import { readIssue, type IssueSummary } from "./github-issues.js";
 import { sqlLiteralList } from "./sql.js";
 import { TICKET_ANSWER_EVENT, TICKET_QUESTION_EVENT } from "./ticket-chat.js";
 
@@ -112,6 +113,23 @@ export interface BoardItemView {
 	 * without inferring it from a status.
 	 */
 	sessionEnded?: boolean;
+	/**
+	 * Cached GitHub issue projection (#682). Present when the card is linked to a GitHub
+	 * issue and a cached projection exists. Absent when not linked or not yet fetched.
+	 * Read-only: the card's board column and the issue's labels are independent axes.
+	 * Moving the card does not mutate the issue, and the labels come from GitHub, not
+	 * the board.
+	 */
+	githubIssue?: GithubIssueProjection;
+}
+
+/** The cached GitHub issue fields a board card stores and displays (#682). */
+export interface GithubIssueProjection {
+	number: number;
+	title: string;
+	state: string;
+	labels: string[];
+	url: string;
 }
 
 export interface InstanceBoard {
@@ -289,13 +307,38 @@ export async function columnsForInstance(env: Env, instanceId: string, userId: s
 	return (await boardConfigForInstance(env, instanceId, userId)).columns;
 }
 
+/** Parse a stored `github_issue_cache` blob into a projection, or null. */
+function parseCachedIssue(raw: string | null | undefined): GithubIssueProjection | undefined {
+	if (!raw) return undefined;
+	try {
+		const o = JSON.parse(raw) as unknown;
+		if (!o || typeof o !== "object") return undefined;
+		const r = o as Record<string, unknown>;
+		if (typeof r.number !== "number" || typeof r.title !== "string" || typeof r.state !== "string") return undefined;
+		return {
+			number: r.number,
+			title: r.title,
+			state: r.state,
+			labels: Array.isArray(r.labels) ? (r.labels as unknown[]).filter((l): l is string => typeof l === "string") : [],
+			url: typeof r.url === "string" ? r.url : "",
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+/** Serialize an IssueSummary into the compact JSON stored in `github_issue_cache`. */
+function serializeIssueCache(issue: IssueSummary): string {
+	return JSON.stringify({ number: issue.number, title: issue.title, state: issue.state, labels: issue.labels, url: issue.url });
+}
+
 /** Build the instance's single work board: configured columns + one card per job. */
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string): Promise<InstanceBoard> {
 	const [tasks, overlayRows, boardCfg, threadRows] = await Promise.all([
 		mirroredRuntimeTasks(env, instanceId, userId, BOARD_TASK_LIMIT),
-		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
+		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at, github_issue_number, github_issue_cache FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
-			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>(),
+			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string; github_issue_number: number | null; github_issue_cache: string | null }>(),
 		boardConfigForInstance(env, instanceId, userId),
 		// Per-ticket conversation turns (#150), so a card can say it has been questioned. One
 		// grouped read for the whole board rather than a read per card; the partial index from
@@ -315,7 +358,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		if (r.task_id) threadTurnsByTask.set(r.task_id, Number(r.n) || 0);
 	}
 
-	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>();
+	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string; github_issue_number: number | null; github_issue_cache: string | null }>();
 	for (const r of overlayRows.results ?? []) overlay.set(r.job_key, r);
 
 	// One card per job — newest attempt represents the card.
@@ -340,6 +383,8 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		const runStatus = String(rep.status ?? "");
 		const userStatus = overlay.get(jobKey)?.user_status ?? null;
 		const latestTaskId = String(rep.id ?? "");
+		const overlayRow = overlay.get(jobKey);
+		const githubIssue = overlayRow ? parseCachedIssue(overlayRow.github_issue_cache) : undefined;
 		const item: BoardItemView = {
 			jobKey,
 			latestTaskId,
@@ -354,6 +399,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			status: userStatus || runStatus,
 			attempts: arr.map((t) => ({ id: String(t.id ?? ""), status: String(t.status ?? ""), updatedAt: t.updatedAt || t.createdAt || "" })),
 			updatedAt: rep.updatedAt || rep.createdAt || "",
+			...(githubIssue ? { githubIssue } : {}),
 		};
 		items.push(item);
 		if (rep.type === CODING_SESSION_TASK_TYPE) {
@@ -393,6 +439,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 	// tracked pipeline card (e.g. Interview) doesn't vanish with its runs.
 	for (const [jobKey, row] of overlay) {
 		if (byKey.has(jobKey) || !row.user_status) continue;
+		const githubIssue = parseCachedIssue(row.github_issue_cache);
 		items.push({
 			jobKey,
 			latestTaskId: "",
@@ -407,6 +454,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			status: row.user_status,
 			attempts: [],
 			updatedAt: row.updated_at || "",
+			...(githubIssue ? { githubIssue } : {}),
 		});
 	}
 
@@ -581,6 +629,100 @@ export async function deleteBoardItem(env: Env, instanceId: string, userId: stri
 	await env.DB.prepare("DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3")
 		.bind(instanceId, userId, jobKey)
 		.run();
+}
+
+/**
+ * Link (or unlink) a board card to a GitHub issue (#682). Stores the issue number as
+ * a stable key and immediately fetches + caches the issue's projection (title/state/labels/url)
+ * so the board can render it without a live GitHub call. Passing `null` unlinks.
+ *
+ * The card row is upserted if it does not exist yet (a card can be linked before it is moved).
+ * The board column and the issue labels are independent axes — linking never touches
+ * `user_status`.
+ *
+ * Returns `{ ok: true, issue }` on success, `{ ok: false, error }` when the issue cannot be
+ * fetched (not found, private + no install, network down). A fetch failure does NOT block the
+ * link — the number is stored and the cache stays empty; `refresh` can fill it later.
+ */
+export async function linkBoardItemGithubIssue(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	jobKey: string,
+	link: { repo: string; issueNumber: number } | null,
+): Promise<{ ok: true; issue?: GithubIssueProjection } | { ok: false; error: string }> {
+	if (!link) {
+		// Unlink: clear the two github columns if the row exists.
+		await env.DB.prepare(
+			`UPDATE board_items SET github_issue_number = NULL, github_issue_cache = '', updated_at = datetime('now')
+       WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3`,
+		).bind(instanceId, userId, jobKey).run();
+		return { ok: true };
+	}
+
+	const { repo, issueNumber } = link;
+	// Fetch the issue projection immediately so the row is warm on the first board read.
+	const fetched = await readIssue(env, userId, repo, issueNumber);
+	const cache = fetched ? serializeIssueCache(fetched) : "";
+
+	// Upsert the row. The display fields (title/subtitle/url/user_status) are PRESERVED on
+	// conflict — linking must not wipe a card that was already moved to a pipeline column.
+	await env.DB.prepare(
+		`INSERT INTO board_items (instance_id, user_id, job_key, user_status, title, subtitle, url, github_issue_number, github_issue_cache, updated_at)
+     VALUES (?1, ?2, ?3, NULL, '', '', '', ?4, ?5, datetime('now'))
+     ON CONFLICT(instance_id, user_id, job_key) DO UPDATE SET
+       github_issue_number = excluded.github_issue_number,
+       github_issue_cache   = excluded.github_issue_cache,
+       updated_at           = excluded.updated_at`,
+	).bind(instanceId, userId, jobKey.slice(0, 400), issueNumber, cache).run();
+
+	if (!fetched) {
+		return { ok: false, error: `Could not fetch issue #${issueNumber} from ${repo} — the number is stored but the cache is empty. Try refreshing later.` };
+	}
+	return { ok: true, issue: parseCachedIssue(cache) };
+}
+
+/**
+ * Refresh the cached GitHub issue projections for every linked card on this instance's
+ * board (#682). Fetches each distinct (repo, issue) pair once and updates the stored
+ * cache. Silently skips cards whose fetch fails so a single unreachable issue cannot
+ * block the others. Returns a count of how many were refreshed vs skipped.
+ *
+ * `boardGithubRepo` must be set in the instance config to know WHICH repo to use for
+ * cards that were linked without an explicit repo stored per-row — the per-instance
+ * repo setting is the authority here.
+ */
+export async function refreshBoardGithubIssues(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	githubRepo: string,
+): Promise<{ refreshed: number; skipped: number }> {
+	// All linked cards for this instance.
+	const rows = await env.DB.prepare(
+		`SELECT job_key, github_issue_number FROM board_items
+     WHERE instance_id = ?1 AND user_id = ?2 AND github_issue_number IS NOT NULL`,
+	).bind(instanceId, userId).all<{ job_key: string; github_issue_number: number }>();
+
+	const linked = rows.results ?? [];
+	if (!linked.length) return { refreshed: 0, skipped: 0 };
+
+	let refreshed = 0;
+	let skipped = 0;
+
+	await Promise.all(
+		linked.map(async (row) => {
+			const fetched = await readIssue(env, userId, githubRepo, row.github_issue_number);
+			if (!fetched) { skipped++; return; }
+			await env.DB.prepare(
+				`UPDATE board_items SET github_issue_cache = ?4, updated_at = datetime('now')
+         WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3`,
+			).bind(instanceId, userId, row.job_key, serializeIssueCache(fetched)).run();
+			refreshed++;
+		}),
+	);
+
+	return { refreshed, skipped };
 }
 
 /**

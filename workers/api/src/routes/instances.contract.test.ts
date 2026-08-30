@@ -133,6 +133,7 @@ const PARAMS: Record<string, string> = {
 	turnId: "turn-1",
 	uploadId: "upload-1",
 	seq: "1",
+	jobKey: "job-key-1",
 };
 
 function concrete(pattern: string): string {
@@ -269,6 +270,8 @@ const ROUTES = [
 	"POST /:instanceId/board/status",
 	"GET /:instanceId/board-config",
 	"PUT /:instanceId/board-config",
+	"PUT /:instanceId/board/items/:jobKey/github-issue",
+	"POST /:instanceId/board/github-issues/refresh",
 	"POST /:instanceId/tasks",
 	"POST /:instanceId/tasks/direct",
 	"PATCH /:instanceId/tasks/:taskId",
@@ -395,6 +398,8 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/board/status",
 		"GET /:instanceId/board-config",
 		"PUT /:instanceId/board-config",
+		"PUT /:instanceId/board/items/:jobKey/github-issue",
+		"POST /:instanceId/board/github-issues/refresh",
 		"POST /:instanceId/tasks",
 		"POST /:instanceId/tasks/direct",
 		"PATCH /:instanceId/tasks/:taskId",
@@ -573,6 +578,12 @@ const GATES: Record<string, [number, number]> = {
 	"POST /:instanceId/board/status": [401, 404],
 	"GET /:instanceId/board-config": [401, 404],
 	"PUT /:instanceId/board-config": [401, 404],
+	// GitHub issue link/unlink (#682). Owner-only: linking a card to an issue is a
+	// per-instance action; a stranger must not read or change which issue backs a card.
+	"PUT /:instanceId/board/items/:jobKey/github-issue": [401, 404],
+	// GitHub issue cache refresh (#682). Owner-only: the repo is read from the instance
+	// config, so a stranger would trigger a read scoped to another owner's GitHub install.
+	"POST /:instanceId/board/github-issues/refresh": [401, 404],
 	"POST /:instanceId/tasks": [401, 404],
 	"POST /:instanceId/tasks/direct": [401, 404],
 	// Editing a ticket's wording (PAS #137). Gated before the body is looked at, so a

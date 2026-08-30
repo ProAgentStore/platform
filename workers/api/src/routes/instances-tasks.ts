@@ -7,7 +7,9 @@ import {
 	buildInstanceBoard,
 	clearFinishedBoardItems,
 	columnsForInstance,
+	linkBoardItemGithubIssue,
 	liveBoardItemMeta,
+	refreshBoardGithubIssues,
 	setBoardItemStatus,
 	setInstanceBoardConfig,
 } from "../lib/board.js";
@@ -218,6 +220,58 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		if ("columns" in body) patch.columns = body.columns === null ? null : (body.columns as BoardColumn[]);
 		if (body.view === "kanban" || body.view === "list") patch.view = body.view;
 		return c.json(await setInstanceBoardConfig(c.env, instanceId, session.uid, patch));
+	});
+
+	/**
+	 * Link (or unlink) a board card to a GitHub issue (#682). Stores the issue number and
+	 * immediately fetches + caches the issue's projection (title/state/labels/url) for display.
+	 *
+	 * Body `{ repo: "owner/repo", issueNumber: 5 }` — link.
+	 * Body `{}` or `{ issueNumber: null }` — unlink (clears both columns).
+	 *
+	 * Read-only with respect to GitHub: moving a card never mutates the upstream issue.
+	 */
+	router.put("/:instanceId/board/items/:jobKey/github-issue", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		const jobKey = decodeURIComponent(c.req.param("jobKey"));
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		if (!jobKey) return c.json({ error: "jobKey required" }, 400);
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const issueNumber = typeof body.issueNumber === "number" && body.issueNumber > 0 ? Math.floor(body.issueNumber) : null;
+		if (!issueNumber) {
+			// Unlink
+			const result = await linkBoardItemGithubIssue(c.env, instanceId, session.uid, jobKey, null);
+			return c.json(result);
+		}
+		const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+		if (!repo) return c.json({ error: "repo required when linking (e.g. \"owner/repo\")" }, 400);
+		const result = await linkBoardItemGithubIssue(c.env, instanceId, session.uid, jobKey, { repo, issueNumber });
+		return c.json(result, result.ok ? 200 : 422);
+	});
+
+	/**
+	 * Refresh the cached GitHub issue projections for every linked card on this instance's
+	 * board (#682). Uses the per-instance `boardGithubRepo` config setting as the repo.
+	 * Returns counts of refreshed + skipped cards. Silently skips unreachable issues.
+	 */
+	router.post("/:instanceId/board/github-issues/refresh", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		// Read the per-instance github repo from config, or from the request body as override.
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const bodyRepo = typeof body.repo === "string" ? body.repo.trim() : "";
+		// Fall back to the instance config boardGithubRepo.
+		const configRow = await c.env.DB.prepare(
+			"SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2",
+		).bind(instanceId, session.uid).first<{ config: string }>();
+		let cfg: Record<string, unknown> = {};
+		try { cfg = configRow?.config ? (JSON.parse(configRow.config) as Record<string, unknown>) : {}; } catch { cfg = {}; }
+		const repo = bodyRepo || (typeof cfg.boardGithubRepo === "string" ? cfg.boardGithubRepo.trim() : "");
+		if (!repo) return c.json({ error: "no GitHub repo configured for this board — set boardGithubRepo in config or pass repo in the body" }, 400);
+		const result = await refreshBoardGithubIssues(c.env, instanceId, session.uid, repo);
+		return c.json(result);
 	});
 
 	/** Create a task on my registered runtime. */
