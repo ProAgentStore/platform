@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findHandAuthoredCards, findHandAuthoredControls } from "./control-shapes.js";
+import { lineOf, scanTags } from "./jsx-tags.js";
 import { TREES, assertMeasurable, tsxFiles } from "./tsx-trees.js";
 
 /**
@@ -342,5 +343,101 @@ describe("findHandAuthoredControls", () => {
 
 	it("reports the line so the failure can be clicked", () => {
 		expect(findHandAuthoredControls(`\n\n<button className="p-2 rounded">x</button>`)[0].line).toBe(3);
+	});
+});
+
+/**
+ * Responsive label guard (#438).
+ *
+ * Two bugs reached production because a control row's labels were NOT hidden on mobile:
+ * #426 (an overflow) and #431 (a four-button row 80 lines below the two-button row that
+ * was already fixed). Both fixes added `hidden sm:inline` to the `<span>` labels. Nothing
+ * stopped the pattern from recurring — that is what this guard is.
+ *
+ * ── The silently-dead class (assertion 1, the first finding)
+ *
+ * `.hidden{display:none}` is emitted BEFORE `.inline-flex` in the built stylesheet, so
+ * `className="hidden sm:flex"` on a `<Button>` does NOT hide it on mobile — `BUTTON_BASE`
+ * wins and the control stays visible. Silently. The author sees a desktop build that is
+ * correct, and the mobile regression ships unnoticed. `Button.tsx`'s docstring documents
+ * this; this assertion makes it machine-enforceable (#438).
+ *
+ * The correct approach when a NATIVE button must be conditionally visible is either:
+ *  (a) wrap it in a container that carries `hidden sm:block` (the container is not a
+ *      `<Button>` so it has no BUTTON_BASE conflict), or
+ *  (b) move responsive visibility into the table (a new variant or size step), or
+ *  (c) use a native `<button>` rather than the `<Button>` component — native buttons
+ *      do not carry BUTTON_BASE, so `hidden sm:flex` works there.
+ *
+ * This guard asserts the count is 0, not that it stays 0: if a new `<Button hidden sm:>`
+ * lands it must be zero, not "plus one from last sprint".
+ *
+ * ── Non-vacuity
+ *
+ * `assertMeasurable` (from the button-shape guard above) already verifies the three trees
+ * are a real size. A second denominator assertion here would duplicate it; the shared call
+ * there is the denominator for this scan too.
+ */
+describe("responsive labels — Button with hidden sm: is silently dead (#438)", () => {
+	/**
+	 * Finds every `<Button>` opening tag (capital B = the component, not a native element)
+	 * whose className attribute carries a `hidden sm:` utility.
+	 *
+	 * Why `hidden sm:` is wrong on `<Button>`: `Button.tsx` injects `buttonClass()` which
+	 * includes `BUTTON_BASE = "... inline-flex ..."`. Tailwind resolves same-property
+	 * utilities by their position in the GENERATED stylesheet, not by their order in the
+	 * class attribute. `.hidden{display:none}` is emitted before `.inline-flex`, so
+	 * `.inline-flex` wins — the button is always visible. Verified on the built `index.css`.
+	 */
+	function findButtonWithHiddenSm(source: string): Array<{ line: number; excerpt: string }> {
+		const hits: Array<{ line: number; excerpt: string }> = [];
+		for (const tag of scanTags(source)) {
+			if (tag.name !== "Button" || tag.closing || tag.selfClosing) continue;
+			// Extract everything from `className` onward in the tag body.
+			const cnIdx = tag.body.indexOf("className");
+			if (cnIdx === -1) continue;
+			const cnText = tag.body.slice(cnIdx);
+			// `hidden sm:` is the pattern: `hidden` followed immediately by a `sm:` utility
+			// (e.g. `hidden sm:flex`, `hidden sm:inline-flex`).
+			if (!/hidden\s+sm:/.test(cnText)) continue;
+			hits.push({ line: lineOf(source, tag.index), excerpt: tag.body.trim().slice(0, 120) });
+		}
+		return hits;
+	}
+
+	it.each(TREES)("no <Button> carries hidden sm: in className in %s", (_name, root) => {
+		const offenders: string[] = [];
+		for (const file of tsxFiles(root)) {
+			const source = readFileSync(file, "utf8");
+			for (const hit of findButtonWithHiddenSm(source)) {
+				offenders.push(`  ${relative(root, file)}:${hit.line}  ${hit.excerpt}`);
+			}
+		}
+		expect(
+			offenders,
+			[
+				"`hidden sm:flex` (or `sm:inline-flex`) on a `<Button>` does not hide it on mobile.",
+				"BUTTON_BASE emits `inline-flex`, which wins because `.inline-flex` is emitted AFTER",
+				"`.hidden` in the built stylesheet — Tailwind's property-order rule, not specificity.",
+				"",
+				"Use a wrapper element, a native `<button>` (which has no BUTTON_BASE conflict),",
+				"or a new table entry in control-classes.ts if this becomes a pattern (#438).",
+				"",
+				...offenders,
+			].join("\n"),
+		).toEqual([]);
+	});
+
+	it("the scan finds Button tags at all — non-vacuity", () => {
+		// If scanTags or the name filter breaks, `findButtonWithHiddenSm` could return nothing
+		// for every file and the guard above would pass vacuously. The same trap `assertMeasurable`
+		// closes for the shape and card guards. This confirms the scan is actually live.
+		let found = 0;
+		for (const [, root] of TREES) {
+			for (const file of tsxFiles(root)) {
+				found += scanTags(readFileSync(file, "utf8")).filter((t) => t.name === "Button" && !t.closing && !t.selfClosing).length;
+			}
+		}
+		expect(found, "no <Button> tags found in any tree — the scanner is broken or all trees are empty").toBeGreaterThan(20);
 	});
 });
