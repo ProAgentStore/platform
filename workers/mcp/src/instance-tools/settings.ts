@@ -95,6 +95,53 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 	);
 
 	server.tool(
+		"get_instance_operator_manual",
+		"Read the operator manual for a subscribed instance — caller-facing notes about HOW this instance is meant to be driven (not an instruction to the agent). Returns { manual, rules, context }: `manual` is the stored document, `rules` echoes the agent's Special Instructions so you can see the standing orders that will make it refuse things, `context` is reserved.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/operator-manual`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_operator_manual",
+		"Replace the operator manual for a subscribed instance (max 16000 chars). The manual is caller-facing guidance — notes for the human or MCP client driving this instance. It is NOT injected as an agent instruction; it is fenced as data when the agent reads it via read_operator_manual. To write the agent's standing orders instead, use set_instance_instructions.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			manual: z.string().describe("The full new operator manual text (replaces the old one; empty string clears it)"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, manual, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, bytes: manual.length };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_operator_manual", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_operator_manual", "replace instance operator manual", input, {
+					endpoint: `/v1/instances/${instance_id}/operator-manual`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/operator-manual`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ manual }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_operator_manual", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"get_instance_instructions",
 		"Read a subscribed instance's Special Instructions (the subscriber's free-text rules injected at the top of the agent's prompt — console Knowledge → Rules & Tips).",
 		{

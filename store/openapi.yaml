@@ -5344,6 +5344,62 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/operator-manual:
+    get:
+      summary: Read operator manual
+      description: |
+        Caller-facing guidance for how this instance is meant to be driven. NOT injected as an
+        agent instruction (that is Special Instructions). Returns `{ manual, rules, context }`:
+        `manual` is the stored document, `rules` echoes the agent's Special Instructions so a
+        caller reading the manual also sees the standing orders that will make the agent refuse
+        things, `context` is reserved for slice 3 (live rendered block).
+      operationId: getOperatorManual
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The operator manual and current rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  manual: { type: string }
+                  rules: { type: string }
+                  context: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Update operator manual
+      description: |
+        Replace the operator manual (max 16000 chars). Accepts `{ manual }` only — `rules` and
+        `context` are read-only via this route. Rejects with 400 when the manual exceeds
+        `OPERATOR_MANUAL_MAX_CHARS` (16000); the response names the submitted length.
+      operationId: setOperatorManual
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                manual: { type: string, maxLength: 16000 }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "400":
+          description: Manual too long (length named in error message)
+          content:
+            application/json:
+              schema: { type: object, properties: { error: { type: string } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/apply-resume:
     put:
       summary: Upload the résumé

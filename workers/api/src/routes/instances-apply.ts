@@ -264,6 +264,17 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	}
 }
 
+/**
+ * Maximum length of the operator manual in characters.
+ *
+ * Exported as a named constant (not a bare `.slice(0, N)`) so every caller can cite it
+ * by name; the bare truncate in the `specialInstructions` path at :435 is the bug this
+ * constant class exists to avoid. The `PUT` route rejects above this cap rather than
+ * silently truncating — open question 1 in #739 resolved in favour of a 400 naming the
+ * submitted length.
+ */
+export const OPERATOR_MANUAL_MAX_CHARS = 16_000;
+
 /** Read the instance's JSON config (client-side settings incl. specialInstructions). */
 export async function readInstanceConfig(env: Env, instanceId: string, userId: string): Promise<Record<string, unknown>> {
 	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ config: string }>();
@@ -452,6 +463,61 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
 		if (!caps?.surfaces.includes("apply")) return c.json({ tips: [] });
 		return c.json({ tips: await listAtsCache(c.env, session.uid) });
+	});
+
+	/**
+	 * Read the instance's operator manual — caller-facing guidance, NOT injected as an
+	 * agent instruction. Returns `{ manual, rules, context }`:
+	 *   - `manual`  the stored free-text document (may be "")
+	 *   - `rules`   the current specialInstructions (so a caller reading the manual also
+	 *               sees the standing orders that will make the agent refuse things — the
+	 *               symmetric read that makes a refusal legible)
+	 *   - `context` always "" in slice 1; reserved for the live rendered block (slice 3)
+	 */
+	router.get("/:instanceId/operator-manual", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const row = await c.env.DB.prepare(
+			"SELECT operator_manual, config FROM agent_instances WHERE id = ?1 AND user_id = ?2",
+		)
+			.bind(instanceId, session.uid)
+			.first<{ operator_manual: string | null; config: string | null }>();
+		let rules = "";
+		try {
+			const cfg = JSON.parse(row?.config || "{}") as Record<string, unknown>;
+			rules = typeof cfg.specialInstructions === "string" ? cfg.specialInstructions : "";
+		} catch {
+			// malformed config — rules stays ""
+		}
+		return c.json({ manual: row?.operator_manual ?? "", rules, context: "" });
+	});
+
+	/**
+	 * Replace the operator manual. Accepts `{ manual }` only — `rules` and `context` are
+	 * read-only via this route; the former is written by `PUT /instructions`. Rejects with
+	 * 400 (naming the submitted length) when the manual exceeds OPERATOR_MANUAL_MAX_CHARS,
+	 * rather than silently truncating the way specialInstructions does — open question 1
+	 * in #739 resolved in favour of an honest rejection.
+	 */
+	router.put("/:instanceId/operator-manual", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const body = (await c.req.json().catch(() => ({}))) as { manual?: unknown };
+		const manual = String(body.manual ?? "");
+		if (manual.length > OPERATOR_MANUAL_MAX_CHARS) {
+			return c.json(
+				{
+					error: `Operator manual too long: ${manual.length} chars (max ${OPERATOR_MANUAL_MAX_CHARS}).`,
+				},
+				400,
+			);
+		}
+		await c.env.DB.prepare("UPDATE agent_instances SET operator_manual = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+			.bind(manual, instanceId, session.uid)
+			.run();
+		return c.json({ ok: true });
 	});
 
 	/** Supply the value the apply agent asked for (ask-and-hold / needs_input handoff). */

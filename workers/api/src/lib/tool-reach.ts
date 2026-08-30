@@ -151,6 +151,8 @@ export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
 	stop_work: "platform",
 	get_behaviour: "platform",
 	set_behaviour: "platform",
+	// #739: reads the operator manual out of the instance's `operator_manual` D1 column.
+	read_operator_manual: "platform",
 	get_stats: "platform",
 	set_stats_card: "platform",
 	run_pipeline: "platform",

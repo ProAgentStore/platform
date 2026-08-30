@@ -83,7 +83,7 @@ the private runtime is working. The instance is correctly refusing to spend plat
 
 ## Tool Surface
 
-The server registers 146 tools; call `tools/list` for the current set. The tool table in
+The server registers 148 tools; call `tools/list` for the current set. The tool table in
 `workers/mcp/README.md` (or the published `platform-docs/mcp.md`) lists every tool with its
 scope, dry-run support, and confirmation value. The always-on `platform_guide` tool returns a
 plain-text map of the most commonly used ones — call it at the start of a session to orient

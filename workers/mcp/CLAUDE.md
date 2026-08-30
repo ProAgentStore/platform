@@ -70,7 +70,7 @@ src/
     ├── knowledge.ts      10 tools — documents, files, vectors, memory
     ├── observability.ts  9 tools — messages, activity, errors, trace, pipeline runs, feedback
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
-    ├── settings.ts       11 tools — settings, name, instructions, model, translation, state
+    ├── settings.ts       13 tools — settings, name, instructions, operator manual, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
     ├── composition.ts   10 tools — supervision (#183), connections (#182), loops
     ├── account.ts        8 tools — whoami, billing, usage, keys, email, profile, budget limits
@@ -83,15 +83,16 @@ src/
                           surfaces:["coding"]) + 3 loop tools
 ```
 
-**146 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**148 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 100 across `instance-tools/`. 124 are always registered; 22 are
+`storage-tools.ts`, and 102 across `instance-tools/`. 126 are always registered; 22 are
 surface-gated (apply=4, repo=3, coding=15).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
-+ 13 + 100 = 146. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 102 = 148. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
-headline of 141 until #696 re-counted them. The per-file rows in the tree above are
+headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
+added two always-on settings tools. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
@@ -137,7 +138,7 @@ tells you exactly what you changed about it.
    refuses.) **`jsonText` is compact and takes no formatting option (#586)** — the reader is
    a host with a byte ceiling, not a person, and the indented default cost ~22% of every
    result and defeated two byte guards in one day. Do not hand-roll
-   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 146 tools through a
+   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 148 tools through a
    real client and fails any result whose text is indented JSON, however it was produced.
 5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
    it, in a comment above the registration (#328). The caller is usually a model: without

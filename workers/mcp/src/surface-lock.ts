@@ -252,4 +252,15 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.16 is published.
 	"0.1.17": "sha256:cd24991cf9659bb8f09af6b4ad3ef47b8f2d4e72352b6fffb18fc12d063d78f9",
+	// 0.1.18 (#739): two new tool NAMES registered unconditionally (always-on):
+	// `get_instance_operator_manual` (read) and `set_instance_operator_manual` (write).
+	// 146 registrations become 148; `MCP_TOOL_ALWAYS_ON` moves 124 → 126;
+	// `MCP_TOOL_GATED` (derived) stays at 22 — neither tool is surface-gated.
+	//
+	// These are the MCP half of the caller-facing operator manual (#739 Slice 1). The agent
+	// also gets a BASE-tier `read_operator_manual` tool (not on this surface) and a bounded
+	// injected notice in `agent-think.ts`, both in the same commit.
+	//
+	// Appended, never edited in place: 0.1.17 is published.
+	"0.1.18": "sha256:ab5fcce1033ec9a84e31d42ec01915e6f72d57720b40ce2b03e04605708decc5",
 };

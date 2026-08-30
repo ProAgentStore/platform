@@ -1,0 +1,21 @@
+-- Add operator_manual column to agent_instances (#739).
+--
+-- A named column instead of a config key for two reasons:
+--
+--   1. `GET /v1/instances/my/instances` selects `i.config` wholesale and the handler
+--      discards the blob after routing (`routes/instances.ts:310`). At 36,714 bytes for
+--      42 instances the payload is already inside the 48,000-byte MCP wire budget. A
+--      16 KB manual in `config` would put `my_instances` over that ceiling (#739
+--      Decision 2). A named column is not selected by the listing query and costs it nothing.
+--
+--   2. The manual has a 16,000-char cap enforced by the API; TEXT with no inline default is
+--      the correct SQL type (the application layer owns the invariant, not the schema).
+--
+-- The column is NULL for every pre-existing row — the API route returns "" on NULL, so
+-- a subscriber who never set one gets `{ manual: "", rules: "…", context: "" }` without
+-- needing a migration to backfill an empty string.
+--
+-- CONSTRAINT: operator_manual must NOT be read by any query that selects `config` wholesale
+-- (i.e. the listing routes) — see Decision 2. The per-instance detail route reads it alone.
+
+ALTER TABLE agent_instances ADD COLUMN operator_manual TEXT;

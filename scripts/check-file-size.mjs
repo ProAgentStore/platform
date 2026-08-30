@@ -862,7 +862,9 @@ const PINS = {
 	// already have — `withFraming` is in `untrusted-fence.ts` beside the anchoring rule that makes
 	// the head/tail split necessary, and `work-stop.ts`/`work-report.ts`/`terminal-label.ts` are
 	// earlier extractions from this same file.
-	"workers/api/src/lib/tool-registry.ts": 836,
+	// +34 for #739: `read_operator_manual` ToolDef (BASE tier, mutates:false, untrustedOutput:true)
+	// + its handler, + comments explaining the fence/no-write-path decisions.
+	"workers/api/src/lib/tool-registry.ts": 870,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1017,7 +1019,8 @@ const PINS = {
 	// lib/events.ts's `logToolFailure` and NOT here: why one row per FAILURE rather than per tool
 	// (this table has no retention cron), why `warn` rather than `error`, and why its message keeps
 	// the 600 characters #517 preserved instead of the 200 the summary row cuts to.
-	"workers/api/src/agent-think.ts": 1207,
+	// +31 for #739: the operator manual notice block — a D1 query + conditional prompt injection.
+	"workers/api/src/agent-think.ts": 1238,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -1509,7 +1512,8 @@ const PINS = {
 	"scripts/docs-drift.mjs": 829,
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
-	"scripts/check-file-size.mjs": 1593,
+	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.
+	"scripts/check-file-size.mjs": 1597,
 };
 
 /**

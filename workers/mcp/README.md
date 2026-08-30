@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**146 tool registrations.** 124 are always registered; 22 are gated to the console
+**148 tool registrations.** 126 are always registered; 22 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -231,6 +231,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_stats` | Patch your own stats cards (`card: null` removes/hides; never edits the template) | write | yes | |
 | `get_instance_instructions` | Read Special Instructions | — | | |
 | `set_instance_instructions` | Replace them (max 4000 chars) | write | yes | |
+| `get_instance_operator_manual` | Read the operator manual (caller-facing; echoes rules) | — | | |
+| `set_instance_operator_manual` | Replace the operator manual (max 16000 chars) | write | yes | |
 | `get_translation_config` | Read the translation display config | — | | |
 | `set_translation_config` | Patch it | write | yes | |
 

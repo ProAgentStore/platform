@@ -121,6 +121,10 @@ export const BUILTIN_TOOL_SCOPES: Readonly<Record<string, "read" | "write">> = {
 	// listed anyway because "can this agent read my email" is the auditor's question, and a tool
 	// absent from the listing entirely is the thing this file exists to stop.
 	find_confirmation_link: "read",
+	// #739: reads the caller-facing operator manual. `untrustedOutput:true` on the
+	// ToolDef fences the result at the source; the scope here answers the audit question
+	// "can this tool change state" — it cannot.
+	read_operator_manual: "read",
 	list_coding_repos: "read",
 	read_terminal: "read",
 	send_to_cli: "write",

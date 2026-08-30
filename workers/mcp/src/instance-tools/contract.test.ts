@@ -266,6 +266,7 @@ const TABLE: Record<string, Row> = {
 	get_apply_tips: ["apply", "none", null, null, "instance_id,token"],
 	get_instance_board_config: ["board", "none", null, null, "instance_id,token"],
 	get_instance_instructions: ["settings", "none", null, null, "instance_id,token"],
+	get_instance_operator_manual: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_memory: ["knowledge", "none", null, null, "instance_id,token"],
 	get_instance_settings: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_state: ["settings", "none", null, null, "instance_id,token"],
@@ -326,6 +327,7 @@ const TABLE: Record<string, Row> = {
 	update_board_ticket: ["board", "write", null, "envelope", "description,dry_run,instance_id,job_key,reasoning,title,token"],
 	set_instance_board_config: ["board", "write", null, "envelope", "columns,dry_run,instance_id,reset,token,view"],
 	set_instance_instructions: ["settings", "write", null, "envelope", "dry_run,instance_id,instructions,token"],
+	set_instance_operator_manual: ["settings", "write", null, "envelope", "dry_run,instance_id,manual,token"],
 	set_instance_model: ["settings", "write", null, "envelope", "dry_run,instance_id,model,token"],
 	// #671: `write` rather than `runtime` — it changes where calls are ROUTED, it does not itself
 	// drive anything on the machine.

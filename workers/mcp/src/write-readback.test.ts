@@ -165,6 +165,7 @@ const READBACK: Record<string, string | null> = {
 	"rename_instance.name": "my_instances",
 	"set_instance_settings.settings": "get_instance_settings",
 	"set_instance_instructions.instructions": "get_instance_instructions",
+	"set_instance_operator_manual.manual": "get_instance_operator_manual",
 	"set_instance_model.model": "get_instance_state",
 	// #671. Readable by the tool added alongside it — the gap this closed was precisely that the
 	// pin could be neither read nor written here, so a reader had to exist for the writer to land.
