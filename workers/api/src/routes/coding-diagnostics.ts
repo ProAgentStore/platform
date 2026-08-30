@@ -118,6 +118,30 @@ interface GithubSearchResult {
 	error?: string;
 }
 
+/**
+ * The parsed result of a `/coding/github-repo-detail` runner call (#687).
+ *
+ * `checked: true` is the version marker. An older runner 404s and the route returns
+ * 502. All arrays may be empty when the repo exists but has no issues/PRs/branches.
+ */
+interface GithubRepoDetailResult {
+	checked?: boolean;
+	repo?: string;
+	issues?: Array<{
+		number: number; title: string; state: string; author: string | null;
+		created_at: string; updated_at: string; labels: string[]; assignee: string | null;
+	}>;
+	pulls?: Array<{
+		number: number; title: string; state: string; author: string | null;
+		created_at: string; updated_at: string; head_branch: string; base_branch: string;
+		draft: boolean; labels: string[];
+	}>;
+	branches?: Array<{ name: string; sha: string; protected: boolean }>;
+	fromCache?: boolean;
+	cachedAt?: string;
+	error?: string;
+}
+
 export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	/**
 	 * Close every tracked coding session on the runner.
@@ -224,6 +248,35 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			sort: c.req.query("sort") || undefined,
 		};
 		const result = await callRunner<GithubSearchResult>(conn, "/coding/github-search", body, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+		return c.json(result);
+	});
+
+	/**
+	 * Fetch issues, pull requests, and branches for a given `owner/repo` (#687).
+	 *
+	 * Read-only: only calls `gh api GET /repos/{owner}/{repo}/{issues,pulls,branches}`.
+	 * Results are cached on the runner for 2 minutes; `fromCache: true` signals a
+	 * cache hit. An older runner 404s and this route returns 502.
+	 *
+	 * Query parameters:
+	 *   `repo`   — required — `owner/repo` slug (e.g. `serge-ivo/my-app`)
+	 *   `limit`  — max items per list (1–100; default 30)
+	 *   `state`  — `"open"` (default) | `"all"` (for issues + PRs)
+	 *
+	 * Returns `{ checked: true, repo, issues: [], pulls: [], branches: [], fromCache, cachedAt }`
+	 * or `{ error }`. 502 when the runner is offline or predates this endpoint.
+	 */
+	codingRoutes.get("/:instanceId/coding/github-repo-detail", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
+		if (!conn) return c.json({ error: "Runner not connected" }, 502);
+		// Forward query params to the runner via POST body (the relay is POST-only).
+		const body = {
+			repo: c.req.query("repo") || undefined,
+			limit: c.req.query("limit") ? Number(c.req.query("limit")) : undefined,
+			state: c.req.query("state") || undefined,
+		};
+		const result = await callRunner<GithubRepoDetailResult>(conn, "/coding/github-repo-detail", body, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
 		return c.json(result);
 	});
 

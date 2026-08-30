@@ -1126,6 +1126,19 @@ const PINS = {
 	// what a brief says, what it must never claim, and its budget — is not here at all: it is pure,
 	// tested, and in workers/api/src/lib/coding-seed-brief.ts.
 	"packages/browser-runner/src/coding/headless.ts": 1005,
+	// New entry at #687 — 629 → 964, crossing LIMIT by 164. The repo-detail slice
+	// (#687) adds three new types (GithubIssueEntry, GithubPullEntry, GithubBranchEntry),
+	// their input/output interfaces, an in-process LRU cache, three projection helpers
+	// (toIssueEntry, toPullEntry, toBranchEntry), and the public getGithubRepoDetail
+	// function — all reading from `gh api GET` endpoints. Growth is additive: the three
+	// functions it joins (#685 listGithubRepos / listGithubOrgs, #686 searchGithubRepos)
+	// are each distinct read surfaces with no shared state except the spawnSync helper,
+	// so splitting by feature would produce three files that all import spawnSync and
+	// nothing else from each other. The file header now names all three issue anchors.
+	// The implementation is covered by isolation-clean tests in github-browse.test.ts
+	// (which tests are excluded from this ratchet by design — the comment at line ~38 says
+	// "adding tests would punish the only thing that fixes the problem").
+	"packages/browser-runner/src/coding/github-browse.ts": 965,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge
@@ -1513,7 +1526,8 @@ const PINS = {
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.
-	"scripts/check-file-size.mjs": 1597,
+	// +13 at #687: new entry for github-browse.ts (11-line rationale + pin) + this note + blank.
+	"scripts/check-file-size.mjs": 1611,
 };
 
 /**

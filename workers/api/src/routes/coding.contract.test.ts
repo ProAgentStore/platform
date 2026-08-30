@@ -236,6 +236,8 @@ const ROUTES = [
 	"GET /:instanceId/coding/github-repos",
 	// GitHub repository search (#686) — read-only, cached, no per-repo fan-out.
 	"GET /:instanceId/coding/github-search",
+	// GitHub repository detail (#687) — issues, PRs, branches for a given owner/repo.
+	"GET /:instanceId/coding/github-repo-detail",
 	"GET /:instanceId/coding/diagnostics",
 ];
 
@@ -320,6 +322,8 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/coding/github-repos",
 		// GitHub repository search (#686) — read-only, cached, no per-repo fan-out.
 		"GET /:instanceId/coding/github-search",
+		// GitHub repository detail (#687) — issues, PRs, branches for a given owner/repo.
+		"GET /:instanceId/coding/github-repo-detail",
 		"GET /:instanceId/coding/diagnostics",
 	],
 	// The cursored feed (#581, #527). Its own module because it is the only route on this surface

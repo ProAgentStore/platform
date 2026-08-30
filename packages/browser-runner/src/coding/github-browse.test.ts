@@ -1,9 +1,9 @@
 /**
- * Unit tests for `github-browse.ts` (#685, #686).
+ * Unit tests for `github-browse.ts` (#685, #686, #687).
  *
- * `listGithubRepos`, `listGithubOrgs`, and `searchGithubRepos` are pure in the
- * sense that they take input and call `gh api` — the test harness stubs `spawnSync`
- * so no network call is made and no real `gh` binary is needed.
+ * `listGithubRepos`, `listGithubOrgs`, `searchGithubRepos`, and `getGithubRepoDetail`
+ * are pure in the sense that they take input and call `gh api` — the test harness
+ * stubs `spawnSync` so no network call is made and no real `gh` binary is needed.
  *
  * What is verified:
  *   - The `gh` arguments (endpoint, sort, pagination, jq projection).
@@ -17,10 +17,12 @@
  *   - Read-only: the `gh` command is ALWAYS `gh api` (never a write verb).
  *   - Search (#686): GitHub search API used (no per-repo fan-out), caching, rate-limit
  *     handling, qualifier building, openPrs pivot to issue search, isolation between cases.
+ *   - Detail (#687): issues, PRs, branches fetched per-repo; PR/issue filter; draft flag;
+ *     merged PR detection; label projection; caching; invalid slug rejection; isolation.
  */
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSearchCacheForTesting, listGithubOrgs, listGithubRepos, searchGithubRepos } from "./github-browse.js";
+import { clearDetailCacheForTesting, clearSearchCacheForTesting, getGithubRepoDetail, listGithubOrgs, listGithubRepos, searchGithubRepos } from "./github-browse.js";
 
 vi.mock("node:child_process", () => ({
 	spawnSync: vi.fn(),
@@ -66,8 +68,9 @@ function ghRepo(overrides: Partial<{
 
 beforeEach(() => {
 	vi.resetAllMocks();
-	// Clear the in-process search cache so no cached result bleeds between test cases.
+	// Clear the in-process caches so no cached result bleeds between test cases.
 	clearSearchCacheForTesting();
+	clearDetailCacheForTesting();
 });
 
 describe("listGithubRepos — personal repos", () => {
@@ -606,6 +609,336 @@ describe("searchGithubRepos — read-only invariant", () => {
 			expect(args[0]).toBe("api");
 			// Must not use --paginate (search is bounded)
 			expect(args).not.toContain("--paginate");
+		}
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getGithubRepoDetail — #687
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Build a synthetic `spawnSync` return for a successful single-page `gh api` call. */
+function detailSuccess(payload: object) {
+	return { status: 0, stdout: JSON.stringify(payload), stderr: "", error: undefined };
+}
+
+/** A minimal GitHub issue object. */
+function ghIssue(overrides: Partial<{
+	number: number; title: string; state: string; created_at: string; updated_at: string;
+	labels: object[]; assignee: object | null; user: object; pull_request: object;
+}> = {}) {
+	return {
+		number: 1,
+		title: "Fix the bug",
+		state: "open",
+		created_at: "2026-08-01T00:00:00Z",
+		updated_at: "2026-08-20T00:00:00Z",
+		labels: [{ name: "bug" }],
+		assignee: null,
+		user: { login: "dev-user" },
+		...overrides,
+	};
+}
+
+/** A minimal GitHub pull request object. */
+function ghPull(overrides: Partial<{
+	number: number; title: string; state: string; created_at: string; updated_at: string;
+	head: object; base: object; draft: boolean; labels: object[]; user: object; merged_at: string | null;
+}> = {}) {
+	return {
+		number: 10,
+		title: "Add feature",
+		state: "open",
+		created_at: "2026-08-05T00:00:00Z",
+		updated_at: "2026-08-21T00:00:00Z",
+		head: { ref: "feat/my-feature" },
+		base: { ref: "main" },
+		draft: false,
+		labels: [],
+		user: { login: "pr-author" },
+		merged_at: null,
+		...overrides,
+	};
+}
+
+/** A minimal GitHub branch object. */
+function ghBranch(overrides: Partial<{ name: string; commit: object; protected: boolean }> = {}) {
+	return {
+		name: "main",
+		commit: { sha: "abc1234567890" },
+		protected: false,
+		...overrides,
+	};
+}
+
+/**
+ * Set up `mockSpawn` to return three successive detail responses: issues, then PRs, then branches.
+ * The runner calls gh three times for one detail request (one per list).
+ */
+function setupDetailMocks(issues: object[], pulls: object[], branches: object[]) {
+	mockSpawn
+		.mockReturnValueOnce(detailSuccess(issues))
+		.mockReturnValueOnce(detailSuccess(pulls))
+		.mockReturnValueOnce(detailSuccess(branches));
+}
+
+describe("getGithubRepoDetail — basic", () => {
+	it("returns checked:true with the expected shape", () => {
+		setupDetailMocks([ghIssue()], [ghPull()], [ghBranch()]);
+		const result = getGithubRepoDetail({ repo: "serge-ivo/my-app" });
+		expect(result).not.toHaveProperty("error");
+		if ("error" in result) return;
+		expect(result.checked).toBe(true);
+		expect(result.repo).toBe("serge-ivo/my-app");
+		expect(Array.isArray(result.issues)).toBe(true);
+		expect(Array.isArray(result.pulls)).toBe(true);
+		expect(Array.isArray(result.branches)).toBe(true);
+		expect(typeof result.cachedAt).toBe("string");
+		expect(result.fromCache).toBe(false);
+	});
+
+	it("calls gh api for issues, pulls, and branches — three separate requests", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo" });
+		expect(mockSpawn).toHaveBeenCalledTimes(3);
+		const paths = mockSpawn.mock.calls.map(([, args]) => (args as string[])[1]);
+		expect(paths[0]).toMatch(/repos\/org\/repo\/issues/);
+		expect(paths[1]).toMatch(/repos\/org\/repo\/pulls/);
+		expect(paths[2]).toMatch(/repos\/org\/repo\/branches/);
+	});
+
+	it("never calls gh api with --paginate (bounded to per_page)", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo" });
+		for (const [, args] of mockSpawn.mock.calls) {
+			expect(args as string[]).not.toContain("--paginate");
+		}
+	});
+
+	it("projects an issue to the expected fields", () => {
+		setupDetailMocks([ghIssue({ number: 42, title: "Crash on startup", state: "open",
+			labels: [{ name: "critical" }, { name: "bug" }], assignee: { login: "assignee-user" } })], [], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		const issue = result.issues[0];
+		expect(issue.number).toBe(42);
+		expect(issue.title).toBe("Crash on startup");
+		expect(issue.state).toBe("open");
+		expect(issue.author).toBe("dev-user");
+		expect(issue.labels).toEqual(["critical", "bug"]);
+		expect(issue.assignee).toBe("assignee-user");
+	});
+
+	it("projects a pull request to the expected fields", () => {
+		setupDetailMocks([], [ghPull({ number: 99, title: "Big refactor", head: { ref: "refactor/big" },
+			base: { ref: "develop" }, draft: true })], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		const pull = result.pulls[0];
+		expect(pull.number).toBe(99);
+		expect(pull.title).toBe("Big refactor");
+		expect(pull.head_branch).toBe("refactor/big");
+		expect(pull.base_branch).toBe("develop");
+		expect(pull.draft).toBe(true);
+	});
+
+	it("marks a PR as merged when merged_at is set", () => {
+		setupDetailMocks([], [ghPull({ state: "closed", merged_at: "2026-08-10T12:00:00Z" })], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.pulls[0].state).toBe("merged");
+	});
+
+	it("marks a PR as closed when state is closed and merged_at is null", () => {
+		setupDetailMocks([], [ghPull({ state: "closed", merged_at: null })], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.pulls[0].state).toBe("closed");
+	});
+
+	it("projects a branch to the expected fields", () => {
+		setupDetailMocks([], [], [ghBranch({ name: "release/v2", commit: { sha: "deadbeef" }, protected: true })]);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		const branch = result.branches[0];
+		expect(branch.name).toBe("release/v2");
+		expect(branch.sha).toBe("deadbeef");
+		expect(branch.protected).toBe(true);
+	});
+
+	it("excludes pull requests from the issues list (GitHub returns PRs in /issues)", () => {
+		// An issue item with a `pull_request` key — should be excluded from issues
+		const issueWithPr = ghIssue({ pull_request: { url: "https://api.github.com/repos/org/repo/pulls/5" } });
+		const realIssue = ghIssue({ number: 2, title: "Real issue" });
+		setupDetailMocks([issueWithPr, realIssue], [], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.issues).toHaveLength(1);
+		expect(result.issues[0].title).toBe("Real issue");
+	});
+
+	it("includes the state filter in the issues and pulls requests", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo", state: "all" });
+		const issuePath = (mockSpawn.mock.calls[0][1] as string[])[1];
+		const pullsPath = (mockSpawn.mock.calls[1][1] as string[])[1];
+		expect(issuePath).toMatch(/state=all/);
+		expect(pullsPath).toMatch(/state=all/);
+	});
+
+	it("defaults to state=open", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo" });
+		const issuePath = (mockSpawn.mock.calls[0][1] as string[])[1];
+		expect(issuePath).toMatch(/state=open/);
+	});
+
+	it("honours the limit and includes it in the per_page param", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo", limit: 10 });
+		for (const [, args] of mockSpawn.mock.calls) {
+			expect((args as string[])[1]).toMatch(/per_page=10/);
+		}
+	});
+
+	it("caps limit at 100", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo", limit: 999 });
+		for (const [, args] of mockSpawn.mock.calls) {
+			expect((args as string[])[1]).toMatch(/per_page=100/);
+		}
+	});
+
+	it("skips malformed issue/PR/branch items and carries on", () => {
+		setupDetailMocks(
+			[null as unknown as object, { number: "not-a-number" }, ghIssue({ number: 3 })],
+			[null as unknown as object, ghPull()],
+			[null as unknown as object, ghBranch()],
+		);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.issues).toHaveLength(1);
+		expect(result.pulls).toHaveLength(1);
+		expect(result.branches).toHaveLength(1);
+	});
+
+	it("handles empty lists gracefully", () => {
+		setupDetailMocks([], [], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.issues).toHaveLength(0);
+		expect(result.pulls).toHaveLength(0);
+		expect(result.branches).toHaveLength(0);
+	});
+});
+
+describe("getGithubRepoDetail — input validation", () => {
+	it("returns an error when repo is empty", () => {
+		const result = getGithubRepoDetail({ repo: "" });
+		expect(result).toHaveProperty("error");
+		// Must not call gh at all
+		expect(mockSpawn).not.toHaveBeenCalled();
+	});
+
+	it("returns an error when repo has no slash", () => {
+		const result = getGithubRepoDetail({ repo: "noslash" });
+		expect(result).toHaveProperty("error");
+		expect(mockSpawn).not.toHaveBeenCalled();
+	});
+
+	it("returns an error when repo has too many slashes", () => {
+		const result = getGithubRepoDetail({ repo: "org/owner/repo" });
+		expect(result).toHaveProperty("error");
+		expect(mockSpawn).not.toHaveBeenCalled();
+	});
+});
+
+describe("getGithubRepoDetail — error handling", () => {
+	it("returns an error when gh is not installed", () => {
+		mockSpawn.mockReturnValue({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }) });
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		expect(result).toHaveProperty("error");
+		if (!("error" in result)) return;
+		expect(result.error).toMatch(/not installed/i);
+	});
+
+	it("returns an error when gh exits non-zero on issues", () => {
+		mockSpawn.mockReturnValue({ status: 1, stdout: "", stderr: "Not Found", error: undefined });
+		const result = getGithubRepoDetail({ repo: "org/missing" });
+		expect(result).toHaveProperty("error");
+	});
+
+	it("returns an error when gh exits non-zero on pulls", () => {
+		mockSpawn
+			.mockReturnValueOnce(detailSuccess([]))
+			.mockReturnValueOnce({ status: 1, stdout: "", stderr: "Not Found", error: undefined });
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		expect(result).toHaveProperty("error");
+	});
+
+	it("returns an error when gh exits non-zero on branches", () => {
+		mockSpawn
+			.mockReturnValueOnce(detailSuccess([]))
+			.mockReturnValueOnce(detailSuccess([]))
+			.mockReturnValueOnce({ status: 1, stdout: "", stderr: "Not Found", error: undefined });
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		expect(result).toHaveProperty("error");
+	});
+
+	it("returns an error when gh produces unparsable output", () => {
+		mockSpawn.mockReturnValue({ status: 0, stdout: "not json", stderr: "", error: undefined });
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		expect(result).toHaveProperty("error");
+	});
+});
+
+describe("getGithubRepoDetail — caching", () => {
+	it("returns fromCache:false on first call", () => {
+		setupDetailMocks([ghIssue()], [ghPull()], [ghBranch()]);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.fromCache).toBe(false);
+	});
+
+	it("returns fromCache:true and does not call gh on a cache hit", () => {
+		setupDetailMocks([ghIssue()], [ghPull()], [ghBranch()]);
+		const first = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in first) throw new Error("expected success on first call");
+		expect(first.fromCache).toBe(false);
+		expect(mockSpawn).toHaveBeenCalledTimes(3); // three gh calls
+
+		const second = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in second) throw new Error("expected success on second call");
+		expect(second.fromCache).toBe(true);
+		// No additional gh calls
+		expect(mockSpawn).toHaveBeenCalledTimes(3);
+	});
+
+	it("makes fresh calls when the repo slug differs", () => {
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo-a" });
+		setupDetailMocks([], [], []);
+		getGithubRepoDetail({ repo: "org/repo-b" });
+		// 3 + 3 = 6 calls total
+		expect(mockSpawn).toHaveBeenCalledTimes(6);
+	});
+
+	it("returns cachedAt as an ISO string", () => {
+		setupDetailMocks([], [], []);
+		const result = getGithubRepoDetail({ repo: "org/repo" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.cachedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+	});
+});
+
+describe("getGithubRepoDetail — read-only invariant", () => {
+	it("only ever calls `gh api` — never a write verb", () => {
+		setupDetailMocks([ghIssue()], [ghPull()], [ghBranch()]);
+		getGithubRepoDetail({ repo: "org/repo" });
+		for (const [cmd, args] of mockSpawn.mock.calls) {
+			expect(cmd).toBe("gh");
+			expect((args as string[])[0]).toBe("api");
+			expect(args as string[]).not.toContain("--paginate");
 		}
 	});
 });

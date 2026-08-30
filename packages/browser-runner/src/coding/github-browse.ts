@@ -59,6 +59,16 @@
  * - Rate limits are GitHub's (5 000/hr for authenticated requests, 30/min for search).
  *   Long enumerations of a large org will consume REST quota; `limit` keeps this
  *   manageable. Search has its own quota; the cache and bounded limit guard it.
+ *
+ * ── Repository detail (#687)
+ *
+ * For a given `owner/repo`, returns the repository's open issues, open pull requests,
+ * and branches in three separate arrays. Each is fetched with a separate `gh api` call
+ * (no `--paginate` to stay within the REST quota) and bounded to a sensible limit.
+ * The same caching strategy as search (#686) is applied: results are held in-process
+ * for `DETAIL_TTL_MS` (2 minutes — shorter than search because PR/issue state changes
+ * faster than repo metadata) and the caller is told when data is from cache via
+ * `fromCache: true`. Read-only by construction: only `gh api GET` verbs are used.
  */
 
 import { spawnSync } from "node:child_process";
@@ -625,5 +635,330 @@ export function searchGithubRepos(input: GithubSearchInput = {}): GithubSearchRe
 		canonicalQuery,
 	};
 	SEARCH_CACHE.set(cacheKey, { result, fetchedAt });
+	return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GitHub repository detail (#687)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One issue entry as returned to the cloud. */
+export interface GithubIssueEntry {
+	number: number;
+	title: string;
+	state: "open" | "closed";
+	author: string | null;
+	created_at: string;
+	updated_at: string;
+	labels: string[];
+	/** `null` for unassigned. */
+	assignee: string | null;
+}
+
+/** One pull request entry as returned to the cloud. */
+export interface GithubPullEntry {
+	number: number;
+	title: string;
+	state: "open" | "closed" | "merged";
+	author: string | null;
+	created_at: string;
+	updated_at: string;
+	head_branch: string;
+	base_branch: string;
+	draft: boolean;
+	labels: string[];
+}
+
+/** One branch entry as returned to the cloud. */
+export interface GithubBranchEntry {
+	name: string;
+	/** The commit SHA at the branch tip. */
+	sha: string;
+	protected: boolean;
+}
+
+/** Input for {@link getGithubRepoDetail}. */
+export interface GithubRepoDetailInput {
+	/**
+	 * The `owner/repo` slug, e.g. `"serge-ivo/my-app"`.
+	 *
+	 * Must contain exactly one slash and must not be empty. Invalid input returns
+	 * `{ error }` without calling `gh`.
+	 */
+	repo: string;
+	/**
+	 * Maximum issues/PRs to return (1–100, default 30).
+	 *
+	 * Applied independently to each list — the total number of items returned may
+	 * be up to `3 × limit` (issues + PRs + branches each independently capped).
+	 * Branches are also capped at `limit` but ordered by name so the default branch
+	 * comes first (GitHub returns branches alphabetically).
+	 */
+	limit?: number;
+	/**
+	 * Issue/PR state filter: `"open"` (default) or `"all"`.
+	 *
+	 * `"closed"` items are rarely useful in a browser context and `"all"` doubles the
+	 * result size, so the default is `"open"`. Pass `"all"` when the caller explicitly
+	 * asks for closed items too.
+	 */
+	state?: "open" | "all";
+}
+
+/** What the runner returns for a github-repo-detail request. */
+export interface GithubRepoDetailResult {
+	checked: true;
+	/** The `owner/repo` this result is for. */
+	repo: string;
+	issues: GithubIssueEntry[];
+	pulls: GithubPullEntry[];
+	branches: GithubBranchEntry[];
+	/** Whether the result was served from the in-process cache. */
+	fromCache: boolean;
+	/** ISO timestamp of when this result was fetched from GitHub. */
+	cachedAt: string;
+}
+
+/** Maximum items to return per list. Mirrors GitHub's own page cap for these endpoints. */
+const DETAIL_MAX_LIMIT = 100;
+const DETAIL_DEFAULT_LIMIT = 30;
+
+/** How long a cached detail result is considered fresh (milliseconds). */
+const DETAIL_TTL_MS = 2 * 60 * 1000; // 2 minutes — issues/PRs change faster than repo metadata
+
+interface DetailCacheEntry {
+	result: GithubRepoDetailResult;
+	fetchedAt: number;
+}
+const DETAIL_CACHE = new Map<string, DetailCacheEntry>();
+
+/** Evict stale entries to keep the cache bounded. */
+function pruneDetailCache(): void {
+	const cutoff = Date.now() - DETAIL_TTL_MS;
+	for (const [key, entry] of DETAIL_CACHE) {
+		if (entry.fetchedAt < cutoff) DETAIL_CACHE.delete(key);
+	}
+}
+
+/**
+ * Clear the entire detail cache.
+ *
+ * Exported for test isolation only — tests must call this in `beforeEach` so
+ * that no cached result bleeds from one test case to the next.
+ */
+export function clearDetailCacheForTesting(): void {
+	DETAIL_CACHE.clear();
+}
+
+/**
+ * Run a single `gh api` call (no `--paginate`) and return the parsed JSON, or
+ * `{ error }` on failure. Used for the detail endpoints where pagination would
+ * consume too much quota; instead `per_page` is bounded by `limit`.
+ *
+ * Returns the raw parsed value (object or array), not wrapped in `unknown[]`,
+ * because the detail API paths return both array and object shapes.
+ */
+function runGhApiOnce(path: string): unknown | { error: string } {
+	const result = spawnSync("gh", ["api", path], {
+		encoding: "utf-8",
+		timeout: 30_000,
+		env: process.env,
+	});
+	if (result.error) {
+		const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+		return { error: code === "ENOENT" ? "`gh` is not installed or not on PATH" : result.error.message };
+	}
+	if (result.status !== 0) {
+		const msg = String(result.stderr ?? "").slice(0, 500).trim() || `gh exited ${result.status ?? "unknown"}`;
+		return { error: msg };
+	}
+	const raw = String(result.stdout ?? "").trim();
+	if (!raw) return { error: "gh returned empty output" };
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return { error: "gh returned unparsable output" };
+	}
+}
+
+/** Project a raw GitHub issue object to {@link GithubIssueEntry}. */
+function toIssueEntry(raw: unknown): GithubIssueEntry | null {
+	if (!raw || typeof raw !== "object") return null;
+	const r = raw as Record<string, unknown>;
+	const num = typeof r.number === "number" ? r.number : Number(r.number);
+	if (!Number.isFinite(num) || num < 1) return null;
+	const title = r.title != null ? String(r.title) : "";
+	const rawState = String(r.state ?? "open");
+	const state: GithubIssueEntry["state"] = rawState === "closed" ? "closed" : "open";
+	const author = r.user != null && typeof r.user === "object"
+		? (String((r.user as Record<string, unknown>).login ?? "") || null)
+		: null;
+	const labels = Array.isArray(r.labels)
+		? r.labels.map((l: unknown) => {
+			if (typeof l === "string") return l;
+			if (l && typeof l === "object") return String((l as Record<string, unknown>).name ?? "");
+			return "";
+		}).filter(Boolean)
+		: [];
+	const assignee = r.assignee != null && typeof r.assignee === "object"
+		? (String((r.assignee as Record<string, unknown>).login ?? "") || null)
+		: null;
+	return {
+		number: num,
+		title,
+		state,
+		author,
+		created_at: r.created_at != null ? String(r.created_at) : "",
+		updated_at: r.updated_at != null ? String(r.updated_at) : "",
+		labels,
+		assignee,
+	};
+}
+
+/** Project a raw GitHub pull request object to {@link GithubPullEntry}. */
+function toPullEntry(raw: unknown): GithubPullEntry | null {
+	if (!raw || typeof raw !== "object") return null;
+	const r = raw as Record<string, unknown>;
+	const num = typeof r.number === "number" ? r.number : Number(r.number);
+	if (!Number.isFinite(num) || num < 1) return null;
+	const title = r.title != null ? String(r.title) : "";
+	// GitHub marks merged PRs as `state: "closed"` with a `merged_at` timestamp.
+	const rawState = String(r.state ?? "open");
+	const merged = r.merged_at != null && r.merged_at !== null;
+	const state: GithubPullEntry["state"] = merged ? "merged" : rawState === "closed" ? "closed" : "open";
+	const author = r.user != null && typeof r.user === "object"
+		? (String((r.user as Record<string, unknown>).login ?? "") || null)
+		: null;
+	const head = r.head != null && typeof r.head === "object"
+		? String((r.head as Record<string, unknown>).ref ?? "") : "";
+	const base = r.base != null && typeof r.base === "object"
+		? String((r.base as Record<string, unknown>).ref ?? "") : "";
+	const labels = Array.isArray(r.labels)
+		? r.labels.map((l: unknown) => {
+			if (typeof l === "string") return l;
+			if (l && typeof l === "object") return String((l as Record<string, unknown>).name ?? "");
+			return "";
+		}).filter(Boolean)
+		: [];
+	return {
+		number: num,
+		title,
+		state,
+		author,
+		created_at: r.created_at != null ? String(r.created_at) : "",
+		updated_at: r.updated_at != null ? String(r.updated_at) : "",
+		head_branch: head,
+		base_branch: base,
+		draft: r.draft === true,
+		labels,
+	};
+}
+
+/** Project a raw GitHub branch object to {@link GithubBranchEntry}. */
+function toBranchEntry(raw: unknown): GithubBranchEntry | null {
+	if (!raw || typeof raw !== "object") return null;
+	const r = raw as Record<string, unknown>;
+	const name = r.name != null ? String(r.name) : "";
+	if (!name) return null;
+	const commit = r.commit != null && typeof r.commit === "object"
+		? (r.commit as Record<string, unknown>)
+		: {};
+	const sha = commit.sha != null ? String(commit.sha) : "";
+	return {
+		name,
+		sha,
+		protected: r.protected === true,
+	};
+}
+
+/**
+ * Fetch issues, pull requests, and branches for a given `owner/repo`.
+ *
+ * Read-only by construction: the only `gh` calls are `gh api GET /repos/{owner}/{repo}/issues`,
+ * `/pulls`, and `/branches` — all read endpoints. Never writes, never mutates anything.
+ *
+ * Results are cached in-process for {@link DETAIL_TTL_MS} (2 minutes) to guard against
+ * repeated calls from the same runner session. Cache hits return `fromCache: true`.
+ *
+ * Never throws — every failure is a descriptive `{ error }` property.
+ */
+export function getGithubRepoDetail(input: GithubRepoDetailInput): GithubRepoDetailResult | { error: string } {
+	const repoSlug = (input.repo ?? "").trim();
+	// Validate the slug — must be "owner/repo" with no extra slashes.
+	if (!repoSlug?.includes("/") || repoSlug.split("/").length !== 2) {
+		return { error: "repo must be an \"owner/repo\" slug (e.g. \"serge-ivo/my-app\")" };
+	}
+	const limit = Math.max(1, Math.min(DETAIL_MAX_LIMIT, Math.floor(Number(input.limit) || DETAIL_DEFAULT_LIMIT)));
+	const state = input.state === "all" ? "all" : "open";
+
+	const cacheKey = `${repoSlug}:${limit}:${state}`;
+	const existing = DETAIL_CACHE.get(cacheKey);
+	if (existing && Date.now() - existing.fetchedAt < DETAIL_TTL_MS) {
+		return { ...existing.result, fromCache: true };
+	}
+
+	const encodedRepo = repoSlug.split("/").map(encodeURIComponent).join("/");
+
+	// Fetch issues (GitHub issues endpoint returns issues only, not PRs, when `pulls=false`
+	// is implicit). Use `?state=open&per_page=N` to bound the result.
+	const issuesRaw = runGhApiOnce(`repos/${encodedRepo}/issues?state=${state}&per_page=${limit}&sort=updated&direction=desc`);
+	if (issuesRaw != null && typeof issuesRaw === "object" && "error" in (issuesRaw as Record<string, unknown>)) {
+		return issuesRaw as { error: string };
+	}
+
+	// Fetch pull requests.
+	const pullsRaw = runGhApiOnce(`repos/${encodedRepo}/pulls?state=${state}&per_page=${limit}&sort=updated&direction=desc`);
+	if (pullsRaw != null && typeof pullsRaw === "object" && "error" in (pullsRaw as Record<string, unknown>)) {
+		return pullsRaw as { error: string };
+	}
+
+	// Fetch branches (no state filter — branches are either there or not).
+	const branchesRaw = runGhApiOnce(`repos/${encodedRepo}/branches?per_page=${limit}`);
+	if (branchesRaw != null && typeof branchesRaw === "object" && "error" in (branchesRaw as Record<string, unknown>)) {
+		return branchesRaw as { error: string };
+	}
+
+	// Project down to typed entries, skipping malformed items.
+	const issues: GithubIssueEntry[] = [];
+	if (Array.isArray(issuesRaw)) {
+		for (const item of issuesRaw) {
+			// GitHub's /issues endpoint also returns pull requests — exclude them so the
+			// caller gets a clean issues-only list (PRs are in the pulls array).
+			if (item && typeof item === "object" && (item as Record<string, unknown>).pull_request != null) continue;
+			const entry = toIssueEntry(item);
+			if (entry) issues.push(entry);
+		}
+	}
+
+	const pulls: GithubPullEntry[] = [];
+	if (Array.isArray(pullsRaw)) {
+		for (const item of pullsRaw) {
+			const entry = toPullEntry(item);
+			if (entry) pulls.push(entry);
+		}
+	}
+
+	const branches: GithubBranchEntry[] = [];
+	if (Array.isArray(branchesRaw)) {
+		for (const item of branchesRaw) {
+			const entry = toBranchEntry(item);
+			if (entry) branches.push(entry);
+		}
+	}
+
+	const fetchedAt = Date.now();
+	const cachedAt = new Date(fetchedAt).toISOString();
+	pruneDetailCache();
+
+	const result: GithubRepoDetailResult = {
+		checked: true,
+		repo: repoSlug,
+		issues,
+		pulls,
+		branches,
+		fromCache: false,
+		cachedAt,
+	};
+	DETAIL_CACHE.set(cacheKey, { result, fetchedAt });
 	return result;
 }

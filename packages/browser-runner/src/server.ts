@@ -10,7 +10,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
-import { listGithubOrgs, listGithubRepos, searchGithubRepos, type GithubBrowseInput, type GithubSearchInput } from "./coding/github-browse.js";
+import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -267,6 +267,24 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 				: bTyped.sort,
 		};
 		return json(res, 200, searchGithubRepos(input));
+	}
+	// ── GitHub repository detail (#687) ──────────────────────────────────────
+	// Read-only: fetches issues, PRs, and branches for a given owner/repo slug
+	// via `gh api`. Results are cached in-process for 2 minutes.
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/github-repo-detail") {
+		const b = req.method === "POST"
+			? await readJson<GithubRepoDetailInput>(req).catch(() => ({}) as GithubRepoDetailInput)
+			: {} as GithubRepoDetailInput;
+		const bTyped = b as GithubRepoDetailInput;
+		const qRepo = url.searchParams.get("repo");
+		const qLimit = url.searchParams.get("limit");
+		const qState = url.searchParams.get("state");
+		const input: GithubRepoDetailInput = {
+			repo: qRepo ?? bTyped.repo ?? "",
+			limit: qLimit ? Number(qLimit) : bTyped.limit,
+			state: (qState === "all" || qState === "open") ? qState : bTyped.state,
+		};
+		return json(res, 200, getGithubRepoDetail(input));
 	}
 
 	if (req.method === "POST" && path === "/coding/browse") {
