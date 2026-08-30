@@ -534,7 +534,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_diagnostics",
-		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Use to debug why sessions are offline or stuck.",
+		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Use to debug why sessions are offline or stuck. For deploy and CI status — workflow run outcomes, whether a push passed or failed — use github_workflow_runs via call_instance_tool instead; this tool covers the runner and session layer, not the GitHub Actions layer.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
