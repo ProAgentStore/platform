@@ -231,6 +231,8 @@ const ROUTES = [
 	"POST /:instanceId/coding/close-sessions",
 	"POST /:instanceId/coding/kill-tmux",
 	"GET /:instanceId/coding/browse",
+	// Credential scope (#688) — surfaces which gh account the runner is acting as.
+	"GET /:instanceId/coding/github-credentials",
 	// GitHub org + repo enumeration (#685) — read-only runner proxy.
 	"GET /:instanceId/coding/github-orgs",
 	"GET /:instanceId/coding/github-repos",
@@ -317,6 +319,8 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/coding/close-sessions",
 		"POST /:instanceId/coding/kill-tmux",
 		"GET /:instanceId/coding/browse",
+		// Credential scope (#688) — surfaces which gh account the runner is acting as.
+		"GET /:instanceId/coding/github-credentials",
 		// GitHub org + repo enumeration (#685) — read-only runner proxy.
 		"GET /:instanceId/coding/github-orgs",
 		"GET /:instanceId/coding/github-repos",

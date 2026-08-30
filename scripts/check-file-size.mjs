@@ -1138,7 +1138,13 @@ const PINS = {
 	// The implementation is covered by isolation-clean tests in github-browse.test.ts
 	// (which tests are excluded from this ratchet by design — the comment at line ~38 says
 	// "adding tests would punish the only thing that fixes the problem").
-	"packages/browser-runner/src/coding/github-browse.ts": 965,
+	// +131 at #688: assertReadOnlyGhApiArgs (runtime guard, 55 lines incl. doc), the WRITE_METHODS
+	// constant, GithubCredentialScope interface, getGithubCredentialScope (57 lines incl. doc), a
+	// 16-line module-header paragraph explaining the enforcement strategy, and the matching updates
+	// to the two call-site comments in runGhApi and runGhApiOnce. All additions are in the same
+	// file because the guard is a single-chokepoint design: splitting it out would let a future
+	// call site import spawnSync directly without going through the guard.
+	"packages/browser-runner/src/coding/github-browse.ts": 1097,
 	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
 	// +6 at #354 (one import, one lookup, three lines of why): the supervision POST now refuses a
 	// supervisor whose agent declares no delegation tool, instead of answering 201 for an edge
@@ -1527,7 +1533,8 @@ const PINS = {
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.
 	// +13 at #687: new entry for github-browse.ts (11-line rationale + pin) + this note + blank.
-	"scripts/check-file-size.mjs": 1611,
+	// +7 at #688: raise of github-browse.ts pin (6-line rationale + pin bump) + this note + own pin bump.
+	"scripts/check-file-size.mjs": 1618,
 };
 
 /**

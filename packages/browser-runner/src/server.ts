@@ -10,7 +10,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
-import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
+import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -211,6 +211,13 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const b = req.method === "POST" ? await readJson<{ host?: string }>(req).catch(() => ({})) : {};
 		const host = String((b as { host?: string }).host || "github.com");
 		return json(res, 200, probeGitSshIdentity(host));
+	}
+	// ── GitHub credential scope (#688) ────────────────────────────────────────
+	// Read-only: reports the authenticated gh login + org memberships. Surfaces
+	// which account and organisations the runner's credentials can reach, before
+	// any browse operation begins. Never writes, never mutates anything on GitHub.
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/github-credentials") {
+		return json(res, 200, getGithubCredentialScope());
 	}
 	// ── GitHub org + repo enumeration (#685) ──────────────────────────────────
 	// Read-only: lists orgs and repos reachable by the machine's `gh` credentials.

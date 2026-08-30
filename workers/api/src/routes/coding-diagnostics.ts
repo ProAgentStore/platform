@@ -142,6 +142,20 @@ interface GithubRepoDetailResult {
 	error?: string;
 }
 
+/**
+ * The parsed result of a `/coding/github-credentials` runner call (#688).
+ *
+ * `checked: true` is the version marker. An older runner that does not support
+ * this endpoint returns 502 (the relay returns 404 as a non-2xx), which is
+ * distinct from a runner that successfully reported an empty scope.
+ */
+interface GithubCredentialScopeResult {
+	checked?: boolean;
+	login?: string;
+	orgs?: string[];
+	error?: string;
+}
+
 export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	/**
 	 * Close every tracked coding session on the runner.
@@ -160,6 +174,26 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		if (!conn) return c.json({ error: "Runner not connected" }, 502);
 		const dir = c.req.query("dir") || "~";
 		const result = await callRunner(conn, "/coding/browse", { dir }, { timeoutMs: READ_TIMEOUT_MS });
+		return c.json(result);
+	});
+
+	/**
+	 * Report the credential scope of the runner's `gh` login (#688).
+	 *
+	 * Read-only: calls `gh api user` + `gh api user/orgs` — two GET requests that
+	 * never mutate anything. Returns `{ checked: true, login, orgs }` — the GitHub
+	 * account name and the organisations it belongs to. This tells the user exactly
+	 * which account the runner is acting as and what it can reach.
+	 *
+	 * Returns 502 when the runner is offline. Returns `{ error }` when `gh` is
+	 * unavailable or unauthenticated. An older runner that does not support this
+	 * endpoint returns 502 (the relay 404s, which `callRunner` converts to a failure).
+	 */
+	codingRoutes.get("/:instanceId/coding/github-credentials", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
+		if (!conn) return c.json({ error: "Runner not connected" }, 502);
+		const result = await callRunner<GithubCredentialScopeResult>(conn, "/coding/github-credentials", undefined, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
 		return c.json(result);
 	});
 

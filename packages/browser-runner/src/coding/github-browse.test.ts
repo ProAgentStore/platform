@@ -22,7 +22,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearDetailCacheForTesting, clearSearchCacheForTesting, getGithubRepoDetail, listGithubOrgs, listGithubRepos, searchGithubRepos } from "./github-browse.js";
+import { assertReadOnlyGhApiArgs, clearDetailCacheForTesting, clearSearchCacheForTesting, getGithubCredentialScope, getGithubRepoDetail, listGithubOrgs, listGithubRepos, searchGithubRepos } from "./github-browse.js";
 
 vi.mock("node:child_process", () => ({
 	spawnSync: vi.fn(),
@@ -939,6 +939,181 @@ describe("getGithubRepoDetail — read-only invariant", () => {
 			expect(cmd).toBe("gh");
 			expect((args as string[])[0]).toBe("api");
 			expect(args as string[]).not.toContain("--paginate");
+		}
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// assertReadOnlyGhApiArgs — #688 runtime read-only guard
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The guard is the single enforcement mechanism for the read-only invariant of this
+ * module (#688). These tests pin that it:
+ *
+ *   - Returns `{ error }` for every write HTTP method.
+ *   - Returns `undefined` for GET and HEAD (safe) and for no method at all (gh defaults GET).
+ *   - Is case-insensitive (a lowercase "post" is also refused).
+ *   - Handles all three forms: `-X POST`, `--method POST`, `--method=POST`.
+ *   - Does not refuse a path that happens to contain a method word (e.g. "repos/post-repo").
+ */
+describe("assertReadOnlyGhApiArgs — runtime read-only guard (#688)", () => {
+	it("returns undefined when no method flag is present", () => {
+		expect(assertReadOnlyGhApiArgs(["user/repos?sort=pushed"])).toBeUndefined();
+		expect(assertReadOnlyGhApiArgs(["--paginate", "user/orgs", "--jq", "[.[]]"])).toBeUndefined();
+		expect(assertReadOnlyGhApiArgs([])).toBeUndefined();
+	});
+
+	it("returns undefined for GET (explicit)", () => {
+		expect(assertReadOnlyGhApiArgs(["-X", "GET", "user/repos"])).toBeUndefined();
+		expect(assertReadOnlyGhApiArgs(["--method", "GET", "user/repos"])).toBeUndefined();
+		expect(assertReadOnlyGhApiArgs(["--method=GET", "user/repos"])).toBeUndefined();
+	});
+
+	it("returns undefined for HEAD", () => {
+		expect(assertReadOnlyGhApiArgs(["-X", "HEAD", "user/repos"])).toBeUndefined();
+	});
+
+	it("returns { error } for POST via -X", () => {
+		const result = assertReadOnlyGhApiArgs(["-X", "POST", "repos/org/repo/issues", "-f", "title=x"]);
+		expect(result).toHaveProperty("error");
+		expect(result?.error).toMatch(/POST/);
+		expect(result?.error).toMatch(/read-only/);
+	});
+
+	it("returns { error } for POST via --method", () => {
+		const result = assertReadOnlyGhApiArgs(["--method", "POST", "repos/org/repo/issues"]);
+		expect(result).toHaveProperty("error");
+		expect(result?.error).toMatch(/POST/);
+	});
+
+	it("returns { error } for POST via --method=", () => {
+		const result = assertReadOnlyGhApiArgs(["--method=POST", "repos/org/repo/issues"]);
+		expect(result).toHaveProperty("error");
+		expect(result?.error).toMatch(/POST/);
+	});
+
+	it("returns { error } for PATCH, PUT, DELETE", () => {
+		for (const method of ["PATCH", "PUT", "DELETE"]) {
+			const result = assertReadOnlyGhApiArgs(["-X", method, "repos/org/repo"]);
+			expect(result, method).toHaveProperty("error");
+			expect(result?.error).toMatch(new RegExp(method));
+		}
+	});
+
+	it("is case-insensitive — lowercase write methods are also refused", () => {
+		const result = assertReadOnlyGhApiArgs(["-X", "post", "repos/org/repo/issues"]);
+		expect(result).toHaveProperty("error");
+		expect(result?.error).toMatch(/POST/);
+	});
+
+	it("does not refuse a path containing a method word as a substring", () => {
+		// "repos/delete-me" — the path contains "delete" but no method flag is present.
+		expect(assertReadOnlyGhApiArgs(["repos/delete-me"])).toBeUndefined();
+		expect(assertReadOnlyGhApiArgs(["repos/post-hook/branches"])).toBeUndefined();
+	});
+
+	it("reads the last --method flag when multiple are supplied (last-wins)", () => {
+		// An unusual case, but the guard must not refuse based on an earlier safe flag
+		// when a later write flag overrides it (and vice versa).
+		const result = assertReadOnlyGhApiArgs(["--method=GET", "--method=POST", "path"]);
+		expect(result).toHaveProperty("error"); // POST wins
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getGithubCredentialScope — #688 credential scope surface
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("getGithubCredentialScope (#688)", () => {
+	it("returns the authenticated login and org list", () => {
+		// First call: gh api user → returns the user object
+		mockSpawn.mockReturnValueOnce({
+			status: 0,
+			stdout: JSON.stringify({ login: "serge-ivo", id: 12345, type: "User" }),
+			stderr: "",
+			error: undefined,
+		});
+		// Second call: gh api --paginate user/orgs --jq ... → returns org list
+		mockSpawn.mockReturnValueOnce({
+			status: 0,
+			stdout: JSON.stringify([{ login: "ProAgentStore" }, { login: "my-org" }]),
+			stderr: "",
+			error: undefined,
+		});
+		const result = getGithubCredentialScope();
+		expect(result).not.toHaveProperty("error");
+		if ("error" in result) return;
+		expect(result.checked).toBe(true);
+		expect(result.login).toBe("serge-ivo");
+		expect(result.orgs).toEqual(["ProAgentStore", "my-org"]);
+	});
+
+	it("returns login with empty orgs when the user belongs to no orgs", () => {
+		mockSpawn.mockReturnValueOnce({
+			status: 0,
+			stdout: JSON.stringify({ login: "solo-dev" }),
+			stderr: "",
+			error: undefined,
+		});
+		mockSpawn.mockReturnValueOnce({ status: 0, stdout: "[]", stderr: "", error: undefined });
+		const result = getGithubCredentialScope();
+		if ("error" in result) throw new Error("expected success");
+		expect(result.login).toBe("solo-dev");
+		expect(result.orgs).toEqual([]);
+	});
+
+	it("returns { error } when gh api user fails (not authenticated)", () => {
+		mockSpawn.mockReturnValueOnce({
+			status: 1,
+			stdout: "",
+			stderr: "Not Found (HTTP 404)",
+			error: undefined,
+		});
+		const result = getGithubCredentialScope();
+		expect(result).toHaveProperty("error");
+	});
+
+	it("returns { error } when gh is not installed", () => {
+		mockSpawn.mockReturnValue({
+			status: null, stdout: "", stderr: "",
+			error: Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }),
+		});
+		const result = getGithubCredentialScope();
+		expect(result).toHaveProperty("error");
+		if (!("error" in result)) return;
+		expect(result.error).toMatch(/not installed/i);
+	});
+
+	it("returns { error } when the orgs call fails", () => {
+		mockSpawn.mockReturnValueOnce({
+			status: 0,
+			stdout: JSON.stringify({ login: "dev" }),
+			stderr: "",
+			error: undefined,
+		});
+		mockSpawn.mockReturnValueOnce({
+			status: 1,
+			stdout: "",
+			stderr: "authentication required",
+			error: undefined,
+		});
+		const result = getGithubCredentialScope();
+		expect(result).toHaveProperty("error");
+	});
+
+	it("only calls gh api (read-only) — no write method is ever used", () => {
+		mockSpawn.mockReturnValueOnce({
+			status: 0,
+			stdout: JSON.stringify({ login: "dev" }),
+			stderr: "",
+			error: undefined,
+		});
+		mockSpawn.mockReturnValueOnce({ status: 0, stdout: "[]", stderr: "", error: undefined });
+		getGithubCredentialScope();
+		for (const [cmd, args] of mockSpawn.mock.calls) {
+			expect(cmd).toBe("gh");
+			expect((args as string[])[0]).toBe("api");
 		}
 	});
 });

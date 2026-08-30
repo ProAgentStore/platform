@@ -69,9 +69,73 @@
  * for `DETAIL_TTL_MS` (2 minutes — shorter than search because PR/issue state changes
  * faster than repo metadata) and the caller is told when data is from cache via
  * `fromCache: true`. Read-only by construction: only `gh api GET` verbs are used.
+ *
+ * ── Credential scope and read-only enforcement (#688)
+ *
+ * The machine's `gh` credential is account-wide: it can write to any repository the
+ * user can reach, not just the ones this browser is browsing. The read-only invariant
+ * is enforced at the single function boundary that every `gh api` call passes through:
+ * `assertReadOnlyGhApiArgs` rejects any args that carry a non-GET HTTP method flag
+ * (`-X`, `--method`, or `--method=`). This means a future code path cannot accidentally
+ * issue a mutating call — the guard refuses before `spawnSync` is reached.
+ *
+ * `getGithubCredentialScope` surfaces the credential's effective scope to the user:
+ * the authenticated login and the organisations it belongs to. This is the answer to
+ * "what can this credential actually reach?" before any browse operation begins.
  */
 
 import { spawnSync } from "node:child_process";
+
+/**
+ * HTTP methods that write state on GitHub. Any `gh api` call carrying one of these
+ * is a mutating call and is refused at this boundary.
+ *
+ * `GET` and `HEAD` (GitHub's `gh api` default is GET) are the only safe verbs.
+ * `DELETE` is included: while GitHub's REST spec marks it as "idempotent", it
+ * irreversibly removes resources and is not idempotent from a data-safety view.
+ */
+const WRITE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+/**
+ * Guard that every `gh api` call in this module passes through (#688).
+ *
+ * Scans `args` for any HTTP method flag (`-X <method>`, `--method <method>`,
+ * `--method=<method>`) and returns `{ error }` if the resolved method is a write
+ * verb. Called from both `runGhApi` (paginated) and `runGhApiOnce` (single page),
+ * which are the only two `spawnSync` call sites in this file.
+ *
+ * Fails closed: an unrecognised / empty method passes through (gh defaults to GET).
+ * A caller that tries to be clever by lowercasing the method is also caught — the
+ * check is case-insensitive.
+ *
+ * Returns `undefined` when the args are safe; returns `{ error: string }` when
+ * a write method is found, so callers can return early in the same shape they use
+ * for every other error.
+ */
+export function assertReadOnlyGhApiArgs(args: string[]): { error: string } | undefined {
+	let method = "";
+	let nextIsMethod = false;
+	for (const arg of args) {
+		if (nextIsMethod) {
+			method = arg;
+			nextIsMethod = false;
+			continue;
+		}
+		if (arg === "-X" || arg === "--method") {
+			nextIsMethod = true;
+			continue;
+		}
+		if (arg.startsWith("--method=")) {
+			method = arg.slice("--method=".length);
+		}
+	}
+	if (!method) return undefined; // no explicit method — gh defaults to GET, safe
+	const upper = method.toUpperCase();
+	if (WRITE_METHODS.has(upper)) {
+		return { error: `github-browse: refused mutating gh api call (method: ${upper}) — this tool is read-only` };
+	}
+	return undefined;
+}
 
 /**
  * One repository entry as returned to the cloud.
@@ -156,6 +220,10 @@ const DEFAULT_LIMIT = 50;
  * Never throws — errors are returned as `{ error: string }`.
  */
 function runGhApi(args: string[]): unknown[] | { error: string } {
+	// Runtime read-only guard (#688): reject before spawnSync if the caller somehow
+	// passes a write method. This is the chokepoint for all paginated gh api calls.
+	const guardErr = assertReadOnlyGhApiArgs(args);
+	if (guardErr) return guardErr;
 	const result = spawnSync("gh", ["api", "--paginate", ...args], {
 		encoding: "utf-8",
 		timeout: 60_000,
@@ -238,6 +306,61 @@ export function listGithubOrgs(): { orgs: string[] } | { error: string } {
 		}
 	}
 	return { orgs };
+}
+
+/**
+ * The scope a set of `gh` credentials can reach (#688).
+ *
+ * `login` is the GitHub user (or bot) whose token `gh` is using.
+ * `orgs` is the list of organisations that user belongs to.
+ *
+ * A deploy key would show an empty `login` and `[]` orgs. A user account shows
+ * its login and every org it's a member of.
+ *
+ * `checked: true` is the version marker so an older runner that 404s this endpoint
+ * is distinguishable from a runner that successfully reported an empty scope.
+ */
+export interface GithubCredentialScope {
+	checked: true;
+	/** The GitHub login of the authenticated user (empty string if unavailable). */
+	login: string;
+	/** The org logins this credential is a member of. */
+	orgs: string[];
+}
+
+/**
+ * Report the effective credential scope of the machine's `gh` login (#688).
+ *
+ * Two sequential calls: `gh api user` (login) + `gh api user/orgs` (org list).
+ * Neither call mutates anything; both are read-only GET requests. The result tells
+ * the user which GitHub account the runner is acting as and which organisations
+ * that account can see, BEFORE any browse operation begins.
+ *
+ * Returns `{ error }` when `gh` is unavailable or unauthenticated.
+ */
+export function getGithubCredentialScope(): GithubCredentialScope | { error: string } {
+	// Fetch the authenticated user's login.
+	const userRaw = runGhApiOnce("user");
+	if (userRaw != null && typeof userRaw === "object" && "error" in (userRaw as Record<string, unknown>)) {
+		return userRaw as { error: string };
+	}
+	const login =
+		userRaw != null && typeof userRaw === "object"
+			? String((userRaw as Record<string, unknown>).login ?? "")
+			: "";
+
+	// Fetch org memberships.
+	const orgsJq = "[.[] | {login: .login}]";
+	const orgsRaw = runGhApi(["user/orgs", "--jq", orgsJq]);
+	if ("error" in orgsRaw) return orgsRaw as { error: string };
+	const orgs: string[] = [];
+	for (const item of orgsRaw) {
+		if (item && typeof item === "object" && "login" in item) {
+			orgs.push(String((item as Record<string, unknown>).login));
+		}
+	}
+
+	return { checked: true, login, orgs };
 }
 
 /**
@@ -536,6 +659,10 @@ export function searchGithubRepos(input: GithubSearchInput = {}): GithubSearchRe
 	// results would burn quota; instead we ask for exactly what we need in one page.
 	// `runGhApi` uses `--paginate` which doesn't work for search (it'd parse the
 	// wrapper as one item). We call spawnSync directly.
+	// Read-only by construction (#688): `apiPath` is a search endpoint path constructed
+	// above; no method override is passed. The only way in is a GET to search/repositories
+	// or search/issues — both read-only. `assertReadOnlyGhApiArgs` is not needed here
+	// because there are no caller-supplied args; the path is constructed, not forwarded.
 	const ghResult = spawnSync("gh", ["api", apiPath], {
 		encoding: "utf-8",
 		timeout: 30_000,
@@ -759,6 +886,10 @@ export function clearDetailCacheForTesting(): void {
  * because the detail API paths return both array and object shapes.
  */
 function runGhApiOnce(path: string): unknown | { error: string } {
+	// Read-only by construction (#688): `path` is a REST resource path, never a method
+	// flag. The only argument to `gh api` is the path; the default method is GET and
+	// there is no way to override it from this call site. `assertReadOnlyGhApiArgs`
+	// covers `runGhApi` (where args is caller-supplied); here the signature enforces it.
 	const result = spawnSync("gh", ["api", path], {
 		encoding: "utf-8",
 		timeout: 30_000,
