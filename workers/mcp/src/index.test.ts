@@ -646,6 +646,125 @@ describe("coding_session_fresh", () => {
 	});
 });
 
+// ── coding_instance_deploy_status (#683) ────────────────────────────────────
+
+describe("coding_instance_deploy_status (coding surface)", () => {
+	const RUNS_RESPONSE = {
+		workflow_runs: [
+			{
+				name: "CI",
+				conclusion: "success",
+				status: "completed",
+				updated_at: "2026-08-29T10:00:00Z",
+				html_url: "https://github.com/ProAgentStore/platform/actions/runs/1",
+				head_sha: "abc1234def",
+				head_branch: "main",
+				event: "push",
+			},
+			{
+				name: "Deploy API",
+				conclusion: null,
+				status: "in_progress",
+				updated_at: "2026-08-29T10:01:00Z",
+				html_url: "https://github.com/ProAgentStore/platform/actions/runs/2",
+				head_sha: "abc1234def",
+				head_branch: "main",
+				event: "push",
+			},
+		],
+	};
+
+	it("returns workflow runs for the instance's registered repo", async () => {
+		const h = await setup({ groups: ["coding"], env: { GITHUB_TOKEN: "gh-token" } });
+		h.fetchStub.respond((u) => u.includes("/coding/repos"), {
+			body: { repos: [{ id: "repo-1", name: "platform", instanceId: "i1", githubRepo: "ProAgentStore/platform" }] },
+		});
+		h.fetchStub.respond((u) => u.includes("api.github.com"), { body: RUNS_RESPONSE });
+
+		const res = await h.tools.get("coding_instance_deploy_status")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("ProAgentStore/platform");
+		expect(res.content[0].text).toContain("CI");
+		expect(res.content[0].text).toContain("success");
+		expect(res.content[0].text).toContain("Deploy API");
+		expect(res.content[0].text).toContain("in_progress");
+		// Should hit GitHub with per_page=10
+		const ghCall = h.fetchStub.calls.find((c) => c.url.includes("api.github.com"));
+		expect(ghCall?.url).toContain("ProAgentStore/platform");
+		expect(ghCall?.url).toContain("per_page=10");
+	});
+
+	it("filters by SHA when sha is provided", async () => {
+		const h = await setup({ groups: ["coding"], env: { GITHUB_TOKEN: "gh-token" } });
+		h.fetchStub.respond((u) => u.includes("/coding/repos"), {
+			body: { repos: [{ id: "repo-1", name: "platform", instanceId: "i1", githubRepo: "ProAgentStore/platform" }] },
+		});
+		h.fetchStub.respond((u) => u.includes("api.github.com"), { body: RUNS_RESPONSE });
+
+		await h.tools.get("coding_instance_deploy_status")!.handler({ instance_id: "i1", sha: "abc1234" });
+		const ghCall = h.fetchStub.calls.find((c) => c.url.includes("api.github.com"));
+		expect(ghCall?.url).toContain("head_sha=abc1234");
+	});
+
+	it("asks which repo when there are several and no repo_id given", async () => {
+		const h = await setup({ groups: ["coding"], env: { GITHUB_TOKEN: "gh-token" } });
+		h.fetchStub.respond((u) => u.includes("/coding/repos"), {
+			body: {
+				repos: [
+					{ id: "repo-1", name: "platform", instanceId: "i1", githubRepo: "ProAgentStore/platform" },
+					{ id: "repo-2", name: "api", instanceId: "i1", githubRepo: "ProAgentStore/api" },
+				],
+			},
+		});
+
+		const res = await h.tools.get("coding_instance_deploy_status")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("repo_id");
+		// Must not touch GitHub when ambiguous
+		expect(h.fetchStub.calls.some((c) => c.url.includes("api.github.com"))).toBe(false);
+	});
+
+	it("rejects a repo_id not found on the instance", async () => {
+		const h = await setup({ groups: ["coding"], env: { GITHUB_TOKEN: "gh-token" } });
+		h.fetchStub.respond((u) => u.includes("/coding/repos"), {
+			body: { repos: [{ id: "repo-1", name: "platform", instanceId: "i1", githubRepo: "ProAgentStore/platform" }] },
+		});
+
+		const res = await h.tools.get("coding_instance_deploy_status")!.handler({ instance_id: "i1", repo_id: "wrong-id" });
+		expect(res.content[0].text).toContain("Error");
+		expect(res.content[0].text).toContain("wrong-id");
+		expect(h.fetchStub.calls.some((c) => c.url.includes("api.github.com"))).toBe(false);
+	});
+
+	it("says so when the repo has no GitHub coordinate (local-only checkout)", async () => {
+		const h = await setup({ groups: ["coding"], env: { GITHUB_TOKEN: "gh-token" } });
+		h.fetchStub.respond((u) => u.includes("/coding/repos"), {
+			body: { repos: [{ id: "repo-1", name: "local-project", instanceId: "i1" }] },
+		});
+
+		const res = await h.tools.get("coding_instance_deploy_status")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("local-only");
+		expect(h.fetchStub.calls.some((c) => c.url.includes("api.github.com"))).toBe(false);
+	});
+
+	it("works in read-only mode — it is a read-only tool, so the scope gate does not block it", async () => {
+		const h = await setup({ groups: ["coding"], env: { MCP_READ_ONLY: "1", GITHUB_TOKEN: "gh-token" } });
+		h.fetchStub.respond((u) => u.includes("/coding/repos"), {
+			body: { repos: [{ id: "repo-1", name: "platform", instanceId: "i1", githubRepo: "ProAgentStore/platform" }] },
+		});
+		h.fetchStub.respond((u) => u.includes("api.github.com"), { body: { workflow_runs: [] } });
+
+		const res = await h.tools.get("coding_instance_deploy_status")!.handler({ instance_id: "i1" });
+		// Should NOT be blocked — read-only mode only blocks write/runtime/destructive.
+		expect(res.content[0].text).not.toContain("read-only mode");
+		// The GitHub call should still have been made.
+		expect(h.fetchStub.calls.some((c) => c.url.includes("api.github.com"))).toBe(true);
+	});
+
+	it("is not registered when the user has no coding surface", async () => {
+		const h = await setup({ groups: [] });
+		expect(h.tools.has("coding_instance_deploy_status")).toBe(false);
+	});
+});
+
 // ── Operator suspension (#273) ───────────────────────────────────────────────
 
 describe("suspension gate", () => {

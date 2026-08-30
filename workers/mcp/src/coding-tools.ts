@@ -26,6 +26,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
+import { github } from "./repo-tools.js";
 import { audit, requirePermission, type SafetyContext } from "./safety.js";
 import { runStateSentence } from "./state-vocabulary.js";
 
@@ -534,7 +535,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_diagnostics",
-		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Use to debug why sessions are offline or stuck. For deploy and CI status — workflow run outcomes, whether a push passed or failed — use github_workflow_runs via call_instance_tool instead; this tool covers the runner and session layer, not the GitHub Actions layer.",
+		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Use to debug why sessions are offline or stuck. For deploy and CI status — workflow run outcomes, whether a push passed or failed — use coding_instance_deploy_status instead; this tool covers the runner and session layer, not the GitHub Actions layer.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
@@ -544,6 +545,102 @@ export function registerCodingSessionTools(
 			if (!sessionToken) return authRequired();
 			const d = await authedCall(`/v1/instances/${instance_id}/coding/diagnostics`, sessionToken, {}, env);
 			return jsonText(d);
+		},
+	);
+
+	// ── Deploy status for a coding instance's registered repo (#683) ──
+	//
+	// `agent_deploy_status` answers one question for ProAgentStore agent repos — "did the
+	// standalone worker deploy?" — and cannot answer for a coding instance's attached repo, which
+	// sits in a DIFFERENT org under a DIFFERENT deploy pipeline (e.g. `ProAgentStore/platform`
+	// deploys through `.github/workflows/ci.yml` + `deploy-api.yml`, not a standalone
+	// `deploy.yml`). The shape of the existing tool assumes it is querying ONE workflow in ONE
+	// ProAgentStore org, which is wrong for any of the repos a coding instance might attach.
+	//
+	// So this is NOT a generalisation of `agent_deploy_status`; it is a separate read that takes
+	// an instance id, fetches that instance's registered repos, resolves the `githubRepo` field
+	// (owner/repo on GitHub), and queries ALL recent workflow runs for that repo — across every
+	// workflow, not only `deploy.yml`. A user who just merged to main and wants to know whether
+	// `ci.yml` went green AND `deploy-api.yml` finished needs both, and filtering to a name here
+	// would silently miss one.
+	//
+	// Ownership is enforced by `authedCall`: the coding-repos route is user-scoped (returns 404
+	// for someone else's instance), so a wrong instance id returns an error rather than another
+	// user's repos. An explicit `requirePermission` (read scope) is added here so the safety
+	// layer sees the call and MCP_READ_ONLY gates it.
+	server.tool(
+		"coding_instance_deploy_status",
+		"Latest GitHub Actions workflow runs for a coding instance's registered repo — every workflow, not only deploy.yml. Use this after merging to main to check whether CI and deploy have finished. Optionally filter to runs for a specific commit SHA. Ownership-checked via the instance: an instance_id you do not own returns an error, not another user's runs. For runner/session state use coding_diagnostics; for the coding timeline use coding_timeline.",
+		{
+			instance_id: z.string().describe("Instance ID"),
+			repo_id: z.string().optional().describe("Repo ID from coding_repos_list. Omit when the instance has exactly one registered repo."),
+			sha: z.string().optional().describe("Commit SHA (full or 7-char prefix) to filter runs by. Omit to return the 10 most recent runs across all commits."),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ instance_id, repo_id, sha, token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "coding_instance_deploy_status", { instance_id, repo_id });
+			if (denied) return denied;
+
+			// Resolve the registered repo. The repos call is user-scoped in the API, enforcing ownership.
+			const reposData = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as {
+				repos?: CodingRepoRow[];
+				error?: string;
+			};
+			if (reposData.error) return text(`Error: ${reposData.error}`);
+
+			const repos = filterReposByInstance(reposData.repos || [], instance_id);
+			let repo: CodingRepoRow | undefined;
+			if (repo_id) {
+				repo = repos.find((r) => r.id === repo_id);
+				if (!repo) return text(`Error: no repo with id "${repo_id}" found on instance "${instance_id}".`);
+			} else if (repos.length === 1) {
+				repo = repos[0];
+			} else if (repos.length === 0) {
+				return text("No repos registered on this instance. Add one with coding_repo_add.");
+			} else {
+				const list = repos.map((r) => `${r.name || "(unnamed)"} (repo_id: ${r.id})`).join(", ");
+				return text(`This instance has ${repos.length} repos — say which with repo_id: ${list}`);
+			}
+
+			if (!repo.githubRepo) {
+				return text(`Repo "${repo.name || repo.id}" is a local-only checkout with no GitHub coordinate — cannot fetch workflow runs.`);
+			}
+
+			// repo.githubRepo is "owner/repo" — split into org and name for the GitHub API call.
+			const slash = repo.githubRepo.indexOf("/");
+			if (slash < 1) return text(`Unexpected githubRepo format: "${repo.githubRepo}"`);
+			const repoOrg = repo.githubRepo.slice(0, slash);
+			const repoName = repo.githubRepo.slice(slash + 1);
+
+			const qs = sha ? `?head_sha=${encodeURIComponent(sha)}&per_page=10` : "?per_page=10";
+			const res = await github(env, `/repos/${repoOrg}/${repoName}/actions/runs${qs}`);
+			if (!res.ok) return text(`Error from GitHub: ${res.text}`);
+
+			const data = res.data as {
+				workflow_runs?: Array<{
+					name: string;
+					conclusion: string | null;
+					status: string;
+					updated_at: string;
+					html_url: string;
+					head_sha: string;
+					head_branch: string;
+					event: string;
+				}>;
+			};
+			const runs = data.workflow_runs || [];
+			if (runs.length === 0) {
+				return text(sha
+					? `No workflow runs found for ${repo.githubRepo} at commit ${sha}.`
+					: `No workflow runs found for ${repo.githubRepo}.`);
+			}
+			const lines = runs.map((r) => {
+				const verdict = r.conclusion || r.status;
+				return `- ${verdict} ${r.name} on ${r.head_branch} (${r.head_sha.slice(0, 7)}) — ${r.updated_at}\n  ${r.html_url}`;
+			});
+			return text(`GitHub Actions runs for ${repo.githubRepo}:\n${lines.join("\n")}`);
 		},
 	);
 }

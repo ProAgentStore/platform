@@ -239,4 +239,17 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// the DO and not exposed through the MCP surface.
 	// Appended, never edited in place: 0.1.15 is published.
 	"0.1.16": "sha256:a68aca8589a0e2dae8d8bc88281afc74bd2d1426d1b53e621d3d56a8ee34677a",
+	// 0.1.17 (#683): one new tool NAME in the surface-gated `coding` group,
+	// `coding_instance_deploy_status` — the first bullet of `MCP_SERVER_VERSION`'s bump list.
+	// 145 registrations become 146, 21 surface-gated become 22 (coding: 14 → 15).
+	// `MCP_TOOL_ALWAYS_ON` does not move: this registration sits inside the same
+	// `groups.has("coding")` gate as the other coding tools.
+	//
+	// The new tool reads GitHub Actions workflow runs for a coding instance's registered repo
+	// (any `owner/repo`, not only a ProAgentStore agent repo). It is `read`-scoped and
+	// uses the worker's `GITHUB_TOKEN` — same credential as `agent_deploy_status`, but
+	// without assuming the repo is in the `GITHUB_ORG` org or that the workflow is `deploy.yml`.
+	//
+	// Appended, never edited in place: 0.1.16 is published.
+	"0.1.17": "sha256:cd24991cf9659bb8f09af6b4ad3ef47b8f2d4e72352b6fffb18fc12d063d78f9",
 };

@@ -58,8 +58,8 @@ src/
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
-├── coding-tools.ts       11 tools — the coding surface: open/capture/message/restart/end a
-│                         repo's conversation, repos, overseer, diagnostics (#696)
+├── coding-tools.ts       12 tools — the coding surface: open/capture/message/restart/end a
+│                         repo's conversation, repos, overseer, diagnostics, deploy status (#683)
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
 └── instance-tools/
     ├── index.ts          builds the ctx, calls the fourteen group registrars
@@ -83,13 +83,13 @@ src/
                           surfaces:["coding"]) + 3 loop tools
 ```
 
-**145 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 11 in
+**146 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 100 across `instance-tools/`. 124 are always registered; 21 are
-surface-gated (apply=4, repo=3, coding=14).
+`storage-tools.ts`, and 100 across `instance-tools/`. 124 are always registered; 22 are
+surface-gated (apply=4, repo=3, coding=15).
 
-Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 11
-+ 13 + 100 = 145. They said 88 until #602, which made the paragraph sum to 132 — a total the
+Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
++ 13 + 100 = 146. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
@@ -137,7 +137,7 @@ tells you exactly what you changed about it.
    refuses.) **`jsonText` is compact and takes no formatting option (#586)** — the reader is
    a host with a byte ceiling, not a person, and the indented default cost ~22% of every
    result and defeated two byte guards in one day. Do not hand-roll
-   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 145 tools through a
+   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 146 tools through a
    real client and fails any result whose text is indented JSON, however it was produced.
 5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
    it, in a comment above the registration (#328). The caller is usually a model: without
@@ -202,7 +202,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 21 tools are surface-gated.
+  given connection, because 22 tools are surface-gated.
 
 ## Bindings and secrets
 

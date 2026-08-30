@@ -119,6 +119,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	billing_status: "read",
 	check_instance_loop: "read",
 	coding_diagnostics: "read",
+	coding_instance_deploy_status: "read",
 	coding_loop_status: "read",
 	coding_repos_list: "read",
 	coding_session_capture: "read",
@@ -309,7 +310,10 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// and a route for and no tool. `write` rather than `destructive` on purpose: this IS the
 	// reversible form of the delete beside it, and classing a pause as destructive would put it
 	// behind the scope a default connection never holds — i.e. would leave the gap open.
-	read: 71,
+	// +1 read at #683: `coding_instance_deploy_status`, which reads GitHub Actions workflow runs
+	// for a coding instance's registered repo. Uses the MCP worker's `GITHUB_TOKEN`, gated by
+	// the `read` scope so `MCP_READ_ONLY` blocks it correctly.
+	read: 72,
 	write: 44,
 	runtime: 16,
 	destructive: 14,

@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**145 tool registrations.** 124 are always registered; 21 are gated to the console
+**146 tool registrations.** 124 are always registered; 22 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -290,6 +290,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_session_end` | End the session, stopping the CLI | runtime | | |
 | `coding_session_fresh` | End and start clean (no `--resume`) | runtime | | |
 | `coding_overseer` | Cross-repo coordinator; can drive a specific engine | runtime | | |
+| `coding_instance_deploy_status` | Latest GitHub Actions workflow runs for a coding instance's registered repo; optionally filter by commit SHA | read | | |
 
 ### Autonomous loops
 
