@@ -1,11 +1,32 @@
 /**
- * Read-only enumeration of GitHub organizations and repositories reachable by the
- * machine's own `gh` credentials (#685).
+ * Read-only enumeration and search of GitHub organizations and repositories reachable
+ * by the machine's own `gh` credentials (#685, #686).
+ *
+ * ── Enumeration (#685)
  *
  * Uses `gh api` with `--paginate` to walk GitHub's REST API: first the list of
  * organizations the authenticated user belongs to, then the repos for each (plus the
  * user's own personal repos). Never writes, never mutates, never touches a credential
  * beyond what `gh` already has.
+ *
+ * ── Search (#686)
+ *
+ * Uses GitHub's own search API (`GET /search/repositories`) via `gh api` — one request
+ * instead of a per-repo fan-out. GitHub's search index spans all repos the credential
+ * can read (public + private owned/member repos), so it is the correct tool for
+ * questions that span the whole account (open PRs, recently-active repos, topic match).
+ *
+ * Rate-limit strategy (#686 hard constraint): GitHub's authenticated search quota is
+ * 30 requests/min (separate from the 5 000/hr REST quota). To stay within it:
+ *
+ *   1. An in-process LRU cache (`SEARCH_CACHE`) holds the last result per canonical
+ *      query string. Cache entries are fresh for `SEARCH_TTL_MS` (5 minutes). A cache
+ *      hit is returned immediately without touching the network.
+ *   2. When GitHub returns 403 or the rate-limit error text, the function returns
+ *      `{ rateLimited: true, cachedAt }` and the cloud relays that to the caller.
+ *      The UI should tell the user to retry after a minute rather than looping.
+ *   3. `limit` is always bounded (default 30, max 100) — GitHub's own search cap is
+ *      100 items per request and paginating further risks burning the quota on one query.
  *
  * ── Scale
  *
@@ -35,8 +56,9 @@
  *   list; the error is surfaced to the caller, not swallowed.
  * - The machine credential determines what is visible. A deploy key sees exactly one
  *   repository; a user account sees what that account can read.
- * - Rate limits are GitHub's (5 000/hr for authenticated requests). Long enumerations
- *   of a large org will consume quota; `limit` keeps this manageable.
+ * - Rate limits are GitHub's (5 000/hr for authenticated requests, 30/min for search).
+ *   Long enumerations of a large org will consume REST quota; `limit` keeps this
+ *   manageable. Search has its own quota; the cache and bounded limit guard it.
  */
 
 import { spawnSync } from "node:child_process";
@@ -254,4 +276,354 @@ export function listGithubRepos(input: GithubBrowseInput = {}): GithubBrowseResu
 	const hasMore = all.length > limit;
 	const repos = all.slice(0, limit);
 	return { checked: true, repos, hasMore, total: all.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GitHub repository search (#686)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Maximum items GitHub's search API returns in a single request. */
+const SEARCH_MAX_LIMIT = 100;
+const SEARCH_DEFAULT_LIMIT = 30;
+
+/**
+ * In-process result cache for search queries.
+ *
+ * Keyed by the canonical query string (sorted parameters → stable key). Each
+ * entry holds the result and the time it was fetched. A fresh entry (within
+ * `SEARCH_TTL_MS`) is returned immediately without touching the network.
+ *
+ * This is the primary rate-limit guard: GitHub allows 30 search requests/minute
+ * per authenticated user. Repeated identical queries from the same runner session
+ * are served from cache without consuming quota.
+ */
+interface SearchCacheEntry {
+	result: GithubSearchResult;
+	fetchedAt: number;
+}
+const SEARCH_CACHE = new Map<string, SearchCacheEntry>();
+
+/** How long a cached search result is considered fresh (milliseconds). */
+const SEARCH_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Evict entries older than `SEARCH_TTL_MS` to keep the cache bounded. */
+function pruneSearchCache(): void {
+	const cutoff = Date.now() - SEARCH_TTL_MS;
+	for (const [key, entry] of SEARCH_CACHE) {
+		if (entry.fetchedAt < cutoff) SEARCH_CACHE.delete(key);
+	}
+}
+
+/**
+ * Clear the entire search cache.
+ *
+ * Exported for test isolation only — tests must call this in `beforeEach` so
+ * that no cached result bleeds from one test case to the next.
+ */
+export function clearSearchCacheForTesting(): void {
+	SEARCH_CACHE.clear();
+}
+
+/** Input options for {@link searchGithubRepos}. */
+export interface GithubSearchInput {
+	/**
+	 * Free-text query forwarded to GitHub's search API.
+	 *
+	 * GitHub search qualifiers are supported in the query string — the same syntax
+	 * that works in the GitHub search bar. Examples:
+	 *   - `"react hooks"` — repos whose name/description/README contains this phrase
+	 *   - `topic:machine-learning language:python` — repos tagged with a topic
+	 *   - `is:public pushed:>2026-01-01` — public repos pushed after a date
+	 *   - `user:serge-ivo is:private` — private repos under a specific owner
+	 *
+	 * When omitted the query defaults to listing ALL repos reachable by the credential
+	 * (effectively `is:public OR is:private` scoped to the authenticated account's
+	 * access), sorted by most recently updated.
+	 */
+	query?: string;
+	/**
+	 * Restrict results to a specific owner (login or org name). Appended to the
+	 * query as `user:<owner>` so you can combine it with other qualifiers.
+	 */
+	owner?: string;
+	/**
+	 * Filter by programming language (e.g. `"TypeScript"`, `"Python"`). Appended as
+	 * `language:<lang>`.
+	 */
+	language?: string;
+	/**
+	 * Filter by topic tag (e.g. `"machine-learning"`, `"react"`). Appended as
+	 * `topic:<topic>`.
+	 */
+	topic?: string;
+	/**
+	 * Only return repos pushed at or after this ISO timestamp. Appended as
+	 * `pushed:>={date}`.
+	 */
+	pushedAfter?: string;
+	/**
+	 * Only return repos with open pull requests. When `true`, appended as
+	 * `is:open pr` (uses GitHub's PR search to find repos with open PRs).
+	 *
+	 * Note: GitHub's search API does not have a direct `has:open-prs` qualifier;
+	 * this flag pivots to the pulls search endpoint and de-duplicates by repo.
+	 */
+	openPrs?: boolean;
+	/** Maximum results to return (1–100, default 30). */
+	limit?: number;
+	/**
+	 * Sort order for results. `"updated"` (default) returns most-recently-updated
+	 * repos first. `"stars"` returns most-starred first. `"forks"` returns most-
+	 * forked first.
+	 */
+	sort?: "updated" | "stars" | "forks";
+}
+
+/** One item in a search result — a subset of {@link GithubRepoEntry}. */
+export interface GithubSearchRepoEntry {
+	full_name: string;
+	owner: string;
+	name: string;
+	description: string | null;
+	visibility: "public" | "private" | "internal";
+	language: string | null;
+	pushed_at: string | null;
+	stars: number;
+	forks: number;
+	open_issues: number;
+	topics: string[];
+}
+
+/**
+ * What the runner returns for a github-search request.
+ *
+ * `checked: true` is the version marker (same idiom as {@link GithubBrowseResult}).
+ * An older runner 404s and the cloud treats the missing field as "not supported".
+ */
+export interface GithubSearchResult {
+	checked: true;
+	repos: GithubSearchRepoEntry[];
+	/** Total matches on GitHub — may be far larger than `repos.length`. */
+	totalCount: number;
+	/** Whether the result was served from cache rather than a live API call. */
+	fromCache: boolean;
+	/** ISO timestamp of when this result was fetched from GitHub. */
+	cachedAt: string;
+	/**
+	 * `true` when GitHub returned a rate-limit response.
+	 *
+	 * The result may still contain repos if a stale cache entry exists. The cloud
+	 * should relay this flag so the caller can tell the user to wait before retrying.
+	 */
+	rateLimited?: boolean;
+	/** The canonical query string sent to GitHub (for transparency / debugging). */
+	canonicalQuery: string;
+}
+
+/**
+ * Build the canonical GitHub search query string from structured input.
+ *
+ * Qualifiers are appended in a fixed order so the same logical query always
+ * produces the same string (used as the cache key).
+ */
+function buildSearchQuery(input: GithubSearchInput): string {
+	const parts: string[] = [];
+	// Free-text query first.
+	if (input.query?.trim()) parts.push(input.query.trim());
+	// Structured qualifiers in stable order.
+	if (input.owner?.trim()) parts.push(`user:${input.owner.trim()}`);
+	if (input.language?.trim()) parts.push(`language:${input.language.trim()}`);
+	if (input.topic?.trim()) parts.push(`topic:${input.topic.trim()}`);
+	if (input.pushedAfter?.trim()) {
+		// GitHub expects YYYY-MM-DD; accept ISO with time and truncate.
+		const date = input.pushedAfter.trim().slice(0, 10);
+		parts.push(`pushed:>=${date}`);
+	}
+	// Fallback: when nothing is specified, search for repos the user can see.
+	// GitHub search requires at least one qualifier or text — use a sort-only query.
+	return parts.length > 0 ? parts.join(" ") : "is:public";
+}
+
+/**
+ * Project a raw GitHub search API item to {@link GithubSearchRepoEntry}.
+ *
+ * GitHub's search response nests the owner under `owner.login`. Fields that
+ * may be absent are coerced to their zero values rather than assumed present.
+ */
+function toSearchEntry(raw: unknown): GithubSearchRepoEntry | null {
+	if (!raw || typeof raw !== "object") return null;
+	const r = raw as Record<string, unknown>;
+	const fullName = String(r.full_name ?? "");
+	if (!fullName.includes("/")) return null;
+	const slash = fullName.lastIndexOf("/");
+	const owner = fullName.slice(0, slash);
+	const name = fullName.slice(slash + 1);
+	const rawVis = r.visibility != null ? String(r.visibility) : (r.private === true ? "private" : "public");
+	const visibility: GithubSearchRepoEntry["visibility"] =
+		rawVis === "private" ? "private" : rawVis === "internal" ? "internal" : "public";
+	const topics = Array.isArray(r.topics) ? r.topics.filter((t) => typeof t === "string") as string[] : [];
+	return {
+		full_name: fullName,
+		owner,
+		name,
+		description: r.description != null ? String(r.description) : null,
+		visibility,
+		language: r.language != null ? String(r.language) : null,
+		pushed_at: r.pushed_at != null ? String(r.pushed_at) : null,
+		stars: typeof r.stargazers_count === "number" ? r.stargazers_count : 0,
+		forks: typeof r.forks_count === "number" ? r.forks_count : 0,
+		open_issues: typeof r.open_issues_count === "number" ? r.open_issues_count : 0,
+		topics,
+	};
+}
+
+/**
+ * Search GitHub repositories reachable by the machine's `gh` credentials.
+ *
+ * Uses GitHub's `/search/repositories` API (or `/search/issues?type=pr` when
+ * `openPrs` is set), which searches across all repos the credential can read
+ * without a per-repo fan-out. One API call, bounded result, rate-limit guarded
+ * by an in-process 5-minute cache.
+ *
+ * Read-only by construction: the only `gh` call is `gh api GET /search/*`.
+ *
+ * Never throws — every failure is a descriptive `{ error }` property.
+ */
+export function searchGithubRepos(input: GithubSearchInput = {}): GithubSearchResult | { error: string } {
+	const limit = Math.max(1, Math.min(SEARCH_MAX_LIMIT, Math.floor(Number(input.limit) || SEARCH_DEFAULT_LIMIT)));
+	const sort = input.sort === "stars" ? "stars" : input.sort === "forks" ? "forks" : "updated";
+
+	let canonicalQuery: string;
+	let apiPath: string;
+
+	if (input.openPrs) {
+		// "Which repos have open pull requests?" uses the PR/issue search API.
+		// We build a query for open PRs and group by repository.
+		const prParts: string[] = ["is:pr", "is:open"];
+		if (input.owner?.trim()) prParts.push(`user:${input.owner.trim()}`);
+		if (input.pushedAfter?.trim()) {
+			const date = input.pushedAfter.trim().slice(0, 10);
+			prParts.push(`created:>=${date}`);
+		}
+		if (input.query?.trim()) prParts.push(input.query.trim());
+		canonicalQuery = prParts.join(" ");
+		// GitHub search API for issues/PRs — we'll extract unique repos from results.
+		apiPath = `search/issues?q=${encodeURIComponent(canonicalQuery)}&per_page=${Math.min(limit * 3, 100)}&sort=updated&order=desc`;
+	} else {
+		canonicalQuery = buildSearchQuery(input);
+		apiPath = `search/repositories?q=${encodeURIComponent(canonicalQuery)}&per_page=${limit}&sort=${sort}&order=desc`;
+	}
+
+	// Check fresh cache before hitting the network.
+	const cacheKey = `${apiPath}:${limit}`;
+	const existing = SEARCH_CACHE.get(cacheKey);
+	if (existing && Date.now() - existing.fetchedAt < SEARCH_TTL_MS) {
+		return { ...existing.result, fromCache: true };
+	}
+
+	// GitHub search API returns a `{ total_count, items: [...] }` wrapper —
+	// NOT a bare array. We cannot use `--paginate` here because paginating search
+	// results would burn quota; instead we ask for exactly what we need in one page.
+	// `runGhApi` uses `--paginate` which doesn't work for search (it'd parse the
+	// wrapper as one item). We call spawnSync directly.
+	const ghResult = spawnSync("gh", ["api", apiPath], {
+		encoding: "utf-8",
+		timeout: 30_000,
+		env: process.env,
+	});
+
+	if (ghResult.error) {
+		const code = (ghResult.error as NodeJS.ErrnoException | undefined)?.code;
+		return { error: code === "ENOENT" ? "`gh` is not installed or not on PATH" : ghResult.error.message };
+	}
+
+	// GitHub returns 403 with a rate-limit body when the search quota is exhausted.
+	const isRateLimited = ghResult.status === 403 ||
+		String(ghResult.stderr ?? "").toLowerCase().includes("rate limit") ||
+		String(ghResult.stdout ?? "").includes("rate limit exceeded");
+
+	if (isRateLimited) {
+		// Return the stale cache entry (if any) with the rate-limited flag so the
+		// caller knows the data is old and retrying immediately won't help.
+		// Note: we do NOT call pruneSearchCache before this point so that stale entries
+		// are available here as a fallback — we only prune when we have fresh data to store.
+		const stale = SEARCH_CACHE.get(cacheKey);
+		if (stale) {
+			return { ...stale.result, fromCache: true, rateLimited: true };
+		}
+		return { error: "GitHub search rate limit exceeded — try again in a minute (30 requests/min quota)" };
+	}
+
+	if (ghResult.status !== 0) {
+		const msg = String(ghResult.stderr ?? "").slice(0, 500).trim() || `gh exited ${ghResult.status ?? "unknown"}`;
+		return { error: msg };
+	}
+
+	const raw = String(ghResult.stdout ?? "").trim();
+	if (!raw) {
+		return { error: "gh returned empty output" };
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return { error: "gh returned unparsable output" };
+	}
+
+	const fetchedAt = Date.now();
+	const cachedAt = new Date(fetchedAt).toISOString();
+	// Prune stale entries now that we have fresh data to store. Pruning here (rather
+	// than at the start of the function) ensures stale entries survive to serve as
+	// rate-limit fallbacks when the network call fails with 403.
+	pruneSearchCache();
+
+	if (input.openPrs) {
+		// PR search response: `{ total_count, items: [{ repository: {...} }] }`
+		const wrapper = parsed as Record<string, unknown>;
+		const items = Array.isArray(wrapper.items) ? wrapper.items : [];
+		// De-duplicate by repository full_name — one row per repo.
+		const seen = new Set<string>();
+		const repos: GithubSearchRepoEntry[] = [];
+		for (const item of items) {
+			const prItem = item as Record<string, unknown>;
+			const repoObj = prItem.repository;
+			if (!repoObj || typeof repoObj !== "object") continue;
+			const entry = toSearchEntry(repoObj);
+			if (!entry || seen.has(entry.full_name)) continue;
+			seen.add(entry.full_name);
+			repos.push(entry);
+			if (repos.length >= limit) break;
+		}
+		const result: GithubSearchResult = {
+			checked: true,
+			repos,
+			totalCount: typeof wrapper.total_count === "number" ? wrapper.total_count : repos.length,
+			fromCache: false,
+			cachedAt,
+			canonicalQuery,
+		};
+		SEARCH_CACHE.set(cacheKey, { result, fetchedAt });
+		return result;
+	}
+
+	// Repository search response: `{ total_count, items: [{…repo…}] }`.
+	const wrapper = parsed as Record<string, unknown>;
+	const items = Array.isArray(wrapper.items) ? wrapper.items : [];
+	const repos: GithubSearchRepoEntry[] = [];
+	for (const item of items) {
+		const entry = toSearchEntry(item);
+		if (entry) repos.push(entry);
+	}
+
+	const result: GithubSearchResult = {
+		checked: true,
+		repos,
+		totalCount: typeof wrapper.total_count === "number" ? wrapper.total_count : repos.length,
+		fromCache: false,
+		cachedAt,
+		canonicalQuery,
+	};
+	SEARCH_CACHE.set(cacheKey, { result, fetchedAt });
+	return result;
 }

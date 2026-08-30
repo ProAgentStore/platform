@@ -87,6 +87,37 @@ interface GithubBrowseResult {
 	error?: string;
 }
 
+/**
+ * The parsed result of a `/coding/github-search` runner call (#686).
+ *
+ * `checked: true` is the version marker. `rateLimited: true` means the runner
+ * hit GitHub's search rate limit (30 req/min); a stale cache entry may still
+ * be present. An older runner 404s and the route returns 502.
+ */
+interface GithubSearchRepoEntry {
+	full_name: string;
+	owner: string;
+	name: string;
+	description: string | null;
+	visibility: "public" | "private" | "internal";
+	language: string | null;
+	pushed_at: string | null;
+	stars: number;
+	forks: number;
+	open_issues: number;
+	topics: string[];
+}
+interface GithubSearchResult {
+	checked?: boolean;
+	repos?: GithubSearchRepoEntry[];
+	totalCount?: number;
+	fromCache?: boolean;
+	cachedAt?: string;
+	rateLimited?: boolean;
+	canonicalQuery?: string;
+	error?: string;
+}
+
 export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	/**
 	 * Close every tracked coding session on the runner.
@@ -151,6 +182,48 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			visibility: c.req.query("visibility") || undefined,
 		};
 		const result = await callRunner<GithubBrowseResult>(conn, "/coding/github-repos", body, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+		return c.json(result);
+	});
+
+	/**
+	 * Search GitHub repositories reachable by the runner's `gh` credentials (#686).
+	 *
+	 * Read-only: only calls `gh api GET /search/repositories` (or `/search/issues`
+	 * when `openPrs` is set). Uses GitHub's own search API — one request across all
+	 * reachable repos, no per-repo fan-out. Results are cached on the runner for 5
+	 * minutes; `fromCache: true` signals a cache hit, `rateLimited: true` signals the
+	 * 30 req/min search quota was hit (stale data may still be present).
+	 *
+	 * Query parameters (all optional):
+	 *   `query`       — free-text + GitHub search qualifiers (e.g. "topic:react")
+	 *   `owner`       — restrict to one owner (appended as `user:<owner>`)
+	 *   `language`    — filter by language (appended as `language:<lang>`)
+	 *   `topic`       — filter by topic tag (appended as `topic:<topic>`)
+	 *   `pushedAfter` — ISO date; only repos pushed at or after (appended as `pushed:>=date`)
+	 *   `openPrs`     — "true" to pivot to the PR search and group by repo
+	 *   `limit`       — max repos to return (1–100; default 30)
+	 *   `sort`        — "updated" (default) | "stars" | "forks"
+	 *
+	 * Returns `{ checked: true, repos: [], totalCount, fromCache, cachedAt, canonicalQuery }`
+	 * or `{ error }`. 502 when the runner is offline or predates this endpoint.
+	 */
+	codingRoutes.get("/:instanceId/coding/github-search", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
+		if (!conn) return c.json({ error: "Runner not connected" }, 502);
+		// Forward query params to the runner via POST body (the relay is POST-only).
+		const qOpenPrs = c.req.query("openPrs");
+		const body = {
+			query: c.req.query("query") || undefined,
+			owner: c.req.query("owner") || undefined,
+			language: c.req.query("language") || undefined,
+			topic: c.req.query("topic") || undefined,
+			pushedAfter: c.req.query("pushedAfter") || undefined,
+			openPrs: qOpenPrs !== undefined ? qOpenPrs === "true" : undefined,
+			limit: c.req.query("limit") ? Number(c.req.query("limit")) : undefined,
+			sort: c.req.query("sort") || undefined,
+		};
+		const result = await callRunner<GithubSearchResult>(conn, "/coding/github-search", body, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
 		return c.json(result);
 	});
 

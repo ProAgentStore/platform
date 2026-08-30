@@ -1,9 +1,9 @@
 /**
- * Unit tests for `github-browse.ts` (#685).
+ * Unit tests for `github-browse.ts` (#685, #686).
  *
- * `listGithubRepos` and `listGithubOrgs` are pure in the sense that they take input
- * and call `gh api` — the test harness stubs `spawnSync` so no network call is made
- * and no real `gh` binary is needed.
+ * `listGithubRepos`, `listGithubOrgs`, and `searchGithubRepos` are pure in the
+ * sense that they take input and call `gh api` — the test harness stubs `spawnSync`
+ * so no network call is made and no real `gh` binary is needed.
  *
  * What is verified:
  *   - The `gh` arguments (endpoint, sort, pagination, jq projection).
@@ -15,10 +15,12 @@
  *   - Errors from `gh` (non-zero exit, missing binary, unparsable output) surface as
  *     `{ error }` rather than throwing.
  *   - Read-only: the `gh` command is ALWAYS `gh api` (never a write verb).
+ *   - Search (#686): GitHub search API used (no per-repo fan-out), caching, rate-limit
+ *     handling, qualifier building, openPrs pivot to issue search, isolation between cases.
  */
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listGithubOrgs, listGithubRepos } from "./github-browse.js";
+import { clearSearchCacheForTesting, listGithubOrgs, listGithubRepos, searchGithubRepos } from "./github-browse.js";
 
 vi.mock("node:child_process", () => ({
 	spawnSync: vi.fn(),
@@ -64,6 +66,8 @@ function ghRepo(overrides: Partial<{
 
 beforeEach(() => {
 	vi.resetAllMocks();
+	// Clear the in-process search cache so no cached result bleeds between test cases.
+	clearSearchCacheForTesting();
 });
 
 describe("listGithubRepos — personal repos", () => {
@@ -257,6 +261,351 @@ describe("read-only invariant", () => {
 			// The second arg must be "api" (the read-only subcommand). Write verbs
 			// are two-word ("pr create", "issue close", etc.) — never a bare "api".
 			expect(args[0]).toBe("api");
+		}
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// searchGithubRepos — #686
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a synthetic `spawnSync` return for a successful `gh api` search call.
+ *
+ * GitHub's search API returns `{ total_count, items: [...] }` rather than a bare
+ * array, so this helper wraps the items in the correct envelope.
+ */
+function searchSuccess(items: object[], totalCount = items.length) {
+	return {
+		status: 0,
+		stdout: JSON.stringify({ total_count: totalCount, items }),
+		stderr: "",
+		error: undefined,
+	};
+}
+
+/** A minimal search result item as GitHub returns it from `/search/repositories`. */
+function ghSearchRepo(overrides: Partial<{
+	full_name: string;
+	visibility: string;
+	language: string | null;
+	pushed_at: string;
+	description: string | null;
+	stargazers_count: number;
+	forks_count: number;
+	open_issues_count: number;
+	topics: string[];
+	private: boolean;
+}> = {}) {
+	return {
+		full_name: "serge-ivo/my-repo",
+		visibility: "public",
+		language: "TypeScript",
+		pushed_at: "2026-08-20T10:00:00Z",
+		description: "A test repo",
+		stargazers_count: 42,
+		forks_count: 5,
+		open_issues_count: 3,
+		topics: ["typescript", "testing"],
+		private: false,
+		...overrides,
+	};
+}
+
+describe("searchGithubRepos — basic", () => {
+	it("calls gh api search/repositories (no --paginate) with the query", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo()]));
+		searchGithubRepos({ query: "react hooks" });
+		expect(mockSpawn).toHaveBeenCalledOnce();
+		const [cmd, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(cmd).toBe("gh");
+		// Must be a read-only API call — no --paginate (search is one page)
+		expect(args[0]).toBe("api");
+		expect(args[1]).not.toBe("--paginate");
+		// Must target the search/repositories endpoint
+		expect(args[1]).toMatch(/search\/repositories/);
+		// Must include the query
+		expect(args[1]).toMatch(/react/);
+	});
+
+	it("returns repos with the expected search fields", () => {
+		mockSpawn.mockReturnValue(searchSuccess([
+			ghSearchRepo({ full_name: "serge-ivo/alpha", language: "TypeScript", stargazers_count: 10 }),
+		]));
+		const result = searchGithubRepos({ query: "alpha" });
+		expect(result).not.toHaveProperty("error");
+		if ("error" in result) return;
+		expect(result.checked).toBe(true);
+		expect(result.repos).toHaveLength(1);
+		const repo = result.repos[0];
+		expect(repo.full_name).toBe("serge-ivo/alpha");
+		expect(repo.owner).toBe("serge-ivo");
+		expect(repo.name).toBe("alpha");
+		expect(repo.language).toBe("TypeScript");
+		expect(typeof repo.stars).toBe("number");
+		expect(typeof repo.forks).toBe("number");
+		expect(typeof repo.open_issues).toBe("number");
+		expect(Array.isArray(repo.topics)).toBe(true);
+	});
+
+	it("returns totalCount from the search envelope", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo()], 999));
+		const result = searchGithubRepos({ query: "test" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.totalCount).toBe(999);
+		expect(result.repos).toHaveLength(1);
+	});
+
+	it("honours limit (default 30) — does not pass --paginate", () => {
+		// 50 items in response but limit is 30 (default)
+		const items = Array.from({ length: 50 }, (_, i) => ghSearchRepo({ full_name: `org/repo-${i}` }));
+		mockSpawn.mockReturnValue(searchSuccess(items, 50));
+		const result = searchGithubRepos({});
+		if ("error" in result) throw new Error("expected success");
+		// GitHub caps search to what we asked for (per_page=30); runner returns all items
+		// from the response — if GitHub returned 50 despite per_page=30, the runner returns all 50.
+		// What matters is that the API was called with per_page=30.
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(args[1]).toMatch(/per_page=30/);
+	});
+
+	it("applies a hard cap of 100 on limit", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ limit: 999 });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(args[1]).toMatch(/per_page=100/);
+	});
+
+	it("appends user: qualifier when owner is given", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ owner: "my-org" });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(decodeURIComponent(args[1])).toMatch(/user:my-org/);
+	});
+
+	it("appends language: qualifier", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ language: "Python" });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(decodeURIComponent(args[1])).toMatch(/language:Python/);
+	});
+
+	it("appends topic: qualifier", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ topic: "machine-learning" });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(decodeURIComponent(args[1])).toMatch(/topic:machine-learning/);
+	});
+
+	it("appends pushed: qualifier for pushedAfter", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ pushedAfter: "2026-01-15T00:00:00Z" });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		// Date part only (time stripped)
+		expect(decodeURIComponent(args[1])).toMatch(/pushed:>=2026-01-15/);
+	});
+
+	it("forwards the sort parameter", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ sort: "stars" });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(args[1]).toMatch(/sort=stars/);
+	});
+
+	it("defaults sort to updated", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({});
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(args[1]).toMatch(/sort=updated/);
+	});
+
+	it("returns an error when gh is not installed", () => {
+		mockSpawn.mockReturnValue({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }) });
+		const result = searchGithubRepos({ query: "test" });
+		expect(result).toHaveProperty("error");
+		if (!("error" in result)) return;
+		expect(result.error).toMatch(/not installed/i);
+	});
+
+	it("returns an error when gh exits non-zero", () => {
+		mockSpawn.mockReturnValue({ status: 1, stdout: "", stderr: "authentication required", error: undefined });
+		const result = searchGithubRepos({ query: "test" });
+		expect(result).toHaveProperty("error");
+	});
+
+	it("returns an error when gh produces unparsable output", () => {
+		mockSpawn.mockReturnValue({ status: 0, stdout: "not json", stderr: "", error: undefined });
+		const result = searchGithubRepos({ query: "test" });
+		expect(result).toHaveProperty("error");
+	});
+
+	it("returns an error when gh returns empty output", () => {
+		mockSpawn.mockReturnValue({ status: 0, stdout: "", stderr: "", error: undefined });
+		const result = searchGithubRepos({ query: "test" });
+		expect(result).toHaveProperty("error");
+	});
+
+	it("handles response with no items gracefully", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		const result = searchGithubRepos({ query: "very-obscure-thing" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.repos).toHaveLength(0);
+		expect(result.totalCount).toBe(0);
+	});
+
+	it("skips malformed items and carries on", () => {
+		mockSpawn.mockReturnValue(searchSuccess([
+			null as unknown as object,
+			{ full_name: 123 } as object, // no slash → filtered
+			ghSearchRepo({ full_name: "org/ok" }),
+		]));
+		const result = searchGithubRepos({ query: "test" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.repos).toHaveLength(1);
+		expect(result.repos[0].name).toBe("ok");
+	});
+
+	it("handles private repos correctly", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo({ visibility: "private", private: true })]));
+		const result = searchGithubRepos({ query: "private" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.repos[0].visibility).toBe("private");
+	});
+});
+
+describe("searchGithubRepos — caching", () => {
+	it("returns fromCache:false on first call", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo()]));
+		const result = searchGithubRepos({ query: "test" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.fromCache).toBe(false);
+	});
+
+	it("returns fromCache:true and does not call gh on a cache hit", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo()]));
+		// First call — populates cache
+		const first = searchGithubRepos({ query: "cached-query" });
+		if ("error" in first) throw new Error("expected success on first call");
+		expect(first.fromCache).toBe(false);
+
+		// Second call with the same query — should hit cache
+		const second = searchGithubRepos({ query: "cached-query" });
+		if ("error" in second) throw new Error("expected success on second call");
+		expect(second.fromCache).toBe(true);
+		// gh should only have been called once total
+		expect(mockSpawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("makes a fresh call when the query differs", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo()]));
+		searchGithubRepos({ query: "query-a" });
+		searchGithubRepos({ query: "query-b" });
+		expect(mockSpawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("returns cachedAt as an ISO string", () => {
+		mockSpawn.mockReturnValue(searchSuccess([ghSearchRepo()]));
+		const result = searchGithubRepos({ query: "timestamp-test" });
+		if ("error" in result) throw new Error("expected success");
+		expect(result.cachedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+	});
+});
+
+describe("searchGithubRepos — rate limiting", () => {
+	it("returns an error when gh exits 403 and no cache exists", () => {
+		mockSpawn.mockReturnValue({ status: 403, stdout: "", stderr: "rate limit exceeded", error: undefined });
+		const result = searchGithubRepos({ query: "rate-limited-query-no-cache" });
+		expect(result).toHaveProperty("error");
+		if (!("error" in result)) return;
+		expect(result.error).toMatch(/rate limit/i);
+	});
+
+	it("returns stale cache with rateLimited:true when 403 and stale cache exists", () => {
+		vi.useFakeTimers();
+		try {
+			// First call succeeds and populates cache.
+			mockSpawn.mockReturnValueOnce(searchSuccess([ghSearchRepo()]));
+			const first = searchGithubRepos({ query: "rate-then-limit-stale" });
+			if ("error" in first) throw new Error("expected success on first call");
+
+			// Advance time past the 5-minute TTL so the cache is stale but the entry
+			// is still in the Map (pruneSearchCache only removes entries when a new
+			// search runs — we haven't run a different query yet to trigger pruning).
+			// The SEARCH_CACHE still holds the old entry; Date.now() is now > fetchedAt + TTL.
+			vi.advanceTimersByTime(6 * 60 * 1000); // 6 minutes
+
+			// Second call — cache is stale, so we call gh again; it returns 403.
+			// The stale entry is still in the Map and gets returned with rateLimited:true.
+			mockSpawn.mockReturnValueOnce({ status: 403, stdout: "", stderr: "rate limit exceeded", error: undefined });
+			const second = searchGithubRepos({ query: "rate-then-limit-stale" });
+			if ("error" in second) throw new Error("expected success with stale cache");
+			expect(second.rateLimited).toBe(true);
+			expect(second.fromCache).toBe(true);
+			// Data is still there from the first call
+			expect(second.repos).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("searchGithubRepos — openPrs pivot", () => {
+	it("calls search/issues (not search/repositories) when openPrs is true", () => {
+		// PR search response has items with a `repository` field
+		const prItem = {
+			id: 1,
+			title: "Fix bug",
+			state: "open",
+			repository: ghSearchRepo({ full_name: "org/repo-with-prs" }),
+		};
+		mockSpawn.mockReturnValue({
+			status: 0,
+			stdout: JSON.stringify({ total_count: 1, items: [prItem] }),
+			stderr: "",
+			error: undefined,
+		});
+		searchGithubRepos({ openPrs: true });
+		const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+		expect(args[1]).toMatch(/search\/issues/);
+		expect(decodeURIComponent(args[1])).toMatch(/is:pr/);
+		expect(decodeURIComponent(args[1])).toMatch(/is:open/);
+	});
+
+	it("de-duplicates repos when multiple PRs belong to the same repo", () => {
+		const sharedRepo = ghSearchRepo({ full_name: "org/shared-repo" });
+		const items = [
+			{ id: 1, title: "PR 1", state: "open", repository: sharedRepo },
+			{ id: 2, title: "PR 2", state: "open", repository: sharedRepo },
+			{ id: 3, title: "PR 3", state: "open", repository: ghSearchRepo({ full_name: "org/other-repo" }) },
+		];
+		mockSpawn.mockReturnValue({
+			status: 0,
+			stdout: JSON.stringify({ total_count: 3, items }),
+			stderr: "",
+			error: undefined,
+		});
+		const result = searchGithubRepos({ openPrs: true });
+		if ("error" in result) throw new Error("expected success");
+		// Two distinct repos despite three PRs
+		expect(result.repos).toHaveLength(2);
+		const names = result.repos.map((r) => r.full_name);
+		expect(names).toContain("org/shared-repo");
+		expect(names).toContain("org/other-repo");
+	});
+});
+
+describe("searchGithubRepos — read-only invariant", () => {
+	it("only ever calls `gh api` — never a write verb", () => {
+		mockSpawn.mockReturnValue(searchSuccess([]));
+		searchGithubRepos({ query: "test" });
+		searchGithubRepos({ owner: "my-org", language: "Go" });
+		searchGithubRepos({ openPrs: true });
+		for (const call of mockSpawn.mock.calls) {
+			const [cmd, args] = call as [string, string[]];
+			expect(cmd).toBe("gh");
+			expect(args[0]).toBe("api");
+			// Must not use --paginate (search is bounded)
+			expect(args).not.toContain("--paginate");
 		}
 	});
 });

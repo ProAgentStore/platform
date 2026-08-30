@@ -234,6 +234,8 @@ const ROUTES = [
 	// GitHub org + repo enumeration (#685) — read-only runner proxy.
 	"GET /:instanceId/coding/github-orgs",
 	"GET /:instanceId/coding/github-repos",
+	// GitHub repository search (#686) — read-only, cached, no per-repo fan-out.
+	"GET /:instanceId/coding/github-search",
 	"GET /:instanceId/coding/diagnostics",
 ];
 
@@ -316,6 +318,8 @@ const OWNERSHIP: Record<string, string[]> = {
 		// GitHub org + repo enumeration (#685) — read-only runner proxy.
 		"GET /:instanceId/coding/github-orgs",
 		"GET /:instanceId/coding/github-repos",
+		// GitHub repository search (#686) — read-only, cached, no per-repo fan-out.
+		"GET /:instanceId/coding/github-search",
 		"GET /:instanceId/coding/diagnostics",
 	],
 	// The cursored feed (#581, #527). Its own module because it is the only route on this surface

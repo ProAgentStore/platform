@@ -10,7 +10,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
-import { listGithubOrgs, listGithubRepos, type GithubBrowseInput } from "./coding/github-browse.js";
+import { listGithubOrgs, listGithubRepos, searchGithubRepos, type GithubBrowseInput, type GithubSearchInput } from "./coding/github-browse.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -236,6 +236,37 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 				: (b as GithubBrowseInput).visibility,
 		};
 		return json(res, 200, listGithubRepos(input));
+	}
+	// ── GitHub repository search (#686) ───────────────────────────────────────
+	// Read-only: searches repos reachable by the machine's `gh` credentials via
+	// GitHub's own search API. One API call per query (no per-repo fan-out).
+	// Results are cached in-process for 5 minutes to guard the 30 req/min quota.
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/github-search") {
+		const b = req.method === "POST"
+			? await readJson<GithubSearchInput>(req).catch(() => ({}) as GithubSearchInput)
+			: {} as GithubSearchInput;
+		const qQuery = url.searchParams.get("query");
+		const qOwner = url.searchParams.get("owner");
+		const qLang = url.searchParams.get("language");
+		const qTopic = url.searchParams.get("topic");
+		const qPushedAfter = url.searchParams.get("pushedAfter");
+		const qOpenPrs = url.searchParams.get("openPrs");
+		const qLimit = url.searchParams.get("limit");
+		const qSort = url.searchParams.get("sort");
+		const bTyped = b as GithubSearchInput;
+		const input: GithubSearchInput = {
+			query: qQuery ?? bTyped.query,
+			owner: qOwner ?? bTyped.owner,
+			language: qLang ?? bTyped.language,
+			topic: qTopic ?? bTyped.topic,
+			pushedAfter: qPushedAfter ?? bTyped.pushedAfter,
+			openPrs: qOpenPrs !== null ? qOpenPrs === "true" : bTyped.openPrs,
+			limit: qLimit ? Number(qLimit) : bTyped.limit,
+			sort: (qSort === "stars" || qSort === "forks" || qSort === "updated")
+				? qSort
+				: bTyped.sort,
+		};
+		return json(res, 200, searchGithubRepos(input));
 	}
 
 	if (req.method === "POST" && path === "/coding/browse") {
