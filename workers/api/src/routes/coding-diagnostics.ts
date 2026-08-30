@@ -64,6 +64,29 @@ async function closeCodingSessions(c: Context<{ Bindings: Env }>) {
 	return c.json(result);
 }
 
+/**
+ * The parsed result of a `/coding/github-repos` runner call (#685).
+ *
+ * `checked: true` is the version marker — an older runner 404s and the route
+ * returns 502 instead of an empty list, which is what "not supported" means.
+ */
+interface GithubRepoEntry {
+	owner: string;
+	name: string;
+	full_name: string;
+	visibility: "public" | "private" | "internal";
+	default_branch: string;
+	pushed_at: string | null;
+	language: string | null;
+}
+interface GithubBrowseResult {
+	checked?: boolean;
+	repos?: GithubRepoEntry[];
+	hasMore?: boolean;
+	total?: number;
+	error?: string;
+}
+
 export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	/**
 	 * Close every tracked coding session on the runner.
@@ -82,6 +105,52 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		if (!conn) return c.json({ error: "Runner not connected" }, 502);
 		const dir = c.req.query("dir") || "~";
 		const result = await callRunner(conn, "/coding/browse", { dir }, { timeoutMs: READ_TIMEOUT_MS });
+		return c.json(result);
+	});
+
+	/**
+	 * List GitHub organizations reachable by the runner's `gh` credentials (#685).
+	 *
+	 * Read-only: only calls `gh api GET /user/orgs`. Returns `{ orgs: string[] }` —
+	 * the login names, suitable for use as the `owner` parameter of the repos route.
+	 * Returns 502 when the runner is offline, 200 with `{ error }` when `gh` fails.
+	 * An older runner that does not support this endpoint returns 502 with a suitable
+	 * message (the relay returns 404 as a non-2xx, which `callRunner` converts).
+	 */
+	codingRoutes.get("/:instanceId/coding/github-orgs", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
+		if (!conn) return c.json({ error: "Runner not connected" }, 502);
+		const result = await callRunner<{ orgs?: string[]; error?: string }>(conn, "/coding/github-orgs", undefined, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+		return c.json(result);
+	});
+
+	/**
+	 * List GitHub repositories reachable by the runner's `gh` credentials (#685).
+	 *
+	 * Read-only: only calls `gh api GET /user/repos` or `GET /orgs/{org}/repos`.
+	 * Query parameters (all optional):
+	 *   `owner`      — personal login or org name (omit for the user's own repos)
+	 *   `limit`      — max repos to return (1–200; default 50)
+	 *   `since`      — ISO timestamp; only repos pushed after this date
+	 *   `visibility` — "all" | "public" | "private" (default "all")
+	 *
+	 * Returns `{ checked: true, repos: [], hasMore, total }` or `{ error }`.
+	 * 502 when the runner is offline. An older runner that does not support this
+	 * endpoint returns 502 (the relay returns 404 as a non-2xx).
+	 */
+	codingRoutes.get("/:instanceId/coding/github-repos", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
+		if (!conn) return c.json({ error: "Runner not connected" }, 502);
+		// Forward query params to the runner via POST body (the relay is POST-only).
+		const body = {
+			owner: c.req.query("owner") || undefined,
+			limit: c.req.query("limit") ? Number(c.req.query("limit")) : undefined,
+			since: c.req.query("since") || undefined,
+			visibility: c.req.query("visibility") || undefined,
+		};
+		const result = await callRunner<GithubBrowseResult>(conn, "/coding/github-repos", body, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
 		return c.json(result);
 	});
 

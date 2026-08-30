@@ -10,6 +10,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
+import { listGithubOrgs, listGithubRepos, type GithubBrowseInput } from "./coding/github-browse.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -211,6 +212,32 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const host = String((b as { host?: string }).host || "github.com");
 		return json(res, 200, probeGitSshIdentity(host));
 	}
+	// ── GitHub org + repo enumeration (#685) ──────────────────────────────────
+	// Read-only: lists orgs and repos reachable by the machine's `gh` credentials.
+	// Never writes, never mutates anything on GitHub.
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/github-orgs") {
+		return json(res, 200, listGithubOrgs());
+	}
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/github-repos") {
+		const b = req.method === "POST"
+			? await readJson<GithubBrowseInput>(req).catch(() => ({}) as GithubBrowseInput)
+			: {} as GithubBrowseInput;
+		// Query params override body for GET callers (more REST-idiomatic).
+		const qOwner = url.searchParams.get("owner");
+		const qLimit = url.searchParams.get("limit");
+		const qSince = url.searchParams.get("since");
+		const qVis = url.searchParams.get("visibility");
+		const input: GithubBrowseInput = {
+			owner: qOwner ?? (b as GithubBrowseInput).owner,
+			limit: qLimit ? Number(qLimit) : (b as GithubBrowseInput).limit,
+			since: qSince ?? (b as GithubBrowseInput).since,
+			visibility: (qVis === "public" || qVis === "private" || qVis === "all")
+				? qVis
+				: (b as GithubBrowseInput).visibility,
+		};
+		return json(res, 200, listGithubRepos(input));
+	}
+
 	if (req.method === "POST" && path === "/coding/browse") {
 		const { readdirSync, statSync } = await import("node:fs");
 		const { resolve } = await import("node:path");

@@ -231,6 +231,9 @@ const ROUTES = [
 	"POST /:instanceId/coding/close-sessions",
 	"POST /:instanceId/coding/kill-tmux",
 	"GET /:instanceId/coding/browse",
+	// GitHub org + repo enumeration (#685) — read-only runner proxy.
+	"GET /:instanceId/coding/github-orgs",
+	"GET /:instanceId/coding/github-repos",
 	"GET /:instanceId/coding/diagnostics",
 ];
 
@@ -310,6 +313,9 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/coding/close-sessions",
 		"POST /:instanceId/coding/kill-tmux",
 		"GET /:instanceId/coding/browse",
+		// GitHub org + repo enumeration (#685) — read-only runner proxy.
+		"GET /:instanceId/coding/github-orgs",
+		"GET /:instanceId/coding/github-repos",
 		"GET /:instanceId/coding/diagnostics",
 	],
 	// The cursored feed (#581, #527). Its own module because it is the only route on this surface
