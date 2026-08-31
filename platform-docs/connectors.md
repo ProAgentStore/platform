@@ -31,7 +31,7 @@ resolved before the run and is refused at dispatch instead.
 
 | Connector | Auth | Scopes | Tools (examples) |
 |---|---|---|---|
-| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_list_pulls`, `github_read_pull`, `github_workflow_runs`, `github_create_issue` (write), `github_comment_issue` (write), `github_update_issue` (write — close/reopen, relabel, assign) |
+| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_list_issue_comments`, `github_list_pulls`, `github_read_pull`, `github_workflow_runs`, `github_create_issue` (write), `github_comment_issue` (write), `github_update_issue` (write — close/reopen, relabel, assign) |
 | `http` | vault API key | read + write | `http_request` (call any REST API as configuration) |
 | `web-search` | vault API key | read | `web_search` (Google Custom Search) |
 | `meta` | platform token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |

@@ -7,9 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // serialise) without re-testing github-issues.ts. github_workflow_runs + github_create_issue
 // fetch api.github.com directly, so those go through the stubbed globalThis.fetch.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { listIssues, readIssue, invalidateIssuesCache, invalidateIssueCaches, listPulls, readPull } = vi.hoisted(() => ({
+const { listIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, readPull } = vi.hoisted(() => ({
 	listIssues: vi.fn(),
 	readIssue: vi.fn(),
+	listIssueComments: vi.fn(),
 	// The cache drop `github_create_issue` performs after a successful POST (#401) — mocked at the
 	// same seam, and ASSERTED below: an agent that opens an issue and then lists issues must not
 	// read back its own pre-write copy.
@@ -21,7 +22,7 @@ const { listIssues, readIssue, invalidateIssuesCache, invalidateIssueCaches, lis
 	listPulls: vi.fn(),
 	readPull: vi.fn(),
 }));
-vi.mock("../github-issues.js", () => ({ listIssues, readIssue, invalidateIssuesCache, invalidateIssueCaches }));
+vi.mock("../github-issues.js", () => ({ listIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
 vi.mock("../github-prs.js", () => ({ listPulls, readPull }));
 
 import { GITHUB_TOOLS } from "./github.js";
@@ -64,6 +65,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	listIssues.mockReset();
 	readIssue.mockReset();
+	listIssueComments.mockReset();
 	listPulls.mockReset();
 	readPull.mockReset();
 	invalidateIssuesCache.mockReset();
@@ -75,12 +77,13 @@ beforeEach(() => {
 });
 
 describe("github connector — registration", () => {
-	it("registers all 8 tools with correct scopes (reads, plus the three issue writes)", () => {
+	it("registers all 9 tools with correct scopes (reads, plus the three issue writes)", () => {
 		const names = registryToolNameSet();
 		for (const n of [
 			"github_workflow_runs",
 			"github_list_issues",
 			"github_read_issue",
+			"github_list_issue_comments",
 			"github_list_pulls",
 			"github_read_pull",
 			"github_create_issue",
@@ -92,6 +95,7 @@ describe("github connector — registration", () => {
 		expect(getRegistryTool("github_workflow_runs")?.scope).toBe("read");
 		expect(getRegistryTool("github_list_issues")?.scope).toBe("read");
 		expect(getRegistryTool("github_read_issue")?.scope).toBe("read");
+		expect(getRegistryTool("github_list_issue_comments")?.scope).toBe("read");
 		expect(getRegistryTool("github_list_pulls")?.scope).toBe("read");
 		expect(getRegistryTool("github_read_pull")?.scope).toBe("read");
 		expect(getRegistryTool("github_create_issue")?.scope).toBe("write");
@@ -102,7 +106,7 @@ describe("github connector — registration", () => {
 		expect(getRegistryTool("github_update_issue")?.scope).toBe("write");
 	});
 
-	it("groups the 8 tools under the github connector for the catalog", () => {
+	it("groups the 9 tools under the github connector for the catalog", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "github");
 		expect(grp).toBeDefined();
 		expect(grp?.tools).toEqual(
@@ -110,6 +114,7 @@ describe("github connector — registration", () => {
 				"github_workflow_runs",
 				"github_list_issues",
 				"github_read_issue",
+				"github_list_issue_comments",
 				"github_list_pulls",
 				"github_read_pull",
 				"github_create_issue",
@@ -117,7 +122,7 @@ describe("github connector — registration", () => {
 				"github_update_issue",
 			]),
 		);
-		expect(grp?.tools).toHaveLength(8);
+		expect(grp?.tools).toHaveLength(9);
 	});
 
 	/**
@@ -320,6 +325,23 @@ describe("github connector — issue reads delegate to github-issues", () => {
 		const r = await tool("github_read_issue").handler(ctx(), { repo: "acme/widgets", number: 99 });
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/#99 not found in acme\/widgets/);
+	});
+
+	it("github_list_issue_comments passes pagination through and serialises the comments", async () => {
+		listIssueComments.mockResolvedValue([
+			{ id: 10, author: "octo", body: "please check the failing case", createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z", url: "u10" },
+		]);
+		const r = await tool("github_list_issue_comments").handler(ctx(), { repo: "acme/widgets", number: 7, page: 2, per_page: 5 });
+		expect(r.success).toBe(true);
+		expect(JSON.parse(r.content)[0]).toMatchObject({ id: 10, author: "octo", body: "please check the failing case" });
+		expect(listIssueComments).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", 7, { page: 2, perPage: 5 });
+	});
+
+	it("github_list_issue_comments requires a number WITHOUT calling GitHub", async () => {
+		const r = await tool("github_list_issue_comments").handler(ctx(), { repo: "acme/widgets" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/number.*required/i);
+		expect(listIssueComments).not.toHaveBeenCalled();
 	});
 });
 

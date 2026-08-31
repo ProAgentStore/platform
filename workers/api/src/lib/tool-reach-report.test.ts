@@ -91,6 +91,7 @@ const INTERNET = new Set<string>([
 	"github_workflow_runs",
 	"github_list_issues",
 	"github_read_issue",
+	"github_list_issue_comments",
 	"github_list_pulls",
 	"github_read_pull",
 	"github_create_issue",

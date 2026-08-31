@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Dev Workflow
+
+- When completing development work in this repo, commit the finished change and push it to the
+  tracked remote branch as part of the task. Do not leave completed dev work only in the local
+  worktree unless the user explicitly asks not to commit or push.
+
 ## ProAgentStore Access Rules
 
 Use ProAgentStore account state only through the configured MCP server.

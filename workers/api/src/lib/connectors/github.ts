@@ -18,7 +18,7 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
-import { invalidateIssueCaches, invalidateIssuesCache, listIssues, readIssue } from "../github-issues.js";
+import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssues, readIssue } from "../github-issues.js";
 import { listPulls, readPull } from "../github-prs.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "../github-actions.js";
 
@@ -118,6 +118,19 @@ const readIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 	if (!num) return { content: "An issue `number` is required.", success: false };
 	const issue = await readIssue(ctx.env, ctx.userId ?? "", repo, num);
 	return issue ? { content: JSON.stringify(issue, null, 2), success: true } : { content: `Issue #${num} not found in ${repo}.`, success: false };
+};
+
+const listIssueCommentsHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const num = Number(input.number);
+	if (!Number.isFinite(num) || num <= 0) return { content: "An issue `number` is required.", success: false };
+	const comments = await listIssueComments(ctx.env, ctx.userId ?? "", repo, num, {
+		page: Number(input.page) || 1,
+		perPage: Number(input.per_page) || 30,
+	});
+	return { content: JSON.stringify(comments, null, 2), success: true };
 };
 
 const listPullsHandler: ToolDef["handler"] = async (ctx, input) => {
@@ -301,11 +314,24 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_read_issue",
 			untrustedOutput: true,
 			scope: "read",
-			description: "Read one issue (title, body, labels, state) by number.",
+			description: "Read one issue (title, body, labels, state) by number. Use github_list_issue_comments to read the discussion underneath it.",
 			handler: "github_read_issue",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				number: { type: "number", required: true, description: "The issue number." },
+			},
+		},
+		{
+			name: "github_list_issue_comments",
+			untrustedOutput: true,
+			scope: "read",
+			description: "List comments on one GitHub issue — author, body, timestamps and URL. Read-only; use this before acting on an issue whose discussion matters.",
+			handler: "github_list_issue_comments",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
+				number: { type: "number", required: true, description: "The issue number." },
+				page: { type: "number", description: "Page number for older/newer batches (default 1)." },
+				per_page: { type: "number", description: "How many comments to return (default 30, max 50)." },
 			},
 		},
 		{
@@ -380,6 +406,7 @@ const compiled = compileConnector(GITHUB_MANIFEST, {
 	github_workflow_runs: workflowRunsHandler,
 	github_list_issues: listIssuesHandler,
 	github_read_issue: readIssueHandler,
+	github_list_issue_comments: listIssueCommentsHandler,
 	github_list_pulls: listPullsHandler,
 	github_read_pull: readPullHandler,
 	github_create_issue: createIssueHandler,

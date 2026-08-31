@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listIssues, readIssue } from "./github-issues.js";
+import { listIssueComments, listIssues, readIssue } from "./github-issues.js";
 import type { Env } from "../types.js";
 
 vi.mock("./github-app.js", () => ({
@@ -90,5 +90,60 @@ describe("readIssue", () => {
 	it("returns null on a GitHub error", async () => {
 		mockFetch(() => ({ status: 404, body: {} }));
 		expect(await readIssue(env, "user1", "acme/widget", 99)).toBeNull();
+	});
+});
+
+describe("listIssueComments", () => {
+	it("maps comment fields and sends pagination", async () => {
+		let seenUrl = "";
+		mockFetch((url) => {
+			seenUrl = url;
+			return {
+				status: 200,
+				body: [
+					{
+						id: 11,
+						user: { login: "octocat" },
+						body: "I can reproduce this.",
+						created_at: "2026-08-01T00:00:00Z",
+						updated_at: "2026-08-02T00:00:00Z",
+						html_url: "https://github.com/acme/widget/issues/5#issuecomment-11",
+					},
+				],
+			};
+		});
+		const comments = await listIssueComments(env, "user1", "acme/widget", 5, { page: 2, perPage: 5 });
+		expect(seenUrl).toContain("/repos/acme/widget/issues/5/comments");
+		expect(seenUrl).toContain("page=2");
+		expect(seenUrl).toContain("per_page=5");
+		expect(comments).toEqual([
+			{
+				id: 11,
+				author: "octocat",
+				body: "I can reproduce this.",
+				createdAt: "2026-08-01T00:00:00Z",
+				updatedAt: "2026-08-02T00:00:00Z",
+				url: "https://github.com/acme/widget/issues/5#issuecomment-11",
+			},
+		]);
+	});
+
+	it("clamps per_page and rejects a malformed issue number without fetching", async () => {
+		let seenUrl = "";
+		mockFetch((url) => {
+			seenUrl = url;
+			return { status: 200, body: [] };
+		});
+		await listIssueComments(env, "user1", "acme/widget", 5, { page: -2, perPage: 500 });
+		expect(seenUrl).toContain("page=1");
+		expect(seenUrl).toContain("per_page=50");
+
+		expect(await listIssueComments(env, "user1", "acme/widget", 0)).toEqual([]);
+		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns [] on a GitHub error", async () => {
+		mockFetch(() => ({ status: 404, body: { message: "Not Found" } }));
+		expect(await listIssueComments(env, "user1", "acme/widget", 99)).toEqual([]);
 	});
 });

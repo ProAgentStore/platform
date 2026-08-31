@@ -118,6 +118,7 @@ describe("the ingresses this closed", () => {
 	// Named individually rather than counted, so deleting a declaration names the issue it reopens.
 	const CLOSED: Array<[string, string]> = [
 		["github_read_issue", "#746 — an issue body any stranger can author on a public repo"],
+		["github_list_issue_comments", "GitHub issue comments any stranger can author on a public repo"],
 		["github_list_issues", "#746"],
 		["github_read_pull", "#746"],
 		["github_list_pulls", "#746"],

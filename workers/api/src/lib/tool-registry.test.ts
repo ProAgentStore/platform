@@ -37,6 +37,7 @@ describe("tool registry", () => {
 		expect(names.has("github_workflow_runs")).toBe(true);
 		expect(names.has("github_list_issues")).toBe(true);
 		expect(names.has("github_read_issue")).toBe(true);
+		expect(names.has("github_list_issue_comments")).toBe(true);
 	});
 
 	it("exposes ToolDef-shaped definitions (name/description/jsonSchema, verbatim pass-through)", () => {
@@ -66,6 +67,7 @@ describe("tool registry", () => {
 	it("groups tools by connector for the catalog", () => {
 		const gh = registryConnectorGroups().find((g) => g.connector === "github");
 		expect(gh?.tools).toContain("github_read_issue");
+		expect(gh?.tools).toContain("github_list_issue_comments");
 	});
 
 	it("unknown tool → failure, never throws", async () => {

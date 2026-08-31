@@ -34,10 +34,24 @@ export interface IssueDetail extends IssueSummary {
 	body: string;
 }
 
+export interface IssueComment {
+	id: number;
+	author: string;
+	body: string;
+	createdAt: string;
+	updatedAt: string;
+	url: string;
+}
+
 export interface ListIssuesOpts {
 	state?: "open" | "closed" | "all";
 	labels?: string;
 	limit?: number;
+}
+
+export interface ListIssueCommentsOpts {
+	page?: number;
+	perPage?: number;
 }
 
 const GH_HEADERS = (token: string | null) => ({
@@ -73,6 +87,15 @@ interface RawIssue {
 	labels?: Array<{ name?: string } | string>;
 }
 
+interface RawIssueComment {
+	id: number;
+	body: string | null;
+	created_at: string;
+	updated_at: string;
+	html_url: string;
+	user?: { login?: string } | null;
+}
+
 function labelNames(labels: RawIssue["labels"]): string[] {
 	if (!Array.isArray(labels)) return [];
 	return labels
@@ -93,10 +116,12 @@ function toSummary(raw: RawIssue): IssueSummary {
 }
 
 const BODY_CAP = 8 * 1024;
+const COMMENT_BODY_CAP = 8 * 1024;
 
 /** The cache resources this module owns — named once so the write path can drop the right one. */
 export const ISSUES_RESOURCE = "issues";
 export const ISSUE_RESOURCE = "issue";
+export const ISSUE_COMMENTS_RESOURCE = "issue-comments";
 
 /**
  * Forget this user's cached issue LIST for a repo.
@@ -132,6 +157,7 @@ export async function invalidateIssueCaches(env: Env, userId: string, githubRepo
 	await Promise.all([
 		invalidateGithubCache(env, userId, githubRepo, ISSUES_RESOURCE),
 		invalidateGithubCache(env, userId, githubRepo, ISSUE_RESOURCE),
+		invalidateGithubCache(env, userId, githubRepo, ISSUE_COMMENTS_RESOURCE),
 	]);
 }
 
@@ -192,5 +218,52 @@ export async function readIssue(env: Env, userId: string, githubRepo: string, nu
 		return { ...toSummary(raw), body };
 	} catch {
 		return null;
+	}
+}
+
+function toComment(raw: RawIssueComment): IssueComment {
+	return {
+		id: raw.id,
+		author: raw.user?.login ?? "",
+		body: (raw.body ?? "").slice(0, COMMENT_BODY_CAP),
+		createdAt: raw.created_at ?? "",
+		updatedAt: raw.updated_at ?? "",
+		url: raw.html_url ?? "",
+	};
+}
+
+/**
+ * List comments on one GitHub issue. Returns [] on any failure, matching `listIssues`'s
+ * graceful-degradation contract.
+ */
+export async function listIssueComments(
+	env: Env,
+	userId: string,
+	githubRepo: string,
+	number: number,
+	opts: ListIssueCommentsOpts = {},
+): Promise<IssueComment[]> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed || !Number.isFinite(number) || number <= 0) return [];
+	try {
+		const token = await installationTokenForOwner(env, userId, parsed.owner);
+		const perPage = Math.min(Math.max(Math.trunc(opts.perPage ?? 30) || 30, 1), 50);
+		const page = Math.max(Math.trunc(opts.page ?? 1) || 1, 1);
+		const params = new URLSearchParams({ per_page: String(perPage), page: String(page) });
+		const qs = params.toString();
+		const res = await githubConditionalJson<RawIssueComment[]>(env, {
+			identity: { userId, authContext: await githubAuthContext(env, userId, parsed.owner, token) },
+			repo: `${parsed.owner}/${parsed.name}`,
+			resource: ISSUE_COMMENTS_RESOURCE,
+			variant: `${Number(number)}?${qs}`,
+			url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues/${Number(number)}/comments?${qs}`,
+			headers: GH_HEADERS(token),
+		});
+		if (!res.ok) return [];
+		const data = res.data;
+		if (!Array.isArray(data)) return [];
+		return data.map(toComment);
+	} catch {
+		return [];
 	}
 }

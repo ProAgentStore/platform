@@ -235,7 +235,7 @@ function isGithubCoordinate(v: string): boolean {
 }
 
 /** The GitHub reads that need only an `owner/name` ARGUMENT — no local checkout at all. */
-const GITHUB_READ_TOOLS = ["github_list_issues", "github_read_issue", "github_list_pulls", "github_read_pull", "github_workflow_runs"] as const;
+const GITHUB_READ_TOOLS = ["github_list_issues", "github_read_issue", "github_list_issue_comments", "github_list_pulls", "github_read_pull", "github_workflow_runs"] as const;
 
 /**
  * What the "no repository configured" refusal is allowed to SAY (#513).

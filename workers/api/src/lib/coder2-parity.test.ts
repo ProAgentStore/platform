@@ -245,7 +245,7 @@ describe("the Repo Coder has ONE chat, and it can still do the job (0070 / #209)
 		// costs nothing. If a future edit drops one of these, the chat quietly gets dumber than
 		// the thing it replaced and no other test notices.
 		const tools = declared();
-		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_list_issues", "github_read_issue"]) {
+		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_list_issues", "github_read_issue", "github_list_issue_comments"]) {
 			expect(tools, n).toContain(n);
 		}
 		// The terminal is deliberately NOT a tool here: agent-think.ts already injects a fresh
@@ -283,11 +283,13 @@ describe("0101 — the Coders can read pull requests (#415)", () => {
 	// instance. The registry half being complete is what makes that invisible — nothing fails, the
 	// agent just declines. This is the assertion that the two halves stay joined.
 	const PULLS = ["github_list_pulls", "github_read_pull"] as const;
+	const ISSUE_COMMENTS = "github_list_issue_comments";
 
 	for (const slug of ["coder-repo", "coder", "coder-lead"]) {
 		it(`${slug} declares both pull tools`, () => {
 			const { tools } = effectiveDeclared(slug);
 			for (const n of PULLS) expect(tools, n).toContain(n);
+			expect(tools, ISSUE_COMMENTS).toContain(ISSUE_COMMENTS);
 		});
 
 		it(`${slug} stays inside MAX_DECLARED_TOOLS`, () => {
