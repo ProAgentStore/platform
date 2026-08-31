@@ -5,6 +5,8 @@
 - When completing development work in this repo, commit the finished change and push it to the
   tracked remote branch as part of the task. Do not leave completed dev work only in the local
   worktree unless the user explicitly asks not to commit or push.
+- Project-local Codex agent specs live in `.codex/agents/`. Keep the Dev Agent and BA Agent
+  instructions there aligned with this workflow.
 
 ## ProAgentStore Access Rules
 
