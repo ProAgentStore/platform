@@ -88,4 +88,4 @@
  */
 
 /** Advertised in `serverInfo.version`, and restated in `server.json` and `platform-docs/mcp.md`. */
-export const MCP_SERVER_VERSION = "0.1.19";
+export const MCP_SERVER_VERSION = "0.1.20";

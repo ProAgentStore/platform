@@ -101,7 +101,7 @@ Two paths, both resolving to a ProAgentStore session:
 | Path | How | Notes |
 |---|---|---|
 | OAuth 2.1 + PKCE (default) | The client discovers `/authorize` + `/token`, registers dynamically at `/register`, and the browser consent page delegates to ProAgentStore's own GitHub or Google sign-in | PKCE `S256` is mandatory — `code_challenge` is required and plain PKCE is rejected. Access tokens live 24h. Requested scopes are stored on the grant. |
-| Per-call `token` argument | Every authenticated tool accepts an optional `token` (a PAGS session token) | Bypasses the OAuth grant, so it carries no scope set and no audit subject: `requirePermission` falls back to the default scope grant and `audit()` writes nothing. Use OAuth unless you are scripting. |
+| Per-call `token` argument | Every authenticated tool accepts an optional `token` (a PAGS session token) | Bypasses the OAuth grant, so it carries no requested scope set and uses the default grant. It is still audited: the signed session's `uid` becomes the audit subject. Prefer OAuth unless you are scripting. |
 
 The endpoint under `/mcp` is gated by the OAuth provider. Every other path is served by
 the login handler: `/authorize`, `/authorize/continue`, `/oauth/callback`, `/health`,
@@ -141,6 +141,27 @@ carries `readOnlyHint` / `destructiveHint` annotations, and the server sends an
 an `outputSchema` and answer with `structuredContent` — their payloads are `{"agents": […]}`
 and `{"instances": […]}`, **objects rather than bare arrays**. All results are serialised
 compactly.
+
+### Avoid First-Call Parameter Errors
+
+Treat `tools/list` input schemas as exact. Argument names are `snake_case`; do not translate
+them to camelCase, pluralise them, or add wrapper objects. IDs, task IDs, session IDs, job
+keys, runner node names, cursors, and confirmation strings are opaque values: copy them
+exactly from the tool that returned them.
+
+Use JSON booleans for boolean fields (`true` / `false`, not `"true"` / `"false"`). Numeric
+fields that say they coerce may accept numeric strings, but send numbers when the host can.
+When a parameter says it accepts either an object/array or a JSON string, send the
+object/array unless your host cannot.
+
+For `call_instance_tool`, do not guess the nested shape. Call:
+
+```text
+list_instance_tools { instance_id, allowed_only: true, schemas: true }
+call_instance_tool { instance_id, tool: "<exact nested tool name>", input: { ...nested args... } }
+```
+
+`input` is the nested tool's argument object itself, not another wrapper around it.
 
 ### Catalog and reference (no auth)
 

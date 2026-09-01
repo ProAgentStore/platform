@@ -22,7 +22,20 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    the 124" for months *while the gate swept this file*, because the old wording put words
    between the number and "are gated" and matched nothing (#602, #603). Keep the shape.
 
-3. **Detect failure structurally, not by reading prose — but know the shape.** This
+3. **Avoid first-call parameter errors.** `tools/list` is the schema, not a hint:
+   use the exact `snake_case` argument names it declares. Do not translate them to
+   camelCase, pluralise them, or add wrapper objects. IDs, task IDs, session IDs, job
+   keys, runner node names and cursors are opaque — copy them exactly from the tool that
+   returned them. JSON booleans must be booleans (`true` / `false`), not strings; numeric
+   fields that say they coerce may accept strings, but prefer numbers. When a field says
+   it accepts either an object/array or a JSON string, use the object/array unless your
+   MCP host cannot send it. For `call_instance_tool`, always do the two-step lookup:
+   `list_instance_tools { instance_id, allowed_only: true, schemas: true }`, then pass
+   `tool` as the exact nested tool name and `input` as exactly that nested schema's
+   argument object — not `{ input: { input: ... } }`, not REST route params, and not
+   guessed aliases.
+
+4. **Detect failure structurally, not by reading prose — but know the shape.** This
    server does **not** set `isError` on results. Every tool returns a single text content
    block. A failure looks like one of two things:
    - text beginning `Error: ` — auth required, denied scope, missing confirmation, or an
@@ -41,34 +54,34 @@ Connection methods and the full tool table: [`README.md`](./README.md).
 
    Results are serialised **compactly**. Do not parse by eye or by line offset.
 
-4. **A permission denial is a stop, not a retry.** `requirePermission` returns
+5. **A permission denial is a stop, not a retry.** `requirePermission` returns
    `Error: <tool> requires <scope> permission, but MCP is in read-only mode.` or
    `Error: <tool> requires MCP scope "<scope>". …`. Both are configuration facts —
    `MCP_READ_ONLY=1` on the server, or a grant without that scope. Retrying produces the
    identical denial and another audit row. Report it to the user and stop.
 
-5. **Prefer `dry_run: true` before an uncertain mutation.** It returns
+6. **Prefer `dry_run: true` before an uncertain mutation.** It returns
    `{"dryRun": true, "tool", "action", "wouldDo"}` describing the call it would make —
    endpoint, method, body, byte counts. It is audited but changes nothing. `dry_run` is
    checked *after* the scope check, so a dry run of a tool you lack scope for still
    denies.
 
-6. **`destructive` is not in the default grant.** A plain browser sign-in gets
+7. **`destructive` is not in the default grant.** A plain browser sign-in gets
    `read write runtime`. Delete- and overwrite-style tools will deny until the client
    requests `destructive` explicitly at authorization time. Do not attempt to work
    around this by finding another tool.
 
-7. **Confirmation strings are exact and are the tool's own name** (with one exception).
+8. **Confirmation strings are exact and are the tool's own name** (with one exception).
    `confirm` is compared with `===`; there is no fuzzy match, and the string is never
    the user's words. The full list is below.
 
-8. **Never put secrets in tool arguments.** The audit log redacts keys matching
+9. **Never put secrets in tool arguments.** The audit log redacts keys matching
    `token|secret|password|credential|authorization|api_key|…` and values shaped like
    `sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs and bearer headers — but redaction is a
    backstop, not a channel. There is no tool that needs a third-party secret; keys live
    in the account vault and are injected server-side.
 
-9. **Connector writes are gated per instance.** `call_instance_tool` is a generic
+10. **Connector writes are gated per instance.** `call_instance_tool` is a generic
    invoker, so it is scope-checked as `write` even when the underlying connector tool
    reads. The instance's own write-consent gate applies on top. Call
    `list_instance_tools` first: it returns every tool the instance could run — built-in
@@ -88,20 +101,21 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    the agent, so eleven universal tools — six of them writes — were invisible to an
    audit that was told it could establish an agent is read-only.
 
-10. **Instance state is the user's, not the template's.** Writing to an instance never
+11. **Instance state is the user's, not the template's.** Writing to an instance never
     touches the creator's agent, and reading a creator's agent tells you nothing about a
     subscriber's data. Pick the agent-scoped or instance-scoped tool deliberately.
 
-11. **`chat_with_agent` is a preview, not the runtime.** It hits the public trial
+12. **`chat_with_agent` is a preview, not the runtime.** It hits the public trial
     endpoint and is capped. Real work goes through `subscribe_agent` →
     `chat_with_instance`.
 
-12. **Everything you do is audited.** Writes, runtime calls, dry runs, and denials are
+13. **Everything you do is audited.** Writes, runtime calls, dry runs, and denials are
     written to KV under the OAuth subject for 90 days. `mcp_audit_log` reads them back.
-    Note that audit only records when connected via OAuth — a per-call `token` argument
-    carries no subject, so it writes no audit rows and no scope set.
+    A per-call `token` argument is also audited: the token is a signed ProAgentStore
+    session, and the audit subject is resolved from the `uid` inside it. Its scope set is
+    still the default grant, so prefer OAuth unless you are scripting.
 
-13. **Read the annotations and the server `instructions` before reading descriptions.**
+14. **Read the annotations and the server `instructions` before reading descriptions.**
     Every tool publishes `readOnlyHint` / `destructiveHint`, and they are accurate:
     `readOnlyHint: true` means it only reads. `destructiveHint: true` reads "MAY perform
     destructive updates", and every such tool additionally demands an exact `confirm`
@@ -109,7 +123,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
     block on `initialize`; it is maintained alongside the tool surface, so prefer it to
     assumptions carried in from another MCP server.
 
-14. **Report a run's state in the platform's words, not your own.** `health` has four
+15. **Report a run's state in the platform's words, not your own.** `health` has four
     values — `working`, `waiting`, `stalled`, `ended` — and `ended` is returned for any run
     that is not `running`, so it is the usual answer from `check_instance_loop`. `ended`
     makes no claim that anything is running. Do not derive a verdict from `status` or from

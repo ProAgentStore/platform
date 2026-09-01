@@ -77,6 +77,11 @@ Short form:
 list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages
 ```
 
+Use the parameter names exactly as the MCP schema declares them. The runtime path uses
+`agent_id` only for published catalogue/template agents and `instance_id` for the user's private
+copy. `session_id`, `task_id`, runner node names and cursors are opaque; copy them from the
+tool result that returned them.
+
 ## Public Trial Flow
 
 `chat_with_agent` intentionally calls:

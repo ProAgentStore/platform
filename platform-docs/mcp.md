@@ -107,7 +107,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.19`
+- `serverInfo.version`: `0.1.20`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -122,20 +122,29 @@ Alongside `serverInfo`, the server returns an `instructions` string. MCP sends i
 is where guidance that applies **across** tools belongs, rather than being repeated into 135
 descriptions.
 
-ProAgentStore's says four things, in this order, because the first 512 characters are the
+ProAgentStore's says five things, in this order, because the first 512 characters are the
 part a host is most likely to keep:
 
 1. **Get an id first.** Almost every tool acts on one agent instance. `my_instances` lists
    the ones you already run; `list_agents` is the public catalogue and `subscribe_agent`
    creates an instance from it.
-2. **Check instance tools before driving the terminal.** An instance's own connector tools
+2. **Use the exact input schema.** Argument names are `snake_case`; opaque ids, task ids,
+   session ids, job keys, node names and cursors are copied from previous tool results.
+3. **Check instance tools before driving the terminal.** An instance's own connector tools
    are one level down: `list_instance_tools` names them (GitHub, HTTP, search connectors,
    memory, files, knowledge) and `call_instance_tool` invokes one. Check there before
    reaching for `coding_session_message`.
-3. **Debug with `agent_trace` first**, then `instance_messages` or `list_errors` for detail;
+4. **Debug with `agent_trace` first**, then `instance_messages` or `list_errors` for detail;
    `usage_summary` reports spend.
-4. **The annotations are accurate**, a state-changing tool takes `dry_run`, and the
+5. **The annotations are accurate**, a state-changing tool takes `dry_run`, and the
    `confirm` + `destructive`-scope refusals below are real and cannot be argued past.
+
+Parameter schemas are exact. Use the `snake_case` names from `tools/list`; do not translate
+them to camelCase or wrap arguments in extra objects. IDs, session IDs, task IDs, job keys,
+runner nodes, cursors, and confirmation strings are opaque values copied from previous tool
+results. JSON booleans are booleans (`true` / `false`), not strings. For `call_instance_tool`,
+first call `list_instance_tools { instance_id, allowed_only: true, schemas: true }`, then pass
+`tool` as the exact nested name and `input` as exactly that nested schema's argument object.
 
 The string itself is `SERVER_INSTRUCTIONS` in `workers/mcp/src/tool-metadata.ts`, and it is
 served verbatim — alongside `PLATFORM_GUIDE` — at `GET https://mcp.proagentstore.online/surface`

@@ -161,6 +161,33 @@ async function say(name: string, extra: Record<string, unknown> = {}): Promise<s
 	return (await t.handler({ ...argsFor(t.schema), ...extra })).content[0].text;
 }
 
+function paramDescription(toolName: string, field: string): string {
+	const t = tools.get(toolName);
+	if (!t) throw new Error(`no such tool: ${toolName}`);
+	const param = t.schema[field] as { description?: string } | undefined;
+	return param?.description ?? "";
+}
+
+describe("MCP input schemas guide first-call parameters (#769)", () => {
+	it("runtime task tools explain which opaque ids and payload wrapper to pass", () => {
+		const cases: Array<[string, string, RegExp]> = [
+			["register_instance_runtime", "instance_id", /my_instances[\s\S]*not the public agent_id/],
+			["instance_runtime_status", "instance_id", /my_instances[\s\S]*not the public agent_id/],
+			["run_instance_task", "instance_id", /my_instances[\s\S]*not the public agent_id/],
+			["run_instance_task", "type", /exact task type/],
+			["run_instance_task", "input", /JSON object[\s\S]*do not wrap it in another `input` object/],
+			["call_instance_tool", "tool", /Exact[^.]*from list_instance_tools/],
+			["call_instance_tool", "input", /list_instance_tools\(schemas:true\)[\s\S]*do not wrap it/],
+			["approve_instance_task", "task_id", /returned by run_instance_task|instance_task_events/],
+			["cancel_instance_task", "confirm", /Exact confirmation string/],
+			["instance_task_events", "limit", /1-500/],
+		];
+		for (const [toolName, field, pattern] of cases) {
+			expect(paramDescription(toolName, field), `${toolName}.${field}`).toMatch(pattern);
+		}
+	});
+});
+
 /** The scope a tool actually enforces — read out of the refusal, not out of the source. */
 async function scopeOf(name: string): Promise<string> {
 	scopes = ["read"];

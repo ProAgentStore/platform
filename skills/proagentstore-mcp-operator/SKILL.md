@@ -98,9 +98,12 @@ and coding tools (gated to the console surfaces the subscribed agent exposes).
 When operating through MCP:
 
 1. State which MCP action you are taking.
-2. Prefer private instance tools over public trial tools for durable work.
-3. For mutating tools, pass `dry_run: true` first to preview what the call would do before committing it. The result says `dryRun: true` and describes the change without applying it.
-4. Thirteen tools require an exact `confirm` value (compared with `===`, never fuzzy-matched). Twelve use the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `delete_supervision`, `clear_instance_messages`. The exception is `remove_repo`, which requires `confirm: "remove_all_repos"` and only when removing every repo. A refusal from a confirm-gated tool is mechanical — the gate cannot be argued past; supply the exact value.
-5. The `destructive` scope is never granted by default. A client connected with standard browser sign-in cannot run delete- or overwrite-style tools unless the authorization flow explicitly requests the `destructive` scope.
-6. Report the MCP result in plain language with IDs, slugs, URLs, and next steps.
-7. If OAuth or credentials block progress, explain the exact approval or credential step needed.
+2. Read `tools/list` before a first call and use the exact `snake_case` parameter names and schemas it declares. IDs, task IDs, session IDs, job keys, runner nodes, cursors and confirm strings are opaque: copy them exactly from the previous result.
+3. Prefer private instance tools over public trial tools for durable work.
+4. For `call_instance_tool`, first call `list_instance_tools { instance_id, allowed_only: true, schemas: true }`, then pass `tool` as the exact nested tool name and `input` as exactly that nested schema's argument object. Do not wrap `input` in another `input` object.
+5. Use JSON booleans (`true` / `false`) for boolean fields, not strings. Numeric fields that say they coerce may accept strings, but send numbers when possible.
+6. For mutating tools, pass `dry_run: true` first to preview what the call would do before committing it. The result says `dryRun: true` and describes the change without applying it.
+7. Thirteen tools require an exact `confirm` value (compared with `===`, never fuzzy-matched). Twelve use the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `delete_supervision`, `clear_instance_messages`. The exception is `remove_repo`, which requires `confirm: "remove_all_repos"` and only when removing every repo. A refusal from a confirm-gated tool is mechanical — the gate cannot be argued past; supply the exact value.
+8. The `destructive` scope is never granted by default. A client connected with standard browser sign-in cannot run delete- or overwrite-style tools unless the authorization flow explicitly requests the `destructive` scope.
+9. Report the MCP result in plain language with IDs, slugs, URLs, and next steps.
+10. If OAuth or credentials block progress, explain the exact approval or credential step needed.

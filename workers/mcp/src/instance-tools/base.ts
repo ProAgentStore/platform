@@ -225,12 +225,12 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	// guess made here.
 	server.tool(
 		"call_instance_tool",
-		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object. No dry run: call list_instance_tools with schemas:true first — that is where the input schema lives, and where you learn whether this instance may run the tool at all.",
+		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. This is a two-step wrapper: first call list_instance_tools with allowed_only:true and schemas:true, find the target tool, then pass `tool` as that exact name and `input` as exactly that nested tool's argument object. Do not wrap the nested arguments in another object and do not guess aliases. No dry run: list_instance_tools is the read-only preview.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
-			tool: z.string().describe("Tool name, e.g. github_list_issues"),
-			input: z.record(z.any()).optional().describe("The tool's input arguments object"),
+			tool: z.string().describe("Exact connector/built-in tool name from list_instance_tools, e.g. github_list_issues. Copy the name exactly."),
+			input: z.record(z.any()).optional().describe("The nested tool's argument object exactly as list_instance_tools(schemas:true) declares it. Example: if the nested schema has `repo` and `state`, pass {\"repo\":\"owner/repo\",\"state\":\"open\"}; do not wrap it as {\"input\":{...}}."),
 		},
 		async ({ token, instance_id, tool, input }) => {
 			const sessionToken = tokenFor(token);

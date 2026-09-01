@@ -162,9 +162,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			"chat_with_agent",
 			"Send a message to a published agent (trial mode)",
 			{
-				agent_id: z.string(),
-				message: z.string(),
-				session_id: z.string().optional(),
+				agent_id: z.string().describe("Published agent ID or slug from list_agents/agent_info. This is not a private instance_id."),
+				message: z.string().describe("User message for the public trial chat. For durable private work, use chat_with_instance instead."),
+				session_id: z.string().optional().describe("Trial chat session_id returned by a previous chat_with_agent call. Omit to start a new trial session."),
 			},
 			async ({ agent_id, message, session_id }) => {
 				const data = (await apiCall(`/v1/public/agents/${agent_id}/try`, {

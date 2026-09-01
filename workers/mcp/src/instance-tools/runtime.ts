@@ -20,13 +20,13 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Register a local or managed ProAgentStore browser runtime for one of your private instances. Use this before run_instance_task for browser-capable agents.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			endpoint_url: z.string().describe("Runtime endpoint URL. Use localhost for a local runner you started yourself."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			endpoint_url: z.string().describe("HTTP(S) runtime endpoint URL reachable by the MCP worker, e.g. https://runner.example.com. For local browser runners prefer the CLI relay (`pags up`) and instance_runner_node instead of guessing a localhost URL."),
 			runner_token: z.string().optional().describe("Bearer token configured on the browser runtime."),
-			placement: z.enum(["local", "managed"]).optional(),
-			capabilities: z.array(z.string()).optional(),
-			runner_version: z.string().optional(),
-			dry_run: z.boolean().optional(),
+			placement: z.enum(["local", "managed"]).optional().describe("Where the runtime is hosted. Omit for local."),
+			capabilities: z.array(z.string()).optional().describe("Runtime capability names this endpoint supports. Omit unless the runner gave you an explicit list."),
+			runner_version: z.string().optional().describe("Version string reported by the runner. Omit if unknown."),
+			dry_run: z.boolean().optional().describe("Preview the registration without saving it. Use before registering an uncertain endpoint."),
 		},
 		async ({
 			token,
@@ -84,7 +84,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Check the registered local or managed browser runtime for one of your private instances.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
 			probe: z.boolean().optional().describe("When true, PAGS calls the browser runtime /health and /capabilities endpoints."),
 		},
 		async ({ token, instance_id, probe }) => {
@@ -190,9 +190,9 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Remove the registered runtime endpoint for one of your private instances.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			confirm: z.string().optional().describe('Must be "unregister_instance_runtime" to remove a runtime endpoint.'),
-			dry_run: z.boolean().optional(),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			confirm: z.string().optional().describe('Exact confirmation string required for a real unregister: "unregister_instance_runtime". Omit on dry_run.'),
+			dry_run: z.boolean().optional().describe("Preview the unregister without removing the runtime endpoint."),
 		},
 		async ({ token, instance_id, confirm, dry_run }) => {
 			const sessionToken = tokenFor(token);
@@ -224,12 +224,12 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Create a task on the registered local or managed browser runtime for a private instance. The PAGS brain stays in control; the local ProAgentStore runner executes browser capabilities through the relay.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			type: z.string().describe("Runner task type, e.g. echo or browser.open."),
-			input: z.record(z.unknown()).optional(),
-			requires_approval: z.boolean().optional(),
-			approval_prompt: z.string().optional(),
-			dry_run: z.boolean().optional(),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			type: z.string().describe('Runner task type. Use the exact task type the runtime supports, e.g. "echo" or "browser.open"; do not invent dotted names without checking the runtime docs/status.'),
+			input: z.record(z.unknown()).optional().describe("JSON object passed to the runtime task as its input payload. Omit for no input; do not wrap it in another `input` object."),
+			requires_approval: z.boolean().optional().describe("When true, the task pauses for approve_instance_task before the runtime performs the approval-gated action."),
+			approval_prompt: z.string().optional().describe("Human-readable approval request shown with the waiting task. Use only when requires_approval is true."),
+			dry_run: z.boolean().optional().describe("Preview the task creation without enqueueing it on the runtime."),
 		},
 		async ({ token, instance_id, type, input, requires_approval, approval_prompt, dry_run }) => {
 			const sessionToken = tokenFor(token);
@@ -269,9 +269,9 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Approve a browser runtime task waiting for human approval.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			task_id: z.string(),
-			dry_run: z.boolean().optional(),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("Task ID returned by run_instance_task or shown by instance_task_events. Copy it exactly."),
+			dry_run: z.boolean().optional().describe("Preview the approval without approving the waiting runtime task."),
 		},
 		async ({ token, instance_id, task_id, dry_run }) => {
 			const sessionToken = tokenFor(token);
@@ -301,10 +301,10 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Cancel a task on the registered local or managed browser runtime for a private instance.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			task_id: z.string(),
-			confirm: z.string().optional().describe('Must be "cancel_instance_task" to cancel a browser runtime task.'),
-			dry_run: z.boolean().optional(),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("Task ID returned by run_instance_task or shown by instance_task_events. Copy it exactly."),
+			confirm: z.string().optional().describe('Exact confirmation string required for a real cancellation: "cancel_instance_task". Omit on dry_run.'),
+			dry_run: z.boolean().optional().describe("Preview the cancellation without cancelling the runtime task."),
 		},
 		async ({ token, instance_id, task_id, confirm, dry_run }) => {
 			const sessionToken = tokenFor(token);
@@ -336,8 +336,8 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		"Read recent events from a private instance's registered browser runtime.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			limit: z.coerce.number().int().min(1).max(500).optional(),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			limit: z.coerce.number().int().min(1).max(500).optional().describe("Maximum recent task events to return, 1-500. Omit for 100."),
 		},
 		async ({ token, instance_id, limit }) => {
 			const sessionToken = tokenFor(token);

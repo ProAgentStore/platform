@@ -275,4 +275,12 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.18 is published.
 	"0.1.19": "sha256:e1b7b7da1444269800746126ac2a3c76853e1b4756d14b60866b2cf0bae4f81b",
+	// 0.1.20 (#769): SERVER_INSTRUCTIONS now tells MCP callers to read the exact
+	// tools/list input schemas and copy opaque ids exactly. Runtime tools,
+	// call_instance_tool and chat_with_agent parameter descriptions were strengthened
+	// to prevent first-call parameter errors. Argument descriptions live in inputSchema,
+	// so this is a served surface change. No tool names or counts changed.
+	//
+	// Appended, never edited in place: 0.1.19 is published.
+	"0.1.20": "sha256:d9f550de7233837e5ae90de5b508ac67e58ad2feff5b74a90358a120c4fa5aa9",
 };
