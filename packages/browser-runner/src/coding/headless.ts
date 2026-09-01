@@ -11,6 +11,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
+import { engineAdapterFor, type EngineAdapter, type EngineMode } from "./engine-adapter.js";
+
+export { buildClaudeArgs } from "./engine-adapter.js";
 
 /**
  * The coding engine — Claude Code driven through its structured **stream-json**
@@ -93,16 +96,6 @@ export interface HeadlessSessionConfig {
 
 type Run = "idle" | "thinking";
 
-/** A line emitted on the CLI's stdout, parsed loosely (we tolerate unknown shapes). */
-interface StreamEvent {
-	type?: string;
-	subtype?: string;
-	session_id?: string;
-	is_error?: boolean;
-	result?: string;
-	message?: { content?: Array<Record<string, unknown>> };
-}
-
 /**
  * How many un-drained usage records a session holds (#267).
  *
@@ -166,7 +159,8 @@ export class HeadlessSession {
 	 */
 	private pendingSeed: string | null = null;
 	/** "stream-json" for Claude (structured) · "raw" for any other CLI (stdout capture). */
-	private readonly mode: "stream-json" | "raw";
+	private readonly mode: EngineMode;
+	private readonly adapter: EngineAdapter;
 	private readonly cmdBin: string;
 	private readonly cmdArgs: string[];
 	private readonly binName: string;
@@ -308,8 +302,8 @@ export class HeadlessSession {
 		this.engineLabel = `${config.clientType}:${config.id}`;
 		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`.
 		this.claudeSessionId = readState(config.statePath, config.id) ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom) : null);
-		// Claude is the structured engine; everything else is a raw CLI.
-		this.mode = config.clientType === "claude" ? "stream-json" : "raw";
+		this.adapter = engineAdapterFor(config.clientType);
+		this.mode = this.adapter.mode;
 		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,
 		// so an engine that found its own conversation drops it unread rather than being handed a
 		// summary of the conversation it is already in.
@@ -460,10 +454,7 @@ export class HeadlessSession {
 			return;
 		}
 		if (this.procAlive) return;
-		// stream-json: we own the structural flags + --resume; merge the user's extras
-		// (e.g. --model) without letting them clobber or orphan-value our flags. raw:
-		// run exactly what the user configured and capture stdout.
-		const args = this.mode === "stream-json" ? buildClaudeArgs(this.cmdArgs, this.claudeSessionId) : [...this.cmdArgs];
+		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
 		const proc = spawn(this.cmdBin, args, {
 			cwd: this.config.workDir,
@@ -714,59 +705,44 @@ export class HeadlessSession {
 	}
 
 	private handle(line: string): void {
-		let ev: StreamEvent;
-		try {
-			ev = JSON.parse(line) as StreamEvent;
-		} catch {
-			return; // tolerate non-JSON noise
-		}
-		switch (ev.type) {
-			case "system":
-				if (ev.subtype === "init" && ev.session_id) {
-					this.claudeSessionId = ev.session_id;
-					writeState(this.config.statePath, this.config.id, ev.session_id);
-				}
+		for (const ev of this.adapter.parseLine(line)) {
+			switch (ev.kind) {
+			case "session":
+				this.claudeSessionId = ev.sessionId;
+				writeState(this.config.statePath, this.config.id, ev.sessionId);
 				break;
-			case "assistant":
-				for (const block of ev.message?.content ?? []) {
-					if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
-						this.push(`[${stamp()}] ${block.text.trim()}`); // timestamped agent reply
-					} else if (block.type === "tool_use") {
-						const name = String(block.name ?? "tool");
-						this.push(`⚙ ${name} ${shortInput(block.input)}`); // ⚙
-						// The result arrives in a LATER event carrying only `tool_use_id`, and how much
-						// of it reaches the pane depends on which tool it was (#700) — so the name is
-						// remembered here and read back in `settleAct`'s sibling branch below.
-						if (typeof block.id === "string" && block.id) this.toolNames.set(block.id, name);
-						this.noteAct(block);
-					}
-				}
+			case "assistant_text":
+				this.push(`[${stamp()}] ${ev.text}`); // timestamped agent reply
 				break;
-			case "user": // tool results come back as a synthetic user message
-				for (const block of ev.message?.content ?? []) {
-					if (block.type === "tool_result") {
-						const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
-						// `""` when the call was not seen (a pane that began mid-turn, a runner restart):
-						// an unknown tool takes the conservative budget rather than the generous one.
-						const tool = this.toolNames.get(id) ?? "";
-						this.toolNames.delete(id);
-						this.push(renderToolResult(toolResultMark(block), block.content, tool)); // ↳✓ / ↳✗ (#597)
-						this.settleAct(block);
-					}
-				}
+			case "tool_use":
+				this.push(`⚙ ${ev.name} ${shortInput(ev.input)}`); // ⚙
+				// The result arrives in a LATER event carrying only `tool_use_id`, and how much
+				// of it reaches the pane depends on which tool it was (#700) — so the name is
+				// remembered here and read back in `settleAct`'s sibling branch below.
+				if (ev.id) this.toolNames.set(ev.id, ev.name);
+				this.noteAct(ev.block);
 				break;
-			case "result": {
-				const failure = ev.is_error ? String(ev.result ?? ev.subtype ?? "failed") : "";
+			case "tool_result": {
+				// `""` when the call was not seen (a pane that began mid-turn, a runner restart):
+				// an unknown tool takes the conservative budget rather than the generous one.
+				const tool = this.toolNames.get(ev.toolUseId) ?? "";
+				this.toolNames.delete(ev.toolUseId);
+				this.push(renderToolResult(toolResultMark(ev.block), ev.content, tool)); // ↳✓ / ↳✗ (#597)
+				this.settleAct(ev.block);
+				break;
+			}
+			case "turn_end": {
+				const failure = ev.isError ? ev.result : "";
 				if (failure) this.push(`[error] ${failure}`);
 				// The structured path's ANALOGUE of a non-zero exit (#545). Claude has no process
 				// per turn, so `exitCode` is honestly null and the verdict comes from the protocol's
 				// own `is_error` — the same claim, in the words the engine states it in. Without
 				// this the field would exist for three engines and silently not for the flagship.
-				this.turnReport = turnReportFromResult(ev.is_error === true, failure);
+				this.turnReport = turnReportFromResult(ev.isError, failure);
 				// The same event that ends the turn also reports what the turn COST (#267). It was
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.
 				// An errored turn still burned tokens, so this is recorded regardless of is_error.
-				const usage = parseEngineUsage(ev, `${this.config.id}:${this.usageRunId}:${this.usageSeq++}`);
+				const usage = parseEngineUsage(ev.raw, `${this.config.id}:${this.usageRunId}:${this.usageSeq++}`);
 				if (usage) {
 					this.pendingUsage.push(usage);
 					if (this.pendingUsage.length > MAX_PENDING_USAGE) this.pendingUsage.shift();
@@ -782,6 +758,7 @@ export class HeadlessSession {
 			}
 			default:
 				break;
+			}
 		}
 		// Keep the in-memory transcript bounded. Counts ENTRIES, and an entry may now be a
 		// multi-line block (a result, or a long assistant reply) rather than one line — the
@@ -932,37 +909,6 @@ export function parseCommand(command: string | undefined): { bin: string; args: 
 		tokens.push(out);
 	}
 	return { bin: tokens[0] ?? "", args: tokens.slice(1) };
-}
-
-/** Structural flags PAGS owns for the Claude stream-json engine — a user command
- *  must not override or duplicate these (and must not orphan their values). */
-const RESERVED_CLAUDE_FLAGS = new Set(["-p", "--print", "--input-format", "--output-format", "--verbose", "--resume"]);
-
-/**
- * Build Claude's argv: our structural stream-json flags + the user's extra args
- * (e.g. `--model`), with reserved flags (and their values) stripped so the user
- * can't clobber the protocol or leave an orphaned positional. `--resume` is added
- * last from our persisted session id, never from the user's command.
- */
-export function buildClaudeArgs(userArgs: string[], resumeId: string | null): string[] {
-	const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
-	for (let i = 0; i < userArgs.length; i++) {
-		const a = userArgs[i];
-		if (RESERVED_CLAUDE_FLAGS.has(a)) {
-			// drop the flag AND its value (when the next token isn't itself a flag)
-			if (i + 1 < userArgs.length && !userArgs[i + 1].startsWith("-")) i++;
-			continue;
-		}
-		// Push every user token as-is. A previous `!args.includes(a)` dedup silently
-		// dropped a REPEATED flag token (e.g. the 2nd `--add-dir` in `--add-dir /a
-		// --add-dir /b`), which orphaned its value (`/b` became a stray positional).
-		// Our own structural flags are already protected via RESERVED_CLAUDE_FLAGS, so
-		// no dedup is needed here.
-		args.push(a);
-	}
-	if (!args.includes("--dangerously-skip-permissions")) args.push("--dangerously-skip-permissions");
-	if (resumeId) args.push("--resume", resumeId);
-	return args;
 }
 
 // ── tiny on-disk store: our session id → Claude's session id (resume key) ──────
