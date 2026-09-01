@@ -7,6 +7,9 @@
   worktree unless the user explicitly asks not to commit or push.
 - Project-local Codex agent specs live in `.codex/agents/`. Keep the Dev Agent and BA Agent
   instructions there aligned with this workflow.
+- For tasks with two or more independent areas of investigation, use subagents in parallel.
+  Delegate codebase exploration, documentation research, testing, and reviews where appropriate.
+  Wait for relevant agents and consolidate their results before finishing.
 
 ## ProAgentStore Access Rules
 
