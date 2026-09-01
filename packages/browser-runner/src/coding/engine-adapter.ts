@@ -11,7 +11,9 @@ export type NormalizedEngineEvent =
 
 export interface EngineAdapter {
 	readonly mode: EngineMode;
+	readonly persistent: boolean;
 	buildLaunchArgs(userArgs: string[], resumeId: string | null): string[];
+	buildTurnArgs(userArgs: string[], turnText: string): string[];
 	parseLine(line: string): NormalizedEngineEvent[];
 }
 
@@ -101,16 +103,91 @@ function parseClaudeLine(line: string): NormalizedEngineEvent[] {
 
 export const claudeEngineAdapter: EngineAdapter = {
 	mode: "stream-json",
+	persistent: true,
 	buildLaunchArgs: buildClaudeArgs,
+	buildTurnArgs: (userArgs, turnText) => [...userArgs, turnText],
 	parseLine: parseClaudeLine,
+};
+
+function hasFlag(args: string[], flag: string): boolean {
+	return args.some((a) => a === flag || a.startsWith(`${flag}=`));
+}
+
+function buildCodexExecArgs(userArgs: string[], turnText: string): string[] {
+	const args = [...userArgs];
+	if (!hasFlag(args, "--json")) args.splice(1, 0, "--json");
+	args.push(turnText);
+	return args;
+}
+
+function parseCodexLine(line: string): NormalizedEngineEvent[] {
+	let ev: Record<string, unknown>;
+	try {
+		const parsed = JSON.parse(line);
+		const parsedRecord = record(parsed);
+		if (!parsedRecord) return [];
+		ev = parsedRecord;
+	} catch {
+		return [];
+	}
+
+	const type = typeof ev.type === "string" ? ev.type : "";
+	const item = record(ev.item);
+	if (type === "thread.started" && typeof ev.thread_id === "string" && ev.thread_id) return [{ kind: "session", sessionId: ev.thread_id }];
+	if (type === "turn.completed" || type === "turn.failed") {
+		const result =
+			typeof ev.error === "string" ? ev.error : typeof ev.message === "string" ? ev.message : type === "turn.failed" ? "failed" : "";
+		return [{ kind: "turn_end", raw: ev, isError: type === "turn.failed", result }];
+	}
+	if (!item) return [];
+
+	const itemType = typeof item.type === "string" ? item.type : "";
+	if (type === "item.completed" && itemType === "agent_message" && typeof item.text === "string" && item.text.trim()) {
+		return [{ kind: "assistant_text", text: item.text.trim() }];
+	}
+	if (itemType !== "command_execution") return [];
+
+	const id = typeof item.id === "string" ? item.id : "";
+	const command = typeof item.command === "string" ? item.command : "";
+	const block = type === "item.completed"
+		? {
+				type: "tool_result",
+				tool_use_id: id,
+				is_error: item.status === "failed" || (typeof item.exit_code === "number" && item.exit_code !== 0),
+				content: typeof item.aggregated_output === "string" ? item.aggregated_output : "",
+			}
+		: {
+				type: "tool_use",
+				id,
+				name: "Bash",
+				input: { command },
+			};
+
+	if (type === "item.completed") {
+		return [{ kind: "tool_result", block, toolUseId: id, content: block.content }];
+	}
+	if (type === "item.started" && command) return [{ kind: "tool_use", block, id, name: "Bash", input: { command } }];
+	return [];
+}
+
+export const codexEngineAdapter: EngineAdapter = {
+	mode: "stream-json",
+	persistent: false,
+	buildLaunchArgs: (userArgs) => [...userArgs],
+	buildTurnArgs: buildCodexExecArgs,
+	parseLine: parseCodexLine,
 };
 
 export const genericRawEngineAdapter: EngineAdapter = {
 	mode: "raw",
+	persistent: false,
 	buildLaunchArgs: (userArgs) => [...userArgs],
+	buildTurnArgs: (userArgs, turnText) => [...userArgs, turnText],
 	parseLine: () => [],
 };
 
-export function engineAdapterFor(clientType: ClientType): EngineAdapter {
-	return clientType === "claude" ? claudeEngineAdapter : genericRawEngineAdapter;
+export function engineAdapterFor(clientType: ClientType, userArgs: string[] = []): EngineAdapter {
+	if (clientType === "claude") return claudeEngineAdapter;
+	if (clientType === "codex" && userArgs[0] === "exec" && !["resume", "fork", "review", "help"].includes(userArgs[1] ?? "")) return codexEngineAdapter;
+	return genericRawEngineAdapter;
 }

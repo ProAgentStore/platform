@@ -66,12 +66,12 @@ const AI_CLI_COMMANDS = new Set([
 ]);
 
 /**
- * Engines that end a turn with a structured event carrying token counts and cost.
+ * Engines that end a turn with a structured event carrying token counts.
  *
- * Only Claude Code does. Codex and Grok are spawned raw and their turns are stdout text, which is
- * why they are unmetered under BOTH drivers rather than only under the terminal one.
+ * Claude Code also reports a cost estimate. Codex reports token counts through `exec --json` but
+ * no dollar figure on the observed 0.151.0 schema, so its cost source stays absent.
  */
-const STRUCTURED_ENGINES = new Set(["claude", "claude-code"]);
+const STRUCTURED_ENGINES = new Set(["claude", "claude-code", "codex"]);
 
 /**
  * The bare binary name behind whatever the runner reported.
@@ -118,6 +118,7 @@ export function classifyEngineMetering(driver: EngineDriver, engine?: string | n
 		};
 	}
 	if (STRUCTURED_ENGINES.has(name)) {
+		if (name === "codex") return { metered: true, reason: "Codex exec --json reports each turn's tokens; the observed schema does not report a dollar cost." };
 		return { metered: true, reason: "Claude Code reports each turn's tokens and cost, and that figure is recorded as measured." };
 	}
 	return {
@@ -282,8 +283,9 @@ export async function noteUnmeteredDrive(
  * needed for: under `terminal` the verdict is a CONSTANT (a pane carries rendered characters, so
  * nothing is measurable whatever runs in it), which is exactly why those six sites could call
  * `noteUnmeteredDrive` unconditionally and never consult `classifyEngineMetering` at all. Under
- * `headless` the verdict VARIES by engine — Claude Code reports each turn, codex/grok/gemini end a
- * turn with plain stdout — so this is the one place a call is load-bearing rather than decorative.
+ * `headless` the verdict VARIES by engine — Claude Code and Codex report structured turns,
+ * grok/gemini still end a turn with plain stdout — so this is the one place a call is
+ * load-bearing rather than decorative.
  * That is the whole reason the function had no production caller: not a call site that turned out
  * to be hard, just the one row of the table nobody wired.
  *

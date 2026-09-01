@@ -9,7 +9,7 @@ const rec = (over: Record<string, unknown> = {}) => ({
 
 describe("sanitizeEngineUsage", () => {
 	it("passes a well-formed record through intact", () => {
-		expect(sanitizeEngineUsage([rec()])).toEqual([rec()]);
+		expect(sanitizeEngineUsage([rec()])).toEqual([rec({ provider: "anthropic" })]);
 	});
 
 	it("is empty for a non-array — a runner that reports nothing must yield no rows", () => {
@@ -32,6 +32,20 @@ describe("sanitizeEngineUsage", () => {
 		// drop real spend.
 		expect(sanitizeEngineUsage([rec({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })])).toHaveLength(1);
 		expect(sanitizeEngineUsage([rec({ costUsd: 0 })])).toHaveLength(1);
+	});
+
+	it("keeps the reported provider for structured non-Claude engines", () => {
+		expect(sanitizeEngineUsage([rec({ provider: "openai", model: "codex", costUsd: 0 })])[0]).toMatchObject({
+			provider: "openai",
+			model: "codex",
+			inputTokens: 2,
+			costUsd: 0,
+		});
+	});
+
+	it("defaults older runner records to Claude's provider and rejects unknown providers", () => {
+		expect(sanitizeEngineUsage([rec()])[0].provider).toBe("anthropic");
+		expect(sanitizeEngineUsage([rec({ provider: "filecoin" })])[0].provider).toBe("anthropic");
 	});
 
 	it("drops a record with no id — there would be no dedup key", () => {

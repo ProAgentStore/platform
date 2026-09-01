@@ -283,7 +283,7 @@ export class HeadlessSession {
 	 * flag and {@link buildClaudeArgs} is only reached in stream-json mode.
 	 */
 	get resumedConversation(): boolean {
-		return this.mode === "stream-json" && this.claudeSessionId !== null;
+		return this.config.clientType === "claude" && this.mode === "stream-json" && this.claudeSessionId !== null;
 	}
 
 	/**
@@ -301,13 +301,10 @@ export class HeadlessSession {
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;
 		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`.
-		this.claudeSessionId = readState(config.statePath, config.id) ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom) : null);
-		this.adapter = engineAdapterFor(config.clientType);
-		this.mode = this.adapter.mode;
-		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,
-		// so an engine that found its own conversation drops it unread rather than being handed a
-		// summary of the conversation it is already in.
-		this.pendingSeed = this.resumedConversation ? null : config.seed?.trim() || null;
+		this.claudeSessionId =
+			config.clientType === "claude"
+				? readState(config.statePath, config.id) ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom) : null)
+				: null;
 		const { bin, args } = parseCommand(config.command);
 		// When no explicit command is configured, fall back to THIS engine's default
 		// command (codex/gemini/grok/…) — not a hard-coded "claude", which would drive a
@@ -318,6 +315,12 @@ export class HeadlessSession {
 		// Use the configured command's args when a command was given (bin set), else the
 		// engine default's args.
 		this.cmdArgs = bin ? args : fallback.args;
+		this.adapter = engineAdapterFor(config.clientType, this.cmdArgs);
+		this.mode = this.adapter.mode;
+		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,
+		// so an engine that found its own conversation drops it unread rather than being handed a
+		// summary of the conversation it is already in.
+		this.pendingSeed = this.resumedConversation ? null : config.seed?.trim() || null;
 		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
 	}
 
@@ -384,7 +387,7 @@ export class HeadlessSession {
 		//
 		// The ceiling that stops a wedged process is armed in `runOneShot` — it ENDS the turn
 		// rather than relabelling a live one as idle, which is the same mistake in slower form.
-		if (this.oneShot) return this.procAlive ? "thinking" : "idle";
+		if (this.oneShot) return this.mode === "stream-json" ? this.run : this.procAlive ? "thinking" : "idle";
 		// Below: a PERSISTENT non-Claude engine — alive between turns, so exit says nothing about
 		// a turn and idle must be inferred. None ships today; every raw engine is one-shot. The
 		// gate is `!oneShot` rather than `mode === "raw"` because the latter now means the
@@ -439,7 +442,7 @@ export class HeadlessSession {
 	 * multi-turn, which is why it survived the migration untouched.
 	 */
 	private get oneShot(): boolean {
-		return this.mode === "raw";
+		return !this.adapter.persistent;
 	}
 
 	start(): void {
@@ -520,7 +523,7 @@ export class HeadlessSession {
 			// Brief first, instruction second, and never the other way round: it is background for
 			// the request, and an engine that reads the request last acts on the request.
 			const withSeed = seed ? `${seed}\n\n${sent}` : sent;
-			if (this.mode === "stream-json") {
+			if (this.adapter.persistent) {
 				// `role` stays "user" — the only role this protocol accepts, which is why the
 				// disambiguation rides in the text instead (#505).
 				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: withSeed }] } });
@@ -554,7 +557,7 @@ export class HeadlessSession {
 		// Arm the per-turn line capture BEFORE the spawn, so a report can only ever carry a line
 		// this turn produced (#545).
 		this.turnLastLine = "";
-		const proc = spawn(this.cmdBin, [...this.cmdArgs, text], {
+		const proc = spawn(this.cmdBin, this.adapter.buildTurnArgs(this.cmdArgs, text), {
 			cwd: this.config.workDir,
 			env: this.spawnEnv,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -708,8 +711,10 @@ export class HeadlessSession {
 		for (const ev of this.adapter.parseLine(line)) {
 			switch (ev.kind) {
 			case "session":
-				this.claudeSessionId = ev.sessionId;
-				writeState(this.config.statePath, this.config.id, ev.sessionId);
+				if (this.config.clientType === "claude") {
+					this.claudeSessionId = ev.sessionId;
+					writeState(this.config.statePath, this.config.id, ev.sessionId);
+				}
 				break;
 			case "assistant_text":
 				this.push(`[${stamp()}] ${ev.text}`); // timestamped agent reply
@@ -791,10 +796,11 @@ export class HeadlessSession {
 	 * from the RAW `block.content`, never from `renderToolResult()`'s display lines — those are cut to
 	 * the pane's budget (`transcript-lines.ts`) and would drop the URL off a verbose result.
 	 *
-	 * This path (and `noteAct`) is reachable ONLY from the structured stream-json handling above
-	 * (`assistant` → `tool_use`, `user` → `tool_result`). A Codex/Grok session is a raw spawn with no
-	 * such framing, so its PRs stay unattributed by construction; scraping its transcript instead
-	 * would be the temporal guess `pull-attribution.ts` refuses.
+	 * This path (and `noteAct`) is reachable ONLY from structured adapter events. Claude emits
+	 * `assistant` → `tool_use`, `user` → `tool_result`; Codex `exec --json` emits
+	 * `command_execution`, which the adapter normalizes to the same shape. Raw engines have no such
+	 * framing, so scraping their transcript would be the temporal guess `pull-attribution.ts`
+	 * refuses.
 	 */
 	private settleAct(block: Record<string, unknown>): void {
 		const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";

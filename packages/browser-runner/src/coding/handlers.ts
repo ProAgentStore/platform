@@ -35,7 +35,7 @@ export interface AgentHandler {
 const HANDLERS: Record<ClientType, AgentHandler> = {
 	claude: { clientType: "claude", cliCommand: "claude --dangerously-skip-permissions", envVar: "ANTHROPIC_API_KEY" },
 	gemini: { clientType: "gemini", cliCommand: "gemini --approval-mode yolo --skip-trust --prompt", envVar: "GEMINI_API_KEY" },
-	codex: { clientType: "codex", cliCommand: "codex exec --sandbox danger-full-access", envVar: "OPENAI_API_KEY" },
+	codex: { clientType: "codex", cliCommand: "codex exec --json --sandbox danger-full-access", envVar: "OPENAI_API_KEY" },
 	grok: { clientType: "grok", cliCommand: "grok --permission-mode bypassPermissions -p", envVar: "XAI_API_KEY" },
 	generic: { clientType: "generic", cliCommand: "bash", envVar: "" },
 };

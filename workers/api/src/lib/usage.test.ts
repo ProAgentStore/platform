@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateUsage, denseDays, instanceSpendMicros, usageDay, type UsageRow, type UsageSummary } from "./usage.js";
+import { aggregateUsage, denseDays, instanceSpendMicros, recordEngineUsage, usageDay, type UsageRow, type UsageSummary } from "./usage.js";
 import { bucketLabel, instanceLabels } from "./usage-ids.js";
 import { engineUsageRowId } from "./engine-usage.js";
 import type { Env } from "../types.js";
@@ -13,6 +13,35 @@ const row = (over: Partial<UsageRow> = {}): UsageRow => ({
 describe("usageDay", () => {
 	it("takes the UTC date portion of a D1 timestamp", () => {
 		expect(usageDay("2026-07-14 23:59:59")).toBe("2026-07-14");
+	});
+});
+
+describe("recordEngineUsage", () => {
+	it("stores the runner-reported provider and only marks cost_source when a cost was reported", async () => {
+		const batches: Array<{ sql: string; args: unknown[] }> = [];
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind(...args: unknown[]) {
+							return { sql, args };
+						},
+					};
+				},
+				async batch(stmts: Array<{ sql: string; args: unknown[] }>) {
+					batches.push(...stmts);
+				},
+			},
+		} as unknown as Env;
+
+		await recordEngineUsage(env, { userId: "u1", sessionId: "s1", instanceId: "i1" }, [
+			{ id: "codex-turn", provider: "openai", model: "codex", inputTokens: 10, outputTokens: 4, cacheReadTokens: 20, cacheWriteTokens: 0, costUsd: 0 },
+			{ id: "claude-turn", provider: "anthropic", model: "claude-opus-5", inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4, costUsd: 0.25 },
+		]);
+
+		expect(batches).toHaveLength(2);
+		expect(batches[0].args.slice(4, 13)).toEqual(["openai", "codex", 10, 4, 20, 0, 0, null, null]);
+		expect(batches[1].args.slice(4, 13)).toEqual(["anthropic", "claude-opus-5", 1, 2, 3, 4, 250_000, "reported", null]);
 	});
 });
 

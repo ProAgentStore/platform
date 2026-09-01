@@ -29,10 +29,10 @@
  *
  * ── THE HONEST GAP ──
  *
- * Only a stream-json engine (Claude Code) produces these. A raw Codex/Grok session emits nothing
- * parseable, so it records no acts — the same gap, for the same reason, as engine usage (#267). An
- * empty act list therefore means "nothing observed", never "nothing happened", and every consumer
- * has to say so rather than render it as an all-clear.
+ * Only structured engines produce these. Claude Code emits `tool_use`/`tool_result`; Codex
+ * `exec --json` emits `command_execution` events that the adapter normalizes to the same shape.
+ * A raw engine emits nothing parseable, so an empty act list means "nothing observed", never
+ * "nothing happened", and every consumer has to say so rather than render it as an all-clear.
  */
 
 /** The kinds of act worth writing down. Anything not here is ordinary work and is not recorded. */
@@ -239,9 +239,9 @@ function wantsPrNumber(act: EngineActRecord): boolean {
  * true costs more than it saves. The act still carries `ok: false`, so the record remains honest
  * that the command failed.
  *
- * Only reachable from the structured stream-json path. A Codex/Grok raw spawn has no
- * `tool_use`/`tool_result` framing at all, so its PRs stay unattributed — regexing its transcript
- * instead would reintroduce exactly the temporal guess this design refuses.
+ * Only reachable from structured adapter events. A raw spawn has no `tool_use`/`tool_result`
+ * framing at all, so its PRs stay unattributed — regexing its transcript instead would reintroduce
+ * exactly the temporal guess this design refuses.
  */
 export function fillTargetFromResult(acts: EngineActRecord[], content: unknown): EngineActRecord[] {
 	if (!acts.some(wantsPrNumber)) return acts;

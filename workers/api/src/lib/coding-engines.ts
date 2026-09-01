@@ -247,15 +247,16 @@ export function engineAuthReport(mode: EngineAuth, resolved: EngineAuthResolved 
  *    across presets or the choice is a trap. {@link ENGINE_WRITE_FLAGS} names the flag per engine.
  *
  * These are defaults, not policy: the presets are editable per instance (console → ⚙ CLI engines,
- * or `PUT /v1/instances/:id/coding/engines`), and every token here reaches the engine verbatim, so
- * narrowing to `--sandbox workspace-write` — or adding `--model`, `-c`, anything else — is a
- * config change, not a code change. See `docs/coding-engines.md`.
+ * or `PUT /v1/instances/:id/coding/engines`). Except for adapter-owned protocol flags such as
+ * Codex `--json`, every token here reaches the engine verbatim, so narrowing to
+ * `--sandbox workspace-write` — or adding `--model`, `-c`, anything else — is a config change, not
+ * a code change. See `docs/coding-engines.md`.
  */
 export const DEFAULT_ENGINES: CodingEngine[] = [
-	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn). Every other preset
-	// here is respawned per turn and therefore starts each turn with no memory of the previous one
-	// — see `docs/coding-engines.md` § "What one-shot costs", and the per-preset line the engines
-	// panel now shows (#449).
+	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn). Codex is structured
+	// but still one-shot. Every other preset here is raw and respawned per turn; every non-Claude
+	// preset starts each turn with no memory of the previous one — see `docs/coding-engines.md` §
+	// "What one-shot costs", and the per-preset line the engines panel now shows (#449).
 	//
 	// NO PRESET RESUMES, deliberately, though three of these CLIs offer it. Checked against the
 	// installed binaries 2026-08-09: `codex exec resume --last` (codex-cli 0.146.0), grok's
@@ -267,7 +268,7 @@ export const DEFAULT_ENGINES: CodingEngine[] = [
 	// conversation is worse than starting clean, because it is confidently wrong instead of blank.
 	// The prefix contract also has no slot for a session id: the turn text takes that positional.
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
-	{ id: "codex", label: "Codex", command: "codex exec --sandbox danger-full-access" },
+	{ id: "codex", label: "Codex", command: "codex exec --json --sandbox danger-full-access" },
 	// `--skip-trust` is not optional alongside yolo: without it Gemini prints
 	// "Approval mode overridden to \"default\" because the current folder is not trusted" and
 	// goes back to asking — in a headless run, with nobody to ask. Verified live.

@@ -198,18 +198,20 @@ export async function recordEngineUsage(
 				`INSERT OR IGNORE INTO ai_usage
 				   (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens,
 				    cache_read_tokens, cache_write_tokens, cost_micros, cost_source, payer, created_at)
-				 VALUES (?1, ?2, ?3, ?4, 'anthropic', ?5, 'engine', ?6, ?7, ?8, ?9, ?10, 'reported', ?11, datetime('now'))`,
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'engine', ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))`,
 			).bind(
 				engineUsageRowId(args.sessionId, r.id),
 				args.userId,
 				args.agentId ?? null,
 				args.instanceId ?? null,
+				r.provider ?? "anthropic",
 				r.model,
 				r.inputTokens,
 				r.outputTokens,
 				r.cacheReadTokens,
 				r.cacheWriteTokens,
 				Math.round(r.costUsd * 1_000_000),
+				r.costUsd > 0 ? "reported" : null,
 				payer,
 			),
 		);

@@ -41,6 +41,14 @@ process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
 setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
 `;
 
+const FAKE_CODEX_JSON_ARGV = `#!/usr/bin/env node
+const argv = process.argv.slice(2);
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "codex-json-argv" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "argv: " + JSON.stringify(argv) } }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }) + "\\n");
+`;
+
 /**
  * A raw CLI that REFUSES the turn: prints its reason and exits 1 (#545).
  *
@@ -403,6 +411,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let slowBin: string;
 	let pauserBin: string;
 	let argvBin: string;
+	let codexJsonArgvBin: string;
 	let wedgedBin: string;
 	let refuserBin: string;
 	let whichGhBin: string;
@@ -413,6 +422,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		slowBin = join(dir, "fake-slow.js");
 		pauserBin = join(dir, "fake-pauser.js");
 		argvBin = join(dir, "fake-argv.js");
+		codexJsonArgvBin = join(dir, "fake-codex-json-argv.js");
 		wedgedBin = join(dir, "fake-wedged.js");
 		refuserBin = join(dir, "fake-refuser.js");
 		whichGhBin = join(dir, "fake-which-gh.sh");
@@ -420,6 +430,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		writeFileSync(slowBin, FAKE_SLOW);
 		writeFileSync(pauserBin, FAKE_PAUSER);
 		writeFileSync(argvBin, FAKE_ARGV);
+		writeFileSync(codexJsonArgvBin, FAKE_CODEX_JSON_ARGV);
 		writeFileSync(wedgedBin, FAKE_WEDGED);
 		writeFileSync(refuserBin, FAKE_REFUSER);
 		writeFileSync(whichGhBin, FAKE_WHICH_GH);
@@ -427,6 +438,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		chmodSync(slowBin, 0o755);
 		chmodSync(pauserBin, 0o755);
 		chmodSync(argvBin, 0o755);
+		chmodSync(codexJsonArgvBin, 0o755);
 		chmodSync(wedgedBin, 0o755);
 		chmodSync(refuserBin, 0o755);
 		chmodSync(whichGhBin, 0o755);
@@ -434,10 +446,10 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("reports NO usage — an unmeasurable engine must leave a gap, not a zero", async () => {
-		// Codex/Grok emit no structured result event, so there is nothing to measure. Recording a
-		// zero row would put "Coding engine · $0.00" on the Usage page, which claims the engine was
-		// free — a stronger and more misleading statement than the absence it replaces (#267).
-		// The absence is structural, not a special case: raw mode never parses JSON at all.
+		// A custom raw engine emits no structured result event, so there is nothing to measure.
+		// Recording a zero row would put "Coding engine · $0.00" on the Usage page, which claims the
+		// engine was free — a stronger and more misleading statement than the absence it replaces
+		// (#267). The absence is structural, not a special case: raw mode never parses JSON at all.
 		const s = new HeadlessSession({ id: "rawusage", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
 		s.start();
 		s.input("hi");
@@ -597,7 +609,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.stop();
 	}, 20_000);
 
-	it("passes EVERY preset param through to the engine, with the turn text last", async () => {
+	it("passes EVERY preset param through to a raw engine, with the turn text last", async () => {
 		// "It should launch with any params provided" — the preset command is a prefix and the
 		// turn text is appended as the final argument, so `--sandbox danger-full-access`,
 		// `--model`, `-c key=value`, a quoted value, anything, reaches the CLI untouched. This is
@@ -606,15 +618,32 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		const s = new HeadlessSession({
 			id: "raw-argv",
 			workDir: dir,
-			clientType: "codex",
+			clientType: "generic",
 			bin: argvBin,
-			command: 'codex exec --sandbox danger-full-access -c model="o3"',
+			command: 'custom-cli --sandbox danger-full-access -c model="o3"',
 		});
 		s.start();
 		s.input("fix the failing test");
 		await until(() => s.snapshot().includes("argv:"), 8000, "engine argv echo");
 		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
-		expect(argv).toEqual(["exec", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
+		expect(argv).toEqual(["--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
+		s.stop();
+	}, 15_000);
+
+	it("adds --json to codex exec without dropping preset params", async () => {
+		const s = new HeadlessSession({
+			id: "codex-json-argv",
+			workDir: dir,
+			clientType: "codex",
+			bin: codexJsonArgvBin,
+			command: 'codex exec --sandbox danger-full-access -c model="o3"',
+		});
+		s.start();
+		s.input("fix the failing test");
+		await until(() => s.snapshot().includes("argv:"), 8000, "codex JSON argv echo");
+		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
+		expect(argv).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
+		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
 		s.stop();
 	}, 15_000);
 
@@ -623,14 +652,17 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// configured, so a codex/grok session was silently driven by the wrong CLI. Whether
 		// codex is installed (→ "[codex] …" output / exit) or not (→ "cannot run `codex`"),
 		// the transcript must reference codex and NEVER claude.
-		const s = new HeadlessSession({ id: "raw-default", workDir: dir, clientType: "codex" });
+		const fakePath = `${dir}:${process.env.PATH ?? ""}`;
+		writeFileSync(join(dir, "codex"), FAKE_CODEX_JSON_ARGV);
+		chmodSync(join(dir, "codex"), 0o755);
+		const s = new HeadlessSession({ id: "raw-default", workDir: dir, clientType: "codex", env: { PATH: fakePath } });
 		expect(() => s.start()).not.toThrow();
 		// One-shot: the process is spawned by the TURN, so nothing runs until input arrives.
 		s.input("hi");
-		await until(() => s.snapshot().toLowerCase().includes("codex"), 8000, "default raw engine process output");
+		await until(() => s.snapshot().includes("argv:"), 8000, "default codex engine process output");
 		const snap = s.snapshot().toLowerCase();
-		expect(snap).toContain("codex");
 		expect(snap).not.toContain("claude");
+		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex" }]);
 		s.stop();
 	}, 15_000);
 
@@ -1056,6 +1088,25 @@ rl.on("line", (line) => {
 });
 `;
 
+const FAKE_CODEX_MERGER = `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "codex-merge" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.started", item: {
+  id: "item_1", type: "command_execution",
+  command: "git push -u origin fix && gh pr merge 42 --squash",
+  aggregated_output: "", exit_code: null, status: "in_progress",
+} }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.completed", item: {
+  id: "item_1", type: "command_execution",
+  command: "git push -u origin fix && gh pr merge 42 --squash",
+  aggregated_output: "merged",
+  exit_code: 0, status: "completed",
+} }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed", usage: {
+  input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0,
+} }) + "\\n");
+`;
+
 describe("HeadlessSession — a run that merges to main must leave a record (#294)", () => {
 	let dir: string;
 
@@ -1104,6 +1155,22 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		s.stop();
 	}, 20_000);
 
+	it("records Codex command_execution acts through the structured adapter", async () => {
+		const bin = join(dir, "fake-codex-merger.js");
+		writeFileSync(bin, FAKE_CODEX_MERGER);
+		chmodSync(bin, 0o755);
+		const s = new HeadlessSession({ id: "acts-codex", workDir: dir, clientType: "codex", command: "codex exec --sandbox danger-full-access", bin });
+		s.start();
+		s.input("ship it");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("merged"), 8000, "the codex structured turn to finish");
+
+		const acts = s.takeActs();
+		expect(acts.map((a) => a.kind)).toEqual(["push", "pr.merge"]);
+		expect(acts[1]).toMatchObject({ kind: "pr.merge", target: "#42", irreversible: true, ok: true });
+		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
+		s.stop();
+	}, 20_000);
+
 	it("records nothing for a raw engine — a gap, never a false all-clear", async () => {
 		// Nothing parses a Codex/Grok session's stdout, so it can report no acts. An empty list must
 		// therefore mean "not observed"; every consumer is written against that, and this is the test
@@ -1111,7 +1178,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		const bin = join(dir, "fake-raw.js");
 		writeFileSync(bin, `#!/usr/bin/env node\nprocess.stdout.write("gh pr merge 42 --squash\\n");\n`);
 		chmodSync(bin, 0o755);
-		const s = new HeadlessSession({ id: "acts3", workDir: dir, clientType: "codex", bin });
+		const s = new HeadlessSession({ id: "acts3", workDir: dir, clientType: "generic", command: "custom-cli", bin });
 		s.start();
 		s.input("ship it");
 		await until(() => s.snapshot().includes("gh pr merge"), 8000, "the raw engine's output");
