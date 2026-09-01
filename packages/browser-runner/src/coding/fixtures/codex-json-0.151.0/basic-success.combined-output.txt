@@ -1,0 +1,7 @@
+Reading additional input from stdin...
+{"type":"thread.started","thread_id":"01a05aa7-bdc8-7641-b407-be427fb469ae"}
+{"type":"turn.started"}
+2026-09-01T01:48:58.115173Z ERROR codex_rmcp_client::oauth::refresh_transaction: error=OAuth tokens for server [connector-name] cannot be refreshed; authorization required
+2026-09-01T01:48:58.596753Z ERROR codex_rmcp_client::oauth::refresh_transaction: error=OAuth tokens for server [connector-name] cannot be refreshed; authorization required
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"BASIC-SPIKE-OK"}}
+{"type":"turn.completed","usage":{"input_tokens":15173,"cached_input_tokens":9984,"cache_write_input_tokens":0,"output_tokens":11,"reasoning_output_tokens":0}}
