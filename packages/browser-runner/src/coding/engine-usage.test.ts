@@ -31,6 +31,7 @@ describe("parseEngineUsage", () => {
 		const u = parseEngineUsage(RESULT, "fallback");
 		expect(u).toMatchObject({
 			id: "c23b4613-9e55-4e6f-9e85-5847aa0c1aad",
+			provider: "anthropic",
 			model: "claude-opus-5[1m]",
 			inputTokens: 2,
 			outputTokens: 4,
@@ -98,5 +99,31 @@ describe("parseEngineUsage", () => {
 	it("says 'unknown' rather than throwing when modelUsage is missing", () => {
 		const { modelUsage: _omitted, ...noModels } = RESULT;
 		expect(parseEngineUsage(noModels, "f")?.model).toBe("unknown");
+	});
+
+	it("reads Codex token usage from turn.completed without inventing a cost", () => {
+		const u = parseEngineUsage(
+			{
+				type: "turn.completed",
+				usage: {
+					input_tokens: 10,
+					cached_input_tokens: 20,
+					cache_write_input_tokens: 3,
+					output_tokens: 4,
+					reasoning_output_tokens: 2,
+				},
+			},
+			"codex-turn-1",
+		);
+		expect(u).toMatchObject({
+			id: "codex-turn-1",
+			provider: "openai",
+			model: "codex",
+			inputTokens: 10,
+			cacheReadTokens: 20,
+			cacheWriteTokens: 3,
+			outputTokens: 4,
+			costUsd: 0,
+		});
 	});
 });

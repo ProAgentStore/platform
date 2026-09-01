@@ -47,10 +47,10 @@ Claude is the one *persistent* engine: the runner keeps it alive and speaks stru
 spawn(bin, [...presetArgs, turnText])
 ```
 
-So `codex exec --sandbox danger-full-access` plus the turn "fix the failing test" becomes
+So `codex exec --json --sandbox danger-full-access` plus the turn "fix the failing test" becomes
 
 ```
-codex exec --sandbox danger-full-access "fix the failing test"
+codex exec --json --sandbox danger-full-access "fix the failing test"
 ```
 
 Nothing is filtered, reordered, or interpreted. `--model`, `-c key=value`, `--profile`, a flag we
@@ -59,9 +59,10 @@ should (`-c model="o3"` → `model=o3`). That is deliberate: **engine posture is
 not a code change.** Pinned by `headless.test.ts` → "passes EVERY preset param through to the
 engine, with the turn text last".
 
-The one exception is Claude's structural flags (`-p`, `--input-format`, `--output-format`,
-`--verbose`, `--resume`): those carry the wire protocol, so a preset cannot override them.
-`buildClaudeArgs` strips them and their values; every other token you write is kept.
+The exceptions are structural protocol flags. Claude owns `-p`, `--input-format`,
+`--output-format`, `--verbose`, and `--resume`; those carry the wire protocol, so a preset cannot
+override them. Codex `exec` owns `--json` for the same reason: if the preset says `codex exec`, the
+runner inserts `--json` once before appending the turn. Every other token you write is kept.
 
 ### What one-shot costs: a raw engine forgets every previous turn
 
@@ -69,17 +70,18 @@ The prefix contract above has a consequence it is easy to read past. `spawn(bin,
 turnText])` is a **brand new process every turn**, so the Pilot's step 7 —
 
 ```
-codex exec --sandbox danger-full-access "now do the same for the other two files"
+codex exec --json --sandbox danger-full-access "now do the same for the other two files"
 ```
 
 — runs in a process that has never seen steps 1–6. **The working tree carries state; the
 conversation does not.** The engine is not amnesiac about the repo (its edits are still there, and
 it can read them), only about everything it said, decided, or was told.
 
-Claude is the exception, and its continuity is **not** in the preset either: the runner keeps one
-stream-json process alive, and across runner restarts re-spawns it with `--resume <session id>`
-against `~/.claude` — which is exactly why `--resume` is one of the structural flags a preset may
-not set. `resumedConversation` is false for a raw engine under every circumstance.
+Claude is the persistence exception, and its continuity is **not** in the preset either: the runner
+keeps one stream-json process alive, and across runner restarts re-spawns it with
+`--resume <session id>` against `~/.claude` — which is exactly why `--resume` is one of the
+structural flags a preset may not set. Codex also uses structured JSON now, but it is still
+one-shot and `resumedConversation` remains false until the separate resume-by-id spike passes.
 
 **The fix is the prefix contract, used on purpose.** Where the vendor ships a resume subcommand,
 putting it in the preset gives that engine multi-turn memory with no platform change: **multi-turn
@@ -95,8 +97,9 @@ listed per engine (`engine-continuity.ts`, mirroring `deriveClientType`), so it 
 ### What one-shot also costs: a raw engine's spend cannot be measured
 
 The same structural difference decides whether you can see what an engine costs. Claude Code ends
-each turn with a structured event carrying its own token counts and cost; the runner reads it and
-the platform banks a measured row, which is what the **Usage** page adds up. A raw engine ends a
+each turn with a structured event carrying its own token counts and cost; Codex `exec --json`
+reports token counts but, on the observed `codex-cli 0.151.0` schema, no dollar figure. The runner
+reads the fields the CLI reports and the platform banks a measured token row. A raw engine ends a
 turn with plain stdout and reports no numbers at all, so there is nothing to bank.
 
 **A missing row is not a zero.** An unmeasured engine is not cheaper than a measured one — the
@@ -154,7 +157,7 @@ nothing gets:
 | id | Label | Command | `auth` |
 |---|---|---|---|
 | `claude` | Claude Code | `claude --dangerously-skip-permissions` | unset → `auto` |
-| `codex` | Codex | `codex exec --sandbox danger-full-access` | unset → `auto` |
+| `codex` | Codex | `codex exec --json --sandbox danger-full-access` | unset → `auto` |
 | `gemini` | Gemini CLI | `gemini --approval-mode yolo --skip-trust --prompt` | `api-key` |
 | `grok` | Grok | `grok --permission-mode bypassPermissions -p` | unset → `auto` |
 | `local` | Local model (Ollama) | `ollama run llama3` | `machine` |
@@ -167,8 +170,9 @@ the model. The `local` preset is a starting point rather than a recommendation: 
 prompt-in/text-out works by editing the command, and it costs nothing per token.
 
 `deriveClientType` maps the command's real binary — skipping `FOO=bar` prefixes and wrappers like
-`npx`/`env` — to `claude` (structured stream-json) or one of `gemini`/`grok`/`codex` (raw spawn).
-An unrecognised binary maps to `codex`, so it runs RAW rather than being mis-driven as Claude.
+`npx`/`env` — to `claude`, `codex`, `gemini`, or `grok`. Claude is persistent structured
+stream-json; Codex is one-shot structured JSON when the preset is `codex exec`; Gemini and Grok
+remain raw. An unrecognised binary maps to `codex`, so it is never mis-driven as Claude.
 
 ## Every engine must carry its write-permission flag
 

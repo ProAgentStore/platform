@@ -12,13 +12,16 @@
  * whole ledger that is NOT an estimate, so it is carried through as reported rather than being
  * re-derived from `ai-pricing.ts` list prices.
  *
- * Raw (non-Claude) engines never reach this module: `HeadlessSession` only parses JSON in
- * stream-json mode, so a Codex/Grok session produces no records at all. That is deliberate —
- * a zero row would read as "this engine is free", which is a worse lie than a gap.
+ * Raw engines never reach this module: `HeadlessSession` only parses usage from structured engine
+ * events. Codex `exec --json` reports tokens but no dollar figure on the observed 0.151.0 schema,
+ * so those rows carry provider `openai`, model `codex`, and `costUsd: 0` without pretending the CLI
+ * reported a price.
  */
 
 /** One engine turn's measured spend. The wire shape between runner and cloud. */
 export interface EngineUsageRecord {
+	/** Provider whose CLI reported this turn. Older runners omit it and the cloud defaults Claude. */
+	provider?: string;
 	/**
 	 * Stable per-turn id, so reporting the same record twice is harmless.
 	 *
@@ -77,6 +80,7 @@ function pickModel(modelUsage: unknown): string {
 export function parseEngineUsage(ev: unknown, fallbackId: string): EngineUsageRecord | null {
 	if (!ev || typeof ev !== "object") return null;
 	const e = ev as Record<string, unknown>;
+	if (e.type === "turn.completed") return parseCodexUsage(e, fallbackId);
 	if (e.type !== "result") return null;
 
 	const usage = (e.usage && typeof e.usage === "object" ? e.usage : {}) as Record<string, unknown>;
@@ -91,12 +95,34 @@ export function parseEngineUsage(ev: unknown, fallbackId: string): EngineUsageRe
 	const uuid = typeof e.uuid === "string" && e.uuid.trim() ? e.uuid.trim() : "";
 	return {
 		id: uuid || fallbackId,
+		provider: "anthropic",
 		model: pickModel(e.modelUsage),
 		inputTokens,
 		outputTokens,
 		cacheReadTokens,
 		cacheWriteTokens,
 		costUsd,
+		at: new Date().toISOString(),
+	};
+}
+
+function parseCodexUsage(e: Record<string, unknown>, fallbackId: string): EngineUsageRecord | null {
+	const usage = (e.usage && typeof e.usage === "object" ? e.usage : {}) as Record<string, unknown>;
+	const inputTokens = num(usage.input_tokens);
+	const outputTokens = num(usage.output_tokens);
+	const cacheReadTokens = num(usage.cached_input_tokens);
+	const cacheWriteTokens = num(usage.cache_write_input_tokens);
+	if (!inputTokens && !outputTokens && !cacheReadTokens && !cacheWriteTokens) return null;
+
+	return {
+		id: fallbackId,
+		provider: "openai",
+		model: "codex",
+		inputTokens,
+		outputTokens,
+		cacheReadTokens,
+		cacheWriteTokens,
+		costUsd: 0,
 		at: new Date().toISOString(),
 	};
 }

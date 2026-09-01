@@ -15,6 +15,7 @@
 /** One engine turn's measured spend, as the runner reports it. */
 export interface EngineUsageReport {
 	id: string;
+	provider?: string;
 	model: string;
 	inputTokens: number;
 	outputTokens: number;
@@ -28,6 +29,7 @@ const MAX_RECORDS = 200;
 /** A single turn costing more than this is not a turn; refuse it rather than poison the total. */
 const MAX_COST_USD = 1000;
 const MAX_TOKENS = 1_000_000_000;
+const PROVIDERS = new Set(["anthropic", "openai"]);
 
 const posInt = (v: unknown, cap: number): number => {
 	const n = Math.floor(Number(v));
@@ -60,9 +62,11 @@ export function sanitizeEngineUsage(raw: unknown): EngineUsageReport[] {
 		const costRaw = Number(r.costUsd);
 		const costUsd = Number.isFinite(costRaw) && costRaw > 0 ? Math.min(costRaw, MAX_COST_USD) : 0;
 		if (!inputTokens && !outputTokens && !cacheReadTokens && !cacheWriteTokens && !costUsd) continue;
+		const provider = typeof r.provider === "string" && PROVIDERS.has(r.provider.trim()) ? r.provider.trim() : "anthropic";
 		seen.add(id);
 		out.push({
 			id,
+			provider,
 			model: (typeof r.model === "string" && r.model.trim() ? r.model.trim() : "unknown").slice(0, 120),
 			inputTokens,
 			outputTokens,
