@@ -18,7 +18,11 @@ export default defineConfig({
 	},
 	server: {
 		proxy: {
-			"/v1": "https://api.proagentstore.online",
+			"/admin/api": {
+				target: "https://api.proagentstore.online",
+				changeOrigin: true,
+				rewrite: (path) => path.replace(/^\/admin\/api/, ""),
+			},
 		},
 	},
 });

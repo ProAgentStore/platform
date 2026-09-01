@@ -5,14 +5,16 @@ the only thing standing between a forged/leaked session and every cross-tenant r
 has (all users, all instance configs, all coding timelines, all errors, all spend). Cloudflare
 Access adds an SSO/hardware-key wall the bearer token cannot substitute for.
 
-**Status: the code is shipped and the perimeter is OFF.** Turning it on is a dashboard action plus
-two secrets, and there is a verified architectural blocker in the way (§3). Read §3 before §4.
+**Status: the code path is shipped and the perimeter is OFF.** Turning it on is a dashboard action
+plus two secrets. The origin split is closed by the same-origin `/admin/api/*` proxy described in
+§3a; read §3a before §4.
 
 ## 1. The split — what a commit can and cannot do
 
 | Half | Who | State |
 |---|---|---|
 | JWT verification, the three-state gate, observability, tests | code | **done, this commit** |
+| Same-origin `/admin/api/*` proxy and admin SPA relative API base | code | **done** |
 | Creating the Access application, policy, and identity provider | Cloudflare dashboard, owner only | **not done** |
 | Setting `CF_ACCESS_*` as Worker secrets | owner, `wrangler secret put` | **not done** |
 
@@ -99,18 +101,13 @@ That has a sharp implication for how §4's verification is read:
 > requests that reach it. If Access blocks at the edge, the log is silent *and* the portal is
 > broken. The green light is **silence AND the portal working normally.**
 
-Making the perimeter properly workable most likely needs the admin UI and its API on **one
-origin** — a same-origin `/admin/api/*` proxy on the host worker (which already has an `API`
-service binding) forwarding `Cf-Access-Jwt-Assertion` through, with the SPA's base changed to a
-relative path. Then one Access application on `proagentstore.online/admin` covers the shell (an
+The chosen remedy is the same-origin `/admin/api/*` proxy on the host worker (which already has an
+`API` service binding), forwarding `Cf-Access-Jwt-Assertion` through, with the SPA's base changed
+to a relative path. One Access application on `proagentstore.online/admin` covers the shell (an
 interactive top-level login, which redirects fine) *and* every XHR. A smaller variant — adding
-`credentials: "include"` to the admin SPA and having the operator complete the Access login once
-in a top-level tab on `api.proagentstore.online` — may be enough, but leaves an opaque failure
-every time the Access session expires.
-
-**Neither is in this commit.** Both are real architecture changes to a live admin portal, they are
-separable from the gate, and which one is needed depends on the edge behaviour that §4's audit step
-is designed to reveal. File the follow-up once there is evidence rather than guessing now.
+`credentials: "include"` to the admin SPA and having the operator complete the Access login once in
+a top-level tab on `api.proagentstore.online` — is not the chosen path because it leaves an opaque
+failure every time the Access session expires.
 
 ## 3a. The two ways to close the origin split — decided
 
@@ -123,7 +120,7 @@ was chosen, so the decision is not re-derived at the moment someone is about to 
 | | A — same-origin proxy | B — `credentials: "include"` |
 |---|---|---|
 | Access application on | `proagentstore.online`, path `admin` | `api.proagentstore.online`, path `v1/admin` |
-| Code | ~30 lines: a proxy route on the host worker, the SPA's base to `/admin/api`, a dev-proxy entry | 1 line: `credentials: "include"` |
+| Code | Implemented: a proxy route on the host worker, the SPA's base to `/admin/api`, a dev-proxy entry | 1 line: `credentials: "include"` |
 | CORS | none — same origin | every request preflighted, and a preflight is uncredentialed by definition |
 | Session expiry | a top-level navigation redirects to the IdP and returns | an XHR gets a 302 it cannot complete; fails opaquely |
 | Worst misconfiguration | whole apex behind a login (storefront + console) | whole API host behind a login (console + every runner + widget) |
@@ -150,9 +147,6 @@ settings (allowed origins, methods, headers, allow-credentials) for the prefligh
 fixes expiry. The cookie itself is not the problem — `proagentstore.online` and
 `api.proagentstore.online` are the same *site*, so `SameSite=Lax` still sends it cross-origin.
 
-Note: §4 step 2 below still describes Option B's application placement for now, because Option A's
-proxy code has not been written yet. Update it when that work lands.
-
 ## 4. Runbook — ordered, with a verification per step
 
 Steps 1–3 are dashboard; I cannot perform or verify them. Where the Cloudflare UI's exact wording
@@ -166,17 +160,17 @@ Google/GitHub SSO is better).
 *Verify:* `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` returns JSON with a `keys`
 array. The gate fetches exactly this URL, so if it 404s nothing else will work.
 
-**2. Create a self-hosted Access application covering the admin API.**
+**2. Create a self-hosted Access application covering the admin UI and proxy.**
 Zero Trust → **Access → Applications → Add an application → Self-hosted**.
-Domain: `api.proagentstore.online`, path `v1/admin`. Path scoping matters — putting the whole
-hostname behind Access would break every non-admin API call, including the console and every
-runner. Do not do that.
+Domain: `proagentstore.online`, path `admin`. Path scoping matters — putting the whole hostname
+behind Access would put the storefront, console, widget, sitemap and docs behind a login. Do not do
+that.
 *Verify:* the application's overview shows an **Application Audience (AUD) tag** — a long hex
 string. That is `CF_ACCESS_AUD`.
 
 **3. Add a policy.** Action **Allow**, rule `Emails` → the operator's address(es) only.
-*Verify:* in a private window, `https://api.proagentstore.online/v1/admin/me` presents the Access
-login; a non-allowlisted identity is refused.
+*Verify:* in a private window, `https://proagentstore.online/admin/` presents the Access login; a
+non-allowlisted identity is refused.
 
 **4. Set the two secrets — audit mode. This does not enforce anything.**
 

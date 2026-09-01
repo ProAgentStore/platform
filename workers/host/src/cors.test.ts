@@ -105,15 +105,19 @@ describe("public wildcard CORS is an allowlist, not a habit (#296)", () => {
 		expect(SRC).not.toContain("Access-Control-Allow-Credentials");
 	});
 
-	it("the host worker serves nothing that depends on the caller's identity", () => {
+	it("the public host responses serve nothing that depends on the caller's identity", () => {
 		// This is what actually makes `*` safe here, and it is the invariant most likely to be
 		// broken by accident — a future "just add one authenticated endpoint" to a worker whose
-		// default posture is public-and-cacheable. Every response is currently the same for
-		// everyone, so there is nothing a cross-origin reader can learn that they could not have
-		// fetched themselves.
-		for (const forbidden of ["Authorization", "verifySession", "Bearer", "requireUser"]) {
+		// default posture is public-and-cacheable. The only identity-bearing path is the explicit
+		// same-origin /admin/api proxy; public wildcard resources must stay static.
+		for (const forbidden of ["verifySession", "Bearer", "requireUser"]) {
 			expect(SRC, `${forbidden} appeared in workers/host — this worker's wildcard CORS assumes it serves no per-caller data. Move the authenticated route to workers/api, or narrow every '*' first.`).not.toContain(forbidden);
 		}
+		expect(SRC).toContain('const ADMIN_API_PREFIX = "/admin/api"');
+		expect(SRC).toContain('"Authorization"');
+		const proxyBranch = SRC.indexOf("if (isAdminApiProxyPath(path))");
+		expect(proxyBranch).toBeLessThan(SRC.indexOf('return new Response("Method Not Allowed"'));
+		expect(proxyBranch).toBeLessThan(SRC.indexOf('path.startsWith("/admin/")'));
 	});
 });
 

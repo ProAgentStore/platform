@@ -3,7 +3,7 @@
 // admin app needs no @proagentstore/sdk dependency. Server-side, every /v1/admin/*
 // route is behind requireAdmin — this is just the client.
 
-const API = "https://api.proagentstore.online";
+const API = "/admin/api";
 const SESSION_KEY = "pags:session";
 
 export function getToken(): string | null {

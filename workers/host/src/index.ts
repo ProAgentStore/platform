@@ -73,6 +73,10 @@ const JS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
 };
 
+const ADMIN_API_PREFIX = "/admin/api";
+const ADMIN_API_ALLOWED_EXACT = new Set(["/v1/auth/me", "/v1/auth/config", "/v1/errors/client"]);
+const ADMIN_API_FORWARDED_HEADERS = ["Authorization", "Cf-Access-Jwt-Assertion", "Content-Type", "Accept"];
+
 function b64ToBytes(b64: string): Uint8Array {
 	const bin = atob(b64);
 	const arr = new Uint8Array(bin.length);
@@ -112,6 +116,48 @@ function docsLookupPath(path: string): string | null {
 	return path;
 }
 
+function isAdminApiProxyPath(path: string): boolean {
+	return path === ADMIN_API_PREFIX || path.startsWith(`${ADMIN_API_PREFIX}/`);
+}
+
+function adminApiPath(path: string): string {
+	const stripped = path.slice(ADMIN_API_PREFIX.length);
+	return stripped || "/";
+}
+
+function isAllowedAdminApiPath(path: string): boolean {
+	return path.startsWith("/v1/admin/") || ADMIN_API_ALLOWED_EXACT.has(path);
+}
+
+function adminApiHeaders(request: Request): Headers {
+	const headers = new Headers();
+	for (const name of ADMIN_API_FORWARDED_HEADERS) {
+		const value = request.headers.get(name);
+		if (value) headers.set(name, value);
+	}
+	return headers;
+}
+
+async function proxyAdminApi(request: Request, env: Env, apiPath: string): Promise<Response> {
+	const url = new URL(request.url);
+	url.protocol = "https:";
+	url.hostname = "api.proagentstore.online";
+	url.pathname = apiPath;
+	url.port = "";
+	url.username = "";
+	url.password = "";
+
+	const init: RequestInit = {
+		method: request.method,
+		headers: adminApiHeaders(request),
+		redirect: "manual",
+	};
+	if (request.method !== "GET" && request.method !== "HEAD") {
+		init.body = await request.arrayBuffer();
+	}
+	return env.API.fetch(new Request(url.toString(), init));
+}
+
 interface Env {
 	// api.proagentstore.online is a route-mapped Worker — a plain same-zone
 	// fetch() would bypass it and hit the origin DNS record, so the sitemap's
@@ -121,15 +167,23 @@ interface Env {
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
-		if (request.method !== "GET" && request.method !== "HEAD") {
-			return new Response("Method Not Allowed", { status: 405 });
-		}
-
 		const url = new URL(request.url);
 		const path =
 			url.hostname === "console.proagentstore.online" && url.pathname === "/"
 				? "/console"
 				: url.pathname;
+
+		if (isAdminApiProxyPath(path)) {
+			const targetPath = adminApiPath(path);
+			if (!isAllowedAdminApiPath(targetPath)) {
+				return new Response("Not Found", { status: 404 });
+			}
+			return proxyAdminApi(request, env, targetPath);
+		}
+
+		if (request.method !== "GET" && request.method !== "HEAD") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
 
 		const docsPath = docsLookupPath(path);
 		if (docsPath) {
