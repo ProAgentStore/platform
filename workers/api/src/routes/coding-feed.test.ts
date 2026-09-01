@@ -72,6 +72,13 @@ function seedSession(id: string, status: "active" | "ended", updatedAt: string):
 	);
 }
 
+function seedRun(id: string, sessionId: string | null, instanceId = INSTANCE): void {
+	d1.exec(
+		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, started_at, status, session_id)
+		 VALUES ('${id}', '${UID}', '${instanceId}', 'fix #767', 10, 1780000000000, 'running', ${sessionId ? `'${sessionId}'` : "NULL"})`,
+	);
+}
+
 async function append(sessionId: string, type: Parameters<typeof appendTimeline>[1]["type"], content: string) {
 	await appendTimeline(env, { sessionId, instanceId: INSTANCE, userId: UID, type, content });
 }
@@ -239,6 +246,52 @@ describe("the route resolves a session and says what the engine is doing", () =>
 		expect(body.runState).toBe("thinking");
 		expect(body.runnerConnected).toBe(true);
 		expect(body.events[0].content).toContain("objective: fix #26");
+	});
+
+	it("resolves a loop run id to its coding session instead of guessing the newest session", async () => {
+		seedSession("csess-run", "ended", "2026-08-15 09:00:00");
+		seedSession("csess-other", "active", "2026-08-15 10:00:00");
+		seedRun("run-767", "csess-run");
+		await append("csess-run", "brain", "AI run started — objective: expose trace by run");
+		await append("csess-other", "brain", "AI run started — objective: unrelated newer work");
+
+		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-767`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { sessionId: string; runState: string; events: { content: string }[] };
+		expect(body.sessionId).toBe("csess-run");
+		expect(body.runState).toBe("ended");
+		expect(body.events.map((e) => e.content)).toEqual(["AI run started — objective: expose trace by run"]);
+	});
+
+	it("keeps explicit session_id ahead of run_id resolution", async () => {
+		seedSession("csess-named", "ended", "2026-08-15 08:00:00");
+		seedSession("csess-run", "active", "2026-08-15 09:00:00");
+		seedRun("run-767", "csess-run");
+		await append("csess-named", "brain", "the named session wins");
+		await append("csess-run", "brain", "the run-linked session loses");
+
+		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-767&session_id=csess-named`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { sessionId: string; events: { content: string }[] };
+		expect(body.sessionId).toBe("csess-named");
+		expect(body.events.map((e) => e.content)).toEqual(["the named session wins"]);
+	});
+
+	it("does not let a run id escape the instance named in the route", async () => {
+		seedTenant(d1, { userId: UID, instanceIds: ["inst-2"] });
+		seedRun("run-other", "csess-other", "inst-2");
+
+		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-other`);
+		expect(res.status).toBe(404);
+		expect(await res.json()).toEqual({ error: "Run coding session not found" });
+	});
+
+	it("reports a non-coding loop run as having no coding session", async () => {
+		seedRun("run-chat", null);
+
+		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-chat`);
+		expect(res.status).toBe(404);
+		expect(await res.json()).toEqual({ error: "Run coding session not found" });
 	});
 
 	it("falls back to the most recent ENDED session, which is #527's audit case", async () => {

@@ -20,11 +20,11 @@ import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
  * fetch the session list first is a round trip whose answer this route can compute, and it is
  * one more place for the "first active session" rule to be written down differently.
  *
- * Resolution, in order: the `session_id` asked for, else the newest ACTIVE session, else the most
- * recently updated one. That last fallback is deliberate and is what makes one tool answer both
- * issues — the platform ends sessions by itself constantly (the Pilot closes one on every finished
- * run), so a run that finished a minute ago has no active session and is exactly what #527's audit
- * case wants to read.
+ * Resolution, in order: the `session_id` asked for, else the loop `run_id`'s recorded coding
+ * session, else the newest ACTIVE session, else the most recently updated one. That last fallback
+ * is deliberate and is what makes one tool answer both issues — the platform ends sessions by
+ * itself constantly (the Pilot closes one on every finished run), so a run that finished a minute
+ * ago has no active session and is exactly what #527's audit case wants to read.
  *
  * ── `runState`, and the distinction it exists to draw
  *
@@ -57,10 +57,14 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 		// `listSessions` orders by `updated_at DESC`, so the first match of either arm is newest.
 		const sessions = await listSessions(c.env, instanceId, uid);
 		const wanted = c.req.query("session_id");
+		const runId = c.req.query("run_id");
+		const runSessionId = !wanted && runId ? await sessionIdForLoopRun(c.env, instanceId, uid, runId) : null;
 		const session = wanted
 			? sessions.find((s) => s.id === wanted)
-			: (sessions.find((s) => s.status === "active") ?? sessions[0]);
-		if (!session) throw new HttpError(404, wanted ? "Session not found" : "No coding session on this instance");
+			: runId
+				? sessions.find((s) => s.id === runSessionId)
+				: (sessions.find((s) => s.status === "active") ?? sessions[0]);
+		if (!session) throw new HttpError(404, wanted ? "Session not found" : runId ? "Run coding session not found" : "No coding session on this instance");
 		const num = (q: string) => {
 			const n = Number.parseInt(c.req.query(q) ?? "", 10);
 			return Number.isFinite(n) ? n : undefined;
@@ -78,10 +82,10 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 		// because the pane is a runner buffer that no longer exists.
 		//
 		// It is an ARM of this route rather than a route of its own precisely so the resolution rule
-		// above — the session asked for, else the newest active, else the most recently updated — is
-		// the same code and not a second statement of it. That fallback is what makes it answer for a
-		// run that has already ended, which is the case #527 established and the only case this arm
-		// exists for.
+		// above — the session asked for, else the run's recorded session, else the newest active, else
+		// the most recently updated — is the same code and not a second statement of it. That fallback
+		// is what makes it answer for a run that has already ended, which is the case #527 established
+		// and the only case this arm exists for.
 		//
 		// Bounded by ROW COUNT, not bytes. A snapshot is indivisible here: half a pane cut mid-line is
 		// not a smaller answer, it is a different one, and the tail cut is exactly what this arm is
@@ -124,6 +128,15 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 			...feed,
 		});
 	});
+}
+
+async function sessionIdForLoopRun(env: Env, instanceId: string, uid: string, runId: string): Promise<string | null> {
+	const row = await env.DB.prepare(
+		"SELECT session_id FROM agent_loop_runs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3 LIMIT 1",
+	)
+		.bind(runId, instanceId, uid)
+		.first<{ session_id: string | null }>();
+	return row?.session_id ?? null;
 }
 
 /**
