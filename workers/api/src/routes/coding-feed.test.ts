@@ -257,24 +257,20 @@ describe("the route resolves a session and says what the engine is doing", () =>
 
 		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-767`);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { sessionId: string; runState: string; events: { content: string }[] };
+		const body = (await res.json()) as { runId: string; sessionId: string; runState: string; events: { content: string }[] };
+		expect(body.runId).toBe("run-767");
 		expect(body.sessionId).toBe("csess-run");
 		expect(body.runState).toBe("ended");
 		expect(body.events.map((e) => e.content)).toEqual(["AI run started — objective: expose trace by run"]);
 	});
 
-	it("keeps explicit session_id ahead of run_id resolution", async () => {
-		seedSession("csess-named", "ended", "2026-08-15 08:00:00");
+	it("rejects ambiguous run and session cursors before choosing a session", async () => {
 		seedSession("csess-run", "active", "2026-08-15 09:00:00");
 		seedRun("run-767", "csess-run");
-		await append("csess-named", "brain", "the named session wins");
-		await append("csess-run", "brain", "the run-linked session loses");
 
-		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-767&session_id=csess-named`);
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { sessionId: string; events: { content: string }[] };
-		expect(body.sessionId).toBe("csess-named");
-		expect(body.events.map((e) => e.content)).toEqual(["the named session wins"]);
+		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-767&session_id=csess-run`);
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Pass `run_id` or `session_id`, not both." });
 	});
 
 	it("does not let a run id escape the instance named in the route", async () => {
@@ -283,7 +279,7 @@ describe("the route resolves a session and says what the engine is doing", () =>
 
 		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-other`);
 		expect(res.status).toBe(404);
-		expect(await res.json()).toEqual({ error: "Run coding session not found" });
+		expect(await res.json()).toEqual({ error: "Run not found on this instance" });
 	});
 
 	it("reports a non-coding loop run as having no coding session", async () => {
@@ -291,7 +287,7 @@ describe("the route resolves a session and says what the engine is doing", () =>
 
 		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline?run_id=run-chat`);
 		expect(res.status).toBe(404);
-		expect(await res.json()).toEqual({ error: "Run coding session not found" });
+		expect(await res.json()).toEqual({ error: "Run has no coding session" });
 	});
 
 	it("falls back to the most recent ENDED session, which is #527's audit case", async () => {
