@@ -7,6 +7,7 @@ import type { EngineActRecord } from "./engine-acts.js";
 import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
+import type { EngineInvocationMode } from "./engine-adapter.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoTree, runRepoGit } from "./inspect.js";
 import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
@@ -124,6 +125,10 @@ export interface CodingSnapshot {
 	 */
 	authResolved: EngineAuthResolved;
 	engineRuntime: "child-process";
+	/** Whether this runner is parsing structured engine events or forwarding raw stdout (#731). */
+	engineMode: EngineInvocationMode;
+	/** Named downgrade warning when a structured-capable engine is actually running raw (#731). */
+	engineModeWarning: string | null;
 	/**
 	 * How the last COMPLETED turn ended (#545) — the outcome the pane used to hold only as prose.
 	 *
@@ -315,6 +320,8 @@ export class CodingRuntime {
 			// exactly the question asked about a session that just stopped.
 			authResolved: session.authResolved,
 			engineRuntime: session.engineRuntime,
+			engineMode: session.engineMode,
+			engineModeWarning: session.engineModeWarning,
 			// Reported on EVERY capture, including one where the session is not alive: "how did the
 			// last turn end" is exactly the question asked about a session that just stopped, and
 			// the omitted-when-null shape keeps "not measured" distinguishable from a verdict.
@@ -412,6 +419,8 @@ export class CodingRuntime {
 		takeover: boolean;
 		authResolved: EngineAuthResolved;
 		engineRuntime: "child-process";
+		engineMode: EngineInvocationMode;
+		engineModeWarning: string | null;
 		/** What the `gh` write guard did on this machine (#679) — including what it does NOT stop. */
 		ghGuard: GhGuardReport;
 	}> {
@@ -427,6 +436,8 @@ export class CodingRuntime {
 			takeover: this.takeovers.has(sessionId),
 			authResolved: s.authResolved,
 			engineRuntime: s.engineRuntime,
+			engineMode: s.engineMode,
+			engineModeWarning: s.engineModeWarning,
 			ghGuard: s.ghGuard,
 		}));
 	}

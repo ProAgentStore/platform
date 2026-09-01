@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { missingWriteFlag } from "./engine-posture.js";
+import { engineInvocationMode, missingWriteFlag } from "./engine-posture.js";
 
 describe("missingWriteFlag", () => {
 	it("flags the preset that shipped read-only", () => {
@@ -36,5 +36,27 @@ describe("missingWriteFlag", () => {
 	it("sees past wrappers and env prefixes", () => {
 		expect(missingWriteFlag("FOO=bar npx codex exec")).toBe("--sandbox danger-full-access");
 		expect(missingWriteFlag("/opt/bin/codex exec --sandbox workspace-write")).toBeNull();
+	});
+});
+
+describe("engineInvocationMode", () => {
+	it("shows the structured adapters the runner actually has", () => {
+		expect(engineInvocationMode("claude --dangerously-skip-permissions")).toBe("structured");
+		expect(engineInvocationMode("npx claude -p")).toBe("structured");
+		expect(engineInvocationMode("codex exec --sandbox danger-full-access")).toBe("structured");
+		expect(engineInvocationMode("FOO=bar npx codex exec")).toBe("structured");
+	});
+
+	it("leaves unsupported Codex commands and raw-only engines raw", () => {
+		expect(engineInvocationMode("codex")).toBe("raw");
+		expect(engineInvocationMode("codex exec resume thread-1")).toBe("raw");
+		expect(engineInvocationMode("codex exec review")).toBe("raw");
+		expect(engineInvocationMode("gemini --prompt")).toBe("raw");
+		expect(engineInvocationMode("ollama run llama3")).toBe("raw");
+	});
+
+	it("says nothing for an empty preset row", () => {
+		expect(engineInvocationMode("")).toBeNull();
+		expect(engineInvocationMode("   ")).toBeNull();
 	});
 });

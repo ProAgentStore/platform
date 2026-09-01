@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildClaudeArgs, engineAdapterFor } from "./engine-adapter.js";
+import { buildClaudeArgs, engineAdapterFor, engineInvocationWarning } from "./engine-adapter.js";
 
 describe("engineAdapterFor", () => {
 	it("keeps Claude on structured stream-json launch arguments", () => {
@@ -47,6 +47,13 @@ describe("engineAdapterFor", () => {
 			"fix it",
 		]);
 		expect(adapter.buildTurnArgs(["exec", "--json", "--sandbox", "danger-full-access"], "fix it").filter((a) => a === "--json")).toHaveLength(1);
+	});
+
+	it("warns only when a structured-capable engine is actually raw", () => {
+		expect(engineInvocationWarning("codex", "raw")).toBeNull();
+		expect(engineInvocationWarning("claude", "raw")).toMatch(/running raw/);
+		expect(engineInvocationWarning("grok", "raw")).toBeNull();
+		expect(engineInvocationWarning("codex", "structured")).toBeNull();
 	});
 });
 

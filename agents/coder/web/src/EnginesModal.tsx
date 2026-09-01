@@ -4,6 +4,7 @@ import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
 import { engineContinuityNote } from "./engine-continuity";
 import { engineAttributionNote } from "./engine-attribution-note";
+import { engineInvocationNote } from "./engine-invocation-mode";
 import { engineMeteringNote } from "./engine-metering-note";
 import { Cpu, Gauge, History, Trash2, Wallet } from "lucide-react";
 import Button from "./Button";
@@ -100,6 +101,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 						const isClaude = isClaudeEngine(e.command);
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
+						const invocation = engineInvocationNote(e.command);
 						const continuity = engineContinuityNote(e.command);
 						const attribution = engineAttributionNote(e.command, e.auth, hasClaudeCodeToken);
 						const metering = engineMeteringNote(e.command);
@@ -120,6 +122,16 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 											placeholder="Launch command"
 											className="bg-panel border border-line rounded-lg px-2 py-1.5 text-xs font-mono flex-1 min-w-40"
 										/>
+									{invocation && (
+										<span
+											title={invocation.detail}
+											className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-normal ${
+												invocation.mode === "structured" ? "border-success-line bg-success-soft text-success" : "border-line bg-line/50 text-muted"
+											}`}
+										>
+											{invocation.label}
+										</span>
+									)}
 									<button
 										type="button"
 										onClick={() => setEngines((prev) => prev.filter((_, j) => j !== i))}

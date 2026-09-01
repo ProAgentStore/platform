@@ -184,7 +184,20 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(snap.alive).toBe(true);
 		expect(snap.runState).toBe("idle");
 		expect(snap.ready).toBe(true);
+		expect(snap.engineMode).toBe("structured");
+		expect(snap.engineModeWarning).toBeNull();
 		rt.end("one-shot");
+	});
+
+	it("reports a raw fallback mode for a structured-capable engine by name (#731)", () => {
+		rt = new CodingRuntime(join(dir, "base"));
+		const snap = rt.start({ sessionId: "codex-raw", repoId: "r1", workDir: dir, clientType: "codex", command: "codex", bin });
+		expect(snap.engineMode).toBe("raw");
+		expect(snap.engineModeWarning).toBeNull();
+		const diag = rt.diagnostics().find((s) => s.sessionId === "codex-raw");
+		expect(diag?.engineMode).toBe("raw");
+		expect(diag?.engineModeWarning).toBeNull();
+		rt.end("codex-raw");
 	});
 
 	it("reports back whether the engine came up with a conversation to continue (#408)", async () => {

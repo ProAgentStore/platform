@@ -30,6 +30,7 @@ import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
 import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
+import { engineInvocationBadge, type EngineInvocationReport } from "./engine-invocation-mode";
 import { type EngineTurnReport, engineTurnNotice } from "./engine-turn-view";
 import { AlertTriangle, ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 import Button from "./Button";
@@ -385,6 +386,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [authPrompt, setAuthPrompt] = useState<AuthPrompt | null>(null);
 	/** Which credential the engine actually ran on, straight from /capture (#248). */
 	const [engineAuth, setEngineAuth] = useState<EngineAuthReport | null>(null);
+	/** Whether the runner is parsing structured events or forwarding raw stdout (#731). */
+	const [engineInvocation, setEngineInvocation] = useState<EngineInvocationReport | null>(null);
 	/** How the engine's LAST TURN ended, straight from /capture (#545). Null on an older runner. */
 	const [lastTurn, setLastTurn] = useState<EngineTurnReport | null>(null);
 	const [signinMsg, setSigninMsg] = useState("");
@@ -415,6 +418,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				runnerConnected?: boolean;
 				attachment?: AttachmentAnswer;
 				auth?: EngineAuthReport;
+				invocation?: EngineInvocationReport;
 				lastTurn?: EngineTurnReport;
 			}>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
 			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
@@ -423,6 +427,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// Which credential this engine actually ran on (#248). MUST be set before the
 			// unchanged-pane early return below, or an idle session would never report it.
 			setEngineAuth(d.auth ?? null);
+			setEngineInvocation(d.invocation ?? null);
 			// How the last turn ended (#545). BEFORE the unchanged-pane early return for the same
 			// reason: a refusing engine's pane stops changing the moment it starts refusing, which
 			// is precisely when this has something to say.
@@ -1287,21 +1292,28 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				    anywhere in the product, and the one documented way it goes wrong is silent. */}
 				{(() => {
 					const badge = engineAuthBadge(engineAuth);
-					if (!badge) return null;
-					const warn = badge.tone === "warn";
+					const invocation = engineInvocationBadge(engineInvocation);
+					if (!badge && !invocation) return null;
+					const warn = badge?.tone === "warn" || invocation?.tone === "warn";
 					return (
 						<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-warning-line bg-warning-soft" : "border-line"}`}>
-							<div className="flex items-center gap-1.5 text-xs font-bold">
+							{badge && <div className="flex items-center gap-1.5 text-xs font-bold">
 								<Cpu size={12} className={warn ? "text-warning" : "text-muted"} />
 								<span>{badge.label}</span>
-							</div>
-							<p className="text-2xs text-muted mt-0.5">{badge.detail}</p>
+							</div>}
+							{badge && <p className="text-2xs text-muted mt-0.5">{badge.detail}</p>}
 							{/* The ordinary case, stated (#343). `warning` only fires on a mismatch, so
 							    the most common resolution — this machine's own login — showed nothing
 							    at all, which is precisely the configuration where the owner cannot
 							    tell which account is paying. */}
-							{badge.note && <p className="text-2xs text-muted-soft mt-1">{badge.note}</p>}
+							{badge?.note && <p className="text-2xs text-muted-soft mt-1">{badge.note}</p>}
 							{engineAuth?.warning && <p className="text-xs text-warning mt-1">{engineAuth.warning}</p>}
+							{invocation && (
+								<p className="text-2xs text-muted mt-1">
+									<b>{invocation.label}.</b> {invocation.detail}
+								</p>
+							)}
+							{engineInvocation?.warning && <p className="text-xs text-warning mt-1">{engineInvocation.warning}</p>}
 						</div>
 					);
 				})()}

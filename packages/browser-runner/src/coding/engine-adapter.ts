@@ -1,6 +1,7 @@
 import type { ClientType } from "./handlers.js";
 
 export type EngineMode = "stream-json" | "raw";
+export type EngineInvocationMode = "structured" | "raw";
 
 export type NormalizedEngineEvent =
 	| { kind: "session"; sessionId: string }
@@ -15,6 +16,19 @@ export interface EngineAdapter {
 	buildLaunchArgs(userArgs: string[], resumeId: string | null): string[];
 	buildTurnArgs(userArgs: string[], turnText: string): string[];
 	parseLine(line: string): NormalizedEngineEvent[];
+}
+
+export function engineInvocationModeFromAdapter(mode: EngineMode): EngineInvocationMode {
+	return mode === "stream-json" ? "structured" : "raw";
+}
+
+export function structuredCapableEngine(clientType: ClientType): boolean {
+	return clientType === "claude" || clientType === "codex";
+}
+
+export function engineInvocationWarning(clientType: ClientType, mode: EngineInvocationMode): string | null {
+	if (mode !== "raw" || clientType !== "claude") return null;
+	return `running raw — structured not available on this machine's ${clientType} CLI`;
 }
 
 const RESERVED_CLAUDE_FLAGS = new Set(["-p", "--print", "--input-format", "--output-format", "--verbose", "--resume"]);

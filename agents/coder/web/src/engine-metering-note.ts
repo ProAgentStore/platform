@@ -1,11 +1,11 @@
 // Will this preset's spend show up on the Usage page? — pure, so the sentence is testable (#556).
 //
 // The engines panel offers Claude Code, Codex and Grok as equals and says nothing about the one
-// difference that costs money invisibly: Claude Code ends each turn with a structured event
-// carrying its own token counts and cost, which the runner reads and the platform banks as a
-// measured `ai_usage` row. Every other engine is spawned raw and ends a turn with plain stdout, so
-// `takeUsage()` returns nothing and no row is written at all — and a missing row on a page of
-// dollars reads as zero dollars, which is the exact confusion #348 removed for the tmux driver.
+// difference that costs money invisibly: structured engines end each turn with an event carrying
+// token counts, which the runner reads and the platform banks as a measured `ai_usage` row. Raw
+// engines end a turn with plain stdout, so `takeUsage()` returns nothing and no row is written at
+// all — and a missing row on a page of dollars reads as zero dollars, which is the exact confusion
+// #348 removed for the tmux driver.
 //
 // So the choice is made at the moment a user picks an engine, and this is the moment to say it.
 //
@@ -18,14 +18,12 @@
 // exists to state — and a hint that needs a round-trip per keystroke is not a hint.
 //
 // The API's `classifyEngineMetering` ("headless", engine) is the authority, and its
-// `STRUCTURED_ENGINES` set is claude-only. That is not a coincidence this mirror has to track by
-// hand: the runner decides structured-vs-raw with the SAME claude test
-// (`headless.ts` — `mode = clientType === "claude" ? "stream-json" : "raw"`), and structured mode
-// IS what produces the usage record. `isClaudeEngine` is the SDK's mirror of the API's
-// `deriveClientType`, so all three spellings are one fact. If a raw engine ever grows a structured
-// turn-end event, all three move together — the API's set, the runner's mode, and this.
+// structured/raw classifier. That is not a coincidence this mirror has to track by hand: the
+// runner now drives Claude and `codex exec --json` through structured adapters, and structured
+// mode IS what produces the usage record. If another raw engine grows a structured turn-end event,
+// the API's set, the runner's mode, and this helper move together.
 
-import { isClaudeEngine } from "@proagentstore/sdk/ui";
+import { engineInvocationMode } from "@proagentstore/sdk/ui";
 
 export interface EngineMeteringNote {
 	/** Can this engine's spend reach the ledger at all? */
@@ -46,11 +44,11 @@ export interface EngineMeteringNote {
  */
 export function engineMeteringNote(command: string): EngineMeteringNote | null {
 	if (!command.trim()) return null;
-	return isClaudeEngine(command)
+	return engineInvocationMode(command) === "structured"
 		? {
 				metered: true,
 				label: "Spend is measured",
-				detail: "This engine reports each turn's tokens and cost, so its spend appears on your Usage page.",
+				detail: "This engine reports each turn's tokens, so its spend appears on your Usage page.",
 			}
 		: {
 				metered: false,

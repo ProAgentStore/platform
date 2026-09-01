@@ -18,19 +18,38 @@ const LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "
 
 /** The engine's real binary name, skipping `FOO=bar` prefixes and wrappers like `npx`. */
 export function engineBin(command: string): string {
-	for (const t of (command ?? "").trim().split(/\s+/)) {
+	return engineParts(command).bin;
+}
+
+function engineParts(command: string): { bin: string; args: string[] } {
+	const tokens = (command ?? "").trim().split(/\s+/).filter(Boolean);
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i];
 		if (!t || t.includes("=") || t.startsWith("-")) continue;
 		const base = (t.split("/").pop() || "").toLowerCase();
 		if (LAUNCHERS.has(base)) continue;
-		return base;
+		return { bin: base, args: tokens.slice(i + 1) };
 	}
-	return "";
+	return { bin: "", args: [] };
 }
 
 /** Whether a preset's binary is driven as Claude (persistent stream-json) or run raw. */
 export function isClaudeEngine(command: string): boolean {
 	const base = engineBin(command);
 	return !base || base.startsWith("claude");
+}
+
+export type EngineInvocationMode = "structured" | "raw";
+
+const CODEX_RAW_SUBCOMMANDS = new Set(["resume", "fork", "review", "help"]);
+
+/** Whether this editable preset will be driven through structured events or plain stdout. */
+export function engineInvocationMode(command: string): EngineInvocationMode | null {
+	if (!command.trim()) return null;
+	const { bin, args } = engineParts(command);
+	if (!bin || bin.startsWith("claude")) return "structured";
+	if (bin.startsWith("codex") && args[0] === "exec" && !CODEX_RAW_SUBCOMMANDS.has(args[1] ?? "")) return "structured";
+	return "raw";
 }
 
 const WRITE_FLAGS: Record<string, { accepts: string[]; suggest: string }> = {

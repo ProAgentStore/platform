@@ -6,6 +6,9 @@ import {
 	engineAuthFor,
 	engineAuthReport,
 	engineAuthWarning,
+	engineInvocationReport,
+	engineInvocationWarning,
+	expectedEngineInvocationMode,
 	resolveEngineEnv,
 	type CodingEngine,
 } from "./coding-engines.js";
@@ -231,5 +234,41 @@ describe("engineAuthReport — the per-session transparency payload", () => {
 		// so on its own header, rather than the owner discovering it from a refusal.
 		expect(engineAuthReport("subscription", "subscription").note).toMatch(/not counted against the account spend limit/i);
 		expect(engineAuthReport("api-key", "api-key").note).toMatch(/counted against the account spend limit/i);
+	});
+});
+
+describe("engineInvocationReport — structured/raw transparency (#731)", () => {
+	it("classifies the commands the current runner can parse structurally", () => {
+		expect(expectedEngineInvocationMode("claude", "claude --dangerously-skip-permissions")).toBe("structured");
+		expect(expectedEngineInvocationMode("codex", "codex exec --json --sandbox danger-full-access")).toBe("structured");
+		expect(expectedEngineInvocationMode("codex", "codex")).toBe("raw");
+		expect(expectedEngineInvocationMode("codex", "codex exec resume thread-1")).toBe("raw");
+		expect(expectedEngineInvocationMode("grok", "grok --permission-mode bypassPermissions -p")).toBe("raw");
+	});
+
+	it("warns only when a structured-capable engine actually runs raw", () => {
+		expect(engineInvocationWarning("codex", "raw")).toMatch(/running raw/i);
+		expect(engineInvocationWarning("claude", "raw")).toMatch(/running raw/i);
+		expect(engineInvocationWarning("grok", "raw")).toBeNull();
+		expect(engineInvocationWarning("codex", "structured")).toBeNull();
+		expect(engineInvocationWarning("codex", null)).toBeNull();
+	});
+
+	it("keeps expected and runner-resolved mode together", () => {
+		expect(engineInvocationReport({ clientType: "codex", launchCommand: "codex exec --json", runnerMode: "structured" })).toEqual({
+			expected: "structured",
+			resolved: "structured",
+			warning: null,
+		});
+		expect(engineInvocationReport({ clientType: "codex", launchCommand: "codex exec --json", runnerMode: "raw" })).toMatchObject({
+			expected: "structured",
+			resolved: "raw",
+			warning: expect.stringMatching(/codex CLI/),
+		});
+		expect(engineInvocationReport({ clientType: "gemini", launchCommand: "gemini --prompt", runnerMode: "raw" })).toEqual({
+			expected: "raw",
+			resolved: "raw",
+			warning: null,
+		});
 	});
 });

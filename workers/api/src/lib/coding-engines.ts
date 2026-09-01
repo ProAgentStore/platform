@@ -69,6 +69,18 @@ export function asClient(v: unknown): CodingClientType {
 /** Command wrappers to skip when finding the real engine binary in a launch command. */
 const COMMAND_LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "exec", "dlx", "run", "sudo", "time"]);
 
+function commandEngineParts(command: string): { bin: string; args: string[] } {
+	const tokens = command.trim().split(/\s+/).filter(Boolean);
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i];
+		if (!t || t.includes("=") || t.startsWith("-")) continue;
+		const base = (t.split("/").pop() || "").toLowerCase();
+		if (COMMAND_LAUNCHERS.has(base)) continue;
+		return { bin: base, args: tokens.slice(i + 1) };
+	}
+	return { bin: "", args: [] };
+}
+
 /**
  * Derive the engine client type from a launch command's real binary — skipping
  * `FOO=bar` env prefixes and wrappers like `npx`/`bunx`/`env`. This decides whether
@@ -76,17 +88,62 @@ const COMMAND_LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "bun", 
  * An unknown binary maps to "codex" so it runs RAW, not mis-driven as Claude.
  */
 export function deriveClientType(command: string): CodingClientType {
-	for (const t of command.trim().split(/\s+/)) {
-		if (!t || t.includes("=") || t.startsWith("-")) continue;
-		const base = (t.split("/").pop() || "").toLowerCase();
-		if (COMMAND_LAUNCHERS.has(base)) continue;
-		if (base === "claude" || base.startsWith("claude")) return "claude";
-		if (base.startsWith("gemini")) return "gemini";
-		if (base.startsWith("grok")) return "grok";
-		if (base.startsWith("codex")) return "codex";
-		return "codex"; // an unknown binary → run it raw (NOT as Claude stream-json)
-	}
-	return "claude";
+	const { bin: base } = commandEngineParts(command);
+	if (!base) return "claude";
+	if (base === "claude" || base.startsWith("claude")) return "claude";
+	if (base.startsWith("gemini")) return "gemini";
+	if (base.startsWith("grok")) return "grok";
+	if (base.startsWith("codex")) return "codex";
+	return "codex"; // an unknown binary → run it raw (NOT as Claude stream-json)
+}
+
+export type EngineInvocationMode = "structured" | "raw";
+
+const CODEX_RAW_SUBCOMMANDS = new Set(["resume", "fork", "review", "help"]);
+
+/** The invocation path this command should take on a current runner (#731). */
+export function expectedEngineInvocationMode(clientType: CodingClientType, launchCommand: string | null | undefined): EngineInvocationMode {
+	if (clientType === "claude") return "structured";
+	if (clientType !== "codex") return "raw";
+	if (!launchCommand?.trim()) return "structured";
+	const { args } = commandEngineParts(launchCommand);
+	return args[0] === "exec" && !CODEX_RAW_SUBCOMMANDS.has(args[1] ?? "") ? "structured" : "raw";
+}
+
+export interface EngineInvocationReport {
+	/** What the current runner reports it is actually doing; null means no runner/old runner. */
+	resolved: EngineInvocationMode | null;
+	/** What this session's command would use on a current runner. */
+	expected: EngineInvocationMode;
+	/** Human-readable warning when a structured-capable engine is actually running raw. */
+	warning: string | null;
+}
+
+function asEngineInvocationMode(v: unknown): EngineInvocationMode | null {
+	return v === "structured" || v === "raw" ? v : null;
+}
+
+export function engineInvocationWarning(
+	clientType: CodingClientType,
+	resolved: EngineInvocationMode | null,
+	expected: EngineInvocationMode = "structured",
+): string | null {
+	if (resolved !== "raw" || expected !== "structured" || (clientType !== "claude" && clientType !== "codex")) return null;
+	return `running raw — structured not available on this machine's ${clientType} CLI`;
+}
+
+export function engineInvocationReport(input: {
+	clientType: CodingClientType;
+	launchCommand?: string | null;
+	runnerMode?: unknown;
+}): EngineInvocationReport {
+	const resolved = asEngineInvocationMode(input.runnerMode);
+	const expected = expectedEngineInvocationMode(input.clientType, input.launchCommand);
+	return {
+		resolved,
+		expected,
+		warning: engineInvocationWarning(input.clientType, resolved, expected),
+	};
 }
 
 /**

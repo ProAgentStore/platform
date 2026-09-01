@@ -8,6 +8,7 @@ import {
 	engineAuthFor,
 	ENGINE_AUTHS,
 	engineAuthReport,
+	engineInvocationReport,
 	readEngines,
 	resolveEngine,
 	reusedEngineNotice,
@@ -328,6 +329,11 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// a restatement of the setting.
 	const { engines } = await readEngines(c.env, instanceId, uid);
 	const auth = engineAuthReport(engineAuthFor(engines, session.launchCommand), resolvedAuth);
+	const invocation = engineInvocationReport({
+		clientType: session.clientType,
+		launchCommand: session.launchCommand,
+		runnerMode: (snap as { engineMode?: unknown }).engineMode,
+	});
 
 	// `usage` is drained, so it appears on one poll in a hundred and is empty on the rest. Passing
 	// that to the console would look like a field that flickers; it has been ledgered above and
@@ -345,6 +351,7 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 		}),
 		runnerConnected: true,
 		auth,
+		invocation,
 		...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),
 	});
 });

@@ -29,6 +29,7 @@
 import { logEvent } from "./events.js";
 import type { UnmeteredUsageSummary } from "./usage-shape.js";
 import type { Env } from "../types.js";
+import { asClient, expectedEngineInvocationMode } from "./coding-engines.js";
 
 /**
  * How the platform is driving the CLI.
@@ -302,9 +303,9 @@ export async function noteUnmeteredDrive(
 export async function noteUnmeteredHeadlessDrive(
 	env: Env,
 	ctx: { userId?: string; instanceId?: string; traceId?: string },
-	session: { id: string; clientType?: string | null },
+	session: { id: string; clientType?: string | null; launchCommand?: string | null },
 ): Promise<void> {
-	if (classifyEngineMetering("headless", session.clientType).metered) return;
+	if (typeof session.clientType === "string" && expectedEngineInvocationMode(asClient(session.clientType), session.launchCommand) === "structured") return;
 	await noteUnmeteredDrive(env, ctx, {
 		// The runner's own `engineLabel` shape (`<engine>:<session id>`), rebuilt from the two
 		// fields the cloud holds so the trace names the same thing both sides call it.

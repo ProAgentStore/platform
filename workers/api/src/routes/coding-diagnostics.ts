@@ -17,7 +17,7 @@
 import type { Context, Hono } from "hono";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured } from "../lib/github-app.js";
-import { engineAuthFor, engineAuthReport, readEngines, type EngineAuthResolved } from "../lib/coding-engines.js";
+import { engineAuthFor, engineAuthReport, engineInvocationReport, readEngines, type EngineAuthResolved, type EngineInvocationMode } from "../lib/coding-engines.js";
 import { type TrackedGhGuard, writeEnforcementReport } from "../lib/coding-write-enforcement.js";
 import { codingRunsForSessions, type CodingRunFact } from "../lib/board-runs.js";
 import { refusingEngineIssue } from "../lib/coding-run-state.js";
@@ -437,7 +437,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// orphanedTmux/tmuxTotal/pagsTmuxTotal figures described something that could never exist
 		// for these sessions. `engineLabel` replaces `tmuxSession`, which only ever looked like a
 		// tmux target a user could attach to.
-		const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean; authResolved?: EngineAuthResolved; ghGuard?: TrackedGhGuard }> } | null;
+		const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean; authResolved?: EngineAuthResolved; engineMode?: EngineInvocationMode; ghGuard?: TrackedGhGuard }> } | null;
 		if (diagData?.tracked) {
 			for (const t of diagData.tracked) trackedIds.add(t.sessionId);
 		}
@@ -464,6 +464,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 					// report the mode with resolved:null rather than omitting the field and making
 					// the shape differ between branches.
 					auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), null),
+					invocation: engineInvocationReport({ clientType: s.clientType, launchCommand: s.launchCommand, runnerMode: null }),
 					startedAt: s.startedAt, endedAt: new Date().toISOString(), live: null,
 					issue: null, reconciled: true,
 				};
@@ -484,6 +485,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				// Setting vs outcome, per session (#248) — the same pairing /capture reports, so the
 				// diagnostics list answers "which of my sessions is billing per token?" at a glance.
 				auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), tracked?.authResolved ?? null),
+				invocation: engineInvocationReport({ clientType: s.clientType, launchCommand: s.launchCommand, runnerMode: tracked?.engineMode }),
 				// The D1 column is still called tmux_session (renaming it is a table rewrite for a
 				// cosmetic gain); what it holds is an engine label. Surfaced honestly.
 				engineLabel: s.tmuxSession ?? null,

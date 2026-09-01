@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
-import { engineAdapterFor, type EngineAdapter, type EngineMode } from "./engine-adapter.js";
+import { engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
 
 export { buildClaudeArgs } from "./engine-adapter.js";
 
@@ -268,6 +268,16 @@ export class HeadlessSession {
 	/** What the `gh` guard actually did on this machine (#679) — reported, never assumed. */
 	get ghGuard(): GhGuardReport {
 		return ghGuardStatus(this.config.ghScope, mergeEnv(process.env, this.config.env), this.config.ghGuardRoot);
+	}
+
+	/** Whether this process is running through structured events or plain stdout (#731). */
+	get engineMode(): EngineInvocationMode {
+		return engineInvocationModeFromAdapter(this.mode);
+	}
+
+	/** A named warning only when a structured-capable engine is actually running raw (#731). */
+	get engineModeWarning(): string | null {
+		return engineInvocationWarning(this.config.clientType, this.engineMode);
 	}
 
 	/**

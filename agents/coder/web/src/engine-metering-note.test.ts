@@ -13,7 +13,7 @@ describe("engineMeteringNote — what the engines panel says about a preset's sp
 	it("says a raw engine's spend cannot be measured — and that this is not the same as free", () => {
 		// The whole point. A missing ledger row renders as zero dollars, so the sentence has to
 		// distinguish "nothing was spent" from "we could not see it"; #348's own framing.
-		const note = engineMeteringNote("codex exec --sandbox danger-full-access");
+		const note = engineMeteringNote("codex");
 		expect(note?.metered).toBe(false);
 		expect(note?.label).toMatch(/not measured/i);
 		expect(note?.detail).toMatch(/invisible/i);
@@ -34,11 +34,17 @@ describe("engineMeteringNote — what the engines panel says about a preset's sp
 		expect(note?.label).toMatch(/measured/i);
 	});
 
+	it("states the positive case for Codex exec JSON rather than treating all Codex as raw", () => {
+		const note = engineMeteringNote("codex exec --json --sandbox danger-full-access");
+		expect(note?.metered).toBe(true);
+		expect(note?.label).toMatch(/measured/i);
+	});
+
 	it("follows the BINARY through wrappers, so `npx claude` is not mistaken for a raw engine", () => {
 		// The answer belongs to the command's real binary — which is why this is derived from the
 		// SDK's mirror of `deriveClientType` rather than keyed on the preset's id or label.
 		expect(engineMeteringNote("npx claude -p")?.metered).toBe(true);
 		expect(engineMeteringNote("/opt/homebrew/bin/claude")?.metered).toBe(true);
-		expect(engineMeteringNote("npx codex exec")?.metered).toBe(false);
+		expect(engineMeteringNote("npx codex exec")?.metered).toBe(true);
 	});
 });
