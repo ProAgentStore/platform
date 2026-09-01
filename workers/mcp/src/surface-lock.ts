@@ -263,4 +263,16 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.17 is published.
 	"0.1.18": "sha256:ab5fcce1033ec9a84e31d42ec01915e6f72d57720b40ce2b03e04605708decc5",
+	// 0.1.19 (#767): one new tool NAME in the surface-gated `coding` group,
+	// `coding_loop_trace` — the run-id-addressable reader for the same coding timeline feed
+	// `coding_timeline` already exposes by session. The API now accepts `run_id` on
+	// `GET /v1/instances/:id/coding/timeline`, so MCP can hand a caller the live
+	// timeline/tool-call/terminal-tail events for the `runId` returned by `coding_loop_start`
+	// without first making it discover the session id.
+	//
+	// It is read-scoped and gated to `surfaces:["coding"]`; 148 registrations become 149, and
+	// the surface-gated count moves 22 → 23. `MCP_TOOL_ALWAYS_ON` does not move.
+	//
+	// Appended, never edited in place: 0.1.18 is published.
+	"0.1.19": "sha256:e1b7b7da1444269800746126ac2a3c76853e1b4756d14b60866b2cf0bae4f81b",
 };

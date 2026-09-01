@@ -107,9 +107,9 @@ That response means the instance runtime path is working and correctly refusing 
 
 ## MCP Tool Groups
 
-The server currently has 148 tool registrations across `workers/mcp/src`.
+The server currently has 149 tool registrations across `workers/mcp/src`.
 Some are capability-gated and appear only for users with matching agent surfaces, so
-`tools/list` on your own connection is the authoritative surface — 20 of those
+`tools/list` on your own connection is the authoritative surface — 23 of those
 registrations are gated. The `/health` marker reports the same total from
 `workers/mcp/src/tool-count.ts`; it said a hardcoded `41` when this page was written,
 which is the drift `scripts/docs-drift.mjs` now holds every statement of the number to.
@@ -139,7 +139,7 @@ Coding (the Coder agent):
 
 - `coding_repos_list`, `coding_repo_add`, `coding_sessions_list`
 - `coding_session_capture`/`message`/`end`/`restart`/`fresh`
-- `coding_loop_start`/`stop`/`status`, `coding_overseer`, `coding_diagnostics`
+- `coding_loop_start`/`stop`/`status`/`trace`, `coding_overseer`, `coding_diagnostics`
 
 Repo Chat, triggers, board, settings, trace:
 
@@ -179,7 +179,7 @@ Status: active
 
 Verified live:
 
-- MCP exposed its tool set (26 at the time of this 2026-06-11 record; 148 tool registrations in source today — see MCP Tool Groups above).
+- MCP exposed its tool set (26 at the time of this 2026-06-11 record; 149 tool registrations in source today — see MCP Tool Groups above).
 - Required instance tools were present.
 - `subscribe_agent` returned the existing active instance.
 - `add_instance_knowledge` saved a document to that private instance.

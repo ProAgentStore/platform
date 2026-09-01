@@ -864,6 +864,38 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 		expect(body.budgetId).toBe("bud-1");
 	});
 
+	it("reads the coding timeline by run_id, with the same cursors as coding_timeline", async () => {
+		const h = setup({ groups: ["coding"] });
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.includes("/i1/coding/timeline") && m === "GET", {
+			body: {
+				runId: "run-1",
+				sessionId: "sess-1",
+				runState: "thinking",
+				runnerConnected: true,
+				events: [{ seq: 12, type: "terminal", content: "tail", toolCalls: [] }],
+				nextSeq: 12,
+				hasMore: false,
+			},
+		});
+
+		const res = await h.tools.get("coding_loop_trace")!.handler({
+			instance_id: "coder",
+			run_id: "run-1",
+			since_seq: 7,
+			limit: 3,
+		});
+
+		const call = h.fetchStub.calls.find((c) => c.url.includes("/i1/coding/timeline"))!;
+		const qs = new URL(call.url).searchParams;
+		expect(call.method).toBe("GET");
+		expect(qs.get("run_id")).toBe("run-1");
+		expect(qs.get("since")).toBe("7");
+		expect(qs.get("before")).toBeNull();
+		expect(qs.get("limit")).toBe("3");
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ runId: "run-1", sessionId: "sess-1", runState: "thinking" });
+	});
+
 	it("lists recent runs when no run id is given — a run survives the client that started it", async () => {
 		const h = setup();
 		withInstance(h);

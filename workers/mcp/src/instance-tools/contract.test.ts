@@ -241,6 +241,7 @@ const TABLE: Record<string, Row> = {
 	// `before` added by #674 — the backward arm, so a caller can walk a run's history after the
 	// default page stopped being the oldest one.
 	coding_terminal: ["coding", "read", null, null, "before,instance_id,limit,session_id,token"],
+	coding_loop_trace: ["coding", "read", null, null, "before,instance_id,limit,run_id,since_seq,token"],
 	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],

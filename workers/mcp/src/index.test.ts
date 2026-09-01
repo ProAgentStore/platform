@@ -219,6 +219,7 @@ describe("PagsMcp.init — tool registration", () => {
 		const withCoding = (await setup({ groups: ["coding"] })).tools;
 		expect(withCoding.has("coding_session_capture")).toBe(true);
 		expect(withCoding.has("coding_session_message")).toBe(true);
+		expect(withCoding.has("coding_loop_trace")).toBe(true);
 		expect(withCoding.has("coding_diagnostics")).toBe(true);
 	});
 

@@ -120,6 +120,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	check_instance_loop: "read",
 	coding_diagnostics: "read",
 	coding_instance_deploy_status: "read",
+	coding_loop_trace: "read",
 	coding_loop_status: "read",
 	coding_repos_list: "read",
 	coding_session_capture: "read",
@@ -315,12 +316,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #683: `coding_instance_deploy_status`, which reads GitHub Actions workflow runs
 	// for a coding instance's registered repo. Uses the MCP worker's `GITHUB_TOKEN`, gated by
 	// the `read` scope so `MCP_READ_ONLY` blocks it correctly.
+	// +1 read at #767: `coding_loop_trace`, the run-id-addressable live feed for a loop run. It
+	// reads stored timeline rows and runner state through the API, and is surface-gated to coding.
 	// +1 read, +1 write at #739: `get_instance_operator_manual` reads the caller-facing
 	// operator manual (no scope gate, i.e. "none" in the contract table, same as the
 	// symmetric `get_instance_instructions`) and `set_instance_operator_manual` writes it
 	// (`write`). `read` count moves because MCP_RISK_COUNTS tracks the annotation — the tool
 	// itself has no `requirePermission` scope gate (ungated reads are "read" annotated).
-	read: 73,
+	read: 74,
 	write: 45,
 	runtime: 16,
 	destructive: 14,

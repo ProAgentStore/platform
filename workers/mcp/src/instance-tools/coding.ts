@@ -106,6 +106,31 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			},
 		);
 
+		server.tool(
+			"coding_loop_trace",
+			"Read the live trace for one autonomous coding loop run by `run_id` — the id returned by coding_loop_start. This is the run-first form of coding_timeline: it resolves the run's stored coding session, then returns the same cursorable timeline feed while the run is still in flight and after it ends. Poll it by passing the previous reply's `nextSeq` as `since_seq`; walk back with `before`. Events are ordered oldest→newest inside each page and include objective/progress rows, terminal tails, parsed `toolCalls` with tool name, argument summary, output/error summary and `ok` (`true`, `false`, or `null` when not observed), plus `run_state` so no-new-events can be distinguished from a long step, an idle engine, or an offline runner. Read-only and owner-scoped. It does not expose hidden model reasoning or full raw payloads by default; use coding_terminal for full stored pane snapshots.",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				instance_id: z.string().describe("Instance ID or slug"),
+				run_id: z.string().describe("The run id returned by coding_loop_start."),
+				since_seq: z.coerce.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it, oldest-first. Pass the previous reply's `nextSeq` to poll a live run. Cannot be combined with `before`."),
+				before: z.coerce.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK — returns the page of events OLDER than it. Pass the previous reply's `oldestSeq`. Cannot be combined with `since_seq`."),
+				limit: z.coerce.number().int().min(1).max(200).optional().describe("Events per page (default 40). Not the payload bound: a page also stops at a byte budget, and `hasMore` says so — raising this cannot make one call return more bytes."),
+			},
+			async ({ token, instance_id, run_id, since_seq, before, limit }) => {
+				const sessionToken = tokenFor(token);
+				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(safetyFor(token), "read", "coding_loop_trace", { instance_id, run_id });
+				if (denied) return denied;
+				const id = await resolveId(sessionToken, instance_id);
+				const qs = new URLSearchParams({ run_id });
+				if (since_seq !== undefined) qs.set("since", String(since_seq));
+				if (before !== undefined) qs.set("before", String(before));
+				if (limit !== undefined) qs.set("limit", String(limit));
+				return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/coding/timeline?${qs.toString()}`, sessionToken, {}, env));
+			},
+		);
+
 		// ── The pane itself, whole, after the run has ended (#699) ──
 		//
 		// `coding_timeline` above serves a `terminal` row as a 400-character TAIL, and that is right
@@ -186,7 +211,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 
 	server.tool(
 		"coding_loop_start",
-		"Give an agent an objective and let it work on it autonomously, on the server. Returns a run id immediately — poll it with coding_loop_status; the run keeps going after this call returns and after you disconnect. Durable and budgeted: its spend is drawn from a pool and stop_instance_loop / coding_loop_stop can end it. What it drives depends on the agent — a coding agent's engine, otherwise its chat. Same runs as start_instance_loop. Per-repo run lock: only one run may work on a repo at a time — starting a second is rejected with an error naming the repo; call coding_loop_status (no run_id) or check_instance_loop to see whether one is already running, and coding_loop_stop or stop_instance_loop to clear it first. Do NOT use a run for work a direct connector tool already does: filing or commenting on issues, reading issues or PRs, reading issue comments, and checking workflow-run / deploy status are all one-call operations via github_create_issue, github_comment_issue, github_update_issue, github_list_issues, github_read_issue, github_list_issue_comments, github_list_pulls, github_read_pull, and github_workflow_runs — call list_instance_tools to confirm which are available on this agent, then call_instance_tool to invoke one. An autonomous run is the right path for work that needs the code checkout: writing code, running tests, or any sequence of commands on the owner's machine.",
+		"Give an agent an objective and let it work on it autonomously, on the server. Returns a run id immediately — poll status with coding_loop_status and live work events with coding_loop_trace; the run keeps going after this call returns and after you disconnect. Durable and budgeted: its spend is drawn from a pool and stop_instance_loop / coding_loop_stop can end it. What it drives depends on the agent — a coding agent's engine, otherwise its chat. Same runs as start_instance_loop. Per-repo run lock: only one run may work on a repo at a time — starting a second is rejected with an error naming the repo; call coding_loop_status (no run_id) or check_instance_loop to see whether one is already running, and coding_loop_stop or stop_instance_loop to clear it first. Do NOT use a run for work a direct connector tool already does: filing or commenting on issues, reading issues or PRs, reading issue comments, and checking workflow-run / deploy status are all one-call operations via github_create_issue, github_comment_issue, github_update_issue, github_list_issues, github_read_issue, github_list_issue_comments, github_list_pulls, github_read_pull, and github_workflow_runs — call list_instance_tools to confirm which are available on this agent, then call_instance_tool to invoke one. An autonomous run is the right path for work that needs the code checkout: writing code, running tests, or any sequence of commands on the owner's machine.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
@@ -251,7 +276,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// hand-written, and when `RunHealth` gained `ended` (#588) BOTH went stale, independently.
 		// The vocabulary is now rendered from one constant into both, so there is one thing to
 		// change and the test fails if either stops carrying it.
-		`Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs — most of them will be CLOSED, because this listing has no status filter. Use this (without run_id) to check the per-repo run lock before calling coding_loop_start: if a run is already in \`running\` status the next start will be rejected; call coding_loop_stop to clear it first. Reads the server's run record, so it is correct across reconnects and across clients. Read \`health\` first. ${runHealthSentence()} Do not derive one from \`lastAliveAt\` (the orchestrator's heartbeat) and \`lastProgressAt\` (the last actual advance), because a fresh heartbeat beside a stale advance is equally a long engine turn, a park and a stall. And none of it speaks for the ENGINE: for that read coding_timeline (\`run_state\` plus the events since your last poll) or coding_session_capture.`,
+		`Check an autonomous run on an instance: status, the step it is on, why it stopped, and the budget pool it draws from. Omit run_id to list the instance's recent runs — most of them will be CLOSED, because this listing has no status filter. Use this (without run_id) to check the per-repo run lock before calling coding_loop_start: if a run is already in \`running\` status the next start will be rejected; call coding_loop_stop to clear it first. Reads the server's run record, so it is correct across reconnects and across clients. Read \`health\` first. ${runHealthSentence()} Do not derive one from \`lastAliveAt\` (the orchestrator's heartbeat) and \`lastProgressAt\` (the last actual advance), because a fresh heartbeat beside a stale advance is equally a long engine turn, a park and a stall. And none of it speaks for the ENGINE: for that read coding_loop_trace by run_id, coding_timeline by session, or coding_session_capture for a live pane.`,
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),

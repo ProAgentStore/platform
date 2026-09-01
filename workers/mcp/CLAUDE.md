@@ -79,17 +79,17 @@ src/
     │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
-    └── coding.ts         system_status + coding_timeline + coding_terminal (gated to
+    └── coding.ts         system_status + coding_timeline + coding_loop_trace + coding_terminal (gated to
                           surfaces:["coding"]) + 3 loop tools
 ```
 
-**148 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**149 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 102 across `instance-tools/`. 126 are always registered; 22 are
-surface-gated (apply=4, repo=3, coding=15).
+`storage-tools.ts`, and 103 across `instance-tools/`. 126 are always registered; 23 are
+surface-gated (apply=4, repo=3, coding=16).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
-+ 13 + 102 = 148. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 103 = 149. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools. The per-file rows in the tree above are
@@ -138,7 +138,7 @@ tells you exactly what you changed about it.
    refuses.) **`jsonText` is compact and takes no formatting option (#586)** — the reader is
    a host with a byte ceiling, not a person, and the indented default cost ~22% of every
    result and defeated two byte guards in one day. Do not hand-roll
-   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 148 tools through a
+   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 149 tools through a
    real client and fails any result whose text is indented JSON, however it was produced.
 5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
    it, in a comment above the registration (#328). The caller is usually a model: without
@@ -203,7 +203,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 22 tools are surface-gated.
+  given connection, because 23 tools are surface-gated.
 
 ## Bindings and secrets
 
