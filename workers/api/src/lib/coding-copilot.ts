@@ -76,7 +76,20 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 			messages,
 			maxTokens: question ? 600 : 160,
-		}, { kind: "copilot", instanceId: args.instanceId })) as { response?: string };
+		}, {
+			kind: "copilot",
+			instanceId: args.instanceId,
+			traceId: args.sessionId ?? null,
+			promptSource: "copilot",
+			promptPhase: "single_shot",
+			promptSections: [
+				{ label: "copilot.system", value: SYSTEM },
+				{ label: "copilot.lead", value: lead },
+				{ label: "copilot.instructions", value: args.specialInstructions },
+				{ label: "copilot.memory", value: args.memory },
+				{ label: "copilot.terminal", value: pane.slice(-6000) },
+			],
+		})) as { response?: string };
 		return scrubOneShotReply(res.response || "");
 	}
 
@@ -87,7 +100,17 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	const target = { conn: args.conn as RunnerConn, sessionId: args.sessionId, workDir: args.workDir, env, userId, repo: args.repo };
 	const executed = new Set<string>();
 	for (let round = 0; round < 3; round++) {
-		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as Record<string, unknown>;
+		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, {
+			kind: "copilot",
+			instanceId: args.instanceId,
+			traceId: args.sessionId ?? null,
+			promptSource: "copilot",
+			promptPhase: `tool_round_${round + 1}`,
+			promptSections: [
+				{ label: "copilot.messages", value: messages.map((m) => m.content) },
+				{ label: "copilot.tools", value: tools },
+			],
+		})) as Record<string, unknown>;
 		let calls = normalizeToolCalls((raw.tool_calls as unknown[]) || []);
 		// The walker hands back the reply with the call spans removed (#395); `scrubOneShotReply`
 		// takes the markup families around them and discloses an invented RESULT rather than
@@ -129,6 +152,13 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		messages.push({ role: "user", content: "Now answer my question using ONLY what you just read, in plain language (max 2 sentences unless I asked for detail). Do NOT paste code, diffs, or file paths." });
 		if (did === 0) break; // only refused/duplicate calls — stop rather than spin
 	}
-	const fin = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as { response?: string };
+	const fin = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, maxTokens: 600 }, {
+		kind: "copilot",
+		instanceId: args.instanceId,
+		traceId: args.sessionId ?? null,
+		promptSource: "copilot",
+		promptPhase: "final",
+		promptSections: [{ label: "copilot.messages", value: messages.map((m) => m.content) }],
+	})) as { response?: string };
 	return scrubOneShotReply(fin.response || "");
 }

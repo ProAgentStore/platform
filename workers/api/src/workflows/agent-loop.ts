@@ -169,7 +169,7 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 			// DECIDE — the same orchestrator path the HTTP route uses, so the two can't disagree.
 			const decision = await step.do(`decide-${iteration}`, async () => {
 				try {
-					return await runLoopDecide(this.env, userId, instanceId, { objective, messages: transcript, iteration, maxIterations });
+					return await runLoopDecide(this.env, userId, instanceId, { objective, messages: transcript, iteration, maxIterations, traceId: runId });
 				} catch (e) {
 					// A missing BYOK key fails the same way every time — escalate now rather than
 					// letting the Workflow retry the step and charge for each attempt.

@@ -13,6 +13,7 @@ import { bucketLabel, UNASSIGNED_KEY, usageInstanceScopeSql } from "./usage-ids.
 import { payerCoverage } from "./usage-coverage.js";
 import type { UsageBucket, UsageDay, UsageSummary, UsageTotals } from "./usage-shape.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
+import type { PromptSectionInput } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
 
 export type UsageKind =
@@ -46,6 +47,11 @@ export interface UsageContext {
 	kind: UsageKind;
 	instanceId?: string | null;
 	agentId?: string | null;
+	traceId?: string | null;
+	/** Trace-only prompt size attribution. Values are measured locally and never persisted as text. */
+	promptSections?: readonly PromptSectionInput[];
+	promptSource?: string | null;
+	promptPhase?: string | null;
 }
 
 export interface UsageTokens {

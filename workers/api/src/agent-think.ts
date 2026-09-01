@@ -819,12 +819,25 @@ export async function runAgentThink(opts: {
 	 */
 	let truncated = false;
 	const chatComplete = async (body: { messages: { role: string; content: unknown }[]; tools?: unknown[]; toolChoice?: "auto" | "none" }): Promise<ChatCompletion> => {
+		const system = body.messages.find((m) => m.role === "system")?.content;
+		const nonSystem = body.messages.filter((m) => m.role !== "system").map((m) => m.content);
 		const r = (await runUserWorkersAi(
 			env,
 			userId,
 			effectiveModel,
 			{ ...body, maxTokens: CHAT_MAX_TOKENS },
-			{ kind: "chat", instanceId: state.agentId },
+			{
+				kind: "chat",
+				instanceId: state.agentId,
+				traceId: delegation?.traceId ?? null,
+				promptSource: "chat",
+				promptPhase: body.tools?.length ? "tool_round" : body.toolChoice === "none" ? "prose_only" : "reply",
+				promptSections: [
+					{ label: "chat.system", value: system },
+					{ label: "chat.messages", value: nonSystem },
+					{ label: "chat.tools", value: body.tools },
+				],
+			},
 		)) as ChatCompletion;
 		if (!truncated && hitOutputCap(r.stopReason)) {
 			truncated = true;

@@ -16,6 +16,7 @@ import {
 } from "./anthropic-stream.js";
 import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
+import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
 
 export class UserAiCredentialsError extends Error {
@@ -80,6 +81,18 @@ export async function runUserWorkersAi(
 	body: unknown,
 	ctx?: UsageContext,
 ): Promise<unknown> {
+	if (ctx?.promptSections?.length) {
+		await logPromptSectionEstimates(env, {
+			userId,
+			instanceId: ctx.instanceId ?? null,
+			traceId: ctx.traceId ?? null,
+			source: ctx.promptSource ?? ctx.kind,
+			kind: ctx.kind,
+			model,
+			phase: ctx.promptPhase ?? null,
+			sections: ctx.promptSections,
+		});
+	}
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {

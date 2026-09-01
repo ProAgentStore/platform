@@ -578,26 +578,43 @@ export async function decideCodingAction(
 	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot },
 	usageCtx?: UsageContext,
 ): Promise<CodingDecision> {
+	const system = systemPrompt(params.goal);
+	const clock = clockLine(Date.now(), params.goal.timeZone);
+	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
+	const terminal = renderPaneForPilot(params.snapshot.pane);
 	const userMsg = [
 		// The clock, per decision rather than per run (#541): a run that parks for an hour and
 		// resumes must convert the CLI's stated local reset time against the time it is NOW. In the
 		// user message for that reason — the system prompt is built once and would go stale.
-		clockLine(Date.now(), params.goal.timeZone),
-		`Steps so far:\n${params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
+		clock,
+		`Steps so far:\n${steps}`,
 		`\nTERMINAL (run-state: ${params.snapshot.runState}):`,
 		// Not a bare `slice(-6000)`: the tail is labelled with what it is a tail OF (#522, cause B).
-		renderPaneForPilot(params.snapshot.pane),
+		terminal,
 		"\nDo the single next step toward the objective. Call exactly one tool.",
 	].join("\n");
 
 	const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 		messages: [
-			{ role: "system", content: systemPrompt(params.goal) },
+			{ role: "system", content: system },
 			{ role: "user", content: userMsg },
 		],
 		tools: CODING_TOOLS,
 		maxTokens: PILOT_MAX_TOKENS,
-	}, usageCtx)) as {
+	}, usageCtx
+		? {
+				...usageCtx,
+				promptSource: "coding",
+				promptPhase: "pilot_decide",
+				promptSections: [
+					{ label: "pilot.system", value: system },
+					{ label: "pilot.objective", value: params.goal.objective },
+					{ label: "pilot.steps", value: steps },
+					{ label: "pilot.terminal", value: terminal },
+					{ label: "pilot.tools", value: CODING_TOOLS },
+				],
+			}
+			: undefined)) as {
 		response?: string;
 		tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
 		usage?: { input: number; output: number };

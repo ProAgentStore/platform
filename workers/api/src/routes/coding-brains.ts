@@ -401,7 +401,20 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
 			tools,
 			maxTokens: 700,
-		}, { kind: "overseer", instanceId }).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
+		}, {
+			kind: "overseer",
+			instanceId,
+			traceId: sessionId,
+			promptSource: "overseer",
+			promptPhase: "repo_agent",
+			promptSections: [
+				{ label: "overseer.system", value: system },
+				{ label: "overseer.user", value: raw },
+				{ label: "overseer.memory", value: memory },
+				{ label: "overseer.terminal", value: pane.slice(-6000) },
+				{ label: "overseer.tools", value: tools },
+			],
+		}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 		const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 		const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
 		const summary = call && typeof call.arguments?.summary === "string" ? (call.arguments.summary as string).trim() : "";
@@ -474,7 +487,19 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
 			tools,
 			maxTokens: 800,
-		}, { kind: "overseer", instanceId }).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
+		}, {
+			kind: "overseer",
+			instanceId,
+			traceId: instanceId,
+			promptSource: "overseer",
+			promptPhase: "global",
+			promptSections: [
+				{ label: "overseer.system", value: system },
+				{ label: "overseer.user", value: raw },
+				{ label: "overseer.repo_context", value: context },
+				{ label: "overseer.tools", value: tools },
+			],
+		}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 
 		const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 		// #156: the tool still speaks `repoId`, but the route no longer does — it hands an

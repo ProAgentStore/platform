@@ -504,7 +504,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			decide: (p) =>
 				step.do(probe.at(`s${n++}-decide`), retry, () =>
 					decideWithinBudget(env, { userId, instanceId, budgetId: event.payload.budgetId, depth: event.payload.depth }, () =>
-						decideCodingAction(env, userId, p, { kind: "coding", instanceId }),
+						decideCodingAction(env, userId, p, { kind: "coding", instanceId, traceId: event.payload.loopRunId ?? sessionId }),
 					),
 				) as Promise<CodingDecision>,
 			// Poll capture until the CLI goes idle, BACKING OFF as the turn proves long (#523). A

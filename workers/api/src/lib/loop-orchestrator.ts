@@ -20,6 +20,7 @@ export interface LoopDecideInput {
 	messages: LoopTurn[];
 	iteration: number;
 	maxIterations: number;
+	traceId?: string | null;
 }
 
 /** Clamp the inputs the model sees. Pure, so the prompt shape is testable without a model. */
@@ -29,6 +30,7 @@ export function sanitizeDecideInput(raw: Partial<LoopDecideInput>): LoopDecideIn
 		messages: Array.isArray(raw.messages) ? raw.messages.slice(-20) : [],
 		iteration: Math.max(0, Math.min(1_000, Number(raw.iteration) || 0)),
 		maxIterations: Math.max(1, Math.min(1_000, Number(raw.maxIterations) || 10)),
+		traceId: typeof raw.traceId === "string" ? raw.traceId : null,
 	};
 }
 
@@ -77,6 +79,8 @@ export async function runLoopDecide(
 	raw: Partial<LoopDecideInput>,
 ): Promise<LoopDecisionResult> {
 	const input = sanitizeDecideInput(raw);
+	const system = buildLoopSystemPrompt(input.iteration, input.maxIterations);
+	const user = buildLoopUserContent(input);
 	try {
 		const res = (await runUserWorkersAi(
 			env,
@@ -84,12 +88,23 @@ export async function runLoopDecide(
 			"claude-sonnet-4-6",
 			{
 				messages: [
-					{ role: "system", content: buildLoopSystemPrompt(input.iteration, input.maxIterations) },
-					{ role: "user", content: buildLoopUserContent(input) },
+					{ role: "system", content: system },
+					{ role: "user", content: user },
 				],
 				maxTokens: 300,
 			},
-			{ kind: "chat", instanceId },
+			{
+				kind: "chat",
+				instanceId,
+				traceId: input.traceId,
+				promptSource: "loop",
+				promptPhase: "decide",
+				promptSections: [
+					{ label: "loop.system", value: system },
+					{ label: "loop.objective", value: input.objective },
+					{ label: "loop.transcript", value: input.messages.slice(-6).map((m) => m.content) },
+				],
+			},
 		)) as { response?: string };
 		return parseLoopDecision(res.response || "");
 	} catch (e) {
