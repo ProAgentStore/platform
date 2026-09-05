@@ -125,7 +125,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 									{invocation && (
 										<span
 											title={invocation.detail}
-											className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-normal ${
+											className={`shrink-0 rounded-full border px-2 py-0.5 text-2xs font-bold uppercase tracking-normal ${
 												invocation.mode === "structured" ? "border-success-line bg-success-soft text-success" : "border-line bg-line/50 text-muted"
 											}`}
 										>
