@@ -230,6 +230,20 @@ jobs:
         run: cd packages/sdk && npx tsc
       - name: Build docs
         run: pnpm docs:build
+      # `workers/host/src/pages.ts` is build output (build.js inlines store/ into it) and is
+      # gitignored, so a fresh checkout does not have it — and `pnpm test` collects
+      # workers/host/src/admin-api-proxy.test.ts, which imports the host index.ts, which imports
+      # ./pages.js at module load. Without these the suite fails to collect that file.
+      #
+      # The console build was the LAST step of this job, after the tests that needed it. It stays a
+      # build-succeeds check by running here; it just also produces the bundle build.js reads, so
+      # it is one step doing both jobs rather than the same build run twice.
+      - name: Build Console
+        run: cd store/console && npx vite build
+      - name: Build Admin
+        run: cd store/admin && npx vite build
+      - name: Build host pages
+        run: cd workers/host && node build.js
       - run: pnpm test
       - name: E2E projects still select the tests they claim to (#740)
         # `playwright.config.ts` scopes the WebKit project with `grep: /mobile — /` and
@@ -287,5 +301,3 @@ jobs:
       # there passed CI, landed on main, and failed at DEPLOY instead of at PR time.
       - name: Typecheck Admin
         run: cd store/admin && npx tsc --noEmit
-      - name: Build Console
-        run: cd store/console && npx vite build

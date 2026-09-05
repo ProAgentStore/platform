@@ -93,6 +93,32 @@ describe("classifyEngineMetering", () => {
 		expect(classifyEngineMetering("terminal", "").metered).toBe(false);
 	});
 
+	it("does not meter a Codex session that is not launched as `exec --json`", () => {
+		// Same binary, opposite verdict: `codex exec --json` emits per-turn tokens, `codex chat`
+		// emits prose. The engine NAME cannot answer this, which is why the launch command is an
+		// input to the classifier rather than a check performed around it.
+		const v = classifyEngineMetering("headless", "codex", "codex chat");
+		expect(v.metered).toBe(false);
+		expect(v.reason.length).toBeGreaterThan(20);
+		expect(classifyEngineMetering("headless", "codex", "codex exec --json").metered).toBe(true);
+	});
+
+	it("reads a missing launch command as the default invocation, so old rows do not reclassify", () => {
+		// The argument arrived after these sessions were written. Treating "not recorded" as raw
+		// would retroactively turn every measured Codex session into an unmetered one.
+		expect(classifyEngineMetering("headless", "codex", null).metered).toBe(true);
+		expect(classifyEngineMetering("headless", "codex", "  ").metered).toBe(true);
+	});
+
+	it("does not read an unrecognised engine as Claude, whatever the launch command says", () => {
+		// The regression that made this a guard: routing the engine name through `asClient` first
+		// collapses anything outside its four-name list to "claude", which then reads as
+		// structured — so these all silently claimed to be measured and recorded no absence.
+		for (const engine of ["aider", "opencode", "goose", "amp", "crush", "cursor-agent"]) {
+			expect(classifyEngineMetering("headless", engine).metered, engine).toBe(false);
+		}
+	});
+
 	it("always explains itself in a sentence a page can print", () => {
 		for (const v of [
 			classifyEngineMetering("headless", "claude"),
@@ -272,6 +298,25 @@ describe("noteUnmeteredHeadlessDrive — the other row of the 2x2 (#556)", () =>
 			await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "grok" });
 		}
 		expect(new Set(runs.map((r) => String(r.args[0]))).size).toBe(1);
+	});
+
+	it("records the absence for a Codex session launched raw, not just for a raw engine", async () => {
+		// The behaviour #556's fix-forward had to preserve: a metered ENGINE driven through an
+		// unmetered INVOCATION is unmetered, and the row has to say so.
+		const { runs, env } = fakeDb();
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "codex", launchCommand: "codex chat" });
+		expect(runs).toHaveLength(1);
+		expect(contextOf(runs[0]).paneCommand).toBe("codex");
+	});
+
+	it("records the absence for an AI CLI outside the four known clientTypes", async () => {
+		// Regression guard. These read as "claude" through `asClient` and recorded nothing, so a
+		// day of unmeasured aider work looked identical to a day of measured Claude Code work.
+		const { runs, env } = fakeDb();
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "aider" });
+		expect(runs).toHaveLength(1);
+		expect(contextOf(runs[0]).aiCli).toBe(true);
+		expect(contextOf(runs[0]).target).toBe("aider:csess-9");
 	});
 
 	it("says something honest about an engine whose clientType is missing", async () => {
