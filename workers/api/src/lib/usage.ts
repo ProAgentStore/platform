@@ -11,34 +11,17 @@ import { engineSessionFromRowId, engineUsageRowId, type EngineUsageReport } from
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
 import { bucketLabel, UNASSIGNED_KEY, usageInstanceScopeSql } from "./usage-ids.js";
 import { payerCoverage } from "./usage-coverage.js";
-import type { UsageBucket, UsageDay, UsageSummary, UsageTotals } from "./usage-shape.js";
+import type { UsageBucket, UsageDay, UsageKind, UsageSummary, UsageTotals } from "./usage-shape.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
 import type { PromptSectionInput } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
 
-export type UsageKind =
-	| "chat"
-	| "apply"
-	| "coding"
-	/**
-	 * The coding Engine itself (#267) — the CLI child process on the user's machine.
-	 *
-	 * Distinct from "coding", which is the cloud-side Pilot deciding what to instruct it to do.
-	 * Conflating them would hide the split that matters: the Pilot's decisions are cents, the
-	 * Engine's turns are the actual bill.
-	 */
-	| "engine"
-	| "copilot"
-	| "overseer"
-	| "run"
-	| "resume"
-	| "translate"
-	| "voice"
-	// Declarative pipeline LLM step (ai_generate) — e.g. the Outreach agent drafting per lead.
-	| "pipeline"
-	// Platform-paid internal AI (issue #44), billed to the platform, not BYOK.
-	| "embedding"
-	| "summary";
+/**
+ * Re-exported so this stays the module you import a kind FROM; it is DECLARED in `usage-shape.ts`.
+ * Moving the declaration is what breaks the `usage ⇄ prompt-section-estimates` type-only cycle —
+ * see the note beside it there for why the leaf is the fix rather than a deferred import.
+ */
+export type { UsageKind };
 
 /** What a call site knows about the call. provider+model+userId are filled in by
  *  the AI layer (it knows the real model actually used), so callers pass only the

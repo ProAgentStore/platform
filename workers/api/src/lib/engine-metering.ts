@@ -29,7 +29,7 @@
 import { logEvent } from "./events.js";
 import type { UnmeteredUsageSummary } from "./usage-shape.js";
 import type { Env } from "../types.js";
-import { asClient, expectedEngineInvocationMode } from "./coding-engines.js";
+import { expectedEngineInvocationMode } from "./coding-engines.js";
 
 /**
  * How the platform is driving the CLI.
@@ -105,8 +105,14 @@ export function isAiCli(raw: string | null | undefined): boolean {
  *
  * The reason string is the product here. "unmetered: true" is not something a Usage page can
  * print; a sentence saying which part of the pipeline drops the number is.
+ *
+ * `launchCommand` is the third input the verdict genuinely depends on, and only for Codex: it
+ * reports tokens under `exec --json` and says nothing at all under any other subcommand, so the
+ * engine NAME alone cannot answer the question for it. Absent (an older session row that never
+ * recorded one) reads as the default invocation, which is structured — the same answer this
+ * function gave before the argument existed, so nothing reclassifies retroactively.
  */
-export function classifyEngineMetering(driver: EngineDriver, engine?: string | null): MeteringVerdict {
+export function classifyEngineMetering(driver: EngineDriver, engine?: string | null, launchCommand?: string | null): MeteringVerdict {
 	const name = normalizePaneCommand(engine);
 	if (driver === "terminal") {
 		// Note the engine is IRRELEVANT to the verdict here. A pane holds rendered characters, so
@@ -119,7 +125,14 @@ export function classifyEngineMetering(driver: EngineDriver, engine?: string | n
 		};
 	}
 	if (STRUCTURED_ENGINES.has(name)) {
-		if (name === "codex") return { metered: true, reason: "Codex exec --json reports each turn's tokens; the observed schema does not report a dollar cost." };
+		if (name === "codex") {
+			// The one engine whose answer the name cannot carry: `codex exec --json` emits per-turn
+			// tokens, `codex` under any other subcommand emits prose. Same binary, opposite verdict.
+			if (expectedEngineInvocationMode("codex", launchCommand) === "raw") {
+				return { metered: false, reason: "This Codex session is not launched as `exec --json`, so it ends a turn with plain stdout and reports no token counts." };
+			}
+			return { metered: true, reason: "Codex exec --json reports each turn's tokens; the observed schema does not report a dollar cost." };
+		}
 		return { metered: true, reason: "Claude Code reports each turn's tokens and cost, and that figure is recorded as measured." };
 	}
 	return {
@@ -305,7 +318,13 @@ export async function noteUnmeteredHeadlessDrive(
 	ctx: { userId?: string; instanceId?: string; traceId?: string },
 	session: { id: string; clientType?: string | null; launchCommand?: string | null },
 ): Promise<void> {
-	if (typeof session.clientType === "string" && expectedEngineInvocationMode(asClient(session.clientType), session.launchCommand) === "structured") return;
+	// Through the classifier, not around it (#556). The invocation-mode refinement this guard needs
+	// lives INSIDE `classifyEngineMetering` now, so there is still exactly one place that answers
+	// "can this reach the ledger". Asking `expectedEngineInvocationMode` directly also had to route
+	// the engine name through `asClient`, which falls back to "claude" for anything outside its
+	// four-name list — so aider, opencode, goose, amp, crush and cursor-agent all read as structured
+	// and recorded nothing, which is the same silence #556 was opened about.
+	if (classifyEngineMetering("headless", session.clientType, session.launchCommand).metered) return;
 	await noteUnmeteredDrive(env, ctx, {
 		// The runner's own `engineLabel` shape (`<engine>:<session id>`), rebuilt from the two
 		// fields the cloud holds so the trace names the same thing both sides call it.

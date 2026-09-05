@@ -1,5 +1,8 @@
 import { logEvent } from "./events.js";
-import type { UsageKind } from "./usage.js";
+// From the leaf, NOT from `usage.ts` — `usage.ts` imports `PromptSectionInput` from this file, so
+// importing the kind back off it closes a cycle. Type-only, so it erases at runtime and nothing
+// would have failed; `import-graph.test.ts` is what catches it.
+import type { UsageKind } from "./usage-shape.js";
 import type { Env } from "../types.js";
 
 export interface PromptSectionInput {
