@@ -77,7 +77,8 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			"routes/tools.ts",
 			// `POST …/coding/sessions/:id/run` — handing one named session to the Pilot is the
 			// same commitment as pressing Loop, through a narrower door. A root, so depth 0 (#502).
-			"routes/coding.ts",
+			// Moved out of `routes/coding.ts` with the #775 split; `/run` is a drive route.
+			"routes/coding-drive.ts",
 			// The Overseer delegating to the Pilot. A MODEL decides to start this one, which makes
 			// it the least supervised of the three and the one that most needs a pool (#502).
 			"routes/coding-brains.ts",

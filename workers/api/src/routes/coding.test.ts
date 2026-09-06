@@ -8,6 +8,18 @@ import { ownerOf, parseGithubRepo, pickNextIssue } from "./coding-shared.js";
 import { type CodingEngine, deriveClientType, engineAuthFor } from "../lib/coding-engines.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 
+/**
+ * The session-lifecycle route SOURCE. #775 split these routes out of `coding.ts` into
+ * `coding-sessions-open.ts` (open, attach, watch) and `coding-drive.ts` (drive, end, restart);
+ * `coding.ts` is now only the registration order and contains no route bodies at all. The scans
+ * below pin what a route BODY does, so they follow the bodies rather than the filename — a scan
+ * that kept reading `coding.ts` would pass vacuously by finding nothing to check.
+ */
+const sessionRouteSrc = (): string =>
+	["coding-sessions-open.ts", "coding-drive.ts"]
+		.map((f) => readFileSync(join(import.meta.dirname, f), "utf8"))
+		.join("\n");
+
 describe("delegationTaskRecord (#155 — observable delegation task)", () => {
 	const base = { id: "deleg-1", targetLabel: "pags/platform", objective: "add a health check to the api worker", now: "2026-08-03T00:00:00.000Z" };
 
@@ -173,7 +185,7 @@ describe("engine sign-in relay (#coding-auth)", () => {
 	it("only relays a URL the ENGINE printed, never one from the caller", async () => {
 		// This navigates a real browser on the owner's machine. Accepting a client-supplied URL
 		// would turn an authenticated route into an open redirect onto their desktop.
-		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const src = sessionRouteSrc();
 		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
 		const body = route.slice(0, route.indexOf("});"));
 		expect(body).toContain('callRunner<{ pane?: string }>');   // re-reads the pane
@@ -182,7 +194,7 @@ describe("engine sign-in relay (#coding-auth)", () => {
 	});
 
 	it("hands off through the EXISTING takeover path rather than a new mechanism", async () => {
-		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const src = sessionRouteSrc();
 		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
 		const body = route.slice(0, route.indexOf("});"));
 		expect(body).toContain('"/browser/act"');      // navigate in the runner's browser
@@ -195,7 +207,7 @@ describe("engine sign-in relay (#coding-auth)", () => {
 	it("logs only the HOST of the sign-in URL, not the whole thing", () => {
 		// OAuth URLs carry state/PKCE/redirect params; putting them verbatim in a durable trace
 		// is a needless secret-adjacent leak.
-		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const src = sessionRouteSrc();
 		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
 		const body = route.slice(0, route.indexOf("logEvent") + 400);
 		expect(body).toContain("new URL(prompt.url as string).host");
@@ -206,7 +218,7 @@ describe("terminal persistence (#coding-transcript)", () => {
 	/** The capture route's body — up to the NEXT route, not the first `return c.json(`, which is
 	 *  the runner-offline early return well before the code under test. */
 	const routeSrc = () => {
-		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const src = sessionRouteSrc();
 		const i = src.indexOf("coding/sessions/:sessionId/capture");
 		const next = src.indexOf("codingRoutes.", i + 10);
 		return src.slice(i, next === -1 ? undefined : next);
@@ -262,7 +274,7 @@ describe("terminal persistence (#coding-transcript)", () => {
 		// 8,000, so even a correct compare would have read a "change" every time the writers
 		// alternated. The invariant is not "they use the same number" — it is that the number
 		// exists in ONE place and no writer restates it.
-		const writers = ["coding.ts", "coding-brains.ts", "../workflows/coding-watch.ts"];
+		const writers = ["coding-sessions-open.ts", "coding-brains.ts", "../workflows/coding-watch.ts"];
 		for (const f of writers) {
 			const src = readFileSync(join(import.meta.dirname, f), "utf8");
 			expect(src, f).toContain("terminalSnapshotContent");
@@ -287,7 +299,7 @@ describe("every response that carries a session says what the engine came up wit
 	// the properties that cannot be read off the source; this is the cheap complement, and the
 	// regression it catches — a future edit collapsing the call back to `(await …).conn != null`,
 	// which is the exact shape all four had — is a source-level shape.
-	const src = () => readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+	const src = () => sessionRouteSrc();
 	/** One route's body: from its path literal to the next route registration. */
 	const routeSrc = (marker: string, from = 0) => {
 		const s = src();

@@ -78,10 +78,23 @@ const PINS = {
 	// routes. #305 split it along the same kind of boundary — coding-repos.ts (what the agent is
 	// pointed at), coding-brains.ts (the three routes that call a MODEL), coding-diagnostics.ts
 	// (the reconcile-and-explain view), coding-shared.ts (the tenant gate and the four things all
-	// four modules need). What is left is the session lifecycle at 684 lines, so its entry is gone
-	// rather than lowered. Each sibling is registered from the exact position its block occupied,
+	// four modules need). Each sibling is registered from the exact position its block occupied,
 	// and coding.contract.test.ts derives the route table, the order and each module's ownership
 	// by driving the handlers — the evidence that the split moved no behaviour.
+	//
+	// #305 left the session lifecycle here at 684 lines and deleted the entry; it drifted back to
+	// 814 and the entry came back at #738. #775 took the seam #738's own comment had named —
+	// attach-and-observe versus drive-and-end — and cut it: coding-sessions-open.ts (list, engine
+	// presets, create, /start, /capture, /signin, /status) and coding-drive.ts (/message, /run,
+	// /resume, /end, /restart), with the session-scoped conversation in coding-timeline-routes.ts.
+	// `coding.ts` is now 71 lines and holds no route bodies at all, so the entry is gone again.
+	//
+	// Two placements are forced by registration order rather than chosen, and both are commented
+	// where they land: `system-message` stays at the end of coding-sessions-open.ts because it is
+	// registered BEFORE the copilot block, and `/restart` sits in coding-drive.ts (not with
+	// attach-and-observe, where #738's comment grouped it) because it is registered after `/end`.
+	// Hono matches in registration order, so moving either past a sibling would be a behaviour
+	// change — which is the thing coding.contract.test.ts exists to catch.
 	//
 	// 1696 → 853 at #305. Three contiguous route blocks left for sibling modules along the seams
 	// the registrations already had — instances-tasks.ts (the board/ticket surface and the
@@ -139,31 +152,6 @@ const PINS = {
 	// it is positioned against is how `mcp_get_prompt` came to put a remote server's description
 	// where the platform's own words go.
 	"workers/api/src/lib/storage-tools.ts": 857, // +18 (#762): upload_file handler gains content_base64 branch — size cap check, bytesFromBase64 call, text-path mime-type guard; tool declaration gains two optional params and an import.
-	// New entry at #738 — 799 → 810, crossing LIMIT by ten. #305 left this file at 684 and deleted
-	// its entry, which is the outcome this guard wants; it has since drifted back to one line under
-	// the threshold, so #738's four ADDITIVE response fields could not be explained at all without
-	// tripping it. The code delta is genuinely zero net lines — three call sites stop discarding
-	// `startSessionOnRunner`'s result and four `c.json` literals gain `resumed` + `seeded`. Every
-	// line above 799 is the comment saying why, and the why is the whole issue: those four
-	// responses are the ones a RE-ATTACH answers with, a re-attach is the only thing that
-	// relocates a session to another machine, and a relocated engine is cold and briefed. Dropping
-	// the field there is what made #694's "the console banner reports a briefed engine" false on
-	// the one path #694 was about. A reader who sees `runnerConnected: started.conn != null` with
-	// no reason attached will collapse it back to the one-liner it was, and nothing else in the
-	// file would stop them.
-	//
-	// Raised rather than split, and the seam is named so the next raise does not have to rediscover
-	// it: what remains here is the session LIFECYCLE, and it divides at attach-and-observe
-	// (`/start`, `/capture`, `/restart`, `/signin`) versus drive-and-end (`/message`, `/run`,
-	// `/resume`, `/end`). That is a real split and it is not #738's — a four-field reporting fix is
-	// the wrong commit to move eight routes in, and doing both at once would make the behaviour
-	// change unreviewable against the move.
-	// +5 at #731 (1e038c43, pin raised after the fact): `/capture` now answers with an
-	// `engineInvocationReport` built from the session's clientType, its launch command and the mode
-	// the runner reports — the three readings the console needs to say "running raw" without
-	// guessing. It is one call and one response field on the attach-and-observe side of the seam
-	// named above, so it does not move that split; the split is still the next raise's job.
-	"workers/api/src/routes/coding.ts": 815,
 	// +2 for #496 AC2: the owner-initiated resync-identity route is mounted from a new sub-module
 	// (instances-identity.ts) to keep this file's size honest; the two new lines are the import
 	// and the register call. Raised rather than split: the whole change is a mount and an import.

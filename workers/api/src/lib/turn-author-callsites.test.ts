@@ -158,11 +158,12 @@ function messageSites(): Site[] {
  * The call sites that deliberately send NO author, with the reason each one is exempt.
  *
  * Keyed by module and pinned by COUNT, so a second unlabelled construction added to an
- * already-listed file fails too. A file-level exemption would have let `routes/coding.ts` — the
- * module that also holds `/run`, `/resume` and `/restart` — absorb a new machine driver silently.
+ * already-listed file fails too. A file-level exemption would have let `routes/coding-drive.ts` —
+ * the module that also holds `/run`, `/resume` and `/restart` — absorb a new machine driver
+ * silently. (It was `routes/coding.ts` until the #775 split moved the drive routes out.)
  */
 const UNLABELLED_BY_DESIGN: Record<string, { count: number; why: string }> = {
-	"routes/coding.ts": {
+	"routes/coding-drive.ts": {
 		count: 1,
 		why:
 			"POST …/coding/sessions/:sid/message — the console's MANUAL box and MCP's `coding_session_message`, " +
