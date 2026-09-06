@@ -6,6 +6,8 @@
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { keyHint } from "../lib/key-hint.js";
+import { backfillKeyHint } from "../lib/key-hint-backfill.js";
 import { wrongProviderError } from "../lib/key-shape.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
@@ -210,13 +212,21 @@ keysRoutes.get("/status", async (c) => {
 		// GROUP BY provider (#715): a connector can hold several accounts, and this answers "which
 		// providers do I have a credential for" — once each. MIN/MAX pick the earliest connection
 		// and the most recent use across them, which is what a per-provider row should say.
-		"SELECT provider, MIN(created_at) AS created_at, MAX(last_used_at) AS last_used_at FROM user_api_keys WHERE user_id = ?1 GROUP BY provider",
+		// `key_hint` is taken from the UNNAMED DEFAULT SLOT only (#780). This handler collapses a
+		// provider's rows into one, and a hint is an answer to "WHICH key is this" — averaging it
+		// over several accounts with MAX() would return one account's tail labelled as the
+		// provider's. `account_id = ''` is the slot PUT writes and DELETE clears, so it is the
+		// one the panel's own Add/Remove buttons act on. A connector holding only named accounts
+		// yields null here and renders no hint, which is the honest answer for a row that cannot
+		// say which account it means.
+		"SELECT provider, MIN(created_at) AS created_at, MAX(last_used_at) AS last_used_at, MAX(CASE WHEN account_id = '' THEN key_hint END) AS key_hint FROM user_api_keys WHERE user_id = ?1 GROUP BY provider",
 	)
 		.bind(session.uid)
 		.all<{
 			provider: string;
 			created_at: string;
 			last_used_at: string | null;
+			key_hint: string | null;
 		}>();
 
 	const stored = new Set(results.map((r) => r.provider));
@@ -228,6 +238,10 @@ keysRoutes.get("/status", async (c) => {
 			createdAt: results.find((r) => r.provider === p.id)?.created_at || null,
 			lastUsedAt:
 				results.find((r) => r.provider === p.id)?.last_used_at || null,
+			// Four characters, never more — the column only ever holds four (`keyHint`), and this
+			// route does no decryption to produce it. A key stored before migration 0146 reports
+			// null until the platform next uses it, at which point the backfill fills it in.
+			keyHint: results.find((r) => r.provider === p.id)?.key_hint || null,
 		})),
 	});
 });
@@ -274,15 +288,21 @@ keysRoutes.put("/:provider", async (c) => {
 		// account_id '' — the unnamed default. An AI provider key is singular by nature (you have
 		// one Anthropic key), so it stays in the slot it has always occupied; the multi-account
 		// vault (#715) is for connectors whose credential names a mailbox or a drive.
-		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, created_at)
-     VALUES (?1, ?2, '', ?3, ?4, ?5, datetime('now'))
+		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, created_at, key_hint)
+     VALUES (?1, ?2, '', ?3, ?4, ?5, datetime('now'), ?6)
      ON CONFLICT(user_id, provider, account_id) DO UPDATE SET
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
        iv = excluded.iv,
-       created_at = excluded.created_at`,
+       created_at = excluded.created_at,
+       -- Overwritten, not coalesced: replacing the key replaces which key this is, and a stale
+       -- hint would name the key the owner just took OUT of the slot (#780).
+       key_hint = excluded.key_hint`,
 	)
-		.bind(session.uid, providerId, ciphertext, dekWrapped, iv)
+		// The hint is derived from `keyToStore`, the same string being encrypted on the line
+		// above — for cloudflare that is the `{accountId,token}` envelope, which `keyHint`
+		// unwraps so the hint names the token the owner pasted rather than the encoding.
+		.bind(session.uid, providerId, ciphertext, dekWrapped, iv, keyHint(keyToStore))
 		.run();
 
 	return c.json({ success: true, provider: providerId });
@@ -374,10 +394,12 @@ keysRoutes.get("/:provider/reveal", async (c) => {
 	}
 	if (!c.env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
 	const row = await c.env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
+		// `key_hint` rides along so the backfill below can skip D1 entirely once the row has one
+		// (#780) — the alternative is a statement per call that matches nothing forever.
+		"SELECT key_ciphertext, dek_wrapped, iv, key_hint FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
-		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer; key_hint: string | null }>();
 	if (!row) throw new HttpError(404, "No key stored for this provider");
 	const key = await decryptKey(
 		new Uint8Array(row.key_ciphertext),
@@ -389,6 +411,10 @@ keysRoutes.get("/:provider/reveal", async (c) => {
 	await c.env.DB.prepare("UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2 AND account_id = ''")
 		.bind(session.uid, providerId)
 		.run();
+	// The plaintext is already in hand here, so a key stored before migration 0146 gains its
+	// display hint for free (#780). This does NOT make /reveal the panel's source of hints — the
+	// panel must never call it — it is one of the paths that happens to decrypt anyway.
+	await backfillKeyHint(c.env, session.uid, providerId, "", key, row.key_hint);
 	// Audited for the same reason the vault reveal is (#639): `last_used_at` records THAT a key
 	// was touched and overwrites itself, so it can say a key was read once and never that it was
 	// read four hundred times. The guard in security-invariants.test.ts derives the category —
@@ -452,13 +478,16 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 
 	// Decrypt user's key
 	const row = await c.env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
+		// `key_hint` rides along for the same reason as on /reveal: once the row has one, the
+		// backfill returns without a statement, so a proxied request pays nothing (#780).
+		"SELECT key_ciphertext, dek_wrapped, iv, key_hint FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
 		.first<{
 			key_ciphertext: ArrayBuffer;
 			dek_wrapped: ArrayBuffer;
 			iv: ArrayBuffer;
+			key_hint: string | null;
 		}>();
 	if (!row) {
 		// Log pre-upstream rejections too (not just upstream 4xx) so a Whisper/voice
@@ -486,6 +515,9 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 	)
 		.bind(session.uid, providerId)
 		.run();
+	// Same slot the SELECT above read (`account_id = ''`), so the hint lands on the row whose key
+	// this actually is. One-shot: `key_hint IS NULL` means the steady state matches nothing.
+	await backfillKeyHint(c.env, session.uid, providerId, "", apiKey, row.key_hint);
 
 	// Build upstream request from an ALLOWLIST, not from the caller's headers (#214).
 	//

@@ -20,6 +20,13 @@ interface Provider {
 	hasKey: boolean;
 	/** `/v1/keys/status` has always returned this; the panel dropped it until #780. */
 	lastUsedAt?: string | null;
+	/**
+	 * The last 4 characters of the stored key, and never more (#780, migration 0146). Non-secret
+	 * by construction and stored in the clear, so rendering it costs no decryption — the panel
+	 * must never call `/reveal`, which decrypts a whole key and is rate-limited for that reason.
+	 * `null` for a key stored before the column existed, until the platform next uses it.
+	 */
+	keyHint?: string | null;
 }
 
 interface McpAuditEvent {
@@ -354,7 +361,21 @@ export default function Profile() {
 									<div className="flex-1 min-w-0">
 										<span className="text-sm font-medium block truncate">{p.name}</span>
 										{usage ? (
-											<span className={`text-xs block truncate ${usage.tone === "never" ? "text-warning" : "text-muted"}`} data-testid={`key-usage-${p.id}`}>{usage.text}</span>
+											<span className="text-xs flex items-center gap-1.5 min-w-0">
+												{/* Which key, when there is one to name (#780). Four characters, read
+												    from a plaintext column — no /reveal, no decryption on page load.
+												    Mono so a tail of digits and letters is legible at 12px. Deliberately
+												    NOT prefixed with "sk-ant-…": the platform's per-provider prefixes
+												    are a stale catalog (lib/key-shape.ts — Google issues `AQ.` keys
+												    while the entry still says `AI`), so printing one would assert
+												    something about this key that nothing observed. The provider is
+												    already named on the line above; the tail is the whole
+												    discriminator between two keys of the same provider. */}
+												{p.keyHint ? (
+													<span className="font-mono text-muted-soft shrink-0" data-testid={`key-hint-${p.id}`}>…{p.keyHint}</span>
+												) : null}
+												<span className={`truncate ${usage.tone === "never" ? "text-warning" : "text-muted"}`} data-testid={`key-usage-${p.id}`}>{usage.text}</span>
+											</span>
 										) : null}
 									</div>
 									<span className={`text-xs ${p.hasKey ? "text-success" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>

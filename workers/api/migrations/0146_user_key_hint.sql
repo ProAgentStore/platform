@@ -1,0 +1,16 @@
+-- The last 4 characters of a stored key, so the console can say WHICH key the platform holds
+-- ("sk-ant-…4f2a") instead of a bare "Stored". An owner with several Anthropic keys could not
+-- tell which one PAGS was spending, which is the question #780 exists to answer.
+--
+-- Non-secret BY CONSTRUCTION, which is why this is plaintext and not envelope-encrypted like
+-- the key beside it: 4 characters of a ~100-character random key identify it to the person who
+-- already has it and are useless to anyone else. Never the middle, and never a longer slice —
+-- the `sk-ant-` prefix is fixed and carries no information, so the discriminator is the tail.
+--
+-- Nullable, set at write time in PUT /v1/keys/:provider, and lazily backfilled on the next
+-- SUCCESSFUL DECRYPT for keys stored before this column existed — exactly the shape of
+-- 0035_gmail_account_label.sql on this same table. The backfill deliberately hangs off paths
+-- that already hold the plaintext (the key proxy, /reveal, the BYOK AI calls) rather than off
+-- the read: decrypting a key to render a page would turn /reveal's deliberate, rate-limited,
+-- audited action into an automatic one on every visit to Profile.
+ALTER TABLE user_api_keys ADD COLUMN key_hint TEXT;

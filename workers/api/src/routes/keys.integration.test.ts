@@ -37,7 +37,7 @@ const SECRET = "keys-integration-secret";
 // 32-byte (256-bit) KEK as 64 hex chars — the format importKek() expects for AES-KW.
 const KEK_HEX = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
-interface KeyRow { user_id: string; provider: string; key_ciphertext: Uint8Array; dek_wrapped: Uint8Array; iv: Uint8Array; created_at: string; last_used_at: string | null }
+interface KeyRow { user_id: string; provider: string; account_id: string; key_ciphertext: Uint8Array; dek_wrapped: Uint8Array; iv: Uint8Array; created_at: string; last_used_at: string | null; key_hint: string | null }
 
 /** A tiny stateful D1 stand-in backing only the tables these routes touch. */
 function buildApp() {
@@ -55,7 +55,9 @@ function buildApp() {
 							async all() {
 								if (sql.includes("FROM user_api_keys") && sql.includes("SELECT provider")) {
 									const uid = args[0] as string;
-									return { results: keys.filter((k) => k.user_id === uid).map((k) => ({ provider: k.provider, created_at: k.created_at, last_used_at: k.last_used_at })) };
+									// `key_hint` mirrors the route's `MAX(CASE WHEN account_id = '' …)`: only the
+									// unnamed default slot contributes one (#780).
+									return { results: keys.filter((k) => k.user_id === uid).map((k) => ({ provider: k.provider, created_at: k.created_at, last_used_at: k.last_used_at, key_hint: k.account_id === "" ? k.key_hint : null })) };
 								}
 								return { results: [] };
 							},
@@ -63,16 +65,18 @@ function buildApp() {
 								if (sql.includes("SELECT key_ciphertext")) {
 									const [uid, provider] = args as [string, string];
 									const row = find(uid, provider);
-									return row ? { key_ciphertext: row.key_ciphertext, dek_wrapped: row.dek_wrapped, iv: row.iv } : null;
+									return row ? { key_ciphertext: row.key_ciphertext, dek_wrapped: row.dek_wrapped, iv: row.iv, account_id: row.account_id, key_hint: row.key_hint } : null;
 								}
 								return null;
 							},
 							async run() {
 								if (sql.includes("INSERT INTO user_api_keys")) {
-									const [uid, provider, ct, dw, iv] = args as [string, string, Uint8Array, Uint8Array, Uint8Array];
+									const [uid, provider, ct, dw, iv, hint] = args as [string, string, Uint8Array, Uint8Array, Uint8Array, string | null];
 									const existing = find(uid, provider);
-									if (existing) { existing.key_ciphertext = ct; existing.dek_wrapped = dw; existing.iv = iv; }
-									else keys.push({ user_id: uid, provider, key_ciphertext: ct, dek_wrapped: dw, iv, created_at: "2026-08-01", last_used_at: null });
+									// `key_hint = excluded.key_hint` in the route, not a COALESCE: a replaced key
+									// replaces which key this is, so a stale hint would name the one just removed.
+									if (existing) { existing.key_ciphertext = ct; existing.dek_wrapped = dw; existing.iv = iv; existing.key_hint = hint; }
+									else keys.push({ user_id: uid, provider, account_id: "", key_ciphertext: ct, dek_wrapped: dw, iv, created_at: "2026-08-01", last_used_at: null, key_hint: hint });
 								} else if (sql.includes("DELETE FROM user_api_keys")) {
 									const [uid, provider] = args as [string, string];
 									const i = keys.findIndex((k) => k.user_id === uid && k.provider === provider);
@@ -81,6 +85,12 @@ function buildApp() {
 									const [uid, provider] = args as [string, string];
 									const row = find(uid, provider);
 									if (row) row.last_used_at = "2026-08-02";
+								} else if (sql.includes("UPDATE user_api_keys SET key_hint")) {
+									// The lazy backfill (#780). `AND key_hint IS NULL` is modelled, because the
+									// one-shot property is the point — a second call must not rewrite the row.
+									const [hint, uid, provider, accountId] = args as [string, string, string, string];
+									const row = keys.find((k) => k.user_id === uid && k.provider === provider && k.account_id === accountId && k.key_hint === null);
+									if (row) row.key_hint = hint;
 								}
 								return { meta: { changes: 1 } };
 							},
@@ -193,5 +203,109 @@ describe("GET /v1/keys/status + DELETE (integration)", () => {
 
 		const after = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
 		expect(rows(after.providers).find((p) => p.id === "openai")?.hasKey).toBe(false);
+	});
+});
+
+/**
+ * The non-secret last-4 hint (#780, migration 0146).
+ *
+ * The panel could say "Stored" but not WHICH key was stored, so an owner with several Anthropic
+ * keys could not tell whether the one being spent elsewhere was the one PAGS holds. The hint is
+ * four characters, in the clear, and — critically — reachable WITHOUT `/reveal`: decrypting a
+ * whole secret to render four characters would turn a deliberate, rate-limited, audited action
+ * into an automatic one on every page load.
+ */
+describe("key hint on /v1/keys/status (integration)", () => {
+	const KEY = "sk-hint-example-not-a-real-key-4f2a";
+
+	it("returns the last 4 characters of a newly stored key, and never more", async () => {
+		const { app, env } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/openai", { key: KEY }, tok);
+
+		const body = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
+		const openai = rows(body.providers).find((p) => p.id === "openai");
+		expect(openai?.keyHint).toBe("4f2a");
+		expect(KEY.endsWith(openai?.keyHint as string)).toBe(true);
+	});
+
+	it("leaks no more of the key than the hint, anywhere in the response", async () => {
+		// The bound asserted on the SERIALISED body, not on one field: a future addition that put
+		// a longer slice on some other field would pass a per-field check and fail this one.
+		const { app, env } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/openai", { key: KEY }, tok);
+
+		const raw = await (await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env)).text();
+		expect(raw).toContain("4f2a");
+		// Five characters of the tail, and the whole key, must both be absent.
+		expect(raw).not.toContain(KEY.slice(-5));
+		expect(raw).not.toContain(KEY);
+		// Nor any interior run of the key — the middle is never stored and never returned.
+		expect(raw).not.toContain("example-not-a-real");
+	});
+
+	it("does NOT come from /reveal — the status route decrypts nothing", async () => {
+		// Modelled by removing the KEK: /reveal 500s without it, while status still answers with
+		// the hint. If the hint were sourced from a decrypt, this would fail.
+		const { app, env, keys } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/openai", { key: KEY }, tok);
+		expect(keys[0].key_hint).toBe("4f2a");
+
+		const noKek = { ...env, KEY_ENCRYPTION_KEY: undefined } as unknown as typeof env;
+		const reveal = await app.request("/v1/keys/openai/reveal", { headers: { Authorization: `Bearer ${tok}` } }, noKek);
+		expect(reveal.status).toBe(500);
+
+		const body = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, noKek));
+		expect(rows(body.providers).find((p) => p.id === "openai")?.keyHint).toBe("4f2a");
+	});
+
+	it("is scoped to the owner — a second account sees its own hint, never the first's", async () => {
+		const { app, env } = buildApp();
+		const owner = await tokenFor("owner-1");
+		const other = await tokenFor("attacker-2");
+		await json(app, env, "PUT", "/v1/keys/openai", { key: KEY }, owner);
+
+		const seen = await (await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${other}` } }, env)).text();
+		expect(seen).not.toContain("4f2a");
+		expect(rows(((await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${other}` } }, env))).providers)).find((p) => p.id === "openai")?.keyHint).toBeNull();
+
+		// And the second account's own key gets its own hint, not the first's.
+		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-second-account-not-a-real-key-9b71" }, other);
+		const mine = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${other}` } }, env));
+		expect(rows(mine.providers).find((p) => p.id === "openai")?.keyHint).toBe("9b71");
+		const theirs = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${owner}` } }, env));
+		expect(rows(theirs.providers).find((p) => p.id === "openai")?.keyHint).toBe("4f2a");
+	});
+
+	it("names the NEW key after a replacement, not the one taken out of the slot", async () => {
+		const { app, env } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/openai", { key: KEY }, tok);
+		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-rotated-example-not-a-real-key-c07e" }, tok);
+
+		const body = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
+		expect(rows(body.providers).find((p) => p.id === "openai")?.keyHint).toBe("c07e");
+	});
+
+	it("a key stored before the column existed gains its hint on the next USE, with no re-entry", async () => {
+		// The migration is an ALTER TABLE, so every pre-existing row starts null. The owner must
+		// not have to re-paste a key the platform already holds — the same lazy backfill
+		// 0035_gmail_account_label.sql established on this table.
+		const { app, env, keys } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/openai", { key: KEY }, tok);
+		keys[0].key_hint = null; // as an ALTER TABLE leaves it
+
+		const before = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
+		expect(rows(before.providers).find((p) => p.id === "openai")?.keyHint).toBeNull();
+
+		// A use that already decrypts. /reveal is one of them; it is NOT how the panel reads the
+		// hint (the test above pins that), only one of the paths that happens to hold plaintext.
+		expect((await app.request("/v1/keys/openai/reveal", { headers: { Authorization: `Bearer ${tok}` } }, env)).status).toBe(200);
+
+		const after = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
+		expect(rows(after.providers).find((p) => p.id === "openai")?.keyHint).toBe("4f2a");
 	});
 });

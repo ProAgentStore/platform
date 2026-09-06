@@ -3490,10 +3490,12 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 			// row is now two lines, so the fixture carries BOTH states — one spent, one stored and
 			// never touched — or the overflow guards below would measure a one-line row that no
 			// account with a stored key actually sees.
-			{ id: "anthropic", name: "Anthropic Claude", hasKey: true, lastUsedAt: "2026-09-06 23:14:07" },
-			{ id: "openai", name: "OpenAI", hasKey: false, lastUsedAt: null },
-			{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true, lastUsedAt: null },
-			{ id: "google", name: "Google Gemini", hasKey: false, lastUsedAt: null },
+			{ id: "anthropic", name: "Anthropic Claude", hasKey: true, lastUsedAt: "2026-09-06 23:14:07", keyHint: "4f2a" },
+			{ id: "openai", name: "OpenAI", hasKey: false, lastUsedAt: null, keyHint: null },
+			// Stored before migration 0146 and not used since: hint still null, which must render
+			// as nothing rather than as an empty ellipsis.
+			{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true, lastUsedAt: null, keyHint: null },
+			{ id: "google", name: "Google Gemini", hasKey: false, lastUsedAt: null, keyHint: null },
 		],
 	};
 
@@ -3547,9 +3549,9 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 		await mockSignedInConsole(page, {
 			...realistic,
 			providers: [
-				{ id: "anthropic", name: "Anthropic Claude", hasKey: true, lastUsedAt: spent },
-				{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true, lastUsedAt: null },
-				{ id: "openai", name: "OpenAI", hasKey: false, lastUsedAt: null },
+				{ id: "anthropic", name: "Anthropic Claude", hasKey: true, lastUsedAt: spent, keyHint: "4f2a" },
+				{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true, lastUsedAt: null, keyHint: null },
+				{ id: "openai", name: "OpenAI", hasKey: false, lastUsedAt: null, keyHint: null },
 			],
 		});
 		await page.goto("/console/profile");
@@ -3557,6 +3559,8 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 		await page.locator("main").waitFor();
 
 		await expect(page.getByTestId("key-usage-anthropic")).toHaveText("last used 3m ago");
+		// Which key, without decrypting one: four characters from a plaintext column (#780).
+		await expect(page.getByTestId("key-hint-anthropic")).toHaveText("…4f2a");
 		await expect(page.getByTestId("key-usage-cloudflare")).toHaveText("never used");
 		// Not merely different prose — a colour the eye separates, from the declared token set.
 		await expect(page.getByTestId("key-usage-cloudflare")).toHaveClass(/text-warning/);
@@ -3564,6 +3568,9 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 		// A provider with no key has no last-use to report, and "never used" beside "Not set"
 		// would be a claim about a key that does not exist.
 		await expect(page.getByTestId("key-usage-openai")).toHaveCount(0);
+		// A key stored before migration 0146 has no hint yet: render nothing, not a bare ellipsis.
+		await expect(page.getByTestId("key-hint-cloudflare")).toHaveCount(0);
+		await expect(page.getByTestId("key-hint-openai")).toHaveCount(0);
 		expect(revealCalls, `the panel called /reveal: ${revealCalls.join(", ")}`).toEqual([]);
 	});
 

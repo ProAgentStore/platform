@@ -1,4 +1,5 @@
 import { decryptKey } from "./crypto.js";
+import { backfillKeyHint } from "./key-hint-backfill.js";
 import {
 	AI_FIRST_TOKEN_TIMEOUT_MS,
 	AI_STALL_TIMEOUT_MS,
@@ -522,16 +523,26 @@ export async function getUserProviderKey(
 ): Promise<string | null> {
 	if (!userId || !env.KEY_ENCRYPTION_KEY) return null;
 	const row = await env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
-	).bind(userId, provider).first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+		// `account_id` and `key_hint` ride along for the display-hint backfill (#780). The WHERE
+		// deliberately does NOT name an account — this is the long-standing "give me a key for
+		// this provider" read — so the account of the row `.first()` actually returned has to
+		// come back with it. Backfilling under this same loose WHERE could stamp one account's
+		// hint onto another's row, and a confidently wrong "which key is this" is worse than none.
+		"SELECT key_ciphertext, dek_wrapped, iv, account_id, key_hint FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
+	).bind(userId, provider).first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer; account_id: string; key_hint: string | null }>();
 	if (!row) return null;
 	try {
-		return await decryptKey(
+		const plaintext = await decryptKey(
 			new Uint8Array(row.key_ciphertext),
 			new Uint8Array(row.dek_wrapped),
 			new Uint8Array(row.iv),
 			env.KEY_ENCRYPTION_KEY,
 		);
+		// This is the path that decrypts the BYOK Anthropic key on every chat turn, so it is the
+		// one that gives a pre-0146 key its hint without the owner re-entering anything. It costs
+		// nothing once the hint exists: `backfillKeyHint` returns on `row.key_hint` before D1.
+		await backfillKeyHint(env, userId, provider, row.account_id ?? "", plaintext, row.key_hint);
+		return plaintext;
 	} catch {
 		return null;
 	}
@@ -547,13 +558,17 @@ async function getUserCloudflareAiCredentials(
 	}
 
 	const row = await env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'",
+		// `account_id`/`key_hint`: see getUserProviderKey — the WHERE names no account, so the
+		// hint backfill (#780) needs the row it actually got rather than a guessed slot.
+		"SELECT key_ciphertext, dek_wrapped, iv, account_id, key_hint FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'",
 	)
 		.bind(userId)
 		.first<{
 			key_ciphertext: ArrayBuffer;
 			dek_wrapped: ArrayBuffer;
 			iv: ArrayBuffer;
+			account_id: string;
+			key_hint: string | null;
 		}>();
 	if (!row) throw new UserAiCredentialsError();
 
@@ -570,6 +585,9 @@ async function getUserCloudflareAiCredentials(
 			"Stored Cloudflare Workers AI credentials are invalid. Re-add your Cloudflare account ID and API token.",
 		);
 	}
+	// `raw` is the `{accountId,token}` envelope; `keyHint` unwraps it so the hint names the token
+	// the owner pasted, not the last four characters of the JSON encoding.
+	await backfillKeyHint(env, userId, "cloudflare", row.account_id ?? "", raw, row.key_hint);
 	return credentials;
 }
 

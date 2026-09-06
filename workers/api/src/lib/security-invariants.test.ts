@@ -326,7 +326,17 @@ describe("credential storage has exactly one scheme", () => {
 		// the non-crypto `machine_id` column (the unclaim route — #467). The token_* envelope
 		// columns are never touched by that route, so no encryptKey/decryptKey call is needed.
 		// Adding a crypto import here would be unused and misleading.
-		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts"]);
+		//
+		// Known-safe exception: lib/key-hint-backfill.ts UPDATEs user_api_keys only to set
+		// `key_hint`, the 4-character non-secret display hint (#780, migration 0146). This guard's
+		// warning names exactly that shape — "a plaintext column beside the encrypted ones" — so
+		// the entry is not a waiver, it is the answer: the column holds four characters of a
+		// ~100-character key, which identifies it to the owner who already has it and is useless
+		// to anyone else. That is why it does not go through the envelope; a crypto import in that
+		// file would be unused and would imply it handles a secret. The claim is not taken on
+		// trust — the assertion below pins that the file touches NO envelope column, and
+		// key-hint.test.ts pins the 4-character bound.
+		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts"]);
 		const offenders = writers.filter((w) => !SAFE_NON_CRYPTO_WRITERS.has(w.f.rel) && !/from ["'][^"']*\/crypto\.js["']/.test(w.f.raw)).map((w) => `${w.f.rel} → ${w.writes.join(", ")}`);
 		expect(
 			offenders,
@@ -335,6 +345,24 @@ describe("credential storage has exactly one scheme", () => {
 				`column beside the encrypted ones, is indistinguishable from the real thing in review.\n` +
 				`Offenders:\n${listing(offenders)}`,
 		).toEqual([]);
+	});
+
+	it("a non-crypto writer touches no envelope column — the exception is earned, not asserted", () => {
+		// An entry in SAFE_NON_CRYPTO_WRITERS is a claim ("this file writes only a plaintext
+		// column"), and a claim in a comment is what this whole file exists to replace. So the
+		// claim is measured: neither exempted file may name a ciphertext, DEK or IV column at all.
+		// The day one of them starts writing a secret without the envelope, this fails and the
+		// exemption stops covering it — which is the failure mode a bare allowlist has.
+		const ENVELOPE_COLUMN = /\b\w*(?:ciphertext|dek|dek_wrapped)\w*\b|\biv\b/i;
+		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts"]) {
+			const file = ALL.find((f) => f.rel === rel);
+			expect(file, `${rel} is exempted from the crypto-import rule but no longer exists — drop the entry`).toBeDefined();
+			const sqlText = (file?.raw ?? "").match(/["'`][^"'`]*\b(?:INSERT\s+INTO|UPDATE)\s+\w+[^"'`]*["'`]/gi) ?? [];
+			expect(sqlText.length, `${rel} is listed as a credential-table writer but no SQL was found in it`).toBeGreaterThan(0);
+			for (const stmt of sqlText) {
+				expect(ENVELOPE_COLUMN.test(stmt), `${rel} writes an envelope column without the envelope helpers: ${stmt}`).toBe(false);
+			}
+		}
 	});
 
 	it("symmetric encryption happens in exactly two named places", () => {
