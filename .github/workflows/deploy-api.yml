@@ -38,12 +38,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Install Zensical
+        run: python3 -m pip install zensical==0.0.44
+
       # `pnpm test` runs the WHOLE suite, including the console + agent UIs, which import
       # @proagentstore/sdk through its exports map — i.e. its built dist. Without this the suite
       # green in CI (which does build it) fails here on an unresolvable bare specifier, blocking a
       # deploy for a reason unrelated to the change. Same step, same reason, as in ci.yml.
       - name: Build SDK
         run: cd packages/sdk && npx tsc
+
+      - name: Build docs
+        run: pnpm docs:build
 
       # `workers/host/src/pages.ts` is BUILD OUTPUT (build.js inlines store/ into it) and is
       # gitignored, so it does not exist in a fresh checkout. `pnpm test` includes
