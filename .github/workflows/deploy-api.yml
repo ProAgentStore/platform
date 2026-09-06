@@ -45,6 +45,25 @@ jobs:
       - name: Build SDK
         run: cd packages/sdk && npx tsc
 
+      # `workers/host/src/pages.ts` is BUILD OUTPUT (build.js inlines store/ into it) and is
+      # gitignored, so it does not exist in a fresh checkout. `pnpm test` includes
+      # workers/host/src/admin-api-proxy.test.ts, which imports the host worker's index.ts, which
+      # imports ./pages.js at module load — so without these three steps the suite fails to COLLECT
+      # that file and the whole deploy stops, for a reason unrelated to the API. build.js reads the
+      # console and admin Vite bundles, so both have to be built first; this is the same chain, in
+      # the same order, as deploy-host.yml.
+      - name: Build console React app
+        working-directory: store/console
+        run: npx vite build
+
+      - name: Build admin React app
+        working-directory: store/admin
+        run: npx vite build
+
+      - name: Build host pages
+        working-directory: workers/host
+        run: node build.js
+
       - name: Run tests
         run: pnpm test
 

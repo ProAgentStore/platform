@@ -158,7 +158,12 @@ const PINS = {
 	// `/resume`, `/end`). That is a real split and it is not #738's — a four-field reporting fix is
 	// the wrong commit to move eight routes in, and doing both at once would make the behaviour
 	// change unreviewable against the move.
-	"workers/api/src/routes/coding.ts": 810,
+	// +5 at #731 (1e038c43, pin raised after the fact): `/capture` now answers with an
+	// `engineInvocationReport` built from the session's clientType, its launch command and the mode
+	// the runner reports — the three readings the console needs to say "running raw" without
+	// guessing. It is one call and one response field on the attach-and-observe side of the seam
+	// named above, so it does not move that split; the split is still the next raise's job.
+	"workers/api/src/routes/coding.ts": 815,
 	// +2 for #496 AC2: the owner-initiated resync-identity route is mounted from a new sub-module
 	// (instances-identity.ts) to keep this file's size honest; the two new lines are the import
 	// and the register call. Raised rather than split: the whole change is a mount and an import.
@@ -627,7 +632,14 @@ const PINS = {
 	// immediately BEFORE calling this, and a warm re-attach reports nothing, so the obvious form
 	// blanks a correct banner on every open that has one. That is invisible in the diff and it is
 	// the exact tidy-up a later reader would make. Still #305's landing/session split as the seam.
-	"agents/coder/web/src/CodingTab.tsx": 1478,
+	// +12 at #731 (1e038c43, pin raised after the fact): the invocation-mode strip — a second piece
+	// of state on the session header and the JSX that renders it beside the existing engine badge.
+	// The badge and the invocation line are deliberately ONE block with a shared `warn` tone rather
+	// than two independent notices, which is what the extra nesting buys: an engine that is signed
+	// in but running raw is one situation, and reporting it as two adjacent warnings is how the
+	// strip #549 already widened would keep widening. The reading itself is not here — it is
+	// `engine-invocation-mode.ts`, with its own tests. Still #305's landing/session split as the seam.
+	"agents/coder/web/src/CodingTab.tsx": 1490,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1020,7 +1032,13 @@ const PINS = {
 	// (this table has no retention cron), why `warn` rather than `error`, and why its message keeps
 	// the 600 characters #517 preserved instead of the 200 the summary row cuts to.
 	// +31 for #739: the operator manual notice block — a D1 query + conditional prompt injection.
-	"workers/api/src/agent-think.ts": 1238,
+	// +13 at #732 (d5701824, pin raised after the fact): the chat call site now hands the usage
+	// ledger a per-section prompt breakdown (system / messages / tools) so `llm.prompt_sections`
+	// can say WHICH part of a prompt is the expensive one. Twelve of the thirteen lines are the
+	// literal that splits the body it already had; the estimator and its logging are
+	// lib/prompt-section-estimates.ts. Raised rather than split: the labels have to be produced
+	// where the message array is assembled, and moving them out would hand that module the prompt.
+	"workers/api/src/agent-think.ts": 1251,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -1534,7 +1552,12 @@ const PINS = {
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.
 	// +13 at #687: new entry for github-browse.ts (11-line rationale + pin) + this note + blank.
 	// +7 at #688: raise of github-browse.ts pin (6-line rationale + pin bump) + this note + own pin bump.
-	"scripts/check-file-size.mjs": 1618,
+	// +23 on the red-main fix-forward: three raises (routes/coding, CodingTab, agent-think) whose
+	// growth landed on main WITHOUT the pin move this guard asks for, so CI went red at 50aecb9c
+	// and stayed red for five days while nothing deployed. The reasons are written from the diffs
+	// after the fact rather than by their authors, which is the cost of raising a pin late and the
+	// argument for raising it in the same commit. Plus this note.
+	"scripts/check-file-size.mjs": 1641,
 };
 
 /**

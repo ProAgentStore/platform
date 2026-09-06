@@ -29,6 +29,41 @@
  * and it is the only arrangement in which the two sides cannot disagree.
  */
 
+/**
+ * What KIND of call a ledger row records — and the vocabulary `byKind` buckets are keyed by.
+ *
+ * Declared in this leaf rather than in `usage.ts` (#302/#556 fix-forward): `usage.ts` needs
+ * `PromptSectionInput` from `prompt-section-estimates.ts`, and that module needs a kind to label
+ * its log event with. Both facing the other way is a two-module cycle, type-only and therefore
+ * invisible at runtime — exactly the shape `import-graph.test.ts` exists to reject, and exactly
+ * the shape the connector graph was untangled into a leaf to escape.
+ *
+ * `usage.ts` re-exports it, so it stays the module you import a kind FROM. Nothing else moved.
+ */
+export type UsageKind =
+	| "chat"
+	| "apply"
+	| "coding"
+	/**
+	 * The coding Engine itself (#267) — the CLI child process on the user's machine.
+	 *
+	 * Distinct from "coding", which is the cloud-side Pilot deciding what to instruct it to do.
+	 * Conflating them would hide the split that matters: the Pilot's decisions are cents, the
+	 * Engine's turns are the actual bill.
+	 */
+	| "engine"
+	| "copilot"
+	| "overseer"
+	| "run"
+	| "resume"
+	| "translate"
+	| "voice"
+	// Declarative pipeline LLM step (ai_generate) — e.g. the Outreach agent drafting per lead.
+	| "pipeline"
+	// Platform-paid internal AI (issue #44), billed to the platform, not BYOK.
+	| "embedding"
+	| "summary";
+
 /** One slice of a range, in the two units the page reports. */
 export interface CoverageSlice {
 	calls: number;

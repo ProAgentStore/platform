@@ -29,7 +29,14 @@ import { type Page, expect, test } from "@playwright/test";
  * through it would trade the thing being protected for coverage of the thing protecting it.
  */
 
-const API = "https://api.proagentstore.online";
+/**
+ * The admin app talks to the host's SAME-ORIGIN proxy, not the API host directly. So an
+ * intercepted request's pathname is `/admin/api` + the API path, and the handlers below —
+ * which match the API path itself — have to strip the prefix. Matching the raw pathname
+ * silently missed every route and left each page on its signed-out/error branch.
+ */
+const API = "/admin/api";
+const apiPath = (url: string) => new URL(url).pathname.slice(API.length);
 const TEST_TOKEN = "test-pags-admin-token";
 
 type Json = Record<string, unknown>;
@@ -64,8 +71,7 @@ async function mockAdmin(page: Page, instances: Json[] = []): Promise<AdminMock>
 	const mock: AdminMock = { requests: [], deleteResponses: [] };
 
 	await page.route(`${API}/**`, async (route) => {
-		const url = new URL(route.request().url());
-		const path = url.pathname;
+		const path = apiPath(route.request().url());
 		const method = route.request().method();
 		const json = (data: unknown, status = 200) =>
 			route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
@@ -328,7 +334,7 @@ async function mockAdminSurfaces(page: Page) {
 	const bucket = (key: string) => ({ key, label: key, inputTokens: 100, outputTokens: 50, costMicros: 2000, calls: 7 });
 
 	await page.route(`${API}/**`, async (route) => {
-		const path = new URL(route.request().url()).pathname;
+		const path = apiPath(route.request().url());
 		const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
 
 		if (path === "/v1/admin/me") return json({ admin: true });
