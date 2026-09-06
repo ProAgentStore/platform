@@ -6,6 +6,10 @@ on:
       - 'workers/api/**'
       - 'packages/sdk/**'
       - '.github/workflows/deploy-api.yml'
+      # The build chain moved OUT of this file into a composite action (#779). Without this
+      # entry an edit to the shared chain would trigger no deploy at all — the duplication it
+      # replaced was at least watched, because it lived in the path above.
+      - '.github/actions/build-platform/**'
   workflow_dispatch: {}
 
 concurrency:
@@ -36,39 +40,20 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-
-      - name: Install Zensical
-        run: python3 -m pip install zensical==0.0.44
-
-      # `pnpm test` runs the WHOLE suite, including the console + agent UIs, which import
-      # @proagentstore/sdk through its exports map — i.e. its built dist. Without this the suite
-      # green in CI (which does build it) fails here on an unresolvable bare specifier, blocking a
-      # deploy for a reason unrelated to the change. Same step, same reason, as in ci.yml.
-      - name: Build SDK
-        run: cd packages/sdk && npx tsc
-
-      - name: Build docs
-        run: pnpm docs:build
-
-      # `workers/host/src/pages.ts` is BUILD OUTPUT (build.js inlines store/ into it) and is
-      # gitignored, so it does not exist in a fresh checkout. `pnpm test` includes
-      # workers/host/src/admin-api-proxy.test.ts, which imports the host worker's index.ts, which
-      # imports ./pages.js at module load — so without these three steps the suite fails to COLLECT
-      # that file and the whole deploy stops, for a reason unrelated to the API. build.js reads the
-      # console and admin Vite bundles, so both have to be built first; this is the same chain, in
-      # the same order, as deploy-host.yml.
-      - name: Build console React app
-        working-directory: store/console
-        run: npx vite build
-
-      - name: Build admin React app
-        working-directory: store/admin
-        run: npx vite build
-
-      - name: Build host pages
-        working-directory: workers/host
-        run: node build.js
+      # The install + build chain shared with deploy-host.yml and (still hand-rolled) ci.yml.
+      # Must come AFTER pnpm/action-setup and setup-node above — the composite shells out to
+      # `pnpm` directly and has no setup of its own.
+      #
+      # Why an API deploy builds the CONSOLE and the HOST pages at all: `pnpm test` below runs
+      # the WHOLE suite. It imports @proagentstore/sdk through its exports map (its built dist),
+      # and it collects workers/host/src/admin-api-proxy.test.ts, which imports the host worker's
+      # index.ts, which imports ./pages.js at module load. `pages.ts` is build output that
+      # build.js inlines store/ into, and build.js reads the console and admin Vite bundles and
+      # the generated store/docs. Miss any link and the deploy stops for a reason unrelated to
+      # the API — which is exactly what happened when this chain was hand-copied without the
+      # docs steps: run 34004410070 died at `node build.js` with "No docs at store/docs", fixed
+      # in 0ca213b3. Extracting the chain (#779) is what stops the copy existing to go stale.
+      - uses: ./.github/actions/build-platform
 
       - name: Run tests
         run: pnpm test

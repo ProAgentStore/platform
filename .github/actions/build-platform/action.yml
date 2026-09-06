@@ -1,0 +1,38 @@
+name: Build Platform
+description: Install dependencies and build all platform artefacts (SDK, docs, console, admin, host pages).
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Install Zensical
+      shell: bash
+      run: python3 -m pip install zensical==0.0.44
+
+    - name: Build SDK
+      # The console bundles @proagentstore/sdk from its built dist — emit it first.
+      shell: bash
+      working-directory: packages/sdk
+      run: npx tsc
+
+    - name: Build docs
+      shell: bash
+      run: pnpm docs:build
+
+    - name: Build console React app
+      shell: bash
+      working-directory: store/console
+      run: npx vite build
+
+    - name: Build admin React app
+      shell: bash
+      working-directory: store/admin
+      run: npx vite build
+
+    - name: Build host pages
+      shell: bash
+      working-directory: workers/host
+      run: node build.js
