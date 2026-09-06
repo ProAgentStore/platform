@@ -5,6 +5,7 @@ import LoadFailed from "../components/LoadFailed";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import { api, getToken } from "@proagentstore/sdk/client";
+import { keyUsageLabel } from "../lib/keyUsage";
 
 interface ProfileField {
 	key: string;
@@ -17,6 +18,8 @@ interface Provider {
 	id: string;
 	name: string;
 	hasKey: boolean;
+	/** `/v1/keys/status` has always returned this; the panel dropped it until #780. */
+	lastUsedAt?: string | null;
 }
 
 interface McpAuditEvent {
@@ -335,11 +338,25 @@ export default function Profile() {
 						<LoadFailed what="your API keys" detail={keysErr} onRetry={loadKeys} testId="keys-load-failed" compact />
 					) : keysLoading ? <p className="text-sm text-muted">Loading keys...</p> : (
 						<div className="flex flex-col gap-2">
-							{providers.map(p => (
+							{providers.map(p => {
+								// "Stored" alone could not answer the question this panel is asked (#780):
+								// whether the key PAGS holds is the one being spent. `lastUsedAt` was
+								// already on the wire — `MAX(last_used_at) … GROUP BY provider` in
+								// routes/keys.ts — and the panel simply dropped it.
+								const usage = keyUsageLabel(p);
+								return (
 								<div key={p.id} className="flex items-center gap-2 sm:gap-3 p-2.5 bg-paper border border-line rounded-lg">
 									{/* A provider name is the only elastic part of this row; everything else is
-									    a fixed control. Let it truncate instead of widening the card. */}
-									<span className="text-sm font-medium flex-1 min-w-0 truncate">{p.name}</span>
+									    a fixed control. Let it truncate instead of widening the card. The
+									    usage line sits UNDER the name rather than beside it: at 320px the row
+									    is already a name, a status and a button, and a fourth inline element
+									    would take its width from the only part that carries a proper noun. */}
+									<div className="flex-1 min-w-0">
+										<span className="text-sm font-medium block truncate">{p.name}</span>
+										{usage ? (
+											<span className={`text-xs block truncate ${usage.tone === "never" ? "text-warning" : "text-muted"}`} data-testid={`key-usage-${p.id}`}>{usage.text}</span>
+										) : null}
+									</div>
 									<span className={`text-xs ${p.hasKey ? "text-success" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>
 									{p.hasKey ? (
 										<Button size="sm" variant="danger" onClick={() => removeKey(p.id, p.name)}>Remove</Button>
@@ -347,7 +364,8 @@ export default function Profile() {
 										<Button size="sm" variant="primary" onClick={() => addKey(p.id, p.name)}>Add Key</Button>
 									)}
 								</div>
-							))}
+								);
+							})}
 						</div>
 					)}
 				</div>

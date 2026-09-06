@@ -3486,10 +3486,14 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 			},
 		},
 		providers: [
-			{ id: "anthropic", name: "Anthropic Claude", hasKey: true },
-			{ id: "openai", name: "OpenAI", hasKey: false },
-			{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true },
-			{ id: "google", name: "Google Gemini", hasKey: false },
+			// `lastUsedAt` has always been on the wire and the panel dropped it until #780. A key
+			// row is now two lines, so the fixture carries BOTH states — one spent, one stored and
+			// never touched — or the overflow guards below would measure a one-line row that no
+			// account with a stored key actually sees.
+			{ id: "anthropic", name: "Anthropic Claude", hasKey: true, lastUsedAt: "2026-09-06 23:14:07" },
+			{ id: "openai", name: "OpenAI", hasKey: false, lastUsedAt: null },
+			{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true, lastUsedAt: null },
+			{ id: "google", name: "Google Gemini", hasKey: false, lastUsedAt: null },
 		],
 	};
 
@@ -3519,6 +3523,49 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
 		});
 	}
+
+	/**
+	 * A stored key that the platform has never spent is a different fact from a stored key it
+	 * spends constantly (#780).
+	 *
+	 * The panel said only "Stored", so the owner's actual question — "a Claude key is being used
+	 * constantly, is it the one PAGS holds?" — had no answer on this page. The distinction has to
+	 * survive as a distinction: a row whose last-use is blank must not look like a row whose
+	 * last-use is minutes old, which is what an empty timestamp would have given.
+	 *
+	 * `/reveal` is deliberately asserted un-called. It decrypts a whole secret and is rate-limited
+	 * on purpose; a panel that reached for it on load would turn a deliberate action into an
+	 * automatic one on every visit.
+	 */
+	test("a never-used key is unmistakable next to a spent one, without decrypting either", async ({ page }) => {
+		const revealCalls: string[] = [];
+		await page.route("**/v1/keys/*/reveal", (route) => {
+			revealCalls.push(route.request().url());
+			return route.fulfill({ status: 200, body: "{}" });
+		});
+		const spent = new Date(Date.now() - 3 * 60_000).toISOString().replace("T", " ").slice(0, 19);
+		await mockSignedInConsole(page, {
+			...realistic,
+			providers: [
+				{ id: "anthropic", name: "Anthropic Claude", hasKey: true, lastUsedAt: spent },
+				{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true, lastUsedAt: null },
+				{ id: "openai", name: "OpenAI", hasKey: false, lastUsedAt: null },
+			],
+		});
+		await page.goto("/console/profile");
+		await page.waitForLoadState("networkidle");
+		await page.locator("main").waitFor();
+
+		await expect(page.getByTestId("key-usage-anthropic")).toHaveText("last used 3m ago");
+		await expect(page.getByTestId("key-usage-cloudflare")).toHaveText("never used");
+		// Not merely different prose — a colour the eye separates, from the declared token set.
+		await expect(page.getByTestId("key-usage-cloudflare")).toHaveClass(/text-warning/);
+		await expect(page.getByTestId("key-usage-anthropic")).not.toHaveClass(/text-warning/);
+		// A provider with no key has no last-use to report, and "never used" beside "Not set"
+		// would be a claim about a key that does not exist.
+		await expect(page.getByTestId("key-usage-openai")).toHaveCount(0);
+		expect(revealCalls, `the panel called /reveal: ${revealCalls.join(", ")}`).toEqual([]);
+	});
 
 	/**
 	 * The roles row, past what an account can actually hold (#333).
