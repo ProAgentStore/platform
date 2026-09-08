@@ -16,6 +16,7 @@ import { registerBoardTools } from "./board.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorGrantTools } from "./connectors.js";
+import { registerGuideTools } from "./guide.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerObservabilityTools } from "./observability.js";
 import { registerRepoTools } from "./repo.js";
@@ -41,6 +42,9 @@ export function registerInstanceTools(
 	registerRuntimeTools(server, ctx);
 	registerKnowledgeTools(server, ctx);
 	registerObservabilityTools(server, ctx);
+	// The per-instance connection guide (#772) — ungated: the discovery problem it solves
+	// belongs to every agent type, not only the ones with a console surface.
+	registerGuideTools(server, ctx);
 	registerBoardTools(server, ctx);
 	registerSettingsTools(server, ctx);
 	registerTriggerTools(server, ctx);

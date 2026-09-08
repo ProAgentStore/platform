@@ -13,6 +13,7 @@ import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { registerBehaviourRoutes } from "./instances-behaviour.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
+import { registerGuideRoutes } from "./instances-guide.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
@@ -946,6 +947,9 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 // input channel live in instances-apply.ts to keep this file focused.
 registerApplyRoutes(instanceRoutes);
 registerBehaviourRoutes(instanceRoutes);
+// The generated connection guide (#772) — its own module because it is derived state with a
+// renderer of its own, and this file is already at its size pin.
+registerGuideRoutes(instanceRoutes);
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);

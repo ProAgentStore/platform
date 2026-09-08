@@ -127,6 +127,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_session_capture: "read",
 	coding_terminal: "read",
 	coding_timeline: "read",
+	get_instance_connection_guide: "read",
 	coding_sessions_list: "read",
 	connector_status: "read",
 	email_status: "read",
@@ -324,7 +325,10 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// symmetric `get_instance_instructions`) and `set_instance_operator_manual` writes it
 	// (`write`). `read` count moves because MCP_RISK_COUNTS tracks the annotation — the tool
 	// itself has no `requirePermission` scope gate (ungated reads are "read" annotated).
-	read: 74,
+	// +1 read at #772: `get_instance_connection_guide`, which renders the per-instance
+	// connection guide from live state. Reads only — the whole document is derived and the
+	// route writes nothing, which is the property #739 Decision 4 makes load-bearing.
+	read: 75,
 	write: 45,
 	runtime: 16,
 	destructive: 14,

@@ -5439,6 +5439,34 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/connection-guide:
+    get:
+      summary: Generated connection guide for one instance
+      description: |
+        The ready-made briefing for driving THIS instance over MCP: its id, its agent type and
+        console surfaces, whether it needs a local runner, its registered repos, the tools it
+        actually exposes with their exact required/optional field names, and a worked
+        `call_instance_tool` example built from a real input schema. Markdown, ready to paste
+        into another assistant's system instructions.
+
+        Rendered per call from live state and stored nowhere, so re-fetch it rather than
+        caching it. The tool list is read through the same policy the tools listing uses
+        (`GET /v1/instances/{instanceId}/tools`), so the guide cannot become a second answer
+        to what an instance may run. Owner-scoped: an instance you do not own returns 404.
+      operationId: getInstanceConnectionGuide
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The rendered guide
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  guide: { type: string, description: Markdown document }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/operator-manual:
     get:
       summary: Read operator manual

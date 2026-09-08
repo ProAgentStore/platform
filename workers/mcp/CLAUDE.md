@@ -83,16 +83,17 @@ src/
                           surfaces:["coding"]) + 3 loop tools
 ```
 
-**149 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**150 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 103 across `instance-tools/`. 126 are always registered; 23 are
+`storage-tools.ts`, and 104 across `instance-tools/`. 127 are always registered; 23 are
 surface-gated (apply=4, repo=3, coding=16).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
-+ 13 + 103 = 149. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 104 = 150. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
-added two always-on settings tools. The per-file rows in the tree above are
+added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
+the always-on `get_instance_connection_guide` in its own `instance-tools/guide.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
@@ -138,7 +139,7 @@ tells you exactly what you changed about it.
    refuses.) **`jsonText` is compact and takes no formatting option (#586)** — the reader is
    a host with a byte ceiling, not a person, and the indented default cost ~22% of every
    result and defeated two byte guards in one day. Do not hand-roll
-   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 149 tools through a
+   `JSON.stringify(v, null, 2)` either: `conformance.test.ts` calls all 150 tools through a
    real client and fails any result whose text is indented JSON, however it was produced.
 5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
    it, in a comment above the registration (#328). The caller is usually a model: without

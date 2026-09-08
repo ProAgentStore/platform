@@ -283,4 +283,20 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.19 is published.
 	"0.1.20": "sha256:d9f550de7233837e5ae90de5b508ac67e58ad2feff5b74a90358a120c4fa5aa9",
+	// 0.1.21 (#772): one new tool NAME registered unconditionally (always-on),
+	// `get_instance_connection_guide` (read). 149 registrations become 150;
+	// `MCP_TOOL_ALWAYS_ON` moves 126 → 127; `MCP_TOOL_GATED` (derived) stays at 23 —
+	// the tool is not surface-gated, because the discovery problem it solves belongs to
+	// every agent type rather than to the ones with a console surface.
+	//
+	// It renders the per-instance connection guide: the instance id, its agent type, its
+	// registered repos, the tools it actually exposes with their exact field names, and a
+	// worked `call_instance_tool` example built from a real input schema. The facts are the
+	// ones `list_instance_tools` already returns — read through the SAME
+	// `instanceToolPolicy` + `projectToolListing` pair `GET /v1/instances/:id/tools` uses, so
+	// the guide cannot become a second answer to "what may this instance run". Nothing is
+	// stored: the document is rendered per call, per #739 Decision 4.
+	//
+	// Appended, never edited in place: 0.1.20 is published.
+	"0.1.21": "sha256:8ed85ef12e0efb94a154f4c562eaffa2350c5c7cdf193979c3320709c879efbd",
 };

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
+import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { Credential, KnowledgeDoc, Notification, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
+import type { ConnectionGuideResponse, Credential, KnowledgeDoc, Notification, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -46,6 +47,15 @@ type Extra<Console, Producer> = Exclude<keyof Console, keyof Producer>;
 // console interface makes the next line "Type 'string' is not assignable to type 'never'", naming
 // the offending key in the error.
 const _knowledgeDocHasNoInventedFields: Extra<KnowledgeDoc, WorkerKnowledgeDoc> extends never
+	? true
+	: never = true;
+
+// ── ConnectionGuideResponse ──────────────────────────────────────────────────────────────────
+//
+// #772's response, named on both sides from the start rather than added to KNOWN_ANONYMOUS. The
+// producer is `lib/connection-guide.ts`, which is import-safe here for the same reason
+// `agent-types.ts` is: it imports nothing, so no `Env`/`D1Database` global follows it in.
+const _connectionGuideHasNoInventedFields: Extra<ConnectionGuideResponse, WorkerConnectionGuideResponse> extends never
 	? true
 	: never = true;
 

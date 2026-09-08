@@ -358,6 +358,12 @@ const FORWARDS: Record<string, string[]> = {
 		"/messages?before,limit,mime_type,offset,order_by,order_dir,tags,type,user_id,where",
 	],
 	"instances.ts GET /:instanceId/messages": ["/messages?before,limit"],
+	// The connection guide (#772) reads the DO once, and not for anything it renders directly:
+	// `instanceToolPolicy` resolves the email-permission gate through `emailPermitted`
+	// (`lib/instance-tool-policy.ts:402`), which is a `/state` read. So the guide inherits the
+	// same seam `GET /:id/tools` has always had — recorded here rather than left to look like a
+	// new one, and it is why `find_confirmation_link` can appear in the guide's tool list at all.
+	"instances.ts GET /:instanceId/connection-guide": ["/state"],
 	"instances.ts GET /:instanceId/knowledge/:docId": ["/knowledge/doc-1"],
 	"instances.ts GET /:instanceId/knowledge": ["/knowledge"],
 };

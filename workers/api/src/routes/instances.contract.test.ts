@@ -247,6 +247,7 @@ const ROUTES = [
 	"GET /:instanceId/behaviour",
 	"PUT /:instanceId/behaviour",
 	"DELETE /:instanceId/behaviour",
+	"GET /:instanceId/connection-guide",
 	"POST /:instanceId/browse",
 	"GET /:instanceId/translation",
 	"PUT /:instanceId/translation",
@@ -371,6 +372,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"PUT /:instanceId/behaviour",
 		"DELETE /:instanceId/behaviour",
 	],
+	"instances-guide.ts": ["GET /:instanceId/connection-guide"],
 	"instances-browse.ts": ["POST /:instanceId/browse"],
 	"instances-chat.ts": [
 		"POST /:instanceId/chat",
@@ -545,6 +547,10 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/behaviour": [401, 404],
 	"PUT /:instanceId/behaviour": [401, 404],
 	"DELETE /:instanceId/behaviour": [401, 404],
+	// The generated connection guide (#772). Derived state, but every input is tenant-scoped and
+	// the route opens with `requireOwnedInstance`, so a stranger gets the same 404 as every other
+	// per-instance read — not an empty guide, which would be a statement about an instance.
+	"GET /:instanceId/connection-guide": [401, 404],
 	"POST /:instanceId/browse": [401, 404],
 	"GET /:instanceId/translation": [401, 404],
 	"PUT /:instanceId/translation": [401, 404],

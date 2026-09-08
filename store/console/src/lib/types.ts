@@ -357,3 +357,15 @@ export interface Notification {
 	 * never been a `data` column, and `SELECT *` cannot invent one — removed in #617.
 	 */
 }
+
+/**
+ * `GET /v1/instances/:id/connection-guide` (#772) — the generated per-instance briefing.
+ *
+ * Mirrors `ConnectionGuideResponse` in `workers/api/src/lib/connection-guide.ts`; the two are
+ * held equal by the `Extra<>` assertion in `types.test.ts`, which is what stops this from
+ * becoming the 91st hand-copied shape #616 counted.
+ */
+export interface ConnectionGuideResponse {
+	/** The rendered Markdown document. */
+	guide: string;
+}

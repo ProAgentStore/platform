@@ -20,6 +20,7 @@ import { FileConnectorPanel } from "../components/FileConnectorPanel";
 import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
 import Card from "../components/Card";
+import ConnectionGuide from "../components/ConnectionGuide";
 
 interface Props {
 	instanceId: string;
@@ -738,6 +739,14 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, onU
 					/>
 				)}
 			</Card>
+
+			{/* The generated connection guide (#772) — how to drive THIS instance from another
+			    assistant. It sits on Settings rather than its own tab because it is a reference
+			    about the instance, not a workspace: you read it once, copy it, and leave.
+			    `active` is true because reaching this tab IS the request for it. */}
+			<div className="mb-3 sm:mb-4">
+				<ConnectionGuide instanceId={instanceId} active />
+			</div>
 
 			{/* Personality resync (#496): brings the stored DO personality up to the agent's
 			    current seed. Safe: only personality is written — guardrails, goal, welcomeMessage

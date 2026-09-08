@@ -9,6 +9,7 @@ import { registerBoardTools } from "./board.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorGrantTools } from "./connectors.js";
+import { registerGuideTools } from "./guide.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerObservabilityTools } from "./observability.js";
@@ -293,6 +294,7 @@ const TABLE: Record<string, Row> = {
 	get_agent_stats_schema: ["stats", "none", null, null, "agent_id,token"],
 	get_apply_tips: ["apply", "none", null, null, "instance_id,token"],
 	get_instance_board_config: ["board", "none", null, null, "instance_id,token"],
+	get_instance_connection_guide: ["guide", "read", null, null, "instance_id,token"],
 	get_instance_instructions: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_operator_manual: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_memory: ["knowledge", "none", null, null, "instance_id,token"],
@@ -393,6 +395,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	coding: registerCodingTools as any,
 	composition: registerCompositionTools as any,
 	connectors: registerConnectorGrantTools as any,
+	guide: registerGuideTools as any,
 	knowledge: registerKnowledgeTools as any,
 	observability: registerObservabilityTools as any,
 	repo: registerRepoTools as any,
