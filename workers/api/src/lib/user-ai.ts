@@ -65,6 +65,19 @@ export class UserAiProviderError extends Error {
 	}
 }
 
+/**
+ * Does a provider's error sentence say the account is out of money? (#773)
+ *
+ * Anthropic: "Your credit balance is too low to access the Anthropic API." Matched loosely on the
+ * noun phrase rather than the whole sentence, so a reworded suffix does not silently drop the hint.
+ * The classifier in `coding-failure.ts` matches the same phrase; the two are kept in step by
+ * `user-ai.test.ts`, which feeds the live wording to both.
+ */
+export function isCreditBalanceMessage(message: string): boolean {
+	const m = message.toLowerCase();
+	return m.includes("credit balance") || m.includes("insufficient_funds") || m.includes("insufficient credit");
+}
+
 interface StoredCloudflareAiCredentials {
 	accountId: string;
 	token: string;
@@ -242,11 +255,18 @@ async function runAnthropic(
 		const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 		const errObj = (errBody as { error?: { message?: string; type?: string } }).error;
 		const errMsg = errObj?.message || JSON.stringify(errBody);
+		// An exhausted balance arrives as a 400 `invalid_request_error` — the same status and type as
+		// a malformed request — with the sentence as its only signature (#773). The vendor's text is
+		// kept verbatim (it is what `coding-failure.ts` classifies on) and the remedy is appended in
+		// the same shape as the 401 hint, so the owner reads which page to go to rather than which
+		// endpoint said no.
 		const hint = res.status === 404
 			? " — Your API key may not have access to this model. Get a key from console.anthropic.com/settings/keys"
 			: res.status === 401
 				? " — Invalid API key. Update it in Profile → API Keys → Anthropic"
-				: "";
+				: res.status === 400 && isCreditBalanceMessage(errMsg)
+					? " — Insufficient Anthropic credit balance. Top up at console.anthropic.com/settings/billing"
+					: "";
 		throw new UserAiProviderError(
 			`Anthropic (${res.status}): ${errMsg}${hint}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,

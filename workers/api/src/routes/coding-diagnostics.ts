@@ -22,6 +22,7 @@ import { type TrackedGhGuard, writeEnforcementReport } from "../lib/coding-write
 import { codingRunsForSessions, type CodingRunFact } from "../lib/board-runs.js";
 import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
+import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
@@ -553,8 +554,21 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			...writeEnforcementReport(writeScope, diagData?.tracked ?? []),
 		};
 
+		// 5b. The owner's AI provider ACCOUNT (#773) — the one thing a healthy machine, a live relay
+		// and a tracked session cannot tell you: whether the key behind the next run can pay for it.
+		// Read off the record, never probed here (the ticket's non-goal); `verify` names the probe.
+		const providerAccount = await readProviderAccountHealth(env, uid).catch(() => null);
+
 		// 6. Auto-detected issues
 		const issues: Array<{ severity: "error" | "warn" | "info"; message: string; fix?: string }> = [];
+
+		if (providerAccount?.state === "failing") {
+			issues.push({
+				severity: "warn",
+				message: `The Anthropic key behind this instance last failed at ${providerAccount.lastFailureAt} (${providerAccount.failureClass}) and has not succeeded since: ${providerAccount.lastFailure}`,
+				fix: `${providerAccount.remedy}. Then ${providerAccount.verify}.`,
+			});
+		}
 
 		if (!runtimeRow) {
 			issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
@@ -671,6 +685,9 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			// SSH identity transparency (#684). `null` when the runner is offline or predates the
 			// `/coding/git-identity` endpoint — treat as unverified, not as "no problem".
 			gitIdentity: runnerGitIdentity,
+			// The owner's provider account, as last observed (#773). `no_failure_recorded` is not
+			// "healthy" — it is "nothing on record"; `verify` is how to get a live answer.
+			providerAccount,
 			issues,
 		});
 	});

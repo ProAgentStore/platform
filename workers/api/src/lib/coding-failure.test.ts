@@ -72,9 +72,14 @@ describe("classifyCodingFailure — the three classes that used to read identica
 			upstreamStatus: 400,
 			retryable: false,
 		});
-		expect(classifyCodingFailure(credit).class).toBe("provider_credentials");
-		expect(classifyCodingFailure(serialized(credit)).class).toBe("provider_credentials");
+		// Its OWN class since #773: the remedy is the provider's billing page, not this platform's key
+		// page, and a reader of `provider_credentials` could not tell which. Serialised across a
+		// Workflow step boundary it still classifies, because the match is on the sentence.
+		expect(classifyCodingFailure(credit).class).toBe("provider_credit");
+		expect(classifyCodingFailure(serialized(credit)).class).toBe("provider_credit");
 		expect(classifyCodingFailure(credit).retryable).toBe(false);
+		// …and an invalid key is still the other class — the split must not have swallowed it.
+		expect(classifyCodingFailure(new Error("Anthropic (401): invalid x-api-key")).class).toBe("provider_credentials");
 
 		const stall = Object.assign(new Error(deadlineMessage("stall", 20_000)), { retryable: true });
 		expect(classifyCodingFailure(stall).class).toBe("provider_stall");

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { classifyCodingFailure } from "./coding-failure.js";
 import { encryptKey } from "./crypto.js";
 import {
 	encodeCloudflareAiCredentials,
@@ -6,6 +7,7 @@ import {
 	runUserWorkersAi,
 	UserAiCredentialsError,
 	UserAiProviderError,
+	isCreditBalanceMessage,
 } from "./user-ai.js";
 import type { Env } from "../types.js";
 
@@ -530,5 +532,25 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		await expect(
 			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
 		).rejects.toMatchObject({ name: "UserAiProviderError", upstreamStatus: 400, message: expect.stringMatching(/credit balance too low/) });
+	});
+
+	it("names the remedy for an empty balance, and the classifier reads the same sentence (#773)", async () => {
+		// The live 400, verbatim. Its `type` is `invalid_request_error` — the same as a malformed
+		// request — so the sentence is the only signature, and it must survive into the message the
+		// run driver classifies on, with the page to go to appended rather than substituted.
+		const LIVE = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+		const env = await envWithAnthropicKey();
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ type: "error", error: { type: "invalid_request_error", message: LIVE } }, { status: 400 })));
+		const err = await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+		expect(err).toMatchObject({ name: "UserAiProviderError", upstreamStatus: 400, retryable: false });
+		expect(err.message).toContain(LIVE);
+		expect(err.message).toContain("console.anthropic.com/settings/billing");
+		expect(isCreditBalanceMessage(LIVE)).toBe(true);
+		expect(classifyCodingFailure(err).class).toBe("provider_credit");
+		// A different 400 gets no billing advice — the hint must not fire on the status alone.
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { type: "invalid_request_error", message: "messages: final assistant content cannot end with trailing whitespace" } }, { status: 400 })));
+		const other = await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+		expect(other.message).not.toContain("settings/billing");
+		expect(classifyCodingFailure(other).class).toBe("provider_error");
 	});
 });

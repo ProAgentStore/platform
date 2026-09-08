@@ -16,7 +16,8 @@
  *
  *   a provider STALL         transport died mid-reply. Retrying is genuinely the right move.
  *   a CREDENTIALS/CREDIT     the key is invalid, or the balance is gone. No retry will help;
- *                            the owner has to do something.
+ *                            the owner has to do something. Split into two classes by #773,
+ *                            because "which page does the owner go to" differs.
  *   a PLATFORM CEILING       a Cloudflare per-invocation limit (#523). Not the objective failing
  *                            at all — the run was cut off, and its committed work is intact.
  *
@@ -52,7 +53,14 @@ export type CodingFailureClass =
 	| "provider_stall"
 	/** The reply was too long to finish inside the total ceiling. Deterministic: retrying repeats it. */
 	| "provider_overrun"
-	/** No usable key, an invalid one, or an exhausted balance. Only the owner can clear it. */
+	/**
+	 * The owner's provider account has no credit left (#773). Split from `provider_credentials`
+	 * because the two share a remedy-holder (the owner) but not a remedy: an invalid key is fixed on
+	 * this platform's key page, an empty balance on the provider's billing page — and an orchestrator
+	 * reading `provider_credentials` off a dead run could not tell which page to send anyone to.
+	 */
+	| "provider_credit"
+	/** No usable key or an invalid one. Only the owner can clear it. */
 	| "provider_credentials"
 	/** The provider is throttling this key. Wants a backoff, not an immediate retry. */
 	| "provider_rate_limit"
@@ -103,10 +111,15 @@ const CEILING_MARKERS = [
 	"exceeded resource limits",
 ];
 
-/** No key, a rejected key, or no money behind it — three doors, one remedy: the owner acts. */
+/**
+ * No money behind the key (#773). Anthropic reports it as a 400 `invalid_request_error` whose only
+ * signature is the sentence, so the sentence is what is matched — `user-ai.test.ts` pins the live
+ * wording. `insufficient` covers the two other spellings providers use for the same state.
+ */
+const CREDIT_MARKERS = ["credit balance", "insufficient_funds", "insufficient credit", "insufficient_quota"];
+
+/** No key or a rejected key — one door, one remedy: the owner fixes the key. */
 const CREDENTIAL_MARKERS = [
-	"credit balance is too low",
-	"credit balance too low",
 	"invalid api key",
 	"add an api key",
 	"add your cloudflare workers ai account id",
@@ -220,9 +233,12 @@ export function classifyCodingFailure(err: unknown): CodingFailure {
 	// fresh run has no journal, so every act would repeat. Nothing reads this field but a human
 	// (`coding-failure.test.ts` pins that), and it stays honest by saying which retry it means.
 	if (WORKFLOW_INTERNAL_MARKERS.some((k) => m.includes(k))) return at("workflow_internal", true);
-	// Credit/credentials BEFORE the generic provider branch: `Anthropic (400): Your credit balance
-	// is too low` is a 4xx that says nothing about transport, and reporting it as a stall is exactly
-	// the confusion #529 was filed over.
+	// Credit BEFORE credentials, and both BEFORE the generic provider branch: `Anthropic (400): Your
+	// credit balance is too low` is a 4xx that says nothing about transport, and reporting it as a
+	// stall is exactly the confusion #529 was filed over. Credit is read first because its status
+	// (400) would otherwise fall through to `provider_error`, and because an exhausted balance and a
+	// bad key send the owner to different pages (#773).
+	if (CREDIT_MARKERS.some((k) => m.includes(k))) return at("provider_credit", false);
 	if (CREDENTIAL_MARKERS.some((k) => m.includes(k)) || upstreamStatus === 401 || upstreamStatus === 402 || upstreamStatus === 403) {
 		return at("provider_credentials", false);
 	}
@@ -248,6 +264,7 @@ const EXPLAINED: ReadonlySet<CodingFailureClass> = new Set<CodingFailureClass>([
 	"runner_gone",
 	"runner_unreachable",
 	"infra_transient",
+	"provider_credit",
 	"provider_credentials",
 	"provider_rate_limit",
 	"provider_overrun",
@@ -361,7 +378,11 @@ export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
 	// written, against an identical objective that ran fine minutes later.
 	provider_stall: { resume: true, why: "the model's transport dropped mid-reply; the journal replays every completed step, so only the dropped call is paid for again" },
 	provider_overrun: { resume: false, why: "deterministic — the reply was too long, so an identical attempt ends identically" },
-	provider_credentials: { resume: false, why: "no key, a rejected key or an empty balance; only the owner can clear it" },
+	// Not a transport fact and not a platform fact: the owner's own Anthropic account is out of money,
+	// and a replay would spend nothing and fix nothing (#773). Stated with the page to go to, because
+	// this sentence is what the crash report and the chat bubble carry.
+	provider_credit: { resume: false, why: "the Anthropic account has insufficient credit balance; top up credits at console.anthropic.com/settings/billing to continue" },
+	provider_credentials: { resume: false, why: "no key or a rejected key; only the owner can clear it" },
 	provider_rate_limit: { resume: false, why: "the provider is throttling this key and wants a backoff, not an immediate replay" },
 	provider_error: { resume: false, why: "the provider answered with an error we have not split out; retrying an unread error is a guess" },
 	// The runner guard (#341) has already waited for this machine and concluded it is gone. Resuming

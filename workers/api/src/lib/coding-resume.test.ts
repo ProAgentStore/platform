@@ -55,6 +55,7 @@ describe("every failure class has a stated resume decision — the denominator (
 		"runner_unreachable",
 		"provider_stall",
 		"provider_overrun",
+		"provider_credit",
 		"provider_credentials",
 		"provider_rate_limit",
 		"provider_error",
@@ -64,7 +65,7 @@ describe("every failure class has a stated resume decision — the denominator (
 		"unknown",
 	];
 
-	it("covers all 11 classes, and each decision carries its reason", () => {
+	it("covers all 12 classes, and each decision carries its reason", () => {
 		const keys = Object.keys(DRIVER_RESUME_POLICY).sort();
 		expect(keys.length, `policy covers ${keys.length} classes`).toBe(ALL.length);
 		expect(keys).toEqual([...ALL].sort());
@@ -93,7 +94,7 @@ describe("every failure class has a stated resume decision — the denominator (
 		expect(DRIVER_RESUME_POLICY.workflow_internal.resume).toBe(false);
 		// …and the other direction is real too: `provider_rate_limit` and `provider_overrun` are
 		// provider failures that are NOT retryable, and widening the stall must not have widened them.
-		for (const cls of ["provider_overrun", "provider_credentials", "provider_rate_limit", "provider_error"] as const) {
+		for (const cls of ["provider_overrun", "provider_credit", "provider_credentials", "provider_rate_limit", "provider_error"] as const) {
 			expect(DRIVER_RESUME_POLICY[cls].resume, `${cls} must stay terminal`).toBe(false);
 		}
 	});

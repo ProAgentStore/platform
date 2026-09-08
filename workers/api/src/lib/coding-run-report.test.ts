@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { needsHuman, statusFor, type LoopStopReason } from "./agent-loop.js";
-import { codingCrashReport, INTERRUPTED_CLASSES, interruptedBy, outcomeWord, resumeNotice, runOutcomeNote, withoutVendorAdvice } from "./coding-run-report.js";
+import { codingCrashReport, INTERRUPTED_CLASSES, OWNER_ACTION_CLASSES, interruptedBy, outcomeWord, resumeNotice, runOutcomeNote, withoutVendorAdvice } from "./coding-run-report.js";
 import { AI_STALL_TIMEOUT_MS, deadlineMessage } from "./ai-deadlines.js";
 import { CARD_DETAIL_MAX, cardDetail } from "./card-detail.js";
 import { classifyCodingFailure } from "./coding-failure.js";
@@ -118,6 +118,61 @@ describe("`interrupted` is distinguishable from a run whose objective failed (#5
 		expect(reasons).toContain("interrupted");
 		for (const r of reasons) {
 			expect(["completed", "failed", "needs_human", "cancelled"], r).toContain(statusFor(r));
+		}
+	});
+});
+
+describe("an empty provider balance is the OWNER's to clear — not a failure, not an interruption (#773)", () => {
+	/** Verbatim from the run the ticket was filed on, hint and all (`user-ai.ts` appends it). */
+	const CREDIT =
+		"Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. — Insufficient Anthropic credit balance. Top up at console.anthropic.com/settings/billing";
+
+	it("is its own set, disjoint from the interruptions", () => {
+		// G1: asserted, not assumed — the two tables answer different questions ("what cut this off"
+		// vs "who has to act"), and a class in both would be reported twice with two sentences.
+		expect([...OWNER_ACTION_CLASSES].sort()).toEqual(["provider_credit"]);
+		for (const cls of OWNER_ACTION_CLASSES) expect(INTERRUPTED_CLASSES.has(cls), cls).toBe(false);
+		expect(OWNER_ACTION_CLASSES.has(classifyCodingFailure(new Error(CREDIT)).class)).toBe(true);
+	});
+
+	it("files its own stop reason, so an orchestrator reads 'top up' rather than 'failed' and retries", () => {
+		const crash = codingCrashReport(new Error(CREDIT));
+		expect(crash.stopReason).toBe("provider_credit");
+		// Before #773 this was `stopReason: null` and the row said `failed` — the ticket's complaint.
+		expect(crash.stopReason).not.toBeNull();
+		expect(outcomeWord("failed", crash.stopReason)).toBe("provider_credit");
+		expect(statusFor(crash.stopReason as LoopStopReason)).toBe("needs_human");
+		expect(needsHuman(crash.stopReason as LoopStopReason)).toBe(true);
+		// …and it is a different reason from an interruption, which is what makes the two remedies
+		// tellable apart on `coding_loop_status`: one waits for nothing, the other waits for a top-up.
+		expect(crash.stopReason).not.toBe("interrupted");
+	});
+
+	it("leads with what to DO, names the page, and keeps the vendor's own text last", () => {
+		const { detail } = codingCrashReport(new Error(CREDIT));
+		expect(detail.startsWith("Stopped because the Anthropic account has no credit left")).toBe(true);
+		expect(detail).toContain("console.anthropic.com/settings/billing");
+		expect(detail).toContain("not by the objective");
+		expect(detail).not.toMatch(/^run error:/);
+		// The provider's sentence survives at the END, where a 300-char card cuts, not the remedy.
+		// (`top up at` is this module's sentence; the capitalised `Top up` later is `user-ai.ts`'s hint.)
+		expect(detail.indexOf("top up at")).toBeLessThan(detail.indexOf("Anthropic (400)"));
+		expect(cardDetail(detail).length).toBeLessThanOrEqual(CARD_DETAIL_MAX);
+		expect(cardDetail(detail)).toContain("console.anthropic.com/settings/billing");
+	});
+
+	it("does not touch an invalid key — that keeps its own hint and its own column", () => {
+		// The split's other half: `provider_credentials` is NOT an owner-action class here, because its
+		// hint ("Update it in Profile → API Keys") is already in the message and its column was never
+		// decided by #773. Widening the table is a decision, and this pins that it was not made.
+		const key = codingCrashReport(new Error("Anthropic (401): invalid x-api-key — Invalid API key. Update it in Profile → API Keys → Anthropic"));
+		expect(key.stopReason).toBeNull();
+		expect(key.detail.startsWith("run error: ")).toBe(true);
+	});
+
+	it("cannot be produced by any ordinary outcome", () => {
+		for (const o of ["done", "stuck", "needs_input", "failed", "max_steps", "cancelled", "waiting"] as const) {
+			expect(stopReasonFor(o), o).not.toBe("provider_credit");
 		}
 	});
 });

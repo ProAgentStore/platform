@@ -201,6 +201,7 @@ describe("describeLoopRun", () => {
 			cancelled: true,
 			no_progress: true,
 			engine_limit: true,
+			provider_credit: true,
 			interrupted: true,
 		};
 		const statuses = Object.keys(DOMAIN) as Array<LoopRunStatus | "running">;

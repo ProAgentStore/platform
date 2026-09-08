@@ -21,6 +21,7 @@ export type LoopStopReason =
 	| "cancelled" // a human stopped it
 	| "no_progress" // repeating itself — a loop that cannot terminate on its own
 	| "engine_limit" // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
+	| "provider_credit" // the owner's AI provider account has no credit left — top up, do not retry (#773)
 	| "interrupted"; // the PLATFORM cut the invocation off — the objective never reported (#546)
 
 export interface LoopState {
@@ -224,7 +225,11 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	// invocation off, so the objective never reported EITHER way — and two of the five occurrences
 	// had already pushed to `origin main`. "Failed" tells the owner to re-run work that may already
 	// be on the trunk. Somebody has to look, which is what this column is for.
-	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted") return "needs_human";
+	//
+	// `provider_credit` is the same shape as `engine_limit` one level down (#773): the run did not
+	// fail, the owner's own Anthropic account ran out of credit, and the only remedy is theirs — top
+	// up. "Failed" would invite a retry that costs nothing and fixes nothing; "needs you" says who.
+	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit") return "needs_human";
 	return "failed";
 }
 

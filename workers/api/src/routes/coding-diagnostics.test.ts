@@ -58,6 +58,10 @@ function buildEnv(opts: {
 	staleNode?: string;
 	/** Rows in `instance_runtimes` to return (null = unregistered). */
 	hasRuntimeRow?: boolean;
+	/** The newest account-class death in `error_log` for this user, if any (#773). */
+	providerFailure?: { message: string; seen_at: string } | null;
+	/** `user_api_keys.last_used_at` for the Anthropic key — the last SUCCESSFUL call (#773). */
+	anthropicLastUsedAt?: string | null;
 }): Env {
 	const staleNode = opts.staleNode ?? OLD_NODE;
 	const DB = {
@@ -67,6 +71,11 @@ function buildEnv(opts: {
 					return {
 						async first() {
 							if (sql.includes("FROM agent_instances")) return { id: INSTANCE };
+							if (sql.includes("FROM error_log")) {
+								const f = opts.providerFailure;
+								return f ? { message: f.message, context: null, last_context: null, seen_at: f.seen_at } : null;
+							}
+							if (sql.includes("FROM user_api_keys")) return opts.anthropicLastUsedAt === undefined ? null : { last_used_at: opts.anthropicLastUsedAt };
 							if (sql.includes("FROM instance_runtimes") && opts.hasRuntimeRow !== false) {
 								return {
 									endpoint_url: `http://${staleNode}`,
@@ -237,5 +246,42 @@ describe("coding_diagnostics live-reachability (#691)", () => {
 		const offlineBody = (await getDiag(app, env)).body;
 		const offlineRelay = offlineBody.relay as Record<string, unknown>;
 		expect(offlineRelay.relayName).toMatch(OLD_NODE);
+	});
+});
+
+describe("the owner's provider account is part of the diagnosis (#773)", () => {
+	const CREDIT =
+		"coding run 7f3a9c12 failed (provider_credentials) at s1-decide after 0 steps: Anthropic (400): Your credit balance is too low to access the Anthropic API.";
+
+	it("reports nothing on record as `no_failure_recorded`, and raises no issue for it", async () => {
+		const { app, env } = buildApp({});
+		const { status, body } = await getDiag(app, env);
+		expect(status).toBe(200);
+		const account = body.providerAccount as Record<string, unknown>;
+		expect(account.state).toBe("no_failure_recorded");
+		expect(account.verify).toContain("/v1/keys/anthropic/verify");
+		const issues = body.issues as Array<Record<string, unknown>>;
+		expect(issues.some((i) => String(i.message).includes("Anthropic key"))).toBe(false);
+	});
+
+	it("names a still-failing balance as an issue with the top-up page, on a machine that is otherwise fine", async () => {
+		// The ticket's shape: runner healthy, no session problem, and the run could not START. Every
+		// other rule here is about the machine; this is the one about the account paying for the work.
+		const { app, env } = buildApp({ providerFailure: { message: CREDIT, seen_at: "2026-09-09 07:07:00" }, anthropicLastUsedAt: "2026-09-09 06:00:00" });
+		const { body } = await getDiag(app, env);
+		const account = body.providerAccount as Record<string, unknown>;
+		expect(account.state).toBe("failing");
+		expect(account.failureClass).toBe("provider_credit");
+		const issue = (body.issues as Array<Record<string, unknown>>).find((i) => String(i.message).includes("Anthropic key"));
+		expect(issue?.severity).toBe("warn");
+		expect(String(issue?.fix)).toContain("console.anthropic.com/settings/billing");
+		expect(String(issue?.fix)).toContain("/v1/keys/anthropic/verify");
+	});
+
+	it("does not nag once the key has succeeded after the failure", async () => {
+		const { app, env } = buildApp({ providerFailure: { message: CREDIT, seen_at: "2026-09-09 07:07:00" }, anthropicLastUsedAt: "2026-09-09 09:00:00" });
+		const { body } = await getDiag(app, env);
+		expect((body.providerAccount as Record<string, unknown>).state).toBe("recovered");
+		expect((body.issues as Array<Record<string, unknown>>).some((i) => String(i.message).includes("Anthropic key"))).toBe(false);
 	});
 });

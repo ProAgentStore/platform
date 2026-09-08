@@ -58,6 +58,30 @@ const INTERRUPTED_BY: Partial<Record<CodingFailureClass, string>> = {
 export const INTERRUPTED_CLASSES: ReadonlySet<CodingFailureClass> = new Set(Object.keys(INTERRUPTED_BY) as CodingFailureClass[]);
 
 /**
+ * Deaths the OWNER has to clear, and the stop reason each one is filed under (#773).
+ *
+ * A third kind of ending beside "the objective failed" and "something cut the run off": nothing is
+ * wrong with the work or the platform, and nothing will change until the owner acts on THEIR account.
+ * The measured case is an Anthropic `credit balance is too low` 400 — it used to read as
+ * `Loop stopped (failed)` with the vendor's sentence as detail, indistinguishable from a crash, so
+ * an orchestrator treated it as transient and re-dispatched a run that could not start.
+ *
+ * One member for now. `provider_credentials` is deliberately NOT here: a bad key already carries its
+ * own "Update it in Profile → API Keys" hint from `user-ai.ts`, and widening this table is a
+ * decision about what the board column should say for it, which #773 did not make.
+ */
+const OWNER_ACTION: Partial<Record<CodingFailureClass, { stopReason: LoopStopReason; sentence: string }>> = {
+	provider_credit: {
+		stopReason: "provider_credit",
+		sentence:
+			"Stopped because the Anthropic account has no credit left, not by the objective — top up at " +
+			"console.anthropic.com/settings/billing, then start the run again; retrying before that will fail the same way.",
+	},
+};
+
+export const OWNER_ACTION_CLASSES: ReadonlySet<CodingFailureClass> = new Set(Object.keys(OWNER_ACTION) as CodingFailureClass[]);
+
+/**
  * What cut this run off, as a clause — or null when the objective itself is what failed.
  *
  * Lower-case and clause-shaped on purpose: its three readers place it differently (a chat headline,
@@ -81,6 +105,8 @@ export interface CodingCrashReport {
 	 *
 	 * Null for the two cases that already had a sentence — a waited-out runner (#341) and an
 	 * ordinary crash — so this change adds a reason where there was none and rewrites none.
+	 * `interrupted` for {@link INTERRUPTED_CLASSES}; `provider_credit` for the one owner-action
+	 * class (#773). Both land in "Needs you" via `statusFor`, for different stated reasons.
 	 */
 	stopReason: LoopStopReason | null;
 }
@@ -97,7 +123,13 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 	// A waited-out runner is reported as ITSELF, without the "run error:" prefix — that prefix
 	// reads as a crash, and "the runner did not come back" is a finding, not one (#341).
 	if (isRunnerGone(err)) return { detail: message, stopReason: null };
-	const subject = INTERRUPTED_BY[classifyCodingFailure(err).class];
+	const cls = classifyCodingFailure(err).class;
+	// An ending only the owner can clear (#773). Same shape as the interruption below — what to DO
+	// first, the vendor's own text last where the card's 300 characters will cut it — and its own
+	// stop reason, so `coding_loop_status` says "top up" rather than "failed".
+	const owner = OWNER_ACTION[cls];
+	if (owner) return { detail: `${owner.sentence} ${withoutVendorAdvice(message)}`, stopReason: owner.stopReason };
+	const subject = INTERRUPTED_BY[cls];
 	if (!subject) {
 		return { detail: `run error: ${message}`, stopReason: null };
 	}
@@ -178,17 +210,18 @@ export function withoutVendorAdvice(message: string): string {
  * says it outright: it "must not be reported as `outcome: failed` with no qualification".
  *
  * The stop reason is the correction, and the caller passes the SAME value `finishLoopRun` records —
- * so the word the owner reads and the reason the platform filed cannot disagree. Only `interrupted`
- * overrides: it is the only reason `codingCrashReport` produces, and the only one that is a
- * statement about the platform rather than about the objective. `stopReasonFor` cannot produce it
- * from any outcome (asserted in `coding-run-report.test.ts`), so no ordinary ending is reworded.
+ * so the word the owner reads and the reason the platform filed cannot disagree. Only the reasons
+ * `codingCrashReport` itself produces override — `interrupted` (a statement about the platform) and
+ * `provider_credit` (a statement about the owner's account, #773) — neither of which is a statement
+ * about the objective. `stopReasonFor` cannot produce either from any outcome (asserted in
+ * `coding-run-report.test.ts`), so no ordinary ending is reworded.
  *
  * The workflow is required to compose its note through this — `coding-run-report.test.ts` reads
  * `workflows/coding-session.ts` and fails if the call goes back to passing the raw outcome, which
  * is the only way the placeholder could return.
  */
 export function outcomeWord(outcome: string, stopReason?: LoopStopReason | null): string {
-	return stopReason === "interrupted" ? "interrupted" : outcome;
+	return stopReason === "interrupted" || stopReason === "provider_credit" ? stopReason : outcome;
 }
 
 /**

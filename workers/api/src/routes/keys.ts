@@ -16,10 +16,12 @@ import { recordVoiceUsage } from "../lib/usage.js";
 import { estimateTtsMicros, estimateSttMicros, secondsFromAudioBytes } from "../lib/ai-pricing.js";
 import {
 	encodeCloudflareAiCredentials,
+	getUserProviderKey,
 	runUserWorkersAi,
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "../lib/user-ai.js";
+import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "../lib/coding-failure.js";
 import type { Env } from "../types.js";
 
 export const keysRoutes = new Hono<{ Bindings: Env }>();
@@ -308,25 +310,56 @@ keysRoutes.put("/:provider", async (c) => {
 	return c.json({ success: true, provider: providerId });
 });
 
-/** Verify a stored provider key with a minimal provider request. */
+/** The providers a stored key can be verified against, and the model the probe names for each. */
+const VERIFIABLE_PROVIDERS: Record<string, string> = {
+	cloudflare: "@cf/meta/llama-3.2-3b-instruct",
+	// `runAnthropic` names its own model; the id here is documentary. Four output tokens against the
+	// owner's key is the cheapest honest reading of "does this account work right now" (#773).
+	anthropic: "claude-sonnet-4-6",
+};
+
+/**
+ * Verify a stored provider key with a minimal provider request.
+ *
+ * ── This is the on-demand credit check #773 asks for, and deliberately nothing more
+ *
+ * An Anthropic account with no credit answers every call with a 400 whose only signature is the
+ * sentence `Your credit balance is too low`. It is not a state this platform holds (`billing_status`
+ * is about PAGS billing, and correctly said "none"), and the provider exposes no balance endpoint, so
+ * the only way to KNOW is to spend a request and read the answer. That is what this does — on demand,
+ * when a caller suspects something — and it is NOT wired ahead of every dispatch: the ticket's
+ * explicit non-goal, because an extra provider round-trip on every step would tax the common case to
+ * detect a rare one.
+ *
+ * The failure is returned CLASSIFIED (`failureClass`) with the remedy sentence the run driver would
+ * file, so a caller reading this and a caller reading a dead run's `stopReason` get one vocabulary.
+ */
 keysRoutes.post("/:provider/verify", async (c) => {
 	const session = await requireUser(c);
 	const providerId = c.req.param("provider");
-	if (providerId !== "cloudflare") {
+	const model = VERIFIABLE_PROVIDERS[providerId];
+	if (!model) {
 		throw new HttpError(400, `Verification not available for ${providerId}`);
+	}
+	// `runUserWorkersAi` picks the provider from what the user has stored, Anthropic first — so a
+	// verify addressed to Anthropic must fail plainly when there is no Anthropic key to test, rather
+	// than silently probing Workers AI and reporting that as the answer.
+	if (providerId === "anthropic" && !(await getUserProviderKey(c.env, session.uid, "anthropic"))) {
+		throw new HttpError(404, "No Anthropic key stored. Add one in Profile → API Keys → Anthropic");
 	}
 
 	try {
 		await runUserWorkersAi(
 			c.env,
 			session.uid,
-			"@cf/meta/llama-3.2-3b-instruct",
+			model,
 			{
 				messages: [
 					{ role: "system", content: "Reply with exactly: ok" },
 					{ role: "user", content: "verify" },
 				],
 				max_tokens: 4,
+				maxTokens: 4,
 			},
 		);
 		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() });
@@ -335,11 +368,18 @@ keysRoutes.post("/:provider/verify", async (c) => {
 			throw new HttpError(err.status, err.message);
 		}
 		if (err instanceof UserAiProviderError) {
+			const failure = classifyCodingFailure(err);
 			return c.json({
 				ok: false,
+				provider: providerId,
 				error: err.message,
 				upstreamStatus: err.upstreamStatus,
 				details: err.details,
+				// The same class and sentence a dead run files (#773), so "what is wrong with this key"
+				// reads identically here and on `coding_loop_status`.
+				failureClass: failure.class,
+				remedy: DRIVER_RESUME_POLICY[failure.class].why,
+				checkedAt: new Date().toISOString(),
 			}, 400);
 		}
 		throw err;
