@@ -95,6 +95,44 @@ export interface RepoFileWindowInput {
 	/** Override the character budget (the Co-pilot's reader keeps its own, smaller one). */
 	maxChars?: number;
 	maxLines?: number;
+	/**
+	 * The literal call the model repeats to continue, minus `startLine` (#781). Default is this
+	 * file's own reader, `repo_read_file path="…"`; a second reader over the same window — a
+	 * GitHub Actions job log — names its own tool and arguments, or the hint sends the model to a
+	 * tool that cannot reach what it just read.
+	 */
+	nextCall?: string;
+	/**
+	 * The sentence about jumping instead of paging. Default names `repo_grep`, which is the right
+	 * advice for a file on a checkout and wrong for anything else; `""` omits it.
+	 */
+	jumpHint?: string;
+}
+
+/**
+ * Where a window must START for it to run to the END of the text and still fit (#781).
+ *
+ * A log is read from its end — the failure is the last thing a job printed — while a file is
+ * read from its start. The renderer only walks forwards, so this is the pure inverse: walk back
+ * from the last line, spending the same budget the renderer will, and return the first line that
+ * fits. `renderRepoFileWindow({startLine: tailWindowStart(lines)})` then shows exactly the tail.
+ *
+ * Takes the lines the renderer will see (split on `\n`, the empty element after a final newline
+ * already dropped), and mirrors its per-line rendering — number prefix and the long-line cut —
+ * so the two budgets agree.
+ */
+export function tailWindowStart(lines: readonly string[], maxChars = READ_MAX_CHARS, maxLines = READ_MAX_LINES): number {
+	let used = 0;
+	let count = 0;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const text = lines[i] ?? "";
+		const cut = text.length > MAX_LINE_CHARS ? `${text.slice(0, MAX_LINE_CHARS)} … [line truncated: it is ${num(text.length)} characters long]` : text;
+		const rendered = `${i + 1}: ${cut}`;
+		if (count >= maxLines || (count > 0 && used + rendered.length + 1 > maxChars)) return i + 2;
+		used += rendered.length + 1;
+		count++;
+	}
+	return 1;
 }
 
 /** `undefined`/absent → null; a real number → floored; anything else → NaN, which is refused. */
@@ -114,6 +152,8 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 	const { path } = input;
 	const maxChars = input.maxChars ?? READ_MAX_CHARS;
 	const maxLines = input.maxLines ?? READ_MAX_LINES;
+	const nextCall = input.nextCall ?? `repo_read_file path="${path}"`;
+	const jumpHint = input.jumpHint ?? " To jump straight to something instead of paging, use repo_grep and read a window around the line it reports.";
 	const fetchTruncated = Boolean(input.fetchTruncated);
 	const raw = input.content ?? "";
 
@@ -156,7 +196,7 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 		const reach = fetchTruncated
 			? `only its first ${num(available)} lines could be read from this machine (the runner returns at most ${num(READ_FETCH_BYTES)} bytes of the file's ${num(input.size ?? 0)})`
 			: `${path} has ${num(available)} lines`;
-		return { content: `\`startLine\` ${num(from)} is past the end of what this tool can read: ${reach}. Ask for a startLine within that, or use repo_grep to find the line you actually want.`, success: false };
+		return { content: `\`startLine\` ${num(from)} is past the end of what this tool can read: ${reach}. Ask for a startLine within that${input.jumpHint === undefined ? ", or use repo_grep to find the line you actually want" : ""}.`, success: false };
 	}
 
 	const wantedTo = end === null ? available : Math.min(end, available);
@@ -184,8 +224,7 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 		const why = budgetBound ? ` (this window holds about ${num(maxChars)} characters or ${num(maxLines)} lines, whichever comes first)` : "";
 		notes.push(
 			`This is a WINDOW, not the whole file: lines ${num(shownTo + 1)}-${num(available)} were NOT returned${why}.` +
-				` To continue, call repo_read_file again with path="${path}" startLine=${num(shownTo + 1)}.` +
-				" To jump straight to something instead of paging, use repo_grep and read a window around the line it reports.",
+				` To continue, call ${nextCall} startLine=${num(shownTo + 1)}.${jumpHint}`,
 		);
 	}
 	if (fetchTruncated) {
@@ -196,7 +235,7 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 		);
 	}
 
-	const tail = shownTo < available ? `(continues — repo_read_file path="${path}" startLine=${num(shownTo + 1)})` : "";
+	const tail = shownTo < available ? `(continues — ${nextCall} startLine=${num(shownTo + 1)})` : "";
 	// The disclosure and the continuation reminder are the PLATFORM's, and the file's lines are not.
 	// Returned as `head`/`content`/`tail` so `runRegistryTool` can fence the middle and leave ours
 	// outside it (#752, ADR 0006 F2) — a "call again with startLine=…" instruction inside a block

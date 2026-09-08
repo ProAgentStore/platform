@@ -89,6 +89,8 @@ const INTERNET = new Set<string>([
 	"ai_generate", // sends the prompt to the model provider
 	// ── github ──
 	"github_workflow_runs",
+	"github_workflow_run_logs", // #781 — downloads a job's log from GitHub's blob store
+
 	"github_list_issues",
 	"github_read_issue",
 	"github_list_issue_comments",

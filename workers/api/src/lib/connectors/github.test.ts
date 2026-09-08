@@ -77,10 +77,11 @@ beforeEach(() => {
 });
 
 describe("github connector — registration", () => {
-	it("registers all 9 tools with correct scopes (reads, plus the three issue writes)", () => {
+	it("registers all 10 tools with correct scopes (reads, plus the three issue writes)", () => {
 		const names = registryToolNameSet();
 		for (const n of [
 			"github_workflow_runs",
+			"github_workflow_run_logs",
 			"github_list_issues",
 			"github_read_issue",
 			"github_list_issue_comments",
@@ -93,6 +94,8 @@ describe("github connector — registration", () => {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("github_workflow_runs")?.scope).toBe("read");
+		expect(getRegistryTool("github_workflow_run_logs")?.scope).toBe("read");
+		expect(getRegistryTool("github_workflow_run_logs")?.mutates).toBe(false);
 		expect(getRegistryTool("github_list_issues")?.scope).toBe("read");
 		expect(getRegistryTool("github_read_issue")?.scope).toBe("read");
 		expect(getRegistryTool("github_list_issue_comments")?.scope).toBe("read");
@@ -106,12 +109,13 @@ describe("github connector — registration", () => {
 		expect(getRegistryTool("github_update_issue")?.scope).toBe("write");
 	});
 
-	it("groups the 9 tools under the github connector for the catalog", () => {
+	it("groups the 10 tools under the github connector for the catalog", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "github");
 		expect(grp).toBeDefined();
 		expect(grp?.tools).toEqual(
 			expect.arrayContaining([
 				"github_workflow_runs",
+				"github_workflow_run_logs",
 				"github_list_issues",
 				"github_read_issue",
 				"github_list_issue_comments",
@@ -122,7 +126,7 @@ describe("github connector — registration", () => {
 				"github_update_issue",
 			]),
 		);
-		expect(grp?.tools).toHaveLength(9);
+		expect(grp?.tools).toHaveLength(10);
 	});
 
 	/**
@@ -282,6 +286,140 @@ describe("github connector — github_workflow_runs dispatch", () => {
 		const r = await tool("github_workflow_runs").handler(ctx(), { repo: "acme/widgets" });
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/GitHub returned 404 for acme\/widgets/);
+	});
+});
+
+/**
+ * The log TEXT, not just the status (#781).
+ *
+ * Every read here goes through the stubbed fetch: one call lists the run's jobs, one asks GitHub
+ * for the job's log (answered with a redirect), one follows the redirect to the blob store. The
+ * third must carry NO Authorization header — it is a pre-signed URL on another host.
+ */
+describe("github connector — github_workflow_run_logs dispatch", () => {
+	const JOBS = {
+		jobs: [
+			{ id: 11, name: "lint", status: "completed", conclusion: "success", html_url: "u1", steps: [{ number: 1, name: "biome", status: "completed", conclusion: "success" }] },
+			{
+				id: 22,
+				name: "ci",
+				status: "completed",
+				conclusion: "failure",
+				html_url: "u2",
+				steps: [
+					{ number: 1, name: "Checkout", status: "completed", conclusion: "success" },
+					{ number: 7, name: "Typecheck Console", status: "completed", conclusion: "failure" },
+					{ number: 8, name: "Typecheck Admin", status: "completed", conclusion: "skipped" },
+				],
+			},
+		],
+	};
+	const LOG = ["2026-09-08T09:10:09.1234567Z ##[group]Run npx tsc --noEmit", "2026-09-08T09:10:10.0000000Z src/App.tsx(3,1): error TS2322: nope", "2026-09-08T09:10:11.0000000Z ##[error]Process completed with exit code 2."].join("\n");
+	const redirect = (location: string) => ({ ok: false, status: 302, headers: new Headers({ location }), text: async () => "" }) as unknown as Response;
+	const textResponse = (body: string, ok = true, status = 200) => ({ ok, status, headers: new Headers(), text: async () => body }) as unknown as Response;
+	/** Route the stub by URL: jobs list, the API's redirect, the blob. */
+	const routes = (log: string | Response = LOG) =>
+		fetchMock.mockImplementation(async (url: string) => {
+			if (url.includes("/actions/runs/500/jobs")) return jsonResponse(JOBS);
+			if (url.includes("/actions/jobs/22/logs")) return redirect("https://blob.example/22.txt?sig=abc");
+			if (url.includes("/actions/jobs/11/logs")) return redirect("https://blob.example/11.txt?sig=abc");
+			if (url.startsWith("https://blob.example/")) return typeof log === "string" ? textResponse(log) : log;
+			return jsonResponse({}, false, 404);
+		});
+
+	it("picks the FAILED job, reads its log tail first, strips timestamps, and never sends the token to the blob host", async () => {
+		routes();
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+		expect(r.success).toBe(true);
+		// The header: every job with its id, the failed steps, and the tail-first note.
+		expect(r.head).toContain("lint: success (job_id 11)");
+		expect(r.head).toContain("ci: failure (job_id 22)");
+		expect(r.head).toContain("#7 Typecheck Console (failure)");
+		expect(r.head).not.toContain("#8 Typecheck Admin");
+		expect(r.head).toContain("Showing the END of the log first");
+		expect(r.head).toContain("timestamp");
+		// The body: numbered, timestamps gone, content intact.
+		expect(r.content).toContain("2: src/App.tsx(3,1): error TS2322: nope");
+		expect(r.content).not.toContain("2026-09-08T");
+		expect(r.origin).toContain('job "ci" (job_id 22)');
+		// Three fetches: jobs (auth), API log redirect (auth), blob (NO auth).
+		const calls = fetchMock.mock.calls as Array<[string, RequestInit | undefined]>;
+		expect(calls.map(([u]) => u)).toEqual([
+			expect.stringContaining("/repos/acme/widgets/actions/runs/500/jobs"),
+			expect.stringContaining("/repos/acme/widgets/actions/jobs/22/logs"),
+			"https://blob.example/22.txt?sig=abc",
+		]);
+		expect((calls[1][1]?.headers as Record<string, string>).Authorization).toBe("token gh-token-abc");
+		expect(calls[1][1]?.redirect).toBe("manual");
+		// The blob fetch carries a deadline (#438) and NOTHING else — no headers, so no token.
+		expect(calls[2][1]?.headers).toBeUndefined();
+		expect(calls[2][1]?.signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it("reads the job the caller names, and lists the jobs when the id is not in the run", async () => {
+		routes();
+		const ok = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500, job_id: 11 });
+		expect(ok.success).toBe(true);
+		expect(ok.origin).toContain('job "lint" (job_id 11)');
+		expect(ok.head).toContain('Every step of "lint" succeeded.');
+		const missing = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500, job_id: 99 });
+		expect(missing.success).toBe(false);
+		expect(missing.content).toContain("No job with job_id 99");
+		expect(missing.content).toContain("ci: failure (job_id 22)");
+	});
+
+	it("honours an explicit line range and names ITSELF in the continuation hint, not repo_read_file", async () => {
+		const long = Array.from({ length: 3_000 }, (_, i) => `2026-09-08T09:10:09.0000000Z line ${i + 1} ${"x".repeat(40)}`).join("\n");
+		routes(long);
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500, startLine: 10, endLine: 12 });
+		expect(r.success).toBe(true);
+		expect(r.content).toBe(["10: line 10 " + "x".repeat(40), "11: line 11 " + "x".repeat(40), "12: line 12 " + "x".repeat(40)].join("\n"));
+		expect(r.head).not.toContain("Showing the END");
+		expect(r.head).toContain('github_workflow_run_logs repo="acme/widgets" run_id=500 job_id=22 startLine=13');
+		expect(r.head).not.toContain("repo_read_file");
+		expect(r.head).not.toContain("repo_grep");
+	});
+
+	it("the default window on a long log ENDS at the last line", async () => {
+		const long = Array.from({ length: 3_000 }, (_, i) => `2026-09-08T09:10:09.0000000Z line ${i + 1} ${"x".repeat(40)}`).join("\n");
+		routes(long);
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+		expect(r.success).toBe(true);
+		expect(r.content.endsWith(`3000: line 3000 ${"x".repeat(40)}`)).toBe(true);
+		expect(r.head).toMatch(/lines \d[\d,]*-3,000 of 3,000/);
+		expect(r.tail).toBeUndefined();
+	});
+
+	it("says when the log is gone (410) or not yet written (404), naming the job", async () => {
+		routes(textResponse("", false, 410));
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain('no log for job "ci" (job_id 22)');
+		expect(r.content).toContain("90 days");
+	});
+
+	it("requires a numeric run_id and explains where it comes from", async () => {
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("run_id");
+		expect(r.content).toContain("not its run number");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("reports a run with no jobs as an answer, not an error", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ jobs: [] }));
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("no jobs yet");
+	});
+
+	it("reports GitHub's status when the job list fails, and goes through resolveRepo first", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({}, false, 404));
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("GitHub returned 404 listing the jobs of run 500");
+		const denied = await tool("github_workflow_run_logs").handler(ctx({ connectorClient: tokenClient(null) }), { repo: "acme/widgets", run_id: 500 });
+		expect(denied.success).toBe(false);
 	});
 });
 

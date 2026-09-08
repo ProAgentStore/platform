@@ -273,7 +273,11 @@ describe("migration 0123 — catalog copy (#362)", () => {
  */
 const SQL_0140 = readFileSync(fileURLToPath(new URL("../../migrations/0140_tmux_coder_reads_without_the_shell.sql", import.meta.url).href), "utf8");
 const SQL_0145 = readFileSync(fileURLToPath(new URL("../../migrations/0145_coder_issue_comments_tool.sql", import.meta.url).href), "utf8");
+const SQL_0148 = readFileSync(fileURLToPath(new URL("../../migrations/0148_coder_workflow_run_logs_tool.sql", import.meta.url).href), "utf8");
 const ISSUE_COMMENTS_TOOL = "github_list_issue_comments";
+const RUN_LOGS_TOOL = "github_workflow_run_logs";
+/** The GitHub READS granted after 0140's historical contract: 0145 (issue comments), 0148 (job logs, #781). */
+const LATER_GITHUB_READS = [ISSUE_COMMENTS_TOOL, RUN_LOGS_TOOL];
 
 /** The six read-only tools, from the connector's own registry entry rather than restated here. */
 const REPO_LOCAL_NAMES = groups.find((g) => g.connector === "repo-local")?.tools ?? [];
@@ -320,13 +324,13 @@ describe("migration 0140 — a read stops costing a write-scope shell call (#515
 		}
 	});
 
-	it("grants exactly the six repo-local tools, plus the later issue-comment read", () => {
+	it("grants exactly the six repo-local tools, plus the later GitHub reads", () => {
 		// Derived from 0123's own literal rather than restated, so the two files cannot drift: if
 		// 0123's list is ever edited, this fails instead of quietly dropping a tmux or github tool.
-		// 0145 is the one later GitHub read added after this migration's historical contract.
+		// 0145 and 0148 are the later GitHub reads added after this migration's historical contract.
 		expect(REPO_LOCAL_NAMES).toHaveLength(6);
-		expect([...LIVE.tools].sort()).toEqual([...DECLARED, ...REPO_LOCAL_NAMES, ISSUE_COMMENTS_TOOL].sort());
-		expect(LIVE.tools).toHaveLength(22);
+		expect([...LIVE.tools].sort()).toEqual([...DECLARED, ...REPO_LOCAL_NAMES, ...LATER_GITHUB_READS].sort());
+		expect(LIVE.tools).toHaveLength(23);
 		expect(LIVE.tools.filter((t) => t.startsWith("repo_")).sort()).toEqual([...REPO_LOCAL_NAMES].sort());
 	});
 
@@ -340,12 +344,12 @@ describe("migration 0140 — a read stops costing a write-scope shell call (#515
 	it("keeps the tmux and github halves byte-identical to 0123's", () => {
 		// The 0107 failure mode, one level down: this migration re-states the WHOLE tools array, so
 		// the way it goes wrong is by losing one of the fifteen it did not come here to change. The
-		// later 0145 issue-comments grant is checked separately here so it does not blur that guard.
+		// later 0145/0148 read grants are checked separately here so they do not blur that guard.
 		expect(LIVE.tools.filter((t) => t.startsWith("tmux_"))).toEqual(DECLARED.filter((t) => t.startsWith("tmux_")));
-		expect(LIVE.tools.filter((t) => t.startsWith("github_") && t !== ISSUE_COMMENTS_TOOL)).toEqual(
+		expect(LIVE.tools.filter((t) => t.startsWith("github_") && !LATER_GITHUB_READS.includes(t))).toEqual(
 			DECLARED.filter((t) => t.startsWith("github_")),
 		);
-		expect(LIVE.tools).toContain(ISSUE_COMMENTS_TOOL);
+		for (const name of LATER_GITHUB_READS) expect(LIVE.tools).toContain(name);
 	});
 
 	it("does not re-set the whole capabilities object, and does not touch surfaces or runtime", () => {
@@ -468,7 +472,7 @@ describe("migration 0140 — the personality, which is why the tools get used", 
 });
 
 describe("migration 0140 — idempotent, and converging", () => {
-	it("replaying 0140 and the later issue-comment grant in order changes nothing", () => {
+	it("replaying 0140 and the later GitHub read grants in order changes nothing", () => {
 		// Every value written is a constant, so a second ordered application must be a no-op. The
 		// failure this rules out is an append-shaped write that doubles a list on the second run.
 		const d1 = realSchemaD1();
@@ -476,6 +480,7 @@ describe("migration 0140 — idempotent, and converging", () => {
 			const before = seededRow(d1).config;
 			d1.exec(SQL_0140);
 			d1.exec(SQL_0145);
+			d1.exec(SQL_0148);
 			expect(JSON.parse(seededRow(d1).config)).toEqual(JSON.parse(before));
 		} finally {
 			d1.close();
@@ -492,6 +497,7 @@ describe("migration 0140 — idempotent, and converging", () => {
 			d1.sqlite.prepare("UPDATE agents SET config = ? WHERE slug = ?").run(JSON.stringify(pre), "tmux-coder");
 			d1.exec(SQL_0140);
 			d1.exec(SQL_0145);
+			d1.exec(SQL_0148);
 			const after = JSON.parse(seededRow(d1).config) as Record<string, unknown>;
 			expect((after.capabilities as Record<string, unknown>).tools).toEqual(LIVE.tools);
 			expect(after.settingsSchema).toEqual(LIVE.config.settingsSchema);

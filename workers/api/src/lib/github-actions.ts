@@ -118,6 +118,121 @@ export async function fetchWorkflowRuns(
 	}
 }
 
+/**
+ * One job of a run, with its steps (#781). The shape the log tool lists in its header so a
+ * reader can name a different job on the next call.
+ */
+export interface WorkflowJob {
+	id: number;
+	name: string;
+	/** queued | in_progress | completed */
+	status: string;
+	/** success | failure | cancelled | skipped | timed_out | action_required | null while running */
+	conclusion: string | null;
+	url: string;
+	steps: Array<{ number: number; name: string; status: string; conclusion: string | null }>;
+}
+
+export type WorkflowJobsResult = { jobs: WorkflowJob[] } | { status: number | null };
+
+export function mapWorkflowJob(raw: Record<string, unknown>): WorkflowJob {
+	const steps = Array.isArray(raw.steps) ? (raw.steps as Array<Record<string, unknown>>) : [];
+	return {
+		id: typeof raw.id === "number" ? raw.id : Number(raw.id) || 0,
+		name: typeof raw.name === "string" ? raw.name : "",
+		status: typeof raw.status === "string" ? raw.status : "",
+		conclusion: typeof raw.conclusion === "string" ? raw.conclusion : null,
+		url: typeof raw.html_url === "string" ? raw.html_url : "",
+		steps: steps.map((s) => ({
+			number: typeof s.number === "number" ? s.number : Number(s.number) || 0,
+			name: typeof s.name === "string" ? s.name : "",
+			status: typeof s.status === "string" ? s.status : "",
+			conclusion: typeof s.conclusion === "string" ? s.conclusion : null,
+		})),
+	};
+}
+
+/**
+ * The jobs of one run. Never throws — same `{ status }` degradation as `fetchWorkflowRuns`, so
+ * the connector can say "GitHub returned 404" rather than a generic failure. Not cached: a job
+ * list is read once per log read, not polled.
+ */
+export async function fetchWorkflowJobs(repo: string, token: string | undefined, runId: number): Promise<WorkflowJobsResult> {
+	try {
+		const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, { headers: actionsHeaders(token), signal: AbortSignal.timeout(15_000) });
+		if (!res.ok) return { status: res.status };
+		const data = (await res.json()) as { jobs?: Array<Record<string, unknown>> };
+		return { jobs: (data.jobs ?? []).map(mapWorkflowJob) };
+	} catch {
+		return { status: null };
+	}
+}
+
+/**
+ * How much of a job log is kept (#781). Logs are unbounded — a verbose install step alone can be
+ * megabytes — and the failure is at the END, so when the cap binds the HEAD is dropped, never the
+ * tail. Two megabytes is far past any window the tool will render and small enough to hold in a
+ * Worker without thought; the number is stated in the tool's own header when it bites.
+ */
+export const JOB_LOG_FETCH_BYTES = 2 * 1024 * 1024;
+
+export type JobLogResult = { text: string; size: number; headTruncated: boolean } | { status: number | null };
+
+/**
+ * The plain-text log of ONE job (#781).
+ *
+ * The per-JOB endpoint, deliberately: `…/runs/{id}/logs` answers with a ZIP of every job's
+ * files, which a Worker would have to parse; `…/jobs/{id}/logs` answers with a redirect to a
+ * single text file, and a job is the unit a failure lives in anyway.
+ *
+ * `redirect: "manual"`, then a second fetch with NO headers. The redirect target is a pre-signed
+ * blob URL on another host; following it automatically would forward the installation token to
+ * that host, and whether a runtime strips `Authorization` on a cross-origin redirect is exactly
+ * the kind of thing not to depend on. Never throws.
+ */
+export async function fetchJobLog(repo: string, token: string | undefined, jobId: number, maxBytes = JOB_LOG_FETCH_BYTES): Promise<JobLogResult> {
+	try {
+		const first = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${jobId}/logs`, { headers: actionsHeaders(token), redirect: "manual", signal: AbortSignal.timeout(15_000) });
+		let body: Response = first;
+		if (first.status >= 300 && first.status < 400) {
+			const location = first.headers.get("location");
+			if (!location) return { status: first.status };
+			// A deadline and nothing else: no headers, so the token never reaches the blob host.
+			// Thirty seconds because this is the one download here that can be megabytes (#438).
+			body = await fetch(location, { signal: AbortSignal.timeout(30_000) });
+		}
+		if (!body.ok) return { status: body.status };
+		const full = await body.text();
+		const headTruncated = full.length > maxBytes;
+		return { text: headTruncated ? full.slice(full.length - maxBytes) : full, size: full.length, headTruncated };
+	} catch {
+		return { status: null };
+	}
+}
+
+/**
+ * Drop the `2026-09-08T09:10:09.1234567Z ` GitHub prefixes every log line with. Twenty-nine
+ * characters a line, on lines whose useful part is often shorter than that: with the prefixes a
+ * 20,000-character window holds roughly half the log lines it holds without them, and the
+ * timestamps answer no question a failing step's text does. Stated in the tool's header.
+ */
+export function stripLogTimestamps(text: string): string {
+	return text.replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?/gm, "");
+}
+
+/** Conclusions that mean "this is the job to read". `cancelled` is not one: it prints nothing diagnostic. */
+const FAILED = new Set(["failure", "timed_out", "action_required"]);
+
+/**
+ * Which job to read when the caller named none (#781): the first that failed, else the one still
+ * running, else the last — a green run's last job is the closest thing to "what happened". Null
+ * only for an empty list.
+ */
+export function pickJob(jobs: readonly WorkflowJob[]): WorkflowJob | null {
+	if (!jobs.length) return null;
+	return jobs.find((j) => j.conclusion !== null && FAILED.has(j.conclusion)) ?? jobs.find((j) => j.status !== "completed") ?? jobs[jobs.length - 1];
+}
+
 /** Map one raw GitHub Actions run into the compact BuildRun the console + connector consume. */
 export function mapWorkflowRun(run: Record<string, unknown>): BuildRun {
 	return {
