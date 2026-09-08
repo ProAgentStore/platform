@@ -65,7 +65,7 @@ export default function NotificationPreferences({
 	// The instances the scope can name. Read once; a scope entry for an instance that is gone is
 	// simply not shown, and the server drops nothing on read, so it is harmless either way.
 	useEffect(() => {
-		api<{ instances?: Instance[] }>("/v1/instances/my/instances")
+		api<{ instances: Instance[] }>("/v1/instances/my/instances")
 			.then((d) => setRoster((d.instances || []).map(({ id, name, slug }) => ({ id, name, slug }))))
 			.catch(() => setRoster([]));
 	}, []);

@@ -266,7 +266,9 @@ const KNOWN_ANONYMOUS = {
 	// (covered above — fd4f4630, a50ac460, 111af681)
 
 	// ── preferences ──────────────────────────────────────────────────────────
-	"bb96a385": "{ preferences?: { voice?: Record<string, unknown>; translation?: Record<string, unknown>; notifications?: Record<string, unknown> } }",
+	// #784: `notifications` gained `instances?: string[]` beside `muted`, so the hash moved (one
+	// entry replaced, none added).
+	"ab1fa448": "{ preferences?: { voice?: Record<string, unknown>; translation?: Record<string, unknown>; notifications?: { muted?: string[]; instances?: string[] } }; languages?: …; notificationTypes?: NotificationTypeSpec[] }",
 	"d6477d03": "{ preferences?: { voice?: Record<string, unknown> } }",
 	"2e201707": "{ providers?: Record<string, boolean> }",
 
