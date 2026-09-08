@@ -44,14 +44,14 @@ describe("fetchJobLog — the redirect is followed WITHOUT the token, and the TA
 	afterEach(() => vi.unstubAllGlobals());
 
 	it("asks GitHub with the token and redirect:manual, then fetches the blob bare", async () => {
-		const fetchMock = vi.fn(async (url: string) => {
+		const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
 			if (url.includes("/actions/jobs/9/logs")) return { ok: false, status: 302, headers: new Headers({ location: "https://blob.example/9.txt" }) } as unknown as Response;
 			return { ok: true, status: 200, headers: new Headers(), text: async () => "hello\n" } as unknown as Response;
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const r = await fetchJobLog("acme/widgets", "tok", 9);
 		expect(r).toEqual({ text: "hello\n", size: 6, headTruncated: false });
-		const [[apiUrl, apiInit], [blobUrl, blobInit]] = fetchMock.mock.calls as Array<[string, RequestInit | undefined]>;
+		const [[apiUrl, apiInit], [blobUrl, blobInit]] = fetchMock.mock.calls;
 		expect(apiUrl).toBe("https://api.github.com/repos/acme/widgets/actions/jobs/9/logs");
 		expect(apiInit?.redirect).toBe("manual");
 		expect((apiInit?.headers as Record<string, string>).Authorization).toBe("token tok");
