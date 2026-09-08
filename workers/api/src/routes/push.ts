@@ -213,6 +213,13 @@ export interface NotifyOptions {
 	 * declare itself unmutable.
 	 */
 	kind?: NotificationKind;
+	/**
+	 * The instance this notification is ABOUT, when the caller has one (#784). Read by the
+	 * account's instance scope ("only interrupt me about these instances") and written to the
+	 * row. Omit for account-level events — a résumé parsed, a new subscriber — which no scope
+	 * can exclude.
+	 */
+	instanceId?: string;
 }
 
 /**
@@ -221,7 +228,8 @@ export interface NotifyOptions {
  *
  * Three gates, in order, all of which keep the row and only ever suppress the interruption:
  *
- *  1. **Mute** — a per-type preference on the account. Never applies to an `alert`.
+ *  1. **Mute** — a per-type preference on the account, and since #784 the per-instance scope
+ *     beside it. Neither ever applies to an `alert`.
  *  2. **Recent duplicate** — the same event key already pushed inside the window. This is the
  *     floor: it exists to bound a malfunction, not to express a policy. #359 is what happens
  *     without it — a watcher bug turned ~20 pushes into 40–80 notifications and nothing
@@ -248,7 +256,7 @@ export async function notifyUser(
 		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
 			.bind(userId)
 			.first<{ preferences: string | null }>();
-		interrupt = pushAllowedByPreference(parseAccountPreferences(row?.preferences).notifications, type, kind);
+		interrupt = pushAllowedByPreference(parseAccountPreferences(row?.preferences).notifications, type, kind, opts.instanceId);
 	} catch {
 		// Fall open — an unreadable preference must not swallow a notification.
 	}
@@ -270,7 +278,7 @@ export async function notifyUser(
 		}
 	}
 
-	await createNotification(env.DB, userId, type, title, body, undefined, url, { dedupeKey, kind, interrupt }).catch(
+	await createNotification(env.DB, userId, type, title, body, undefined, url, { dedupeKey, kind, interrupt, instanceId: opts.instanceId }).catch(
 		() => undefined,
 	);
 	if (!interrupt) return;

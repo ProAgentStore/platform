@@ -35,8 +35,13 @@ describe("the instance page is keyed by the instance", () => {
 
 	it("does not write an instance response that outlived its effect", () => {
 		// The capabilities this sets decide which tabs render — landing one from the previous
-		// agent is precisely the wrong-agent-on-screen failure.
-		expect(CODE).toContain("if (inst && live)");
+		// agent is precisely the wrong-agent-on-screen failure. The fetch, and its `live` guard,
+		// moved into hooks/useInstanceRecord.ts with #784 (so the page could say "gone" instead
+		// of loading forever); the rule is asserted where the code now is.
+		const HOOK = readFileSync(join(__dirname, "../hooks/useInstanceRecord.ts"), "utf8");
+		expect(HOOK).toContain("if (!live) return;");
+		expect(HOOK).toContain("if (inst) setInstance(inst);");
+		expect(CODE).not.toContain('api<{ instances: Instance[] }>("/v1/instances/my/instances")');
 	});
 });
 

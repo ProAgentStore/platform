@@ -21,9 +21,12 @@ import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import ConnectionGuide from "../components/ConnectionGuide";
+import HomeScreenShortcut from "../components/HomeScreenShortcut";
 
 interface Props {
 	instanceId: string;
+	/** Labels the home-screen shortcut's icon (#784). */
+	instanceName?: string;
 	isApply: boolean;
 	/** True when the agent declares the `coding` surface — adds a repo pointer to "Where things live". */
 	isCoding?: boolean;
@@ -55,7 +58,7 @@ interface WorkdriveStatus {
 	reach?: ConnectorReach;
 }
 
-export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	// Owner-initiated personality resync (#496 AC2) — brings the DO's stored personality up to
 	// the agent's current seed without touching guardrails/goal/welcomeMessage.
@@ -746,6 +749,13 @@ export default function SettingsTab({ instanceId, isApply, isCoding, isRepo, onU
 			    `active` is true because reaching this tab IS the request for it. */}
 			<div className="mb-3 sm:mb-4">
 				<ConnectionGuide instanceId={instanceId} active />
+			</div>
+
+			{/* The direct link to THIS instance, and the manifest swap that makes "Add to Home Screen"
+			    open here rather than the list (#784). Beside the connection guide because both are
+			    "how to reach this instance from outside", one for a person and one for an assistant. */}
+			<div className="mb-3 sm:mb-4">
+				<HomeScreenShortcut instanceId={instanceId} instanceName={instanceName} />
 			</div>
 
 			{/* Personality resync (#496): brings the stored DO personality up to the agent's

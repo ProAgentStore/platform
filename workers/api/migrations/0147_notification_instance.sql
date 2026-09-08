@@ -1,0 +1,12 @@
+-- Per-instance notification scoping (#784).
+--
+-- `notifications.agent_id` names the AGENT a row concerns (a "new subscriber" row carries the
+-- agent that was subscribed to). Nothing recorded which INSTANCE a run, handoff, deploy or
+-- scheduled run belonged to, so a preference of the form "only interrupt me about this
+-- instance" had nothing to read — and the console once declared an `instanceId` on the row
+-- that no column backed (#617). This is that column, for real, written by `notifyUser`
+-- whenever the caller has an instance in hand.
+--
+-- Nullable on purpose: account-level rows (a résumé parsed, a new subscriber to an agent you
+-- publish) have no instance and are never scoped by one.
+ALTER TABLE notifications ADD COLUMN instance_id TEXT;

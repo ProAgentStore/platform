@@ -333,6 +333,12 @@ export interface Notification {
 	 */
 	agent_id?: string;
 	/**
+	 * The INSTANCE the row is about, when the producer had one — migration 0147 (#784). Null for
+	 * account-level rows (a résumé parsed, a new subscriber). This is the column #617 found the
+	 * console wishing for under `instanceId`; it exists now, under the table's own name.
+	 */
+	instance_id?: string | null;
+	/**
 	 * `/v1/notifications` returns rows straight from D1, so the wire shape is snake_case — see
 	 * `NotificationLike` in lib/nextAgent.ts, which had it right. The camelCase fields below are
 	 * what the page WISHED for: `createdAt` was always undefined, so every row rendered

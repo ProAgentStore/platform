@@ -142,16 +142,35 @@ export function notificationDedupeKey(type: string, event: string | undefined, t
 export interface NotificationPreferences {
 	/** Types whose *updates* do not raise a push. Never applies to an `alert`. */
 	muted: string[];
+	/**
+	 * Instances whose *updates* may raise a push (#784). Absent or empty means every instance —
+	 * the default, and the state a user returns to by clearing the list. Never applies to an
+	 * `alert`, and never to a row that carries no instance (a résumé parsed, a new subscriber):
+	 * a scope can only exclude what it can name.
+	 */
+	instances?: string[];
 }
+
+/** Bounds on the instance scope: an id is opaque but not unbounded, and a list is a choice, not a dump. */
+const INSTANCE_ID_MAX = 100;
+const INSTANCE_SCOPE_MAX = 200;
 
 /** Lenient on read, and unknown ids are dropped — a stored mute for a type we deleted is noise. */
 export function sanitizeNotificationPreferences(raw: unknown): NotificationPreferences | undefined {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-	const muted = (raw as { muted?: unknown }).muted;
-	if (!Array.isArray(muted)) return { muted: [] };
+	const { muted, instances } = raw as { muted?: unknown; instances?: unknown };
 	const seen = new Set<string>();
-	for (const id of muted) if (isKnownNotificationType(id)) seen.add(id);
-	return { muted: [...seen] };
+	if (Array.isArray(muted)) for (const id of muted) if (isKnownNotificationType(id)) seen.add(id);
+	const scope = new Set<string>();
+	if (Array.isArray(instances)) {
+		for (const id of instances) {
+			if (typeof id === "string" && id.length > 0 && id.length <= INSTANCE_ID_MAX) scope.add(id);
+			if (scope.size >= INSTANCE_SCOPE_MAX) break;
+		}
+	}
+	// The key is absent, not `[]`, when there is no scope: "every instance" is the ABSENCE of a
+	// choice, and a stored `instances: []` would read as a choice that happens to be empty.
+	return scope.size ? { muted: [...seen], instances: [...scope] } : { muted: [...seen] };
 }
 
 /**
@@ -173,7 +192,14 @@ export function pushAllowedByPreference(
 	prefs: NotificationPreferences | undefined,
 	type: string,
 	kind: NotificationKind,
+	/** The instance the notification is about, when the caller has one (#784). */
+	instanceId?: string,
 ): boolean {
 	if (kind === "alert") return true;
-	return !prefs?.muted.includes(type);
+	if (prefs?.muted.includes(type)) return false;
+	// The instance scope (#784): an update about an instance outside the chosen set does not
+	// interrupt. A row with no instance cannot be outside a set of instances, so it passes —
+	// the scope narrows what it can name and nothing else.
+	if (instanceId && prefs?.instances?.length && !prefs.instances.includes(instanceId)) return false;
+	return true;
 }

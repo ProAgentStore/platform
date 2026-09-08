@@ -79,6 +79,14 @@ preferenceRoutes.put("/", async (c) => {
 		if (unknown !== undefined) {
 			throw new HttpError(400, `unknown notification type: ${String(unknown).slice(0, 40)}`);
 		}
+		// The instance scope (#784): a list of ids, or absent. Not validated against ownership —
+		// an id that is not yours matches no notification you will ever receive, so it is inert
+		// rather than dangerous — but its SHAPE is, for the same reason `muted`'s is: a silently
+		// dropped scope leaves the user believing they narrowed something.
+		const instances = (body.notifications as { instances?: unknown }).instances;
+		if (instances !== undefined && (!Array.isArray(instances) || instances.some((id) => typeof id !== "string"))) {
+			throw new HttpError(400, "notifications.instances must be an array of instance ids");
+		}
 	}
 	if (body.voice !== undefined) {
 		// Same strict-on-write rule as the per-instance override route.

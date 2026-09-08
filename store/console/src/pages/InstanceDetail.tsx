@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
-import type { Instance, Message, RunnerPresence } from "../lib/types";
+import type { Message, RunnerPresence } from "../lib/types";
 import { identityFor } from "../lib/identity";
 import { mergeOlderMessages, nextOlderCursor, resolveHasMore, type MessagePageResponse } from "../lib/messagePaging";
 import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
@@ -10,6 +10,8 @@ import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import PlaybackIcon from "../components/PlaybackIcon";
+import InstanceMissing from "../components/InstanceMissing";
+import { useInstanceRecord } from "../hooks/useInstanceRecord";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus, resolveComposer } from "@proagentstore/sdk/hooks";
 import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
@@ -99,7 +101,9 @@ function InstancePage() {
 	const navigate = useNavigate();
 	// The owner's own zone when they set one (#345) — the hover text on every message stamp.
 	const timeZone = useAccountTimeZone();
-	const [instance, setInstance] = useState<Instance | null>(null);
+	// The record, and — for a bookmark to an instance that no longer exists — the fact that
+	// there is none (#784). The fetch is the one this page always made, moved into the hook.
+	const { instance, missing } = useInstanceRecord(id);
 	const surfaces = instance?.capabilities?.surfaces || [];
 	// Tabs are gated on the whole DECLARED set, not just surfaces: some are about what the agent
 	// can DO (knowledge tools → Indexing, collection tools → Data). An agent that declares no tool
@@ -293,28 +297,13 @@ function InstancePage() {
 		el.style.height = `${el.scrollHeight}px`;
 	}, [input]);
 
+	// The per-instance state that must not survive a switch (#240); the record itself is
+	// fetched by `useInstanceRecord` above, with the same `live` guard the old effect had.
 	useEffect(() => {
 		if (!id) return;
-		let live = true;
-		setInstance(null);
 		setMessages([]);
 		setChildHeader(null);
-		(async () => {
-			try {
-				const data = await api<{ instances: Instance[] }>("/v1/instances/my/instances");
-				const inst = (data.instances || []).find((i) => i.id === id || i.slug === id);
-				// Belt and braces with the remount above: a response that outlives its effect must
-				// never write. The capabilities this sets decide which tabs render, so landing one
-				// from a previous agent is exactly the wrong-agent-on-screen bug (#240).
-				if (inst && live) {
-					setInstance(inst);
-				}
-			} catch (e) {
-				console.error(e);
-			}
-		})();
-		return () => { live = false; };
-	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [id]);
 
 	// ── The conversation, reported UP so the app can show it from anywhere (#278) ──────────
 	//
@@ -1052,6 +1041,9 @@ function InstancePage() {
 	useEffect(() => { if (!activeOwnsHeader) setChildHeader(null); }, [activeOwnsHeader]);
 	useHeaderSlot(childHeader || headerContent);
 
+	// A shortcut or bookmark to an instance that is gone says so, instead of loading forever (#784).
+	if (missing) return <InstanceMissing id={id} />;
+
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Tab content */}
@@ -1471,6 +1463,7 @@ function InstancePage() {
 					if (!active?.render) return null;
 					const body = active.render({
 						instanceId: id,
+						instanceName: instance?.name,
 						isApply,
 						isCoding,
 						isRepo,

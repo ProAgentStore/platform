@@ -46,6 +46,8 @@ export type SurfaceId =
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
 	instanceId: string;
+	/** The instance's display name — the home-screen shortcut labels its icon with it (#784). */
+	instanceName?: string;
 	isApply: boolean;
 	/** True when the agent declares the `coding` surface — used by Settings to point users at the Coding tab. */
 	isCoding?: boolean;
@@ -331,8 +333,8 @@ export const SURFACES: SurfaceDef[] = [
 		icon: "⚙",
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, isApply, isCoding, isRepo, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} isApply={isApply} isCoding={isCoding} isRepo={isRepo} onUnsubscribe={onUnsubscribe} />
+		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, onUnsubscribe }) => (
+			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 ];

@@ -58,6 +58,8 @@ export default function Preferences() {
 	const [languages, setLanguages] = useState<Array<{ name: string; tag: string }>>([]);
 	const [notificationTypes, setNotificationTypes] = useState<NotificationTypeSpec[]>([]);
 	const [mutedNotifications, setMutedNotifications] = useState<string[]>([]);
+	// The instance scope (#784): empty means every instance.
+	const [notificationInstances, setNotificationInstances] = useState<string[]>([]);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [loaded, setLoaded] = useState(false);
 
@@ -82,7 +84,7 @@ export default function Preferences() {
 					preferences?: {
 						voice?: Record<string, unknown>;
 						translation?: Record<string, unknown>;
-						notifications?: { muted?: string[] };
+						notifications?: { muted?: string[]; instances?: string[] };
 					};
 					languages?: Array<{ name: string; tag: string }>;
 					notificationTypes?: NotificationTypeSpec[];
@@ -94,6 +96,7 @@ export default function Preferences() {
 				// see NotificationPreferences.
 				setNotificationTypes(d.notificationTypes || []);
 				setMutedNotifications(d.preferences?.notifications?.muted || []);
+				setNotificationInstances(d.preferences?.notifications?.instances || []);
 			} catch {
 				// A failed read must still render the controls at platform defaults — an empty page
 				// with no explanation is worse than editable defaults.
@@ -163,6 +166,8 @@ export default function Preferences() {
 				types={notificationTypes}
 				muted={mutedNotifications}
 				onSaved={setMutedNotifications}
+				instances={notificationInstances}
+				onInstancesSaved={setNotificationInstances}
 			/>
 
 			<Card className="mb-3 sm:mb-4">

@@ -683,6 +683,15 @@ components:
           type: array
           description: Type ids from `notificationTypes`. An unknown id is a 400 on write.
           items: { type: string }
+        instances:
+          type: array
+          description: |
+            Instance ids whose `update` notifications may interrupt you. Absent or empty means
+            every instance. Like `muted`, it never applies to an `alert`, and it cannot exclude an
+            account-level notification that names no instance. Ids are not checked for ownership
+            on write (an id that is not yours matches nothing), but the shape is: a non-array or a
+            non-string entry is a 400.
+          items: { type: string }
 
     AgentCapabilities:
       type: object

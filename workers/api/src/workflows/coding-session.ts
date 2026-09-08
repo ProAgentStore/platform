@@ -588,7 +588,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			sleep: (label, ms) => step.sleep(label, ms),
 			notify: (title, body, key, alert) =>
 				runRetry(`notify-${key}-${round}`, async () => {
-					const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined };
+					const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined, instanceId };
 					return await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), opts).then(() => null, () => null);
 				}).then(() => undefined),
 			announce: postToChat,
@@ -891,7 +891,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// A session ends once. `update` — nothing is waiting on the user, so this is what a
 					// "Coder" mute is for.
 					await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), {
-						key: `coding-end:${sessionId}`,
+						key: `coding-end:${sessionId}`, instanceId,
 					}).catch(() => undefined);
 					return null;
 				});

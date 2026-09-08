@@ -60,6 +60,23 @@ const put = (body: unknown): RequestInit => ({ method: "PUT", body: JSON.stringi
 const read = async (res: Response) => (await res.json<{ preferences: AccountPreferences }>()).preferences;
 
 describe("the account timezone", () => {
+	it("round-trips the notification instance scope and rejects a malformed one (#784)", async () => {
+		const { app, env, saved } = testApp();
+		const res = await call(app, env, put({ notifications: { muted: ["deploy"], instances: ["inst-a", "inst-b"] } }));
+		expect(res.status).toBe(200);
+		expect((await read(res)).notifications).toEqual({ muted: ["deploy"], instances: ["inst-a", "inst-b"] });
+		expect(saved().notifications).toEqual({ muted: ["deploy"], instances: ["inst-a", "inst-b"] });
+
+		// Clearing the scope is a whole-section write with no `instances`, and the key goes away.
+		const cleared = await call(app, env, put({ notifications: { muted: ["deploy"] } }));
+		expect((await read(cleared)).notifications).toEqual({ muted: ["deploy"] });
+
+		const bad = await call(app, env, put({ notifications: { muted: [], instances: "inst-a" } }));
+		expect(bad.status).toBe(400);
+		const badEntry = await call(app, env, put({ notifications: { muted: [], instances: ["inst-a", 3] } }));
+		expect(badEntry.status).toBe(400);
+	});
+
 	it("round-trips an IANA zone", async () => {
 		const { app, env, saved } = testApp();
 		const res = await call(app, env, put({ timezone: "Australia/Sydney" }));

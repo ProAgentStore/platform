@@ -112,7 +112,7 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 			codingSessionLink(instanceId, sessionId),
 			// One watcher, one completion. Migration 0024 already deduped the WATCHERS; this keys
 			// the notification on the same fact so a second watcher for a session cannot re-buzz.
-			{ key: `coding-watch-end:${sessionId}` },
+			{ key: `coding-watch-end:${sessionId}`, instanceId },
 		).catch(() => undefined);
 		return null;
 	});

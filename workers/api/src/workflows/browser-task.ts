@@ -184,6 +184,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				await notifyUser(env, userId, "apply", title, body, link, {
 					key: `browse-handoff:${taskId}:${reason}:${round}`,
 					kind: "alert",
+					instanceId,
 				}).catch(async (e) => {
 					await logError(env, { source: "browser-task", userId, message: `handoff notify failed (${reason}): ${e instanceof Error ? e.message : String(e)}`.slice(0, 300), context: { instanceId, taskId, reason } }).catch(() => undefined);
 				});

@@ -67,9 +67,30 @@ describe("pushAllowedByPreference", () => {
 		expect(pushAllowedByPreference(prefs, "coding", "update")).toBe(true);
 	});
 
+	// The instance scope (#784) — the same asymmetry as the mute, one axis over.
+	it("lets an update through only from an instance in the scope, and never scopes an alert", () => {
+		const prefs = { muted: [], instances: ["inst-a"] };
+		expect(pushAllowedByPreference(prefs, "coding", "update", "inst-a")).toBe(true);
+		expect(pushAllowedByPreference(prefs, "coding", "update", "inst-b")).toBe(false);
+		expect(pushAllowedByPreference(prefs, "coding", "alert", "inst-b")).toBe(true);
+	});
+
+	it("cannot exclude a notification that names no instance", () => {
+		const prefs = { muted: [], instances: ["inst-a"] };
+		expect(pushAllowedByPreference(prefs, "apply", "update")).toBe(true);
+		expect(pushAllowedByPreference(prefs, "subscribe", "update", undefined)).toBe(true);
+	});
+
+	it("applies the mute and the scope independently", () => {
+		const prefs = { muted: ["deploy"], instances: ["inst-a"] };
+		expect(pushAllowedByPreference(prefs, "deploy", "update", "inst-a")).toBe(false);
+		expect(pushAllowedByPreference(prefs, "coding", "update", "inst-a")).toBe(true);
+	});
+
 	it("allows everything when nothing is configured", () => {
 		expect(pushAllowedByPreference(undefined, "deploy", "update")).toBe(true);
 		expect(pushAllowedByPreference({ muted: [] }, "deploy", "update")).toBe(true);
+		expect(pushAllowedByPreference({ muted: [], instances: [] }, "deploy", "update", "inst-z")).toBe(true);
 	});
 });
 
@@ -101,5 +122,15 @@ describe("NOTIFICATION_TYPES", () => {
 		// has to say so before someone mutes "Coder" expecting silence during a stuck run.
 		expect(NOTIFICATION_TYPES.find((t) => t.id === "coding")?.alerts).toBe(true);
 		expect(NOTIFICATION_TYPES.find((t) => t.id === "deploy")?.alerts).toBe(false);
+	});
+});
+
+describe("sanitizeNotificationPreferences — the instance scope (#784)", () => {
+	it("keeps non-empty string ids, dedupes, and drops the key when the scope is empty", async () => {
+		const { sanitizeNotificationPreferences } = await import("./notifications.js");
+		expect(sanitizeNotificationPreferences({ muted: [], instances: ["a", "a", "", 7, "b"] })).toEqual({ muted: [], instances: ["a", "b"] });
+		expect(sanitizeNotificationPreferences({ muted: ["deploy"], instances: [] })).toEqual({ muted: ["deploy"] });
+		expect(sanitizeNotificationPreferences({ muted: ["deploy"] })).toEqual({ muted: ["deploy"] });
+		expect(sanitizeNotificationPreferences({ muted: [], instances: "inst-a" })).toEqual({ muted: [] });
 	});
 });

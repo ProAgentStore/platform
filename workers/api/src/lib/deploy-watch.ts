@@ -509,6 +509,7 @@ export async function runDeployWatch(env: Env): Promise<void> {
 				// Belt and braces on purpose: this is the fourth defect in this area.
 				await notifyUser(env, repo.user_id, "deploy", decision.title, decision.body, decision.url, {
 					key: deployEventKey(repo.github_repo, decision.seenId),
+					instanceId: repo.instance_id,
 				}).catch(() => undefined);
 			} else if (decision.reason === "stale-page") {
 				// The rejection has to leave a trace somewhere other than the owner's phone. This

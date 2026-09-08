@@ -10,6 +10,7 @@ import {
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
+import { pinnedManifest } from "./manifest.js";
 
 const PAGES: Record<string, string> = {
 	"/": homepage,
@@ -303,10 +304,12 @@ export default {
 			});
 		}
 
-		// Manifest
+		// Manifest — optionally pinned to one instance via `?start=&name=` (#784, see manifest.ts).
+		// A pinned copy is cached for an hour rather than a day: it is one owner's, not everyone's.
 		if (path === "/manifest.json") {
-			return new Response(manifestJson, {
-				headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" },
+			const { body, pinned } = pinnedManifest(manifestJson, url.searchParams);
+			return new Response(body, {
+				headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${pinned ? 3600 : 86400}` },
 			});
 		}
 

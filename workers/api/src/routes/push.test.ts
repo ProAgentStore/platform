@@ -177,6 +177,28 @@ describe("notifyUser", () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
+	// The instance scope (#784): the row is written either way; only the interruption is bounded.
+	it("keeps the row but skips the push for an update from an instance outside the scope", async () => {
+		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: [], instances: ["inst-a"] } } });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", undefined, { instanceId: "inst-b" });
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].pushedAt).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("does not scope a notification that names no instance", async () => {
+		const subs = [await realSub("phone")];
+		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: [], instances: ["inst-a"] } }, subs });
+		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(envWithVapid, "u1", "apply", "✅ Résumé parsed", "saved");
+		expect(inserted[0].pushedAt).not.toBeNull();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+	});
+
 	// The one that must never regress: muting a type does not silence a run that has STOPPED
 	// and is waiting for a human. Muting "Coder" stops "✅ Coder finished", never "🙋 needs you".
 	it("still pushes an alert for a muted type", async () => {

@@ -56,6 +56,8 @@ export interface NotificationRecordOptions {
 	kind?: NotificationKind;
 	/** False when this copy was suppressed (duplicate, or a muted type) — no push, no Slack. */
 	interrupt?: boolean;
+	/** The instance the row is about, when the caller has one (#784, migration 0147). */
+	instanceId?: string;
 }
 
 /**
@@ -74,8 +76,10 @@ export async function createNotification(
 ): Promise<void> {
 	const interrupt = opts.interrupt !== false;
 	await db.prepare(
-		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, url, kind, dedupe_key, pushed_at, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))`,
+		// `instance_id` is LAST (?11): `push.test.ts` reads the dedupe key and push time by bind
+		// position, and a column added in the middle would silently move what they measure.
+		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, url, kind, dedupe_key, pushed_at, created_at, instance_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), ?11)`,
 	)
 		.bind(
 			crypto.randomUUID(),
@@ -89,6 +93,7 @@ export async function createNotification(
 			opts.dedupeKey || null,
 			// The window is measured against a real interruption — see migration 0093.
 			interrupt ? new Date().toISOString() : null,
+			opts.instanceId || null,
 		)
 		.run();
 

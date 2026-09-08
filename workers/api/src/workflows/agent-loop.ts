@@ -376,7 +376,7 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 					instanceLink(instanceId),
 					// One run stops once. `alert` because the run has STOPPED and only a human
 					// restarts it — never muted (#360).
-					{ key: `loop:${runId}:${stop.reason}`, kind: "alert" },
+					{ key: `loop:${runId}:${stop.reason}`, kind: "alert", instanceId },
 				).catch(() => undefined);
 			}
 		});

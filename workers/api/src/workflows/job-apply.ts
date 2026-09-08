@@ -397,6 +397,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				await notifyUser(env, userId, "apply", title, body, link, {
 					key: `apply-handoff:${taskId}:${reason}:${round}`,
 					kind: "alert",
+					instanceId,
 				}).catch(async (e) => {
 					await logError(env, { source: "job-apply", userId, message: `handoff notify failed (${reason}): ${e instanceof Error ? e.message : String(e)}`.slice(0, 300), context: { instanceId, taskId, reason } }).catch(() => undefined);
 				});

@@ -290,7 +290,7 @@ export async function executeTriggerAction(
 				// event: "your machine is not ready" has not changed between ticks.
 				// A synthetic target (a manual run) carries no id — fall back to the instance so the
 				// key is still about a THING and never collapses two different agents together.
-				{ key: `trigger-skip:${target.id ?? target.instance_id}:${offline ? "offline" : "busy"}` },
+				{ key: `trigger-skip:${target.id ?? target.instance_id}:${offline ? "offline" : "busy"}`, instanceId: target.instance_id },
 			).catch(() => undefined);
 		}
 	}
