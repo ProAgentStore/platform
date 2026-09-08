@@ -8,7 +8,7 @@ import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
 import type { EngineInvocationMode } from "./engine-adapter.js";
-import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoTree, runRepoGit } from "./inspect.js";
+import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoSync, repoTree, runRepoGit } from "./inspect.js";
 import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
@@ -208,8 +208,17 @@ export class CodingRuntime {
 	}
 
 	/** Run a whitelisted read-only git command in the session's repo. */
-	git(input: { sessionId?: string; workDir?: string; cmd: GitCmd; path?: string; n?: number }) {
-		return runRepoGit(this.resolveWorkDir(input), input.cmd, { path: input.path, n: input.n });
+	git(input: { sessionId?: string; workDir?: string; cmd: GitCmd; path?: string; n?: number; ref?: string }) {
+		return runRepoGit(this.resolveWorkDir(input), input.cmd, { path: input.path, n: input.n, ref: input.ref });
+	}
+
+	/**
+	 * Where the checkout stands against its upstream — fetch (cached), then count ahead/behind
+	 * (#785). Never pulls. The one endpoint here that reaches the NETWORK, which is why it carries
+	 * its own cache and its own no-prompt environment (`inspect.ts`).
+	 */
+	sync(input: { sessionId?: string; workDir?: string; branch?: string; forceFetch?: boolean }) {
+		return repoSync(this.resolveWorkDir(input), { branch: input.branch, forceFetch: input.forceFetch });
 	}
 
 	/**

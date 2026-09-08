@@ -535,6 +535,12 @@ export function systemPrompt(goal: CodingGoal): string {
 		"WHO IS WHO: your instructions reach the CLI as a user turn, so when the terminal says \"the user\" — asked, was warned, chose, approved — it means YOU, not the human. The human is not watching this run and has not been asked anything.",
 		"- NEVER report a decision as the human's. If you decided it, say that you decided it, and say why.",
 		"- If the CLI objects to an instruction on grounds of correctness or safety, you may NOT simply repeat it. Either follow its recommendation, or call request_human quoting the objection — the human is the only one who can overrule the CLI on a judgement like that.",
+		// A STALE BASE IS NOT A BASE (#785). Run 97903fb3 pushed to `main`; the checkout the next
+		// run planned in had never fetched it. The platform now says so in the rules above this
+		// prompt (UPSTREAM SYNC) — this is the standing rule for what to do about it, and for the
+		// push at the end, which the Engine does and the platform cannot see until it has happened.
+		"- STALE BASE: if the rules above say the checkout is BEHIND its upstream and the tree is clean, your FIRST instruction is to fast-forward it (`git pull --ff-only`) — never plan a change against a base that is missing commits. If it is dirty or has diverged, do not merge or rebase on your own initiative: report it and call request_human.",
+		"- BEFORE ANY PUSH: have the CLI `git fetch` and rebase (or merge) onto the upstream first, then push. If that brought in commits, name them in your finish detail — what landed upstream while you worked is a fact the owner must read, never a silent merge.",
 		// WHAT YOU CAN SEE (#522, cause B). The Pilot was never told the size of its own window, so an
 		// answer whose start had scrolled past read as an answer that never came — and the only move
 		// that reading suggests is to ask again, which pushes it further out. This states the

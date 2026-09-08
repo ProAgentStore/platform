@@ -22,6 +22,7 @@ import { awaitEngineIdle, shouldTouchActivity } from "../lib/coding-idle-poll.js
 import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
+import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../lib/repo-sync.js";
 import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
@@ -644,19 +645,39 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// being on an unexpected branch is visible and cheap to fix. So the run gets the fact
 			// and an explicit instruction not to discard anything, and the human gets a board card
 			// at the end (below) — nothing here changes the tree.
-			const repoState = (await step.do("repo-state-start", async () => {
+			//
+			// …and where it stands against its UPSTREAM (#785). The tree's state says what is in the
+			// working directory; the sync says whether the commits the run will build on are the
+			// commits that exist. A checkout three commits behind `main` plans a diff against code that
+			// has already changed, and nothing in the state note could say so. The runner fetches
+			// (remote-tracking refs only — never the branch, never the tree) and counts; the platform
+			// TELLS, in the same voice as the state note, and pulls nothing itself.
+			const repoStart = (await step.do("repo-state-start", async () => {
 				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
-				if (!repo) return null;
-				return (await readRepoWorkingState(conn, { repo, sessionId })) ?? null;
-			})) as RepoWorkingState | null;
+				if (!repo) return { state: null, sync: null };
+				const [state, sync] = await Promise.all([
+					readRepoWorkingState(conn, { repo, sessionId }).catch(() => null),
+					// `forceFetch`: a run's start is the one moment a fresh answer is worth a network
+					// round trip, whatever the cache holds.
+					readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null),
+				]);
+				return { state: state ?? null, sync: sync ?? null };
+			})) as { state: RepoWorkingState | null; sync: RepoSyncVerdict | null };
+			const repoState = repoStart.state;
 			// `branch` is the repo's CONFIGURED branch, carried on the payload by whoever started
 			// the run — so the comparison is against what this repo is supposed to be on, not
 			// against a hardcoded "main".
 			const stateNote = repoState ? describeRepoState(repoState, { configuredBranch: branch ?? null }) : null;
-			if (stateNote) {
+			const syncNote = repoStart.sync ? describeRepoSync(repoStart.sync) : null;
+			if (stateNote || syncNote) {
 				goal.specialInstructions = [
 					goal.specialInstructions,
-					`REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.`,
+					stateNote
+						? `REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.`
+						: "",
+					syncNote
+						? `UPSTREAM SYNC (checked just now, nothing was pulled): ${syncNote} If the checkout is BEHIND and the tree is clean and on its configured branch, make your FIRST instruction a fast-forward (\`git pull --ff-only\`) so you never plan against a stale base, and say in your report what it brought in. If it is dirty or has diverged, do not merge or rebase on your own initiative — report it and ask.`
+						: "",
 				]
 					.filter(Boolean)
 					.join("\n\n");
@@ -668,6 +689,14 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				await traceCodingRun(env, traceCtx, "coding.run.start", `objective: ${goal.objective}`, { maxSteps: event.payload.maxSteps ?? 40 });
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
 				if (stateNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: stateNote });
+				// The sync line is a RECORD as much as a briefing (#785): when a run's report later
+				// says "the file was not there", the timeline has to show whether the base was
+				// current when the run began. Loud in chat only when it is actionable — a run
+				// starting behind is the incident; a run starting in sync is not news.
+				if (syncNote) {
+					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at start: ${syncNote}` });
+					if (repoStart.sync?.state === "behind" || repoStart.sync?.state === "diverged") await postToChat(`**Repository sync at start** — ${syncNote}`);
+				}
 				// State the authority up front, in the record the owner reads back. Only when one is
 				// actually in force — a line saying "may merge" on every run would be noise, and worse,
 				// would read as a decision somebody made.
@@ -779,6 +808,23 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// the live session (the only way to see a managed clone dir).
 				await step.do("repo-state-end", async () => {
 					await enforceRepoPolicies(env, { conn, instanceId, userId, repoId, repoLabel: goal.repo, sessionId });
+					return null;
+				});
+				// The LAST check against upstream (#785, ask 2). The one-active-session-per-repo rule
+				// bounds but does not remove the race: a human, or another tool, can push to `main`
+				// while a run works, and a run that ends BEHIND has finished on top of a base that
+				// moved. Ahead is reported too — unpushed commits at the end of a run are a fact the
+				// owner needs in the thread, not something to discover from a later `git status`.
+				// Fetch only; the run is over and nothing here may merge into a tree it no longer
+				// drives.
+				await step.do("repo-sync-end", async () => {
+					const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+					if (!repo) return null;
+					const v = await readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null);
+					const line = v ? describeRepoSync(v) : null;
+					if (!line) return null;
+					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at end of run: ${line}` }).catch(() => undefined);
+					if (v && (v.state === "behind" || v.state === "diverged" || v.state === "ahead")) await postToChat(`**Repository sync at end of run** — ${line}`);
 					return null;
 				});
 				// The CLOSING drain (#294), before anything can tear the session down.

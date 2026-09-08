@@ -38,7 +38,7 @@ resolved before the run and is refused at dispatch instead.
 | `terminal` | none (runner relay) | read + write | `terminal_list_targets`, `terminal_capture`, `terminal_run_command` (write), `terminal_send_keys` (write), `terminal_send_message` (write — type text + Enter + settle + confirm) |
 | `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write), `tmux_send_message` (write — type text + Enter + settle + confirm) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
-| `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
+| `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_find`, `repo_grep`, `repo_git` (`status`/`diff`/`diff-stat`/`log`/`ls-files`/`show`, fixed argv, optional validated `ref`), `repo_remote`. Every read checks the checkout against its upstream (runner fetches remote-tracking refs, cached a minute, never pulls) and appends a `STALE CHECKOUT` note when it is behind; `repo_git status` always states the sync position. |
 | `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write), `transfer_conversation` (write) |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |

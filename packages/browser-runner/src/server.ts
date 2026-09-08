@@ -347,9 +347,20 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		}
 	}
 	if (req.method === "POST" && path === "/coding/git") {
-		const b = await readJson<{ sessionId?: string; workDir?: string; cmd: "status" | "diff" | "diff-stat" | "log" | "ls-files"; path?: string; n?: number }>(req);
+		const b = await readJson<{ sessionId?: string; workDir?: string; cmd: "status" | "diff" | "diff-stat" | "log" | "ls-files" | "show"; path?: string; n?: number; ref?: string }>(req);
 		try {
 			return json(res, 200, runner.coding.git(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
+	// Where the checkout stands against its upstream (#785): fetch (cached a minute), then count
+	// ahead/behind. Never pulls. A SEPARATE endpoint for the reason `/coding/search` is one: an
+	// older runner 404s it, which the cloud reads as "unverified" — never as "in sync".
+	if (req.method === "POST" && path === "/coding/sync") {
+		const b = await readJson<{ sessionId?: string; workDir?: string; branch?: string; forceFetch?: boolean }>(req);
+		try {
+			return json(res, 200, runner.coding.sync(b));
 		} catch (e: unknown) {
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}

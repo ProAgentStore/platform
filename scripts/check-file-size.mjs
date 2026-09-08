@@ -1358,7 +1358,13 @@ const PINS = {
 	// local variable (pilotUsageRecords / closingUsageRecords) plus the call, both to avoid calling
 	// sanitizeEngineUsage twice. The growth goes beside the code it observes, not in a helper file,
 	// for the same reason the authority gates in #676 stayed here.
-	"workers/api/src/workflows/coding-session.ts": 915,
+	// +46 at #785: the run reads where its checkout stands against UPSTREAM at start and at end —
+	// the `repo-state-start` step now also fetches and counts ahead/behind (one Promise.all beside
+	// the existing state read, and a second briefing paragraph in the same specialInstructions
+	// block), and a `repo-sync-end` step reports the final position to the timeline and the chat.
+	// Beside the state read rather than in a helper, because the two reads are one question ("what
+	// base is this run building on") answered in one step, and the sentences are `repo-sync.ts`'s.
+	"workers/api/src/workflows/coding-session.ts": 961,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1552,7 +1558,8 @@ const PINS = {
 	// and stayed red for five days while nothing deployed. The reasons are written from the diffs
 	// after the fact rather than by their authors, which is the cost of raising a pin late and the
 	// argument for raising it in the same commit. Plus this note.
-	"scripts/check-file-size.mjs": 1641,
+	// +2 at #785: the coding-session.ts entry's reason, and this line.
+	"scripts/check-file-size.mjs": 1643,
 };
 
 /**

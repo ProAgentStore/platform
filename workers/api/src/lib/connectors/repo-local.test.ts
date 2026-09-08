@@ -12,7 +12,8 @@ vi.mock("../runner-client.js", () => ({
 	READ_TIMEOUT_MS: 30_000,
 }));
 
-import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoMissingMessage, repoPathForInstance } from "./repo-local.js";
+import { REPO_LOCAL_TOOLS, REPO_SEARCH_MIN_CLI, repoMissingMessage, repoPathForInstance, unknownGitInputs } from "./repo-local.js";
+import { REPO_SYNC_MIN_CLI, statusSyncLine, verdictFromSync } from "../repo-sync.js";
 import { CONNECTORS } from "./registry.js";
 import { getRegistryTool, registryToolNameSet, renderToolContent } from "../tool-registry.js";
 // The budget both caps in this file are sized against (#534's AC 5) — asserted against the real
@@ -529,16 +530,18 @@ describe("finding a file — the capability the connector never had (#508)", () 
 		const r = await tool("repo_find").handler(ctx(), { pattern: "event_form" });
 		expect(r.success).toBe(true);
 		expect(r.content).toContain("event_form_dialog.dart");
-		const [, path, body] = callRunner.mock.calls[0];
-		expect(path).toBe("/coding/search");
-		expect(body).toMatchObject({ pattern: "event_form", mode: "path" });
+		// By PATH, not by index: every read now also asks `/coding/sync` (#785), started before the
+		// read it accompanies so the two relay calls overlap.
+		const search = callRunner.mock.calls.find((c: unknown[]) => c[1] === "/coding/search");
+		expect(search?.[2]).toMatchObject({ pattern: "event_form", mode: "path" });
 	});
 
 	it("repo_grep asks for a CONTENT search and renders file:line: text", async () => {
 		callRunner.mockResolvedValue({ matches: [{ path: "src/a.ts", line: 42, text: "class EventFormDialog {}" }], shown: 1, total: 1, truncated: false });
 		const r = await tool("repo_grep").handler(ctx(), { pattern: "EventFormDialog" });
 		expect(r.content).toContain("src/a.ts:42: class EventFormDialog {}");
-		expect(callRunner.mock.calls[0][2]).toMatchObject({ mode: "content" });
+		const search = callRunner.mock.calls.find((c: unknown[]) => c[1] === "/coding/search");
+		expect(search?.[2]).toMatchObject({ mode: "content" });
 	});
 
 	it("says how much of the list it is NOT showing, rather than slicing bytes off the end", async () => {
@@ -832,5 +835,196 @@ describe("the tools read the repo row's folder, not just the setting (#520)", ()
 		callRunner.mockResolvedValue({ entries: [{ path: "src/index.ts", type: "file" }] });
 		await tool("repo_tree").handler(ctx(JSON.stringify({ settings: { repo: "~/stale" } }), {}, [{ name: "chess", workdir: "~/dev/chess" }]), {});
 		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/coding/tree", { workDir: "~/dev/chess", path: undefined, maxDepth: undefined }, expect.anything());
+	});
+});
+
+/**
+ * repo_git's `log` "ignored its arguments" (#785, the compounding issue).
+ *
+ * It never had them. The schema was `{cmd, path, n}`, the handler read those three and nothing
+ * else, and `--format`, `-1 <sha>` and `--stat <sha>` were dropped on the floor — so every call
+ * answered with the same twenty newest commits and nothing said an argument had gone nowhere. The
+ * argv stays FIXED (the security property `gitArgv` documents); what changes is that the tool
+ * now has a slot for a revision, a command for one commit, and a refusal for everything else.
+ */
+describe("repo_git — arguments are honoured or refused, never dropped (#785)", () => {
+	/** Answer `/coding/git` with `git`, `/coding/sync` with `sync`, everything else with `{}`. */
+	const runner = (git: unknown, sync: unknown = {}) =>
+		callRunner.mockImplementation(async (_conn: unknown, path: string) => (path === "/coding/git" ? git : path === "/coding/sync" ? sync : {}));
+
+	it("refuses an input it has no slot for, by name, and says what it takes instead", async () => {
+		// The three things the issue tried, as a model would spell them.
+		for (const extra of [{ format: "%H" }, { args: ["-1", "abc123"] }, { stat: true, sha: "abc123" }]) {
+			callRunner.mockClear();
+			const r = await tool("repo_git").handler(ctx(), { cmd: "log", ...extra });
+			expect(r.success, JSON.stringify(extra)).toBe(false);
+			for (const k of Object.keys(extra)) expect(r.content).toContain(`\`${k}\``);
+			expect(r.content).toContain("fixed for safety");
+			expect(r.content).toContain('{cmd:"show", ref:"<sha>"}');
+			expect(callRunner.mock.calls.some((c: unknown[]) => c[1] === "/coding/git")).toBe(false);
+		}
+	});
+
+	it("the refusal is pure and names every offending key", () => {
+		const msg = unknownGitInputs(["format", "sha"]);
+		expect(msg).toContain("`format`, `sha`");
+		expect(msg).toContain("A custom --format is not available");
+	});
+
+	it("forwards `ref` to the runner and stays quiet when the runner says it applied", async () => {
+		runner({ cmd: "git log", output: "6da7c9a1 feat(mcp): a per-instance connection guide", pathApplied: false, refApplied: true });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "log", ref: "6da7c9a1", n: 1 });
+		expect(r.success).toBe(true);
+		const git = callRunner.mock.calls.find((c: unknown[]) => c[1] === "/coding/git");
+		expect(git?.[2]).toMatchObject({ cmd: "log", ref: "6da7c9a1", n: 1 });
+		expect(parts(r.content).body).toBe("6da7c9a1 feat(mcp): a per-instance connection guide");
+		expect(r.content).not.toContain("ignored");
+	});
+
+	it("`show` needs a ref, and describes one commit", async () => {
+		expect((await tool("repo_git").handler(ctx(), { cmd: "show" })).success).toBe(false);
+		expect((await tool("repo_git").handler(ctx(), { cmd: "show" })).content).toContain("needs a `ref`");
+		runner({ cmd: "git show", output: "commit 6da7c9a1\n 3 files changed", pathApplied: false, refApplied: true });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "show", ref: "6da7c9a1" });
+		expect(r.success).toBe(true);
+		expect(parts(r.content).body).toContain("3 files changed");
+	});
+
+	it("says when the machine's runner IGNORED `ref` — the exact silence the issue reported", async () => {
+		// An older runner answers `log` with no `refApplied` at all: the twenty newest commits,
+		// exactly what the issue saw. The difference is the sentence after them.
+		runner({ cmd: "git log", output: "28057e13 fix\nde09b9db feat\n", pathApplied: false });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "log", ref: "6da7c9a1", n: 1 });
+		const { tail } = parts(r.content);
+		expect(tail).toContain("ignored `ref`");
+		expect(tail).toContain(REPO_SYNC_MIN_CLI);
+		expect(tail).toContain("NOT about `6da7c9a1`");
+	});
+
+	it("does not blame the runner for a ref when none was given", async () => {
+		runner({ cmd: "git log", output: "28057e13 fix\n", pathApplied: false });
+		expect((await tool("repo_git").handler(ctx(), { cmd: "log" })).content).not.toContain("ignored `ref`");
+	});
+
+	it("turns an old runner's 'unsupported git command: show' into the upgrade sentence", async () => {
+		runner({ error: "unsupported git command: show" });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "show", ref: "abc123" });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain(REPO_SYNC_MIN_CLI);
+		expect(r.content).toContain("npm i -g @proagentstore/cli");
+	});
+
+	it("rejects `show` in the cloud's own enum check on a stale tool list, not with a relay error", async () => {
+		expect((await tool("repo_git").handler(ctx(), { cmd: "push" })).content).toContain("must be one of");
+	});
+});
+
+/**
+ * A stale read is never SILENT (#785, ask 1).
+ *
+ * The incident in one sentence: `repo_find` answered "no file whose path contains X" on a folder
+ * three commits behind the branch that had just added X, and the answer was true of the folder
+ * and false of the repository. Every read tool now asks the runner where the checkout stands and
+ * appends the answer as a tail when it is behind — the note rides OUTSIDE the fence, as the
+ * platform's own sentence (ADR 0006 F2).
+ */
+describe("every read tool says when the checkout is BEHIND (#785)", () => {
+	const BEHIND = { checked: true, branch: "main", upstream: "origin/main", localHead: "28057e13abc", remoteHead: "6da7c9a1abc", ahead: 0, behind: 3, fetched: true, fetchedAt: 1, fetchError: null };
+	const IN_SYNC = { ...BEHIND, behind: 0, remoteHead: "28057e13abc" };
+	/** Route by path: `/coding/sync` answers `sync`, `/coding/repo-check` a healthy checkout, everything else `rest`. */
+	const runner = (sync: unknown, rest: unknown) =>
+		callRunner.mockImplementation(async (_conn: unknown, path: string) =>
+			path === "/coding/sync" ? sync : path === "/coding/repo-check" ? { checked: true, path: "/home/u/work/my-repo", exists: true, isDirectory: true, entryCount: 87, insideWorkTree: true, gitChecked: true } : rest,
+		);
+
+	it("repo_find's 'no such file' carries the stale note — this is #782, prevented", async () => {
+		runner(BEHIND, { matches: [], shown: 0, total: 0, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "connection-guide" });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("no file whose path contains");
+		expect(r.content).toContain("STALE CHECKOUT");
+		expect(r.content).toContain("3 commits BEHIND origin/main");
+		expect(r.content).toContain("Nothing was pulled automatically");
+	});
+
+	it("repo_tree, repo_read_file, repo_grep and repo_remote carry it too, outside the fence", async () => {
+		const cases: Array<[string, Record<string, unknown>, unknown, string]> = [
+			["repo_tree", {}, { entries: [{ path: "src/a.ts", type: "file" }] }, "src/a.ts"],
+			["repo_read_file", { path: "src/a.ts" }, { content: "export const a = 1;", size: 19 }, "1: export const a = 1;"],
+			["repo_grep", { pattern: "a" }, { matches: [{ path: "src/a.ts", line: 1, text: "a" }], shown: 1, total: 1, truncated: false }, "src/a.ts:1: a"],
+			["repo_remote", {}, { remote: "git@github.com:acme/thing.git" }, "acme/thing"],
+		];
+		for (const [name, input, rest, bodyHas] of cases) {
+			runner(BEHIND, rest);
+			const r = await tool(name).handler(ctx(), input);
+			const { body, tail } = parts(r.content);
+			expect(r.success, name).toBe(true);
+			expect(body, name).toContain(bodyHas);
+			expect(tail, name).toContain("STALE CHECKOUT");
+			// And the body is what it always was — the note is added, nothing is replaced.
+			expect(body, name).not.toContain("STALE");
+		}
+	});
+
+	it("repo_read_file keeps the window's own reminder AND adds the note", async () => {
+		const content = Array.from({ length: 3_000 }, (_, i) => `const line${i} = ${i};`).join("\n");
+		runner(BEHIND, { content, size: content.length });
+		const r = await tool("repo_read_file").handler(ctx(), { path: "big.ts" });
+		expect(r.content).toContain("were NOT returned");
+		expect(r.content).toContain("STALE CHECKOUT");
+	});
+
+	it("says NOTHING when the checkout is in sync — a note on every healthy read is not a signal", async () => {
+		runner(IN_SYNC, { matches: [{ path: "src/a.ts" }], shown: 1, total: 1, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "a" });
+		expect(r.content).not.toContain("STALE");
+		expect(r.content).not.toContain("upstream");
+	});
+
+	it("says nothing on a runner too old to answer — the status quo, not a false all-clear", async () => {
+		runner({ error: "Runner /coding/sync → 404: not found" }, { matches: [{ path: "src/a.ts" }], shown: 1, total: 1, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "a" });
+		expect(r.success).toBe(true);
+		expect(r.content).not.toContain("STALE");
+		expect(r.content).not.toContain("UNVERIFIED");
+	});
+
+	it("says a fetch FAILED when it did and nothing else is known — 'could not check' is the missing fact", async () => {
+		runner({ ...BEHIND, fetched: false, fetchError: "could not resolve host github.com", ahead: null, behind: null }, { matches: [{ path: "src/a.ts" }], shown: 1, total: 1, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "a" });
+		expect(parts(r.content).tail).toContain("SYNC UNVERIFIED");
+		expect(parts(r.content).tail).toContain("could not resolve host github.com");
+	});
+
+	it("repo_git status ALWAYS states the sync position in its head, in sync included", async () => {
+		runner(BEHIND, { cmd: "git status", output: "## main...origin/main [behind 3]", pathApplied: false });
+		const behind = await tool("repo_git").handler(ctx(), { cmd: "status" });
+		expect(parts(behind.content).head).toContain("3 commits BEHIND origin/main");
+		expect(parts(behind.content).body).toBe("## main...origin/main [behind 3]");
+
+		runner(IN_SYNC, { cmd: "git status", output: "## main...origin/main", pathApplied: false });
+		const ok = await tool("repo_git").handler(ctx(), { cmd: "status" });
+		expect(parts(ok.content).head).toContain("in sync with origin/main");
+	});
+
+	it("statusSyncLine is silent only for a runner that could not answer at all", () => {
+		expect(statusSyncLine(verdictFromSync({ error: "Not found" }))).toBe("");
+		expect(statusSyncLine(verdictFromSync(IN_SYNC))).toContain("in sync");
+		expect(statusSyncLine(verdictFromSync({ ...IN_SYNC, fetched: false }))).toContain("as of the last fetch");
+		expect(statusSyncLine(verdictFromSync({ ...BEHIND, upstream: null, ahead: null, behind: null }))).toContain("no upstream");
+	});
+
+	it("repo_git's other commands carry the read-tool tail, not the head line", async () => {
+		runner(BEHIND, { cmd: "git log", output: "28057e13 fix\n", pathApplied: false, refApplied: false });
+		const r = await tool("repo_git").handler(ctx(), { cmd: "log" });
+		expect(parts(r.content).head).not.toContain("BEHIND");
+		expect(parts(r.content).tail).toContain("STALE CHECKOUT");
+	});
+
+	it("starts the sync check BEFORE the read, so the two relay calls overlap", async () => {
+		runner(IN_SYNC, { matches: [{ path: "src/a.ts" }], shown: 1, total: 1, truncated: false });
+		await tool("repo_find").handler(ctx(), { pattern: "a" });
+		const paths = callRunner.mock.calls.map((c: unknown[]) => c[1]);
+		expect(paths.indexOf("/coding/sync")).toBeLessThan(paths.indexOf("/coding/search"));
 	});
 });

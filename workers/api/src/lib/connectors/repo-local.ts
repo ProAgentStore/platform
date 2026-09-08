@@ -27,6 +27,7 @@ import { checkWorkdirVia, isWorkdirBroken } from "../coding-workdir.js";
 import { listRepoWorkdirs, type RepoWorkdirRow } from "../coding-store.js";
 import { agentCapabilities } from "../agent-capabilities.js";
 import { READ_FETCH_BYTES, renderRepoFileWindow } from "../repo-file-window.js";
+import { REPO_SYNC_MIN_CLI, statusSyncLine, syncReadNote, syncTailFor, syncVerdictFor } from "../repo-sync.js";
 
 /**
  * The typed settings (settingsSchema) that can name the checkout on the user's machine.
@@ -139,8 +140,13 @@ export const REPO_SEARCH_MIN_CLI = "0.4.49";
 async function runnerTooOld(ctx: RegistryToolCtx, e: unknown, what: string): Promise<string | null> {
 	const message = e instanceof Error ? e.message : String(e);
 	if (!/→ 404|not found/i.test(message)) return null;
-	if (!ctx.instanceId || !ctx.userId) return runnerUpgradeMessage({ what, minCli: REPO_SEARCH_MIN_CLI });
-	return runnerUpgradeRefusal(ctx.env, ctx.instanceId, ctx.userId, { what, minCli: REPO_SEARCH_MIN_CLI });
+	return runnerNeeds(ctx, what, REPO_SEARCH_MIN_CLI);
+}
+
+/** The upgrade sentence for a capability this machine's CLI predates — named release, named machine (#524). */
+async function runnerNeeds(ctx: RegistryToolCtx, what: string, minCli: string): Promise<string> {
+	if (!ctx.instanceId || !ctx.userId) return runnerUpgradeMessage({ what, minCli });
+	return runnerUpgradeRefusal(ctx.env, ctx.instanceId, ctx.userId, { what, minCli });
 }
 
 /**
@@ -409,8 +415,29 @@ async function workdirProblem(conn: RunnerConn, workDir: string): Promise<string
 	return isWorkdirBroken(verdict) ? verdict.detail : null;
 }
 
-const GIT_CMDS = ["status", "diff", "diff-stat", "log", "ls-files"] as const;
+// Is what a tool is about to read CURRENT (#785)? Every read tool below asks `syncVerdictFor`
+// BEFORE the read it accompanies and awaits `syncTailFor` after, so the two relay calls overlap.
+// The sentences, and the decision of when to say nothing, are `lib/repo-sync.ts`.
+
+const GIT_CMDS = ["status", "diff", "diff-stat", "log", "ls-files", "show"] as const;
 type GitCmd = (typeof GIT_CMDS)[number];
+/** The inputs `repo_git` reads. Anything else is refused by name — see the handler. */
+const GIT_INPUTS = new Set(["cmd", "path", "n", "ref"]);
+
+/**
+ * The refusal for an input `repo_git` has no slot for (#785). Pure, exported for its test.
+ *
+ * It names what the caller CAN do, because every argument the issue tried has an honest spelling
+ * now — except `--format`, which is refused outright: a caller-supplied format string is exactly
+ * the class of argv the fixed table exists to keep out.
+ */
+export function unknownGitInputs(keys: readonly string[]): string {
+	const named = keys.map((k) => `\`${k}\``).join(", ");
+	return (
+		`repo_git does not take ${named}. Its git argv is fixed for safety — there is no way to pass your own flags — so inputs other than \`cmd\`, \`path\`, \`n\` and \`ref\` are refused rather than silently dropped. ` +
+		'What you can do instead: one commit → {cmd:"show", ref:"<sha>"}; the newest N commits from a point → {cmd:"log", ref:"<sha or branch>", n:N}; what changed since a ref → {cmd:"diff-stat", ref:"origin/main"}. A custom --format is not available; read the fields you need from show or log.'
+	);
+}
 
 export const REPO_LOCAL_TOOLS: ToolDef[] = [
 	{
@@ -432,6 +459,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 		handler: async (ctx, input) => {
 			const t = await resolveTarget(ctx);
 			if ("error" in t) return { content: t.error, success: false };
+			const sync = syncVerdictFor(t);
 			const res = await callRunner<{ entries?: Array<{ path: string; type: string; size?: number; deeper?: boolean }>; truncated?: boolean; truncatedByDepth?: boolean; error?: string }>(
 				t.conn,
 				"/coding/tree",
@@ -461,9 +489,9 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				// a success worth shrugging at or a diagnosis worth relaying.
 				const problem = await workdirProblem(t.conn, t.workDir);
 				if (problem) return { content: problem, success: false };
-				return { head: "(no files found at that path)", content: "", success: true };
+				return { head: "(no files found at that path)", content: "", success: true, tail: await syncTailFor(sync) };
 			}
-			return { content: lines.join("\n"), success: true, tail: note, origin: `a repository checkout on your machine${input.path ? ` (${String(input.path)})` : ""}` };
+			return { content: lines.join("\n"), success: true, tail: await syncTailFor(sync, note), origin: `a repository checkout on your machine${input.path ? ` (${String(input.path)})` : ""}` };
 		},
 	},
 	{
@@ -489,6 +517,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			if ("error" in t) return { content: t.error, success: false };
 			const path = String(input.path ?? "").trim();
 			if (!path) return { content: "A `path` is required (use repo_tree to find one).", success: false };
+			const sync = syncVerdictFor(t);
 			const res = await callRunner<{ content?: string; binary?: boolean; truncated?: boolean; size?: number; error?: string }>(
 				t.conn,
 				"/coding/read-file",
@@ -505,16 +534,20 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				const problem = await workdirProblem(t.conn, t.workDir);
 				return { content: problem ? `${problem} (the read of \`${path}\` failed: ${err})` : err, success: false };
 			}
-			if (res.binary) return { content: `${path} is a binary file (${res.size ?? 0} bytes) — not readable as text.`, success: true };
+			if (res.binary) return { content: `${path} is a binary file (${res.size ?? 0} bytes) — not readable as text.`, success: true, tail: await syncTailFor(sync) };
+			const win = renderRepoFileWindow({
+				path,
+				content: res.content ?? "",
+				size: res.size,
+				fetchTruncated: res.truncated,
+				startLine: input.startLine,
+				endLine: input.endLine,
+			});
+			// The file that was NOT on disk yet is the whole incident (#785): a read of an old tree
+			// carries the staleness note after the window's own "read on with startLine" reminder.
 			return {
-				...renderRepoFileWindow({
-					path,
-					content: res.content ?? "",
-					size: res.size,
-					fetchTruncated: res.truncated,
-					startLine: input.startLine,
-					endLine: input.endLine,
-				}),
+				...win,
+				tail: await syncTailFor(sync, win.tail),
 				origin: `the file ${path} in a repository checkout on your machine`,
 			};
 		},
@@ -527,31 +560,53 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 		mutates: false,
 		untrustedOutput: true,
 		description:
-			"Run one read-only git command in the local repository to see its real current state: status (uncommitted changes), diff (what changed), diff-stat (which files changed), log (recent commits), ls-files (tracked files). Use this when the question is about history or what is in flight, not about a file's contents.",
+			"Run one read-only git command in the local repository to see its real current state: status (uncommitted changes, the branch, and whether the checkout is BEHIND its upstream), diff (what changed in the working tree — or against `ref`), diff-stat (which files changed), log (recent commits, one line each, newest first, `n` of them — from `ref` when given), ls-files (tracked files), show (what ONE commit changed: the `--stat` of `ref`, which is required). The git argv is FIXED for safety: you cannot pass your own flags or a `--format`, and any input other than cmd, path, n and ref is refused by name rather than silently ignored. Use this when the question is about history or what is in flight, not about a file's contents.",
 		jsonSchema: {
 			type: "object",
 			properties: {
 				cmd: { type: "string", enum: [...GIT_CMDS], description: "Which read-only git command to run." },
 				path: { type: "string", description: "Limit the command to one file or folder (optional). Applies to every command — `ls-files` narrowed to a folder is a good way to list what a folder actually contains at any depth." },
-				n: { type: "number", description: "For `log`: how many commits (default 20, max 200)." },
+				n: { type: "number", description: "For `log`: how many commits (default 20, max 200). `n:1` with `ref` is the line for exactly that commit." },
+				ref: {
+					type: "string",
+					description:
+						"A commit sha, branch, tag or revision, e.g. `6da7c9a1`, `origin/main`, `HEAD~3`. For `show` it is the commit to describe (required); for `log` the point to list from; for `diff` and `diff-stat` what to compare the working tree against. It is a revision, never a flag — it cannot start with `-`.",
+				},
 			},
 			required: ["cmd"],
 		},
 		handler: async (ctx, input) => {
 			const t = await resolveTarget(ctx);
 			if ("error" in t) return { content: t.error, success: false };
+			// REFUSED BY NAME what used to be dropped in silence (#785). The issue "tested with custom
+			// `--format`, with `-1 <sha>`, with `--stat <sha>`" and got the same twenty lines every
+			// time: none of those was an input, the handler read `cmd`/`path`/`n` and nothing else,
+			// and a `log` with its arguments thrown away is indistinguishable from a `log` that was
+			// asked for. The argv stays fixed — that is the security property `gitArgv` documents —
+			// so the honest answer to an argument this tool has no slot for is to say so and name the
+			// slot it does have.
+			const unknown = Object.keys(input).filter((k) => !GIT_INPUTS.has(k));
+			if (unknown.length) return { content: unknownGitInputs(unknown), success: false };
 			const cmd = String(input.cmd ?? "") as GitCmd;
 			if (!GIT_CMDS.includes(cmd)) {
 				return { content: `\`cmd\` must be one of: ${GIT_CMDS.join(", ")}.`, success: false };
 			}
-			const res = await callRunner<{ cmd?: string; output?: string; truncated?: boolean; pathApplied?: boolean; error?: string }>(
+			const ref = typeof input.ref === "string" ? input.ref.trim() : "";
+			if (cmd === "show" && !ref) {
+				return { content: '`show` needs a `ref` — the commit to describe, e.g. {cmd:"show", ref:"6da7c9a1"}. Without one it would describe HEAD, which is a guess dressed as an answer.', success: false };
+			}
+			const sync = syncVerdictFor(t);
+			const res = await callRunner<{ cmd?: string; output?: string; truncated?: boolean; pathApplied?: boolean; refApplied?: boolean; error?: string }>(
 				t.conn,
 				"/coding/git",
-				{ workDir: t.workDir, cmd, path: input.path, n: input.n },
+				{ workDir: t.workDir, cmd, path: input.path, n: input.n, ref: ref || undefined },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
 			const err = failed(res);
 			if (err) {
+				// A runner older than the `show` command refuses it as an unknown cmd — a version
+				// fact, and said as one, with the machine and the release named (#524).
+				if (/unsupported git command/i.test(err)) return { content: await runnerNeeds(ctx, `run \`git ${cmd}\``, REPO_SYNC_MIN_CLI), success: false };
 				// The runner says "not a git repo" without saying WHICH path is not one — and a
 				// vanished checkout produces exactly that. Name it.
 				const problem = await workdirProblem(t.conn, t.workDir);
@@ -575,19 +630,30 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			// in the runner, which is a separate release, so an older machine still does it. Only an
 			// ABSENT `pathApplied` means that: a new runner reports `false` when the requested path
 			// resolved to the repo root, where the whole repo IS the right answer.
-			const ignored = input.path && res.pathApplied === undefined ? `\n\n(NOTE: this machine's runner ignored the \`path\` filter — it needs CLI ${REPO_SEARCH_MIN_CLI} or newer. The output above covers the WHOLE repository, not \`${String(input.path)}\`.)` : "";
-			// Both notes are ours and both keep their POSITION relative to the output — the cut note
+			const ignored = input.path && res.pathApplied === undefined ? `(NOTE: this machine's runner ignored the \`path\` filter — it needs CLI ${REPO_SEARCH_MIN_CLI} or newer. The output above covers the WHOLE repository, not \`${String(input.path)}\`.)` : "";
+			// Same skew, one release later, for `ref` (#785). Only an ABSENT `refApplied` means the
+			// machine is old; a new runner reports `false` when no ref was asked for.
+			const refIgnored = ref && res.refApplied === undefined ? `(NOTE: this machine's runner ignored \`ref\` — it needs CLI ${REPO_SYNC_MIN_CLI} or newer. The output above is the default \`git ${cmd}\`, NOT about \`${ref}\`.)` : "";
+			// Where the checkout stands against upstream (#785). `status` is the question "what
+			// state is this repo in", so it ALWAYS answers — in the head, in sync included, because
+			// a status that says nothing about upstream is the status that let #782 get filed. Every
+			// other command carries the read-tool tail, which speaks only when there is something
+			// to say.
+			const v = await sync;
+			const syncHead = cmd === "status" ? statusSyncLine(v) : "";
+			const syncTail = cmd === "status" ? "" : (syncReadNote(v) ?? "");
+			// All notes are ours and all keep their POSITION relative to the output — the cut note
 			// above it (a note explaining a cut must not be what a second cut removes first) and the
-			// path-ignored note after the output it qualifies. `head`/`tail` is what lets them stay
+			// ignored-input notes after the output they qualify. `head`/`tail` is what lets them stay
 			// where #534 and #508 put them while the git output itself is fenced.
 			// "produced no output" is OUR sentence about an empty answer, so it joins the head and
 			// leaves the body empty — nothing to fence (ADR 0006 F2).
 			const empty = out ? "" : `(git ${cmd} produced no output)`;
 			return {
-				head: [cutNote.trim(), empty].filter(Boolean).join("\n"),
+				head: [cutNote.trim(), syncHead, empty].filter(Boolean).join("\n"),
 				content: out,
 				success: true,
-				tail: ignored.trim(),
+				tail: [ignored, refIgnored, syncTail].filter(Boolean).join("\n\n"),
 				origin: `\`git ${cmd}\` in a repository checkout on your machine`,
 			};
 		},
@@ -626,6 +692,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				if ("error" in t) return { content: t.error, success: false };
 				const pattern = String(input.pattern ?? "").trim();
 				if (!pattern) return { content: "A `pattern` is required — the text or file name to look for.", success: false };
+				const sync = syncVerdictFor(t);
 				let res: { matches?: Array<{ path: string; line?: number; text?: string }>; shown?: number; total?: number; truncated?: boolean; error?: string };
 				try {
 					res = await callRunner(t.conn, "/coding/search", { workDir: t.workDir, pattern, path: input.path, mode: isFind ? "path" : "content" }, { timeoutMs: READ_TIMEOUT_MS });
@@ -645,8 +712,10 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					const problem = await workdirProblem(t.conn, t.workDir);
 					if (problem) return { content: problem, success: false };
 					// A real, useful answer — and one the agent may state plainly. Saying "nothing
-					// matches" is only honest because the search had no depth limit to hide behind.
-					return { head: `(no ${isFind ? "file whose path contains" : "match for"} "${pattern}"${input.path ? ` under ${String(input.path)}` : ""})`, content: "", success: true };
+					// matches" is only honest because the search had no depth limit to hide behind —
+					// and because the tail says whether the tree searched is the CURRENT one (#785):
+					// "no file named X" on a checkout three commits behind is how #782 got filed.
+					return { head: `(no ${isFind ? "file whose path contains" : "match for"} "${pattern}"${input.path ? ` under ${String(input.path)}` : ""})`, content: "", success: true, tail: await syncTailFor(sync) };
 				}
 				const lines = matches.map((m) => (isFind ? m.path : `${m.path}:${m.line ?? "?"}: ${m.text ?? ""}`));
 				// Bounded by MATCH COUNT at BOTH ends now (#534's AC 5). The runner drops whole
@@ -678,6 +747,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					head: note.trim(),
 					content: kept.join("\n"),
 					success: true,
+					tail: await syncTailFor(sync),
 					origin: `a ${isFind ? "file-name" : "contents"} search of a repository checkout on your machine`,
 				};
 			},
@@ -696,6 +766,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 		handler: async (ctx) => {
 			const t = await resolveTarget(ctx);
 			if ("error" in t) return { content: t.error, success: false };
+			const sync = syncVerdictFor(t);
 			const res = await callRunner<{ remote?: string | null; error?: string }>(
 				t.conn,
 				"/coding/git-remote",
@@ -712,7 +783,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				if (problem) return { content: problem, success: false };
 				return { content: "(no git origin remote — this checkout has no configured remote)", success: true };
 			}
-			return { head: "origin:", content: res.remote, success: true, origin: "the git config of a checkout on your machine" };
+			return { head: "origin:", content: res.remote, success: true, tail: await syncTailFor(sync), origin: "the git config of a checkout on your machine" };
 		},
 	},
 ];

@@ -1,9 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { gitArgv, InspectError, readRepoFile, repoSearch, repoTree, resolveInside, runRepoGit, SEARCH_MAX_RESULTS, TREE_MAX_DEPTH } from "./inspect.js";
+import {
+	gitArgv,
+	InspectError,
+	insideWorkTree,
+	readGitRemoteOrigin,
+	readRepoFile,
+	repoSearch,
+	repoSync,
+	repoTree,
+	resetSyncCache,
+	resolveInside,
+	runRepoGit,
+	SEARCH_MAX_RESULTS,
+	SYNC_FETCH_TTL_MS,
+	TREE_MAX_DEPTH,
+	validateRef,
+} from "./inspect.js";
 
 describe("resolveInside (traversal guard)", () => {
 	const root = "/home/u/repo";
@@ -62,6 +78,40 @@ describe("gitArgv (whitelist)", () => {
 	});
 	it("throws on an unknown command", () => {
 		expect(() => gitArgv("rm" as never)).toThrow(InspectError);
+	});
+
+	describe("`ref` — the argument #785 tried and found silently ignored", () => {
+		it("puts a ref where git expects a revision: before `--`, after the fixed flags", () => {
+			expect(gitArgv("log", { n: 1, ref: "abc123" })).toEqual(["log", "--oneline", "-n", "1", "abc123"]);
+			expect(gitArgv("log", { n: 1, ref: "abc123", relPath: "src" })).toEqual(["log", "--oneline", "-n", "1", "abc123", "--", "src"]);
+			expect(gitArgv("diff", { ref: "origin/main" })).toEqual(["diff", "origin/main"]);
+			expect(gitArgv("diff-stat", { ref: "HEAD~3", relPath: "src" })).toEqual(["diff", "--stat", "HEAD~3", "--", "src"]);
+		});
+
+		it("`show` is `--stat <sha>` and REQUIRES the sha — HEAD would be a guess dressed as an answer", () => {
+			expect(gitArgv("show", { ref: "abc123" })).toEqual(["show", "--stat", "--format=medium", "abc123"]);
+			expect(() => gitArgv("show")).toThrow(/needs a `ref`/);
+		});
+
+		it("ignores a ref on the commands that have no revision to take", () => {
+			expect(gitArgv("status", { ref: "abc123" })).toEqual(["status", "--short", "--branch"]);
+			expect(gitArgv("ls-files", { ref: "abc123" })).toEqual(["ls-files"]);
+		});
+	});
+});
+
+describe("validateRef — a revision may never become a flag (#785)", () => {
+	it("accepts the revisions git itself accepts", () => {
+		for (const ok of ["abc123", "6da7c9a1", "HEAD", "HEAD~3", "origin/main", "v1.2.0", "main..feature", "@{u}", "feature/x-1"]) {
+			expect(validateRef(ok), ok).toBe(ok);
+		}
+	});
+	it("refuses anything that starts with a dash, and anything with whitespace or shell noise", () => {
+		// `--format=%H` was one of the three things #785 tried. It is refused by NAME, not silently
+		// dropped, which is the whole difference between this and the bug.
+		for (const bad of ["--format=%H", "-1", " ", "", "a b", "abc;rm", "$(x)", "a\nb"]) {
+			expect(() => validateRef(bad), JSON.stringify(bad)).toThrow(InspectError);
+		}
 	});
 });
 
@@ -231,5 +281,153 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 			expect(() => repoSearch(dir, { pattern: "   ", mode: "content" })).toThrow(InspectError);
 			expect(() => repoSearch(dir, { pattern: "x".repeat(201), mode: "content" })).toThrow(InspectError);
 		});
+	});
+
+	describe("a SUBDIRECTORY of a checkout is a checkout (#785, the `.git` gate)", () => {
+		// `checkWorkdir` (repo.ts) says `~/monorepo/apps/thing` is inside a work tree because it asks
+		// `git rev-parse`; three functions here asked `existsSync(".git")` and said the opposite. So
+		// the staleness verdict called the folder healthy and `repo_git` in it answered "not a git
+		// repo". Same folder, two answers — this pins the one that is true.
+		it("runRepoGit, repoSearch and readGitRemoteOrigin all work from `src/`", () => {
+			const sub = join(dir, "src");
+			expect(insideWorkTree(sub)).toBe(true);
+			expect(runRepoGit(sub, "status").output).toContain("##");
+			expect(repoSearch(sub, { pattern: "app", mode: "path" }).matches.length).toBeGreaterThan(0);
+			// No origin on this repo, so null — but no throw, and not because the gate refused.
+			expect(readGitRemoteOrigin(sub)).toBeNull();
+		});
+
+		it("still refuses a plain folder and a missing path with the message the cloud matches", () => {
+			mkdirSync(join(dir, "..", "plain-folder-785"), { recursive: true });
+			expect(() => runRepoGit(join(dir, "..", "plain-folder-785"), "status")).toThrow(/not a git repo/);
+			expect(() => runRepoGit(join(dir, "does-not-exist"), "status")).toThrow(/not a git repo/);
+			expect(insideWorkTree(join(dir, "does-not-exist"))).toBe(false);
+		});
+	});
+
+	describe("runRepoGit honours `ref` (#785)", () => {
+		it("`log` with a ref and n:1 answers with THAT commit, and says the ref reached git", () => {
+			const first = execFileSync("git", ["rev-list", "--max-parents=0", "HEAD"], { cwd: dir, encoding: "utf-8" }).trim();
+			const r = runRepoGit(dir, "log", { n: 1, ref: first });
+			expect(r.refApplied).toBe(true);
+			expect(r.output.trim().split("\n")).toHaveLength(1);
+			expect(r.output).toContain("init");
+		});
+		it("`show` lists what one commit changed", () => {
+			const first = execFileSync("git", ["rev-list", "--max-parents=0", "HEAD"], { cwd: dir, encoding: "utf-8" }).trim();
+			const r = runRepoGit(dir, "show", { ref: first });
+			expect(r.output).toContain("src/app.ts");
+			expect(r.output).toContain("1 file changed");
+		});
+		it("reports refApplied:false when no ref was given, so the cloud can tell 'ignored' from 'none'", () => {
+			expect(runRepoGit(dir, "log", { n: 1 }).refApplied).toBe(false);
+		});
+		it("refuses a ref that would be read as a flag, before git ever sees it", () => {
+			expect(() => runRepoGit(dir, "log", { ref: "--format=%H" })).toThrow(InspectError);
+		});
+	});
+});
+
+describe("repoSync — where a checkout stands against its upstream (#785)", () => {
+	let base: string;
+	let origin: string;
+	let a: string;
+	let b: string;
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	const commit = (cwd: string, file: string, msg: string) => {
+		writeFileSync(join(cwd, file), `${msg}\n`);
+		git(cwd, "add", "-A");
+		git(cwd, "commit", "-q", "-m", msg);
+	};
+
+	beforeAll(() => {
+		base = mkdtempSync(join(tmpdir(), "pags-sync-"));
+		origin = join(base, "origin.git");
+		a = join(base, "a");
+		b = join(base, "b");
+		git(base, "init", "-q", "--bare", "-b", "main", origin);
+		git(base, "clone", "-q", origin, a);
+		git(a, "config", "user.email", "t@t.co");
+		git(a, "config", "user.name", "t");
+		git(a, "checkout", "-q", "-b", "main");
+		mkdirSync(join(a, "src"));
+		commit(a, "src/one.ts", "one");
+		git(a, "push", "-q", "-u", "origin", "main");
+		git(base, "clone", "-q", origin, b);
+		git(b, "config", "user.email", "t@t.co");
+		git(b, "config", "user.name", "t");
+		resetSyncCache();
+	});
+	afterAll(() => rmSync(base, { recursive: true, force: true }));
+
+	it("is in sync right after a push", () => {
+		const s = repoSync(a, { forceFetch: true });
+		expect(s.checked).toBe(true);
+		expect(s.branch).toBe("main");
+		expect(s.upstream).toBe("origin/main");
+		expect(s.ahead).toBe(0);
+		expect(s.behind).toBe(0);
+		expect(s.fetched).toBe(true);
+		expect(s.fetchError).toBeNull();
+		expect(s.localHead).toBe(s.remoteHead);
+	});
+
+	it("reports BEHIND after somebody else pushes — the incident, reproduced", () => {
+		// 6da7c9a1 from the other machine. Nothing on disk in `a` changes; `behind` is what says
+		// the reads that follow are reads of an old tree.
+		commit(b, "src/two.ts", "two");
+		git(b, "push", "-q", "origin", "main");
+		const s = repoSync(a, { forceFetch: true });
+		expect(s.behind).toBe(1);
+		expect(s.ahead).toBe(0);
+		expect(s.localHead).not.toBe(s.remoteHead);
+		// And the file the other machine shipped is still not here — a pull is the caller's call.
+		expect(existsSync(join(a, "src", "two.ts"))).toBe(false);
+	});
+
+	it("counts AHEAD from a local commit WITHOUT a new fetch — counts are fresh, the fetch is cached", () => {
+		const before = repoSync(a);
+		commit(a, "src/three.ts", "three");
+		const after = repoSync(a);
+		expect(after.ahead).toBe(1);
+		expect(after.behind).toBe(1);
+		expect(after.fetchedAt).toBe(before.fetchedAt);
+	});
+
+	it("fetches again once the TTL has passed", () => {
+		const t0 = repoSync(a).fetchedAt ?? 0;
+		const later = repoSync(a, { now: () => t0 + SYNC_FETCH_TTL_MS + 1 });
+		expect(later.fetchedAt).toBeGreaterThan(t0);
+	});
+
+	it("answers the same from a subdirectory, keyed on the work-tree root", () => {
+		const s = repoSync(join(a, "src"));
+		expect(s.path).toBe(git(a, "rev-parse", "--show-toplevel"));
+		expect(s.behind).toBe(1);
+	});
+
+	it("reports a fetch failure by NAME and keeps the last known counts, rather than saying in-sync", () => {
+		git(a, "remote", "set-url", "origin", join(base, "nowhere.git"));
+		resetSyncCache();
+		const s = repoSync(a, { forceFetch: true });
+		expect(s.fetched).toBe(false);
+		expect(s.fetchError).toMatch(/nowhere|does not appear|not found|No such/i);
+		// `origin/main` is still the ref the last successful fetch left, so the counts still hold.
+		expect(s.behind).toBe(1);
+		git(a, "remote", "set-url", "origin", origin);
+		resetSyncCache();
+	});
+
+	it("falls back to origin/<configured branch> when HEAD is detached", () => {
+		git(a, "checkout", "-q", "--detach", "HEAD");
+		const s = repoSync(a, { branch: "main", forceFetch: true });
+		expect(s.branch).toBeNull();
+		expect(s.upstream).toBe("origin/main");
+		expect(s.behind).toBe(1);
+		git(a, "checkout", "-q", "main");
+	});
+
+	it("refuses a folder that is not a checkout", () => {
+		expect(() => repoSync(base)).toThrow(/not a git repo/);
 	});
 });

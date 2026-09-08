@@ -545,6 +545,30 @@ describe("systemPrompt — the Pilot is told the bound that actually binds (#700
 	});
 });
 
+describe("systemPrompt — a stale base is not a base (#785)", () => {
+	it("tells the Pilot to fast-forward a clean, behind checkout FIRST, and never to plan on a stale one", () => {
+		// Run 97903fb3 pushed 6da7c9a1 to main; the checkout the next run planned in had never
+		// fetched it. The workflow now states the sync in the rules; this is the rule about it.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/STALE BASE/);
+		expect(p).toMatch(/git pull --ff-only/);
+		expect(p).toMatch(/never plan a change against a base that is missing commits/);
+	});
+
+	it("forbids merging or rebasing a dirty or diverged tree on its own initiative", () => {
+		expect(systemPrompt(GOAL)).toMatch(/dirty or has diverged, do not merge or rebase on your own initiative/);
+	});
+
+	it("requires a fetch before any push, and a NAMED account of what landed upstream", () => {
+		// The Engine pushes, not the platform, so the end-of-run sync check can only report what
+		// already happened. This is the half that has to be a rule the Pilot carries.
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/BEFORE ANY PUSH/);
+		expect(p).toMatch(/name them in your finish detail/);
+		expect(p).toMatch(/never a silent merge/);
+	});
+});
+
 describe("systemPrompt — who the terminal means by \"the user\" (#505)", () => {
 	it("tells the Pilot that the terminal's \"user\" is itself, not the human", () => {
 		// The runner writes the Pilot's instruction as `role: "user"`, so the engine calls its
