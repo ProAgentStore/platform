@@ -27,6 +27,7 @@ behaves wrongly, the bug is usually in `workers/api`, not here.
 | Route | `mcp.proagentstore.online/*`, zone `proagentstore.online` (`wrangler.toml`) |
 | Registry | `server.json` at the repo root; also `/.well-known/mcp-server.json` on the store |
 | Quick add | `claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp` |
+| Pinned (#783) | `https://mcp.proagentstore.online/mcp/i/<instance_id>` — one instance's own tools under their real names, no `instance_id` argument, plus `chat`/`guide`/`messages`; nothing platform-wide. `src/pinned.ts`. |
 
 ## Auth and safety
 
@@ -54,6 +55,11 @@ src/
 ├── oauth-provider.ts     /authorize, /authorize/continue, /oauth/callback, /health, root
 ├── session.ts            verifyMcpSession (HMAC session → uid)
 ├── registration.ts       the one seam every `server.tool(...)` call passes through
+├── pinned.ts             the /mcp/i/<id> session (#783): URL → ctx.props, and a registrar whose
+│                         names are the instance's policy rows (data — never a literal, so the
+│                         counts below describe the platform-wide surface only)
+├── json-schema-zod.ts    the connectors' JSON Schema subset → zod shape, so a pinned tool
+│                         publishes its real field names
 ├── tool-metadata.ts      annotations, titles, output schemas (advisory, never a check)
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
@@ -104,7 +110,10 @@ registration boundaries it already had; the blocks moved verbatim.
 
 Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 `instance-tools.test.ts`, `instance-tools/contract.test.ts`, `oauth-provider.test.ts`,
-`repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`.
+`repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`, and `pinned.test.ts` +
+`json-schema-zod.test.ts` for the pinned surface, which the platform-wide guards
+(`TOOL_RISK` completeness, `MCP_TOOL_COUNT`, the README table, `SURFACE_LOCK`) deliberately
+do not see — its names are an instance's data.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
 under `instance-tools/` — 98 of them — to a table of **group, scope, confirmation string,

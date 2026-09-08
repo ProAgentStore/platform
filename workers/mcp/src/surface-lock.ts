@@ -299,4 +299,14 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.20 is published.
 	"0.1.21": "sha256:8ed85ef12e0efb94a154f4c562eaffa2350c5c7cdf193979c3320709c879efbd",
+	// 0.1.22 (#783): the pinned session. No platform-wide tool name, schema or annotation
+	// moved and `MCP_TOOL_COUNT` stays at 150; what moved is `SERVER_INSTRUCTIONS`, which now
+	// ends with one sentence telling a caller that `/mcp/i/<instance_id>` publishes only that
+	// instance's own tools (no `instance_id` argument) plus chat/guide/messages. The
+	// instructions are inside the fingerprint by DECISION 1, so this is a served-surface
+	// change and the version moves. The pinned surface itself is not in this hash: its names
+	// are an instance's policy rows, held to their own contract in `pinned.test.ts`.
+	//
+	// Appended, never edited in place: 0.1.21 is published.
+	"0.1.22": "sha256:0565f1ca5211d6b338a2268514c0ab56d4d761d019982473a0c384b98a3a497d",
 };

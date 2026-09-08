@@ -93,6 +93,35 @@ For stdio-only MCP clients, use the published CLI as the local proxy:
 }
 ```
 
+## Pinned To One Instance
+
+When a client will drive one instance for the whole life of the connection, connect it to
+that instance's own URL:
+
+```
+https://mcp.proagentstore.online/mcp/i/<instance_id>
+```
+
+Same OAuth and token lifetime as `/mcp`; a different `tools/list`. A pinned session publishes
+the instance's **own** tools under their real names, with their real field names as the input
+schema and **no `instance_id` argument** — `github_read_issue {repo, number}` instead of
+`call_instance_tool {instance_id, tool, input}` — plus three fixed tools:
+
+| Tool | What it does |
+|---|---|
+| `chat` | Send a message to the pinned instance and get its reply (`runtime`; takes `dry_run`). |
+| `guide` | The instance's connection guide, plus the tools this session did *not* register and why. |
+| `messages` | Recent messages, paged with `before` / `limit` like `instance_messages`. |
+
+None of the platform-wide tools are registered on a pinned session; a client that wants them
+connects to `/mcp` as before. Only tools the instance may run **and** that
+`call_instance_tool` could reach are registered — chat-only tools are listed by `guide` instead.
+Annotations follow each tool's own policy row (`readOnlyHint` is true exactly when the tool
+does not mutate). The pin is a routing hint, never a grant: an instance that is not yours
+registers a single tool, `pinned_instance_unavailable`, and every call still passes the API's
+owner check and the live tool policy, so a tool the owner switches off is refused whatever
+the session still lists. Get the id from `my_instances` on `/mcp`.
+
 ## Agent Rules
 
 ```md
@@ -107,7 +136,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.21`
+- `serverInfo.version`: `0.1.22`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -122,7 +151,7 @@ Alongside `serverInfo`, the server returns an `instructions` string. MCP sends i
 is where guidance that applies **across** tools belongs, rather than being repeated into 135
 descriptions.
 
-ProAgentStore's says five things, in this order, because the first 512 characters are the
+ProAgentStore's says six things, in this order, because the first 512 characters are the
 part a host is most likely to keep:
 
 1. **Get an id first.** Almost every tool acts on one agent instance. `my_instances` lists
@@ -138,6 +167,8 @@ part a host is most likely to keep:
    `usage_summary` reports spend.
 5. **The annotations are accurate**, a state-changing tool takes `dry_run`, and the
    `confirm` + `destructive`-scope refusals below are real and cannot be argued past.
+6. **Pin when you already know the instance.** `/mcp/i/<instance_id>` publishes only that
+   instance's own tools, with no `instance_id` argument, plus `chat`, `guide` and `messages`.
 
 Parameter schemas are exact. Use the `snake_case` names from `tools/list`; do not translate
 them to camelCase or wrap arguments in extra objects. IDs, session IDs, task IDs, job keys,

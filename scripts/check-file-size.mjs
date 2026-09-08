@@ -727,7 +727,14 @@ const PINS = {
 	// the number is the ledger's conclusion, not its content, and a net-zero that erased the
 	// shrink would leave #703's eleven lines silently available — which is the case the #696
 	// note above exists to name.
-	"workers/mcp/src/index.ts": 933,
+	// +24 for #783: the pinned session. `init()` branches to `initPinned` before any
+	// platform-wide registration (so a pinned DO registers nothing it should not), the
+	// pipeline installer takes a metadata resolver instead of hardcoding the platform one, and
+	// `apiHandler` is wrapped so `/mcp/i/<id>` reaches the same transport. The work itself —
+	// the URL parse, the row filter, the registrar, the three fixed tools — is `pinned.ts` and
+	// `json-schema-zod.ts`; what stayed here is the wiring that needs `this.env`, `this.token`
+	// and `this.safety`, which cannot leave the class that owns the per-connection state.
+	"workers/mcp/src/index.ts": 958,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.

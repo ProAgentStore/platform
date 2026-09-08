@@ -12,7 +12,8 @@ import { installRegistrationPipeline, type RegistrationTarget } from "./registra
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
 import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
-import { annotationsFor, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { loadPinnedSurface, pinnedRiskFor, registerPinnedTools, withPinnedInstance } from "./pinned.js";
 import {
 	AGENT_ID,
 	agentTemplateFiles,
@@ -41,8 +42,17 @@ type Props = {
 	authToken?: string;
 	mcpScopes?: string[] | null;
 	mcpSubject?: string;
+	/** Set by `withPinnedInstance` for a `/mcp/i/<id>` session (#783) — never by the OAuth grant. */
+	pinnedInstance?: string;
 };
 type Env = McpEnv;
+
+/** Per-tool metadata for the platform-wide surface: annotations + output schema, keyed by name. */
+function platformMetadata(name: string): Record<string, unknown> {
+	const annotations = annotationsFor(name);
+	const outputSchema = outputSchemaFor(name);
+	return { ...(annotations ? { annotations } : {}), ...(outputSchema ? { outputSchema } : {}) };
+}
 
 export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	server = new McpServer({ name: "ProAgentStore", version: MCP_SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
@@ -78,18 +88,27 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 * before any registration happens: it carries the operator-suspension gate (#273) and
 	 * the tool metadata this server publishes (#561).
 	 */
-	private installRegistrationPipeline(): void {
+	private installRegistrationPipeline(metadata: (name: string) => Record<string, unknown> = platformMetadata): void {
 		installRegistrationPipeline(this.server as unknown as RegistrationTarget, {
 			gate: (name, provided) => suspensionBlock(this.env, this.token(provided), name),
-			metadata: (name) => {
-				const annotations = annotationsFor(name);
-				const outputSchema = outputSchemaFor(name);
-				return {
-					...(annotations ? { annotations } : {}),
-					...(outputSchema ? { outputSchema } : {}),
-				};
-			},
+			metadata,
 		});
+	}
+
+	/**
+	 * A session pinned to ONE instance (#783): the surface is that instance's own tools plus
+	 * chat/guide/messages, and nothing platform-wide. Annotations come from each policy row's
+	 * `mutates` rather than `TOOL_RISK`, because the names are data. Everything else — the
+	 * suspension gate, the safety layer, the audit — is the same pipeline. See `pinned.ts`.
+	 */
+	private async initPinned(instanceId: string): Promise<void> {
+		const surface = await loadPinnedSurface(this.env, this.userToken, instanceId);
+		const risk = pinnedRiskFor(surface);
+		this.installRegistrationPipeline((name) => {
+			const annotations = annotationsForRisk(risk(name));
+			return annotations ? { annotations } : {};
+		});
+		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 
 	/**
@@ -125,6 +144,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		// MCP stream and makes clients hang until they time out. Register once.
 		if (this.toolsRegistered) return;
 		this.toolsRegistered = true;
+
+		// A `/mcp/i/<id>` session registers ONLY that instance's surface (#783) — nothing below.
+		if (this.props?.pinnedInstance) return this.initPinned(this.props.pinnedInstance);
 
 		// Must precede every registration below — it wraps the registrar itself.
 		this.installRegistrationPipeline();
@@ -917,7 +939,10 @@ type ProviderEnv = Env & { OAUTH_PROVIDER: OAuthHelpers };
  */
 export default new OAuthProvider<ProviderEnv>({
 	apiRoute: "/mcp",
-	apiHandler: PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
+	// `/mcp/i/<instanceId>` reaches the same transport with the id on `ctx.props` (#783).
+	apiHandler: withPinnedInstance(PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
+		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
+	}) as ExportedHandler<ProviderEnv> & {
 		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
 	},
 	defaultHandler: loginHandler as ExportedHandler<ProviderEnv>,

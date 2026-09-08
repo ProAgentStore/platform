@@ -38,6 +38,26 @@ codex mcp login proagentstore
 npx mcp-remote https://mcp.proagentstore.online/mcp
 ```
 
+### Pinned to one instance (#783)
+
+If a client will drive ONE instance for its whole life — a chat project pinned to a single
+Coder, say — connect it to that instance's own URL instead of `/mcp`:
+
+```
+https://mcp.proagentstore.online/mcp/i/<instance_id>
+```
+
+Same OAuth, same session lifetime, different `tools/list`: that session publishes the
+instance's **own** tools under their real names with their real field names and **no
+`instance_id` argument** (`github_read_issue {repo, number}` rather than
+`call_instance_tool {instance_id, tool, input}`), plus three fixed tools — `chat`, `guide`
+and `messages` — and **none** of the platform-wide tools in the table below. Only tools the
+instance may run AND that `call_instance_tool` could reach are registered; chat-only tools are
+named in `guide` rather than registered. The pin is a routing hint, not a grant: an instance
+that is not yours registers one tool, `pinned_instance_unavailable`, that says so, and every
+call still passes the API's owner check and live tool policy. Get the id from `my_instances`
+on `/mcp`. The platform-wide connector is unchanged.
+
 ### stdio-only clients
 
 ```json

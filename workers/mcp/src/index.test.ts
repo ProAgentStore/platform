@@ -112,6 +112,8 @@ interface HarnessOpts {
 	subject?: string;
 	authToken?: string | null;
 	env?: Record<string, unknown>;
+	/** A `/mcp/i/<id>` session (#783) — the pinned surface is held to its own contract in pinned.test.ts. */
+	pinnedInstance?: string;
 }
 
 async function setup(opts: HarnessOpts = {}) {
@@ -156,6 +158,7 @@ async function setup(opts: HarnessOpts = {}) {
 		authToken: opts.authToken === undefined ? "session-token" : opts.authToken,
 		mcpScopes: opts.scopes ?? ["read", "write", "runtime", "destructive"],
 		mcpSubject: opts.subject ?? "user-1",
+		...(opts.pinnedInstance ? { pinnedInstance: opts.pinnedInstance } : {}),
 	};
 	inst.server = fakeServer; // replace the real McpServer with our capturing double
 
@@ -237,6 +240,16 @@ describe("PagsMcp.init — tool registration", () => {
 		const noSurface = (await setup({ groups: [] })).tools;
 		expect(noSurface.size).toBe(MCP_TOOL_ALWAYS_ON);
 		expect(MCP_TOOL_ALWAYS_ON + MCP_TOOL_GATED).toBe(MCP_TOOL_COUNT);
+	});
+
+	it("registers NONE of the platform-wide tools on a session pinned to one instance (#783)", async () => {
+		// The pinned surface's own contract lives in pinned.test.ts; what belongs HERE is the
+		// negative half — that pinning does not merely add tools but replaces the surface, so a
+		// caller who asked for the minimal schema never sees `my_instances` or `create_agent`.
+		const h = await setup({ groups: ["apply", "repo", "coding"], pinnedInstance: "inst-1" });
+		const platform = (await setup({ groups: ["apply", "repo", "coding"] })).tools;
+		for (const name of platform.keys()) expect(h.tools.has(name), `${name} leaked onto the pinned session`).toBe(false);
+		expect(h.tools.size).toBeGreaterThan(0);
 	});
 
 	it("registers tools only once even if init runs again (idempotent guard)", async () => {
