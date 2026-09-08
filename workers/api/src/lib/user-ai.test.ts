@@ -541,7 +541,7 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		const LIVE = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
 		const env = await envWithAnthropicKey();
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ type: "error", error: { type: "invalid_request_error", message: LIVE } }, { status: 400 })));
-		const err = await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+		const err = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
 		expect(err).toMatchObject({ name: "UserAiProviderError", upstreamStatus: 400, retryable: false });
 		expect(err.message).toContain(LIVE);
 		expect(err.message).toContain("console.anthropic.com/settings/billing");
@@ -549,7 +549,7 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		expect(classifyCodingFailure(err).class).toBe("provider_credit");
 		// A different 400 gets no billing advice — the hint must not fire on the status alone.
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { type: "invalid_request_error", message: "messages: final assistant content cannot end with trailing whitespace" } }, { status: 400 })));
-		const other = await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+		const other = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
 		expect(other.message).not.toContain("settings/billing");
 		expect(classifyCodingFailure(other).class).toBe("provider_error");
 	});
