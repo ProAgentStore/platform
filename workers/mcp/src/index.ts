@@ -13,6 +13,7 @@ import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
 import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
 import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { newTouchThrottle, recordInstanceTouch, touchedInstance } from "./recent-instances.js";
 import { loadPinnedSurface, pinnedRiskFor, registerPinnedTools, withPinnedInstance } from "./pinned.js";
 import {
 	AGENT_ID,
@@ -68,6 +69,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	/** Survives across `safety()` calls, which is where the memo has to live: one tool call
 	 *  builds a context more than once, and each one audits (#702). */
 	private tokenSubjectCache = newTokenSubjectCache();
+	/** When this session last recorded each instance it touched (#787) — see `recent-instances.ts`. */
+	private touchThrottle = newTouchThrottle();
 
 	private safety(provided?: string): SafetyContext {
 		return {
@@ -88,10 +91,13 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 * before any registration happens: it carries the operator-suspension gate (#273) and
 	 * the tool metadata this server publishes (#561).
 	 */
-	private installRegistrationPipeline(metadata: (name: string) => Record<string, unknown> = platformMetadata): void {
+	private installRegistrationPipeline(metadata: (name: string) => Record<string, unknown> = platformMetadata, pinned?: string): void {
 		installRegistrationPipeline(this.server as unknown as RegistrationTarget, {
 			gate: (name, provided) => suspensionBlock(this.env, this.token(provided), name),
 			metadata,
+			// Which instance the call was about, for `recent_instances` (#787): the `instance_id`
+			// argument on the platform-wide surface, the pinned instance on a `/mcp/i/<id>` session.
+			touch: (name, input, provided) => recordInstanceTouch(this.safety(provided), name, touchedInstance(input, pinned), this.touchThrottle),
 		});
 	}
 
@@ -107,7 +113,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		this.installRegistrationPipeline((name) => {
 			const annotations = annotationsForRisk(risk(name));
 			return annotations ? { annotations } : {};
-		});
+		}, instanceId);
 		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 

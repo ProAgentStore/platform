@@ -45,6 +45,14 @@ export interface RegistrationOptions {
 	gate: (name: string, provided?: string) => Promise<TextResult | null>;
 	/** Per-tool metadata merged into the registration config (annotations, output schema). */
 	metadata?: (name: string) => Record<string, unknown> | undefined;
+	/**
+	 * Called after every call the gate let through, with the tool's name and the caller's raw
+	 * arguments (#787). It records which instance the call was about — see `recent-instances.ts`
+	 * for why that is recorded here and not in the ~80 handlers that take an `instance_id`: the
+	 * same "the tool nobody has written yet" argument that put the gate here. Its result is
+	 * ignored and it must not throw; it never changes what the caller receives.
+	 */
+	touch?: (name: string, input: Record<string, unknown> | undefined, provided?: string) => Promise<void>;
 }
 
 export function installRegistrationPipeline(
@@ -71,6 +79,9 @@ export function installRegistrationPipeline(
 			const provided = typeof first?.token === "string" ? first.token : undefined;
 			const blocked = await opts.gate(name, provided);
 			const result = blocked ?? (await handler(...handlerArgs));
+			// After the handler, so a slow KV never delays the answer's computation — and only for a
+			// call that ran: a suspended account's attempts are not "work it was doing".
+			if (!blocked && opts.touch) await opts.touch(name, first as Record<string, unknown> | undefined, provided);
 			return metadata.outputSchema ? withStructuredContent(result) : result;
 		};
 

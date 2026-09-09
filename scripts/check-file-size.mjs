@@ -734,7 +734,12 @@ const PINS = {
 	// the URL parse, the row filter, the registrar, the three fixed tools — is `pinned.ts` and
 	// `json-schema-zod.ts`; what stayed here is the wiring that needs `this.env`, `this.token`
 	// and `this.safety`, which cannot leave the class that owns the per-connection state.
-	"workers/mcp/src/index.ts": 958,
+	// +5 for #787: the `touch` hook on the registration pipeline — one import, one memo field,
+	// and the two-line wiring that hands `touchedInstance(input, pinned)` to the recorder. The
+	// recorder, the throttle and the storage shape are `recent-instances.ts`; the tool that reads
+	// them back is `instance-tools/recent.ts`. What stayed here is, again, only what needs
+	// `this.safety` and the pinned id.
+	"workers/mcp/src/index.ts": 964,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1559,7 +1564,9 @@ const PINS = {
 	// after the fact rather than by their authors, which is the cost of raising a pin late and the
 	// argument for raising it in the same commit. Plus this note.
 	// +2 at #785: the coding-session.ts entry's reason, and this line.
-	"scripts/check-file-size.mjs": 1643,
+	// +8 at #787: the mcp/index.ts raise above (six lines of why for five lines of wiring) and
+	// these two. Same self-referential growth every raise costs — the reason IS the record.
+	"scripts/check-file-size.mjs": 1650,
 };
 
 /**

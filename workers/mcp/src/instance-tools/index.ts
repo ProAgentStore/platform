@@ -19,6 +19,7 @@ import { registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerObservabilityTools } from "./observability.js";
+import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
 import { registerSettingsTools } from "./settings.js";
@@ -45,6 +46,9 @@ export function registerInstanceTools(
 	// The per-instance connection guide (#772) — ungated: the discovery problem it solves
 	// belongs to every agent type, not only the ones with a console surface.
 	registerGuideTools(server, ctx);
+	// "What was I working on?" (#787) — ungated for the same reason as the guide: the question
+	// belongs to every agent type, and the run lookup answers for every instance.
+	registerRecentTools(server, ctx);
 	registerBoardTools(server, ctx);
 	registerSettingsTools(server, ctx);
 	registerTriggerTools(server, ctx);

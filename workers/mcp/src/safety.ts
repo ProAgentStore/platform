@@ -30,8 +30,9 @@ export interface SafetyContext {
 	resolveSubject?: () => Promise<string | undefined>;
 }
 
-/** The audit subject: the OAuth grant's, or the one a `token` argument resolves to. */
-async function subjectFor(ctx: SafetyContext): Promise<string | undefined> {
+/** The audit subject: the OAuth grant's, or the one a `token` argument resolves to. Exported for
+ *  `recent-instances.ts` (#787), which must key by the SAME identity the audit trail does. */
+export async function subjectFor(ctx: SafetyContext): Promise<string | undefined> {
 	if (ctx.subject) return ctx.subject;
 	return ctx.resolveSubject ? await ctx.resolveSubject() : undefined;
 }

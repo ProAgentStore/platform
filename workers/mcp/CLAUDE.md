@@ -68,7 +68,7 @@ src/
 │                         repo's conversation, repos, overseer, diagnostics, deploy status (#683)
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
 └── instance-tools/
-    ├── index.ts          builds the ctx, calls the fourteen group registrars
+    ├── index.ts          builds the ctx, calls the fifteen group registrars
     ├── shared.ts         TokenResolver/SafetyResolver, trigger config, board grouping
     │   ── ungated: every subscriber gets these ──
     ├── base.ts           7 tools — the connector-tool gate, subscribe/cancel, chat
@@ -82,6 +82,8 @@ src/
     ├── account.ts        8 tools — whoami, billing, usage, keys, email, profile, budget limits
     ├── connectors.ts     4 tools — connector status and folder grants
     ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
+    ├── guide.ts          1 tool — the per-instance connection guide (#772)
+    ├── recent.ts         1 tool — the instances this account drove most recently, with run health (#787)
     │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
@@ -89,22 +91,24 @@ src/
                           surfaces:["coding"]) + 3 loop tools
 ```
 
-**150 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**151 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 104 across `instance-tools/`. 127 are always registered; 23 are
+`storage-tools.ts`, and 105 across `instance-tools/`. 128 are always registered; 23 are
 surface-gated (apply=4, repo=3, coding=16).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
-+ 13 + 104 = 150. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 105 = 151. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
-the always-on `get_instance_connection_guide` in its own `instance-tools/guide.ts`. The per-file rows in the tree above are
+the always-on `get_instance_connection_guide` in its own `instance-tools/guide.ts`; and said
+21 + 12 + 13 + 104 = 150 until #787 added the always-on `recent_instances` in
+`instance-tools/recent.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the
 file a tool landed in when nobody decided where it went, and the largest in the repo. That
-86 is history and is not the current count (98); it is kept because it is what makes the
+86 is history and is not the current count (99); it is kept because it is what makes the
 1871 lines legible. The nine ungated groups above are that file split along the
 registration boundaries it already had; the blocks moved verbatim.
 
@@ -116,7 +120,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 do not see — its names are an instance's data.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
-under `instance-tools/` — 98 of them — to a table of **group, scope, confirmation string,
+under `instance-tools/` — 99 of them — to a table of **group, scope, confirmation string,
 dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the

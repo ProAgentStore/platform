@@ -1342,3 +1342,139 @@ describe("set_budget_limits — a patch must not clear what it does not name (#5
 		]);
 	});
 });
+
+// ── recent_instances (#787): the caller's own recency view ───────────────────
+
+describe("recent_instances", () => {
+	const touch = (h: Harness, subject: string, instance: string, tool: string, at: string) =>
+		h.auditStore.set(`recent:${subject}:${instance}`, JSON.stringify({ instance, tool, at }));
+
+	it("joins the session's touches against the roster and each instance's latest run, newest first, capped at 5", async () => {
+		const h = setup();
+		// Six touches, out of key order, so the cap and the sort are both exercised. `i-gone` is a
+		// touch on an instance the roster no longer has (cancelled since), and `coder` is a SLUG a
+		// coding tool accepted — it resolves to the first instance of that agent, which is `i1`,
+		// already listed by id, so it must not appear twice.
+		touch(h, "user-1", "i1", "coding_loop_status", "2026-09-09T10:00:00.000Z");
+		touch(h, "user-1", "i2", "chat_with_instance", "2026-09-09T09:00:00.000Z");
+		touch(h, "user-1", "i3", "coding_timeline", "2026-09-09T08:00:00.000Z");
+		touch(h, "user-1", "i4", "call_instance_tool", "2026-09-09T07:00:00.000Z");
+		touch(h, "user-1", "i5", "coding_loop_start", "2026-09-09T06:00:00.000Z");
+		touch(h, "user-1", "i6", "coding_loop_status", "2026-09-09T05:00:00.000Z");
+		touch(h, "user-1", "i-gone", "coding_loop_status", "2026-09-09T11:00:00.000Z");
+		touch(h, "user-1", "coder", "coding_loop_status", "2026-09-09T09:30:00.000Z");
+		touch(h, "user-2", "theirs", "coding_loop_status", "2026-09-09T12:00:00.000Z");
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), {
+			body: {
+				instances: [
+					{ id: "i1", agent_id: "a1", slug: "coder", name: "platform coder", status: "active" },
+					{ id: "i2", agent_id: "a2", slug: "assistant", status: "active" },
+					{ id: "i3", agent_id: "a1", slug: "coder", status: "active" },
+					{ id: "i4", agent_id: "a3", slug: "browser", status: "paused" },
+					{ id: "i5", agent_id: "a1", slug: "coder", status: "active" },
+					{ id: "i6", agent_id: "a1", slug: "coder", status: "active" },
+				],
+			},
+		});
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i1/loop"), {
+			body: {
+				runs: [
+					{
+						runId: "run-new",
+						instanceId: "i1",
+						objective: "Work GitHub issue #787 ".padEnd(400, "x"),
+						status: "running",
+						stopReason: null,
+						iteration: 3,
+						maxIterations: 15,
+						startedAt: 1_757_400_000_000,
+						finishedAt: null,
+						lastProgressAt: 1_757_400_100_000,
+						lastAliveAt: 1_757_400_200_000,
+						waitingUntil: 1_757_486_400_000,
+						waitingReason: "human",
+						health: "waiting",
+						waitNote: "Waiting on a human — GIVES UP then, at 2026-09-10T06:40:00.000Z.",
+						sessionId: "csess_1",
+					},
+					{ runId: "run-old", status: "closed", stopReason: "completed", health: "ended", startedAt: 1, finishedAt: 2 },
+				],
+			},
+		});
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i2/loop"), { body: { runs: [] } });
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i3/loop"), {
+			body: { runs: [{ runId: "run-3", objective: "fix", status: "closed", stopReason: "provider_credit", health: "ended", waitingReason: null, waitingUntil: null, waitNote: null, startedAt: 5, finishedAt: 6 }] },
+		});
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i4/loop"), { status: 403, body: { error: "forbidden" } });
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i5/loop"), { body: { runs: [] } });
+
+		const res = await h.tools.get("recent_instances")!.handler({});
+		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>> };
+
+		expect(body.instances.map((i) => i.instanceId)).toEqual(["i1", "i2", "i3", "i4", "i5"]);
+		expect(body.instances[0]).toMatchObject({
+			instanceId: "i1",
+			name: "platform coder",
+			slug: "coder",
+			status: "active",
+			lastInteractionAt: "2026-09-09T10:00:00.000Z",
+			lastTool: "coding_loop_status",
+		});
+		// The run is the NEWEST one, passed through: `health` and `waitNote` are the API's verdicts,
+		// never re-derived here (#580), and the human-handoff deadline travels with its reason.
+		expect(body.instances[0].run).toMatchObject({
+			runId: "run-new",
+			health: "waiting",
+			status: "running",
+			stopReason: null,
+			waitingReason: "human",
+			waitingUntil: 1_757_486_400_000,
+			waitNote: "Waiting on a human — GIVES UP then, at 2026-09-10T06:40:00.000Z.",
+		});
+		// The objective is a preview, not the issue body.
+		expect((body.instances[0].run as { objective: string }).objective.length).toBeLessThanOrEqual(161);
+		expect((body.instances[0].run as { objective: string }).objective.endsWith("…")).toBe(true);
+		// Never ran: `run: null` with no error beside it.
+		expect(body.instances[1]).toMatchObject({ instanceId: "i2", name: null, run: null });
+		expect(body.instances[1]).not.toHaveProperty("runError");
+		// A failed run: the unambiguous stop reason (#773) is right there.
+		expect(body.instances[2].run).toMatchObject({ health: "ended", stopReason: "provider_credit" });
+		// The API refused the run lookup: said so, rather than reading as "never ran".
+		expect(body.instances[3]).toMatchObject({ instanceId: "i4", status: "paused", run: null, runError: "forbidden" });
+		// Only the instances that made the cut were looked up.
+		const loopCalls = h.fetchStub.calls.filter((c) => c.url.includes("/loop"));
+		expect(loopCalls.map((c) => c.method)).toEqual(["GET", "GET", "GET", "GET", "GET"]);
+		expect(loopCalls.some((c) => c.url.includes("/i6/"))).toBe(false);
+		// A read: nothing was audited.
+		expect(h.auditEvents().filter((e) => e.tool === "recent_instances")).toEqual([]);
+	});
+
+	it("answers an empty list with a hint, and makes no roster or run call", async () => {
+		const h = setup();
+		const res = await h.tools.get("recent_instances")!.handler({});
+		const body = JSON.parse(res.content[0].text) as { instances: unknown[]; hint: string };
+		expect(body.instances).toEqual([]);
+		expect(body.hint).toContain("my_instances");
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
+	it("is a read: refused without the read scope, allowed in read-only mode", async () => {
+		const denied = setup({ scopes: ["write", "runtime", "destructive"] });
+		const refusal = await denied.tools.get("recent_instances")!.handler({});
+		expect(refusal.content[0].text).toContain('requires MCP scope "read"');
+
+		const ro = setup({ readOnly: true });
+		const ok = await ro.tools.get("recent_instances")!.handler({});
+		expect(JSON.parse(ok.content[0].text)).toMatchObject({ instances: [] });
+	});
+
+	it("requires a session and surfaces a roster error", async () => {
+		const anon = setup({ token: null });
+		expect((await anon.tools.get("recent_instances")!.handler({})).content[0].text).toContain("authentication required");
+
+		const h = setup();
+		touch(h, "user-1", "i1", "coding_loop_status", "2026-09-09T10:00:00.000Z");
+		h.fetchStub.respond((u) => u.endsWith("/my/instances"), { status: 500, body: { error: "boom" } });
+		expect((await h.tools.get("recent_instances")!.handler({})).content[0].text).toBe("Error: boom");
+	});
+});

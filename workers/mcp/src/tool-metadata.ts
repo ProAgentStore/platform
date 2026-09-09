@@ -35,7 +35,7 @@ import type { McpScope } from "./safety.js";
  * addition goes AFTER the id-first sentence, never before it.
  */
 export const SERVER_INSTRUCTIONS = [
-	"ProAgentStore hosts server-side AI agents. Almost every tool acts on ONE agent instance, so start by getting an id: my_instances lists the ones the connected user already runs; list_agents is the public catalogue and subscribe_agent creates an instance from it.",
+	"ProAgentStore hosts server-side AI agents. Almost every tool acts on ONE agent instance, so start by getting an id: my_instances lists the ones the connected user already runs, recent_instances the few they drove most recently with each one's live run health; list_agents is the public catalogue and subscribe_agent creates an instance from it.",
 	"Before calling a tool, read its input schema from tools/list and send exactly those snake_case parameter names. IDs, task IDs, session IDs, job keys, node names and cursors are opaque: copy them exactly from the tool that returned them, do not derive, shorten, pluralize or rename them.",
 	"An instance's OWN tools are one level down from this surface and are usually the direct path: list_instance_tools names what one instance may actually run — its GitHub, HTTP and search connectors as well as its own memory, files and knowledge — and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: driving a terminal to shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path.",
 	"To debug what an agent did, call agent_trace first (chat turns, steps and errors on one timeline), then instance_messages or list_errors for detail. usage_summary reports spend.",
@@ -180,6 +180,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	query_instance_records: "read",
 	query_records: "read",
 	read_agent_file: "read",
+	recent_instances: "read",
 	sdk_reference: "read",
 	// The two reads that POST: the API expresses a vector query as a request BODY, so the
 	// method says "write" and the tool does not. Named in the test's exemption list, which
@@ -329,7 +330,10 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #772: `get_instance_connection_guide`, which renders the per-instance
 	// connection guide from live state. Reads only — the whole document is derived and the
 	// route writes nothing, which is the property #739 Decision 4 makes load-bearing.
-	read: 75,
+	// +1 read at #787: `recent_instances`, which joins the session's own touch record against
+	// the roster and each instance's run list. Three GETs and nothing written — the recording
+	// half lives in the registration pipeline, not in this tool.
+	read: 76,
 	write: 45,
 	runtime: 16,
 	destructive: 14,

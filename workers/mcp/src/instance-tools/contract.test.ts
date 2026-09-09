@@ -13,6 +13,7 @@ import { registerGuideTools } from "./guide.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerObservabilityTools } from "./observability.js";
+import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
 import { registerSettingsTools } from "./settings.js";
@@ -338,6 +339,9 @@ const TABLE: Record<string, Row> = {
 	list_runner_nodes: ["runtime", "none", null, null, "token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
 	my_instances: ["base", "none", null, null, "token"],
+	// #787: the caller's own recency view. `read`-gated like `get_instance_connection_guide`
+	// rather than a bare proxy, so MCP_READ_ONLY and a suspended account both see the call.
+	recent_instances: ["recent", "read", null, null, "token"],
 	register_instance_runtime: ["runtime", "runtime", null, "envelope", "capabilities,dry_run,endpoint_url,instance_id,placement,runner_token,runner_version,token"],
 	resolve_feedback: ["observability", "write", null, "envelope", "dry_run,feedback_id,issue_url,status,token"],
 	remove_repo: ["repo", "write", null, "envelope", "confirm,dry_run,instance_id,repo_url,token"],
@@ -398,6 +402,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	guide: registerGuideTools as any,
 	knowledge: registerKnowledgeTools as any,
 	observability: registerObservabilityTools as any,
+	recent: registerRecentTools as any,
 	repo: registerRepoTools as any,
 	runtime: registerRuntimeTools as any,
 	settings: registerSettingsTools as any,

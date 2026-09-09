@@ -309,4 +309,19 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.21 is published.
 	"0.1.22": "sha256:0565f1ca5211d6b338a2268514c0ab56d4d761d019982473a0c384b98a3a497d",
+	// 0.1.23 (#787): one new tool NAME registered unconditionally (always-on), `recent_instances`
+	// (read) — the first bullet of `MCP_SERVER_VERSION`'s bump list. 150 registrations become
+	// 151; `MCP_TOOL_ALWAYS_ON` moves 127 → 128; `MCP_TOOL_GATED` (derived) stays at 23.
+	// `SERVER_INSTRUCTIONS` also moved: its id-first sentence now names the new tool beside
+	// `my_instances`, and the instructions are inside the fingerprint by DECISION 1.
+	//
+	// It is the name a caching host cannot work around, and the one this ticket exists for: a
+	// fresh conversation asking "what was I working on?" had only `my_instances` (the whole
+	// roster, ordered by the instance's own activity) and `coding_loop_status` (one instance,
+	// id required). The recency signal did not exist — read tools audit nothing — so the same
+	// change records it, from the registration pipeline, which is why no `inputSchema` moved:
+	// the recording is a property of the seam, not an argument on any tool.
+	//
+	// Appended, never edited in place: 0.1.22 is published.
+	"0.1.23": "sha256:a468f949178aaa27b85a5edfcf40bf4b5dd637ec74c6f3ad94f165dac7da6890",
 };

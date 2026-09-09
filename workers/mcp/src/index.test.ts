@@ -74,7 +74,8 @@ function makeFetchStub(): FetchStub {
 	const stub: FetchStub = {
 		calls: [],
 		respond(matcher, res) {
-			rules.push({ match: matcher, status: res.status ?? 200, body: res.body ?? {} });
+			// Newest rule first, so a test can override what `setup()` pre-programmed (the roster).
+			rules.unshift({ match: matcher, status: res.status ?? 200, body: res.body ?? {} });
 		},
 	};
 	vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -169,7 +170,11 @@ async function setup(opts: HarnessOpts = {}) {
 		tools,
 		fetchStub,
 		auditStore: store,
-		auditEvents: () => Array.from(store.values()).map((v) => JSON.parse(v) as Record<string, unknown>),
+		// Audit rows only: the same KV holds the `recent:` touches (#787), which are not audit events.
+		auditEvents: () =>
+			Array.from(store.entries())
+				.filter(([k]) => k.startsWith("audit:"))
+				.map(([, v]) => JSON.parse(v) as Record<string, unknown>),
 	};
 }
 
@@ -1095,5 +1100,70 @@ describe("tool annotations", () => {
 			.filter((f) => readFileSync(f, "utf8").includes('from "./tool-metadata.js"'))
 			.map((f) => f.slice(dir.length));
 		expect(importers.sort()).toEqual(["index.ts", "oauth-provider.ts", "registration.ts"]);
+	});
+});
+
+// ── The recency record behind recent_instances (#787) ────────────────────────
+//
+// Written by the registration PIPELINE, not by handlers — so the proof has to run the real
+// `init()` and call a captured tool through the wrapper the pipeline installed. A test on the
+// recorder alone (`recent-instances.test.ts`) cannot show that a call reaches it.
+
+describe("the registration pipeline records which instance a call touched (#787)", () => {
+	const touches = (h: Awaited<ReturnType<typeof setup>>) =>
+		[...h.auditStore.entries()].filter(([k]) => k.startsWith("recent:")).map(([k, v]) => [k, JSON.parse(v) as Record<string, unknown>] as const);
+
+	it("records a call that names an instance_id, under the connection's subject, after the handler ran", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u) => u.includes("/v1/instances/i1/loop"), { body: { runs: [] } });
+		await h.tools.get("coding_loop_status")!.handler({ instance_id: "i1" });
+		expect(touches(h)).toEqual([["recent:user-1:i1", expect.objectContaining({ instance: "i1", tool: "coding_loop_status" })]]);
+		// A READ left a record here and nowhere else: the audit trail is still write-only.
+		expect(h.auditEvents().filter((e) => e.tool === "coding_loop_status")).toEqual([]);
+	});
+
+	it("records nothing for a call with no instance_id, and nothing for a suspended account", async () => {
+		const h = await setup();
+		await h.tools.get("my_instances")!.handler({});
+		await h.tools.get("whoami")!.handler({});
+		expect(touches(h)).toEqual([]);
+
+		const suspended = await setup();
+		suspended.fetchStub.respond((u) => u.endsWith("/v1/auth/me"), { status: 403, body: { error: "suspended" } });
+		const res = await suspended.tools.get("get_instance_connection_guide")!.handler({ instance_id: "i1" });
+		expect(res.content[0].text).toContain("suspended");
+		expect(touches(suspended)).toEqual([]);
+	});
+
+	it("keys a per-call token's touches by the identity that token resolves to, not the connection's", async () => {
+		// Same rule as the audit subject (#702): a scripted caller's `token` is an identity. An
+		// unverifiable one is nobody, and records nothing.
+		const h = await setup({ env: { SESSION_SIGNING_KEY: "k" } });
+		await h.tools.get("get_instance_connection_guide")!.handler({ instance_id: "i1", token: "not-a-session" });
+		expect(touches(h)).toEqual([]);
+	});
+
+	it("records the pinned instance on every call of a /mcp/i/<id> session, which names it in no argument (#783)", async () => {
+		const h = await setup({ groups: [], pinnedInstance: "inst-1" });
+		const [name] = [...h.tools.keys()];
+		await h.tools.get(name)!.handler({});
+		expect(touches(h).map(([k, v]) => [k, v.instance, v.tool])).toEqual([["recent:user-1:inst-1", "inst-1", name]]);
+	});
+
+	it("is read back by recent_instances, which is registered always-on", async () => {
+		const h = await setup({ groups: [] });
+		expect(h.tools.has("recent_instances")).toBe(true);
+		expect(h.tools.get("recent_instances")!.config.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), {
+			body: { instances: [{ id: "i1", agent_id: "a1", slug: "coder", name: "Coder", status: "active" }] },
+		});
+		h.fetchStub.respond((u) => u.includes("/v1/instances/i1/loop"), {
+			body: { runs: [{ runId: "r1", status: "running", health: "working", stopReason: null, waitingReason: null, waitingUntil: null, waitNote: null, objective: "x", startedAt: 1, finishedAt: null }] },
+		});
+		await h.tools.get("get_instance_connection_guide")!.handler({ instance_id: "i1" });
+		const res = await h.tools.get("recent_instances")!.handler({});
+		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>> };
+		expect(body.instances).toHaveLength(1);
+		expect(body.instances[0]).toMatchObject({ instanceId: "i1", name: "Coder", lastTool: "get_instance_connection_guide", run: { runId: "r1", health: "working" } });
 	});
 });
