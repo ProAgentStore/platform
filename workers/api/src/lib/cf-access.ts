@@ -48,6 +48,19 @@ interface Jwk {
 let jwksCache: { domain: string; keys: Jwk[]; fetchedAt: number } | null = null;
 const JWKS_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * Whether this isolate has already said the perimeter is off (#108).
+ *
+ * An inert gate had no positive production signal by construction: `off` returned `next()` and
+ * nothing else, so a deploy with the admin routes live and no `CF_ACCESS_*` secrets looked exactly
+ * like a healthy one. Workers have no startup hook that sees bindings — `env` exists only per
+ * request — so "startup" means the first admin request each isolate handles, and the flag keeps it
+ * to one line per isolate rather than one per poll of the admin SPA. `console.warn`, not
+ * `logError`: a row per cold start is heartbeat, and the error log carries evidence. `/health`
+ * reports the same state durably (`adminPerimeter`).
+ */
+let warnedOff = false;
+
 async function getJwks(teamDomain: string): Promise<Jwk[]> {
 	const now = Date.now();
 	if (jwksCache && jwksCache.domain === teamDomain && now - jwksCache.fetchedAt < JWKS_TTL_MS) {
@@ -166,7 +179,15 @@ const OUTCOME_MESSAGE: Record<Exclude<AccessOutcome, "valid">, Record<"audit" | 
 export function cloudflareAccessGate() {
 	return async (c: Context<{ Bindings: Env }>, next: Next) => {
 		const mode = cloudflareAccessMode(c.env);
-		if (mode === "off") return next();
+		if (mode === "off") {
+			// `API_BUILD` is "dev" from wrangler.toml locally and the real SHA on a CI deploy, so a
+			// developer's own machine stays quiet and a production isolate says it once.
+			if (!warnedOff && c.env.API_BUILD !== "dev") {
+				warnedOff = true;
+				console.warn("[cf-access] gate is OFF — CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD are unset; admin routes are unprotected");
+			}
+			return next();
+		}
 
 		const token = c.req.header("Cf-Access-Jwt-Assertion");
 		const outcome: AccessOutcome = !token

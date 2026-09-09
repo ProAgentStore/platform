@@ -51,7 +51,7 @@ import { adminSettingsRoutes } from "./routes/admin-settings.js";
 import { toolRoutes } from "./routes/tools.js";
 import { connectorRoutes } from "./routes/connectors.js";
 import { mcpRoutes } from "./routes/mcp.js";
-import { cloudflareAccessGate } from "./lib/cf-access.js";
+import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
@@ -199,7 +199,9 @@ app.route("/v1/admin", adminOpsRoutes); // /ops
 app.route("/v1/admin", adminTriggersRoutes); // /triggers
 app.route("/v1/admin", adminSettingsRoutes); // /settings/platform-ai — runtime kill switch
 
-app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api" }));
+// `adminPerimeter` (#108): the Access gate's state — off / audit / enforce — readable without a
+// credential, so a deploy can check it and an inert perimeter is a visible fact, not a silence.
+app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api", adminPerimeter: cloudflareAccessMode(c.env) }));
 
 // ── Global error handler ───────────────────────────────────────────────────
 

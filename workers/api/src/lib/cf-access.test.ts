@@ -129,6 +129,31 @@ async function run(e: Partial<Env>, token?: string) {
 }
 
 describe("cloudflareAccessGate — off", () => {
+	// `warnedOff` is module-level and once-per-isolate (#108), so these three run in this order on
+	// purpose: the silent case first, before any call can have consumed the one warning.
+	it("stays silent on a local build (API_BUILD = dev)", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const { passed } = await run({ API_BUILD: "dev" });
+		expect(passed).toBe(true);
+		expect(warn).not.toHaveBeenCalled();
+		expect(logError).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("warns ONCE per isolate on a deployed build that the gate is off — and never writes the error log", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const first = await run({ API_BUILD: "abc1234" });
+		expect(first.passed).toBe(true);
+		expect(first.thrown).toBeUndefined();
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0][0]).toContain("gate is OFF");
+		// The second admin request on the same isolate is what the admin SPA's polling looks like.
+		await run({ API_BUILD: "abc1234" });
+		expect(warn).toHaveBeenCalledOnce();
+		expect(logError).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
 	it("is a pure no-op when unconfigured, and logs nothing", async () => {
 		const { passed, thrown } = await run({});
 		expect(passed).toBe(true);
