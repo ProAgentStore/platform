@@ -696,6 +696,30 @@ export async function touchSessionDriver(
  *
  * A claim that has gone quiet for {@link STALE_DRIVER_MS} is takeable. `driver_at IS NULL` is
  * takeable too — a row claimed before the heartbeat existed must not lock the session forever.
+ *
+ * ── A STEAL RETIRES WHAT IT DISPLACES (#790, symptom 3)
+ *
+ * Taking a stale claim used to be silent: the UPDATE matched, `true` came back, and the run that
+ * had been holding the claim was left `status = 'running'` with nobody to close it. So the session
+ * had TWO officially-running runs, and because `ensureActiveSession` reuses a session that is still
+ * `active`, the new Pilot attached to the same tmux pane the old engine was sitting in — which is
+ * what the incident saw as "the original stuck run's engine went back to `working`" after a second
+ * `coding_loop_start`.
+ *
+ * The window was not small. `STALE_DRIVER_MS` is 15 minutes and `STALE_RUN_MS` is 3 hours, so for
+ * 2h45m a session could be re-driven while its previous run was still officially in flight and
+ * still owned by nothing. **Answering the question the plan raised: the two constants are
+ * deliberately different and should stay so** — they answer different questions ("may I drive this
+ * session?" vs "is this run still alive?") and the claim must become takeable long before a run is
+ * declared dead, or a genuinely dead workflow would lock its repo out for three hours. What was
+ * wrong was never the gap; it was that nothing happened at the moment the gap was crossed. Retiring
+ * the displaced run AT THE STEAL closes it regardless of how far apart the two numbers are.
+ *
+ * Ordered steal-then-retire, and it must stay that way: the retire is scoped to runs on this
+ * session that are still `running`, and all three callers claim BEFORE creating their own run row
+ * (`loop-drivers.ts`, `routes/coding-brains.ts`, `routes/coding-drive.ts`), so the new run cannot
+ * yet exist to be caught by it. A caller that ever creates its run row first would retire itself —
+ * `claim-retires-displaced.test.ts` pins the ordering for exactly that reason.
  */
 export async function claimSessionDriver(
 	env: Env,
@@ -704,6 +728,14 @@ export async function claimSessionDriver(
 	sessionId: string,
 	driverId: string,
 ): Promise<boolean> {
+	// Who holds it now, read BEFORE the steal — afterwards the column says `driverId` and the fact
+	// that a claim was taken from somebody is gone. Only used to decide whether this was a STEAL:
+	// claiming a free session, or re-claiming one this driver already holds, displaces nothing.
+	const held = await env.DB
+		.prepare("SELECT driver_id FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(sessionId, instanceId, userId)
+		.first<{ driver_id: string | null }>()
+		.catch(() => null);
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
 		    SET driver_id = ?5, driver_at = ?4, last_activity_at = ?4, updated_at = datetime('now')
@@ -713,8 +745,39 @@ export async function claimSessionDriver(
 	)
 		.bind(sessionId, instanceId, userId, Date.now(), driverId, Date.now() - STALE_DRIVER_MS)
 		.run();
-	return (res.meta?.changes ?? 0) > 0;
+	const claimed = (res.meta?.changes ?? 0) > 0;
+	if (claimed && held?.driver_id && held.driver_id !== driverId) {
+		await retireDisplacedRuns(env, instanceId, userId, sessionId);
+	}
+	return claimed;
 }
+
+/**
+ * Close any run still calling itself `running` on a session whose claim has just been taken (#790).
+ *
+ * Best-effort, and that is a decision rather than an oversight: the caller is about to start real
+ * work, the claim is already theirs, and refusing to start because a bookkeeping UPDATE failed would
+ * convert a stale row into a blocked user. A row this misses is still caught by the sweeper.
+ *
+ * `interrupted` is the reason (#546) — the platform cut the invocation off and the objective never
+ * reported either way — which `statusFor` puts in `needs_human` rather than `failed`. That is the
+ * honest column: the displaced run may have pushed commits before it wedged, so somebody should
+ * look rather than assume nothing happened.
+ */
+async function retireDisplacedRuns(env: Env, instanceId: string, userId: string, sessionId: string): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE agent_loop_runs
+		    SET status = 'needs_human', stop_reason = 'interrupted', detail = ?4, finished_at = ?5
+		  WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'running'`,
+	)
+		.bind(sessionId, instanceId, userId, DISPLACED_DETAIL, Date.now())
+		.run()
+		.catch(() => undefined);
+}
+
+const DISPLACED_DETAIL =
+	"This run stopped heartbeating and a newer run took over its session, so the platform closed it. " +
+	"It did not report either way — check the repository before assuming its work was lost.";
 
 /** Give the session back. Scoped to the holder, so a late release can't free someone else's claim. */
 export async function releaseSessionDriver(

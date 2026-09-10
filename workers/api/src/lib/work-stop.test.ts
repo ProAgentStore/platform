@@ -23,13 +23,16 @@ const run = (over: Partial<LoopRunView> = {}): LoopRunView => ({
 	startedAt: Date.now() - 60_000,
 	finishedAt: null,
 	lastProgressAt: Date.now() - 10_000,
-	// Four fields this factory simply did not have, each carrying the default `rowToView`
-	// (agent-loop-store.ts:151) gives it. They were invisible while this file was excluded from tsc
+	// Fields this factory simply did not have, each carrying the default `rowToView`
+	// (agent-loop-store.ts) gives it. They were invisible while this file was excluded from tsc
 	// (#599), so every run here was built with `lastAliveAt`/`waitingReason`/`waitingUntil` as
 	// `undefined` and `interruptions` absent — none of which the real mapper can produce.
+	// `parkedSince` joined them at #790, and tsc named it here the moment it did, which is the
+	// property #599 bought.
 	lastAliveAt: null,
 	waitingUntil: null,
 	waitingReason: null,
+	parkedSince: null,
 	interruptions: 0,
 	delegatedBy: null,
 	sessionId: null,

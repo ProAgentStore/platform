@@ -215,12 +215,19 @@ export const STATUS_DOMAINS: Record<string, StatusDomain> = {
 		values: { running: "app", completed: "app", failed: "app", interrupted: "app" },
 	},
 	"agent_loop_runs.status": {
-		values: { running: "app", completed: "app?", failed: "app", needs_human: "app?", cancelled: "app" },
+		values: { running: "app", completed: "app?", failed: "app", needs_human: "app", cancelled: "app" },
 		note:
-			"`finishLoopRun` (lib/agent-loop-store.ts:341) is the only terminal write and binds its " +
-			"`reason` argument; the three terminal values are decided by the workflows that call it " +
-			"(workflows/agent-loop.ts:280, workflows/coding-session.ts:227, workflows/pipeline-run.ts — #619). " +
-			"'running' is the INSERT literal at :156.",
+			"`finishLoopRun` (lib/agent-loop-store.ts) is the terminal write for a run that ENDS ITSELF, " +
+			"and binds its `reason` argument; the terminal values are decided by the workflows that call " +
+			"it (workflows/agent-loop.ts, workflows/coding-session.ts, workflows/pipeline-run.ts — #619). " +
+			"'running' is the INSERT literal. Two BACKSTOPS also write terminally, for runs whose driver " +
+			"is gone and so can never reach `finishLoopRun` at all — the thing that file's rule cannot " +
+			"cover: `lib/run-sweeper.ts` (three passes through one `closeRuns`, which derives the status " +
+			"from the reason through `statusFor` so the two cannot disagree) and " +
+			"`lib/coding-store.ts`'s `retireDisplacedRuns`, which closes the run a stale-claim steal " +
+			"displaces (#790). The latter is why `needs_human` is `app` rather than `app?`: it is the " +
+			"first LITERAL writer of that value, `statusFor('interrupted')` having always produced it " +
+			"through a bind the scanner cannot see.",
 	},
 	"mcp_input_requests.status": {
 		values: { pending: "app", answered: "app", cancelled: "app", expired: "app" },

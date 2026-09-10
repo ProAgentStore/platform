@@ -62,6 +62,49 @@ function ago(ms: number): string {
 export const STALLED_AFTER_MS = 15 * 60 * 1000;
 
 /**
+ * How long a park may last before it stops being a park and starts being a wedge (#790).
+ *
+ * This is the DEFAULT — the bound for a reason with no budget of its own. Per-reason budgets are
+ * {@link PARK_LIMIT_MS}, and they are the point: a single number is wrong here, which is the
+ * surprise this ticket turned up. `coding-session.ts:605` records that "a usage-limit park may
+ * legitimately last six [hours]", so a flat four-hour cap would call a perfectly healthy
+ * `engine_limit` park stalled — turning a bug where nothing is ever reported into a bug where
+ * healthy runs are, which is the #459 direction and the worse of the two.
+ */
+export const MAX_PARK_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * What each park's silence is WORTH, in milliseconds, before it reads as death.
+ *
+ * The three reasons are not the same kind of wait and their honest budgets differ by two orders of
+ * magnitude:
+ *
+ *   platform_interrupt  A journal replay in flight. Cloudflare replays in seconds; #583's own
+ *                       measured storm was seven deploys in 48 minutes, each resumed promptly. A
+ *                       replay that has not landed in 15 minutes is not landing — and this is the
+ *                       park run fe53a0c1 sat in for 25+ minutes reporting `waiting` (#790). Same
+ *                       15 minutes as {@link STALLED_AFTER_MS}, deliberately: this park's claim is
+ *                       precisely "nothing is ticking and that is fine", so once it stops being
+ *                       fine it should be judged by the same clock as any other silence.
+ *   human               A takeover or a needs-input handoff, which `coding-pause.ts` already bounds
+ *                       at 15 minutes. Doubled, so the platform's own give-up fires first and this
+ *                       only catches a handoff whose timer never ran.
+ *   engine_limit        The engine's OWN subscription window, which really can be ~6h. 8h leaves an
+ *                       hour of headroom past the longest window anyone has observed, and this park
+ *                       almost always carries `waitingUntil` anyway — which overrides everything
+ *                       here (see {@link runHealth}).
+ *
+ * A table rather than an `if`, for the reason `RUN_WAIT_REASONS` is an array (#596): a fourth park
+ * reason must not be able to arrive without someone choosing its budget, and
+ * `run-health-readers.test.ts` walks the enum to make sure it cannot.
+ */
+export const PARK_LIMIT_MS: Record<RunWaitReason, number> = {
+	platform_interrupt: STALLED_AFTER_MS,
+	human: 30 * 60 * 1000,
+	engine_limit: 8 * 60 * 60 * 1000,
+};
+
+/**
  * What a `running` row actually means right now (#580).
  *
  * `status` has three states hiding inside it, and until 0127 the record could only express two of
@@ -153,6 +196,15 @@ export interface RunHealthInput {
 	lastAliveAt?: number | null;
 	lastProgressAt?: number | null;
 	startedAt: number;
+	/**
+	 * ms epoch this park began (0150, #790). Optional-and-nullable like every other signal here: a
+	 * caller that has not read the column falls back through the heartbeat exactly as an unwritten
+	 * column does, which is conservative in the safe direction — it can only make a park look OLDER
+	 * and so be bounded sooner, never younger.
+	 */
+	parkedSince?: number | null;
+	/** ms epoch this park's clock runs out, when the platform knows one (#596). See {@link runHealth}. */
+	waitingUntil?: number | null;
 }
 
 /**
@@ -176,13 +228,45 @@ export interface RunHealthInput {
  * minute line and read as stalled; `last_alive_at` is written by the pause tick and by the capture
  * poll, at most a minute apart, so silence on it is evidence rather than a slow step.
  */
+/**
+ * Has this park outstayed what its reason is worth? (#790)
+ *
+ * ── `waitingUntil` wins, and that ordering is the argument
+ *
+ * When the platform has published an instant, it KNOWS when this park ends — `planEngineWait`
+ * computed it off the engine's own stated window — and a budget guessed from a table has no
+ * business overriding a fact. So a park inside its own deadline is never overrun, however long it
+ * is. The budget below is what governs the park that publishes NO instant, which is exactly
+ * `platform_interrupt`: it has no knowable end (`coding-pause.ts`), it is therefore the park that
+ * can hide indefinitely, and it is the one the incident was in.
+ *
+ * Past a published deadline the budget applies again, from the park's start. A deadline that has
+ * come and gone with the run still parked is a claim that has been falsified, not a licence.
+ *
+ * `parkedSince` absent falls back through the heartbeat to `startedAt`, the same chain the sweeper
+ * and `runHealth` already share — so a pre-0150 row is bounded from a timestamp that is at least as
+ * old as its park, never newer.
+ */
+function parkOverrun(run: RunHealthInput, now: number): boolean {
+	if (run.waitingUntil && now < run.waitingUntil) return false;
+	const limit = PARK_LIMIT_MS[run.waitingReason as RunWaitReason] ?? MAX_PARK_MS;
+	const since = run.parkedSince ?? run.lastAliveAt ?? run.lastProgressAt ?? run.startedAt;
+	return now - since > limit;
+}
+
 export function runHealth(run: RunHealthInput, now: number): RunHealth {
 	// A CLOSED run makes no liveness claim in either direction (#459's rule, #588's member).
 	if (run.status !== "running") return "ended";
 	// A park OUTRANKS the heartbeat test, and deliberately so: a run parked on a platform
 	// interruption (#583) is mid-resume and has nothing ticking BY DESIGN, so reading its silence as
 	// death would report a recovery in progress as a failure.
-	if (run.waitingReason) return "waiting";
+	//
+	// It no longer outranks it FOREVER (#790). That short-circuit had no time bound, so `stalled`
+	// was unreachable for a parked run at any age — and `waiting_reason` is cleared by exactly one
+	// condition (an iteration ADVANCING), which a wedged run never meets. Run fe53a0c1 sat here for
+	// 25+ minutes on instruction 1 of 15, reporting `waiting`, which is the sentence that tells an
+	// owner nothing is wrong.
+	if (run.waitingReason) return parkOverrun(run, now) ? "stalled" : "waiting";
 	const last = run.lastAliveAt ?? run.lastProgressAt ?? run.startedAt;
 	return now - last > STALLED_AFTER_MS ? "stalled" : "working";
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RUN_HEALTH_LEGEND, RUN_HEALTH_STATES, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
+import { MAX_PARK_MS, PARK_LIMIT_MS, RUN_HEALTH_LEGEND, RUN_HEALTH_STATES, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
 import { statusFor, type LoopRunStatus, type LoopStopReason } from "./agent-loop.js";
 import type { LoopRunView } from "./agent-loop-store.js";
 import type { TerminalView } from "./terminal-label.js";
@@ -27,6 +27,7 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		lastAliveAt: NOW - 40_000,
 		waitingUntil: null,
 		waitingReason: null,
+		parkedSince: null,
 		interruptions: 0,
 		delegatedBy: null,
 		sessionId: null,
@@ -305,12 +306,19 @@ describe("describeLoopRun", () => {
 			// #583: a run interrupted by our own deploy is parked with nothing ticking BY DESIGN
 			// while Cloudflare replays its journal. Reading that silence as death would report a
 			// recovery in progress as a failure.
+			//
+			// The heartbeat here is five minutes dead — well past a heartbeat interval, so the park
+			// is genuinely doing the outranking — and the park itself is young. This assertion used
+			// to use a heartbeat AND a park an hour old, which #790 measured as the other defect:
+			// see the test below. What #583 needs protected is the resume IN FLIGHT, and that is
+			// what this now pins.
 			const resuming = run({
 				status: "running",
 				finishedAt: null,
-				lastAliveAt: NOW - 60 * 60_000,
+				lastAliveAt: NOW - 5 * 60_000,
 				lastProgressAt: NOW - 60 * 60_000,
 				waitingReason: "platform_interrupt",
+				parkedSince: NOW - 5 * 60_000,
 				waitingUntil: null,
 			});
 			expect(runHealth(resuming, NOW)).toBe("waiting");
@@ -318,6 +326,24 @@ describe("describeLoopRun", () => {
 			// transport drop, and "a platform update interrupted it" would be a false accusation
 			// against our own deploys. Which cause it was lives on the `error_log` row's class.
 			expect(describeLoopRun(resuming, NOW)).toContain("interrupted by something other than the work");
+		});
+
+		it("but it does NOT outrank it forever — a replay that never landed is stalled (#790)", () => {
+			// The defect this closes. `waiting_reason` is cleared by exactly one condition, an
+			// iteration ADVANCING, which a wedged run never meets — so the park short-circuit had no
+			// time bound and `stalled` was unreachable for a parked run at any age. Run fe53a0c1 sat
+			// exactly here for 25+ minutes on instruction 1 of 15, reporting `waiting`, which is the
+			// sentence that tells an owner nothing is wrong.
+			const wedged = run({
+				status: "running",
+				finishedAt: null,
+				lastAliveAt: NOW - 60 * 60_000,
+				lastProgressAt: NOW - 60 * 60_000,
+				waitingReason: "platform_interrupt",
+				parkedSince: NOW - 60 * 60_000,
+				waitingUntil: null,
+			});
+			expect(runHealth(wedged, NOW)).toBe("stalled");
 		});
 
 		it("a human handoff is a park too, and says so in the second person", () => {
@@ -545,5 +571,107 @@ describe("recentWorkPrompt — the context block that removes the tool-call deci
 		expect(p).toContain("## Your recent work");
 		expect(p).toContain("d1");
 		expect(p).toMatch(/Never deny one of these/);
+	});
+});
+
+
+/**
+ * A park has to END (#790).
+ *
+ * `runHealth` short-circuited on `waitingReason` with no time bound, so `stalled` was unreachable
+ * for a parked run at any age — and `waiting_reason` is cleared by exactly one condition, an
+ * iteration ADVANCING, which a wedged run never meets. Run fe53a0c1 sat parked on
+ * `platform_interrupt` for 25+ minutes on instruction 1 of 15, reporting `waiting` the whole time.
+ */
+describe("a park is bounded by what its REASON is worth (#790)", () => {
+	const parked = (over: Partial<LoopRunView>) =>
+		run({ status: "running", finishedAt: null, waitingUntil: null, lastAliveAt: NOW - 60_000, ...over });
+
+	it("stays `waiting` inside its budget, on every reason", () => {
+		// The #583 protection, held for all three: a park doing its job must never read as death.
+		for (const reason of Object.keys(PARK_LIMIT_MS) as Array<keyof typeof PARK_LIMIT_MS>) {
+			const inside = parked({ waitingReason: reason, parkedSince: NOW - (PARK_LIMIT_MS[reason] - 1000) });
+			expect(runHealth(inside, NOW), reason).toBe("waiting");
+		}
+	});
+
+	it("flips to `stalled` past it, on every reason", () => {
+		for (const reason of Object.keys(PARK_LIMIT_MS) as Array<keyof typeof PARK_LIMIT_MS>) {
+			const past = parked({ waitingReason: reason, parkedSince: NOW - (PARK_LIMIT_MS[reason] + 1000) });
+			expect(runHealth(past, NOW), reason).toBe("stalled");
+		}
+	});
+
+	it("gives each reason a DIFFERENT budget, because their honest silences differ by hours", () => {
+		// The surprise this ticket turned up: a single flat cap is wrong here. `coding-session.ts`
+		// records that a usage-limit park may legitimately last six hours, so a four-hour cap would
+		// call a healthy `engine_limit` park stalled — trading a bug where nothing is reported for
+		// one where healthy runs are, which is the #459 direction and the worse of the two.
+		expect(PARK_LIMIT_MS.platform_interrupt).toBe(STALLED_AFTER_MS);
+		expect(PARK_LIMIT_MS.engine_limit).toBeGreaterThan(6 * 60 * 60_000);
+		expect(PARK_LIMIT_MS.platform_interrupt).toBeLessThan(PARK_LIMIT_MS.engine_limit);
+	});
+
+	it("the incident's own shape: a 25-minute platform_interrupt park is stalled", () => {
+		const fe53a0c1 = parked({
+			waitingReason: "platform_interrupt",
+			parkedSince: NOW - 25 * 60_000,
+			lastAliveAt: NOW - 25 * 60_000,
+			lastProgressAt: NOW - 25 * 60_000,
+			iteration: 1,
+			maxIterations: 15,
+		});
+		expect(runHealth(fe53a0c1, NOW)).toBe("stalled");
+		expect(describeLoopRun(fe53a0c1, NOW)).toContain("STALLED");
+	});
+
+	it("a published deadline OUTRANKS the budget while it is still in the future", () => {
+		// When the platform has stated when a park ends, it knows — `planEngineWait` computed it off
+		// the engine's own window. A table has no business overriding a fact.
+		const longButKnown = parked({
+			waitingReason: "engine_limit",
+			parkedSince: NOW - 20 * 60 * 60_000,
+			waitingUntil: NOW + 60_000,
+		});
+		expect(runHealth(longButKnown, NOW)).toBe("waiting");
+	});
+
+	it("…and stops outranking it once that deadline has passed", () => {
+		// A deadline that has come and gone with the run still parked is a claim that was falsified,
+		// not a licence.
+		const overdue = parked({
+			waitingReason: "engine_limit",
+			parkedSince: NOW - 20 * 60 * 60_000,
+			waitingUntil: NOW - 60_000,
+		});
+		expect(runHealth(overdue, NOW)).toBe("stalled");
+	});
+
+	it("dates the park from parkedSince, NOT from the heartbeat the park keeps refreshing", () => {
+		// The whole mechanism. A park ticks every minute or so; if the bound were measured from the
+		// heartbeat it would measure "time since the last tick" and never expire — the same defect
+		// one column over.
+		const tickingForever = parked({
+			waitingReason: "platform_interrupt",
+			parkedSince: NOW - 60 * 60_000,
+			lastAliveAt: NOW - 1000,
+		});
+		expect(runHealth(tickingForever, NOW)).toBe("stalled");
+	});
+
+	it("falls back to the heartbeat on a pre-0150 row, which can only bound it EARLIER", () => {
+		// Conservative in the safe direction: a missing `parked_since` reads as a park at least as
+		// old as the heartbeat, never younger, so an unmigrated row is judged sooner rather than
+		// escaping the bound entirely.
+		const legacy = parked({ waitingReason: "platform_interrupt", parkedSince: null, lastAliveAt: NOW - 60 * 60_000 });
+		expect(runHealth(legacy, NOW)).toBe("stalled");
+	});
+
+	it("MAX_PARK_MS is the fallback for a reason with no budget of its own", () => {
+		// A fourth park reason arriving without a budget must still be bounded, not exempt.
+		const unknown = parked({ waitingReason: "something_new" as never, parkedSince: NOW - (MAX_PARK_MS + 1000) });
+		expect(runHealth(unknown, NOW)).toBe("stalled");
+		const young = parked({ waitingReason: "something_new" as never, parkedSince: NOW - 1000 });
+		expect(runHealth(young, NOW)).toBe("waiting");
 	});
 });

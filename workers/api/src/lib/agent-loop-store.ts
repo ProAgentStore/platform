@@ -32,6 +32,12 @@ export interface LoopRunRow {
 	waiting_until: number | null;
 	/** Why it is parked (0127) — a short platform enum, never free text. */
 	waiting_reason: string | null;
+	/**
+	 * ms epoch this park BEGAN (0150, #790). Non-null exactly when `waiting_reason` is, and — the
+	 * property the bound depends on — NOT pushed forward by the ticks a park generates. See the
+	 * migration for why none of the existing timestamps can answer "how long has it been parked".
+	 */
+	parked_since: number | null;
 	/** Platform interruptions this run was resumed through (0127, #583). */
 	interruptions: number | null;
 	/** Supervisor instance that delegated this run (0090). Null when the owner started it. */
@@ -119,6 +125,15 @@ export interface LoopRunView {
 	waitingUntil: number | null;
 	/** Why the run is parked, or null when it is not (#580). */
 	waitingReason: RunWaitReason | null;
+	/**
+	 * ms epoch this park BEGAN, or null when the run is not parked (0150, #790).
+	 *
+	 * The signal `runHealth` needs to bound a park, and the one no existing column could carry: the
+	 * heartbeat is rewritten by every tick, progress dates the last ADVANCE, and `waitingUntil` is
+	 * null for the one park that has no knowable end — which is precisely the park that can hide
+	 * forever. Written once when the park starts and deliberately NOT refreshed while it lasts.
+	 */
+	parkedSince: number | null;
 	/** Platform interruptions this run has been resumed through (#583). */
 	interruptions: number;
 	/**
@@ -158,6 +173,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		lastAliveAt: row.last_alive_at ?? null,
 		waitingUntil: row.waiting_until ?? null,
 		waitingReason: (row.waiting_reason as RunWaitReason | null) ?? null,
+		parkedSince: row.parked_since ?? null,
 		interruptions: row.interruptions ?? 0,
 		delegatedBy: row.delegated_by ?? null,
 		sessionId: row.session_id ?? null,
@@ -262,6 +278,10 @@ export async function listDelegatedRuns(
  *
  * Liveness always moves, because an advance is also a heartbeat, and a park is CLEARED on the same
  * condition: a run that advanced is by definition no longer waiting for anything.
+ *
+ * `parked_since` is cleared on that same condition and in that same statement (0150, #790) — the
+ * invariant it has to keep is that it is non-null exactly when `waiting_reason` is, and the only way
+ * to guarantee that is for one statement to write both.
  */
 export async function recordIteration(env: Env, runId: string, iteration: number, at: number = Date.now()): Promise<void> {
 	await env.DB.prepare(
@@ -270,6 +290,7 @@ export async function recordIteration(env: Env, runId: string, iteration: number
 		        last_progress_at = CASE WHEN ?2 > iteration THEN ?3 ELSE last_progress_at END,
 		        waiting_until = CASE WHEN ?2 > iteration THEN NULL ELSE waiting_until END,
 		        waiting_reason = CASE WHEN ?2 > iteration THEN NULL ELSE waiting_reason END,
+		        parked_since = CASE WHEN ?2 > iteration THEN NULL ELSE parked_since END,
 		        last_alive_at = ?3
 		  WHERE run_id = ?1`,
 	)
@@ -312,7 +333,24 @@ export async function recordLiveness(
 		await env.DB.prepare("UPDATE agent_loop_runs SET last_alive_at = ?2 WHERE run_id = ?1").bind(runId, at).run();
 		return;
 	}
-	await env.DB.prepare("UPDATE agent_loop_runs SET last_alive_at = ?2, waiting_reason = ?3, waiting_until = ?4 WHERE run_id = ?1")
+	// `parked_since` is set only when the row is NOT ALREADY PARKED, and that CASE is the whole
+	// mechanism (#790). A park generates a tick every few minutes and every one of them calls this
+	// function with the same reason; writing `at` unconditionally would push the park's start date
+	// forward on every tick, and the bound built on it would measure "time since the last tick" —
+	// which is the exact defect this closes, reintroduced one column over. Cleared in the same
+	// statement when the park is (`wait: null`), so the two columns cannot disagree.
+	await env.DB.prepare(
+		`UPDATE agent_loop_runs
+		    SET last_alive_at = ?2,
+		        waiting_reason = ?3,
+		        waiting_until = ?4,
+		        parked_since = CASE
+		          WHEN ?3 IS NULL THEN NULL
+		          WHEN waiting_reason IS NULL OR parked_since IS NULL THEN ?2
+		          ELSE parked_since
+		        END
+		  WHERE run_id = ?1`,
+	)
 		.bind(runId, at, wait?.reason ?? null, wait?.until ?? null)
 		.run();
 }
@@ -345,10 +383,16 @@ export async function countInterruption(env: Env, runId: string): Promise<number
  * budget pool and leak headroom the tree never gets back.
  */
 export async function requestCancel(env: Env, userId: string, runId: string): Promise<boolean> {
+	// `cancel_requested_at` is what lets the sweeper enforce a stop the workflow never read (0150,
+	// #790). COALESCE so a second `stop_work` on the same run does not reset the clock — the run has
+	// been ignoring the request since the FIRST one, and re-asking must not buy it another grace
+	// period.
 	const res = await env.DB.prepare(
-		"UPDATE agent_loop_runs SET cancel_requested = 1 WHERE run_id = ?1 AND user_id = ?2 AND status = 'running'",
+		`UPDATE agent_loop_runs
+		    SET cancel_requested = 1, cancel_requested_at = COALESCE(cancel_requested_at, ?3)
+		  WHERE run_id = ?1 AND user_id = ?2 AND status = 'running'`,
 	)
-		.bind(runId, userId)
+		.bind(runId, userId, Date.now())
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }
