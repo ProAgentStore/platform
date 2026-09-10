@@ -4,8 +4,20 @@ import { toolBlurbFor, withPartialToolLog } from "./agent-think.js";
 import { findCalls, matchLines, stripCommentsAndLiterals } from "./lib/source-guard.js";
 import type { AgentCapabilities } from "./lib/agent-capabilities.js";
 
-/** agent-think.ts as written, and with comments/strings blanked (line numbers preserved). */
-const THINKER = readFileSync(new URL("./agent-think.ts", import.meta.url).pathname, "utf-8");
+/**
+ * The chat turn's implementation as written, and with comments/strings blanked.
+ *
+ * BOTH FILES since #777. The turn used to be one 1,250-line file; the middle of it — gathering what
+ * the agent is and can see, and folding that into the messages — now lives in `agent-think-prompt.ts`.
+ * Every assertion below asks "does the code that runs a turn do X", and that subject did not change
+ * when it was split across two files. Scanning only the first would have left each one green while
+ * measuring roughly a third less, which is the failure mode this whole file is built to prevent.
+ *
+ * Line numbers in failure messages are relative to the concatenation rather than to either file.
+ * They are diagnostics, never assertions — every check below is on content.
+ */
+const THINKER_FILES = ["./agent-think.ts", "./agent-think-prompt.ts"] as const;
+const THINKER = THINKER_FILES.map((f) => readFileSync(new URL(f, import.meta.url).pathname, "utf-8")).join("\n");
 const THINKER_CODE = stripCommentsAndLiterals(THINKER);
 
 describe("withPartialToolLog (#24 — surface committed side effects on a late failure)", () => {

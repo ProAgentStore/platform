@@ -435,7 +435,28 @@ const NOT_PROMPT_TEXT: Record<string, string> = {
 		"named `-prompt` but it is not one: it builds the ENGINE's environment (which credential a CLI signs in with), and is imported by `routes/coding.ts`, not by the chat prompt builder. Nothing it returns is read by a model.",
 };
 
-const REACH = promptModulesReachedBy(readFileSync(join(SRC, "agent-think.ts"), "utf8"));
+/**
+ * The assembly sites, read from BOTH halves of the turn (#777).
+ *
+ * `runAgentThink` was one 1,250-line function until #777 moved its middle — the stretch that
+ * gathers what the agent is and can see — into `agent-think-prompt.ts`. TWENTY-SIX of the forty-three
+ * `systemPrompt +=` statements went with it, and six modules append the prompt from nowhere else:
+ * `agent-style-prompt`, `connector-tool-prompt`, `deployment-prompt`, `repo-status-prompt`,
+ * `runner-availability` and `template-preview-tools`.
+ *
+ * Scanning only the original file after that split would have dropped all six from the reviewed set
+ * and stayed GREEN — a smaller denominator is indistinguishable from a clean one, which is the exact
+ * argument this derivation exists to make (see `PROMPT_MODULES_BY_HAND` above). So the union is the
+ * measurement, and `ASSEMBLY_FILES` is what a future split has to be added to.
+ */
+const ASSEMBLY_FILES = ["agent-think.ts", "agent-think-prompt.ts"] as const;
+const REACHES = ASSEMBLY_FILES.map((f) => promptModulesReachedBy(readFileSync(join(SRC, f), "utf8")));
+const REACH = {
+	modules: [...new Set(REACHES.flatMap((r) => r.modules))],
+	appendSites: REACHES.reduce((n, r) => n + r.appendSites, 0),
+	importedNames: REACHES.reduce((n, r) => n + r.importedNames, 0),
+	unresolved: [...new Set(REACHES.flatMap((r) => r.unresolved))],
+};
 
 const PROMPT_MODULES = [...new Set([...Object.keys(PROMPT_MODULES_BY_HAND), ...REACH.modules])].sort();
 
@@ -576,6 +597,33 @@ describe("the modules the ratchet reads", () => {
 		expect(REACH.modules.length).toBeGreaterThanOrEqual(15);
 	});
 
+	it("needs BOTH halves of the assembly — dropping either loses modules (#777)", () => {
+		// G4, and the assertion that makes the union above load-bearing rather than decorative.
+		// The split moved 26 of 43 append sites into the second file; if scanning one file were
+		// enough, the union would be cosmetic and the next person would drop it. So: prove that
+		// each half reaches modules the other does not, by measuring the halves separately.
+		//
+		// Stated as "each half contributes", not with hardcoded module names, so an honest future
+		// move of one block between the two files does not fail this — what must not happen is a
+		// file leaving the scan.
+		const [fromThink, fromPrompt] = REACHES.map((r) => new Set(r.modules));
+		const onlyInThink = [...fromThink].filter((m) => !fromPrompt.has(m));
+		const onlyInPrompt = [...fromPrompt].filter((m) => !fromThink.has(m));
+		expect(onlyInPrompt.length, `scanning only agent-think.ts would lose: ${onlyInPrompt.join(", ")}`).toBeGreaterThan(0);
+		expect(onlyInThink.length, `scanning only agent-think-prompt.ts would lose: ${onlyInThink.join(", ")}`).toBeGreaterThan(0);
+		// And the six #777 named, since those are the ones the split actually moved. Containment,
+		// not equality — this is the floor the union has to clear, not a description of it.
+		for (const m of [
+			"lib/agent-style-prompt.ts",
+			"lib/connector-tool-prompt.ts",
+			"lib/deployment-prompt.ts",
+			"lib/repo-status-prompt.ts",
+			"lib/template-preview-tools.ts",
+		]) {
+			expect(REACH.modules, `${m} appends to the prompt and must stay in the scanned set`).toContain(m);
+		}
+	});
+
 	it("scans every *-prompt.ts module, or says why not", () => {
 		// The name rule, which catches what the derivation cannot: a module written and named as
 		// prompt text but not yet wired in, or wired in through a shape the resolver misses.
@@ -657,17 +705,23 @@ describe("the modules the ratchet reads", () => {
  * clauses. It pins the meaning — what the three sub-rules SAY — not the exact wording, so a
  * rewording that preserves intent does not fail.
  */
-describe("#459 — failure-honesty prompt block is present in agent-think.ts (#620)", () => {
-	const src = readFileSync(join(SRC, "agent-think.ts"), "utf8");
+describe("#459 — failure-honesty prompt block is present in the assembly (#620)", () => {
+	// BOTH halves since #777: the HONESTY paragraph these clauses pin now lives in
+	// `agent-think-prompt.ts`, along with the rest of the middle of the turn. Reading only the
+	// original file would have left every assertion below matching against a source that no longer
+	// contains the text — a loud failure here, but the same split silently narrowed the module
+	// derivation above, which is the reason both reads are unioned rather than re-pointed.
+	const src = ASSEMBLY_FILES.map((f) => readFileSync(join(SRC, f), "utf8")).join("\n");
 	const text = promptTextOf(src);
 
 	it("read a plausible source file — G1 guard so a parse failure is not a silent pass", () => {
-		// The real file is over 1 000 lines. 700 is comfortably below honest churn and far above
-		// what an empty parse or an empty file would produce.
+		// The assembly is over 1 300 lines across the two files. 700 is comfortably below honest
+		// churn and far above what an empty parse or a missing file would produce.
 		expect(
 			src.split("\n").length,
-			"agent-think.ts has fewer than 700 lines — the file moved, was replaced, or the path is wrong;\n" +
-				"the clauses below are measuring nothing. Investigate before trusting a green run.",
+			"the chat assembly has fewer than 700 lines across ASSEMBLY_FILES — a file moved, was replaced,\n" +
+				"or a path is wrong; the clauses below are measuring nothing. Investigate before trusting a\n" +
+				"green run.",
 		).toBeGreaterThanOrEqual(700);
 	});
 

@@ -1038,7 +1038,18 @@ const PINS = {
 	// literal that splits the body it already had; the estimator and its logging are
 	// lib/prompt-section-estimates.ts. Raised rather than split: the labels have to be produced
 	// where the message array is assembled, and moving them out would hand that module the prompt.
-	"workers/api/src/agent-think.ts": 1251,
+	// −394 at #777: the middle of `runAgentThink` — 371 lines gathering what the agent IS and what
+	// it can SEE, and folding that into the messages — moved to `agent-think-prompt.ts`. The file
+	// was 1,250 against this pin and 1,071 of those were ONE function, so the ticket's "split along
+	// distinct pipeline stages" had exactly one seam wide enough to cut: the stretch on either side
+	// shares `allToolLog`, `mutations` and the resumable closure with the tool loop and cannot be
+	// lifted without dragging the loop with it.
+	//
+	// Recorded at the SHRINK arm's insistence, which is the half of this guard that matters here:
+	// leaving the pin at 1251 would hand the 394 lines straight back as headroom, and that is
+	// numerically how #138's refactor was undone within hours. The new file is 541 and needs no
+	// entry (LIMIT is 800) — deliberately, so it has to earn one before it grows.
+	"workers/api/src/agent-think.ts": 857,
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing
@@ -1577,7 +1588,10 @@ const PINS = {
 	// these two. Same self-referential growth every raise costs — the reason IS the record.
 	// +11 at #788: the two raises above (tools.ts and coding-session.ts, five lines of why each)
 	// and this note. Same self-referential growth every raise costs — the reason IS the record.
-	"scripts/check-file-size.mjs": 1661,
+	// +13 at #777: the agent-think.ts entry above — eleven lines recording a SHRINK, which is the
+	// arm of this guard that is easiest to skip and the one that decides whether a refactor holds
+	// its ground — plus these two.
+	"scripts/check-file-size.mjs": 1675,
 };
 
 /**

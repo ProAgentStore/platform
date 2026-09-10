@@ -131,10 +131,23 @@ describe("every reader that hands stored history to a model redacts first (#406)
 	const read = (rel: string) => readFileSync(new URL(rel, import.meta.url).pathname, "utf-8");
 
 	it("agent-think builds its prompt from the redacted history and never from `messages` raw", () => {
-		const src = read("../agent-think.ts");
-		expect(src).toMatch(/redactFabricatedHistory\(messages\)\.map\(/);
-		// The pre-fix line, which is what a later edit would most naturally reintroduce.
-		expect(stripCommentsAndLiterals(src)).not.toMatch(/\.\.\.messages\.map\(/);
+		// BOTH halves of the assembly since #777. `runAgentThink`'s middle moved to
+		// `agent-think-prompt.ts` and took the `aiMessages` construction — and therefore this call —
+		// with it. Scanning the two rather than re-pointing at the one that happens to hold it today:
+		// the failure this guard is about is a THIRD reader appearing beside these, and it would
+		// appear in whichever file the assembly is in at the time.
+		const files = ["../agent-think.ts", "../agent-think-prompt.ts"];
+		const srcs = files.map(read);
+		// G1 — both files must be readable and non-trivial, or "no raw `.map`" below is a claim
+		// about an empty string.
+		for (const [i, src] of srcs.entries()) {
+			expect(src.split("\n").length, `${files[i]} is too small to be the assembly — the scan is measuring nothing`).toBeGreaterThan(100);
+		}
+		const joined = srcs.join("\n");
+		expect(joined).toMatch(/redactFabricatedHistory\(messages\)\.map\(/);
+		// The pre-fix line, which is what a later edit would most naturally reintroduce — checked
+		// across both, since either file could grow one.
+		expect(stripCommentsAndLiterals(joined)).not.toMatch(/\.\.\.messages\.map\(/);
 	});
 
 	it("the summarizer's transcript is built from the redacted list", () => {
