@@ -292,6 +292,12 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	write_agent_file: "destructive",
 	cancel_instance: "destructive",
 	cancel_instance_task: "destructive",
+	// #692: detaching a repo from a coding instance. The BINDING is cheap to recreate with
+	// `coding_repo_add`, which on its own would argue for `write` — but removing it asks the runner
+	// to end any active session on that repo first, so the call reaches out and stops engine
+	// processes on the owner's machine. A scope is about what a call can disturb, not about how hard
+	// the row is to retype.
+	coding_repo_remove: "destructive",
 	clear_instance_messages: "destructive",
 	delete_instance_connector_grant: "destructive",
 	delete_instance_file: "destructive",
@@ -340,10 +346,15 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `write` and not `destructive` for the cancel, on the same reasoning as the enabled/disabled
 	// pair above: withdrawing a queued objective stops work that has not begun and destroys
 	// nothing — the run it would have become does not exist yet.
+	// +1 destructive at #692: `coding_repo_remove`, the counterpart `coding_repo_add` never had.
+	// The surface could attach a repo to a coding instance and not detach one, so a binding added in
+	// error — a GitHub org the owner does not own, a local workdir that no longer exists — could only
+	// be cleaned up in the console. `destructive` rather than `write` because the removal ends any
+	// active engine on that repo; see its entry above.
 	read: 77,
 	write: 46,
 	runtime: 16,
-	destructive: 14,
+	destructive: 15,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

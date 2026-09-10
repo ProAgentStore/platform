@@ -342,4 +342,23 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.23 is published.
 	"0.1.24": "sha256:8c3f4657df1d24196df6b1fc937e95babd811c42fac0911c3c346262ca3f7960",
+	// 0.1.25 (#692): one new tool NAME, `coding_repo_remove` — the first bullet of
+	// `MCP_SERVER_VERSION`'s bump list. SURFACE-GATED, not always-on: it lives in
+	// `coding-tools.ts` behind `groups.has("coding")` beside `coding_repo_add`, so 153
+	// registrations become 154, `MCP_TOOL_GATED` (derived) moves 23 → 24, and
+	// `MCP_TOOL_ALWAYS_ON` stays at 130.
+	//
+	// It closes an asymmetry rather than adding a capability: the surface could ATTACH a repo to a
+	// coding instance (`coding_repo_add`) and had no way to detach one, so a binding created by
+	// automation could only be removed by a human in the console. The endpoint it calls,
+	// `DELETE /v1/instances/:id/coding/repos/:repoId`, has existed all along — its only caller was
+	// `agents/coder/web`, which is why the MCP parity guard never saw the gap (that guard inventories
+	// `store/console/src`).
+	//
+	// Annotated `destructive` (`destructiveHint: true`), with a `confirm` string and a `dry_run`,
+	// because removing the binding asks the runner to end any active engine on that repo.
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.24 is published.
+	"0.1.25": "sha256:ec2538db46e034243a5f9b0474d7c99e55e14680b30beaa7910044dd25a0ef89",
 };

@@ -114,6 +114,10 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// #788: addressing, like every id above it — which queue entry `coding_loop_queue_cancel`
 	// is about. Obtained from `coding_loop_queue`, never composed by the caller.
 	"entry_id",
+	// #692: addressing, the same job as `repo_id` above — WHICH repo `coding_repo_remove` is
+	// about, for a caller holding the owner's words rather than an id. Nothing stores it: the
+	// tool resolves it to an id and the id is what goes on the wire.
+	"repo_name",
 ]);
 
 /**

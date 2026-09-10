@@ -64,7 +64,7 @@ src/
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
-├── coding-tools.ts       12 tools — the coding surface: open/capture/message/restart/end a
+├── coding-tools.ts       13 tools — the coding surface: open/capture/message/restart/end a
 │                         repo's conversation, repos, overseer, diagnostics, deploy status (#683)
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
 └── instance-tools/
@@ -91,7 +91,7 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**153 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**154 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
 `storage-tools.ts`, and 107 across `instance-tools/`. 130 are always registered; 23 are
 surface-gated (apply=4, repo=3, coding=16).
@@ -219,7 +219,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 23 tools are surface-gated.
+  given connection, because 24 tools are surface-gated.
 
 ## Bindings and secrets
 

@@ -345,16 +345,86 @@ describe("promotion is a human action", () => {
 		expect(callers).toEqual(["lib/repo-policies.ts", "routes/coding-repos.ts"]);
 	});
 
-	it("no MCP tool can reach the route that accepts one", () => {
-		// The MCP worker talks to the API over HTTP, so the guard is on the PATH it names. Both known
-		// references are the collection (list repos / add a repo); the promotion route is the
-		// per-repo `PUT …/coding/repos/:repoId`, which nothing here may construct.
+	/**
+	 * Only CODE counts. A path quoted in a comment cannot call anything, and #692 proved the
+	 * distinction matters: `coding_repo_remove`'s docblock names the endpoint it wraps, and the
+	 * unstripped scan reported that prose as an offender alongside the real call. A guard that
+	 * cannot tell an explanation from an instruction trains people to delete the explanation.
+	 */
+	const codeOf = (p: string) =>
+		readFileSync(p, "utf-8")
+			.replace(/\/\*[\s\S]*?\*\//g, " ")
+			.split("\n")
+			.map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1"))
+			.join("\n");
+
+	it("no MCP tool constructs a repo path outside the recorded set", () => {
+		// The MCP worker talks to the API over HTTP, so the first half of the guard is on the PATH.
+		// EXACT set equality rather than "⊆ allowed", the `security-invariants.ts` shape: removing a
+		// caller fails too, so the list can only change deliberately.
 		const paths = new Set<string>();
 		for (const p of walk(MCP)) {
-			for (const m of readFileSync(p, "utf-8").matchAll(/["'`]([^"'`]*coding\/repos[^"'`]*)["'`]/g)) paths.add(m[1]);
+			for (const m of codeOf(p).matchAll(/["'`]([^"'`]*coding\/repos[^"'`]*)["'`]/g)) paths.add(m[1]);
 		}
 		// Spelled by concatenation so the literal is not itself a template placeholder — biome reads
 		// `${…}` inside a plain string as a mistake, and here it is the exact text being asserted.
-		expect([...paths].sort()).toEqual([`/v1/instances/$\{instance_id}/coding/repos`]);
+		expect([...paths].sort()).toEqual([
+			// The COLLECTION — list repos, add a repo. Cannot carry a policy: the field is accepted
+			// only by the per-repo route below.
+			`/v1/instances/$\{instance_id}/coding/repos`,
+			// The per-repo path, added at #692 for `coding_repo_remove` — the counterpart
+			// `coding_repo_add` never had, without which a binding created by automation could only
+			// be removed by a human in the console. It is reachable ONLY with DELETE, which the next
+			// test is what actually enforces.
+			`/v1/instances/$\{instance_id}/coding/repos/$\{encodeURIComponent(targetId as string)}`,
+		]);
 	});
-});
+
+	it("no MCP tool sends a PUT to a repo path — the promotion route's own verb", () => {
+		// THE INVARIANT, stated precisely. The test above is a path-shape proxy for it, and #692
+		// showed the proxy is not the rule: `PUT …/coding/repos/:repoId` is what accepts
+		// `sanitizeRepoPolicies`, and DELETE on the same path cannot promote anything. Left as a
+		// path-only guard, the next legitimate per-repo tool either gets refused for no reason or —
+		// far likelier — gets waved through by widening the list, and the widening is what would
+		// silently admit a PUT.
+		//
+		// The path is usually held in a CONST and passed to `authedCall` many lines later, so a
+		// window measured from the path literal reaches the wrong code — the first cut of this guard
+		// did exactly that and passed against a deliberately planted PUT, which is the "matches
+		// nothing, looks identical to passing" failure `source-guard.ts` is about. So: resolve the
+		// identifiers that hold a repo path, then judge each `authedCall` by its OWN first argument.
+		const offenders: string[] = [];
+		const REPO_PATH = /coding\/repos/;
+		for (const p of walk(MCP)) {
+			const code = codeOf(p);
+			// `const endpoint = ` + "`…/coding/repos/…`" — the identifiers that carry a repo path.
+			const held = new Set<string>();
+			for (const m of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*["'`]([^"'`]*)["'`]/g)) {
+				if (REPO_PATH.test(m[2])) held.add(m[1]);
+			}
+			for (const m of code.matchAll(/authedCall\(\s*([^,]+),/g)) {
+				const arg = m[1].trim();
+				const isRepoPath = REPO_PATH.test(arg) || held.has(arg);
+				if (!isRepoPath) continue;
+				// The options object is the third argument of this same call.
+				const call = code.slice(m.index ?? 0, (m.index ?? 0) + 300);
+				if (/method:\s*["'`]PUT["'`]/.test(call)) offenders.push(`${p.slice(MCP.length)}: ${arg}`);
+			}
+		}
+		// G1 — the scan must have SEEN the repo calls, or "no offenders" means "no measurement".
+		// This is the assertion whose absence let the first cut of this guard pass while blind.
+		const seen: string[] = [];
+		for (const p of walk(MCP)) {
+			const code = codeOf(p);
+			const held = new Set<string>();
+			for (const m of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*["'`]([^"'`]*)["'`]/g)) {
+				if (REPO_PATH.test(m[2])) held.add(m[1]);
+			}
+			for (const m of code.matchAll(/authedCall\(\s*([^,]+),/g)) {
+				const arg = m[1].trim();
+				if (REPO_PATH.test(arg) || held.has(arg)) seen.push(`${p.slice(MCP.length)}: ${arg}`);
+			}
+		}
+		expect(seen.length, "the scan found no repo-path authedCall at all — it is measuring nothing").toBeGreaterThanOrEqual(3);
+		expect(offenders, "an MCP tool that PUTs to a repo path can promote a policy to `act` (#322)").toEqual([]);
+	});});

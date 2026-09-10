@@ -27,7 +27,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { github } from "./repo-tools.js";
-import { audit, requirePermission, type SafetyContext } from "./safety.js";
+import { audit, dryRun, requireConfirmation, requirePermission, type SafetyContext } from "./safety.js";
 import { runStateSentence } from "./state-vocabulary.js";
 
 type TokenResolver = (provided?: string) => string | null;
@@ -443,6 +443,115 @@ export function registerCodingSessionTools(
 			const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env);
 			await audit(safetyFor(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path } });
 			return jsonText(r);
+		},
+	);
+
+	// ── Detaching a repo (#692, comment 1) ──
+	//
+	// The surface had `coding_repo_add` and `coding_repos_list` and no way back. A repo attached in
+	// error could only be removed in the console, so the same automation that created a binding could
+	// not undo it — and the issue names three live examples: a GitHub binding to an org the owner does
+	// not own, plus two local bindings whose absolute workdirs no longer exist on disk
+	// (`cloneStatus: needs_attention`). All three were stuck.
+	//
+	// `remove_repo` is NOT this tool and cannot stand in for it: that one detaches a repo from
+	// repo-chat VECTOR INGESTION. The binding here is a `coding_repos` row, a different object with a
+	// different lifecycle, and the issue calls out the confusion explicitly.
+	//
+	// ── The API endpoint already existed
+	//
+	// `DELETE /v1/instances/:id/coding/repos/:repoId` (routes/coding-repos.ts) has been there all
+	// along, called from the Coder web UI. It is not a bare row delete: it first asks the runner to end
+	// any ACTIVE sessions on that repo, because deleting the row removes the last handle to them and a
+	// stop that quietly failed would leave a CLI process writing to a checkout no API could reach. It
+	// proceeds even when the runner does not confirm — a flaky runner must not trap an owner with a
+	// repo they cannot remove — and returns a `warning` naming how many engines were left running.
+	// That warning is passed through verbatim below: it is the half a caller must act on, and
+	// swallowing it would recreate the orphaned-process problem one layer up.
+	//
+	// The parity guard never flagged the gap because it inventories `store/console/src`, and this
+	// endpoint's only caller is `agents/coder/web`.
+	//
+	// ── Why it takes a NAME as well as an id
+	//
+	// The issue asks for "repo id or name". A caller that has just listed repos has the id; a caller
+	// acting on the owner's words has "the platform one". Resolving the name goes through
+	// `filterReposByInstance` — the same guard #692's other half added — so a mis-routed listing
+	// cannot make this tool delete a repo belonging to a different instance. An ambiguous name is
+	// REFUSED rather than resolved to the first match: picking one of two repos called `platform` and
+	// deleting it is not recoverable.
+	server.tool(
+		"coding_repo_remove",
+		"Detach a repo from a coding instance — the counterpart to coding_repo_add, and the way to clean up a binding that was added in error or whose local checkout no longer exists. Identify the repo by `repo_id` (from coding_repos_list) or by `repo_name`; a name that matches more than one repo is refused rather than guessed. Any ACTIVE coding session on that repo is asked to stop first, because removing the binding is the last handle on the engine process; if one does not confirm it stopped, the removal still completes and the reply carries a `warning` naming how many may still be running on the owner's machine — act on that. This does NOT delete the repository itself, any code, or anything on GitHub: it removes the agent's binding to it, and the same repo can be added again with coding_repo_add. It is also NOT remove_repo, which detaches a repo from repo-chat vector ingestion — a different object entirely.",
+		{
+			instance_id: z.string().describe("Instance ID or slug"),
+			repo_id: z.string().optional().describe("Repo ID from coding_repos_list. Preferred — it is unambiguous. Give this OR repo_name."),
+			repo_name: z.string().optional().describe("The repo's name as coding_repos_list reports it, when you do not have its id. Refused if it matches more than one repo on this instance."),
+			confirm: z.string().optional().describe('Must be "coding_repo_remove" to actually detach the repo.'),
+			dry_run: z.boolean().optional().describe("Report which repo would be detached, without detaching it. Resolves the name, so it is also how you check that a name is unambiguous."),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ instance_id, repo_id, repo_name, confirm, dry_run, token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, repo_id, repo_name };
+			// `destructive`, not `write`. The binding is cheap to recreate, but this ENDS RUNNING
+			// ENGINES on the owner's machine as a side effect, and a scope is about what a call can
+			// disturb rather than about how hard the row is to type again.
+			const denied = await requirePermission(safetyFor(token), "destructive", "coding_repo_remove", input);
+			if (denied) return denied;
+			if (!repo_id && !repo_name) return text("Error: coding_repo_remove needs repo_id or repo_name. Call coding_repos_list to see this instance's repos.");
+
+			// Resolve a name to an id BEFORE the confirmation gate, so a caller confirming is
+			// confirming a repo that exists and is unique — and so `dry_run` can report the same
+			// resolution without committing to anything.
+			let targetId = repo_id;
+			let targetName = repo_name;
+			if (!targetId) {
+				const listed = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as {
+					repos?: CodingRepoRow[];
+					error?: string;
+				};
+				if (listed.error) return jsonText(listed);
+				const wanted = String(repo_name).trim().toLowerCase();
+				const matches = filterReposByInstance(listed.repos || [], instance_id).filter((r) => (r.name ?? "").trim().toLowerCase() === wanted);
+				if (!matches.length) return text(`Error: no repo named "${repo_name}" on this instance. Call coding_repos_list to see what is attached.`);
+				if (matches.length > 1) {
+					return text(
+						`Error: "${repo_name}" matches ${matches.length} repos on this instance (${matches.map((r) => r.id).join(", ")}). ` +
+							"Call coding_repo_remove again with repo_id — deleting the wrong one is not recoverable.",
+					);
+				}
+				targetId = matches[0].id;
+				targetName = matches[0].name ?? repo_name;
+			}
+
+			const endpoint = `/v1/instances/${instance_id}/coding/repos/${encodeURIComponent(targetId as string)}`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "coding_repo_remove", "detach a repo from a coding instance", input, {
+					endpoint,
+					method: "DELETE",
+					repoId: targetId,
+					repoName: targetName ?? null,
+					effect: "The agent's binding to this repo would be removed, and any active coding session on it asked to stop. The repository itself, its code and its GitHub remote are untouched.",
+					reversible: "Re-attach with coding_repo_add. Per-repo instructions and session history for this binding are not restored.",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_repo_remove", confirm, "coding_repo_remove", input);
+			if (unconfirmed) return unconfirmed;
+
+			const data = await authedCall(endpoint, sessionToken, { method: "DELETE" }, env);
+			// `authedCall` RETURNS a non-2xx as `{error}` rather than throwing — the same trap #788
+			// names on `coding_loop_start`. Auditing without looking is how a 404 gets recorded as a
+			// completed deletion.
+			if ((data as { error?: string }).error) return jsonText(data);
+			await audit(safetyFor(token), {
+				tool: "coding_repo_remove",
+				action: "completed",
+				input: { ...input, repoId: targetId },
+				result: data,
+			});
+			return jsonText({ ...(data as object), repoId: targetId, repoName: targetName ?? null });
 		},
 	);
 

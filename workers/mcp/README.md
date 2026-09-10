@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**153 tool registrations.** 130 are always registered; 23 are gated to the console
+**154 tool registrations.** 130 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -325,6 +325,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_diagnostics` | Same picture, for debugging offline/stuck sessions | — | | |
 | `coding_repos_list` | Repos registered on the instance + their sessions | — | | |
 | `coding_repo_add` | Add a repo by local path, `owner/repo`, or clone URL | write | | |
+| `coding_repo_remove` | Detach a repo from a coding instance — the counterpart to `coding_repo_add`; stops any active engine on it first, and deletes no code | destructive | yes | `coding_repo_remove` |
 | `coding_sessions_list` | All sessions, active and ended | — | | |
 | `coding_session_capture` | Live terminal output + run state (LIVE sessions only — an ended one answers with an empty pane) | — | | |
 | `coding_timeline` | What a run is doing, cursored by `since_seq` — objective, each instruction driven, pane tails, outcome. Works on a finished run too | read | | |

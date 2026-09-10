@@ -83,7 +83,7 @@ the private runtime is working. The instance is correctly refusing to spend plat
 
 ## Tool Surface
 
-The server registers 153 tools; call `tools/list` for the current set. The tool table in
+The server registers 154 tools; call `tools/list` for the current set. The tool table in
 `workers/mcp/README.md` (or the published `platform-docs/mcp.md`) lists every tool with its
 scope, dry-run support, and confirmation value. The always-on `platform_guide` tool returns a
 plain-text map of the most commonly used ones — call it at the start of a session to orient
@@ -103,7 +103,7 @@ When operating through MCP:
 4. For `call_instance_tool`, first call `list_instance_tools { instance_id, allowed_only: true, schemas: true }`, then pass `tool` as the exact nested tool name and `input` as exactly that nested schema's argument object. Do not wrap `input` in another `input` object.
 5. Use JSON booleans (`true` / `false`) for boolean fields, not strings. Numeric fields that say they coerce may accept strings, but send numbers when possible.
 6. For mutating tools, pass `dry_run: true` first to preview what the call would do before committing it. The result says `dryRun: true` and describes the change without applying it.
-7. Thirteen tools require an exact `confirm` value (compared with `===`, never fuzzy-matched). Twelve use the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `delete_supervision`, `clear_instance_messages`. The exception is `remove_repo`, which requires `confirm: "remove_all_repos"` and only when removing every repo. A refusal from a confirm-gated tool is mechanical — the gate cannot be argued past; supply the exact value.
+7. Fourteen tools require an exact `confirm` value (compared with `===`, never fuzzy-matched). Thirteen use the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `delete_supervision`, `clear_instance_messages`, `coding_repo_remove`. The exception is `remove_repo`, which requires `confirm: "remove_all_repos"` and only when removing every repo. A refusal from a confirm-gated tool is mechanical — the gate cannot be argued past; supply the exact value.
 8. The `destructive` scope is never granted by default. A client connected with standard browser sign-in cannot run delete- or overwrite-style tools unless the authorization flow explicitly requests the `destructive` scope.
 9. Report the MCP result in plain language with IDs, slugs, URLs, and next steps.
 10. If OAuth or credentials block progress, explain the exact approval or credential step needed.
