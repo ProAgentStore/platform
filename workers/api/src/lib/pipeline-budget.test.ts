@@ -75,6 +75,12 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			"lib/tool-registry.ts",
 			// `POST /v1/instances/:id/loop` — the human pressing Loop is always a root.
 			"routes/tools.ts",
+			// The objective queue's drain (#788), which starts a queued follow-up the moment the
+			// run it was waiting behind ends. A NEW autonomous entry point, so it admits separately:
+			// inheriting the finished run's pool would let one `coding_loop_start` open a budget an
+			// unbounded chain of follow-ups then draws on. A root, so depth 0 — the queue is the
+			// owner's, not a subordinate's.
+			"lib/objective-queue-start.ts",
 			// `POST …/coding/sessions/:id/run` — handing one named session to the Pilot is the
 			// same commitment as pressing Loop, through a narrower door. A root, so depth 0 (#502).
 			// Moved out of `routes/coding.ts` with the #775 split; `/run` is a drive route.

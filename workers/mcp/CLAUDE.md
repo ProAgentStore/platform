@@ -88,22 +88,24 @@ src/
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
     └── coding.ts         system_status + coding_timeline + coding_loop_trace + coding_terminal (gated to
-                          surfaces:["coding"]) + 3 loop tools
+                          surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**151 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**153 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 105 across `instance-tools/`. 128 are always registered; 23 are
+`storage-tools.ts`, and 107 across `instance-tools/`. 130 are always registered; 23 are
 surface-gated (apply=4, repo=3, coding=16).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
-+ 13 + 105 = 151. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 107 = 153. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
 the always-on `get_instance_connection_guide` in its own `instance-tools/guide.ts`; and said
 21 + 12 + 13 + 104 = 150 until #787 added the always-on `recent_instances` in
-`instance-tools/recent.ts`. The per-file rows in the tree above are
+`instance-tools/recent.ts`; and said 21 + 12 + 13 + 105 = 151 until #788 added the two
+always-on objective-queue tools (`coding_loop_queue`, `coding_loop_queue_cancel`) beside the
+three loop tools in `instance-tools/coding.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the

@@ -432,6 +432,27 @@ describe("one driver per engine — every path that starts a Pilot claims it (#2
 		expect(sql.some((q) => q.includes("'delegation'"))).toBe(false);
 	});
 
+	it("marks the busy refusal `reason: \"busy\"` — the only 409 here that waiting fixes (#788)", async () => {
+		// `queue_if_busy` turns on this field and not on the status: the objective queue must park
+		// work behind a run in flight, and must NOT park it behind "this agent has no repository",
+		// which is the same 409 and never drains.
+		const { env } = codingEnv(true);
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "busy" });
+	});
+
+	it("does NOT mark a structural 409 as busy", async () => {
+		// No repo on the agent. Same status, opposite remedy — queueing behind it would be work
+		// that can never start, with nobody told.
+		const { env } = stubEnv({ repos: [], session: { id: "s1", client_type: "claude" } });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		if (!out.ok) {
+			expect(out.status).toBe(409);
+			expect(out.reason).toBeUndefined();
+		}
+	});
+
 	it("claims BEFORE opening the run row, so a refusal leaves no orphan", async () => {
 		// Order matters: a claim checked after the row is written leaves an `agent_loop_runs` row
 		// that no workflow will ever close — the stranded-row failure #207C exists to sweep up.

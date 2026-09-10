@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**151 tool registrations.** 128 are always registered; 23 are gated to the console
+**153 tool registrations.** 130 are always registered; 23 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -357,6 +357,8 @@ immediately instead of a whole transcript.
 | `coding_loop_start` | Same run, started for a coding instance — returns a run id, keeps going after the call | runtime | yes | |
 | `coding_loop_status` | Status of that run from the server's record (omit `run_id` to list runs) | read | | |
 | `coding_loop_stop` | Cooperative stop; omit `run_id` to stop the newest running one | write | no ([why](#tools-with-no-dry-run)) | |
+| `coding_loop_queue` | The objectives queued behind the current run (`coding_loop_start` with `queue_if_busy`), FIFO — the top one starts automatically when the active run ends | read | | |
+| `coding_loop_queue_cancel` | Withdraw a queued objective before it starts; only a pending entry can be withdrawn | write | no ([why](#tools-with-no-dry-run)) | |
 
 ### Triggers
 

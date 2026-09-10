@@ -827,7 +827,10 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 
 		const started = h.fetchStub.calls.find((c) => c.url.endsWith("/i1/loop") && c.method === "POST");
 		expect(started).toBeDefined();
-		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5 });
+		// `queueIfBusy: false` is sent EXPLICITLY rather than omitted (#788): the default must be
+		// stated on the wire, so the API's "don't silently auto-queue" rule is a fact about the
+		// request rather than about whichever side happens to default it.
+		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5, queueIfBusy: false });
 		// It must NOT reimplement the loop here any more.
 		expect(h.fetchStub.calls.some((c) => c.url.includes("/loop-decide"))).toBe(false);
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/i1/chat"))).toBe(false);
@@ -848,6 +851,80 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 
 		expect(JSON.parse(res.content[0].text).error).toBeDefined();
 		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start" && e.action === "completed")).toBe(false);
+	});
+
+	// ── Queued follow-up objectives (#788) ──
+
+	it("queue_if_busy is passed through so the API can queue instead of refusing", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", {
+			status: 202,
+			body: { queued: true, entry: { id: "objq-7", status: "pending" }, blocked: "repo is already being worked on" },
+		});
+
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "the next thing", queue_if_busy: true });
+
+		const sent = h.fetchStub.calls.find((c) => c.url.endsWith("/i1/loop") && c.method === "POST");
+		expect(JSON.parse(sent?.body ?? "{}").queueIfBusy).toBe(true);
+		expect(JSON.parse(res.content[0].text).entry.id).toBe("objq-7");
+	});
+
+	it("a queued objective is audited as queued, not as a started run", async () => {
+		// `action: "completed"` with `runId: null` would claim a run began and lose the only handle
+		// on what actually happened.
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", {
+			status: 202,
+			body: { queued: true, entry: { id: "objq-7" } },
+		});
+
+		await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x", queue_if_busy: true });
+
+		const audited = h.auditEvents().find((e) => e.tool === "coding_loop_start");
+		expect(audited?.action).toBe("queued");
+		expect((audited?.result as { queueEntryId?: string })?.queueEntryId).toBe("objq-7");
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start" && e.action === "completed")).toBe(false);
+	});
+
+	it("coding_loop_queue reads the queue, and narrows to one repo when asked", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.includes("/i1/loop/queue") && m === "GET", {
+			body: { entries: [{ id: "objq-1", objective: "next" }] },
+		});
+
+		const res = await h.tools.get("coding_loop_queue")!.handler({ instance_id: "coder", repo_id: "r1" });
+
+		const read = h.fetchStub.calls.find((c) => c.url.includes("/loop/queue"));
+		expect(read?.url).toContain("repo_id=r1");
+		expect(JSON.parse(res.content[0].text).entries[0].id).toBe("objq-1");
+	});
+
+	it("coding_loop_queue_cancel DELETEs the entry and audits it", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.includes("/loop/queue/objq-1") && m === "DELETE", { body: { ok: true, status: "cancelled" } });
+
+		const res = await h.tools.get("coding_loop_queue_cancel")!.handler({ instance_id: "coder", entry_id: "objq-1" });
+
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ ok: true, entryId: "objq-1" });
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_queue_cancel" && e.action === "completed")).toBe(true);
+	});
+
+	it("a cancel the server refuses is not audited as completed", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.includes("/loop/queue/objq-1") && m === "DELETE", {
+			status: 409,
+			body: { error: "that objective is already started and can no longer be cancelled" },
+		});
+
+		const res = await h.tools.get("coding_loop_queue_cancel")!.handler({ instance_id: "coder", entry_id: "objq-1" });
+
+		expect(JSON.parse(res.content[0].text).error).toBeDefined();
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_queue_cancel" && e.action === "completed")).toBe(false);
 	});
 
 	it("reads status from the server's run record, not from memory in this Worker", async () => {

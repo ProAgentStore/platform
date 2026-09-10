@@ -123,6 +123,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_diagnostics: "read",
 	coding_instance_deploy_status: "read",
 	coding_loop_trace: "read",
+	coding_loop_queue: "read",
 	coding_loop_status: "read",
 	coding_repos_list: "read",
 	coding_session_capture: "read",
@@ -199,6 +200,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	add_knowledge: "write",
 	ask_ticket: "write",
 	clear_finished_tasks: "write",
+	coding_loop_queue_cancel: "write",
 	coding_loop_stop: "write",
 	coding_repo_add: "write",
 	create_agent: "write",
@@ -333,8 +335,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #787: `recent_instances`, which joins the session's own touch record against
 	// the roster and each instance's run list. Three GETs and nothing written — the recording
 	// half lives in the registration pipeline, not in this tool.
-	read: 76,
-	write: 45,
+	// +1 read, +1 write at #788: `coding_loop_queue` reads the objectives parked behind an
+	// instance's current run, and `coding_loop_queue_cancel` withdraws one before it starts.
+	// `write` and not `destructive` for the cancel, on the same reasoning as the enabled/disabled
+	// pair above: withdrawing a queued objective stops work that has not begun and destroys
+	// nothing — the run it would have become does not exist yet.
+	read: 77,
+	write: 46,
 	runtime: 16,
 	destructive: 14,
 };

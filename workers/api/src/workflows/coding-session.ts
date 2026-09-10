@@ -47,6 +47,7 @@ import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSl
 import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason } from "../lib/agent-loop-store.js";
+import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import { traceCodingRun } from "../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, resumeNotice, runOutcomeNote } from "../lib/coding-run-report.js";
 import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
@@ -949,6 +950,26 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// for both delegation kinds. Written here, in the same terminal step that closes the
 				// board card, so the two cannot disagree.
 				await closeDelegation(result);
+				// THE LOCK IS NOW FREE — start whatever was queued behind it (#788).
+				//
+				// LAST, and after `closeDelegation`, for two reasons that are the same reason: the run
+				// that just ended must be fully closed before another can be admitted. The session was
+				// ended (or its single-flight claim released) in the `end` step above, so the next
+				// start's `claimSessionDriver` can actually succeed; and `finishLoopRun` has written
+				// this run's terminal row, so nothing that reads `agent_loop_runs` sees two running runs
+				// for one repo.
+				//
+				// Inside `if (!resuming)` with everything else terminal: a run Cloudflare is about to
+				// replay has NOT ended and still holds its claim. Draining there would start a second
+				// run against the engine the replay carries on driving — the exact collision #208
+				// exists to prevent, arriving by the door #788 opened.
+				//
+				// `tryDequeueAndStart` never throws, so no `.catch` here: a queue that cannot be drained
+				// is recorded in `error_log` and must not turn a finished run into a failed step.
+				await step.do("objective-queue-drain", async () => {
+					await tryDequeueAndStart(env, instanceId, repoId, userId);
+					return null;
+				});
 			}
 		}
 		return result;

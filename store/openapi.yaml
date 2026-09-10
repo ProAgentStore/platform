@@ -283,6 +283,49 @@ components:
         error:
           type: string
 
+    ObjectiveQueueEntry:
+      type: object
+      description: >
+        One objective waiting behind an instance's current run. Created by `POST /loop` with
+        `queueIfBusy` when the repo is busy; started automatically, FIFO, when the active run
+        reaches a terminal state.
+      properties:
+        id: { type: string, example: objq-4f1c… }
+        instanceId: { type: string }
+        repoId:
+          type: string
+          nullable: true
+          description: >
+            Which repo this objective is for. Null means ANY — it runs on whichever repo's lock
+            clears first, and is the only kind a chat-driver loop can drain.
+        userId: { type: string }
+        objective: { type: string, maxLength: 2000 }
+        maxIterations:
+          type: integer
+          nullable: true
+          description: >
+            Stored as given and clamped to the account ceiling in force when the objective actually
+            STARTS, not when it was queued. Null takes the platform default.
+        metadata:
+          type: string
+          nullable: true
+          description: Caller-owned. Returned exactly as written; the platform never reads it.
+        status:
+          type: string
+          enum: [pending, running, started, cancelled, failed]
+          description: >
+            `pending` is waiting and is the only cancellable state. `running` is the brief moment a
+            drain is starting it. `started` means a run exists — see `runId`. `failed` means the
+            drain could not start it and `stopReason` says why.
+        stopReason: { type: string, nullable: true }
+        runId:
+          type: string
+          nullable: true
+          description: The run this entry became, once it starts. Read it with `GET /loop/{runId}`.
+        createdAt: { type: integer, description: ms epoch — the FIFO order. }
+        startedAt: { type: integer, nullable: true }
+        finishedAt: { type: integer, nullable: true }
+
     Success:
       type: object
       required: [success]
@@ -7802,6 +7845,15 @@ paths:
                     Coding agents only — which repository this run is for. Omit and the agent's
                     first repo is used, which is what a delegated goal means. A repo that is not
                     on this agent is refused rather than falling back.
+                queueIfBusy:
+                  type: boolean
+                  description: >
+                    When the repo is already being worked on, QUEUE this objective instead of
+                    refusing it: the response is 202 with the queue entry, and the platform starts
+                    it automatically the moment the active run reaches a terminal state. Only the
+                    BUSY refusal queues — an agent with no repository, no runner, or an unusable
+                    checkout still fails, because waiting fixes none of those. Default false, so a
+                    caller that did not ask still gets the 409.
                 budget:
                   type: object
                   properties:
@@ -7821,6 +7873,20 @@ paths:
                   budgetId: { type: string }
                   maxIterations: { type: integer }
                   status: { type: string, example: running }
+        "202":
+          description: >
+            The repo was busy and `queueIfBusy` was set, so the objective was queued rather than
+            started. Nothing is running yet; `entry.id` is the handle for reading or withdrawing it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queued: { type: boolean, example: true }
+                  entry: { $ref: "#/components/schemas/ObjectiveQueueEntry" }
+                  blocked:
+                    type: string
+                    description: The refusal this objective is waiting behind, in the driver's own words.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "402": { $ref: "#/components/responses/PaymentRequired" }
@@ -7843,6 +7909,72 @@ paths:
                     items: { type: object, additionalProperties: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/loop/queue:
+    get:
+      summary: List the objectives queued behind this instance's current run
+      description: |
+        The FIFO queue filled by `POST /loop` with `queueIfBusy`. The first entry is what starts
+        next, automatically, when the active run reaches a terminal state (done, failed or max
+        iterations).
+
+        Pending entries only. Once an entry starts it becomes a run, and `GET /loop/{runId}` by its
+        `runId` is where its account continues.
+      operationId: listObjectiveQueue
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: repo_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Narrow to the entries eligible for ONE repo — its own plus the repo-agnostic ones,
+            which is exactly what that repo's next drain will take. Omit for everything pending on
+            the instance.
+      responses:
+        "200":
+          description: Pending entries, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/ObjectiveQueueEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/loop/queue/{entryId}:
+    delete:
+      summary: Withdraw a queued objective before it starts
+      description: >
+        Only a PENDING entry can be withdrawn. An entry the platform has already begun starting
+        answers 409 and names the state it reached, because at that point a run exists and
+        `POST /loop/{runId}/cancel` is what ends it.
+      operationId: cancelObjectiveQueueEntry
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: entryId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Withdrawn
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  status: { type: string, example: cancelled }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The entry has left `pending` and can no longer be withdrawn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/instances/{instanceId}/loop/{runId}:
     get:

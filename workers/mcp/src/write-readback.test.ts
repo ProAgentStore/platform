@@ -107,6 +107,13 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"probe",
 	"reset",
 	"enabled",
+	// #788: whether a busy repo should QUEUE this objective rather than refuse it. A routing
+	// decision, not content — nothing stores the boolean. What it can cause to exist (the queue
+	// entry) is content, and reads back through `coding_loop_queue`; see the objective below.
+	"queue_if_busy",
+	// #788: addressing, like every id above it — which queue entry `coding_loop_queue_cancel`
+	// is about. Obtained from `coding_loop_queue`, never composed by the caller.
+	"entry_id",
 ]);
 
 /**
@@ -220,6 +227,9 @@ const READBACK: Record<string, string | null> = {
 	// ── loops ──
 	"start_instance_loop.objective": "check_instance_loop",
 	"start_instance_loop.max_iterations": "check_instance_loop",
+	// When `queue_if_busy` parks it instead of starting it, the SAME objective reads back through
+	// `coding_loop_queue` until it becomes a run — at which point this reader is the right one
+	// again. One entry per argument, so the reader named is the one for the started case (#788).
 	"coding_loop_start.objective": "coding_loop_status",
 	"coding_loop_start.max_iterations": "coding_loop_status",
 

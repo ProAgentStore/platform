@@ -15,6 +15,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { nextStep, instructionKey, needsHuman, readAgentReply, replyErrorClass, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness } from "../lib/agent-loop-store.js";
+import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import { classifyCodingFailure, driverResumePlan, MAX_PLATFORM_RESUMES } from "../lib/coding-failure.js";
 import { interruptedBy } from "../lib/coding-run-report.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
@@ -379,6 +380,21 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 					{ key: `loop:${runId}:${stop.reason}`, kind: "alert", instanceId },
 				).catch(() => undefined);
 			}
+		});
+
+		// Whatever was queued behind this run (#788), now that it has a terminal row.
+		//
+		// `repoId: null` — the chat driver has no checkout, so it drains only the repo-agnostic
+		// entries. It also never REFUSES for busyness: there is no single-flight claim on a chat loop,
+		// so nothing here can enqueue in the first place today. The hook exists anyway, because the
+		// queue's contract is "the next objective starts when the run ends" and a contract that holds
+		// for one driver and silently not the other is how a caller learns to distrust it.
+		//
+		// After `finish`, for the same reason the Pilot's drain is last: the run must be closed before
+		// another is admitted, or `listLoopRuns` shows two running loops for one instance.
+		await step.do("objective-queue-drain", async () => {
+			await tryDequeueAndStart(this.env, instanceId, null, userId);
+			return null;
 		});
 
 		return { stopReason: stop.reason, iterations: iteration };

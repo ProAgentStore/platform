@@ -65,7 +65,25 @@ export interface LoopStartInput {
 
 export type LoopStartResult =
 	| { ok: true; runId: string; driver: string }
-	| { ok: false; status: number; error: string };
+	| {
+			ok: false;
+			status: number;
+			error: string;
+			/**
+			 * WHICH 409 this is, for the callers that must tell them apart (#788).
+			 *
+			 * `busy` is the single-flight claim below: a run is in flight and waiting is a real
+			 * remedy. Every other refusal at this status — no repo on the agent, no runner, a
+			 * checkout that failed admission — is structural, and waiting fixes none of them. The
+			 * objective queue turns on exactly that distinction: `queue_if_busy` on a `busy` refusal
+			 * parks the objective until the lock clears, while parking it on "this agent has no
+			 * repository yet" would queue work that can never drain.
+			 *
+			 * Absent rather than `"other"`: a driver that has not thought about this question should
+			 * not be able to answer it by accident.
+			 */
+			reason?: "busy";
+	  };
 
 export interface LoopDriver {
 	/** Stable id, for logs and the `driver` field callers get back. */
@@ -219,6 +237,8 @@ const codingDriver: LoopDriver = {
 			return {
 				ok: false,
 				status: 409,
+				// The one 409 here that WAITING fixes (#788) — see `LoopStartResult.reason`.
+				reason: "busy",
 				// Names WHO can do the stopping (#540). The owner read this sentence at 12:07, in a
 				// bubble produced by the agent's own `start_work` call, and the only actor in the room
 				// who could act on it was him — twelve minutes later he asked the agent to stop and was

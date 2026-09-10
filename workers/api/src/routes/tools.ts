@@ -40,6 +40,8 @@ import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
+import { enqueueObjective } from "../lib/objective-queue.js";
+import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
@@ -1072,6 +1074,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 		objective?: string;
 		maxIterations?: number;
 		repoId?: string;
+		queueIfBusy?: boolean;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
 	const objective = String(body.objective ?? "").trim();
@@ -1108,9 +1111,35 @@ toolRoutes.post("/:id/loop", async (c) => {
 		budgetId: budget.id,
 		depth: 0,
 	});
-	if (!started.ok) throw new HttpError(started.status, started.error);
+	if (!started.ok) {
+		// QUEUE INSTEAD OF FAIL, but only on the refusal waiting actually fixes (#788).
+		//
+		// Opt-in, and it stays opt-in: a caller that did not ask still gets today's 409, because
+		// silently parking an objective is how a request the user thinks failed runs an hour later
+		// against a repo they have since changed. `reason === "busy"` and not `status === 409` — the
+		// other 409s here are "this agent has no repository", "no runner", "that checkout failed
+		// admission", and queueing behind any of them parks work that can never drain.
+		//
+		// The pool `openBudget` opened above is NOT reused when the objective finally starts: the
+		// drain opens its own, per #184's rule that every autonomous entry point admits separately.
+		// It is left open rather than closed, because `closed` is dead vocabulary in
+		// `delegation-budget-store.ts` and an unspent pool is not `exhausted` — the same state every
+		// finished run's pool is already in.
+		if (body.queueIfBusy === true && started.reason === "busy") {
+			const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null });
+			// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
+			// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
+			// it is waiting.
+			return c.json({ queued: true, entry, blocked: started.error }, 202);
+		}
+		throw new HttpError(started.status, started.error);
+	}
 	return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running" }, 201);
 });
+
+// Registered HERE, above `GET /:id/loop/:runId` — Hono matches in order, and `/loop/queue` would
+// otherwise be read as a run id (#788). See `routes/loop-queue-routes.ts`.
+registerLoopQueueRoutes(toolRoutes);
 
 /**
  * Loop presets (#234) — the named objectives the loop form offers, per instance.

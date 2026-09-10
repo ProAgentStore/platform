@@ -1239,7 +1239,12 @@ const PINS = {
 	// +30 at #726: the POST /:id/tools/:name invoker now writes one agent_events row when
 	// entry.mutates || entry.reach==="internet". The predicate comment + the logEvent call +
 	// the redactSecrets import total ~30 lines.
-	"workers/api/src/routes/tools.ts": 1221,
+	// +29 at #788: `POST /:id/loop` gains the `queue_if_busy` branch — enqueue instead of 409 when
+	// the refusal is `reason: "busy"`, answered 202 with the queue entry — plus the two imports and
+	// the `registerLoopQueueRoutes(toolRoutes)` call, which must sit ABOVE `GET /:id/loop/:runId`
+	// because Hono matches in registration order. The queue's own two handlers are NOT here: they
+	// are in `routes/loop-queue-routes.ts`, which is what keeps this at +29 instead of +90.
+	"workers/api/src/routes/tools.ts": 1250,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1369,7 +1374,11 @@ const PINS = {
 	// block), and a `repo-sync-end` step reports the final position to the timeline and the chat.
 	// Beside the state read rather than in a helper, because the two reads are one question ("what
 	// base is this run building on") answered in one step, and the sentences are `repo-sync.ts`'s.
-	"workers/api/src/workflows/coding-session.ts": 961,
+	// +21 at #788: the objective-queue drain, as its own terminal `step.do` after `closeDelegation`
+	// — one call plus the fourteen lines of why it must be LAST, inside `if (!resuming)`, and why it
+	// carries no `.catch`. The decision it triggers lives entirely in `lib/objective-queue-start.ts`;
+	// what is here is the one fact only this file knows, which is when the lock is actually free.
+	"workers/api/src/workflows/coding-session.ts": 982,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1566,7 +1575,9 @@ const PINS = {
 	// +2 at #785: the coding-session.ts entry's reason, and this line.
 	// +8 at #787: the mcp/index.ts raise above (six lines of why for five lines of wiring) and
 	// these two. Same self-referential growth every raise costs — the reason IS the record.
-	"scripts/check-file-size.mjs": 1650,
+	// +11 at #788: the two raises above (tools.ts and coding-session.ts, five lines of why each)
+	// and this note. Same self-referential growth every raise costs — the reason IS the record.
+	"scripts/check-file-size.mjs": 1661,
 };
 
 /**

@@ -217,9 +217,10 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			instance_id: z.string().describe("Instance ID or slug"),
 			objective: z.string().describe("What the agent should accomplish"),
 			max_iterations: z.coerce.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10). The server clamps this to your account's loop ceiling."),
+			queue_if_busy: z.boolean().optional().describe("When the repo is already being worked on, QUEUE this objective instead of failing. Answers `{queued:true, entry}` instead of a run id, and the platform starts it automatically the moment the active run reaches a terminal state — done, failed or max iterations. Queue is FIFO per repo; read it with coding_loop_queue and withdraw an entry with coding_loop_queue_cancel. Only the BUSY refusal queues: an agent with no repository, no runner, or an unusable checkout still fails immediately, because waiting fixes none of those. Off by default — without it, a busy instance is still an error."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations, dry_run }) => {
+		async ({ token, instance_id, objective, max_iterations, queue_if_busy, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const maxIter = max_iterations ?? 10;
@@ -238,7 +239,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				return dryRun(safetyFor(token), "coding_loop_start", "start an autonomous server-side run", { instance_id, max_iterations: maxIter }, {
 					endpoint: `/v1/instances/${instance_id}/loop`,
 					method: "POST",
-					effect: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.`,
+					effect: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.${queue_if_busy ? " If the repo is busy it would be QUEUED instead, and started when the active run ends." : ""}`,
 					objective,
 					objectiveBytes: new TextEncoder().encode(objective).length,
 					spend: `Each step spends the instance's own BYOK budget, drawn from a pool opened for the run. coding_loop_stop is the way to end it early.`,
@@ -249,17 +250,24 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			const data = await authedCall(
 				`/v1/instances/${encodeURIComponent(id)}/loop`,
 				sessionToken,
-				{ method: "POST", body: JSON.stringify({ objective, maxIterations: maxIter }) },
+				{ method: "POST", body: JSON.stringify({ objective, maxIterations: maxIter, queueIfBusy: queue_if_busy === true }) },
 				env,
 			);
 			// `authedCall` RETURNS a non-2xx as `{error}` rather than throwing, so reporting
 			// without looking is how a refusal gets formatted as a started run.
 			if ((data as { error?: string }).error) return jsonText(data);
+			// A queued objective is recorded as QUEUED, not as a completed start (#788). The audit
+			// trail is what answers "what did this token cause"; writing `runId: null` under
+			// `action: "completed"` would say a run began and immediately lose the entry id that is
+			// the only handle on the thing that actually happened.
+			const queued = (data as { queued?: boolean; entry?: { id?: string } }).queued === true;
 			await audit(safetyFor(token), {
 				tool: "coding_loop_start",
-				action: "completed",
-				input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective).length, maxIterations: maxIter },
-				result: { runId: (data as { runId?: string }).runId ?? null, budgetId: (data as { budgetId?: string }).budgetId ?? null },
+				action: queued ? "queued" : "completed",
+				input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective).length, maxIterations: maxIter, queueIfBusy: queue_if_busy === true },
+				result: queued
+					? { queueEntryId: (data as { entry?: { id?: string } }).entry?.id ?? null }
+					: { runId: (data as { runId?: string }).runId ?? null, budgetId: (data as { budgetId?: string }).budgetId ?? null },
 			});
 			return jsonText(data);
 		},
@@ -336,6 +344,66 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			if ((data as { error?: string }).error) return jsonText(data);
 			await audit(safetyFor(token), { tool: "coding_loop_stop", action: "completed", input: { instance_id: id, run_id: target }, result: { ok: true } });
 			return jsonText({ ...(data as object), runId: target });
+		},
+	);
+
+	// ── The queue behind the lock (#788) ──
+	//
+	// `coding_loop_start`'s `queue_if_busy` can park an objective; these two are what make that
+	// safe to use. The issue asks for a queue that is "visible via a list/check call so the caller
+	// can see what's queued and cancel before it starts", and a queue you can add to and never
+	// read is worse than the 409 it replaces: the 409 at least told you nothing had happened.
+	//
+	// Read + withdraw, and deliberately NOT reorder. FIFO is the whole contract — "the moment the
+	// active run ends, the next one starts" — and a reorder verb turns the order into something a
+	// caller has to check rather than something it can rely on. Cancel and re-queue expresses any
+	// reordering anyone actually needs, in terms that keep the invariant true.
+
+	server.tool(
+		"coding_loop_queue",
+		"List the objectives queued behind an instance's current run — the ones added with coding_loop_start's `queue_if_busy`. FIFO: the top entry is what starts next, automatically, the moment the active run reaches a terminal state. Each entry carries its `id` (pass it to coding_loop_queue_cancel), the objective, `maxIterations`, `repoId` (null means whichever repo frees up first) and when it was queued. Pending entries ONLY — once an entry starts it becomes a run, and coding_loop_status by its `runId` is where its account continues. An empty list plus a running run means nothing is lined up; an empty list plus no running run means the queue has drained.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+			repo_id: z.string().optional().describe("Narrow to the entries eligible for ONE repo — its own plus the repo-agnostic ones, which is exactly what that repo's next drain will take. Omit for everything pending on the instance."),
+		},
+		async ({ token, instance_id, repo_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_queue", { instance_id, repo_id });
+			if (denied) return denied;
+			const id = await resolveId(sessionToken, instance_id);
+			const qs = repo_id ? `?repo_id=${encodeURIComponent(repo_id)}` : "";
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/queue${qs}`, sessionToken, {}, env));
+		},
+	);
+
+	// NO `dry_run`, for the same reason `coding_loop_stop` has none: the answer is fully determined
+	// by the entry id, the question worth asking first is answered by `coding_loop_queue` (a READ),
+	// and withdrawing is the safe direction — it stops work starting rather than committing any.
+	server.tool(
+		"coding_loop_queue_cancel",
+		"Withdraw a queued objective before it starts. Takes the `id` from coding_loop_queue. Only a PENDING entry can be withdrawn: an entry the platform has already begun starting answers 409 and names the state it reached, because at that point a run exists and coding_loop_stop is what ends it. Cancelling one entry does not touch the rest of the queue or the run currently in flight.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+			entry_id: z.string().describe("The queue entry id from coding_loop_queue. Not a run id."),
+		},
+		async ({ token, instance_id, entry_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "write", "coding_loop_queue_cancel", { instance_id, entry_id });
+			if (denied) return denied;
+			const id = await resolveId(sessionToken, instance_id);
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(id)}/loop/queue/${encodeURIComponent(entry_id)}`,
+				sessionToken,
+				{ method: "DELETE" },
+				env,
+			);
+			if ((data as { error?: string }).error) return jsonText(data);
+			await audit(safetyFor(token), { tool: "coding_loop_queue_cancel", action: "completed", input: { instance_id: id, entry_id }, result: { ok: true } });
+			return jsonText({ ...(data as object), entryId: entry_id });
 		},
 	);
 

@@ -274,12 +274,14 @@ const TABLE: Record<string, Row> = {
 	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
-	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
 	coding_loop_status: ["coding", "read", null, null, "instance_id,run_id,token"],
 	coding_loop_stop: ["coding", "write", null, null, "instance_id,run_id,token"],
+	coding_loop_queue: ["coding", "read", null, null, "instance_id,repo_id,token"],
+	coding_loop_queue_cancel: ["coding", "write", null, null, "entry_id,instance_id,token"],
 	connector_status: ["connectors", "none", null, null, "provider,token"],
 	create_connection: ["composition", "write", null, "envelope", "action,config,dry_run,event_type,instance_id,target_instance_id,token"],
 	create_instance_trigger: ["triggers", "write", null, "envelope", "action,config,dry_run,instance_id,name,schedule,token,type"],
@@ -529,6 +531,12 @@ describe("conventions the table has to keep", () => {
 		//   coding_loop_stop     the same tool by another name since #502 — it cancels the same
 		//                        durable run through the same route, so it inherits the same
 		//                        argument for having no preview.
+		//   coding_loop_queue_cancel
+		//                        withdrawing a queued objective, on the same reasoning (#788): the
+		//                        call is fully determined by one entry id, "which entry is that?"
+		//                        is answered better by `coding_loop_queue` (a read), and cancelling
+		//                        is the safe direction — it stops work that has not begun and so
+		//                        commits nothing.
 		//   set_connection_enabled,
 		//   set_supervision_enabled
 		//                        the two pauses added by #667, on `stop_instance_loop`'s reasoning:
@@ -539,11 +547,18 @@ describe("conventions the table has to keep", () => {
 		//                        safe direction: it is reversible by the same call, which is the
 		//                        whole reason the tools exist rather than a delete.
 		//
-		// All five carry that reasoning in a comment above their registration. Anything joining
+		// All six carry that reasoning in a comment above their registration. Anything joining
 		// this list needs the same — the entry here is the index, not the argument.
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
-		).toEqual(["call_instance_tool", "coding_loop_stop", "set_connection_enabled", "set_supervision_enabled", "stop_instance_loop"]);
+		).toEqual([
+			"call_instance_tool",
+			"coding_loop_stop",
+			"coding_loop_queue_cancel",
+			"set_connection_enabled",
+			"set_supervision_enabled",
+			"stop_instance_loop",
+		]);
 	});
 
 	it("the generic connector invoker records its own success", async () => {

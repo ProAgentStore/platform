@@ -324,4 +324,22 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.22 is published.
 	"0.1.23": "sha256:a468f949178aaa27b85a5edfcf40bf4b5dd637ec74c6f3ad94f165dac7da6890",
+	// 0.1.24 (#788): queued follow-up objectives. THREE things a client receives moved, and all
+	// three are the first bullets of `MCP_SERVER_VERSION`'s own list:
+	//
+	//   * two new tool NAMES, both always-on beside `coding_loop_start` rather than surface-gated
+	//     (the Agent Loop tools have never been gated — the queue belongs to the same verb):
+	//     `coding_loop_queue` (read) and `coding_loop_queue_cancel` (write). 151 registrations
+	//     become 153; `MCP_TOOL_ALWAYS_ON` moves 128 → 130; `MCP_TOOL_GATED` (derived) stays at 23.
+	//   * an `inputSchema` change on `coding_loop_start`: the `queue_if_busy` argument, which turns
+	//     a busy repo from an outright refusal into a queued objective the platform starts when the
+	//     active run reaches a terminal state.
+	//   * the annotations for the two new names, from `tool-metadata.ts`.
+	//
+	// `SERVER_INSTRUCTIONS` did NOT move. The queue is reached through `coding_loop_start`, which
+	// the instructions already name, and adding a sentence for every tool is how that string stops
+	// being read.
+	//
+	// Appended, never edited in place: 0.1.23 is published.
+	"0.1.24": "sha256:8c3f4657df1d24196df6b1fc937e95babd811c42fac0911c3c346262ca3f7960",
 };
