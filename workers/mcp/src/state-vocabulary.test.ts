@@ -31,6 +31,7 @@ const { MCP_TOOL_COUNT } = await import("./tool-count.js");
 const {
 	BACKED_VOCABULARIES,
 	CLEARED_TASK_STATUSES,
+	AGENT_CHAT_STATUSES,
 	CODING_RUN_STATES,
 	RUN_HEALTH_STATES,
 	UNBACKED_CLAIMS,
@@ -114,6 +115,42 @@ describe("the coding run-state vocabulary is the API's, not a restatement of it"
 		// The exact string that shipped for six weeks: "Also returns run state (idle/working/offline)".
 		expect(runStateSentence()).not.toContain("working");
 		expect([...CODING_RUN_STATES]).not.toContain("working");
+	});
+});
+
+describe("the agent chat vocabulary is the API's AgentState union, not a restatement of it (#791)", () => {
+	/**
+	 * `AgentState.status`'s members, read out of the API worker's source — the only copy that is
+	 * authority. A field union rather than an `as const` array, so this parses the union itself.
+	 *
+	 * The mirror exists because `get_instance_state` PUBLISHES these three, and #791 is about what
+	 * they were taken to mean: they describe a chat turn, and a coding run leaves all three alone.
+	 * A fourth member arriving over there without this file noticing would put an unglossed value in
+	 * front of a caller already known to over-read this field.
+	 */
+	function chatStatusFromSource(): string[] {
+		const src = readFileSync(join(import.meta.dirname, "../../api/src/agent-types.ts"), "utf8");
+		// Scoped to the AgentState BLOCK. The file declares several `status:` fields and the first
+		// one belongs to a different interface — the unscoped regex read that one and compared this
+		// vocabulary against somebody else's, which is a guard measuring the wrong thing rather than
+		// nothing, and passes just as quietly.
+		const block = src.slice(src.indexOf("export interface AgentState"));
+		const m = block.slice(0, block.indexOf("}")).match(/^\s*status:\s*([^;]+);/m);
+		return m ? [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]) : [];
+	}
+
+	it("matches workers/api/src/agent-types.ts, derived from its source", () => {
+		const members = chatStatusFromSource();
+		// G1 — a parse that found nothing must fail as a broken guard, not pass as a clean tree.
+		expect(members.length, "parsed no AgentState.status members — the guard has stopped measuring").toBeGreaterThanOrEqual(3);
+		expect([...AGENT_CHAT_STATUSES].sort()).toEqual([...members].sort());
+	});
+
+	it("has no member that could express a RUN being live — which is the ticket", () => {
+		// The point of backing this vocabulary at all. There is no fourth value meaning "busy": a
+		// caller asking whether it is safe to start work must read `runs`, not this. If a member
+		// like that ever IS added, this fails and the description has to be rewritten with it.
+		for (const s of AGENT_CHAT_STATUSES) expect(["idle", "thinking", "error"]).toContain(s);
 	});
 });
 

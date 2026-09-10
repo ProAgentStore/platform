@@ -38,11 +38,16 @@ interface DoCall {
 interface Opts {
 	agents?: Array<{ id: string; slug?: string; owner_id: string }>;
 	instances?: Array<{ id: string; user_id: string }>;
+	/** Open `agent_loop_runs` rows for the run-liveness merge on GET /state (#791). */
+	activeRuns?: Array<Record<string, unknown>>;
+	/** Make the runs lookup throw, so the "we did not measure" path can be driven. */
+	runsQueryFails?: boolean;
 }
 
 function buildApp(opts: Opts = {}) {
 	const agents = opts.agents ?? [];
 	const instances = opts.instances ?? [];
+	const activeRuns = opts.activeRuns ?? [];
 	const doCalls: DoCall[] = [];
 	let doResponse: (path: string, method: string) => Response = () => Response.json({ ok: true });
 
@@ -65,7 +70,14 @@ function buildApp(opts: Opts = {}) {
 								}
 								return null;
 							},
-							async all() { return { results: [] }; },
+							async all() {
+								if (sql.includes("agent_loop_runs")) {
+									if (opts.runsQueryFails) throw new Error("D1 unavailable");
+									const [uid, instanceId] = args as [string, string];
+									return { results: activeRuns.filter((r) => r.user_id === uid && r.instance_id === instanceId) };
+								}
+								return { results: [] };
+							},
 							async run() { return { meta: { changes: 1 } }; },
 						};
 					},
@@ -211,6 +223,114 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		expect(rows((await jsonBody(res)).memory)[0].key).toBe("name");
 		expect(doCalls[0].agentDoName).toBe("i1"); // instance id, not agent id
 		expect(doCalls[0].path).toBe("/memory");
+	});
+
+	// ── GET /state now answers "is anything RUNNING here", not only "is a chat turn in flight" (#791)
+
+	const loopRow = (over: Record<string, unknown> = {}) => ({
+		run_id: "run-1",
+		user_id: "u1",
+		instance_id: "i1",
+		objective: "work through the open issues",
+		status: "running",
+		stop_reason: null,
+		detail: null,
+		iteration: 3,
+		max_iterations: 15,
+		cancel_requested: 0,
+		budget_id: "b1",
+		started_at: Date.now() - 600_000,
+		finished_at: null,
+		last_progress_at: Date.now() - 60_000,
+		last_alive_at: Date.now() - 5_000,
+		waiting_until: null,
+		waiting_reason: null,
+		parked_since: null,
+		interruptions: 0,
+		delegated_by: null,
+		session_id: "csess_1",
+		...over,
+	});
+
+	it("an idle instance reports runs.active 0 alongside the DO state", async () => {
+		const h = buildApp({ instances: [{ id: "i1", user_id: "u1" }] });
+		h.setDoResponse(() => Response.json({ name: "Coder", status: "idle", inflight: [] }));
+		const res = await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = await jsonBody(res);
+		// The DO's own state still comes through untouched — this adds a field, it replaces nothing.
+		expect(body.name).toBe("Coder");
+		expect(body.status).toBe("idle");
+		expect(rec(body.runs)).toEqual({ active: 0, runs: [] });
+	});
+
+	it("a live run makes the SAME payload say so — the defect this closes", async () => {
+		// The reported symptom exactly: `status: "idle"` and `inflight: []` while a run is live.
+		// Those two stay as they were (they describe a chat turn), and `runs` is what now carries
+		// the answer the caller was actually asking for.
+		const h = buildApp({ instances: [{ id: "i1", user_id: "u1" }], activeRuns: [loopRow()] });
+		h.setDoResponse(() => Response.json({ name: "Coder", status: "idle", inflight: [] }));
+		const res = await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u1"));
+		const body = await jsonBody(res);
+		expect(body.status).toBe("idle");
+		expect(rows(body.inflight)).toHaveLength(0);
+		const runs = rec(body.runs);
+		expect(runs.active).toBe(1);
+		expect(rows(runs.runs)[0].runId).toBe("run-1");
+		expect(rows(runs.runs)[0].health).toBe("working");
+	});
+
+	it("a PARKED run still counts as active", async () => {
+		// "Is it safe to start new work" is answered by the run existing — it holds the session
+		// claim and the budget pool whatever its verdict says.
+		const h = buildApp({
+			instances: [{ id: "i1", user_id: "u1" }],
+			activeRuns: [loopRow({ waiting_reason: "human", parked_since: Date.now() - 60_000 })],
+		});
+		h.setDoResponse(() => Response.json({ status: "idle", inflight: [] }));
+		const runs = rec((await jsonBody(await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u1")))).runs);
+		expect(runs.active).toBe(1);
+		expect(rows(runs.runs)[0].health).toBe("waiting");
+	});
+
+	it("scopes the runs to this owner and this instance", async () => {
+		const h = buildApp({
+			instances: [{ id: "i1", user_id: "u1" }],
+			activeRuns: [loopRow({ run_id: "mine" }), loopRow({ run_id: "other-user", user_id: "u2" }), loopRow({ run_id: "other-inst", instance_id: "i2" })],
+		});
+		h.setDoResponse(() => Response.json({ status: "idle" }));
+		const runs = rec((await jsonBody(await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u1")))).runs);
+		expect(runs.active).toBe(1);
+		expect(rows(runs.runs)[0].runId).toBe("mine");
+	});
+
+	it("reports a FAILED lookup as unavailable, never as zero", async () => {
+		// A zero here would manufacture the same false all-clear the ticket is about. The state
+		// itself must still return: a liveness extra cannot be allowed to fail a read that worked.
+		const h = buildApp({ instances: [{ id: "i1", user_id: "u1" }], runsQueryFails: true });
+		h.setDoResponse(() => Response.json({ name: "Coder", status: "idle" }));
+		const res = await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = await jsonBody(res);
+		expect(body.name).toBe("Coder");
+		expect(rec(body.runs)).toEqual({ active: null, runs: [], unavailable: true });
+	});
+
+	it("passes a DO error through WITHOUT a runs field", async () => {
+		// The DO answers 404 "Not initialized" for an instance with no state. Attaching liveness to
+		// that would describe the runs of something the same response says does not exist.
+		const h = buildApp({ instances: [{ id: "i1", user_id: "u1" }], activeRuns: [loopRow()] });
+		h.setDoResponse(() => Response.json({ error: "Not initialized" }, { status: 404 }));
+		const res = await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u1"));
+		expect(res.status).toBe(404);
+		expect((await jsonBody(res)).runs).toBeUndefined();
+	});
+
+	it("still 404s a state read for an instance that is not yours", async () => {
+		// The merge must not have widened the ownership gate.
+		const h = buildApp({ instances: [{ id: "i1", user_id: "u1" }], activeRuns: [loopRow()] });
+		const res = await get(h.app, h.env, "/v1/instances/i1/state", await tokenFor("u2"));
+		expect(res.status).toBe(404);
 	});
 
 	it("PUT state forwards the body to the instance DO", async () => {

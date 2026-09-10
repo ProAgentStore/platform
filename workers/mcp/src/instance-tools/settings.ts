@@ -281,7 +281,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_instance_state",
-		"Read a subscribed instance's DO state (identity, guardrails, permissions). Read-only — permission toggles stay in the console.",
+		"Read a subscribed instance's DO state (identity, guardrails, permissions) and whether anything is running on it. Read-only — permission toggles stay in the console. WHICH FIELD ANSWERS WHAT (#791): `status` (`idle`/`thinking`/`error`) and `inflight` describe the agent's own CHAT TURN and nothing else — an autonomous run drives a separate workflow and leaves both of them idle, so neither is evidence that the instance is free. `runs` is the one to read for that: `runs.active` counts the runs still open on this instance and `runs.runs[]` carries each one's `runId` and `health` — the platform's own verdict, `working`/`waiting`/`stalled`/`ended`. Quote `health` rather than deriving one from the timestamps beside it. Before starting new work, check `runs.active`, not `status`. `runs.active: null` with `unavailable: true` means the lookup FAILED and nothing was measured — it is not the same answer as 0, and must not be read as one. For a live run's engine-level detail use coding_loop_status or coding_loop_trace.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

@@ -5,6 +5,8 @@
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { listActiveRuns } from "../lib/agent-loop-store.js";
+import { runLiveness, runLivenessUnavailable } from "../lib/instance-run-liveness.js";
 import { resolveGithubAccess } from "../lib/github-app.js";
 import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
 import type { Env } from "../types.js";
@@ -455,10 +457,46 @@ instanceStorageRoutes.delete("/:id/agent-tasks/:taskId", async (c) => {
 	return proxyDO(c, instance.id, `/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 });
 
+/**
+ * The instance's DO state, PLUS whether anything is actually running on it (#791).
+ *
+ * ── What was wrong
+ *
+ * This route returned the DO's state and nothing else, and the two fields a caller reaches for —
+ * `status` and `inflight` — describe CHAT TURNS. `AgentState.status` is the three-value union
+ * `agent-do.ts` writes around a turn; `inflight` is `chat-inflight.ts`'s per-turn marker. A coding
+ * run drives the `CODING_SESSION` Workflow and touches neither, so a live run reported as
+ * `status: "idle", inflight: []` — a confident no to a question this payload could not answer.
+ *
+ * ── Why the merge is HERE and not in the DO
+ *
+ * The Durable Object has neither of the two keys `agent_loop_runs` is scoped by. It knows its own
+ * storage and nothing about the caller; this route has already resolved `session.uid` and the owned
+ * `instance.id`, and holds the D1 binding. Putting the lookup in the DO would mean handing it an
+ * identity it has no other reason to know, to answer a question it cannot scope.
+ *
+ * ── Failure is reported, not swallowed into a zero
+ *
+ * If the runs cannot be read, `active` is NULL and `unavailable: true` — never `0`. Zero is a claim
+ * that nothing is running, and manufacturing it from a failed lookup is precisely the false
+ * all-clear this ticket is about. The state itself still returns: a liveness extra must not be able
+ * to fail a read of the identity and guardrails that has always worked.
+ */
 instanceStorageRoutes.get("/:id/state", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
-	return proxyDO(c, instance.id, "/state");
+	const res = await proxyDO(c, instance.id, "/state");
+	// A non-2xx passes through untouched. The DO answers 404 "Not initialized" for an instance that
+	// has no state yet, and attaching a `runs` field to that would describe the liveness of
+	// something the same response says does not exist.
+	if (!res.ok) return res;
+	const state = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+	if (!state || typeof state !== "object") return Response.json(state);
+	const runs = await listActiveRuns(c.env, session.uid, instance.id).then(
+		(rows) => runLiveness(rows, Date.now()),
+		() => runLivenessUnavailable(),
+	);
+	return Response.json({ ...state, runs });
 });
 
 instanceStorageRoutes.put("/:id/state", async (c) => {

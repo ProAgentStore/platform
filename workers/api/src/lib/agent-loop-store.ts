@@ -234,6 +234,28 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
 }
 
 /**
+ * The runs still OPEN on one instance (#791).
+ *
+ * Its own query rather than a filter over {@link listLoopRuns}: that one reads 50 rows ordered by
+ * `started_at DESC` and would pull a year of finished runs to find the handful that matter. This
+ * predicate matches `idx_agent_loop_runs_open` (migration 0068), a PARTIAL index on
+ * `status = 'running'` — a row leaves it the moment it closes, so the index stays the size of the
+ * open set however much history accumulates behind it. That is what makes this cheap enough to sit
+ * on a state read.
+ *
+ * Owner-scoped like every other reader here: a run belongs to the user who started it, and the
+ * route that calls this has already proven the instance is theirs.
+ */
+export async function listActiveRuns(env: Env, userId: string, instanceId: string): Promise<LoopRunView[]> {
+	const res = await env.DB.prepare(
+		"SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2 AND status = 'running' ORDER BY started_at DESC",
+	)
+		.bind(userId, instanceId)
+		.all<LoopRunRow>();
+	return (res.results ?? []).map(toLoopRunView);
+}
+
+/**
  * The runs one SUPERVISOR started on other agents (#318).
  *
  * The counterpart to `listLoopRuns`, which answers "what did this instance run itself". A

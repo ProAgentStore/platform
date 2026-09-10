@@ -177,6 +177,22 @@ export function runStateSentence(): string {
 export const RUN_HEALTH_STATES = ["working", "waiting", "stalled", "ended"] as const;
 
 /**
+ * The AGENT's own chat status — mirrored from `workers/api/src/agent-types.ts`'s `AgentState`.
+ *
+ * Three values, and the reason they need naming here is #791: `get_instance_state` publishes them,
+ * and until that ticket it published them as the answer to "is this instance busy". They are not.
+ * `agent-do.ts` writes `thinking` when a chat turn starts, `idle` when it finishes and `error` when
+ * it throws — a coding run drives a separate Workflow and touches none of them, so a live run reads
+ * as `idle` here and always will. That is correct about a chat turn and was a false all-clear about
+ * the instance, which is why the tool now publishes `runs` beside it and says which answers what.
+ *
+ * Mirrored rather than imported for the reason every vocabulary in this file is: the MCP worker
+ * cannot import from `workers/api`. `state-vocabulary.test.ts` reads the cited source and fails if
+ * the members drift apart, which is what makes a copy safe to keep.
+ */
+export const AGENT_CHAT_STATUSES = ["idle", "thinking", "error"] as const;
+
+/**
  * What each verdict means, and — for two of them — what it deliberately does NOT claim.
  *
  * `ended`'s gloss is the fix: it is the member that did not exist, and a reader who meets it
@@ -304,6 +320,14 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"cleared task status": {
 		sources: ["workers/api/src/routes/instances-runtime.ts", "packages/browser-runner/src/types.ts"],
 		values: CLEARED_TASK_STATUSES,
+	},
+	// #791. `get_instance_state` publishes this set, and the ticket is about what it was taken to
+	// mean rather than about the members: they describe a CHAT TURN, not the instance. Backing it
+	// here is what stops the next reader assuming a fourth value could express "a run is live" —
+	// there is no such member, and the answer lives in the `runs` field beside it.
+	"agent chat status": {
+		sources: ["workers/api/src/agent-types.ts"],
+		values: AGENT_CHAT_STATUSES,
 	},
 };
 
