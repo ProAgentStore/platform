@@ -115,6 +115,14 @@ interface HarnessOpts {
 	env?: Record<string, unknown>;
 	/** A `/mcp/i/<id>` session (#783) — the pinned surface is held to its own contract in pinned.test.ts. */
 	pinnedInstance?: string;
+	/**
+	 * Make the first N roster lookups fail with a 500, so `userGroups`' retry can be driven (#759).
+	 *
+	 * A 500 rather than a thrown fetch on purpose: `apiCall` RETURNS a non-2xx as `{error}` instead
+	 * of throwing, which is the path the original `catch` could never see and the likeliest shape of
+	 * the transient failure this retry exists for.
+	 */
+	rosterFailures?: number;
 }
 
 async function setup(opts: HarnessOpts = {}) {
@@ -132,6 +140,16 @@ async function setup(opts: HarnessOpts = {}) {
 		(u) => u.endsWith("/v1/instances/my/instances"),
 		{ body: { instances: (opts.groups ?? []).map((s) => ({ capabilities: { surfaces: [s] } })) } },
 	);
+	// Registered AFTER the success rule so it is matched FIRST (`respond` unshifts), and stateful so
+	// it stops matching once the quota is spent — which is what lets one test say "fails once, then
+	// succeeds" and another say "fails every time".
+	if (opts.rosterFailures) {
+		let remaining = opts.rosterFailures;
+		fetchStub.respond(
+			(u) => u.endsWith("/v1/instances/my/instances") && remaining-- > 0,
+			{ status: 500, body: { error: "API 500" } },
+		);
+	}
 
 	const tools = new Map<string, CapturedTool>();
 	// The double implements `registerTool`, because that is the call the registration
@@ -208,6 +226,63 @@ describe("PagsMcp.init — tool registration", () => {
 		]) {
 			expect(tools.has(name)).toBe(true);
 		}
+	});
+
+	/**
+	 * A transient roster lookup must not cost this connection every gated tool (#759).
+	 *
+	 * `init()` latches `toolsRegistered = true` and registers ONCE per Durable Object, so an empty
+	 * group set is not a small failure: the whole `coding`, `apply` and `repo` surface disappears
+	 * from `tools/list` for the life of that DO, and the user sees the always-on tools working while
+	 * their coding tools have simply vanished.
+	 */
+	describe("userGroups survives a transient roster failure (#759)", () => {
+		const rosterCalls = (h: Awaited<ReturnType<typeof setup>>) =>
+			h.fetchStub.calls.filter((c) => c.url.endsWith("/v1/instances/my/instances")).length;
+
+		it("retries once, and the gated tools survive", async () => {
+			// The whole ticket, as one case: the first lookup 500s and the coding surface is still
+			// registered because the second one succeeded.
+			const h = await setup({ groups: ["coding"], rosterFailures: 1 });
+			expect(rosterCalls(h), "the roster must be asked twice — once failing, once not").toBe(2);
+			expect(h.tools.has("coding_session_capture")).toBe(true);
+			expect(h.tools.has("coding_repos_list")).toBe(true);
+		});
+
+		it("retries a 500, which is the shape the old catch could NOT see", async () => {
+			// `apiCall` returns a non-2xx as `{error}` rather than throwing, so the pre-#759 `catch`
+			// was unreachable for an API error: the failure fell through to `data.instances ===
+			// undefined`, an empty list, and a silently latched empty set. A retry inside the
+			// try/catch alone would not have fired here — this asserts the error-object path.
+			const h = await setup({ groups: ["coding"], rosterFailures: 1 });
+			expect(h.tools.has("coding_session_capture")).toBe(true);
+		});
+
+		it("gives up after the one retry rather than looping", async () => {
+			// The bound matters as much as the retry. An unbounded loop here would hold every new
+			// connection's `initialize` open against an API that is genuinely down.
+			const h = await setup({ groups: ["coding"], rosterFailures: 99 });
+			expect(rosterCalls(h), "exactly two attempts, never more").toBe(2);
+			// And the fallback is the pre-#759 behaviour: no gated tools, but the always-on set is
+			// intact, so the connection still works for everything that does not need a surface.
+			expect(h.tools.has("coding_session_capture")).toBe(false);
+			expect(h.tools.has("list_agents")).toBe(true);
+		});
+
+		it("does not retry when there is no token — an anonymous connection is legitimately empty", async () => {
+			// Retrying here would add the backoff to every unauthenticated `initialize` to re-derive
+			// a certainty. `userGroups` returns before it asks anything at all.
+			const h = await setup({ authToken: null });
+			expect(rosterCalls(h), "an unauthenticated connection must not ask for a roster").toBe(0);
+			expect(h.tools.has("coding_session_capture")).toBe(false);
+		});
+
+		it("asks exactly once when the first lookup succeeds", async () => {
+			// The no-regression arm: the retry must cost nothing on the path that already worked.
+			const h = await setup({ groups: ["coding"] });
+			expect(rosterCalls(h)).toBe(1);
+			expect(h.tools.has("coding_session_capture")).toBe(true);
+		});
 	});
 
 	it("also mounts the instance + storage tool groups (delegated registration)", async () => {

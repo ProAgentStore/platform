@@ -55,6 +55,16 @@ function platformMetadata(name: string): Record<string, unknown> {
 	return { ...(annotations ? { annotations } : {}), ...(outputSchema ? { outputSchema } : {}) };
 }
 
+/**
+ * How long to wait before the one retry {@link PagsMcp.userGroups} gets (#759).
+ *
+ * One retry, not a loop. The failure being covered is a transient blip on a single lookup at DO
+ * start; anything that survives a second attempt 200ms later is not transient, and a longer
+ * backoff would hold every new connection's `tools/list` behind it. 200ms is short enough that a
+ * client waiting on `initialize` does not notice and long enough to miss a same-instant blip.
+ */
+const USER_GROUPS_RETRY_MS = 200;
+
 export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	server = new McpServer({ name: "ProAgentStore", version: MCP_SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
 	private userToken: string | null = null;
@@ -117,25 +127,67 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 
+
 	/**
 	 * The console-surface groups (apply / coding / repo …) across the connected
 	 * user's subscribed agents. Agent-specific tools are gated to these, so a user
 	 * only sees tools for the agents they actually have (a Repo Chat user never
 	 * sees apply_to_job). Empty when unauthenticated → only core tools show.
+	 *
+	 * ── Why this retries (#759)
+	 *
+	 * An empty set here is not a small failure. `init()` latches `toolsRegistered = true` before this
+	 * runs and the tools are registered ONCE per Durable Object, so a lookup that comes back empty
+	 * removes every surface-gated tool — the entire `coding`, `apply` and `repo` groups — from
+	 * `tools/list` for the whole life of that DO. The user sees the always-on tools working normally
+	 * while their coding tools have simply vanished, with nothing anywhere saying why.
+	 *
+	 * ── The failure the old shape could not see
+	 *
+	 * `apiCall` RETURNS a non-2xx as `{error: "API 500", …}` rather than throwing (http.ts) — the same
+	 * trap `coding_repos_list` and `coding_loop_start` both name at their own call sites. So the
+	 * `catch` below was only ever reachable for a NETWORK-level throw: a 500 from the API fell straight
+	 * through to `data.instances === undefined`, an empty list, and a silently latched empty set. That
+	 * is the likeliest shape of the transient failure this retry is for, and a retry placed inside the
+	 * try/catch alone would not have fired for it. Both paths retry.
+	 *
+	 * ── What is NOT retried
+	 *
+	 * No token: an unauthenticated connection legitimately has no groups, and retrying would add
+	 * 200ms to every anonymous `initialize` to re-derive a certainty.
+	 *
+	 * ── What this does not fix
+	 *
+	 * The LATCH. If both attempts fail, the DO still registers with an empty set and stays that way
+	 * until it is evicted. Making registration re-runnable is a larger change — registering a tool
+	 * twice on the same server throws and cancels the MCP stream, which is the failure the latch exists
+	 * to prevent — and it is not what #759 asks for. This narrows the window; it does not close it.
 	 */
 	private async userGroups(): Promise<Set<string>> {
-		const groups = new Set<string>();
-		if (!this.userToken) return groups;
+	const groups = new Set<string>();
+	if (!this.userToken) return groups;
+	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
 			const data = (await authedCall("/v1/instances/my/instances", this.userToken, {}, this.env)) as
 				| Array<{ capabilities?: { surfaces?: string[] } }>
-				| { instances?: Array<{ capabilities?: { surfaces?: string[] } }> };
-			const list = Array.isArray(data) ? data : (data.instances ?? []);
+				| { instances?: Array<{ capabilities?: { surfaces?: string[] } }>; error?: string };
+			// The error object `apiCall` returns instead of throwing. Checked BEFORE the list is
+			// read, because `{error}` has no `instances` and would otherwise read as "no agents".
+			if (!Array.isArray(data) && data?.error) {
+				if (attempt === 0) await new Promise((r) => setTimeout(r, USER_GROUPS_RETRY_MS));
+				continue;
+			}
+			const list = Array.isArray(data) ? data : (data?.instances ?? []);
 			for (const inst of list) for (const s of inst.capabilities?.surfaces ?? []) groups.add(s);
+			return groups;
 		} catch {
-			/* unauthenticated or transient error → no agent-specific tools this connection */
+			// A network-level throw. Same treatment as the error object above: one more try, then
+			// give up with an empty set — the pre-#759 behaviour, which is still the honest
+			// fallback once a second attempt has also failed.
+			if (attempt === 0) await new Promise((r) => setTimeout(r, USER_GROUPS_RETRY_MS));
 		}
-		return groups;
+	}
+	return groups;
 	}
 
 	async init() {

@@ -739,7 +739,14 @@ const PINS = {
 	// recorder, the throttle and the storage shape are `recent-instances.ts`; the tool that reads
 	// them back is `instance-tools/recent.ts`. What stayed here is, again, only what needs
 	// `this.safety` and the pinned id.
-	"workers/mcp/src/index.ts": 964,
+	// +52 at #759: `userGroups` gains one bounded retry, and forty of those lines are why. An empty
+	// group set here is not a small failure — `init()` latches `toolsRegistered` and registers ONCE
+	// per Durable Object, so a single blip removes the entire coding/apply/repo surface from
+	// `tools/list` for that DO's whole life. The comment also records the trap that made the old
+	// shape unreachable (`apiCall` RETURNS a non-2xx as `{error}` rather than throwing, so the
+	// `catch` never fired for the failure it was written for) and states what the retry does NOT
+	// fix — the latch — so the next reader does not mistake a narrowed window for a closed one.
+	"workers/mcp/src/index.ts": 1016,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1591,7 +1598,9 @@ const PINS = {
 	// +13 at #777: the agent-think.ts entry above — eleven lines recording a SHRINK, which is the
 	// arm of this guard that is easiest to skip and the one that decides whether a refactor holds
 	// its ground — plus these two.
-	"scripts/check-file-size.mjs": 1675,
+	// +9 at #759: the mcp/index.ts raise above (seven lines of why for one bounded retry) and these
+	// two. The reason IS the record — a pin moved without one is a number nobody can audit later.
+	"scripts/check-file-size.mjs": 1684,
 };
 
 /**

@@ -91,13 +91,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**154 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 12 in
+**154 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 107 across `instance-tools/`. 130 are always registered; 23 are
-surface-gated (apply=4, repo=3, coding=16).
+`storage-tools.ts`, and 107 across `instance-tools/`. 130 are always registered; 24 are
+surface-gated (apply=4, repo=3, coding=17).
 
-Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 12
-+ 13 + 107 = 153. They said 88 until #602, which made the paragraph sum to 132 — a total the
+Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
++ 13 + 107 = 154. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -210,9 +210,15 @@ tells you exactly what you changed about it.
 - **Models send JSON strings for object params.** `create_agent` / `update_agent` accept
   `z.union([z.record(z.unknown()), z.string()])` and parse a string, because rejecting it
   turns a working call into a retry loop. Do the same for any new object-shaped argument.
-- **`userGroups()` swallows its error.** An unauthenticated or transient failure yields
-  an empty set, i.e. no agent-specific tools this connection. That is intentional, but it
-  means "my tool disappeared" is usually an auth problem, not a registration bug.
+- **`userGroups()` gets ONE retry, then swallows (#759).** No token → empty set
+  immediately, which is correct and costs nothing. A failed lookup is retried once after
+  200ms and only then yields empty, i.e. no agent-specific tools for the life of that DO.
+  The retry covers both a thrown fetch AND the `{error}` object `apiCall` returns for a
+  non-2xx — the second was the reachable one, and the original `catch` could not see it.
+  What it does not fix is the LATCH: two failures still register an empty surface until the
+  DO is evicted, because re-running registration would throw `already registered`. So "my
+  tool disappeared" is still usually an auth problem rather than a registration bug — just
+  no longer a single blip away.
 - **`/health`'s `tools` count comes from `src/tool-count.ts`.** It answered a hardcoded
   `41` for months while 124 were registered — and `oauth-provider.test.ts` asserted the
   41, so the test locked the wrong number in rather than catching it. `index.test.ts` now
