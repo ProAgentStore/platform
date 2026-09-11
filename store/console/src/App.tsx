@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
 import { HeaderProvider } from "./lib/HeaderContext";
@@ -16,12 +17,42 @@ import Usage from "./pages/Usage";
 import Feedback from "./pages/Feedback";
 import Preferences from "./pages/Preferences";
 import RunDetail from "./pages/RunDetail";
-import { resolveDefaultRoute } from "./lib/lastRoute";
+import { landingRoute, landingRouteFromMemory, type TopLevelRoute } from "./lib/lastRoute";
+import { readLandingCounts } from "./lib/landing";
 
-/** Root/unknown-path redirect: restore the last visited top-level screen (#161), else
- *  Instances. Read at mount so a reload lands where the user left off. */
+/**
+ * Root/unknown-path redirect: restore the last visited top-level screen (#161), else send the
+ * user to what they actually HAVE — Instances, then My Agents, then the Library (#794).
+ *
+ * A remembered section answers with no request at all, which covers every reload for an
+ * established user. Only a cold start — or a remembered `browse`, the one section `lastRoute.ts`
+ * deliberately does not restore to — pays a round trip, and it asks the same two endpoints the
+ * destination page loads on mount anyway.
+ *
+ * The interim state is a spinner and not a redirect-then-correct: bouncing the user off a page
+ * they were never meant to see rewrites history, and on a slow connection it is visible.
+ */
 function DefaultRedirect() {
-	return <Navigate to={resolveDefaultRoute()} replace />;
+	const [to, setTo] = useState<TopLevelRoute | null>(landingRouteFromMemory);
+
+	useEffect(() => {
+		if (to) return;
+		let live = true;
+		(async () => {
+			const counts = await readLandingCounts();
+			if (live) setTo(landingRoute(null, counts));
+		})();
+		return () => { live = false; };
+	}, [to]);
+
+	if (!to) {
+		return (
+			<div className="flex items-center justify-center min-h-[80dvh]">
+				<div className="text-muted text-sm">Loading...</div>
+			</div>
+		);
+	}
+	return <Navigate to={to} replace />;
 }
 
 function AuthGate() {

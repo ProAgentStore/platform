@@ -137,14 +137,25 @@ export default function Dashboard() {
 			{/* Instances */}
 			{tab === "instances" && (
 				<div>
+					{/* The primary action here is CREATE, not discover (#796, #798).
+					    "Browse agents" was a secondary button that described a destination; this
+					    describes what the user came to do, and matches "+ New Agent" on the Agents
+					    tab so the two halves of the console read the same way.
+
+					    It still lands on the Library, because subscribing IS how an instance is
+					    created (`POST /v1/instances/:id/subscribe`) and `Browse.tsx` already holds
+					    that flow, naming included (#450). A separate picker would be a second
+					    subscribe surface to keep correct for no new capability. So #796 and #798
+					    together are a relabelling, deliberately: the discovery framing goes, the
+					    only route to a new instance stays. */}
 					<div className="flex justify-between items-center mb-4">
 						<h2 className="text-lg font-semibold">Agents you've subscribed to</h2>
-						<Button size="lg" onClick={() => navigate("/browse")}>Browse agents</Button>
+						<Button variant="primary" size="lg" onClick={() => navigate("/browse")} className="active:scale-[0.97]">+ New instance</Button>
 					</div>
 					{loading ? (
 						<p className="text-center py-8 text-muted">Loading instances...</p>
 					) : instances.length === 0 ? (
-						<p className="text-center py-8 text-muted-soft">No subscriptions yet. <button type="button" onClick={() => navigate("/browse")} className="text-accent underline">Browse agents</button> to subscribe.</p>
+						<p className="text-center py-8 text-muted-soft">No instances yet. <button type="button" onClick={() => navigate("/browse")} className="text-accent underline">Subscribe to an agent</button> to create your first one.</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
 							{instances.map((inst) => {

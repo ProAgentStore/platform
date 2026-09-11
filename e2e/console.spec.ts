@@ -1576,6 +1576,48 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page).toHaveURL(/\/console\/agents$/);
 	});
 
+	test("a remembered Library visit does not become the landing route (#794)", async ({ page }) => {
+		// What #794 actually was. The static default has been Instances since #161 (6c73fcc7);
+		// the Library came up because `rememberRoute` persisted EVERY top-level section, so a
+		// single visit to the catalogue owned every cold open afterwards — silently, and for good.
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/browse");
+		// The write is a Layout effect, so poll it rather than infer it from the URL — the same
+		// race the #161 test above documents.
+		await expect
+			.poll(() => page.evaluate(() => localStorage.getItem("console:lastRoute")))
+			.toBe("browse");
+
+		// Re-opening the root now goes to the user's own work instead of the public catalogue.
+		await page.goto("/console/");
+		await expect(page).toHaveURL(/\/console\/instances$/);
+	});
+
+	test("a brand-new account with nothing still lands on the Library (#794)", async ({ page }) => {
+		// The one case discovery IS the right answer for, and the ticket's own follow-on. It is
+		// decided on counts that were read: both endpoints answer, and both answer empty.
+		await mockSignedInConsole(page, { instances: [], agents: [] });
+
+		await page.goto("/console/");
+		await expect(page).toHaveURL(/\/console\/browse$/);
+	});
+
+	test("the Instances tab offers a create action, not a browse one (#796, #798)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances");
+
+		await expect(page.getByRole("button", { name: "+ New instance" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "Browse agents" })).toHaveCount(0);
+
+		// #798's actual requirement: the control has to REACH the subscribe flow, which is the
+		// only thing that creates an instance. Removing #796's button without this is what would
+		// have orphaned it.
+		await page.getByRole("button", { name: "+ New instance" }).click();
+		await expect(page).toHaveURL(/\/console\/browse$/);
+		await expect(page.getByRole("heading", { name: "Browse agents" })).toBeVisible();
+	});
+
 	test("instance indexing page shows indexed, pending, and sync status", async ({ page }) => {
 		await mockSignedInConsole(page);
 
