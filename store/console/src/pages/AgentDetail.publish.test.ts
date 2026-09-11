@@ -68,7 +68,7 @@ describe("saveSettings re-reads the server on EVERY exit path (#793)", () => {
 		expect(body.length, "saveSettings was not found in AgentDetail.tsx — this file is measuring nothing").toBeGreaterThan(400);
 		// Spelled by concatenation so the literal is not itself a template placeholder — biome reads
 		// `${…}` inside a plain string as a mistake, and here it is the exact text being asserted.
-		expect(body).toContain("/v1/agents/$\{id}");
+		expect(body).toContain(`/v1/agents/$\{id}`);
 	});
 
 	it("reloads in the CATCH — the defect this ticket is about", () => {
