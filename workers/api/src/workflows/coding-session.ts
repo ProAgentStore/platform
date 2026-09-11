@@ -24,6 +24,7 @@ import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
 import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../lib/repo-sync.js";
+import { gateRunOnSync, type SyncGateOutcome } from "../lib/repo-sync-gate.js";
 import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
@@ -684,6 +685,20 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					.filter(Boolean)
 					.join("\n\n");
 			}
+			// …and if it could NOT be confirmed, the run stops here (#801).
+			//
+			// #785 made the verdict audible and left it advisory: the instruction above asks the
+			// Engine to fast-forward, and twice — #800, and this platform's own coder sitting six
+			// commits behind — a run proceeded on a base nobody had checked. `repo-sync-gate.ts`
+			// owns the decision, the sentence and the operator's record; this obeys it.
+			//
+			// `result` is SET rather than thrown. A thrown gate reaches `codingCrashReport` below and
+			// reads as "run error:", which is the exact confusion #523 closed — and worse, it would
+			// be classified for a platform resume and replayed against the same unconfirmed base.
+			const syncGate = (await step.do("repo-sync-gate", async () =>
+				gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo }, repoStart.sync),
+			)) as SyncGateOutcome;
+			if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
 			// A run the PLATFORM cut off leaves its work on the record and its PLAN nowhere (#523):
 			// `runCodingLoop`'s action log is a function-local array, so it dies with the invocation
 			// and the next run starts from the objective — re-implementing ten issues that are
@@ -710,6 +725,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at start: ${syncNote}` });
 					if (repoStart.sync?.state === "behind" || repoStart.sync?.state === "diverged") await postToChat(`**Repository sync at start** — ${syncNote}`);
 				}
+				// The refusal is LOUD (#801). A gate whose verdict lives only in the run's outcome
+				// field repeats #800's failure one layer up: the owner has to go and read a raw log
+				// to find out why nothing happened. Chat and trace both, because the remedy is a
+				// thing a person has to go and do on a named machine.
+				if (syncGate.blocked) {
+					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: syncGate.message });
+					await traceCodingRun(env, traceCtx, "coding.run.blocked", syncGate.message, { reason: syncGate.decision.reason });
+					await postToChat(`**Run stopped — unconfirmed base** — ${syncGate.message}`);
+				}
 				// State the authority up front, in the record the owner reads back. Only when one is
 				// actually in force — a line saying "may merge" on every run would be noise, and worse,
 				// would read as a decision somebody made.
@@ -723,7 +747,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				return null;
 			});
 
-			for (let round = 0; round < 12; round++) {
+			for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 				// The caller's cap when it named one, the historical 40 when it did not (#374).
 				result = await runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? 40 });
 				// Both are consumed by the round above — cleared so a stale handoff value or a stale platform note isn't re-injected into a later round.

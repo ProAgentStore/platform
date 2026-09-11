@@ -1416,7 +1416,17 @@ const PINS = {
 	// assignment) plus one timeline line, and six lines of why: the composition and both durable
 	// reads live in `lib/coding-resume-note.ts`, and what is here is the one fact only this file
 	// knows, which is that a run is STARTING on this session right now.
-	"workers/api/src/workflows/coding-session.ts": 994,
+	// +24 at #801: the sync GATE. #785 put the upstream verdict in the timeline and left it
+	// advisory, and twice a run built on a base nobody had confirmed — #800, and this platform's
+	// own coder six commits behind. Four lines of wiring (a `repo-sync-gate` step, the `result`
+	// assignment, the loop guard, four lines of telling the owner) and the rest is why: why the
+	// gate SETS `result` instead of throwing (a thrown gate reads as a crash through
+	// `codingCrashReport`, the confusion #523 had just closed, and would be replayed against the
+	// same unconfirmed base), and why the refusal is posted to chat and trace rather than left
+	// in the outcome field. The decision, the sentence and the operator's record are all in
+	// `lib/repo-sync-gate.ts`; what is here is the one fact only this file knows, which is that
+	// a run is about to start against this verdict.
+	"workers/api/src/workflows/coding-session.ts": 1018,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1626,7 +1636,10 @@ const PINS = {
 	// these two.
 	// +7 at #523: the coding-session.ts raise above (six lines of why for three lines of wiring) and
 	// these two. The reason IS the record — a pin moved without one is a number nobody can audit.
-	"scripts/check-file-size.mjs": 1710,
+	// +13 at #801: the coding-session.ts raise above (ten lines of why for four lines of wiring,
+	// because a gate that STOPS work has to justify itself more than one that reports it) and
+	// these two. The reason IS the record — a pin moved without one is a number nobody can audit.
+	"scripts/check-file-size.mjs": 1723,
 };
 
 /**

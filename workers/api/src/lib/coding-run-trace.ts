@@ -44,6 +44,8 @@ export type CodingRunEvent =
 	| "coding.run.park"
 	/** A platform event interrupted the run and it is being resumed rather than failed (#583). */
 	| "coding.run.interrupted"
+	/** The gate refused to start it — the base it would build on could not be confirmed (#801). */
+	| "coding.run.blocked"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 
@@ -73,10 +75,12 @@ export async function traceCodingRun(
 	await logEvent(env, {
 		source: "coding",
 		event,
-		// `warn` for the two events that mean the run is NOT progressing, `info` for the rest. A park
+		// `warn` for the events that mean the run is NOT progressing, `info` for the rest. A park
 		// and an interruption are explained, not broken — the same distinction `codingFailureLevel`
 		// draws, so a reader filtering `level` gets one consistent answer across both writers.
-		level: event === "coding.run.park" || event === "coding.run.interrupted" ? "warn" : "info",
+		// A BLOCKED run joins them: it is the third way a run can exist without progressing, and an
+		// operator filtering `level` for "why is nothing happening" has to find all three (#801).
+		level: event === "coding.run.park" || event === "coding.run.interrupted" || event === "coding.run.blocked" ? "warn" : "info",
 		message: message.slice(0, 400),
 		userId: ctx.userId,
 		instanceId: ctx.instanceId,

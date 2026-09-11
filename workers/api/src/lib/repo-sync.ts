@@ -59,6 +59,15 @@ export interface RepoSyncVerdict {
 	fetched: boolean;
 	/** Why the latest fetch attempt failed, when it did — the counts then describe the last good fetch. */
 	fetchError: string | null;
+	/**
+	 * The RAW failure the relay or the runner reported, when one did — verbatim, unwrapped (#801).
+	 *
+	 * `detail` already carries this inside a sentence, but a sentence is for a reader and this is
+	 * for a CLASSIFIER: `repo-sync-gate.ts` has to tell an old runner's 404 apart from a machine
+	 * that is simply unreachable, and it must not do that by matching on prose it does not own.
+	 * Null on every answered check, including a failed fetch — that one is `fetchError`.
+	 */
+	error: string | null;
 	/** One sentence, written to be RELAYED. Empty for `in_sync`. */
 	detail: string;
 }
@@ -101,6 +110,7 @@ export function verdictFromSync(raw: unknown): RepoSyncVerdict {
 		remoteHead: short(r.remoteHead),
 		fetched: r.fetched === true,
 		fetchError: typeof r.fetchError === "string" && r.fetchError ? r.fetchError : null,
+		error: typeof r.error === "string" && r.error ? r.error : null,
 	};
 	if (r.checked !== true) {
 		return {

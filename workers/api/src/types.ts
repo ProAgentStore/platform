@@ -63,6 +63,13 @@ export interface Env {
 	 *  at paid launch, when subscription-pool token spend becomes real platform cost. */
 	BUDGET_ENFORCE?: string;
 	/**
+	 * "off"/"0"/"false" = a coding run may start on a base it could not confirm. Unset (default) =
+	 * the gate is ARMED and such a run is stopped before its first instruction — see #801 and
+	 * `lib/repo-sync-gate.ts`, which explains why this one defaults the opposite way to the two
+	 * `*_ENFORCE` switches above. Disarming keeps the `error_log` record; it only stops the block.
+	 */
+	CODING_SYNC_GATE?: string;
+	/**
 	 * This deployment's OWN MCP server endpoint, e.g. `https://mcp.proagentstore.online/mcp` (#287).
 	 * Drives the first-party MCP preset in the console (lib/mcp-presets.ts) — resolved from
 	 * deployment config, never hardcoded in the connector, so local/staging/production each point

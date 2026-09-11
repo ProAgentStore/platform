@@ -170,9 +170,12 @@ describe("the wiring — the defect a unit test of this module cannot see", () =
 	it("sets it BEFORE the round loop, which is what clears it after round 0", () => {
 		// `goal.resumeNote = undefined` runs after every round, so a note assigned after the loop
 		// starts would be wiped before any brain ever read it. Order is the whole correctness here.
-		expect(source.indexOf("if (resumeNote) goal.resumeNote = resumeNote;")).toBeLessThan(
-			source.indexOf("for (let round = 0; round < 12; round++)"),
-		);
+		// Matched on the loop's OPENING, not its whole condition: #801 added `&& !syncGate.blocked`
+		// to it, and this assertion is about where the assignment sits relative to the loop — not
+		// about what the loop tests. An `indexOf` of a full condition silently returns -1 when
+		// someone edits it, which reads as "the assignment is after the loop" and fails for the
+		// wrong reason.
+		expect(source.indexOf("if (resumeNote) goal.resumeNote = resumeNote;")).toBeLessThan(source.indexOf("for (let round = 0; round < 12"));
 		expect(source).toContain("goal.resumeNote = undefined;");
 	});
 
