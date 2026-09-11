@@ -1410,7 +1410,13 @@ const PINS = {
 	// — one call plus the fourteen lines of why it must be LAST, inside `if (!resuming)`, and why it
 	// carries no `.catch`. The decision it triggers lives entirely in `lib/objective-queue-start.ts`;
 	// what is here is the one fact only this file knows, which is when the lock is actually free.
-	"workers/api/src/workflows/coding-session.ts": 982,
+	// +12 at #523: the resume note. A run the platform cut off loses its action log with the
+	// invocation, so its successor re-does work that is already pushed — the ticket's own run closed
+	// ten issues and pushed fifteen times. Two lines of wiring (a `resume-note` step and the
+	// assignment) plus one timeline line, and six lines of why: the composition and both durable
+	// reads live in `lib/coding-resume-note.ts`, and what is here is the one fact only this file
+	// knows, which is that a run is STARTING on this session right now.
+	"workers/api/src/workflows/coding-session.ts": 994,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1618,7 +1624,9 @@ const PINS = {
 	// a rejected save is worth fifty lines of comment) and these two.
 	// +9 at #797: the AgentDetail.tsx raise above (seven lines on why one bug presented as two) and
 	// these two.
-	"scripts/check-file-size.mjs": 1702,
+	// +7 at #523: the coding-session.ts raise above (six lines of why for three lines of wiring) and
+	// these two. The reason IS the record — a pin moved without one is a number nobody can audit.
+	"scripts/check-file-size.mjs": 1710,
 };
 
 /**

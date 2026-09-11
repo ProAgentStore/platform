@@ -19,6 +19,7 @@ import { setCodingSessionCardStatus } from "../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../lib/coding-session-relaunch.js";
 import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../lib/coding-pause.js";
 import { awaitEngineIdle, shouldTouchActivity } from "../lib/coding-idle-poll.js";
+import { pendingCodingResumeNote } from "../lib/coding-resume-note.js";
 import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
@@ -683,6 +684,14 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					.filter(Boolean)
 					.join("\n\n");
 			}
+			// A run the PLATFORM cut off leaves its work on the record and its PLAN nowhere (#523):
+			// `runCodingLoop`'s action log is a function-local array, so it dies with the invocation
+			// and the next run starts from the objective — re-implementing ten issues that are
+			// already pushed. This composes the briefing from what IS durable. Null on every
+			// ordinary start, and on any failed read: the briefing is an improvement to a run that
+			// is otherwise fine, so it must never be the thing that stops one.
+			const resumeNote = (await step.do("resume-note", async () => (await pendingCodingResumeNote(env, { userId, instanceId, sessionId })) ?? null)) as string | null;
+			if (resumeNote) goal.resumeNote = resumeNote;
 			await step.do("tl-start", async () => {
 				// …and in the UNIFIED trace, which is the surface `agent_trace` and every MCP debug
 				// path reads (#580 AC4). The timeline below is per-session and per-console; a run that
@@ -690,6 +699,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				await traceCodingRun(env, traceCtx, "coding.run.start", `objective: ${goal.objective}`, { maxSteps: event.payload.maxSteps ?? 40 });
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
 				if (stateNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: stateNote });
+				// Recorded, not just injected: a checkpoint the owner cannot see is indistinguishable
+				// from one that never fired, and this is the run whose predecessor's report was lost.
+				if (resumeNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: resumeNote });
 				// The sync line is a RECORD as much as a briefing (#785): when a run's report later
 				// says "the file was not there", the timeline has to show whether the base was
 				// current when the run began. Loud in chat only when it is actionable — a run

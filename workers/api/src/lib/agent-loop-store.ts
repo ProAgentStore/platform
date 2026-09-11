@@ -246,6 +246,59 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
  * Owner-scoped like every other reader here: a run belongs to the user who started it, and the
  * route that calls this has already proven the instance is theirs.
  */
+/**
+ * How far back a resume note will look for the run it is about (#523).
+ *
+ * A bound, not a policy: without one this query walks `idx_agent_loop_runs_instance` to the
+ * beginning of the instance's history every time there is NO interrupted run, which is the normal
+ * case on every ordinary start. Six hours is also the semantic answer — a note about work a run did
+ * last week is not a checkpoint, it is archaeology, and the repository has moved since.
+ */
+export const RESUME_NOTE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The last run on THIS session that the platform cut off (#523, item 4).
+ *
+ * `interrupted` is the one stop reason that means "the objective never reported" rather than "the
+ * objective failed" (#546), so it is the only one whose work a successor should be told to preserve.
+ * A `failed` run's acts are not a checkpoint — the run got to say what happened, and repeating its
+ * steps may be exactly right.
+ *
+ * IMMEDIATE successor only, which is why the query takes the most recent finished run and THEN asks
+ * what ended it, rather than asking SQL for the most recent interrupted one. Those differ, and the
+ * difference is a bug: after run A is cut off and run B picks the note up and finishes the work, a
+ * later run C would find A again and be briefed on a checkpoint that has already been consumed. A
+ * normal ending in between means the note's job is done.
+ *
+ * `finished_at IS NOT NULL` because an unfinished row is a run still going: its acts are not a
+ * record of something to skip, they are a live session's, and #790 is what makes "reached a
+ * terminal state" a reliable trigger point at all. It also excludes the CALLER — a run asking this
+ * question has not finished, so it can never be briefed on itself.
+ *
+ * Ordered and bounded on `started_at` so it rides `idx_agent_loop_runs_instance` directly; see
+ * {@link RESUME_NOTE_LOOKBACK_MS} for why the floor is not optional.
+ */
+export async function lastInterruptedRunForSession(
+	env: Env,
+	userId: string,
+	instanceId: string,
+	sessionId: string,
+	now: number = Date.now(),
+): Promise<LoopRunView | null> {
+	const row = await env.DB.prepare(
+		`SELECT * FROM agent_loop_runs
+		  WHERE instance_id = ?2 AND user_id = ?1 AND session_id = ?3
+		    AND finished_at IS NOT NULL
+		    AND started_at >= ?4
+		  ORDER BY started_at DESC LIMIT 1`,
+	)
+		.bind(userId, instanceId, sessionId, now - RESUME_NOTE_LOOKBACK_MS)
+		.first<LoopRunRow>();
+	// The predecessor exists but ended normally — nothing to hand forward. See the header.
+	if (row?.stop_reason !== "interrupted") return null;
+	return toLoopRunView(row);
+}
+
 export async function listActiveRuns(env: Env, userId: string, instanceId: string): Promise<LoopRunView[]> {
 	const res = await env.DB.prepare(
 		"SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2 AND status = 'running' ORDER BY started_at DESC",
