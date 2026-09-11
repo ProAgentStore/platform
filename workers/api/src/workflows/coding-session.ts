@@ -24,7 +24,7 @@ import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
 import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../lib/repo-sync.js";
-import { gateRunOnSync, type SyncGateOutcome } from "../lib/repo-sync-gate.js";
+import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../lib/repo-sync-gate.js";
 import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
@@ -667,11 +667,28 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				return { state: state ?? null, sync: sync ?? null };
 			})) as { state: RepoWorkingState | null; sync: RepoSyncVerdict | null };
 			const repoState = repoStart.state;
+			// …and if it is merely BEHIND on a clean tree, the platform fast-forwards it itself (#802).
+			// The gate below stopped this platform's own coder twice in a row, 19 commits behind, and
+			// told a human to go and type the pull — an objective saying "pull first" never reaches a
+			// run the gate has already stopped. The decision (only `behind`, only clean, only on its
+			// branch — never `diverged`), the ask and the independent re-read live in
+			// `lib/repo-sync-gate.ts`; the machine re-checks every precondition at the hands. A heal
+			// that was not tried is recorded with its reason, so the refusal can say why.
+			const heal = (await step.do("repo-self-heal", async () => {
+				const eligible = syncSelfHealEligible(repoStart.sync, repoStart.state, branch ?? null);
+				if (!eligible.eligible || !eligible.branch) return skippedSyncHeal(eligible);
+				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+				if (!repo) return null;
+				return attemptSyncSelfHeal(conn, { repo, sessionId, branch: eligible.branch });
+			})) as SyncHealOutcome | null;
+			// The verdict the run is judged on is the checkout as it IS now — the re-read after a
+			// heal, else the start-of-run read.
+			const syncAtStart = heal?.sync ?? repoStart.sync;
 			// `branch` is the repo's CONFIGURED branch, carried on the payload by whoever started
 			// the run — so the comparison is against what this repo is supposed to be on, not
 			// against a hardcoded "main".
 			const stateNote = repoState ? describeRepoState(repoState, { configuredBranch: branch ?? null }) : null;
-			const syncNote = repoStart.sync ? describeRepoSync(repoStart.sync) : null;
+			const syncNote = syncAtStart ? describeRepoSync(syncAtStart) : null;
 			if (stateNote || syncNote) {
 				goal.specialInstructions = [
 					goal.specialInstructions,
@@ -696,7 +713,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// reads as "run error:", which is the exact confusion #523 closed — and worse, it would
 			// be classified for a platform resume and replayed against the same unconfirmed base.
 			const syncGate = (await step.do("repo-sync-gate", async () =>
-				gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo }, repoStart.sync),
+				gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal }, syncAtStart),
 			)) as SyncGateOutcome;
 			if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
 			// A run the PLATFORM cut off leaves its work on the record and its PLAN nowhere (#523):
@@ -721,9 +738,17 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// says "the file was not there", the timeline has to show whether the base was
 				// current when the run began. Loud in chat only when it is actionable — a run
 				// starting behind is the incident; a run starting in sync is not news.
+				// A pointer moved on the owner's checkout unattended (#802): the record says what
+				// arrived and how to put it back, in the trace as well, because "why is my checkout on
+				// a different commit" has to be answerable from `agent_trace`.
+				if (heal && heal.status !== "skipped") {
+					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: describeSyncHeal(heal) });
+					await traceCodingRun(env, traceCtx, "coding.run.self_heal", describeSyncHeal(heal), { status: heal.status, commits: heal.commits, from: heal.from, to: heal.to });
+					if (heal.status === "healed") await postToChat(`**Repository fast-forwarded** — ${describeSyncHeal(heal)}`);
+				}
 				if (syncNote) {
 					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at start: ${syncNote}` });
-					if (repoStart.sync?.state === "behind" || repoStart.sync?.state === "diverged") await postToChat(`**Repository sync at start** — ${syncNote}`);
+					if (syncAtStart?.state === "behind" || syncAtStart?.state === "diverged") await postToChat(`**Repository sync at start** — ${syncNote}`);
 				}
 				// The refusal is LOUD (#801). A gate whose verdict lives only in the run's outcome
 				// field repeats #800's failure one layer up: the owner has to go and read a raw log

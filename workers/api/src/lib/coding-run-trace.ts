@@ -46,6 +46,8 @@ export type CodingRunEvent =
 	| "coding.run.interrupted"
 	/** The gate refused to start it — the base it would build on could not be confirmed (#801). */
 	| "coding.run.blocked"
+	/** The platform fast-forwarded (or tried to) a behind checkout before the run started (#802). */
+	| "coding.run.self_heal"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 

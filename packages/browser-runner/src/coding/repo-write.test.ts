@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { InspectError } from "./inspect.js";
-import { gitWriteArgv, isSwitchableBranchName, switchRepoBranch } from "./repo-write.js";
+import { fastForwardRepo, gitWriteArgv, isSwitchableBranchName, switchRepoBranch } from "./repo-write.js";
 
 /**
  * The write surface, exercised against a REAL git repo.
  *
- * The blind spot this suite does NOT cover, stated rather than discovered: it proves that the one
- * verb behaves, and that every refusal path leaves the checkout untouched. It cannot prove there is
- * no OTHER way to reach git from the runner — that is the job of the vocabulary being one member
- * wide, and of the argv test below, which fails the moment a second verb appears without one.
+ * The blind spot this suite does NOT cover, stated rather than discovered: it proves that the two
+ * verbs behave, and that every refusal path leaves the checkout untouched. It cannot prove there is
+ * no OTHER way to reach git from the runner — that is the job of the vocabulary being two members
+ * wide, and of the argv test below, which fails the moment a third verb appears without one.
  */
 
 function git(dir: string, ...argv: string[]): string {
@@ -44,15 +44,22 @@ describe("isSwitchableBranchName (the only caller-supplied token)", () => {
 });
 
 describe("gitWriteArgv (the closed vocabulary, at the hands)", () => {
-	it("maps the one verb to a fixed argv, terminated by --", () => {
+	it("maps the switch verb to a fixed argv, terminated by --", () => {
 		// `--` says "this is a ref, not a path". Without it a branch that shares a name with a file
 		// makes this a FILE checkout, which discards uncommitted work — the one thing no policy may
 		// ever do.
 		expect(gitWriteArgv("switch-branch", { branch: "main" })).toEqual(["checkout", "main", "--"]);
 	});
 
-	it("has exactly one verb — a second one is a code review, not a string", () => {
-		for (const verb of ["commit", "reset", "clean", "stash", "push", "checkout"]) {
+	it("maps the fast-forward verb to a fixed argv with no caller-supplied token at all (#802)", () => {
+		// `--ff-only` is the contract (git aborts on divergence, touching nothing); `--no-rebase` so
+		// a `pull.rebase=true` on the owner's machine cannot turn that abort into a rebase.
+		expect(gitWriteArgv("fast-forward")).toEqual(["pull", "--ff-only", "--no-rebase"]);
+		expect(gitWriteArgv("fast-forward", { branch: "--force" })).toEqual(["pull", "--ff-only", "--no-rebase"]);
+	});
+
+	it("has exactly two verbs — a third one is a code review, not a string", () => {
+		for (const verb of ["commit", "reset", "clean", "stash", "push", "checkout", "pull", "merge", "rebase"]) {
 			expect(() => gitWriteArgv(verb as never, { branch: "main" })).toThrow(InspectError);
 		}
 	});
@@ -174,5 +181,138 @@ describe("switchRepoBranch (on a real temp repo)", () => {
 		// The whole point: NOT false. "Clean" is the word that makes an unattended checkout safe,
 		// and it must never be manufactured from a failed read.
 		expect(r.dirty).toBeNull();
+	});
+});
+
+describe("fastForwardRepo (on a real temp clone of a real temp upstream) (#802)", () => {
+	let up: string;
+	let dir: string;
+
+	/** Commit one file change in `up` — what "origin moved on" looks like. */
+	function advanceUpstream(name: string, body: string): string {
+		writeFileSync(join(up, name), body);
+		git(up, "add", "-A");
+		git(up, "commit", "-qm", `upstream: ${name}`);
+		return git(up, "rev-parse", "HEAD").trim();
+	}
+
+	beforeEach(() => {
+		up = mkdtempSync(join(tmpdir(), "pags-ff-upstream-"));
+		git(up, "init", "-q", "-b", "main");
+		git(up, "config", "user.email", "t@example.com");
+		git(up, "config", "user.name", "T");
+		writeFileSync(join(up, "a.txt"), "one\n");
+		git(up, "add", "-A");
+		git(up, "commit", "-qm", "first");
+		dir = mkdtempSync(join(tmpdir(), "pags-ff-clone-"));
+		rmSync(dir, { recursive: true, force: true });
+		execFileSync("git", ["clone", "-q", up, dir], { encoding: "utf-8" });
+		git(dir, "config", "user.email", "t@example.com");
+		git(dir, "config", "user.name", "T");
+	});
+
+	afterEach(() => {
+		rmSync(up, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("brings a clean, behind checkout up to its upstream and counts what arrived", () => {
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		advanceUpstream("b.txt", "two\n");
+		const target = advanceUpstream("c.txt", "three\n");
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r).toMatchObject({ ok: true, changed: true, branch: "main", upstream: "origin/main", from: before, to: target, commits: 2, dirty: false });
+		// Read from git, not from the return value.
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(target);
+		expect(git(dir, "status", "--porcelain").trim()).toBe("");
+	});
+
+	it("the undo the message prints actually undoes it", () => {
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		advanceUpstream("b.txt", "two\n");
+		const r = fastForwardRepo(dir);
+		git(dir, "reset", "-q", "--keep", r.from as string);
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
+	});
+
+	it("is a no-op success when already in sync", () => {
+		const head = git(dir, "rev-parse", "HEAD").trim();
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r).toMatchObject({ ok: true, changed: false, from: head, to: head, commits: 0 });
+	});
+
+	it("REFUSES a dirty tree and changes nothing — even when the pull would not touch the edited file", () => {
+		advanceUpstream("b.txt", "two\n");
+		writeFileSync(join(dir, "a.txt"), "edited\n");
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r.refused).toBe("dirty");
+		expect(r.ok).toBe(false);
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
+		expect(git(dir, "status", "--porcelain").trim()).toContain("a.txt");
+	});
+
+	it("counts an UNTRACKED file as dirty", () => {
+		writeFileSync(join(dir, "scratch.env"), "SECRET=1\n");
+		expect(fastForwardRepo(dir).refused).toBe("dirty");
+	});
+
+	it("REFUSES when the checkout is not on the branch the verdict was about", () => {
+		advanceUpstream("b.txt", "two\n");
+		git(dir, "checkout", "-q", "-b", "fix/1");
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r.refused).toBe("off-branch");
+		expect(r.branch).toBe("fix/1");
+	});
+
+	it("REFUSES a detached HEAD", () => {
+		git(dir, "checkout", "-q", "--detach");
+		expect(fastForwardRepo(dir).refused).toBe("detached");
+	});
+
+	it("REFUSES a branch with no upstream rather than guessing a remote", () => {
+		git(dir, "checkout", "-q", "-b", "local-only");
+		expect(fastForwardRepo(dir, { branch: "local-only" }).refused).toBe("no-upstream");
+	});
+
+	it("refuses a path that is not a checkout", () => {
+		const empty = mkdtempSync(join(tmpdir(), "pags-not-a-repo-"));
+		try {
+			expect(fastForwardRepo(empty).refused).toBe("not-a-repo");
+		} finally {
+			rmSync(empty, { recursive: true, force: true });
+		}
+	});
+
+	it("FAILS a diverged history with git's own sentence, and the local commit survives", () => {
+		advanceUpstream("b.txt", "two\n");
+		writeFileSync(join(dir, "mine.txt"), "local work\n");
+		git(dir, "add", "-A");
+		git(dir, "commit", "-qm", "local commit");
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r.ok).toBe(false);
+		expect(r.refused).toBeUndefined();
+		expect(r.error).toMatch(/fast-forward|diverg/i);
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
+		expect(git(dir, "log", "--oneline", "-1").trim()).toContain("local commit");
+	});
+
+	it("honours --ff-only even when the owner's config asks pulls to rebase", () => {
+		// The `--no-rebase` in the argv: without it, `pull.rebase=true` would rebase the local
+		// commit onto upstream — a rewrite of the owner's history that no unattended step may do.
+		git(dir, "config", "pull.rebase", "true");
+		advanceUpstream("b.txt", "two\n");
+		writeFileSync(join(dir, "mine.txt"), "local work\n");
+		git(dir, "add", "-A");
+		git(dir, "commit", "-qm", "local commit");
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		const r = fastForwardRepo(dir);
+		expect(r.ok).toBe(false);
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
+	});
+
+	it("throws rather than shelling out when the branch name is unusable", () => {
+		expect(() => fastForwardRepo(dir, { branch: "--force" })).toThrow(InspectError);
 	});
 });

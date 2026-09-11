@@ -365,11 +365,13 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
-	// The ONE write surface (#322). A standing policy may put a checkout back on the branch it
-	// declared; it may not commit, discard, or touch a remote. An older runner 404s this, which the
-	// cloud reports as "asked, not confirmed" rather than as done.
+	// The ONE write surface (#322, #802). A standing policy may put a checkout back on the branch
+	// it declared, and a run may fast-forward a clean checkout to its upstream before it starts; it
+	// may not commit, discard, or push. An older runner 404s the endpoint (and a 0.4.58 runner
+	// 400s the `fast-forward` verb), which the cloud reports as "asked, not confirmed" rather than
+	// as done.
 	if (req.method === "POST" && path === "/coding/git-write") {
-		const b = await readJson<{ sessionId?: string; workDir?: string; cmd: "switch-branch"; branch: string }>(req);
+		const b = await readJson<{ sessionId?: string; workDir?: string; cmd: "switch-branch" | "fast-forward"; branch?: string }>(req);
 		try {
 			return json(res, 200, runner.coding.gitWrite(b));
 		} catch (e: unknown) {

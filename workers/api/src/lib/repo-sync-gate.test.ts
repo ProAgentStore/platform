@@ -2,12 +2,36 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { logError, runnerUpgradeRefusal } = vi.hoisted(() => ({ logError: vi.fn(), runnerUpgradeRefusal: vi.fn() }));
+const { logError, runnerUpgradeRefusal, runnerUpgradeClause, callRunner, readRepoSync } = vi.hoisted(() => ({
+	logError: vi.fn(),
+	runnerUpgradeRefusal: vi.fn(),
+	runnerUpgradeClause: vi.fn(),
+	callRunner: vi.fn(),
+	readRepoSync: vi.fn(),
+}));
 vi.mock("./error-log.js", () => ({ logError }));
-vi.mock("./runner-upgrade.js", () => ({ runnerUpgradeRefusal }));
+vi.mock("./runner-upgrade.js", () => ({ runnerUpgradeRefusal, runnerUpgradeClause }));
+vi.mock("./runner-client.js", () => ({ callRunner }));
+vi.mock("./repo-sync.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./repo-sync.js")>()), readRepoSync }));
 
-import { gateRunOnSync, syncFailureIsOldRunner, syncGateArmed, syncGateDecision, SYNC_GATE_SOURCE } from "./repo-sync-gate.js";
+import {
+	attemptSyncSelfHeal,
+	describeSyncHeal,
+	FAST_FORWARD_MIN_CLI,
+	gateRunOnSync,
+	skippedSyncHeal,
+	syncFailureIsOldRunner,
+	syncGateArmed,
+	syncGateDecision,
+	syncSelfHealEligible,
+	SYNC_GATE_SOURCE,
+	SYNC_HEAL_TIMEOUT_MS,
+	type SyncHealOutcome,
+} from "./repo-sync-gate.js";
 import { REPO_SYNC_MIN_CLI, verdictFromSync } from "./repo-sync.js";
+import type { RepoWorkingState } from "./repo-observation.js";
+import type { RunnerConn } from "./runner-client.js";
+import type { CodingRepo } from "./coding-types.js";
 import type { Env } from "../types.js";
 
 /** The string `runner-client.ts` builds for an endpoint a pre-0.4.58 CLI does not serve. */
@@ -20,6 +44,9 @@ const env = {} as Env;
 beforeEach(() => {
 	logError.mockReset().mockResolvedValue(undefined);
 	runnerUpgradeRefusal.mockReset().mockResolvedValue(`\`mbp\` needs a newer runner to check whether this checkout is up to date (it has 0.4.57) — this needs CLI ${REPO_SYNC_MIN_CLI} or newer.`);
+	runnerUpgradeClause.mockReset().mockImplementation((f: { what: string; minCli: string; node?: string | null }) => `\`${f.node}\` cannot ${f.what} — it needs CLI ${f.minCli} or newer`);
+	callRunner.mockReset();
+	readRepoSync.mockReset();
 });
 
 describe("syncGateDecision — which verdicts may start a run (#801)", () => {
@@ -193,6 +220,164 @@ describe("gateRunOnSync — the sentence and the operator's record (#801)", () =
 	});
 });
 
+const CLEAN: RepoWorkingState = { branch: "main", dirty: false, changedFiles: 0 };
+const BEHIND = verdictFromSync({ ...FRESH, ahead: 0, behind: 19 });
+const conn = { instanceId: "inst_1", userId: "user_1", runnerNode: "mbp" } as unknown as RunnerConn;
+const repo = { id: "repo_1", workdir: "~/dev/stores/pags/platform", branch: "main" } as unknown as CodingRepo;
+
+describe("syncSelfHealEligible — the ONE case a fast-forward is safe unattended (#802)", () => {
+	it("is eligible for a clean checkout, behind, on its configured branch", () => {
+		expect(syncSelfHealEligible(BEHIND, CLEAN, "main")).toEqual({ eligible: true, branch: "main", why: "" });
+	});
+
+	it("falls back to the branch the verdict is about when none is configured", () => {
+		expect(syncSelfHealEligible(BEHIND, CLEAN, null)).toMatchObject({ eligible: true, branch: "main" });
+	});
+
+	it("is NOT eligible for anything but `behind` — in sync, ahead, diverged, unverified, or no verdict", () => {
+		for (const v of [
+			verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }),
+			verdictFromSync({ ...FRESH, ahead: 2, behind: 0 }),
+			verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }),
+			verdictFromSync(OLD_RUNNER),
+			null,
+		]) {
+			expect(syncSelfHealEligible(v, CLEAN, "main").eligible).toBe(false);
+		}
+		// Diverged in particular: a merge or rebase is a decision about somebody's commits.
+		expect(syncSelfHealEligible(verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }), CLEAN, "main").why).toBe("");
+	});
+
+	it("is NOT eligible on a dirty tree, and says how many files and what to do", () => {
+		const e = syncSelfHealEligible(BEHIND, { ...CLEAN, dirty: true, changedFiles: 3 }, "main");
+		expect(e.eligible).toBe(false);
+		expect(e.why).toContain("3 uncommitted files");
+		expect(e.why).toContain("commit or move that work first");
+	});
+
+	it("is NOT eligible off its branch, and names both branches", () => {
+		const e = syncSelfHealEligible(BEHIND, { ...CLEAN, branch: "fix/1" }, "main");
+		expect(e.eligible).toBe(false);
+		expect(e.why).toContain("`fix/1`");
+		expect(e.why).toContain("`main`");
+	});
+
+	it("is NOT eligible when the tree's state is unknown — unknown is not clean", () => {
+		expect(syncSelfHealEligible(BEHIND, null, "main")).toMatchObject({ eligible: false });
+		expect(syncSelfHealEligible(BEHIND, { ...CLEAN, branch: null }, "main").eligible).toBe(false);
+		expect(syncSelfHealEligible(BEHIND, { branch: null, dirty: false, changedFiles: 0, notAGitRepo: true }, "main").eligible).toBe(false);
+	});
+
+	it("skippedSyncHeal turns an ineligible-with-reason into a recorded outcome, and nothing else", () => {
+		expect(skippedSyncHeal(syncSelfHealEligible(BEHIND, { ...CLEAN, dirty: true, changedFiles: 1 }, "main"))).toMatchObject({ status: "skipped", branch: "main" });
+		expect(skippedSyncHeal(syncSelfHealEligible(BEHIND, CLEAN, "main"))).toBeNull();
+		// Not behind → nothing to say → nothing recorded.
+		expect(skippedSyncHeal(syncSelfHealEligible(verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }), CLEAN, "main"))).toBeNull();
+	});
+});
+
+describe("attemptSyncSelfHeal — ask the machine, then believe only the re-read (#802)", () => {
+	const wireOk = { ok: true, changed: true, branch: "main", upstream: "origin/main", from: "5b671b23aaaaaaaa", to: "0af538acbbbbbbbb", commits: 19, dirty: false };
+
+	it("HEALED: the pull ran and an independent re-read says in sync — the gate then passes", async () => {
+		callRunner.mockResolvedValue(wireOk);
+		readRepoSync.mockResolvedValue(verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }));
+		const h = await attemptSyncSelfHeal(conn, { repo, sessionId: "csess_1", branch: "main" });
+		expect(h).toMatchObject({ status: "healed", branch: "main", from: "5b671b23", to: "0af538ac", commits: 19 });
+		expect(h.sync?.state).toBe("in_sync");
+		expect(callRunner).toHaveBeenCalledWith(conn, "/coding/git-write", { sessionId: "csess_1", workDir: repo.workdir, cmd: "fast-forward", branch: "main" }, { timeoutMs: SYNC_HEAL_TIMEOUT_MS });
+		const out = await gateRunOnSync(env, { ...ctx, heal: h }, h.sync);
+		expect(out.blocked).toBe(false);
+		expect(logError).not.toHaveBeenCalled();
+	});
+
+	it("UNCONFIRMED when the pull says it ran but the re-read still says behind — the writer's own account is not enough", async () => {
+		callRunner.mockResolvedValue(wireOk);
+		readRepoSync.mockResolvedValue(BEHIND);
+		const h = await attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" });
+		expect(h.status).toBe("unconfirmed");
+		expect(h.detail).toContain("still reads");
+		expect(h.sync?.state).toBe("behind");
+	});
+
+	it("UNCONFIRMED when the re-read itself failed", async () => {
+		callRunner.mockResolvedValue(wireOk);
+		readRepoSync.mockRejectedValue(new Error("relay closed"));
+		expect((await attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" })).status).toBe("unconfirmed");
+	});
+
+	it("NOOP when the machine found nothing to bring in and the re-read agrees", async () => {
+		callRunner.mockResolvedValue({ ...wireOk, changed: false, commits: 0, to: wireOk.from });
+		readRepoSync.mockResolvedValue(verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }));
+		expect((await attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" })).status).toBe("noop");
+	});
+
+	it("REFUSED by the machine's own precondition, in the owner's language, and no re-read is attempted", async () => {
+		callRunner.mockResolvedValue({ ok: false, changed: false, branch: "main", refused: "dirty", dirty: true });
+		const h = await attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" });
+		expect(h.status).toBe("refused");
+		expect(h.detail).toContain("uncommitted changes");
+		expect(readRepoSync).not.toHaveBeenCalled();
+	});
+
+	it("FAILED with git's own sentence when --ff-only refused a divergence", async () => {
+		callRunner.mockResolvedValue({ ok: false, changed: false, branch: "main", upstream: "origin/main", from: "5b671b23aaaaaaaa", to: "5b671b23aaaaaaaa", error: "Not possible to fast-forward, aborting." });
+		const h = await attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" });
+		expect(h.status).toBe("failed");
+		expect(h.detail).toContain("Not possible to fast-forward");
+	});
+
+	it("UNSUPPORTED on a runner without the verb — whether it 404s the endpoint or 400s the verb — naming the machine and the floor", async () => {
+		for (const msg of ['Runner /coding/git-write → 404: {"error":"Not found"}', 'Runner /coding/git-write → 400: {"error":"unsupported git write command: fast-forward"}']) {
+			callRunner.mockRejectedValue(new Error(msg));
+			const h = await attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" });
+			expect(h.status).toBe("unsupported");
+			expect(h.detail).toContain("mbp");
+			expect(h.detail).toContain(FAST_FORWARD_MIN_CLI);
+		}
+	});
+
+	it("never throws — a heal that crashed the run it was rescuing would be worse than the block", async () => {
+		callRunner.mockRejectedValue(new Error("Runner /coding/git-write → 500: boom"));
+		await expect(attemptSyncSelfHeal(conn, { repo, sessionId: null, branch: "main" })).resolves.toMatchObject({ status: "failed" });
+	});
+});
+
+describe("the refusal carries the heal's story (#802)", () => {
+	const skipped: SyncHealOutcome = { status: "skipped", detail: "it was not fast-forwarded because the working tree has 2 uncommitted files — commit or move that work first", branch: "main", from: null, to: null, commits: null, sync: null };
+
+	it("a heal that was not attempted says so, BEFORE the remedy, and is on the record", async () => {
+		const out = await gateRunOnSync(env, { ...ctx, heal: skipped }, BEHIND);
+		expect(out.blocked).toBe(true);
+		expect(out.message).toContain("A fast-forward was not attempted: it was not fast-forwarded because the working tree has 2 uncommitted files");
+		expect(out.message.indexOf("not attempted")).toBeLessThan(out.message.indexOf("git pull --ff-only"));
+		expect(logError.mock.calls[0][1].context.heal).toEqual({ status: "skipped", detail: skipped.detail });
+	});
+
+	it("a heal that failed says what git said", async () => {
+		const failed: SyncHealOutcome = { ...skipped, status: "failed", detail: "the fast-forward failed: Not possible to fast-forward, aborting." };
+		const out = await gateRunOnSync(env, { ...ctx, heal: failed }, BEHIND);
+		expect(out.message).toContain("attempted first and did not happen: the fast-forward failed: Not possible to fast-forward");
+	});
+
+	it("a heal that happened is not in the refusal — there is no refusal", async () => {
+		const healed: SyncHealOutcome = { ...skipped, status: "healed", detail: "", from: "5b671b23", to: "0af538ac", commits: 19, sync: verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }) };
+		const out = await gateRunOnSync(env, { ...ctx, heal: healed }, healed.sync);
+		expect(out.blocked).toBe(false);
+		expect(out.message).toBe("");
+	});
+
+	it("describeSyncHeal — the timeline sentence names what arrived and the undo", () => {
+		const healed: SyncHealOutcome = { ...skipped, status: "healed", detail: "", from: "5b671b23", to: "0af538ac", commits: 19, sync: null };
+		const s = describeSyncHeal(healed);
+		expect(s).toContain("Fast-forwarded `main` by 19 commits (5b671b23 → 0af538ac)");
+		expect(s).toContain("Undo: `git reset --keep 5b671b23`");
+		expect(describeSyncHeal({ ...healed, commits: 1 })).toContain("by 1 commit (");
+		expect(describeSyncHeal({ ...healed, status: "noop" })).toContain("already current");
+		expect(describeSyncHeal(skipped)).toMatch(/^A fast-forward was not attempted: /);
+	});
+});
+
 /**
  * The WIRING, asserted from source.
  *
@@ -230,6 +415,21 @@ describe("the wiring — a blocked run does not reach the loop (#801)", () => {
 
 	it("decides BEFORE the loop, not inside it", () => {
 		expect(source.indexOf('step.do("repo-sync-gate"')).toBeLessThan(source.indexOf("for (let round = 0; round < 12"));
+	});
+
+	it("tries the self-heal in its own step, BETWEEN the read and the gate, and gates on the re-read (#802)", () => {
+		expect(source).toContain('step.do("repo-self-heal"');
+		expect(source.indexOf('step.do("repo-state-start"')).toBeLessThan(source.indexOf('step.do("repo-self-heal"'));
+		expect(source.indexOf('step.do("repo-self-heal"')).toBeLessThan(source.indexOf('step.do("repo-sync-gate"'));
+		// The verdict the gate sees is the checkout as it IS after the heal, never the pre-heal read.
+		expect(source).toContain("const syncAtStart = heal?.sync ?? repoStart.sync;");
+		expect(source).toContain("heal }, syncAtStart)");
+	});
+
+	it("tells the owner a pointer moved on their checkout, with the undo, on every surface (#802)", () => {
+		expect(source).toContain("describeSyncHeal(heal)");
+		expect(source).toContain('"coding.run.self_heal"');
+		expect(source).toContain("**Repository fast-forwarded**");
 	});
 
 	it("tells the owner on every surface, not just in the outcome field", () => {

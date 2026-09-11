@@ -41,7 +41,7 @@ function requireWorkTree(workDir: string): void {
  * password prompt nobody can see: `GIT_TERMINAL_PROMPT=0` for https, `BatchMode=yes` for ssh.
  * The user's own `GIT_SSH_COMMAND` wins when set — it may carry a key or a proxy we must keep.
  */
-function networkGitEnv(): NodeJS.ProcessEnv {
+export function networkGitEnv(): NodeJS.ProcessEnv {
 	return {
 		...process.env,
 		GIT_TERMINAL_PROMPT: "0",

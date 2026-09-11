@@ -1426,7 +1426,14 @@ const PINS = {
 	// in the outcome field. The decision, the sentence and the operator's record are all in
 	// `lib/repo-sync-gate.ts`; what is here is the one fact only this file knows, which is that
 	// a run is about to start against this verdict.
-	"workers/api/src/workflows/coding-session.ts": 1018,
+	// +25 at #802: the self-HEAL. The gate above did its job the day it deployed — and stopped
+	// this platform's own coder twice in a row, 19 commits behind, for not running a pull the
+	// platform could have run. One `repo-self-heal` step between the read and the gate, the
+	// `syncAtStart` re-read the gate now decides on, and five lines telling the owner a pointer
+	// moved on their checkout (timeline, trace, chat — with the undo). Eligibility, the ask, the
+	// independent confirmation and every sentence live in `lib/repo-sync-gate.ts`; the machine
+	// re-checks every precondition at the hands in `repo-write.ts`.
+	"workers/api/src/workflows/coding-session.ts": 1043,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1639,7 +1646,10 @@ const PINS = {
 	// +13 at #801: the coding-session.ts raise above (ten lines of why for four lines of wiring,
 	// because a gate that STOPS work has to justify itself more than one that reports it) and
 	// these two. The reason IS the record — a pin moved without one is a number nobody can audit.
-	"scripts/check-file-size.mjs": 1723,
+	// +10 at #802: the coding-session.ts raise above (eight lines of why for the self-heal step,
+	// because a platform that MOVES a pointer on somebody's checkout owes more explanation than
+	// one that refuses to) and these three.
+	"scripts/check-file-size.mjs": 1733,
 };
 
 /**

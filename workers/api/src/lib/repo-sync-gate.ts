@@ -32,10 +32,31 @@
  * {@link syncGateDecision} is PURE — whether to block, why, and what the remedy is, asserted
  * without a runner, a database or an env. {@link gateRunOnSync} is the half that needs the world:
  * it names the machine and it RECORDS, and it is the only part a test has to mock.
+ *
+ * ── The self-heal (#802), and the one case it is allowed in
+ *
+ * The gate above traded #785's "make `git pull --ff-only` your first instruction" for "never start
+ * on a stale base" — and the day it deployed, this platform's own coder was stopped twice in a row,
+ * 19 commits behind, with a human told to go and type the pull on the machine. An objective saying
+ * "pull first" cannot help: the gate runs before the objective is read.
+ *
+ * So the platform now does the ONE thing it refused a run for not doing. {@link syncSelfHealEligible}
+ * is the pure test for the only case where that is safe — `behind`, AND the tree is clean, AND it
+ * is on the branch the verdict is about. `diverged` is never healed (a merge or rebase is a decision
+ * about somebody's commits, and #785's standing rule is that the human makes it); `unverified` is
+ * never healed (there is nothing to heal TO). {@link attemptSyncSelfHeal} asks the machine, which
+ * checks every precondition again at the hands (`repo-write.ts`), then CONFIRMS with an independent
+ * re-read: the gate decides on what the checkout IS afterwards, never on the pull's own account of
+ * itself. A heal that did not happen is reported inside the refusal, so the owner learns both that
+ * it was tried and why it could not be.
  */
-import { REPO_SYNC_MIN_CLI, type RepoSyncVerdict } from "./repo-sync.js";
-import { runnerUpgradeRefusal } from "./runner-upgrade.js";
+import { REPO_SYNC_MIN_CLI, readRepoSync, type RepoSyncVerdict } from "./repo-sync.js";
+import { runnerUpgradeClause, runnerUpgradeRefusal } from "./runner-upgrade.js";
+import { isRunnerUnreachable } from "./runner-unreachable.js";
+import { callRunner, type RunnerConn } from "./runner-client.js";
 import { logError } from "./error-log.js";
+import type { RepoWorkingState } from "./repo-observation.js";
+import type { CodingRepo } from "./coding-types.js";
 import type { Env } from "../types.js";
 
 /**
@@ -160,6 +181,8 @@ export interface SyncGateCtx {
 	/** Which machine answered, for the record. The MESSAGE gets its name from `runner-upgrade.ts`. */
 	node?: string | null;
 	repo?: string | null;
+	/** What the self-heal did first, when one was attempted (#802) — folded into the refusal. */
+	heal?: SyncHealOutcome | null;
 }
 
 /**
@@ -204,11 +227,16 @@ export async function gateRunOnSync(env: Env, ctx: SyncGateCtx, v: RepoSyncVerdi
 				}).catch(() => `This machine's runner is too old to check whether this checkout is up to date — it needs CLI ${REPO_SYNC_MIN_CLI} or newer.`)
 			: decision.remedy;
 	const armed = syncGateArmed(env);
+	// The heal's own sentence comes BEFORE the remedy: "we tried the pull and it was refused because
+	// the tree is dirty" is the fact that makes "run `git pull --ff-only`" the wrong instruction —
+	// the owner has to commit or move the diff first, and the sentence says so.
+	const healed = ctx.heal && ctx.heal.status !== "healed" && ctx.heal.status !== "noop" ? describeSyncHeal(ctx.heal) : "";
 	const message = [
 		armed
 			? "This run was stopped before it started because the base it would build on could not be confirmed (#801)."
 			: "The base this run builds on could not be confirmed (#801); the sync gate is disarmed, so it is proceeding anyway.",
 		decision.detail,
+		healed,
 		remedy,
 	]
 		.filter(Boolean)
@@ -232,7 +260,197 @@ export async function gateRunOnSync(env: Env, ctx: SyncGateCtx, v: RepoSyncVerdi
 			armed,
 			// Verbatim, so an operator can tell a 404 from a timeout without re-deriving the class.
 			error: v?.error ?? null,
+			// Whether the platform tried to fix it first, and how that went (#802).
+			heal: ctx.heal ? { status: ctx.heal.status, detail: ctx.heal.detail } : null,
 		},
 	}).catch(() => undefined);
 	return { blocked: armed, decision, message };
+}
+
+// ─── The self-heal (#802) ────────────────────────────────────────────────────────────────────────
+
+/** The CLI release whose `/coding/git-write` serves the `fast-forward` verb. Named in the refusal. */
+export const FAST_FORWARD_MIN_CLI = "0.4.59";
+
+/** Above the runner's own 30s pull cap, so a slow fetch is reported rather than cut off mid-answer. */
+export const SYNC_HEAL_TIMEOUT_MS = 35_000;
+
+export type SyncHealStatus =
+	/** The pull ran AND an independent re-read says the checkout is now current. */
+	| "healed"
+	/** The machine found nothing to bring in — a race with someone's own pull. Re-read is authoritative. */
+	| "noop"
+	/** The runner has no `fast-forward` verb (a CLI below {@link FAST_FORWARD_MIN_CLI}). */
+	| "unsupported"
+	/** The machine declined a precondition it checks for itself — dirty tree, off-branch, no upstream. Nothing touched. */
+	| "refused"
+	/** git itself said no — a divergence `--ff-only` caught, a network or auth failure. Nothing touched. */
+	| "failed"
+	/** The cloud asked and could not corroborate — socket gone, or the re-read disagrees. */
+	| "unconfirmed"
+	/** Not attempted: `behind`, but the tree is dirty or off its branch. `detail` says which, so the refusal can. */
+	| "skipped";
+
+export interface SyncHealOutcome {
+	status: SyncHealStatus;
+	/** One clause in the owner's language. Empty for `healed`/`noop`. */
+	detail: string;
+	/** The branch that was fast-forwarded. */
+	branch: string;
+	/** Short SHAs, for the sentence and for the undo. Null when the machine did not say. */
+	from: string | null;
+	to: string | null;
+	/** Commits brought in. Null when unknown. */
+	commits: number | null;
+	/** The INDEPENDENT re-read after the attempt — the verdict the gate must now decide on. Null when it failed. */
+	sync: RepoSyncVerdict | null;
+}
+
+export interface SyncHealEligibility {
+	eligible: boolean;
+	/** The branch the heal would act on: the configured one, else the one the verdict is about. */
+	branch: string | null;
+	/** Why NOT, in the owner's language, so a refusal can say the heal was not even tried and why. Empty when eligible. */
+	why: string;
+}
+
+/**
+ * Is this the one case a fast-forward is safe with nobody in the room? Pure.
+ *
+ * Every clause is a precondition the RUNNER re-checks at the hands (`repo-write.ts`), so this is
+ * not the safety — it is the decision not to ask when the answer is already known to be no, and
+ * the sentence that explains it.
+ */
+export function syncSelfHealEligible(
+	v: RepoSyncVerdict | null | undefined,
+	state: RepoWorkingState | null | undefined,
+	configuredBranch: string | null | undefined,
+): SyncHealEligibility {
+	const branch = (configuredBranch || "").trim() || v?.branch || null;
+	if (v?.state !== "behind") return { eligible: false, branch, why: "" };
+	if (!state) return { eligible: false, branch, why: "the working tree's state could not be read, so it was not fast-forwarded unattended" };
+	if (state.notAGitRepo) return { eligible: false, branch, why: "the path is not a git working tree" };
+	if (state.dirty) {
+		return {
+			eligible: false,
+			branch,
+			why: `it was not fast-forwarded because the working tree has ${state.changedFiles} uncommitted file${state.changedFiles === 1 ? "" : "s"} — commit or move that work first`,
+		};
+	}
+	if (!state.branch) return { eligible: false, branch, why: "the checkout's branch could not be read, so it was not fast-forwarded unattended" };
+	if (!branch) return { eligible: false, branch, why: "no branch is configured for this repo and the verdict named none" };
+	if (state.branch !== branch) {
+		return { eligible: false, branch, why: `it was not fast-forwarded because the checkout is on \`${state.branch}\`, not \`${branch}\`` };
+	}
+	return { eligible: true, branch, why: "" };
+}
+
+/** The outcome a run records when the heal was NOT tried, so the refusal can say why. Null when there was nothing to say. */
+export function skippedSyncHeal(e: SyncHealEligibility): SyncHealOutcome | null {
+	if (e.eligible || !e.why) return null;
+	return { status: "skipped", detail: e.why, branch: e.branch ?? "", from: null, to: null, commits: null, sync: null };
+}
+
+/**
+ * The runner's reply, redeclared because `workers/api` does not depend on the runner package.
+ * Structurally `FastForwardResult` in `packages/browser-runner/src/coding/repo-write.ts`; every
+ * field optional, because a runner of a different vintage is exactly the case this must survive.
+ */
+interface FastForwardWire {
+	ok?: boolean;
+	changed?: boolean;
+	branch?: string | null;
+	upstream?: string | null;
+	from?: string | null;
+	to?: string | null;
+	commits?: number | null;
+	dirty?: boolean | null;
+	refused?: string;
+	error?: string;
+}
+
+const HEAL_REFUSAL_TEXT: Record<string, string> = {
+	dirty: "the working tree has uncommitted changes — commit or move that work first",
+	"off-branch": "the checkout is not on the branch the verdict was about",
+	detached: "the checkout is on a detached HEAD, not a branch",
+	"no-upstream": "the branch has no upstream to pull from",
+	"not-a-repo": "the path is not a git checkout",
+	"unknown-head": "git could not say which commit the checkout is on",
+};
+
+const short = (sha: unknown): string | null => (typeof sha === "string" && sha ? sha.slice(0, 8) : null);
+
+/**
+ * Ask the machine to fast-forward, then CONFIRM with the same read-only sync call the gate uses.
+ *
+ * Never throws. Every failure is a status with a sentence, because the caller is about to fold it
+ * into a refusal the owner reads — and a heal that crashed the run it was trying to rescue would
+ * be strictly worse than the block it replaced.
+ */
+export async function attemptSyncSelfHeal(
+	conn: RunnerConn,
+	input: { repo: CodingRepo; sessionId: string | null; branch: string },
+): Promise<SyncHealOutcome> {
+	const { repo, sessionId, branch } = input;
+	const base = { branch, from: null as string | null, to: null as string | null, commits: null as number | null, sync: null as RepoSyncVerdict | null };
+	let wire: FastForwardWire;
+	try {
+		wire = await callRunner<FastForwardWire>(
+			conn,
+			"/coding/git-write",
+			{ sessionId: sessionId || undefined, workDir: repo.workdir || undefined, cmd: "fast-forward", branch },
+			{ timeoutMs: SYNC_HEAL_TIMEOUT_MS },
+		);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		// A 0.4.58 runner HAS the endpoint and 400s the verb it does not know; a pre-0.4.48 one
+		// 404s the endpoint. Both are "upgrade this machine", and both name the same floor.
+		if (/→ 404|not found|unsupported git write command/i.test(message)) {
+			return { ...base, status: "unsupported", detail: runnerUpgradeClause({ what: "fast-forward this checkout itself", minCli: FAST_FORWARD_MIN_CLI, node: conn.runnerNode }) };
+		}
+		if (isRunnerUnreachable(e)) return { ...base, status: "unconfirmed", detail: "the machine went away before it answered the fast-forward" };
+		return { ...base, status: "failed", detail: `the fast-forward failed: ${message.slice(0, 160)}` };
+	}
+	const from = short(wire.from);
+	const to = short(wire.to);
+	const commits = typeof wire.commits === "number" && Number.isFinite(wire.commits) ? wire.commits : null;
+	if (wire.refused) {
+		return { ...base, from, to: from, status: "refused", detail: `the fast-forward was refused: ${HEAL_REFUSAL_TEXT[wire.refused] ?? `the machine declined (${String(wire.refused).slice(0, 40)})`}` };
+	}
+	if (wire.error) return { ...base, from, to: from, status: "failed", detail: `the fast-forward failed: ${wire.error.slice(0, 160)}` };
+
+	// The independent read. `forceFetch: false` — the pull just fetched, and the counts are
+	// recomputed on every call regardless; what this confirms is where HEAD is now.
+	const sync = await readRepoSync(conn, { workDir: repo.workdir, sessionId, branch }).catch(() => null);
+	if (sync && (sync.state === "in_sync" || sync.state === "ahead")) {
+		return { ...base, from, to, commits, sync, status: wire.changed === false ? "noop" : "healed", detail: "" };
+	}
+	return {
+		...base,
+		from,
+		to,
+		commits,
+		sync,
+		status: "unconfirmed",
+		detail: sync ? `the fast-forward ran, but the checkout still reads: ${sync.detail || sync.state}` : "the fast-forward ran, but the checkout could not be read back",
+	};
+}
+
+/**
+ * One sentence for the timeline and the chat. Pure.
+ *
+ * For a heal that happened it states what arrived AND the undo — a pointer moved on somebody's
+ * checkout unattended, and the record has to let them put it back. For one that did not, it is
+ * the clause the refusal carries.
+ */
+export function describeSyncHeal(h: SyncHealOutcome): string {
+	if (h.status === "healed") {
+		const n = h.commits !== null ? `${h.commits} commit${h.commits === 1 ? "" : "s"}` : "the missing commits";
+		const shas = h.from && h.to ? ` (${h.from} → ${h.to})` : "";
+		const undo = h.from ? ` Undo: \`git reset --keep ${h.from}\`.` : "";
+		return `Fast-forwarded \`${h.branch}\` by ${n}${shas} before starting, because the checkout was behind and the tree was clean.${undo}`;
+	}
+	if (h.status === "noop") return `\`${h.branch}\` was already current when the fast-forward ran; nothing was brought in.`;
+	if (h.status === "skipped") return `A fast-forward was not attempted: ${h.detail}.`;
+	return `A fast-forward was attempted first and did not happen: ${h.detail}.`;
 }

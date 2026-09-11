@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { InspectError } from "./inspect.js";
+import { InspectError, networkGitEnv } from "./inspect.js";
 
 /**
  * The ONE thing the platform may change in a checkout by itself (#322, the acting half).
@@ -45,8 +45,17 @@ import { InspectError } from "./inspect.js";
  * safety property a pointer move does not need.
  */
 
-/** The closed write vocabulary. One member, and adding a second is a code review. */
-export type GitWriteCmd = "switch-branch";
+/**
+ * The closed write vocabulary. Two members, and adding a third is a code review.
+ *
+ * `fast-forward` (#802) is the second: `git pull --ff-only` on a CLEAN tree that is ON its declared
+ * branch and HAS an upstream. It shares the safety argument with `switch-branch` — a fast-forward
+ * moves a pointer along a line git has already verified is a straight line; it creates no merge
+ * commit, rewrites nothing, and refuses by construction the moment local history has diverged. The
+ * undo is `git reset --keep <the sha it came from>`, which the caller is told verbatim. Nothing in
+ * the `checkout .` / `reset --hard` / `clean` / `stash` family is reachable through it.
+ */
+export type GitWriteCmd = "switch-branch" | "fast-forward";
 
 /**
  * May this string become a git token?
@@ -74,6 +83,13 @@ export function gitWriteArgv(cmd: GitWriteCmd, opts: { branch?: string } = {}): 
 			// discard work.
 			return ["checkout", opts.branch.trim(), "--"];
 		}
+		case "fast-forward":
+			// No caller-supplied token at all: the branch is whatever HEAD is (checked against the
+			// declared one BEFORE this runs), the remote is the upstream git records for it. `--ff-only`
+			// is the whole contract — git aborts, touching nothing, when the histories have diverged.
+			// `--no-rebase` so a `pull.rebase=true` config on the owner's machine cannot turn the
+			// abort into a rebase of their local commits.
+			return ["pull", "--ff-only", "--no-rebase"];
 		default:
 			throw new InspectError(`unsupported git write command: ${cmd as string}`);
 	}
@@ -106,7 +122,7 @@ export interface SwitchBranchResult {
 	error?: string;
 }
 
-function git(workDir: string, argv: string[]): string {
+function git(workDir: string, argv: string[], opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {}): string {
 	// stderr is PIPED rather than inherited: git narrates a checkout on stderr, and the runner's
 	// console is a user-facing log, not a place for `Switched to branch 'main'`. Piping it is also
 	// what makes `e.stderr` available, which is the only honest sentence to put on the card when git
@@ -114,10 +130,22 @@ function git(workDir: string, argv: string[]): string {
 	return execFileSync("git", argv, {
 		cwd: workDir,
 		encoding: "utf-8",
-		timeout: 15_000,
+		timeout: opts.timeout ?? 15_000,
 		maxBuffer: 1024 * 1024,
 		stdio: ["ignore", "pipe", "pipe"],
+		env: opts.env,
 	}).toString();
+}
+
+/** git's diagnosis is the FIRST `fatal:`/`error:` line of stderr; the tail is boilerplate. */
+function gitFailureLine(e: unknown): string {
+	const err = e as { stderr?: string; message?: string };
+	const lines = String(err.stderr || err.message || "")
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean);
+	const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? "git failed";
+	return line.replace(/^(fatal|error):\s*/i, "").slice(0, 200);
 }
 
 /** The current branch, or the short SHA when detached, or null when even that fails. */
@@ -201,4 +229,125 @@ export function switchRepoBranch(workDir: string, branch: string): SwitchBranchR
 		dirtyAfter = null;
 	}
 	return { ok: after === to, changed: after === to, from, to, branch: after, dirty: dirtyAfter };
+}
+
+/** Why the runner declined to fast-forward. Every one of these leaves the checkout byte-identical. */
+export type FastForwardRefusal = "not-a-repo" | "dirty" | "unknown-head" | "detached" | "off-branch" | "no-upstream";
+
+export interface FastForwardResult {
+	/** True only when the pull ran AND HEAD was read back afterwards. */
+	ok: boolean;
+	/** False when there was nothing to bring in — a no-op is a success with nothing to undo. */
+	changed: boolean;
+	/** The branch the checkout is on. Null when HEAD could not be read. */
+	branch: string | null;
+	/** The remote-tracking ref pulled from, e.g. `origin/main`. Null when there is none. */
+	upstream: string | null;
+	/** Full SHAs, read from git before and after — the `from` is what the undo needs. */
+	from: string | null;
+	to: string | null;
+	/** How many commits the fast-forward brought in. Null when git would not count. */
+	commits: number | null;
+	/** Whether the tree has uncommitted work after the pull. `null` means git would not say (#291). */
+	dirty: boolean | null;
+	refused?: FastForwardRefusal;
+	error?: string;
+}
+
+/**
+ * Bring a CLEAN checkout up to its upstream, or refuse and change nothing (#802).
+ *
+ * Every precondition is checked HERE, at the hands, not only in the cloud — the same rule
+ * `switchRepoBranch` follows and for the same reason: the cloud's picture of the tree is a read
+ * taken moments earlier over a relay, and the write has to be safe against the tree as it IS.
+ *
+ *   dirty        refused. A fast-forward that touches a file with uncommitted edits is aborted by
+ *                git anyway, but one that does not touch it silently succeeds and leaves the diff
+ *                sitting on a base it was not written against. Refusing is the only answer that
+ *                cannot change what somebody's uncommitted work means.
+ *   off-branch   refused when `branch` is given and HEAD is elsewhere. The declared branch is the
+ *                one the cloud judged stale; pulling whatever the checkout happens to be on would
+ *                be acting on a verdict about a different ref.
+ *   detached     refused — there is no branch for a pull to advance.
+ *   no-upstream  refused — `git pull` with no tracking information is a prompt, and a guess about
+ *                which remote was meant is exactly the decision this module must never make.
+ *   diverged     NOT a precondition: `--ff-only` is the check, and git makes it atomically against
+ *                the real history. It surfaces as `error`, with the tree untouched.
+ *
+ * Never creates a branch, never sets an upstream, never stashes.
+ */
+export function fastForwardRepo(workDir: string, opts: { branch?: string } = {}): FastForwardResult {
+	const want = typeof opts.branch === "string" && opts.branch.trim() ? opts.branch.trim() : null;
+	if (want !== null && !isSwitchableBranchName(want)) throw new InspectError(`unusable branch name: ${String(opts.branch)}`);
+	const base: FastForwardResult = { ok: false, changed: false, branch: null, upstream: null, from: null, to: null, commits: null, dirty: false };
+	if (!existsSync(resolve(workDir, ".git"))) return { ...base, refused: "not-a-repo" };
+
+	let abbrev: string;
+	try {
+		abbrev = git(workDir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+	} catch {
+		return { ...base, refused: "unknown-head" };
+	}
+	if (!abbrev) return { ...base, refused: "unknown-head" };
+	if (abbrev === "HEAD") return { ...base, refused: "detached" };
+	const branch = abbrev;
+
+	let dirty: boolean;
+	try {
+		dirty = isDirty(workDir);
+	} catch (e) {
+		return { ...base, branch, error: gitFailureLine(e) };
+	}
+	if (dirty) return { ...base, branch, dirty: true, refused: "dirty" };
+	if (want !== null && branch !== want) return { ...base, branch, refused: "off-branch" };
+
+	let upstream: string;
+	try {
+		upstream = git(workDir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).trim();
+	} catch {
+		return { ...base, branch, refused: "no-upstream" };
+	}
+	if (!upstream) return { ...base, branch, refused: "no-upstream" };
+
+	let from: string | null;
+	try {
+		from = git(workDir, ["rev-parse", "HEAD"]).trim() || null;
+	} catch {
+		from = null;
+	}
+
+	try {
+		// The one network call in this file: the no-prompt environment `inspect.ts` uses for
+		// fetches, and a timeout above the runner's fetch cap, because a pull IS a fetch first.
+		git(workDir, gitWriteArgv("fast-forward"), { timeout: 30_000, env: networkGitEnv() });
+	} catch (e) {
+		// `--ff-only` refused, the network failed, or auth was needed and (correctly) not prompted
+		// for. In every case git left the tree as it was; the sentence says which.
+		return { ...base, branch, upstream, from, to: from, error: gitFailureLine(e) };
+	}
+
+	// CONFIRM, do not assume — read HEAD back and count what arrived from git, not from the
+	// exit code.
+	let to: string | null;
+	try {
+		to = git(workDir, ["rev-parse", "HEAD"]).trim() || null;
+	} catch {
+		to = null;
+	}
+	let commits: number | null = null;
+	if (from && to) {
+		try {
+			const n = Number.parseInt(git(workDir, ["rev-list", "--count", `${from}..${to}`]).trim(), 10);
+			commits = Number.isFinite(n) ? n : null;
+		} catch {
+			commits = null;
+		}
+	}
+	let dirtyAfter: boolean | null;
+	try {
+		dirtyAfter = isDirty(workDir);
+	} catch {
+		dirtyAfter = null;
+	}
+	return { ok: to !== null, changed: Boolean(from && to && from !== to), branch, upstream, from, to, commits, dirty: dirtyAfter };
 }

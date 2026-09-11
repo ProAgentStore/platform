@@ -9,7 +9,7 @@ import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
 import type { EngineInvocationMode } from "./engine-adapter.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoSync, repoTree, runRepoGit } from "./inspect.js";
-import { type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
+import { fastForwardRepo, type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
@@ -222,13 +222,20 @@ export class CodingRuntime {
 	}
 
 	/**
-	 * The ONE write the platform may make in a checkout by itself (#322) — put it back on a branch
-	 * it declared, or refuse. See `repo-write.ts`: fixed argv, clean tree required, nothing in the
-	 * `checkout .`/`reset`/`clean`/`stash` family exists to be reached.
+	 * The writes the platform may make in a checkout by itself — put it back on a branch it
+	 * declared (#322), or fast-forward it to its upstream (#802) — or refuse. See `repo-write.ts`:
+	 * fixed argv, clean tree required, nothing in the `checkout .`/`reset`/`clean`/`stash` family
+	 * exists to be reached.
 	 */
-	gitWrite(input: { sessionId?: string; workDir?: string; cmd: GitWriteCmd; branch: string }) {
-		if (input.cmd !== "switch-branch") throw new InspectError(`unsupported git write command: ${String(input.cmd)}`);
-		return switchRepoBranch(this.resolveWorkDir(input), input.branch);
+	gitWrite(input: { sessionId?: string; workDir?: string; cmd: GitWriteCmd; branch?: string }) {
+		const workDir = this.resolveWorkDir(input);
+		if (input.cmd === "switch-branch") {
+			if (typeof input.branch !== "string") throw new InspectError("switch-branch needs a branch");
+			return switchRepoBranch(workDir, input.branch);
+		}
+		// The second verb (#802): bring a clean checkout that is ON `branch` up to its upstream.
+		if (input.cmd === "fast-forward") return fastForwardRepo(workDir, { branch: input.branch });
+		throw new InspectError(`unsupported git write command: ${String(input.cmd)}`);
 	}
 
 	/**
