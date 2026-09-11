@@ -1618,6 +1618,83 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("heading", { name: "Browse agents" })).toBeVisible();
 	});
 
+	// ── #795: type-to-filter over the instances already loaded.
+	//
+	// Three instances, deliberately overlapping: "Repo Coder" and "Repo Chat" share a prefix so a
+	// query has to actually narrow rather than merely match something, and the third is there so
+	// "narrowed" is distinguishable from "showed everything".
+	const FILTER_FIXTURE = [
+		{ id: "inst-1", name: "Job Application Assistant", slug: "job-application-assistant", description: "Applies for jobs", capabilities: { surfaces: ["apply"] } },
+		{ id: "inst-2", name: "Repo Coder", slug: "repo-coder", description: "Writes code", capabilities: { surfaces: ["coding"] } },
+		{ id: "inst-3", name: "Repo Chat", slug: "repo-chat", description: "Answers questions about a job", capabilities: { surfaces: ["repo"] } },
+	];
+
+	test("the Instances tab filters the list as you type (#795)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: FILTER_FIXTURE });
+		await page.goto("/console/instances");
+
+		const cards = page.getByRole("button", { name: /Job Application Assistant|Repo Coder|Repo Chat/ });
+		await expect(cards).toHaveCount(3);
+
+		const box = page.getByRole("searchbox", { name: "Filter instances by name" });
+		await box.fill("repo");
+		await expect(cards).toHaveCount(2);
+		await expect(page.getByText("Job Application Assistant")).toHaveCount(0);
+
+		// Case-insensitive, and narrowing further as the query grows.
+		await box.fill("CODER");
+		await expect(cards).toHaveCount(1);
+		await expect(page.getByRole("button", { name: /Repo Coder/ })).toBeVisible();
+
+		// Clearing restores the full list — the filter is a view, it did not consume anything.
+		await box.fill("");
+		await expect(cards).toHaveCount(3);
+	});
+
+	test("filtering matches the slug, and never the description (#795)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: FILTER_FIXTURE });
+		await page.goto("/console/instances");
+
+		const cards = page.getByRole("button", { name: /Job Application Assistant|Repo Coder|Repo Chat/ });
+		const box = page.getByRole("searchbox", { name: "Filter instances by name" });
+
+		// Hyphenated: this can only match the slug, since every name spells it with spaces.
+		await box.fill("repo-ch");
+		await expect(cards).toHaveCount(1);
+		await expect(page.getByRole("button", { name: /Repo Chat/ })).toBeVisible();
+
+		// "job" is in Repo Chat's DESCRIPTION and in the Job assistant's name. Matching prose
+		// would return both, which is the failure that makes a filter box useless.
+		await box.fill("job");
+		await expect(cards).toHaveCount(1);
+		await expect(page.getByRole("button", { name: /Job Application Assistant/ })).toBeVisible();
+	});
+
+	test("a filter that matches nothing says so, and is not mistaken for an empty account (#795)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: FILTER_FIXTURE });
+		await page.goto("/console/instances");
+
+		const box = page.getByRole("searchbox", { name: "Filter instances by name" });
+		await box.fill("zzzz");
+
+		await expect(page.getByText('No instances match "zzzz"')).toBeVisible();
+		// The lie this guards against: telling a user with three instances they have none, and
+		// then offering to create a fourth.
+		await expect(page.getByText("No instances yet")).toHaveCount(0);
+
+		await page.getByRole("button", { name: "Clear the filter" }).click();
+		await expect(page.getByRole("button", { name: /Job Application Assistant|Repo Coder|Repo Chat/ })).toHaveCount(3);
+	});
+
+	test("an account with no instances gets the create action, not a filter box (#795)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: [] });
+		await page.goto("/console/instances");
+
+		await expect(page.getByText("No instances yet")).toBeVisible();
+		// Offering to narrow an empty list is noise on exactly the account that needs to create.
+		await expect(page.getByRole("searchbox", { name: "Filter instances by name" })).toHaveCount(0);
+	});
+
 	test("instance indexing page shows indexed, pending, and sync status", async ({ page }) => {
 		await mockSignedInConsole(page);
 

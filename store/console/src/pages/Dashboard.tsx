@@ -6,6 +6,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
 import { capabilityBadges, identityFor } from "../lib/identity";
+import { filterInstances } from "../lib/instanceSearch";
 import { platformToolGroups } from "../lib/platformTools";
 
 type SurfaceDoc = {
@@ -27,6 +28,11 @@ export default function Dashboard() {
 	const [surfaceOpen, setSurfaceOpen] = useState(false);
 	const [copied, setCopied] = useState<"instructions" | "guide" | null>(null);
 	const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Type-to-filter over the instances already loaded (#795). Local to the tab and never
+	// persisted: a filter that survived a reload would be a list silently missing rows, with the
+	// reason parked in a box the user has long stopped looking at.
+	const [instanceQuery, setInstanceQuery] = useState("");
+	const visibleInstances = filterInstances(instances, instanceQuery);
 	const navigate = useNavigate();
 
 	const loadAgents = useCallback(async () => {
@@ -152,13 +158,40 @@ export default function Dashboard() {
 						<h2 className="text-lg font-semibold">Agents you've subscribed to</h2>
 						<Button variant="primary" size="lg" onClick={() => navigate("/browse")} className="active:scale-[0.97]">+ New instance</Button>
 					</div>
+					{/* Type-to-filter (#795). Substring over name and slug — lib/instanceSearch.ts
+					    holds the matching and the reasons for its edges.
+
+					    Rendered only when there is something to filter. A box above "No instances
+					    yet" offers to narrow an empty list, which is noise on precisely the account
+					    that needs the create action instead — and it is the one account for which
+					    the two empty states below would be indistinguishable. */}
+					{!loading && instances.length > 0 && (
+						<div className="mb-4">
+							<input
+								type="search"
+								value={instanceQuery}
+								onChange={(e) => setInstanceQuery(e.target.value)}
+								aria-label="Filter instances by name"
+								placeholder="Filter by name..."
+								className="w-full sm:max-w-xs bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+							/>
+						</div>
+					)}
 					{loading ? (
 						<p className="text-center py-8 text-muted">Loading instances...</p>
 					) : instances.length === 0 ? (
 						<p className="text-center py-8 text-muted-soft">No instances yet. <button type="button" onClick={() => navigate("/browse")} className="text-accent underline">Subscribe to an agent</button> to create your first one.</p>
+					) : visibleInstances.length === 0 ? (
+						/* A filter matching nothing is NOT an empty account, and must not be told as
+						   one. Reusing the branch above would state something false and then act on
+						   it, sending a user who already has instances off to the Library to make
+						   another. The way out of THIS state is to clear the filter, so that is what
+						   it offers — and it names the count being hidden, because the number is the
+						   part that says the rows are still there. */
+						<p className="text-center py-8 text-muted-soft">No instances match "{instanceQuery.trim()}". <button type="button" onClick={() => setInstanceQuery("")} className="text-accent underline">Clear the filter</button> to see all {instances.length}.</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
-							{instances.map((inst) => {
+							{visibleInstances.map((inst) => {
 								// Identity is computed, not styled inline: the tint hashes the INSTANCE id so
 								// three Repo Coders (one per repo) never share a colour. See lib/identity.ts.
 								const id = identityFor(inst);

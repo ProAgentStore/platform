@@ -1,5 +1,5 @@
 /**
- * The Instances tab's own action (#796, #798).
+ * The Instances tab's own action (#796, #798) and its type-to-filter (#795).
  *
  * ── The pair, and why they are one change
  *
@@ -16,6 +16,12 @@
  * coverage). So this is a SOURCE guard, for the same reason `AgentDetail.publish.test.ts` has
  * one: the defect class is an ABSENCE — a tab with no way to create anything — and an absence in
  * JSX is invisible to any unit test of it.
+ *
+ * #795's filter is here for the same reason, one step further on. Its matching rules ARE unit
+ * tested, as values, in `lib/instanceSearch.test.ts` — but a filter can be perfectly correct and
+ * still not be WIRED, and `{instances.map(...)}` next to a working search box typechecks, renders,
+ * and ignores every keystroke. That is an absence too: of the one character that makes the box
+ * mean anything. Only the source, or a browser, can see it.
  *
  * The slice is scoped to the `{tab === "instances"}` block on purpose. `Dashboard.tsx` serves
  * FOUR routes (agents, instances, dashboard, tools) off one pathname-derived `tab`, so a guard
@@ -93,3 +99,63 @@ describe("#798 — a visible way to start a new instance", () => {
 		expect(empty).not.toContain("Browse agents");
 	});
 });
+
+describe("#795 — the type-to-filter box", () => {
+	it("offers a search input on the Instances tab", () => {
+		expect(instancesTab).toContain('type="search"');
+		expect(instancesTab).toContain("Filter by name");
+	});
+
+	it("labels it, since a bare box next to a list says nothing to a screen reader", () => {
+		expect(instancesTab).toContain('aria-label="Filter instances by name"');
+	});
+
+	it("RENDERS THE FILTERED LIST — the defect a box that does nothing would be", () => {
+		// The point of the whole feature, and the one thing a passing typecheck does not give
+		// you: `instances.map` here compiles, renders, and quietly ignores every keystroke.
+		expect(instancesTab).toContain("visibleInstances.map(");
+		expect(instancesTab).not.toContain("instances.map(");
+	});
+
+	it("filters through lib/instanceSearch, not an inline predicate", () => {
+		// The matching rules and their edges are tested as values in instanceSearch.test.ts. An
+		// inline `.filter(...)` in JSX would put them back somewhere no unit test can reach.
+		const src2 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+		expect(src2).toContain('from "../lib/instanceSearch"');
+		expect(src2).toContain("filterInstances(instances, instanceQuery)");
+	});
+
+	it("hides the box when there is nothing to filter", () => {
+		// A filter over an empty list is noise on exactly the account that needs the create
+		// action — and it is the account for which the two empty states could not be told apart.
+		expect(instancesTab).toContain("instances.length > 0");
+	});
+
+	it("tells 'no match' apart from 'no instances', which is the lie it would otherwise tell", () => {
+		// Reusing the empty-account branch would state something false about the account AND act
+		// on it, offering the Library to a user who already has instances and simply mistyped.
+		const noMatch = instancesTab.slice(
+			instancesTab.indexOf("visibleInstances.length === 0"),
+			instancesTab.indexOf("grid grid-cols-"),
+		);
+		expect(noMatch.length, "the no-match branch was not found").toBeGreaterThan(100);
+		expect(noMatch).toContain("No instances match");
+		// The way out of THIS state is clearing the filter, not subscribing to something new.
+		expect(noMatch).toContain("Clear the filter");
+		expect(noMatch).toContain('setInstanceQuery("")');
+		expect(noMatch).not.toContain('navigate("/browse")');
+	});
+
+	it("and the empty-ACCOUNT branch still offers the create route, not a filter reset", () => {
+		// The counterpart, so the assertion above cannot pass by the two branches having merged.
+		const empty = instancesTab.slice(
+			instancesTab.indexOf("instances.length === 0"),
+			instancesTab.indexOf("visibleInstances.length === 0"),
+		);
+		expect(empty.length, "the zero-instances branch was not found").toBeGreaterThan(100);
+		expect(empty).toContain("No instances yet");
+		expect(empty).toContain('navigate("/browse")');
+		expect(empty).not.toContain("Clear the filter");
+	});
+})
+;
