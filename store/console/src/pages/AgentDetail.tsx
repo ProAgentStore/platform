@@ -4,7 +4,7 @@ import LoadFailed from "../components/LoadFailed";
 import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import type { Agent, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
+import type { Agent, Instance, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
@@ -37,6 +37,52 @@ const localRowId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.rand
  * wording is a sentence someone will improve; the flag is the API contract, and a guard keyed to
  * the prose would silently stop offering the override the day the copy is edited.
  */
+/**
+ * What the "use this agent" control should DO, given the creator's own instances of it (#797).
+ *
+ * ── Why a creator needs this at all
+ *
+ * Subscribing creates a private INSTANCE — the thing you actually chat with. A template is not
+ * runnable; it is the definition other people subscribe to. So a creator with no instance of their
+ * own agent cannot use it, cannot test it against real settings, and cannot see what a subscriber
+ * sees. The only subscribe control in this console has always lived in Browse, which lists the
+ * PUBLIC catalogue — so the moment an agent is missing from that listing (#793's symptom), its own
+ * author loses the only route to it. #797 is that dependency, reported from the other end.
+ *
+ * ── Pure, because the decision is the part worth testing
+ *
+ * The console has no component test harness (its UI is Playwright's job), so a decision embedded in
+ * JSX is a decision nothing checks. This returns the verdict; the markup renders it.
+ *
+ * `draft` is deliberately its OWN answer rather than folded into `subscribe`. The API refuses a
+ * subscribe to an unpublished agent with "Agent not found or not published" — a 404 whose wording
+ * sends a creator looking for a missing agent rather than at the visibility control two inches
+ * above the button. Saying so before the call is the whole difference.
+ */
+/** The roster response, NAMED rather than inlined. #616: an inline object literal passed as a type
+ *  argument cannot be compared to the Worker's own declaration by the compiler, so it needs a name
+ *  first — and `check-console-types.mjs` ratchets every one that has not got one. */
+interface MyInstances {
+	instances: Instance[];
+}
+
+export type SubscribeAction =
+	| { kind: "open"; instanceId: string }
+	| { kind: "subscribe" }
+	| { kind: "draft" };
+
+export function subscribeActionFor(
+	agent: { id: string; visibility?: string } | null,
+	instances: readonly { id: string; agent_id: string }[],
+): SubscribeAction | null {
+	if (!agent) return null;
+	// An instance you already have outranks visibility: unpublishing a template must not strand the
+	// instances already made from it, and "Open" has to keep working for them.
+	const mine = instances.find((i) => i.agent_id === agent.id);
+	if (mine) return { kind: "open", instanceId: mine.id };
+	return agent.visibility === "published" ? { kind: "subscribe" } : { kind: "draft" };
+}
+
 export function isTestFixtureRefusal(e: unknown): boolean {
 	return e instanceof Error && e.message.includes("allowTestAgent");
 }
@@ -221,6 +267,56 @@ export default function AgentDetail() {
 
 	useEffect(() => { loadAgent(); }, [loadAgent]);
 
+	/**
+	 * The creator's own instances, so this page can offer "Open" or "Use this agent" (#797).
+	 *
+	 * Best-effort: a failed roster read must not take the agent page down with it. The control then
+	 * falls back to offering a subscribe, and the API is the backstop — a duplicate is not possible
+	 * to create by accident, because subscribing again simply makes a second named instance, which
+	 * is a thing the platform supports on purpose.
+	 */
+	const [myInstances, setMyInstances] = useState<Instance[]>([]);
+	const loadMyInstances = useCallback(async () => {
+		try {
+			const r = await api<MyInstances>("/v1/instances/my/instances");
+			setMyInstances(r.instances || []);
+		} catch {
+			// Non-fatal, and NOT silent in effect: an empty roster makes the control offer a
+			// subscribe rather than an "Open" it cannot honour, which is the safe direction.
+			setMyInstances([]);
+		}
+	}, []);
+	useEffect(() => { loadMyInstances(); }, [loadMyInstances]);
+
+	/**
+	 * Subscribe to this agent, matching Browse's contract exactly (#450).
+	 *
+	 * "+ New" asks for a NAME first because the server otherwise calls the second instance
+	 * "Agent 2" — a uniqueness suffix, not something anyone says aloud, which then cannot be reached
+	 * by voice. Browse learned that; this must not re-learn it differently.
+	 */
+	const [subscribing, setSubscribing] = useState(false);
+	const useThisAgent = async () => {
+		if (!agent) return;
+		const action = subscribeActionFor(agent, myInstances);
+		if (!action) return;
+		if (action.kind === "open") { navigate(`/instances/${action.instanceId}`); return; }
+		if (action.kind === "draft") {
+			alert("This agent is a draft. Set its visibility to Published and save, then you can create an instance of it.");
+			return;
+		}
+		setSubscribing(true);
+		try {
+			const r = await api<{ instanceId: string }>(`/v1/instances/${agent.id}/subscribe`, { method: "POST", body: JSON.stringify({}) });
+			await loadMyInstances();
+			navigate(`/instances/${r.instanceId}`);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		} finally {
+			setSubscribing(false);
+		}
+	};
+
 	// Chat
 	const loadMessages = useCallback(async () => {
 		if (!id) return;
@@ -301,6 +397,8 @@ export default function AgentDetail() {
 	 * the freshly-saved values unrendered until the dialog was dismissed — harmless, but it meant
 	 * the one moment a user looks hardest at this form was the one moment it showed stale data.
 	 */
+	const subscribeAction = subscribeActionFor(agent, myInstances);
+
 	const saveSettings = async () => {
 		if (!id) return;
 		const catalogue = { name: sName, description: sDesc, category: sCat, visibility: sVis, model: sModel };
@@ -622,6 +720,13 @@ export default function AgentDetail() {
 
 					<div className="flex gap-2 flex-wrap">
 						<Button variant="primary" size="lg" onClick={saveSettings} disabled={!!stateErr} title={stateErr ? "Personality, goal and welcome message didn't load — saving now would overwrite them with blanks." : undefined}>Save All Settings</Button>
+						{/* #797: a creator could not reach their own agent at all — the only subscribe control
+						    in this console lives in Browse, which lists the PUBLIC catalogue, so an agent
+						    missing from that listing was unreachable by its own author. `draft` is a
+						    distinct state rather than a disabled button: the reason belongs on screen. */}
+						<Button size="lg" onClick={useThisAgent} disabled={subscribing} title={subscribeAction?.kind === "draft" ? "Publish this agent to create an instance of it." : undefined}>
+							{subscribing ? "Creating…" : subscribeAction?.kind === "open" ? "Open my instance" : "Use this agent"}
+						</Button>
 						<Button size="lg" onClick={exportAgent}>Export JSON</Button>
 						<Button size="lg" onClick={saveVersion}>Save Version</Button>
 						<Button variant="danger" size="lg" onClick={deleteAgent}>Delete Agent</Button>

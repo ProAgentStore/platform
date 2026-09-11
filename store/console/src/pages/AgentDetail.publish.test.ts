@@ -24,7 +24,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { isTestFixtureRefusal } from "./AgentDetail.js";
+import { isTestFixtureRefusal, subscribeActionFor } from "./AgentDetail.js";
 
 describe("isTestFixtureRefusal — is this the publish guard, or some other 400?", () => {
 	/** The refusal `lib/test-agent-guard.ts` actually composes, copied verbatim. */
@@ -103,5 +103,81 @@ describe("saveSettings re-reads the server on EVERY exit path (#793)", () => {
 		const retryAt = body.indexOf("allowTestAgent: true");
 		expect(confirmAt).toBeGreaterThan(-1);
 		expect(retryAt).toBeGreaterThan(confirmAt);
+	});
+});
+
+/**
+ * A creator can reach their own agent (#797).
+ *
+ * ── The gap, and why it read as a regression
+ *
+ * Subscribing creates the private INSTANCE you actually chat with; a template is only a definition.
+ * The single subscribe control in this console has always lived in `Browse.tsx`, which lists the
+ * PUBLIC catalogue — so an agent missing from that listing (#793's symptom) was unreachable by its
+ * own author. The reporter believed it had regressed; `git log -S "/subscribe" -- AgentDetail.tsx`
+ * returns nothing, so the affordance was never here. What regressed was the Library listing, and
+ * this page's dependence on it made that look like a second bug.
+ *
+ * The API always allowed it: `POST /v1/instances/:id/subscribe` checks `visibility = 'published'`
+ * and nothing about ownership.
+ */
+describe("subscribeActionFor — what the creator's button should do (#797)", () => {
+	const published = { id: "a1", visibility: "published" };
+	const draft = { id: "a1", visibility: "draft" };
+
+	it("offers a subscribe for a published agent the creator has no instance of", () => {
+		expect(subscribeActionFor(published, [])).toEqual({ kind: "subscribe" });
+	});
+
+	it("opens the instance the creator already has", () => {
+		expect(subscribeActionFor(published, [{ id: "i9", agent_id: "a1" }])).toEqual({ kind: "open", instanceId: "i9" });
+	});
+
+	it("ignores instances of OTHER agents", () => {
+		// The roster is every instance this user owns, not this agent's. Matching on the wrong one
+		// would send a creator to somebody else's conversation.
+		expect(subscribeActionFor(published, [{ id: "i9", agent_id: "other" }])).toEqual({ kind: "subscribe" });
+	});
+
+	it("names `draft` as its own answer rather than offering a subscribe that will 404", () => {
+		// The API refuses an unpublished agent with "Agent not found or not published" — wording that
+		// sends a creator hunting for a missing agent rather than at the visibility control just
+		// above the button.
+		expect(subscribeActionFor(draft, [])).toEqual({ kind: "draft" });
+		expect(subscribeActionFor({ id: "a1" }, [])).toEqual({ kind: "draft" });
+	});
+
+	it("lets an EXISTING instance outrank visibility", () => {
+		// Unpublishing a template must not strand the instances already made from it; "Open" has to
+		// keep working for them.
+		expect(subscribeActionFor(draft, [{ id: "i9", agent_id: "a1" }])).toEqual({ kind: "open", instanceId: "i9" });
+	});
+
+	it("answers null before the agent has loaded", () => {
+		expect(subscribeActionFor(null, [])).toBeNull();
+	});
+});
+
+describe("the subscribe control is wired to the same endpoint Browse uses (#797)", () => {
+	const src = readFileSync(new URL("./AgentDetail.tsx", import.meta.url).pathname, "utf8");
+
+	it("POSTs the subscribe endpoint — the affordance actually exists now", () => {
+		// The whole of #797: `git log -S "/subscribe"` on this file returned nothing before this.
+		expect(src).toContain("/subscribe");
+		expect(src).toContain('method: "POST"');
+	});
+
+	it("reuses `subscribeActionFor` rather than re-deciding in JSX", () => {
+		// A decision embedded in markup is a decision nothing can test — this console has no
+		// component harness, which is why the verdict is a value.
+		expect(src).toContain("subscribeActionFor(agent, myInstances)");
+	});
+
+	it("refreshes the roster after subscribing, so the button becomes Open", () => {
+		// Without it the control still reads "Use this agent" for an instance that now exists, and a
+		// second click makes a second instance the creator did not ask for.
+		const handler = src.slice(src.indexOf("const useThisAgent ="), src.indexOf("const subscribeAction ="));
+		expect(handler.length, "useThisAgent was not found — this guard is measuring nothing").toBeGreaterThan(200);
+		expect(handler).toContain("loadMyInstances()");
 	});
 });

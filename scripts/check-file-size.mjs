@@ -1324,7 +1324,14 @@ const PINS = {
 	// form keeping the user's REJECTED selection on screen with nothing to contradict it. That is
 	// the kind of defect a future reader deletes as defensive noise unless the incident is written
 	// next to it.
-	"store/console/src/pages/AgentDetail.tsx": 857,
+	// +98 at #797: the creator's own subscribe path. A template is a definition, not a runnable
+	// thing — subscribing is what produces the INSTANCE you chat with — and the only subscribe
+	// control in this console has always lived in Browse, which lists the PUBLIC catalogue. So an
+	// agent missing from that listing (#793) was unreachable by its own author, which is how one
+	// bug presented as two. The decision is a pure `subscribeActionFor` with its own tests rather
+	// than a condition in JSX, because this console has no component harness and a verdict embedded
+	// in markup is a verdict nothing checks.
+	"store/console/src/pages/AgentDetail.tsx": 962,
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
@@ -1609,7 +1616,9 @@ const PINS = {
 	// two. The reason IS the record — a pin moved without one is a number nobody can audit later.
 	// +9 at #793: the AgentDetail.tsx raise above (seven lines recording why a form that lies about
 	// a rejected save is worth fifty lines of comment) and these two.
-	"scripts/check-file-size.mjs": 1693,
+	// +9 at #797: the AgentDetail.tsx raise above (seven lines on why one bug presented as two) and
+	// these two.
+	"scripts/check-file-size.mjs": 1702,
 };
 
 /**
