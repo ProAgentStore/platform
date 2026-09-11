@@ -1317,7 +1317,14 @@ const PINS = {
 	// `AgentBuilder` down — buildPlan / execute / the plan editor, ~110 lines — is the "describe
 	// an agent and have the model scaffold it" wizard, and it shares only `navigate` with the
 	// seven-tab editor above it. Splitting there takes this back under LIMIT without a pin.
-	"store/console/src/pages/AgentDetail.tsx": 805,
+	// +52 at #793: `saveSettings` re-reads the server on every exit path, and offers the
+	// test-fixture guard's own override (#65) instead of relaying advice the console could not act
+	// on. Forty of those lines are the WHY: the reported bug was a Library that disagreed with the
+	// settings form, and the cause was neither a schema mismatch nor the listing query — it was this
+	// form keeping the user's REJECTED selection on screen with nothing to contradict it. That is
+	// the kind of defect a future reader deletes as defensive noise unless the incident is written
+	// next to it.
+	"store/console/src/pages/AgentDetail.tsx": 857,
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
@@ -1600,7 +1607,9 @@ const PINS = {
 	// its ground — plus these two.
 	// +9 at #759: the mcp/index.ts raise above (seven lines of why for one bounded retry) and these
 	// two. The reason IS the record — a pin moved without one is a number nobody can audit later.
-	"scripts/check-file-size.mjs": 1684,
+	// +9 at #793: the AgentDetail.tsx raise above (seven lines recording why a form that lies about
+	// a rejected save is worth fifty lines of comment) and these two.
+	"scripts/check-file-size.mjs": 1693,
 };
 
 /**

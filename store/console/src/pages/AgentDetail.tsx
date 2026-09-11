@@ -30,6 +30,17 @@ const MODELS = [
 
 const localRowId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `row-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+/**
+ * Is this the test-fixture publish refusal (#65), as opposed to any other 400?
+ *
+ * Matched on `allowTestAgent` — the flag the message itself names — rather than on its prose. The
+ * wording is a sentence someone will improve; the flag is the API contract, and a guard keyed to
+ * the prose would silently stop offering the override the day the copy is edited.
+ */
+export function isTestFixtureRefusal(e: unknown): boolean {
+	return e instanceof Error && e.message.includes("allowTestAgent");
+}
+
 export default function AgentDetail() {
 	const { id } = useParams<{ id: string }>();
 	const navigate = useNavigate();
@@ -272,14 +283,55 @@ export default function AgentDetail() {
 	}, [tab, loadMessages, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions, loadSurfaces, loadSettingsSchema]);
 	useEffect(() => { reloadTab(); }, [reloadTab]);
 
+	/**
+	 * Save the catalogue fields, then re-read what the server actually stored (#793).
+	 *
+	 * ── Why the reload moved, and why the catch has one too
+	 *
+	 * The reported bug: an agent's settings showed `published` while the Library said "no published
+	 * agents yet". Both read the SAME column (`agents.visibility`), so the two were never looking at
+	 * different fields — the dropdown was showing a value the server had REFUSED.
+	 *
+	 * `sVis` holds what the user picked. On a rejected save this function alerted and returned,
+	 * leaving that selection on screen with nothing to contradict it, so the form went on asserting
+	 * a state the database never took. Reloading in the catch is the fix: the control snaps back to
+	 * what is actually stored, and the alert then describes a disagreement the user can see.
+	 *
+	 * It also moved AHEAD of the success alert. `alert()` blocks the thread, so the old order left
+	 * the freshly-saved values unrendered until the dialog was dismissed — harmless, but it meant
+	 * the one moment a user looks hardest at this form was the one moment it showed stale data.
+	 */
 	const saveSettings = async () => {
 		if (!id) return;
+		const catalogue = { name: sName, description: sDesc, category: sCat, visibility: sVis, model: sModel };
+		const state = { name: sName, personality: sPersonality, goal: sGoal, model: sModel, welcomeMessage: sWelcome };
 		try {
-			await api(`/v1/agents/${id}`, { method: "PUT", body: JSON.stringify({ name: sName, description: sDesc, category: sCat, visibility: sVis, model: sModel }) });
-			await api(`/v1/agents/${id}/state`, { method: "PUT", body: JSON.stringify({ name: sName, personality: sPersonality, goal: sGoal, model: sModel, welcomeMessage: sWelcome }) });
+			try {
+				await api(`/v1/agents/${id}`, { method: "PUT", body: JSON.stringify(catalogue) });
+			} catch (e) {
+				// The test-fixture guard (#65), which is a SPEED BUMP and not a ban: it refuses a
+				// publish whose slug, name or description carries a word like `test` or `sandbox`,
+				// and names `allowTestAgent` as the way through. Nothing in this console ever sent
+				// that flag, so the advice was unactionable from the only UI a creator has — the
+				// refusal read as "publishing is broken". Ask, then obey the answer.
+				if (!isTestFixtureRefusal(e)) throw e;
+				if (!confirm(`${e instanceof Error ? e.message : String(e)}\n\nPublish it anyway?`)) {
+					// Declined: the agent stays as the server has it, and the reload below makes the
+					// form say so rather than leaving `published` selected.
+					await loadAgent();
+					return;
+				}
+				await api(`/v1/agents/${id}`, { method: "PUT", body: JSON.stringify({ ...catalogue, allowTestAgent: true }) });
+			}
+			await api(`/v1/agents/${id}/state`, { method: "PUT", body: JSON.stringify(state) });
+			await loadAgent();
 			alert("Saved!");
-			loadAgent();
-		} catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+		} catch (e) {
+			// Re-read BEFORE reporting. Whatever failed, the form must stop claiming a value the
+			// server does not hold — that gap is the whole of #793.
+			await loadAgent().catch(() => undefined);
+			alert(e instanceof Error ? e.message : String(e));
+		}
 	};
 
 	const deleteAgent = async () => {
