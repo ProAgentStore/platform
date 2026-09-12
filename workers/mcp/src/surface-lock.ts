@@ -361,4 +361,21 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.24 is published.
 	"0.1.25": "sha256:ec2538db46e034243a5f9b0474d7c99e55e14680b30beaa7910044dd25a0ef89",
+	// 0.1.26 (#804): an `inputSchema` change on `coding_loop_start`, and no new name — 154
+	// registrations, `MCP_TOOL_ALWAYS_ON` 130, `MCP_TOOL_GATED` 24, all unchanged.
+	//
+	//   * `repair_checkout` (boolean, optional): start a REPAIR run — the sync gate (#801) lets it
+	//     through, the platform writes its objective (get onto the branch, in sync with upstream,
+	//     clean tree, nothing deleted), and it may do no other work. It is the way out of a block
+	//     that needs no hands on the machine, and every block message for a behind/diverged
+	//     checkout now ends by naming it.
+	//   * `objective` becomes OPTIONAL in the schema, because a repair run's objective is the
+	//     platform's. The handler still refuses a work run without one; the schema cannot say
+	//     "required unless", so the `.describe()` does.
+	//
+	// `SERVER_INSTRUCTIONS` did NOT move: the flag is reached through `coding_loop_start`, which
+	// the instructions already name.
+	//
+	// Appended, never edited in place: 0.1.25 is published.
+	"0.1.26": "sha256:6bf384ce80d5a273d0ba907e65169d5b7e5a4aaaafb389ad35ca6b62b6dab083",
 };

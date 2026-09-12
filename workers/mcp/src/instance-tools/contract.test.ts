@@ -274,7 +274,7 @@ const TABLE: Record<string, Row> = {
 	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
-	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,repair_checkout,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).

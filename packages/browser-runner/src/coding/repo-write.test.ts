@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -241,20 +241,54 @@ describe("fastForwardRepo (on a real temp clone of a real temp upstream) (#802)"
 		expect(r).toMatchObject({ ok: true, changed: false, from: head, to: head, commits: 0 });
 	});
 
-	it("REFUSES a dirty tree and changes nothing — even when the pull would not touch the edited file", () => {
-		advanceUpstream("b.txt", "two\n");
-		writeFileSync(join(dir, "a.txt"), "edited\n");
-		const before = git(dir, "rev-parse", "HEAD").trim();
+	// ── A dirty tree is git's call, not a refusal (#804) ──
+
+	it("fast-forwards PAST an untracked file the incoming commits do not touch, and leaves it alone", () => {
+		// The Heartfull case: 18 commits behind, one untracked tooling folder (`.claude/` there —
+		// a neutral name here, since a developer's global gitignore may hide that one), and a human
+		// sent to delete it by hand. A fast-forward never carries or removes an untracked path.
+		mkdirSync(join(dir, "tooling"), { recursive: true });
+		writeFileSync(join(dir, "tooling", "settings.local.json"), "{}\n");
+		const target = advanceUpstream("b.txt", "two\n");
 		const r = fastForwardRepo(dir, { branch: "main" });
-		expect(r.refused).toBe("dirty");
-		expect(r.ok).toBe(false);
-		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
-		expect(git(dir, "status", "--porcelain").trim()).toContain("a.txt");
+		expect(r).toMatchObject({ ok: true, changed: true, to: target, commits: 1 });
+		// Reported, not hidden: the owner is told the tree was (and still is) dirty.
+		expect(r.dirty).toBe(true);
+		expect(git(dir, "status", "--porcelain").trim()).toContain("tooling/");
 	});
 
-	it("counts an UNTRACKED file as dirty", () => {
-		writeFileSync(join(dir, "scratch.env"), "SECRET=1\n");
-		expect(fastForwardRepo(dir).refused).toBe("dirty");
+	it("fast-forwards PAST an uncommitted edit to a file the incoming commits do not touch, and the edit survives intact", () => {
+		writeFileSync(join(dir, "a.txt"), "edited locally\n");
+		const target = advanceUpstream("b.txt", "two\n");
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r).toMatchObject({ ok: true, changed: true, to: target, dirty: true });
+		expect(git(dir, "status", "--porcelain").trim()).toContain("a.txt");
+		expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("edited locally\n");
+	});
+
+	it("FAILS, naming the file, when an incoming commit would overwrite an uncommitted edit — and nothing is written", () => {
+		writeFileSync(join(dir, "a.txt"), "edited locally\n");
+		advanceUpstream("a.txt", "upstream changed it too\n");
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		const r = fastForwardRepo(dir, { branch: "main" });
+		expect(r.ok).toBe(false);
+		expect(r.refused).toBeUndefined();
+		expect(r.error).toMatch(/overwritten|a\.txt/i);
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
+		expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("edited locally\n");
+	});
+
+	it("FAILS, naming the path, when an incoming commit adds a file that exists untracked — and the untracked file survives", () => {
+		mkdirSync(join(dir, "tooling"), { recursive: true });
+		writeFileSync(join(dir, "tooling", "settings.json"), "mine\n");
+		mkdirSync(join(up, "tooling"), { recursive: true });
+		advanceUpstream(join("tooling", "settings.json"), "theirs\n");
+		const before = git(dir, "rev-parse", "HEAD").trim();
+		const r = fastForwardRepo(dir);
+		expect(r.ok).toBe(false);
+		expect(r.error).toMatch(/untracked|overwritten|settings\.json/i);
+		expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before);
+		expect(readFileSync(join(dir, "tooling", "settings.json"), "utf8")).toBe("mine\n");
 	});
 
 	it("REFUSES when the checkout is not on the branch the verdict was about", () => {

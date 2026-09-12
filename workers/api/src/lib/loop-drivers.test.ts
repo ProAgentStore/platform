@@ -126,6 +126,20 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 		expect(created[0].params.onBehalfOf).toBe("supervisor");
 	});
 
+	it("the coding driver threads a REPAIR flag into the Pilot's goal, and only when asked (#804)", async () => {
+		const stub = () =>
+			stubEnv({
+				repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }],
+				session: { id: "s1", client_type: "claude", status: "active" },
+			});
+		const a = stub();
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: a.env, ...base, repairCheckout: true });
+		expect(a.created[0].params.goal.repairCheckout).toBe(true);
+		const b = stub();
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: b.env, ...base });
+		expect(b.created[0].params.goal.repairCheckout).toBeUndefined();
+	});
+
 	it("the coding driver does, and threads the SAME run id into the Pilot", async () => {
 		const { env, sql, created } = stubEnv({
 			repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }],

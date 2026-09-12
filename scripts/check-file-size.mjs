@@ -1262,7 +1262,12 @@ const PINS = {
 	// the `registerLoopQueueRoutes(toolRoutes)` call, which must sit ABOVE `GET /:id/loop/:runId`
 	// because Hono matches in registration order. The queue's own two handlers are NOT here: they
 	// are in `routes/loop-queue-routes.ts`, which is what keeps this at +29 instead of +90.
-	"workers/api/src/routes/tools.ts": 1250,
+	// +9 at #804: `repairCheckout` on `POST /:id/loop` — three lines of wiring (the body field, the
+	// default objective label, the flag on `driver.start`) and one refusal for a non-coding driver,
+	// which has no checkout to repair. The brief the flag stands for, and every sentence about it,
+	// live in `lib/repo-sync-gate.ts`; what is here is the one fact only this route knows, which is
+	// that an objective is required EXCEPT on a repair run.
+	"workers/api/src/routes/tools.ts": 1259,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1433,7 +1438,11 @@ const PINS = {
 	// moved on their checkout (timeline, trace, chat — with the undo). Eligibility, the ask, the
 	// independent confirmation and every sentence live in `lib/repo-sync-gate.ts`; the machine
 	// re-checks every precondition at the hands in `repo-write.ts`.
-	"workers/api/src/workflows/coding-session.ts": 1043,
+	// +12 at #804: the REPAIR run. Four lines of wiring (`repair` read off the goal, the brief
+	// swapped in for the objective, the advisory notes withheld from a run they would tell to stop,
+	// `repair` handed to the gate) and the trace/timeline label so the record does not carry the
+	// whole brief. Eligibility, the brief and the hint live in `lib/repo-sync-gate.ts`.
+	"workers/api/src/workflows/coding-session.ts": 1055,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1649,7 +1658,9 @@ const PINS = {
 	// +10 at #802: the coding-session.ts raise above (eight lines of why for the self-heal step,
 	// because a platform that MOVES a pointer on somebody's checkout owes more explanation than
 	// one that refuses to) and these three.
-	"scripts/check-file-size.mjs": 1733,
+	// +11 at #804: the tools.ts and coding-session.ts raises above (five and four lines of why)
+	// and these three.
+	"scripts/check-file-size.mjs": 1744,
 };
 
 /**

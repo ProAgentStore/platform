@@ -904,6 +904,20 @@ describe("durable agent loop (#158)", () => {
 		expect(res.status).toBe(400);
 	});
 
+	it("a REPAIR run needs no objective, but does need a coding agent — a chat driver is refused before anything starts (#804)", async () => {
+		let started = 0;
+		const { app, env } = testApp({ loopCreate: async () => { started++; return { id: "wf-loop" }; } });
+		const res = await app.request("/v1/instances/i1/loop", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+			body: JSON.stringify({ repairCheckout: true }),
+		}, env);
+		// Not the 400 "objective is required" — the flag waives that; the refusal is about the driver.
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toMatch(/needs a coding agent/);
+		expect(started).toBe(0);
+	});
+
 	it("404s for an instance the caller does not own", async () => {
 		const { app, env } = testApp({ owned: false });
 		const res = await app.request("/v1/instances/i1/loop", {

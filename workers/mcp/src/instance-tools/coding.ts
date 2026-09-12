@@ -215,15 +215,19 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
-			objective: z.string().describe("What the agent should accomplish"),
+			objective: z.string().optional().describe("What the agent should accomplish. Required unless repair_checkout is set — a repair run's objective is written by the platform, and anything you pass here rides along as a note."),
 			max_iterations: z.coerce.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10). The server clamps this to your account's loop ceiling."),
 			queue_if_busy: z.boolean().optional().describe("When the repo is already being worked on, QUEUE this objective instead of failing. Answers `{queued:true, entry}` instead of a run id, and the platform starts it automatically the moment the active run reaches a terminal state — done, failed or max iterations. Queue is FIFO per repo; read it with coding_loop_queue and withdraw an entry with coding_loop_queue_cancel. Only the BUSY refusal queues: an agent with no repository, no runner, or an unusable checkout still fails immediately, because waiting fixes none of those. Off by default — without it, a busy instance is still an error."),
+			repair_checkout: z.boolean().optional().describe("Start a REPAIR run instead of a work run: when a run was blocked because the checkout is behind or has diverged (the block message ends by naming this flag), this lets the agent fix THAT itself — the platform writes the objective (get onto the branch, in sync with upstream, clean tree), the run is let through the pre-flight sync gate, and it may do nothing else: no ticket work, no pushes, and nothing is ever deleted — work in the way is parked on a `wip/` branch the report names. Coding agents only. Off by default."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations, queue_if_busy, dry_run }) => {
+		async ({ token, instance_id, objective, max_iterations, queue_if_busy, repair_checkout, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const maxIter = max_iterations ?? 10;
+			const repair = repair_checkout === true;
+			// The one argument the schema cannot express: objective is required EXCEPT on a repair run.
+			if (!repair && !(objective ?? "").trim()) return jsonText({ error: "objective is required (or set repair_checkout: true to start a repair run, whose objective the platform writes)" });
 			// An autonomous run spends the instance's own model budget — runtime-scoped, gated by
 			// MCP_READ_ONLY, and audited (was ungated).
 			//
@@ -239,9 +243,12 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				return dryRun(safetyFor(token), "coding_loop_start", "start an autonomous server-side run", { instance_id, max_iterations: maxIter }, {
 					endpoint: `/v1/instances/${instance_id}/loop`,
 					method: "POST",
-					effect: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.${queue_if_busy ? " If the repo is busy it would be QUEUED instead, and started when the active run ends." : ""}`,
-					objective,
-					objectiveBytes: new TextEncoder().encode(objective).length,
+					effect: repair
+						? `${instance_id} would run a REPAIR run: bring its checkout onto its branch and in sync with upstream without discarding anything, for up to ${maxIter} steps, and do no other work.`
+						: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.${queue_if_busy ? " If the repo is busy it would be QUEUED instead, and started when the active run ends." : ""}`,
+					objective: objective ?? null,
+					objectiveBytes: new TextEncoder().encode(objective ?? "").length,
+					repairCheckout: repair || undefined,
 					spend: `Each step spends the instance's own BYOK budget, drawn from a pool opened for the run. coding_loop_stop is the way to end it early.`,
 					note: `instance_id is resolved against my_instances on the real call; this dry run does not resolve it, so a slug that does not exist still fails then.`,
 				});
@@ -250,7 +257,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			const data = await authedCall(
 				`/v1/instances/${encodeURIComponent(id)}/loop`,
 				sessionToken,
-				{ method: "POST", body: JSON.stringify({ objective, maxIterations: maxIter, queueIfBusy: queue_if_busy === true }) },
+				{ method: "POST", body: JSON.stringify({ objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, queueIfBusy: queue_if_busy === true, repairCheckout: repair }) },
 				env,
 			);
 			// `authedCall` RETURNS a non-2xx as `{error}` rather than throwing, so reporting
@@ -264,7 +271,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			await audit(safetyFor(token), {
 				tool: "coding_loop_start",
 				action: queued ? "queued" : "completed",
-				input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective).length, maxIterations: maxIter, queueIfBusy: queue_if_busy === true },
+				input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective ?? "").length, maxIterations: maxIter, queueIfBusy: queue_if_busy === true, repairCheckout: repair },
 				result: queued
 					? { queueEntryId: (data as { entry?: { id?: string } }).entry?.id ?? null }
 					: { runId: (data as { runId?: string }).runId ?? null, budgetId: (data as { budgetId?: string }).budgetId ?? null },

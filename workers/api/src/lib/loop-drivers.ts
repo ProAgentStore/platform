@@ -61,6 +61,12 @@ export interface LoopStartInput {
 	 * how it would have gone missing the moment that duplicate was folded into this table.
 	 */
 	onBehalfOf?: string;
+	/**
+	 * Start a REPAIR run (#804): the sync gate lets it through and the Pilot's objective becomes
+	 * the platform's repair brief — bring the checkout back in sync without discarding anything.
+	 * Only the coding driver knows what a checkout is; the route refuses it for any other.
+	 */
+	repairCheckout?: boolean;
 }
 
 export type LoopStartResult =
@@ -307,7 +313,7 @@ const codingDriver: LoopDriver = {
 				runnerNode: session.runnerNode ?? null,
 				cloneUrl: repo.cloneUrl ?? undefined,
 				branch: repo.branch || undefined,
-				goal: { objective, repo: repo.name, clientType: session.clientType },
+				goal: { objective, repo: repo.name, clientType: session.clientType, repairCheckout: input.repairCheckout === true ? true : undefined },
 				// The number in the caller's "Max iterations" box, honoured (#374).
 				//
 				// It reached the run ROW and stopped there, so `check_delegation` could report

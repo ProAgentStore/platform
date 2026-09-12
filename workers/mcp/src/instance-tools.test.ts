@@ -830,7 +830,7 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 		// `queueIfBusy: false` is sent EXPLICITLY rather than omitted (#788): the default must be
 		// stated on the wire, so the API's "don't silently auto-queue" rule is a fact about the
 		// request rather than about whichever side happens to default it.
-		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5, queueIfBusy: false });
+		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5, queueIfBusy: false, repairCheckout: false });
 		// It must NOT reimplement the loop here any more.
 		expect(h.fetchStub.calls.some((c) => c.url.includes("/loop-decide"))).toBe(false);
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/i1/chat"))).toBe(false);
@@ -854,6 +854,40 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 	});
 
 	// ── Queued follow-up objectives (#788) ──
+
+	// ── Repair runs (#804) ──
+
+	it("repair_checkout is passed through, and needs no objective — the platform writes that one", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", { status: 201, body: { runId: "run-9", driver: "coding", budgetId: "bud-1", maxIterations: 10, status: "running" } });
+
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", repair_checkout: true });
+
+		const sent = JSON.parse(h.fetchStub.calls.find((c) => c.url.endsWith("/i1/loop") && c.method === "POST")?.body ?? "{}");
+		expect(sent.repairCheckout).toBe(true);
+		expect(sent.objective).toBeUndefined();
+		expect(JSON.parse(res.content[0].text).runId).toBe("run-9");
+		const audited = h.auditEvents().find((e) => e.tool === "coding_loop_start" && e.action === "completed");
+		expect((audited?.input as { repairCheckout?: boolean })?.repairCheckout).toBe(true);
+	});
+
+	it("a work run still requires an objective — the flag is the only thing that waives it", async () => {
+		const h = setup();
+		withInstance(h);
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder" });
+		expect(JSON.parse(res.content[0].text).error).toMatch(/objective is required/);
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/i1/loop") && c.method === "POST")).toBe(false);
+	});
+
+	it("a normal run sends repairCheckout:false explicitly, so the API's default is never relied on", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", { status: 201, body: { runId: "run-1", driver: "coding", budgetId: "bud-1" } });
+		await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x" });
+		const sent = JSON.parse(h.fetchStub.calls.find((c) => c.url.endsWith("/i1/loop") && c.method === "POST")?.body ?? "{}");
+		expect(sent.repairCheckout).toBe(false);
+	});
 
 	it("queue_if_busy is passed through so the API can queue instead of refusing", async () => {
 		const h = setup();

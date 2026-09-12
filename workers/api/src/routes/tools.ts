@@ -40,6 +40,7 @@ import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
+import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { enqueueObjective } from "../lib/objective-queue.js";
 import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
@@ -1075,9 +1076,13 @@ toolRoutes.post("/:id/loop", async (c) => {
 		maxIterations?: number;
 		repoId?: string;
 		queueIfBusy?: boolean;
+		repairCheckout?: boolean;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
-	const objective = String(body.objective ?? "").trim();
+	// A REPAIR run needs no words from the caller (#804): the Pilot's objective is the platform's
+	// brief either way, and the run record carries a fixed label when none were given.
+	const repairCheckout = body.repairCheckout === true;
+	const objective = String(body.objective ?? "").trim() || (repairCheckout ? REPAIR_RUN_OBJECTIVE : "");
 	if (!objective) throw new HttpError(400, "objective is required");
 	if (objective.length > 2000) throw new HttpError(400, "objective too long");
 	// Which repo, when the caller knows (#374). Optional because it is driver-specific: a
@@ -1101,6 +1106,9 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// dispatched correctly; the owner's own button did not.
 	const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
 	const driver = loopDriverFor(caps);
+	// Only a coding run has a checkout to repair; a chat driver given the flag would loop its chat
+	// on a brief about git, which is a run that can only fail.
+	if (repairCheckout && driver.id !== "coding") throw new HttpError(400, "repairCheckout needs a coding agent — this agent's runs drive its chat, and there is no checkout to repair");
 	const started = await driver.start({
 		env: c.env,
 		instanceId,
@@ -1110,6 +1118,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 		repoId,
 		budgetId: budget.id,
 		depth: 0,
+		repairCheckout,
 	});
 	if (!started.ok) {
 		// QUEUE INSTEAD OF FAIL, but only on the refusal waiting actually fixes (#788).

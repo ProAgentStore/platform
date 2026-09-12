@@ -231,8 +231,19 @@ export function switchRepoBranch(workDir: string, branch: string): SwitchBranchR
 	return { ok: after === to, changed: after === to, from, to, branch: after, dirty: dirtyAfter };
 }
 
-/** Why the runner declined to fast-forward. Every one of these leaves the checkout byte-identical. */
-export type FastForwardRefusal = "not-a-repo" | "dirty" | "unknown-head" | "detached" | "off-branch" | "no-upstream";
+/**
+ * Why the runner declined to fast-forward. Every one of these leaves the checkout byte-identical.
+ *
+ * `dirty` is deliberately NOT here any more (#804). It was, at 0.4.59, and the first run it met
+ * was a checkout 18 commits behind with one untracked `.claude/` folder — tooling cruft that a
+ * fast-forward would never have touched — refused for being "dirty", with a human told to go and
+ * remove it by hand. A fast-forward is not a checkout: it carries nothing across, and git itself
+ * refuses, atomically and naming the file, when an incoming commit would overwrite a local change
+ * or an untracked path. THAT is the precondition, checked against the real history by the tool
+ * that owns it, and it surfaces below as `error`. The tree is reported (`dirty`, before and after)
+ * so the caller can still say what was there.
+ */
+export type FastForwardRefusal = "not-a-repo" | "unknown-head" | "detached" | "off-branch" | "no-upstream";
 
 export interface FastForwardResult {
 	/** True only when the pull ran AND HEAD was read back afterwards. */
@@ -248,7 +259,11 @@ export interface FastForwardResult {
 	to: string | null;
 	/** How many commits the fast-forward brought in. Null when git would not count. */
 	commits: number | null;
-	/** Whether the tree has uncommitted work after the pull. `null` means git would not say (#291). */
+	/**
+	 * Whether the tree has uncommitted work — read BEFORE the pull on every path, re-read after a
+	 * pull that ran. `null` means git would not say (#291). Informational: a dirty tree does not
+	 * refuse a fast-forward (see {@link FastForwardRefusal}), but the owner is told it was there.
+	 */
 	dirty: boolean | null;
 	refused?: FastForwardRefusal;
 	error?: string;
@@ -261,10 +276,13 @@ export interface FastForwardResult {
  * `switchRepoBranch` follows and for the same reason: the cloud's picture of the tree is a read
  * taken moments earlier over a relay, and the write has to be safe against the tree as it IS.
  *
- *   dirty        refused. A fast-forward that touches a file with uncommitted edits is aborted by
- *                git anyway, but one that does not touch it silently succeeds and leaves the diff
- *                sitting on a base it was not written against. Refusing is the only answer that
- *                cannot change what somebody's uncommitted work means.
+ *   dirty        NOT refused (#804 — it was at 0.4.59). Unlike a checkout, a fast-forward carries
+ *                nothing across: an uncommitted edit to a file the incoming commits do not touch is
+ *                the same edit afterwards, and one they DO touch makes git abort before writing a
+ *                byte ("Your local changes … would be overwritten"). Untracked files likewise —
+ *                left alone, unless an incoming commit adds that path, which git refuses by name.
+ *                The check is therefore git's own, against the real history, and arrives as
+ *                `error`. Nothing here stashes, cleans or commits on the owner's behalf.
  *   off-branch   refused when `branch` is given and HEAD is elsewhere. The declared branch is the
  *                one the cloud judged stale; pulling whatever the checkout happens to be on would
  *                be acting on a verdict about a different ref.
@@ -292,22 +310,23 @@ export function fastForwardRepo(workDir: string, opts: { branch?: string } = {})
 	if (abbrev === "HEAD") return { ...base, refused: "detached" };
 	const branch = abbrev;
 
-	let dirty: boolean;
+	// Read, reported, never a refusal (see the doc above). A status git will not give is `null`,
+	// not `false` — "clean" is a claim, and this is the field the owner's sentence is built from.
+	let dirty: boolean | null;
 	try {
 		dirty = isDirty(workDir);
-	} catch (e) {
-		return { ...base, branch, error: gitFailureLine(e) };
+	} catch {
+		dirty = null;
 	}
-	if (dirty) return { ...base, branch, dirty: true, refused: "dirty" };
-	if (want !== null && branch !== want) return { ...base, branch, refused: "off-branch" };
+	if (want !== null && branch !== want) return { ...base, branch, dirty, refused: "off-branch" };
 
 	let upstream: string;
 	try {
 		upstream = git(workDir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).trim();
 	} catch {
-		return { ...base, branch, refused: "no-upstream" };
+		return { ...base, branch, dirty, refused: "no-upstream" };
 	}
-	if (!upstream) return { ...base, branch, refused: "no-upstream" };
+	if (!upstream) return { ...base, branch, dirty, refused: "no-upstream" };
 
 	let from: string | null;
 	try {
@@ -321,9 +340,11 @@ export function fastForwardRepo(workDir: string, opts: { branch?: string } = {})
 		// fetches, and a timeout above the runner's fetch cap, because a pull IS a fetch first.
 		git(workDir, gitWriteArgv("fast-forward"), { timeout: 30_000, env: networkGitEnv() });
 	} catch (e) {
-		// `--ff-only` refused, the network failed, or auth was needed and (correctly) not prompted
-		// for. In every case git left the tree as it was; the sentence says which.
-		return { ...base, branch, upstream, from, to: from, error: gitFailureLine(e) };
+		// `--ff-only` refused, an incoming commit would overwrite a local change or an untracked
+		// path, the network failed, or auth was needed and (correctly) not prompted for. In every
+		// case git left the tree as it was; the sentence says which, and names the file when there
+		// is one.
+		return { ...base, branch, upstream, from, to: from, dirty, error: gitFailureLine(e) };
 	}
 
 	// CONFIRM, do not assume — read HEAD back and count what arrived from git, not from the

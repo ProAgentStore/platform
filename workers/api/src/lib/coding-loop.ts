@@ -78,6 +78,12 @@ export interface CodingGoal {
 	/** Test mode: plan + send guidance but NEVER let a destructive action through. */
 	dryRun?: boolean;
 	/**
+	 * A REPAIR run (#804): its only objective is to bring the checkout back in sync. The workflow
+	 * lets it through the sync gate and REPLACES `objective` with the platform's brief
+	 * (`repairCheckoutObjective`); the owner's words ride along as a note. Absent = a normal run.
+	 */
+	repairCheckout?: boolean;
+	/**
 	 * What this run may do with the repo's trunk (#314). Resolved once by the workflow from the
 	 * repo override / agent setting / platform default — see lib/coding-authority.ts. Absent behaves
 	 * as `merge`, which is the pre-existing behaviour.

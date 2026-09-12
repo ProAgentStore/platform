@@ -236,6 +236,9 @@ const READBACK: Record<string, string | null> = {
 	// again. One entry per argument, so the reader named is the one for the started case (#788).
 	"coding_loop_start.objective": "coding_loop_status",
 	"coding_loop_start.max_iterations": "coding_loop_status",
+	// A repair run's record carries the platform's fixed objective label, which is what the status
+	// tool reads back (#804).
+	"coding_loop_start.repair_checkout": "coding_loop_status",
 
 	// ── feedback ──
 	"resolve_feedback.issue_url": "list_feedback",

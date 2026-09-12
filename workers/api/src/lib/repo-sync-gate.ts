@@ -183,6 +183,12 @@ export interface SyncGateCtx {
 	repo?: string | null;
 	/** What the self-heal did first, when one was attempted (#802) — folded into the refusal. */
 	heal?: SyncHealOutcome | null;
+	/**
+	 * This is a REPAIR run (#804): its whole objective is to bring the checkout back in sync, so the
+	 * gate records its verdict and lets it start — blocking the one run that exists to fix the
+	 * block would be the dead end #804 was filed about.
+	 */
+	repair?: boolean;
 }
 
 /**
@@ -216,6 +222,16 @@ export interface SyncGateCtx {
 export async function gateRunOnSync(env: Env, ctx: SyncGateCtx, v: RepoSyncVerdict | null | undefined): Promise<SyncGateOutcome> {
 	const decision = syncGateDecision(v);
 	if (!decision.block) return { blocked: false, decision, message: "" };
+	// A repair run is let through ON PURPOSE, and says so (#804). Not filed to `error_log`: the
+	// block it would have been is the very thing the owner just asked the agent to fix, and a row
+	// for it would count the remedy as another occurrence of the fault.
+	if (ctx.repair) {
+		return {
+			blocked: false,
+			decision,
+			message: `The base could not be confirmed (${decision.detail}) — this is a REPAIR run, so it is starting in order to fix exactly that, and nothing else.`,
+		};
+	}
 	// The machine's name, from the module that already knows how to find it (#524). Only for the
 	// version skew — for a checkout that is merely behind, the remedy is a git command and naming
 	// the node adds nothing a `git pull` instruction does not already imply.
@@ -231,6 +247,10 @@ export async function gateRunOnSync(env: Env, ctx: SyncGateCtx, v: RepoSyncVerdi
 	// the tree is dirty" is the fact that makes "run `git pull --ff-only`" the wrong instruction —
 	// the owner has to commit or move the diff first, and the sentence says so.
 	const healed = ctx.heal && ctx.heal.status !== "healed" && ctx.heal.status !== "noop" ? describeSyncHeal(ctx.heal) : "";
+	// The way out that needs no hands on the machine (#804). Only where a repair run can do
+	// anything: a checkout that is behind or diverged. An old runner needs an upgrade and an
+	// unreachable one needs to come back — a run cannot fix either.
+	const repairHint = armed && (decision.reason === "behind" || decision.reason === "diverged") ? REPAIR_RUN_HINT : "";
 	const message = [
 		armed
 			? "This run was stopped before it started because the base it would build on could not be confirmed (#801)."
@@ -238,6 +258,7 @@ export async function gateRunOnSync(env: Env, ctx: SyncGateCtx, v: RepoSyncVerdi
 		decision.detail,
 		healed,
 		remedy,
+		repairHint,
 	]
 		.filter(Boolean)
 		.join(" ");
@@ -330,13 +351,12 @@ export function syncSelfHealEligible(
 	if (v?.state !== "behind") return { eligible: false, branch, why: "" };
 	if (!state) return { eligible: false, branch, why: "the working tree's state could not be read, so it was not fast-forwarded unattended" };
 	if (state.notAGitRepo) return { eligible: false, branch, why: "the path is not a git working tree" };
-	if (state.dirty) {
-		return {
-			eligible: false,
-			branch,
-			why: `it was not fast-forwarded because the working tree has ${state.changedFiles} uncommitted file${state.changedFiles === 1 ? "" : "s"} — commit or move that work first`,
-		};
-	}
+	// A DIRTY tree is deliberately not a reason to skip (#804). It was, and the first checkout it
+	// met was 18 commits behind with one untracked `.claude/` folder — refused, with a human sent to
+	// delete it by hand. A fast-forward carries nothing across; git itself refuses, naming the
+	// file, when an incoming commit would overwrite a local change. So the machine is asked, and
+	// git's answer — not a count of porcelain lines — decides. The runner reports `dirty` back so
+	// the owner is still told what was there.
 	if (!state.branch) return { eligible: false, branch, why: "the checkout's branch could not be read, so it was not fast-forwarded unattended" };
 	if (!branch) return { eligible: false, branch, why: "no branch is configured for this repo and the verdict named none" };
 	if (state.branch !== branch) {
@@ -453,4 +473,80 @@ export function describeSyncHeal(h: SyncHealOutcome): string {
 	if (h.status === "noop") return `\`${h.branch}\` was already current when the fast-forward ran; nothing was brought in.`;
 	if (h.status === "skipped") return `A fast-forward was not attempted: ${h.detail}.`;
 	return `A fast-forward was attempted first and did not happen: ${h.detail}.`;
+}
+
+// ─── The repair run (#804) ───────────────────────────────────────────────────────────────────────
+
+/**
+ * The objective an owner sees on the run record when they start a repair run without words of
+ * their own. The Pilot gets {@link repairCheckoutObjective}, not this — this is the label.
+ */
+export const REPAIR_RUN_OBJECTIVE = "Repair the checkout: bring it onto its branch and in sync with upstream, without discarding any work.";
+
+/** The sentence every block ends with, so a remote owner is never at a dead end. */
+export const REPAIR_RUN_HINT =
+	"Or let the agent fix it: start a REPAIR run — `coding_loop_start` with `repair_checkout: true` (API: `POST …/loop` with `repairCheckout: true`). A repair run may only bring the checkout back in sync; it does no other work.";
+
+export interface RepairBriefInput {
+	repoLabel: string;
+	/** The branch the checkout is supposed to be on — configured, else the verdict's. */
+	branch: string | null;
+	sync: RepoSyncVerdict | null;
+	state: RepoWorkingState | null;
+	heal: SyncHealOutcome | null;
+	/** What the owner typed when starting the run, if anything — carried, never a licence to do more. */
+	ownerNote?: string | null;
+}
+
+/**
+ * The objective a REPAIR run is given. Pure.
+ *
+ * ── Why the platform writes it
+ *
+ * #804's ask 2 is to separate "may this run do ticket work" from "may this run bring the checkout
+ * up to date". A flag on its own would only let an owner's free text through the gate — and the
+ * gate exists because free text has no guarantee in it. So the flag REPLACES the objective with
+ * this brief: the facts the platform just read, the one goal, and the rules. The owner's own words
+ * ride along as a note and cannot widen the goal.
+ *
+ * ── The standing rule, kept
+ *
+ * #785 says a divergence or a dirty tree is the human's decision, never the platform's. This does
+ * not change that. The human makes the decision by starting the run; what the run may then do is
+ * bounded the same way `repo-write.ts` is: nothing is discarded. Work that blocks the sync is
+ * PARKED on a `wip/` branch the report names, so every commit and every uncommitted change that
+ * existed when the run began still exists, somewhere it can be found, when it ends. That is the
+ * invariant the Pilot is told to hold, in those words, above every other instruction.
+ */
+export function repairCheckoutObjective(i: RepairBriefInput): string {
+	const branch = i.branch || i.state?.branch || i.sync?.branch || "its configured branch";
+	const upstream = i.sync?.upstream || `origin/${branch}`;
+	const found: string[] = [];
+	if (i.sync?.detail) found.push(i.sync.detail);
+	else if (i.sync?.state === "in_sync") found.push(`The checkout reads in sync with ${upstream}.`);
+	if (i.state?.notAGitRepo) found.push("The path is not a git working tree.");
+	else if (i.state) {
+		if (i.state.branch && i.branch && i.state.branch !== i.branch) found.push(`It is on branch \`${i.state.branch}\`, not \`${i.branch}\`.`);
+		if (i.state.dirty) found.push(`The working tree has ${i.state.changedFiles} uncommitted file${i.state.changedFiles === 1 ? "" : "s"} (tracked edits and/or untracked paths).`);
+	}
+	if (i.heal && i.heal.status !== "healed" && i.heal.status !== "noop") found.push(describeSyncHeal(i.heal));
+	const lines = [
+		`REPAIR THE CHECKOUT. This is a repair run: the ONLY thing you may do is bring the checkout of "${i.repoLabel}" back to a confirmed-current state. No feature or ticket work, no edits to project files, no pushes.`,
+		"",
+		`GOAL: the checkout is on branch \`${branch}\`, \`git status -sb\` reports \`${branch}...${upstream}\` with no [ahead N] and no [behind N], and the working tree is clean.`,
+		"",
+		`WHAT THE PLATFORM FOUND JUST NOW: ${found.length ? found.join(" ") : "the checkout could not be read."}`,
+		"",
+		"THE ONE INVARIANT: every commit and every uncommitted change that exists now must still exist somewhere — a branch or a commit — when you finish. You may MOVE work; you may never delete it.",
+		"- Forbidden, no exceptions: `git reset --hard`, `git checkout -- <path>`, `git checkout .`, `git restore`, `git clean`, `git stash drop`, `git branch -D`, any `--force`, and any `git push`.",
+		`- Uncommitted edits or untracked paths in the way (tooling folders such as \`.claude/\` count): park them — \`git checkout -b wip/<YYYY-MM-DD>-<short-reason>\`, \`git add -A\`, \`git commit -m "wip: parked by repair run"\`, then \`git checkout ${branch}\`. Never delete them.`,
+		`- Local commits on \`${branch}\` that are not on \`${upstream}\` (ahead or diverged): save them first with \`git branch wip/<YYYY-MM-DD>-<short-reason>\`, then move the branch with \`git reset --keep ${upstream}\`. Never merge or rebase them on your own initiative.`,
+		`- If the checkout is on another branch, leave that branch as it is and \`git checkout ${branch}\` (park uncommitted work first, as above).`,
+		`- Then \`git fetch\` and \`git pull --ff-only\`.`,
+		"",
+		`FINISH: call finish(status:'done') ONLY when \`git status -sb\` shows \`${branch}...${upstream}\` with neither [ahead] nor [behind] and no changed files. In the report name every \`wip/\` branch you created and what it holds, so the owner can recover it. If something cannot be resolved without deleting work or deciding about a conflict, stop there and call finish(status:'failed') saying exactly what and why — do not guess.`,
+	];
+	const note = (i.ownerNote || "").trim();
+	if (note && note !== REPAIR_RUN_OBJECTIVE) lines.push("", `OWNER'S NOTE (context only — it does not widen what this run may do): ${note}`);
+	return lines.join("\n");
 }

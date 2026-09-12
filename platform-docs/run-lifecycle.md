@@ -80,6 +80,24 @@ Two consequences of the clock being one field with one meaning:
 
 A park also outranks the heartbeat test. A run parked on an interruption is mid-resume and has nothing ticking *by design*, so reading its silence as death would report a recovery in progress as a failure.
 
+## Before A Coding Run Starts: The Checkout Must Be Confirmed Current
+
+A coding run builds on a local checkout, and a checkout that is behind its upstream plans a diff against code that has already changed. So before the Pilot's first instruction, the platform reads where the checkout stands against its upstream (the runner fetches remote-tracking refs — it never pulls on its own) and decides whether the run may start.
+
+**In sync, ahead, or no upstream** — the run starts. Unpushed local commits do not make a base stale, and a local-only checkout has no remote to be behind.
+
+**Behind** — the platform fast-forwards the checkout itself, on the runner, with `git pull --ff-only`, then re-reads to confirm before starting. Git's own guards are the safety: an uncommitted edit or untracked file the incoming commits do not touch rides along unchanged; one they would overwrite makes git abort, naming the file, with nothing written. Nothing is stashed, cleaned or committed on your behalf. The timeline, the trace (`coding.run.self_heal`) and the chat record what arrived and the undo (`git reset --keep <sha>`).
+
+**Diverged, or a fast-forward that git refused, or a checkout that could not be checked** — the run is stopped before it starts (`stopReason: failed`, and a `coding:sync-gate` row in `list_errors`). The message says which case it is, whether a fast-forward was tried and what happened, and — for a behind or diverged checkout — how to have the agent fix it without anyone touching the machine:
+
+> Or let the agent fix it: start a REPAIR run — `coding_loop_start` with `repair_checkout: true`.
+
+A **repair run** is a normal run with one difference: the sync gate lets it through, and its objective is written by the platform — get onto the configured branch, in sync with upstream, with a clean tree. It may do nothing else: no ticket work, no pushes. Its one invariant is that nothing is deleted. Work that stands in the way is *parked* on a `wip/<date>-<reason>` branch the report names — uncommitted edits and untracked folders are committed there; local commits that diverged are saved there before the branch is moved with `git reset --keep`. Anything that would need a merge, a rebase, or a judgement about a conflict ends the run as `failed` with the reason, and the next block message tells you what is left. Anything you type as the objective rides along as a note and does not widen what the run may do.
+
+A runner too old to answer the sync check, or a machine that is offline, is reported as exactly that. A run cannot upgrade a CLI or wake a laptop; those two messages name the machine and what to do on it.
+
+The gate can be stood down for an account's API Worker with `CODING_SYNC_GATE=off`; the observation and the error-log rows continue either way.
+
 ## Where You See This
 
 - **`check_instance_loop`** and **`coding_loop_status`** (MCP) — an instance's recent runs, each with `health` and, when parked, a note saying what for and until when.

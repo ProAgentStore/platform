@@ -24,7 +24,7 @@ import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
 import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../lib/repo-sync.js";
-import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../lib/repo-sync-gate.js";
+import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, REPAIR_RUN_OBJECTIVE, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../lib/repo-sync-gate.js";
 import { enforceRepoPolicies } from "../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
@@ -689,7 +689,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// against a hardcoded "main".
 			const stateNote = repoState ? describeRepoState(repoState, { configuredBranch: branch ?? null }) : null;
 			const syncNote = syncAtStart ? describeRepoSync(syncAtStart) : null;
-			if (stateNote || syncNote) {
+			// A REPAIR run (#804) gets the platform's brief INSTEAD of its objective, and not the two
+			// advisory notes below: they rank as USER RULES in the Pilot's prompt and tell it to stop
+			// rather than touch a dirty tree — the exact move a repair run exists to make (safely: it
+			// parks, never discards). The brief carries the same facts in its own words.
+			const repair = goal.repairCheckout === true;
+			if (repair) {
+				goal.objective = repairCheckoutObjective({ repoLabel: goal.repo, branch: branch ?? null, sync: syncAtStart, state: repoState, heal, ownerNote: goal.objective });
+			}
+			if (!repair && (stateNote || syncNote)) {
 				goal.specialInstructions = [
 					goal.specialInstructions,
 					stateNote
@@ -713,7 +721,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// reads as "run error:", which is the exact confusion #523 closed — and worse, it would
 			// be classified for a platform resume and replayed against the same unconfirmed base.
 			const syncGate = (await step.do("repo-sync-gate", async () =>
-				gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal }, syncAtStart),
+				gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal, repair }, syncAtStart),
 			)) as SyncGateOutcome;
 			if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
 			// A run the PLATFORM cut off leaves its work on the record and its PLAN nowhere (#523):
@@ -728,8 +736,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// …and in the UNIFIED trace, which is the surface `agent_trace` and every MCP debug
 				// path reads (#580 AC4). The timeline below is per-session and per-console; a run that
 				// stopped without classifying a failure reached neither `agent_trace` nor `list_errors`.
-				await traceCodingRun(env, traceCtx, "coding.run.start", `objective: ${goal.objective}`, { maxSteps: event.payload.maxSteps ?? 40 });
-				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
+				// A repair run's objective is the platform's multi-line brief; the record carries the
+				// label and the brief's verdict line, not the whole brief (#804).
+				const objectiveLabel = repair ? REPAIR_RUN_OBJECTIVE : goal.objective;
+				await traceCodingRun(env, traceCtx, "coding.run.start", `objective: ${objectiveLabel}`, { maxSteps: event.payload.maxSteps ?? 40, repair: repair || undefined });
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${objectiveLabel}` });
+				if (repair && syncGate.message) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: syncGate.message });
 				if (stateNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: stateNote });
 				// Recorded, not just injected: a checkpoint the owner cannot see is indistinguishable
 				// from one that never fired, and this is the run whose predecessor's report was lost.

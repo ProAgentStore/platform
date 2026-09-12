@@ -19,6 +19,9 @@ import {
 	describeSyncHeal,
 	FAST_FORWARD_MIN_CLI,
 	gateRunOnSync,
+	REPAIR_RUN_HINT,
+	REPAIR_RUN_OBJECTIVE,
+	repairCheckoutObjective,
 	skippedSyncHeal,
 	syncFailureIsOldRunner,
 	syncGateArmed,
@@ -248,11 +251,11 @@ describe("syncSelfHealEligible — the ONE case a fast-forward is safe unattende
 		expect(syncSelfHealEligible(verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }), CLEAN, "main").why).toBe("");
 	});
 
-	it("is NOT eligible on a dirty tree, and says how many files and what to do", () => {
-		const e = syncSelfHealEligible(BEHIND, { ...CLEAN, dirty: true, changedFiles: 3 }, "main");
-		expect(e.eligible).toBe(false);
-		expect(e.why).toContain("3 uncommitted files");
-		expect(e.why).toContain("commit or move that work first");
+	it("IS eligible on a dirty tree — git's own overwrite guard decides, not a count of porcelain lines (#804)", () => {
+		// The Heartfull block: 18 commits behind, one untracked tooling folder, refused as "dirty".
+		// A fast-forward carries nothing across, and git aborts by name if an incoming commit would
+		// overwrite a local change — so the machine is asked and git answers.
+		expect(syncSelfHealEligible(BEHIND, { ...CLEAN, dirty: true, changedFiles: 3 }, "main")).toEqual({ eligible: true, branch: "main", why: "" });
 	});
 
 	it("is NOT eligible off its branch, and names both branches", () => {
@@ -269,7 +272,7 @@ describe("syncSelfHealEligible — the ONE case a fast-forward is safe unattende
 	});
 
 	it("skippedSyncHeal turns an ineligible-with-reason into a recorded outcome, and nothing else", () => {
-		expect(skippedSyncHeal(syncSelfHealEligible(BEHIND, { ...CLEAN, dirty: true, changedFiles: 1 }, "main"))).toMatchObject({ status: "skipped", branch: "main" });
+		expect(skippedSyncHeal(syncSelfHealEligible(BEHIND, { ...CLEAN, branch: "fix/1" }, "main"))).toMatchObject({ status: "skipped", branch: "main" });
 		expect(skippedSyncHeal(syncSelfHealEligible(BEHIND, CLEAN, "main"))).toBeNull();
 		// Not behind → nothing to say → nothing recorded.
 		expect(skippedSyncHeal(syncSelfHealEligible(verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }), CLEAN, "main"))).toBeNull();
@@ -378,6 +381,88 @@ describe("the refusal carries the heal's story (#802)", () => {
 	});
 });
 
+describe("the repair run — the way out that needs no hands on the machine (#804)", () => {
+	it("a block for a BEHIND or DIVERGED checkout ends by naming the repair run", async () => {
+		for (const v of [BEHIND, verdictFromSync({ ...FRESH, ahead: 1, behind: 2 })]) {
+			const out = await gateRunOnSync(env, ctx, v);
+			expect(out.blocked).toBe(true);
+			expect(out.message).toContain("repair_checkout: true");
+			expect(out.message.endsWith(REPAIR_RUN_HINT)).toBe(true);
+		}
+	});
+
+	it("a block an old or unreachable runner caused does NOT — a run cannot upgrade a CLI or wake a machine", async () => {
+		for (const v of [verdictFromSync(OLD_RUNNER), verdictFromSync({ error: "Runner /coding/sync → 504: Runner disconnected" }), null]) {
+			const out = await gateRunOnSync(env, ctx, v);
+			expect(out.blocked).toBe(true);
+			expect(out.message).not.toContain("repair_checkout");
+		}
+	});
+
+	it("a REPAIR run is let through with the verdict stated, and nothing is filed to error_log", async () => {
+		const out = await gateRunOnSync(env, { ...ctx, repair: true }, verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }));
+		expect(out.blocked).toBe(false);
+		expect(out.decision.block).toBe(true);
+		expect(out.message).toContain("REPAIR run");
+		expect(out.message).toContain("DIVERGED");
+		expect(logError).not.toHaveBeenCalled();
+	});
+
+	it("a repair run on a checkout that is fine simply passes", async () => {
+		const out = await gateRunOnSync(env, { ...ctx, repair: true }, verdictFromSync({ ...FRESH, ahead: 0, behind: 0 }));
+		expect(out).toMatchObject({ blocked: false, message: "" });
+	});
+
+	describe("repairCheckoutObjective — the brief the Pilot gets instead of an objective", () => {
+		const base = { repoLabel: "ProAgentStore/platform", branch: "main", heal: null, state: CLEAN };
+
+		it("states the goal against the real upstream, the facts just read, and the one invariant", () => {
+			const o = repairCheckoutObjective({ ...base, sync: BEHIND, state: { ...CLEAN, dirty: true, changedFiles: 1 } });
+			expect(o).toMatch(/^REPAIR THE CHECKOUT/);
+			expect(o).toContain("`main...origin/main`");
+			expect(o).toContain("19 commits BEHIND origin/main");
+			expect(o).toContain("1 uncommitted file ");
+			expect(o).toContain("every commit and every uncommitted change that exists now must still exist somewhere");
+		});
+
+		it("forbids every discarding command and any push, by name", () => {
+			const o = repairCheckoutObjective({ ...base, sync: BEHIND });
+			for (const cmd of ["git reset --hard", "git checkout .", "git restore", "git clean", "git stash drop", "git branch -D", "--force", "git push"]) {
+				expect(o).toContain(cmd);
+			}
+			expect(o).toContain("No feature or ticket work");
+		});
+
+		it("parks rather than deletes — wip/ branches for uncommitted work AND for diverged commits, with --keep not --hard", () => {
+			const o = repairCheckoutObjective({ ...base, sync: verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }) });
+			expect(o).toContain("git checkout -b wip/");
+			expect(o).toContain("git branch wip/");
+			expect(o).toContain("git reset --keep origin/main");
+			expect(o).toContain("Never merge or rebase them on your own initiative");
+		});
+
+		it("carries a failed self-heal's sentence, so the run knows what was already tried", () => {
+			const heal: SyncHealOutcome = { status: "failed", detail: "the fast-forward failed: Your local changes to the following files would be overwritten by merge: a.txt", branch: "main", from: null, to: null, commits: null, sync: null };
+			expect(repairCheckoutObjective({ ...base, sync: BEHIND, heal })).toContain("would be overwritten by merge: a.txt");
+		});
+
+		it("names the branch the checkout is on when it is the wrong one", () => {
+			expect(repairCheckoutObjective({ ...base, sync: BEHIND, state: { ...CLEAN, branch: "fix/1" } })).toContain("It is on branch `fix/1`, not `main`.");
+		});
+
+		it("the owner's words ride along as a NOTE, and the fixed label does not", () => {
+			expect(repairCheckoutObjective({ ...base, sync: BEHIND, ownerNote: "the .claude folder is cruft, park it" })).toContain("OWNER'S NOTE (context only");
+			expect(repairCheckoutObjective({ ...base, sync: BEHIND, ownerNote: REPAIR_RUN_OBJECTIVE })).not.toContain("OWNER'S NOTE");
+		});
+
+		it("finishes only on a confirmed-clean status line, and never by guessing", () => {
+			const o = repairCheckoutObjective({ ...base, sync: BEHIND });
+			expect(o).toContain("finish(status:'done') ONLY when");
+			expect(o).toContain("do not guess");
+		});
+	});
+});
+
 /**
  * The WIRING, asserted from source.
  *
@@ -423,7 +508,15 @@ describe("the wiring — a blocked run does not reach the loop (#801)", () => {
 		expect(source.indexOf('step.do("repo-self-heal"')).toBeLessThan(source.indexOf('step.do("repo-sync-gate"'));
 		// The verdict the gate sees is the checkout as it IS after the heal, never the pre-heal read.
 		expect(source).toContain("const syncAtStart = heal?.sync ?? repoStart.sync;");
-		expect(source).toContain("heal }, syncAtStart)");
+		expect(source).toContain("heal, repair }, syncAtStart)");
+	});
+
+	it("a repair run gets the brief INSTEAD of its objective, and not the advisory notes that would tell it to stop (#804)", () => {
+		expect(source).toContain("const repair = goal.repairCheckout === true;");
+		expect(source).toContain("goal.objective = repairCheckoutObjective({");
+		expect(source).toContain("if (!repair && (stateNote || syncNote))");
+		// The brief is composed BEFORE the gate reads `repair`, and the gate is told.
+		expect(source.indexOf("const repair = goal.repairCheckout")).toBeLessThan(source.indexOf('step.do("repo-sync-gate"'));
 	});
 
 	it("tells the owner a pointer moved on their checkout, with the undo, on every surface (#802)", () => {
