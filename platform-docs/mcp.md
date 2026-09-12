@@ -297,6 +297,38 @@ This server does **not** set `isError`. A failure is one of:
 Check for both. A permission denial is a configuration fact, not a transient failure:
 retrying returns the identical message and writes another audit row.
 
+### A first call that blames your parameters did not come from this server
+
+Some clients report a first call on a fresh session as one of:
+
+> `'mcp_…_coding_loop_start' has not been loaded yet. You do not have the correct parameter
+> names for this tool. … You tried parameters: [instance_id, objective, max_iterations] —
+> these may be incorrect.`
+
+> `tool 'ProAgentStore:coding_loop_status' is not registered. This may indicate a tool name
+> hallucination or a stale tool schema.`
+
+**Retry the call unchanged, and do not rename anything.** Neither sentence is sent by this
+server. Both are written by the client out of its own tool registry — `ProAgentStore:name`
+is a client-side namespacing format, and this server emits no message anywhere that names a
+caller's parameters as possibly incorrect. The parameters in that first message are usually
+the schema's own, correct, and the same call succeeds a second later once the client has
+finished processing `tools/list`.
+
+Tool registration here cannot race a call. It happens inside the Durable Object's
+`blockConcurrencyWhile` start, so every request is held until the surface is registered —
+there is no window in which a call arrives at a half-registered server.
+
+The failures this server *does* report about a session are separate, and say so plainly:
+
+- `Bad Request: Mcp-Session-Id header is required`
+- `Invalid session id. McpAgent must be addressed with a valid session id.`
+- `Session not found`
+
+Those three mean the session is gone — a redeploy ends the Durable Object holding it — and
+the fix is to run `initialize` again, not to change the call. Anything else is one of the
+two honest failure shapes above.
+
 ## Correct Runtime Flows
 
 Public trial preview:

@@ -76,6 +76,14 @@ Failure is detected structurally, not by reading prose. This server does not set
 A failure is either text beginning `Error: `, or JSON carrying an `error` key. Check both;
 treat anything else as success.
 
+A first call on a fresh session that comes back saying the tool "has not been loaded yet"
+and lists your parameters as possibly incorrect — or that the tool "is not registered" —
+is **not** this server talking. Those sentences are written by the client from its own tool
+registry while it is still processing `tools/list`. Retry the identical call; do not rename
+parameters and do not conclude the tool is missing. The server's own session failures name
+themselves (`Session not found`, `Invalid session id…`) and mean re-run `initialize`.
+See `platform-docs/mcp.md` → *Result And Error Shape*.
+
 ## Vocabulary that decides an action
 
 Four distinctions the platform makes and a caller routinely collapses. Getting one wrong
